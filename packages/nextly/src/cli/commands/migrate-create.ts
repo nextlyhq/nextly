@@ -59,6 +59,10 @@ import {
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { appMigrationInputs } from "../../domains/schema/migrate-create/app-migration-inputs";
 import { contributedElementsOf } from "../../domains/schema/migrate-create/app-stream";
+import {
+  declaredPermissionsOf,
+  describePermissionChange,
+} from "../../domains/schema/migrate-create/declared-permissions";
 import { describeSettingsChange } from "../../domains/schema/migrate-create/entity-settings";
 import {
   formatBlankFile,
@@ -75,6 +79,7 @@ import {
   type GeneratePluginMigrationResult,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
+import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type {
   ContributedElements,
   TableSpec,
@@ -110,6 +115,7 @@ import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import { commandRun } from "./command-run";
+import { isPluginDefinition } from "./plugin-definition-shape";
 
 // ============================================================================
 // Types
@@ -474,11 +480,30 @@ export async function runMigrateCreate(
     appStream,
     nothing,
   } = inputs;
+  // Every permission the config declares, by owner, which every snapshot records; a plugin
+  // release that only adds or removes one is a migration of its own. Read before the empty-schema
+  // check: an app with no table yet may still declare permissions, which travel as a migration.
+  const permissions = declaredPermissionsOf(configResult.config, {
+    collections,
+    singles,
+  });
+  // Either side counts: the config declaring one now, or the newest snapshot recording one the
+  // config no longer declares, whose removal is a change too.
+  const ownsAny = (record: { app: object; plugins: object } | undefined) =>
+    record !== undefined &&
+    (Object.keys(record.app).length > 0 ||
+      Object.keys(record.plugins).length > 0);
+  const declaresPermissions =
+    ownsAny(permissions) ||
+    ownsAny(
+      (await loadLatestSnapshot(resolve(migrationsDir, "meta")))?.data
+        .permissions
+    );
   // A project with no tables has no translated field to record, and says so as any recording run
   // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
   if (nothing && options.recordSnapshot === true)
     nothingToRecord(logger, options.dryRun);
-  if (nothing) {
+  if (nothing && !declaresPermissions) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
@@ -507,6 +532,7 @@ export async function runMigrateCreate(
       components,
       metadataUpserts,
       previousMetadataUpserts,
+      permissions,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
       recordSnapshot: options.recordSnapshot === true,
@@ -551,12 +577,15 @@ export async function runMigrateCreate(
   }
 
   const duration = Date.now() - startTime;
-  // A settings change is written as the settings-only migration it is, below; its snapshot is
+  // A settings or permissions change is written as the migration it is, below; its snapshot is
   // the record.
-  if (options.recordSnapshot === true && result.settingsChanges.length > 0) {
+  if (
+    options.recordSnapshot === true &&
+    result.settingsChanges.length + result.permissionChanges.length > 0
+  ) {
     logger.newline();
     logger.info(
-      "The config's settings have changes to migrate, so they are written as a settings-only migration, whose snapshot records which fields are translated."
+      "The config's settings or permissions have changes to migrate, so they are written as a migration with no table statements, whose snapshot records which fields are translated."
     );
   } else if (options.recordSnapshot === true) {
     logger.newline();
@@ -577,6 +606,9 @@ export async function runMigrateCreate(
   logger.keyValue("Operations", result.operationCount);
   for (const change of result.settingsChanges) {
     logger.item(`Settings: ${describeSettingsChange(change)}`, 1);
+  }
+  for (const change of result.permissionChanges) {
+    logger.item(`Permissions: ${describePermissionChange(change)}`, 1);
   }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
@@ -842,21 +874,6 @@ export function missingExtendTarget(error: unknown): string | undefined {
     if (match) return match[1];
   }
   return undefined;
-}
-
-/** Whether a module export is a plugin definition rather than, say, a table. */
-function isPluginDefinition(
-  value: unknown
-): value is Partial<PluginDefinition> {
-  // `name` alone is not enough: a `defineTable` result carries a name too.
-  // `version` is required of every plugin and of no table.
-  const candidate = value as { name?: unknown; version?: unknown } | null;
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    typeof candidate.name === "string" &&
-    typeof candidate.version === "string"
-  );
 }
 
 /**

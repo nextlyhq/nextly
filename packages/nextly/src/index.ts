@@ -547,6 +547,7 @@ export {
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
@@ -563,6 +564,7 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginDurableEvents,
   type PluginEmitOptions,
   type PluginEvents,
   type PluginContributions,
@@ -629,6 +631,8 @@ export {
   type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
+  type PluginProxyHandler,
+  type ProxyAnswer,
   type NextlyPrincipals,
   type PluginPrincipalsApi,
   type PluginRoutePrincipal,
@@ -688,6 +692,22 @@ export {
   type ContentTypeKind,
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
+
+// The later pages of a paginated list's address (`/news/page/2`): one
+// spelling per page, read the way the content routes read them.
+// @experimental
+export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
+
+// The cache tags a read of a collection, or of one entry in it, carries:
+// what a write to it expires. For code that caches an answer built from
+// those reads, such as a plugin's page metadata.
+// @experimental
+export { nextlyTags } from "./runtime/cache/nextly-tags";
+
+// The paths every robots.txt of a Nextly site keeps crawlers out of, read
+// by `nextlyRobots` and by a plugin that serves the file.
+// @experimental
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "./shared/crawl-exclusions";
 
 // Where an entry is served, as the site declares it: one answer for every
 // reader of a page's public address.
@@ -1193,6 +1213,13 @@ export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from
 // root-level `fields`, `status` or `versions`, so its result is not assignable
 // to `ResolvedDraftSplitCollection` however faithfully the record carries them.
 export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
+
+// A plugin's durable events (`ctx.events.emitDurable` / `onDurable`): what a
+// subscriber receives, and the handler that receives it.
+export type {
+  DurableEvent,
+  DurableHandler,
+} from "./domains/plugin-events/subscribers";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {

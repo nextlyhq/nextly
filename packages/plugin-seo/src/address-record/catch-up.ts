@@ -85,6 +85,29 @@ export function startCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
   return run;
 }
 
+/** How many catch-ups are under way. */
+let running = 0;
+/** Whether the last catch-up to finish failed, leaving the record behind. */
+let failed = false;
+
+/**
+ * Whether the record says what each page holds: no catch-up is under way,
+ * and the last one to finish succeeded. An output that lists addresses from
+ * the record answers as not ready otherwise.
+ */
+export function addressRecordReady(): boolean {
+  return running === 0 && !failed;
+}
+
+/**
+ * Start the catch-up again, not awaited, where the last one failed and none
+ * is under way: a failure from a passing cause is not left in place until
+ * the next start.
+ */
+export function retryFailedCatchUp(): void {
+  if (failed && running === 0 && started !== undefined) void catchUp();
+}
+
 /** The last catch-up started, to wait for. */
 export function lastCatchUp(): Promise<CatchUpReport> | undefined {
   return started?.run;
@@ -97,9 +120,12 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
  */
 interface CatchUpOptions {
   afterListing?: () => Promise<void>;
-  /** How many pages one listing read takes, and what runs between reads. */
+  /**
+   * How many pages one listing read takes, and what runs between reads,
+   * told the pages listed so far.
+   */
   pageSize?: number;
-  betweenPages?: () => Promise<void>;
+  betweenPages?: (listed: readonly HeldDocument[]) => Promise<void>;
 }
 
 /** Run the catch-up again with the last context, as the next start would. */
@@ -121,13 +147,19 @@ async function caughtUp(
   ctx: PluginContext,
   options: CatchUpOptions = {}
 ): Promise<CatchUpReport> {
+  running += 1;
   try {
-    return await runCatchUp(ctx, options);
+    const report = await runCatchUp(ctx, options);
+    failed = false;
+    return report;
   } catch (error) {
+    failed = true;
     ctx.logger.error("The SEO address record could not be brought up to date", {
       error,
     });
     return NOTHING;
+  } finally {
+    running -= 1;
   }
 }
 
@@ -230,7 +262,7 @@ async function everyPage(
       });
       updates.push(...page.items);
       after = page.next;
-      if (after !== undefined) await options.betweenPages?.();
+      if (after !== undefined) await options.betweenPages?.(updates);
     } while (after !== undefined);
   }
   const madeAt = (page: HeldDocument) =>
@@ -284,6 +316,13 @@ async function moveIfCurrent(
 /**
  * Claim `update`'s addresses, giving up each one another page holds; nothing
  * once a save has overtaken the page. Answers whether anything was claimed.
+ *
+ * A page deleted since it was listed keeps nothing: its delete let go of
+ * what it held before this claim, so once the claim has committed the page is
+ * looked up, and a page found gone lets go again. The lookup is made after
+ * the claim's transaction, never inside it, so it never waits for a
+ * connection the transaction holds. A delete still running when the claim is
+ * made waits for the page's lock and lets go of the claim itself.
  */
 async function claim(
   ctx: PluginContext,
@@ -296,7 +335,13 @@ async function claim(
     const outcome = await moveIfCurrent(ctx, { ...update, holds }, expected);
     if (outcome === "overtaken") return false;
     const first = outcome.refused[0];
-    if (first === undefined) return true;
+    if (first === undefined) {
+      if (holds.length === 0 || (await stillExists(ctx, update.holder))) {
+        return true;
+      }
+      await moveIfCurrent(ctx, { holder: update.holder, holds: [] }, expected);
+      return false;
+    }
     lost.push({
       holder: update.holder,
       address: first.address,
@@ -369,6 +414,24 @@ function typesIn(row: MetaRow | undefined): Set<string> {
     );
   } catch {
     return new Set();
+  }
+}
+
+/**
+ * Whether the page `holder` names still exists. A Single is listed whole
+ * and cannot be deleted, so one listed exists; an entry is looked up.
+ */
+async function stillExists(
+  ctx: PluginContext,
+  holder: AddressHolder
+): Promise<boolean> {
+  if (holder.collection.startsWith("single:")) return true;
+  try {
+    await ctx.services.collections.findEntryById(holder.collection, holder.id);
+    return true;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND")) return false;
+    throw error;
   }
 }
 

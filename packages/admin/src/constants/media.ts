@@ -34,8 +34,7 @@ export const MEDIA_SORT_OPTIONS: ReadonlyArray<{
  * ui package), so light mode takes its 700 shade; dark mode clears it with the
  * base token. The ui package's contrast tests hold both pairings.
  */
-export const MEDIA_DESTRUCTIVE_TEXT_CLASSES =
-  "text-destructive-700 dark:text-destructive" as const;
+export const MEDIA_DESTRUCTIVE_TEXT_CLASSES = "text-danger-text" as const;
 
 /**
  * The longest alt text and caption the admin saves for an item: the edit

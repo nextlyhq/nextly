@@ -55,11 +55,18 @@ export interface LanguageVersion {
  * address by two languages.
  */
 export function addressLanguages(): string[] {
-  const localization = appLocalization();
-  const codes = localization?.locales.map(locale => locale.code) ?? [];
-  if (codes.length > 0) return codes;
-  const fallback = localization?.defaultLocale;
-  return [fallback !== undefined && fallback !== "" ? fallback : "en"];
+  const codes = appLocalization()?.locales.map(locale => locale.code) ?? [];
+  return codes.length > 0 ? codes : [defaultAddressLanguage()];
+}
+
+/**
+ * The language an address read with none named is held in: the site's
+ * default language as it is now, a choice made in Settings included, or
+ * `"en"` where it names none.
+ */
+export function defaultAddressLanguage(): string {
+  const fallback = appLocalization()?.defaultLocale;
+  return fallback !== undefined && fallback !== "" ? fallback : "en";
 }
 
 /** The type a write names: `single:<slug>` is a Single, anything else a collection. */

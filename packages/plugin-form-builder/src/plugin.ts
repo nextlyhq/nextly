@@ -31,6 +31,8 @@ import {
 } from "./document-shapes";
 import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
+import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
+import { registerFormClosing } from "./handlers/form-closing-hold";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -241,6 +243,20 @@ export function formBuilder(
       // names. Contributed, never suggested: where it goes is core's default's
       // to say, and a site's own default may leave it out.
       dashboard: { widgets: [newSubmissions] },
+      // Each page of the form editor (Preview, Settings, Notifications,
+      // Submissions) at an address of its own under the form's. Every one
+      // draws the form editor itself, so the admin hands the editor the page
+      // and keeps it mounted from tab to tab; Builder is the edit address.
+      admin: {
+        views: {
+          [resolvedConfig.formOverrides.slug]: {
+            documentViews: addressedFormPages().map(page => ({
+              ...page,
+              component: FORM_EDITOR_VIEW,
+            })),
+          },
+        },
+      },
       // The team's and the visitor's starter emails, so a new notification has
       // a message to send from the start; a site edits them in Settings › Email.
       emailTemplates: formsEmailTemplates(),
@@ -612,6 +628,13 @@ export function formBuilder(
           ctx.data.editedBy = ctx.user?.id ?? null;
         }
         return ctx.data;
+      });
+
+      // Each form's closing time and limit, held inside the transaction that
+      // stores a submission, whatever stores it.
+      registerFormClosing(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
       });
 
       // Inject a real submissionCount into form reads (spam excluded — the

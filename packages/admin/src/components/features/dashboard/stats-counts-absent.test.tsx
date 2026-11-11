@@ -8,8 +8,8 @@
  * the dashboard down for the people with the fewest grants. So a missing count
  * is not drawn at all.
  *
- * The Team card is no longer a reader of the summary: it reads `system:team`,
- * and its absent figures are held in `TeamSummary.test.tsx`.
+ * The Team card is no longer a reader of the summary: it lists people from
+ * `system:team-people`, held in `TeamSummary.test.tsx`.
  *
  * @module components/features/dashboard/stats-counts-absent.test
  */

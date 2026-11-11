@@ -30,7 +30,6 @@ import safeRegex from "safe-regex2";
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
 import { isIconIdShape } from "../../collections/fields/types/icon";
 import { isVirtualField } from "../../collections/fields/virtual";
-import { omitDirectComponentFields } from "../../domains/field-groups/direct-component-fields";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
@@ -52,6 +51,7 @@ import { applyFieldDefaults } from "./field-defaults";
 import {
   attachFieldValidators,
   getFieldFunctions,
+  storedAtThisLevel,
 } from "./field-level-registry";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
@@ -1325,8 +1325,8 @@ async function validatePluginFieldType(
 export function hasComponentInContainer(
   fields: readonly ValidatableField[],
   /**
-   * Whether `fields` are themselves a container's: a component's own fields are, for a component
-   * placed directly in them, since its value too is reached by no write of its own.
+   * Whether `fields` are themselves a container's, so a component placed directly in them counts:
+   * a component's own fields are asked so, to have the schemas of what it holds at hand.
    */
   inContainer = false
 ): boolean {
@@ -1405,23 +1405,23 @@ async function validateContainedComponents(
     if (!storedRow) {
       applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
     }
-    // A component's own stored row never holds a component placed directly
-    // among its fields, which the component write omits, so it is not judged
-    // missing; held in a container, the whole value is stored and judged.
-    const judged = storedRow ? omitDirectComponentFields(own) : own;
+    // Every field is judged: a component placed directly among its fields is a row of its own,
+    // read back with it, and judged in turn below as the stored row it is.
     await validateFields(
-      attachFieldValidators("fieldGroup", slug, judged),
+      attachFieldValidators("fieldGroup", slug, own),
       filled,
       // A stored row is judged as the component write judges one: a field
       // type's validator sees the instance as the document it compares with,
       // and no entry write, which that pass does not hand it either.
       storedRow ? { data: filled, mode: "create" } : write,
       at,
-      // A component's value is written whole, so its required fields apply.
+      // A component's value is written whole, so its required fields apply. A stored row's own
+      // fields stay outside any container, so a component placed directly in it is judged as a
+      // stored row too; its groups and repeaters mark what they hold as inside one themselves.
       {
         ...(storedRow ? withoutEntryWrite(options) : options),
         mode: "create",
-        insideContainer: true,
+        insideContainer: !storedRow,
       },
       issues
     );
@@ -1445,7 +1445,22 @@ async function validateFields(
   issues: ValidationIssue[]
 ): Promise<void> {
   for (const field of fields) {
-    if (!field.name) continue;
+    if (!field.name) {
+      // A container with no name only lays fields out when its children are stored at the level it
+      // sits in (a group; a repeater's are per row): they are judged here, with this level's value,
+      // as their validators are attached here.
+      if (field.fields && storedAtThisLevel(field)) {
+        await validateFields(
+          field.fields,
+          data,
+          write,
+          basePath,
+          options,
+          issues
+        );
+      }
+      continue;
+    }
     if (!isJudgedOnWrite(field)) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
     // Own keys only. Field names may be camelCase, so `toString` is a legal

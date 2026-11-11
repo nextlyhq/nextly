@@ -547,6 +547,8 @@ export interface DevBootMigrateDeps<TLogger> {
     tables?: ReadonlySet<string>;
   };
   allowDestructive: boolean;
+  /** What the run does with the registry rows (`MigrateCoreDeps.registryRows`). */
+  registryRows: "insert-missing";
   ensureLedger: () => Promise<void>;
 }
 
@@ -610,6 +612,9 @@ export async function migrateAtDevBoot<
     },
     // The development boot lets the core reconcile make destructive changes.
     allowDestructive: true,
+    // Its start keeps the registry rows in step with the code as it is
+    // edited, ahead of any migration, so only absent rows are inserted here.
+    registryRows: "insert-missing",
     ensureLedger: async () => {
       try {
         await ensureSchemaEventsTable(adapter);

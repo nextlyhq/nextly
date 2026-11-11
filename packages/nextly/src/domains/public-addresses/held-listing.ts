@@ -1,7 +1,7 @@
 /**
  * What a participant reads to bring its record up to date at start: every
- * document's held addresses, a page at a time, oldest first, and a
- * fingerprint of everything those addresses are made from.
+ * document's held addresses, a page at a time in id order, each with when it
+ * was made, and a fingerprint of everything those addresses are made from.
  *
  * Read on the pool, outside any save: a participant catching up runs from its
  * plugin's start, never inside a write.
@@ -14,7 +14,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../di";
 import { whenServicesRegistered } from "../../di/service-access";
-import { getCachedNextly } from "../../init";
 import { PAGINATION_DEFAULTS } from "../../types/pagination";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
@@ -25,6 +24,7 @@ import type { HeldAddressUpdate } from "./participants";
 import {
   declaredFor,
   siteTypes,
+  startedNextly,
   type PublicAddressType,
 } from "./public-address";
 
@@ -54,15 +54,18 @@ const MAX_PAGE = PAGINATION_DEFAULTS.maxLimit - 1;
 const DEFAULT_PAGE = 100;
 
 /** The position after a page, as an opaque cursor. */
-function cursorAt(offset: number): string {
-  return Buffer.from(String(offset)).toString("base64url");
+function cursorAt(lastId: string): string {
+  return Buffer.from(lastId).toString("base64url");
 }
 
-/** The position a cursor names; a cursor it never made reads as the start. */
-function offsetOf(cursor: string | undefined): number {
-  if (cursor === undefined) return 0;
-  const offset = Number(Buffer.from(cursor, "base64url").toString());
-  return Number.isInteger(offset) && offset > 0 ? offset : 0;
+/**
+ * The id a cursor names, the last document of the page before; none for the
+ * start, and for a cursor it never made.
+ */
+function lastIdOf(cursor: string | undefined): string | undefined {
+  if (cursor === undefined || cursor === "") return undefined;
+  const id = Buffer.from(cursor, "base64url").toString();
+  return id === "" ? undefined : id;
 }
 
 function labelOf(document: Readonly<Record<string, unknown>>) {
@@ -99,7 +102,7 @@ async function heldNow(
  * in, read as a save reads it, on a transaction of its own.
  */
 async function singleHeld(type: PublicAddressType): Promise<HeldDocument[]> {
-  const nextly = await getCachedNextly();
+  const nextly = await startedNextly();
   // Read only: a Single never saved has nothing to hold, and listing must
   // not create it.
   const single = (await nextly.findSingle({
@@ -119,9 +122,9 @@ async function singleHeld(type: PublicAddressType): Promise<HeldDocument[]> {
 }
 
 /**
- * One page of `type`'s documents, oldest first (by creation, then id), each
- * with every address it holds now, and the cursor of the next page where
- * there is one. One read for the page, and one per language for the versions
+ * One page of `type`'s documents, in id order, each with every address it
+ * holds now and when it was made, and the cursor of the next page where there
+ * is one: a caller that settles claims oldest first sorts by `createdAt`. One read for the page, and one per language for the versions
  * published in it.
  */
 export async function heldPage(args: {
@@ -132,17 +135,20 @@ export async function heldPage(args: {
   // Started during the boot, not awaited, this waits for the boot to finish.
   await whenServicesRegistered();
   const { type } = args;
-  const offset = offsetOf(args.after);
+  const after = lastIdOf(args.after);
   if (type.kind === "single") {
-    return { items: offset === 0 ? await singleHeld(type) : [] };
+    return { items: after === undefined ? await singleHeld(type) : [] };
   }
   const limit = Math.min(Math.max(args.limit ?? DEFAULT_PAGE, 1), MAX_PAGE);
-  const nextly = await getCachedNextly();
-  // One more than asked, to know whether another page follows.
+  const nextly = await startedNextly();
+  // By id, each page after the last id of the one before, so a document
+  // deleted or made while a caller pages through can never move one it has
+  // not read yet behind where it has been. One more than asked, to know
+  // whether another page follows.
   const page = await nextly.find({
     collection: type.slug,
-    sort: ["createdAt", "id"],
-    offset,
+    sort: "id",
+    ...(after === undefined ? {} : { where: { id: { greater_than: after } } }),
     limit: limit + 1,
     status: "all",
   } as never);
@@ -161,7 +167,10 @@ export async function heldPage(args: {
     });
   }
   const more = page.items.length > limit;
-  return more ? { items, next: cursorAt(offset + limit) } : { items };
+  const last = items.at(-1)?.holder.id;
+  return more && last !== undefined
+    ? { items, next: cursorAt(last) }
+    : { items };
 }
 
 /**

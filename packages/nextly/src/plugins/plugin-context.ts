@@ -35,6 +35,16 @@ import type { FieldGroupRegistryService } from "../domains/field-groups/services
 import type { JobRegistry } from "../domains/jobs/job-registry";
 import type { JobsPassDatabase } from "../domains/jobs/jobs-runner";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
+import {
+  createDurableEventRecorder,
+  durableEventNames,
+  type DurableEventsAdapter,
+} from "../domains/plugin-events/durable-events";
+import { getDurableEventsKick } from "../domains/plugin-events/kick";
+import {
+  getDurableSubscribers,
+  type DurableHandler,
+} from "../domains/plugin-events/subscribers";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -140,6 +150,12 @@ import {
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
+import {
+  createKeyedDigests,
+  type DigestKeyAdapter,
+  type DigestKeyStore,
+  type KeyedDigests,
+} from "./security/keyed-digest";
 import {
   createOneTimeSecrets,
   type OneTimeSecrets,
@@ -712,6 +728,35 @@ export type PluginEvents = Omit<EventBus, "emit"> & {
   ): void;
 };
 
+/**
+ * @experimental A plugin's durable events, beside its bus on `ctx.events`.
+ * A type of its own, so `PluginEvents` stays what it was.
+ */
+export interface PluginDurableEvents {
+  /**
+   * @experimental Record one of this plugin's durable events (declared
+   * `durable: true` in `contributes.events`) with the work that emits it, by
+   * the rule `emit` follows: with `{ tx }`, in that plugin transaction; else
+   * in the transaction the calling code is in; else in one of its own. Every
+   * `onDurable` subscriber registered when it is dispatched then receives it,
+   * at least once, retried with backoff, across restarts. Resolves with the
+   * event's id, which a subscriber de-duplicates on.
+   */
+  emitDurable(
+    name: EventName,
+    payload: Record<string, unknown>,
+    options?: PluginEmitOptions
+  ): Promise<{ id: string }>;
+  /**
+   * @experimental Subscribe to a durable event as `subscriber`, a name
+   * unique within this plugin: what a waiting delivery is owed to, so it
+   * reaches this handler after a restart however subscribers were added or
+   * reordered. The handler may run again for one event; de-duplicate on
+   * `event.id`.
+   */
+  onDurable(name: EventName, subscriber: string, handler: DurableHandler): void;
+}
+
 /** The read itself, as the caller resolved from the plugin's options. */
 function readEventsAs(
   subject: ContentEventSubject,
@@ -859,7 +904,7 @@ export interface PluginContext {
    * transaction, at once. Never for work that rolled back, nor for an
    * attempt that was retried.
    */
-  events: PluginEvents;
+  events: PluginEvents & PluginDurableEvents;
 
   /**
    * @experimental Running Nextly core version, for feature-detection.
@@ -1007,6 +1052,11 @@ export interface PluginSecurityApi {
   readonly opaque: OpaqueSecrets;
   /** One-purpose links and codes, spent once. */
   readonly secrets: OneTimeSecrets;
+  /**
+   * Keyed one-way digests of values to compare without keeping them, under
+   * the plugin's own key, stable across secret rotations.
+   */
+  readonly digests: KeyedDigests;
   /** Verifying the webhooks the plugin receives, in a common scheme or its own. */
   readonly webhooks: PluginReceivedWebhooks;
 }
@@ -1622,6 +1672,9 @@ export const PLUGIN_SERVICE_NAMES = [
   // registered, so a plugin's committed event is offered to the drain of the
   // instance that recorded it.
   "webhookFastDrainScheduler",
+  // `nextly_meta`, where each plugin's sealed digest key is kept
+  // (`ctx.security.digests`).
+  "metaService",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1932,9 +1985,65 @@ function asSecretsAdapter(adapter: AdapterTransactions): SecretsAdapter {
 }
 
 /**
+ * The adapter as keyed digests use it: a session of its own for the first
+ * use, and whether the calling flow is in a transaction. Every adapter core
+ * ships has both; one that does not is refused with a clear error.
+ */
+function isDigestKeyAdapter(value: unknown): value is DigestKeyAdapter {
+  if (typeof value !== "object" || value === null) return false;
+  const methods: readonly (keyof DigestKeyAdapter)[] = [
+    "withSession",
+    "transactionOpenInFlow",
+  ];
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.dialect === "string" &&
+    methods.every(name => typeof record[name] === "function")
+  );
+}
+
+function asDigestKeyAdapter(adapter: AdapterTransactions): DigestKeyAdapter {
+  if (isDigestKeyAdapter(adapter)) return adapter;
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no dialect, withSession or transactionOpenInFlow, which keyed digests need.",
+    logContext: { reason: "digest-adapter-incomplete" },
+  });
+}
+
+/**
  * The resolved adapter as received-webhook claims need it, or a named failure
  * when a stand-in lacks a part of it, rather than a TypeError mid-claim.
  */
+/**
+ * The adapter this context resolves, as a plugin's durable events record
+ * through it: checked for the two methods they use rather than cast, so a
+ * context built over something less refuses plainly instead of failing on
+ * the first event.
+ */
+function asDurableEventsAdapter(
+  adapter: AdapterTransactions
+): DurableEventsAdapter {
+  const value: unknown = adapter;
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).transaction === "function" &&
+    typeof (value as Record<string, unknown>).afterCommit === "function"
+  ) {
+    return value as DurableEventsAdapter;
+  }
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no transaction or afterCommit, which durable events need.",
+    logContext: { reason: "durable-events-adapter-incomplete" },
+  });
+}
+
 function asReceivedWebhooksAdapter(
   adapter: AdapterTransactions
 ): ReceivedWebhooksAdapter {
@@ -2251,7 +2360,9 @@ export function createPluginContext(
                                     ? JobsPassDatabase
                                     : T extends "webhookFastDrainScheduler"
                                       ? WebhookFastDrainScheduler | null
-                                      : never,
+                                      : T extends "metaService"
+                                        ? DigestKeyStore
+                                        : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2643,7 +2754,7 @@ export function createPluginContext(
   // HMR (B2), and `emit()` refuses every name outside the plugin's own
   // namespace, core's included. Every other method
   // delegates to the shared bus unchanged.
-  const events: PluginEvents = pluginName
+  const bus: EventBus = pluginName
     ? new Proxy(rawBus, {
         get(target, prop) {
           if (prop === "on") {
@@ -2696,6 +2807,21 @@ export function createPluginContext(
         },
       })
     : rawBus;
+  // The durable half, beside the bus: what a plugin records with its work
+  // and delivers until each subscriber has it.
+  const durable = pluginDurableEvents(plugin, () =>
+    asDurableEventsAdapter(getServiceFn("adapter"))
+  );
+  const emitDurable = durable.emitDurable.bind(durable);
+  const onDurable = durable.onDurable.bind(durable);
+  const events = new Proxy(bus as unknown as PluginContext["events"], {
+    get(target, prop) {
+      if (prop === "emitDurable") return emitDurable;
+      if (prop === "onDurable") return onDurable;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 
   // Built once per context rather than per call: it closes over the
   // allowlist, and nothing about it changes between requests.
@@ -2936,6 +3062,21 @@ export function createPluginContext(
       // outlives a container being cleared, as on a reload while old plugins
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
+      // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
+      // The store and the install's secrets are read per call, as above.
+      digests: createKeyedDigests({
+        owner,
+        store: () => getServiceFn("metaService"),
+        adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
+        // The keyed generations only: a key is sealed and opened with one.
+        secrets: () =>
+          secretGenerations(
+            env.NEXTLY_SECRET,
+            env.NEXTLY_SECRET_PREVIOUS
+          ).filter(
+            (generation): generation is string => typeof generation === "string"
+          ),
+      }),
       secrets: createOneTimeSecrets({
         owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
@@ -3036,4 +3177,52 @@ function emitAfterCommit(
       error: error instanceof Error ? error.message : String(error),
     });
   });
+}
+
+/**
+ * A plugin's `emitDurable` and `onDurable`: its durable events, recorded by
+ * the one rule its `emit` follows, and offered for prompt dispatch once
+ * they commit; its subscribers, keyed by its boot-time name and the name it
+ * gives each, and retired when the plugin is torn down. A context built
+ * without a plugin has no events of its own to record, and refuses both.
+ */
+function pluginDurableEvents(
+  plugin: PluginDefinition | undefined,
+  adapter: () => DurableEventsAdapter
+): PluginDurableEvents {
+  if (plugin === undefined) {
+    const refusal = (): NextlyError =>
+      NextlyError.forbidden({
+        logContext: { reason: "durable-events-without-plugin" },
+      });
+    const refuse = (): never => {
+      throw refusal();
+    };
+    return {
+      // Rejects rather than throws, as an emit that is refused for any
+      // other reason does.
+      emitDurable: () => Promise.reject(refusal()),
+      onDurable: refuse,
+    };
+  }
+  const owner = bootNameOf(plugin);
+  const recorder = createDurableEventRecorder({
+    owner,
+    durable: durableEventNames(plugin.contributes?.events),
+    adapter,
+    kick: getDurableEventsKick,
+  });
+  return {
+    emitDurable: (name, payload, options) =>
+      recorder.record(name, payload, options),
+    onDurable(name, subscriber, handler) {
+      getDurableSubscribers().register(owner, name, subscriber, handler);
+      // Torn down with the plugin, as its other subscriptions are: retired,
+      // so a re-initialised plugin registers the same names again, and an
+      // event dispatched before it has is still owed to them.
+      recordPluginSubscription(owner, () =>
+        getDurableSubscribers().retireOwner(owner)
+      );
+    },
+  };
 }

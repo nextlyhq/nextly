@@ -30,32 +30,71 @@ export interface CoreSeriesPoint {
 }
 
 /**
- * What a Count card draws.
+ * The value a Count card's Source holds for the people on the site rather than
+ * a collection: a slug no collection can take, as `users-gate` stores it.
+ *
+ * @internal
+ */
+export type CountUsersSource = "users";
+
+/**
+ * What a Count card counts of a collection: every entry, or only the
+ * published ones, or only the drafts.
+ *
+ * @internal
+ */
+export type CountMeasure = "all" | "published" | "draft";
+
+/**
+ * The one line a Count card draws under its number: the change this week, a
+ * trend over the last 8 weeks, the split by status, or nothing.
+ *
+ * @internal
+ */
+export type CountLine = "change" | "trend" | "split" | "none";
+
+/**
+ * What a Count card draws: its number, and the one line under it, each about
+ * the same set of entries (or people).
  *
  * @internal
  */
 export interface CountWidgetData {
-  /** How many entries the collection holds under the card's Filter, drafts included. */
+  /**
+   * How many it counts: the people with an account, or the collection's
+   * entries under the card's Filter that its Count setting counts.
+   */
   total: number;
   /**
-   * The published and draft entries, for a collection with a draft and
-   * published lifecycle, from the read that gives the number; absent for a
-   * collection without one. A small card draws the number alone.
+   * What the number counts: `"people"` for Users; for a collection, its Count
+   * setting, held to every entry where the collection has no draft and
+   * published lifecycle, since it has nothing else to count.
    */
-  split?: { published: number; draft: number };
+  counted: "people" | CountMeasure;
   /**
-   * The entries a scheduled release will publish. Absent below the medium
-   * tier, for a collection without a lifecycle, and for a reader with no
-   * release to read, who is shown no figure rather than a zero.
+   * The line under the number, as answered: the card's "Under the number",
+   * except that a status split is drawn only for every entry of a collection
+   * with a lifecycle, and is answered as the change this week elsewhere.
    */
-  scheduled?: number;
+  line: CountLine;
   /**
-   * The last 30 days, as a series over that range (a point a UTC day, the
-   * first counting only what falls inside the range), and how many entries
-   * were created in the 30 days before them. Only a large card draws it, so
-   * only a large card is answered it.
+   * For the change line: how many of what the number counts were made in the
+   * last 7 days. Absent where it could not be read, and then no line is drawn.
    */
-  trend?: { points: readonly CoreSeriesPoint[]; prior: number };
+  change?: number;
+  /**
+   * For the trend line: how many the number counted at the end of each of the
+   * last 8 weeks, oldest first, then now (the number itself), each counting
+   * only what the number counts, by when it was made. Absent where it could
+   * not be read.
+   */
+  trend?: readonly number[];
+  /**
+   * For the status split: the published and the draft entries, which together
+   * are the number, and the entries scheduled releases will publish where the
+   * reader may read releases.
+   */
+  split?: { published: number; draft: number; scheduled?: number };
 }
 
 /**
@@ -151,12 +190,27 @@ export interface CoreListWidgetData {
 }
 
 /**
- * What the Team card draws: how many people and roles there are, each only
- * when the reader may see it, so a count withheld is never drawn as zero.
+ * One person on the Team card, as JSON carries them.
+ *
+ * @internal
+ */
+export interface TeamPersonData {
+  /** Their name; absent when they have none. */
+  name?: string;
+  email: string;
+  /** The role shown beside them; absent when they hold none. */
+  role?: string;
+  /** When they were last active, as an ISO string; absent when unknown. */
+  lastActiveAt?: string;
+}
+
+/**
+ * What the Team card draws: the people, most recently active first, at most
+ * its "Number of people", and how many its role filter matched in all.
  *
  * @internal
  */
 export interface TeamWidgetData {
-  users?: number;
-  roles?: number;
+  people: TeamPersonData[];
+  total: number;
 }

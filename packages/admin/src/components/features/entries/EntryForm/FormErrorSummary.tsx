@@ -165,17 +165,17 @@ export function FormErrorSummary({
               <li key={path} className="text-sm">
                 <button
                   type="button"
-                  className="font-medium underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-destructive-500 rounded-md inline-block"
+                  className="font-medium underline hover:no-underline focus:outline-none focus:ring-2 focus:ring-danger-solid rounded-md inline-block"
                   onClick={() => scrollToField(path)}
                 >
                   {formatFieldPath(path)}
                 </button>
-                <span className="opacity-90 ml-1">: {message}</span>
+                <span className="ml-1">: {message}</span>
               </li>
             ))}
           </ul>
           {remainingCount > 0 && (
-            <p className="mt-2 text-sm opacity-80">
+            <p className="mt-2 text-sm">
               And {remainingCount} more error{remainingCount > 1 ? "s" : ""}...
             </p>
           )}

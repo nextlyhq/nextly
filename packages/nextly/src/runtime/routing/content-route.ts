@@ -37,6 +37,8 @@ import { nextlyTags } from "../cache/nextly-tags";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageStructuredDataFor,
+  type PageMetadataRequest,
 } from "../seo/page-metadata";
 import type { PageMetadataValues } from "../seo/page-metadata-contract";
 
@@ -138,6 +140,26 @@ export interface RenderContext extends ResolvedContext {
    * @experimental Settles with list pagination.
    */
   listPages?: number;
+  /**
+   * The page's structured data, as JSON-LD text written so that no value can
+   * end its element: place it as the body of a JSON-LD script element, so it
+   * is in the HTML a crawler receives.
+   *
+   * ```tsx
+   * {context.structuredData && (
+   *   <script
+   *     type="application/ld+json"
+   *     dangerouslySetInnerHTML={{ __html: context.structuredData }}
+   *   />
+   * )}
+   * ```
+   *
+   * Read from the same answer as the page's head. Given to `render` only, and
+   * only where a plugin provides page metadata and its answer has some.
+   *
+   * @experimental Settles with the page-metadata contract.
+   */
+  structuredData?: string;
 }
 
 /**
@@ -977,24 +999,100 @@ function buildRoute<TNode>(
       // A redirect's metadata is never read: the page answers with it.
       if ("redirect" in resolved) return {};
       const { entry, context } = resolved;
-      // The address this request was served at: a later page of the entry's
-      // list is its own address, not the list's first page.
-      const path =
-        context.page !== undefined && context.listPagePath !== undefined
-          ? context.listPagePath(context.page)
-          : await addressOf(context.slug, language);
-      return contentPageMetadata(config, entry, context, path);
+      return contentPageMetadata(
+        config,
+        entry,
+        context,
+        await servedPathOf(context, language)
+      );
     });
   }
 
+  /**
+   * The address a request was served at: a later page of the entry's list is
+   * its own address, not the list's first page.
+   */
+  function servedPathOf(
+    context: RenderContext,
+    language: RequestLanguage
+  ): Promise<string> {
+    return context.page !== undefined && context.listPagePath !== undefined
+      ? Promise.resolve(context.listPagePath(context.page))
+      : addressOf(context.slug, language);
+  }
+
   async function ContentPage(args: ContentRouteArgs): Promise<TNode> {
-    return servedAt(args, resolved => {
+    return servedAt(args, async (resolved, language) => {
       if ("redirect" in resolved) triggerPermanentRedirect(resolved.redirect);
-      return config.render(resolved.entry, resolved.context);
+      const { entry, context } = resolved;
+      // Asked only where a provider may answer: a site with none renders as
+      // it always has, and works nothing out for it.
+      const structuredData = knownNoPageMetadataProvider()
+        ? undefined
+        : await contentPageStructuredData(
+            config,
+            entry,
+            context,
+            await servedPathOf(context, language)
+          );
+      return config.render(
+        entry,
+        structuredData === undefined ? context : { ...context, structuredData }
+      );
     });
   }
 
   return { generateStaticParams, generateMetadata, ContentPage };
+}
+
+/** The parts of a content route's config a page's answer is asked with. */
+type PageAnswerConfig<TNode> = Pick<
+  ContentRouteConfig<TNode>,
+  "buildMetadata" | "derivedMetadata" | "tags" | "revalidate"
+>;
+
+/**
+ * What the page-metadata provider is asked about a page this route resolved,
+ * with the route's own metadata; null for a process known to have no
+ * provider, where only that metadata is needed.
+ *
+ * The head and the page's structured data are both asked with this, so they
+ * read one answer.
+ */
+async function contentPageRequest<TNode>(
+  config: PageAnswerConfig<TNode>,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<{
+  code: Metadata | undefined;
+  request: PageMetadataRequest | null;
+}> {
+  const code = config.buildMetadata
+    ? await config.buildMetadata(entry, context)
+    : undefined;
+  // What the content offers costs reads of its own, so it is not worked out
+  // for a process known to have nobody to give it to.
+  if (knownNoPageMetadataProvider()) return { code, request: null };
+  const derived = config.derivedMetadata
+    ? await config.derivedMetadata(entry, context)
+    : undefined;
+  return {
+    code,
+    request: {
+      path,
+      ...(context.locale === undefined ? {} : { locale: context.locale }),
+      source: { kind: "entry", collection: context.collection, entry },
+      ...(derived === undefined ? {} : { derived }),
+      code,
+      // The tags the page's own read carries, so a write to its document
+      // expires its head as it expires its body.
+      tags: [...nextlyTags(context.collection), ...(config.tags ?? [])],
+      ...(config.revalidate === undefined
+        ? {}
+        : { revalidate: config.revalidate }),
+    },
+  };
 }
 
 /**
@@ -1009,36 +1107,40 @@ function buildRoute<TNode>(
  * @experimental Settles with the page-metadata contract.
  */
 export async function contentPageMetadata<TNode>(
-  config: Pick<
-    ContentRouteConfig<TNode>,
-    "buildMetadata" | "derivedMetadata" | "tags" | "revalidate"
-  >,
+  config: PageAnswerConfig<TNode>,
   entry: ContentEntry,
   context: RenderContext,
   path: string
 ): Promise<Metadata> {
-  const code = config.buildMetadata
-    ? await config.buildMetadata(entry, context)
-    : undefined;
-  // What the content offers costs reads of its own, so it is not worked out
-  // for a process known to have nobody to give it to.
-  if (knownNoPageMetadataProvider()) return code ?? {};
-  const derived = config.derivedMetadata
-    ? await config.derivedMetadata(entry, context)
-    : undefined;
-  return pageMetadataFor({
-    path,
-    ...(context.locale === undefined ? {} : { locale: context.locale }),
-    source: { kind: "entry", collection: context.collection, entry },
-    ...(derived === undefined ? {} : { derived }),
-    code,
-    // The tags the page's own read carries, so a write to its document
-    // expires its head as it expires its body.
-    tags: [...nextlyTags(context.collection), ...(config.tags ?? [])],
-    ...(config.revalidate === undefined
-      ? {}
-      : { revalidate: config.revalidate }),
-  });
+  const { code, request } = await contentPageRequest(
+    config,
+    entry,
+    context,
+    path
+  );
+  return request === null ? (code ?? {}) : pageMetadataFor(request);
+}
+
+/**
+ * The structured data of a page this route resolved, as the JSON-LD text a
+ * content route hands its `render` as `context.structuredData`: read from the
+ * same answer as {@link contentPageMetadata}, and nothing without a provider.
+ *
+ * Exported for a route that resolves its entries its own way, so its pages
+ * carry the same structured data a content route's do.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function contentPageStructuredData<TNode>(
+  config: PageAnswerConfig<TNode>,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<string | undefined> {
+  // Nobody to answer: the route's own metadata is not worked out for nothing.
+  if (knownNoPageMetadataProvider()) return undefined;
+  const { request } = await contentPageRequest(config, entry, context, path);
+  return request === null ? undefined : pageStructuredDataFor(request);
 }
 
 /**

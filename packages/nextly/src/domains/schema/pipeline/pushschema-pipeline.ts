@@ -71,6 +71,7 @@ import {
   desiredSchemaTableNames,
 } from "./desired-snapshot";
 import { diffSnapshots } from "./diff/diff";
+import { liveIndexesStandingInForDeclared } from "./diff/index-util";
 import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
@@ -1450,7 +1451,11 @@ export class PushSchemaPipeline {
           // of every managed table it did not rebuild.
           const stripped = stripKitDropsOfDeclaredIndexes(
             pushResult.sqlStatements,
-            desiredSnapshot
+            desiredSnapshot,
+            liveIndexesStandingInForDeclared(
+              desiredSnapshot.tables,
+              liveSnapshot.tables
+            )
           );
           // Likewise the declared checks and foreign keys, which the kit's
           // runtime tables do not carry on PostgreSQL and MySQL either.

@@ -182,12 +182,12 @@ function SaveProblem({
     // work stays on screen while they decide.
     return (
       <div
-        className="flex flex-wrap items-start gap-3 rounded-md border border-border bg-muted/50 px-4 py-3 text-sm"
+        className="flex flex-wrap items-start gap-3 rounded-md border border-warning-border bg-warning-surface px-4 py-3 text-sm"
         data-testid="dashboard-edit-conflict"
       >
         <Icons.AlertTriangle
           aria-hidden
-          className="mt-0.5 size-4 shrink-0 text-warning"
+          className="mt-0.5 size-4 shrink-0 text-warning-text"
         />
         <p className="min-w-0 flex-1">
           Your dashboard changed somewhere else while you were customizing it.
@@ -209,17 +209,17 @@ function SaveProblem({
 
   if (!writeError) return null;
   // The remedy differs from a conflict's: this one is retried, not reloaded,
-  // so the arrangement stays exactly where it is. Full-strength
-  // `border-destructive`, which every other error surface uses; a faded
-  // border falls under the 3:1 a non-decorative border needs.
+  // so the arrangement stays exactly where it is. Drawn as every danger
+  // notice is: the danger status's surface and border, with the icon in its
+  // text colour carrying the state alongside the words.
   return (
     <div
-      className="flex flex-wrap items-start gap-3 rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm"
+      className="flex flex-wrap items-start gap-3 rounded-md border border-danger-border bg-danger-surface px-4 py-3 text-sm"
       data-testid="dashboard-edit-error"
     >
       <Icons.XCircle
         aria-hidden
-        className="mt-0.5 size-4 shrink-0 text-destructive"
+        className="mt-0.5 size-4 shrink-0 text-danger-text"
       />
       <p className="min-w-0 flex-1">
         Your dashboard could not be saved. Your changes are still here — try

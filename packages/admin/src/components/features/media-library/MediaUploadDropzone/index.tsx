@@ -168,7 +168,7 @@ export function MediaUploadDropzone({
   const backgroundStyles = {
     default: "bg-card",
     active: "bg-primary/5 dark:bg-primary/5",
-    reject: "bg-destructive/5 dark:bg-destructive/10",
+    reject: "bg-danger-surface",
   };
 
   const IconComponent = visualState === "reject" ? AlertTriangle : Upload;
@@ -225,8 +225,7 @@ export function MediaUploadDropzone({
                 visualState === "default" &&
                   "bg-primary/20 dark:bg-primary/30 group-hover:bg-primary/30 dark:group-hover:bg-primary/40",
                 visualState === "active" && "bg-primary/20 dark:bg-primary/25",
-                visualState === "reject" &&
-                  "bg-destructive/15 dark:bg-destructive/20"
+                visualState === "reject" && "bg-danger-surface"
               )}
             >
               <IconComponent

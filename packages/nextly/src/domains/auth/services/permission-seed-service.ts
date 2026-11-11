@@ -22,12 +22,14 @@ import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
-import {
-  WORKFLOW_PERMISSION_GROUP,
-  workflowPermissionActions,
-} from "../../workflows/permissions";
 
-import { entityPermissionSpelling } from "./entity-permission-spelling";
+import {
+  builtInEntityPermissions,
+  COLLECTION_SEEDED_ACTIONS,
+  type EntityPermission,
+  SINGLE_SEEDED_ACTIONS,
+  workflowEntityPermissions,
+} from "./entity-permission-spelling";
 import {
   permissionKey,
   PermissionService,
@@ -444,29 +446,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
  * ```
  */
 /**
- * The actions the built-in seeder creates for every collection and every single.
- *
- * Stated once because two things read them: the seeding loops below, and the check that decides
- * whether a plugin may claim a permission. A second copy is how the reservation drifted from what
- * is actually seeded in the first place.
- */
-const COLLECTION_SEEDED_ACTIONS = [
-  "create",
-  "read",
-  "update",
-  "delete",
-  "publish",
-  "unpublish",
-] as const;
-
-const SINGLE_SEEDED_ACTIONS = [
-  "read",
-  "update",
-  "publish",
-  "unpublish",
-] as const;
-
-/**
  * Does this permission still answer for anything?
  *
  * Two ways to be rubbish, and they need different evidence.
@@ -736,7 +715,7 @@ export class PermissionSeedService extends BaseService {
   /**
    * Into `result`, the permissions of every entity of `kind` named in `slugs`:
    * its built-in actions and the ones the workflow attached to it adds
-   * (`workflowPermissionActions`: each step's own actions, and
+   * (`workflowEntityPermissions`: each step's own actions, and
    * `publish-without-review`), each spelled as a rename spells it. The one rule
    * an entity's permissions are seeded by, whether for one entity
    * (`seedCollectionPermissions`, `seedSinglePermissions`) or for all of them
@@ -787,29 +766,34 @@ export class PermissionSeedService extends BaseService {
     );
     const { workflowAttachedTo } = await import("../../workflows/registry");
     const declared: PermissionDeclaration[] = [];
-    const declare = (action: string, entitySlug: string, group?: string) => {
-      held.add(permissionKey(action, entitySlug));
+    // Spelled and grouped by the helpers a migration snapshot records them by.
+    const declare = (permission: EntityPermission) => {
+      held.add(permissionKey(permission.action, permission.resource));
       declared.push({
-        action,
-        resource: entitySlug,
-        ...entityPermissionSpelling(action, entitySlug),
-        ...(group === undefined ? {} : { meta: { group } }),
+        action: permission.action,
+        resource: permission.resource,
+        name: permission.name,
+        slug: permission.slug,
+        description: permission.description,
+        ...(permission.group === null
+          ? {}
+          : { meta: { group: permission.group } }),
       });
     };
-    const actions =
-      kind === "collection" ? COLLECTION_SEEDED_ACTIONS : SINGLE_SEEDED_ACTIONS;
     for (const entitySlug of slugs) {
-      for (const action of actions) declare(action, entitySlug);
+      for (const permission of builtInEntityPermissions(kind, entitySlug)) {
+        declare(permission);
+      }
       const attached = workflowAttachedTo(kind, entitySlug);
-      for (const action of attached
-        ? workflowPermissionActions(attached.workflow)
+      for (const permission of attached
+        ? workflowEntityPermissions(entitySlug, attached.workflow)
         : []) {
-        if (held.has(permissionKey(action, entitySlug))) {
+        if (held.has(permissionKey(permission.action, entitySlug))) {
           result.total++;
           result.skipped++;
         } else {
           // Stored under the workflow group, which is how the presets tell it is a workflow's.
-          declare(action, entitySlug, WORKFLOW_PERMISSION_GROUP);
+          declare(permission);
         }
       }
     }
