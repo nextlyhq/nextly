@@ -197,3 +197,29 @@ test("the bar and its status menu pass the accessibility check", async ({
   ).toBeVisible();
   await expectNoAxeViolations(page, { include: '[role="menu"]' });
 });
+
+test("docks a selected field's settings against the window's edge", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const form = await savedForm(page, "E2E Docked Panel Form");
+  await gotoAdmin(page, form);
+  await waitForShellAnswers(page);
+
+  await page
+    .getByRole("list", { name: "Form fields" })
+    .getByRole("button", { name: /^Email/ })
+    .first()
+    .click();
+  const panel = page.getByRole("complementary", { name: "Field settings" });
+  await expect(panel).toBeVisible();
+  const box = await panel.boundingBox();
+  // Its right edge is the window's, and it runs the height under the bar.
+  expect(Math.round((box?.x ?? 0) + (box?.width ?? 0))).toBe(1440);
+  expect(box?.height ?? 0).toBeGreaterThan(700);
+  // The outline keeps the rest of the width.
+  const outline = await page
+    .getByRole("list", { name: "Form fields" })
+    .boundingBox();
+  expect(outline?.width ?? 0).toBeGreaterThan(600);
+});

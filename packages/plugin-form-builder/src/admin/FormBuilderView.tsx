@@ -47,6 +47,7 @@ import { FORM_PAGES, formPageOf, type FormPageId } from "../form-pages";
 import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
+import { FieldInspector } from "./components/builder/FieldInspector";
 import { FormIdentitySection } from "./components/builder/FormIdentitySection";
 import { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
 import { FormPreview } from "./components/builder/FormPreview";
@@ -449,13 +450,15 @@ function FormEditor({
 
   // A field from the picker, added and opened (`fieldFromChoice`).
   const handleAddField = useCallback(
-    (type: FormFieldTypeId, choice?: FieldPickerChoice) => {
+    (type: FormFieldTypeId, choice?: FieldPickerChoice, index?: number) => {
       const newField = fieldFromChoice(
         type,
         choice,
         fields.map(f => f.name)
       );
-      addField(newField);
+      // Where the outline asked for it (between two rows, or below one),
+      // else at the end.
+      addField(newField, index);
       selectField(newField.name);
     },
     [fields, addField, selectField]
@@ -525,66 +528,80 @@ function FormEditor({
         readOnly={readOnly}
       />
 
-      {/* The editor's column. The Editor frame draws no gutter, so the column
+      {/* The editor's column, and on Builder the selected field's settings
+          docked at the window's edge beside it, as tall as the window. */}
+      <div
+        data-slot="form-editor"
+        className="flex min-h-[var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))] items-stretch"
+      >
+        <div className="min-w-0 flex-1">
+          {/* The editor's column. The Editor frame draws no gutter, so the column
           carries the editor's own inset, in the steps the entry editor's
           field column uses, and its 72rem measure. */}
-      <div
-        data-slot="form-editor-column"
-        className="w-full max-w-[72rem] px-4 pb-16 pt-6 @3xl/content:px-6 @4xl/content:px-8 lg:pt-8"
-      >
-        <FormEditorHeader
-          name={formData.name}
-          fieldCount={fields.length}
-          formId={formData.slug}
-          tabs={tabs}
-          current={page}
-        />
+          <div
+            data-slot="form-editor-column"
+            className="w-full max-w-[72rem] px-4 pb-16 pt-6 @3xl/content:px-6 @4xl/content:px-8 lg:pt-8"
+          >
+            <FormEditorHeader
+              name={formData.name}
+              fieldCount={fields.length}
+              formId={formData.slug}
+              tabs={tabs}
+              current={page}
+            />
 
-        <RefusalAlert
-          refusal={refusal}
-          current={page}
-          hrefOf={pageHref}
-          follow={(event, target) =>
-            followTab(event, pageHref(target), {
-              saved,
-              choose: () => choosePage(target),
-            })
-          }
-        />
+            <RefusalAlert
+              refusal={refusal}
+              current={page}
+              hrefOf={pageHref}
+              follow={(event, target) =>
+                followTab(event, pageHref(target), {
+                  saved,
+                  choose: () => choosePage(target),
+                })
+              }
+            />
 
-        <PageBody page={page}>
-          {pageContent(page, {
-            builder: () => (
-              <FieldCards
-                enabledTypes={config.enabledTypes}
-                disabledFieldTypes={config.disabledFieldTypes}
-                onAddField={handleAddField}
-              />
-            ),
-            preview: () => <FormPreview fields={fields} formData={formData} />,
-            settings: () => (
-              <div className="flex flex-col gap-10">
-                <FormIdentitySection />
-                <FormSettingsTab
-                  spamDefaults={config.spamDefaults}
-                  redirectCollections={config.redirectCollections}
-                  redirectConfigFailed={config.failed}
-                />
-              </div>
-            ),
-            notifications: () => (
-              <FormNotificationsTab defaults={config.notificationDefaults} />
-            ),
-            submissions: () => (
-              <SubmissionsPage
-                formId={entryId}
-                submissionsSlug={config.submissionsSlug}
-                allowed={canReadSubmissions}
-                known={access.known}
-              />
-            ),
-          })}
-        </PageBody>
+            <PageBody page={page}>
+              {pageContent(page, {
+                builder: () => (
+                  <FieldCards
+                    enabledTypes={config.enabledTypes}
+                    disabledFieldTypes={config.disabledFieldTypes}
+                    onAddField={handleAddField}
+                  />
+                ),
+                preview: () => (
+                  <FormPreview fields={fields} formData={formData} />
+                ),
+                settings: () => (
+                  <div className="flex flex-col gap-10">
+                    <FormIdentitySection />
+                    <FormSettingsTab
+                      spamDefaults={config.spamDefaults}
+                      redirectCollections={config.redirectCollections}
+                      redirectConfigFailed={config.failed}
+                    />
+                  </div>
+                ),
+                notifications: () => (
+                  <FormNotificationsTab
+                    defaults={config.notificationDefaults}
+                  />
+                ),
+                submissions: () => (
+                  <SubmissionsPage
+                    formId={entryId}
+                    submissionsSlug={config.submissionsSlug}
+                    allowed={canReadSubmissions}
+                    known={access.known}
+                  />
+                ),
+              })}
+            </PageBody>
+          </div>
+        </div>
+        {page === "builder" ? <FieldInspector /> : null}
       </div>
 
       <DeleteFormDialog
