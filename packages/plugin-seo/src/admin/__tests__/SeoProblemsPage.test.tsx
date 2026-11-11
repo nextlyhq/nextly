@@ -171,4 +171,20 @@ describe("SeoProblemsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /Check now/ }));
     await vi.waitFor(() => expect(screen.getByText("1 problem")).toBeTruthy());
   });
+
+  it("shows the developer note where the clipboard can't be written", async () => {
+    serving(LIST);
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    render(<SeoProblemsPage />);
+    fireEvent.click(screen.getByText("Copy a note for a developer"));
+    await vi.waitFor(() =>
+      expect(toastMutationResult).toHaveBeenCalledWith(
+        "Add publicAddress to cases.",
+        []
+      )
+    );
+  });
 });

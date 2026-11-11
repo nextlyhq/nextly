@@ -9,24 +9,35 @@ import { describe, expect, it, vi } from "vitest";
 const store = vi.hoisted(() => ({
   calls: [] as string[],
   versionsRead: 0,
-  failVersions: false,
+  failRemove: false,
 }));
 
 vi.mock("../store", async importOriginal => ({
   ...(await importOriginal<typeof import("../store")>()),
   // No row before the check; one, by the time the deletion reads.
-  readVersions: async () => {
-    if (store.failVersions) throw new Error("the database went away");
+  readVersionsOf: async () => {
     store.calls.push("readVersions");
     store.versionsRead += 1;
-    return store.versionsRead === 1
-      ? []
-      : [{ subject: { type: "posts", id: "7", label: "7" }, locale: "en" }];
+    // A row the page's check finds stale, where a removal is to fail.
+    return store.failRemove
+      ? new Map([
+          [
+            "7",
+            [{ subject: { type: "posts", id: "7", label: "7" }, locale: "en" }],
+          ],
+        ])
+      : new Map();
+  },
+  readVersions: async () => {
+    store.calls.push("readVersions");
+    store.versionsRead += 1;
+    return [{ subject: { type: "posts", id: "7", label: "7" }, locale: "en" }];
   },
   savePage: async () => {
     store.calls.push("savePage");
   },
   removePage: async () => {
+    if (store.failRemove) throw new Error("the database went away");
     store.calls.push("removePage");
     return true;
   },
@@ -91,11 +102,16 @@ describe("a page's checks and its deletion", () => {
 
   it("fail a full check when a page's check fails, and record no check", async () => {
     store.calls = [];
-    store.failVersions = true;
+    store.failRemove = true;
     const ctx = {
       logger: { error: vi.fn() },
       self: { collections: {} },
+      services: {
+        ownCollections: { listEntries: async () => ({ data: [] }) },
+        collections: { listEntries: async () => ({ data: [] }) },
+      },
       publicAddresses: {
+        defaultLanguage: async () => "en",
         types: async () => [{ kind: "collection", slug: "posts" }],
         held: async () => ({
           items: [
@@ -113,7 +129,7 @@ describe("a page's checks and its deletion", () => {
       );
       expect(store.calls).not.toContain("saveSiteCheck");
     } finally {
-      store.failVersions = false;
+      store.failRemove = false;
     }
   });
 });

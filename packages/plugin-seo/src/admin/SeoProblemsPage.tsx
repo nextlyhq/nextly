@@ -74,7 +74,15 @@ function FixButton({ problem }: { problem: Problem }): JSX.Element {
       size="sm"
       className="nx-seo-sbtn"
       onClick={() => {
-        void navigator.clipboard?.writeText(note).then(
+        // Where the clipboard can't be written (an address that is not
+        // secure, or a policy refusing it), the note is shown to copy by hand.
+        const clipboard =
+          typeof navigator === "undefined" ? undefined : navigator.clipboard;
+        if (clipboard === undefined) {
+          toastMutationResult(note, []);
+          return;
+        }
+        void clipboard.writeText(note).then(
           () => toastMutationResult(`Copied: “${note}”`, []),
           () => toastMutationResult(note, [])
         );

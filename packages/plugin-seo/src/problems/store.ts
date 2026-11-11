@@ -254,29 +254,52 @@ export async function removePage(
   }
 }
 
+/**
+ * The rows of each of `ids`, pages of `type`, one for each language it was
+ * checked in, read together in pages of {@link READ_PAGE}.
+ */
+export async function readVersionsOf(
+  ctx: PluginContext,
+  type: string,
+  ids: readonly string[]
+): Promise<Map<string, PageRow[]>> {
+  const byId = new Map<string, PageRow[]>();
+  if (ids.length === 0) return byId;
+  for (let page = 1; ; page++) {
+    const { data } = await ctx.services.ownCollections.listEntries(
+      problemsSlug(ctx),
+      {
+        where: {
+          and: [
+            { kind: { equals: "page" } },
+            { holderCollection: { equals: type } },
+            { holderId: { in: [...ids] } },
+          ],
+        },
+        sort: { field: "rowKey", direction: "asc" },
+        pagination: { limit: READ_PAGE, page },
+        depth: 0,
+      }
+    );
+    const found = data as unknown[];
+    for (const item of found) {
+      const row = isRecord(item) ? pageRowOf(item) : undefined;
+      if (row === undefined) continue;
+      const rows = byId.get(row.subject.id) ?? [];
+      rows.push(row);
+      byId.set(row.subject.id, rows);
+    }
+    if (found.length < READ_PAGE) return byId;
+  }
+}
+
 /** The rows of the page `id` of `type`, one for each language it was checked in. */
 export async function readVersions(
   ctx: PluginContext,
   type: string,
   id: string
 ): Promise<PageRow[]> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    problemsSlug(ctx),
-    {
-      where: {
-        and: [
-          { kind: { equals: "page" } },
-          { holderCollection: { equals: type } },
-          { holderId: { equals: id } },
-        ],
-      },
-      pagination: { limit: READ_PAGE, page: 1 },
-      depth: 0,
-    }
-  );
-  return (data as unknown[]).flatMap(item =>
-    isRecord(item) ? (pageRowOf(item) ?? []) : []
-  );
+  return (await readVersionsOf(ctx, type, [id])).get(id) ?? [];
 }
 
 /** Every page row, in pages of {@link READ_PAGE}. */

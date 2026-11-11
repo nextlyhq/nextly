@@ -59,6 +59,7 @@ import {
   pageKey,
   readPages,
   readVersions,
+  readVersionsOf,
   readSiteCheck,
   removePage,
   savePage,
@@ -92,27 +93,81 @@ function labelOf(entry: Readonly<Record<string, unknown>>, id: string): string {
 }
 
 /**
- * The entry `id` of `type` in `locale` (the default language where none),
- * as a route reads it: one level of links expanded, so a media field reads
- * as the media library's item. Nothing where it does not exist.
+ * The entries `ids` of `type` in `locale` (the default language where none),
+ * read together as a route reads one: one level of links expanded, so a
+ * media field reads as the media library's item. One missing is absent.
  */
-async function readEntry(
+async function readEntries(
   ctx: PluginContext,
   type: string,
-  id: string,
+  ids: readonly string[],
   locale: string | undefined
-): Promise<Readonly<Record<string, unknown>> | undefined> {
+): Promise<Map<string, Readonly<Record<string, unknown>>>> {
   const { data } = await ctx.services.collections.listEntries(
     type,
     {
-      where: { id: { equals: id } },
-      pagination: { limit: 1, page: 1 },
+      where: { id: { in: [...ids] } },
+      pagination: { limit: ids.length, page: 1 },
       depth: 1,
     },
     { as: "system", ...(locale === undefined ? {} : { locale }) }
   );
-  const [entry] = data as unknown[];
-  return isRecord(entry) ? entry : undefined;
+  const byId = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const entry of data as unknown[]) {
+    if (isRecord(entry)) byId.set(String(entry.id), entry);
+  }
+  return byId;
+}
+
+/**
+ * What checking a page reads before anything else: its rows as they stand,
+ * the paths it holds in each language, and its entry in each of those
+ * languages. Read for a whole batch of pages at once by a full check.
+ */
+interface PageReads {
+  defaultLanguage: string;
+  before: PageRow[];
+  held: HeldLanguages;
+  entries: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+}
+
+/** {@link PageReads} for each of `ids`, pages of `type`, read together. */
+async function readBatch(
+  ctx: PluginContext,
+  type: string,
+  ids: readonly string[]
+): Promise<Map<string, PageReads>> {
+  const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
+  const before = await readVersionsOf(ctx, type, ids);
+  const held = await heldLanguages(ctx, type, ids);
+  const languages = new Set<string>();
+  for (const id of ids) {
+    for (const language of held.get(id)?.keys() ?? []) languages.add(language);
+    for (const row of before.get(id) ?? []) languages.add(row.locale);
+  }
+  const entries = new Map<
+    string,
+    Map<string, Readonly<Record<string, unknown>>>
+  >();
+  for (const language of languages) {
+    const locale = language === defaultLanguage ? undefined : language;
+    for (const [id, entry] of await readEntries(ctx, type, ids, locale)) {
+      const byLanguage = entries.get(id) ?? new Map();
+      byLanguage.set(language, entry);
+      entries.set(id, byLanguage);
+    }
+  }
+  return new Map(
+    ids.map(id => [
+      id,
+      {
+        defaultLanguage,
+        before: before.get(id) ?? [],
+        held: held.get(id) ?? new Map(),
+        entries: entries.get(id) ?? new Map(),
+      },
+    ])
+  );
 }
 
 /** One language of a page, and the paths the record says it holds there. */
@@ -156,10 +211,10 @@ async function servedAddress(
 async function examine(
   ctx: PluginContext,
   checks: ProblemChecks,
-  version: Version
+  version: Version,
+  entry: Readonly<Record<string, unknown>> | undefined
 ): Promise<PageRow | undefined> {
   const { type, id, locale } = version;
-  const entry = await readEntry(ctx, type, id, locale);
   if (entry === undefined) return undefined;
   const ownAddress = await servedAddress(ctx, version, entry);
   if (ownAddress === undefined) return undefined;
@@ -244,44 +299,44 @@ function altersOthers(before: PageRow | undefined, row: PageRow): boolean {
   );
 }
 
-/** The languages the page `id` of `type` holds an address in, with the paths. */
-async function versionsOf(
-  ctx: PluginContext,
-  type: string,
-  id: string
-): Promise<{ defaultLanguage: string; held: HeldLanguages }> {
-  return {
-    defaultLanguage: await ctx.publicAddresses.defaultLanguage(),
-    held: (await heldLanguages(ctx, type, [id])).get(id) ?? new Map(),
-  };
-}
-
 /**
  * Check a page in every language it holds an address in, or was checked
  * in before, keep what was found, and forget a language it is no longer
  * public in. Where a change can alter another page's result, the full
  * check is marked out of date first, so whoever reads the new rows also
- * reads the mark. Answers the keys of the rows it kept.
+ * reads the mark. Reads what `reads` does not hand it, read for a batch.
+ * Answers the keys of the rows it kept.
  */
 async function checkPage(
   ctx: PluginContext,
   checks: ProblemChecks,
   type: string,
-  id: string
+  id: string,
+  reads?: PageReads
 ): Promise<string[]> {
-  const before = await readVersions(ctx, type, id);
-  const { defaultLanguage, held } = await versionsOf(ctx, type, id);
+  const { defaultLanguage, before, held, entries } = reads ??
+    (await readBatch(ctx, type, [id])).get(id) ?? {
+      defaultLanguage: await ctx.publicAddresses.defaultLanguage(),
+      before: [],
+      held: new Map(),
+      entries: new Map(),
+    };
   const languages = new Set([...held.keys(), ...before.map(row => row.locale)]);
   const found: { previous: PageRow | undefined; row: PageRow | undefined }[] =
     [];
   for (const language of languages) {
-    const row = await examine(ctx, checks, {
-      type,
-      id,
-      language,
-      locale: language === defaultLanguage ? undefined : language,
-      held: held.get(language) ?? new Set(),
-    });
+    const row = await examine(
+      ctx,
+      checks,
+      {
+        type,
+        id,
+        language,
+        locale: language === defaultLanguage ? undefined : language,
+        held: held.get(language) ?? new Set(),
+      },
+      entries.get(language)
+    );
     found.push({ previous: before.find(row => row.locale === language), row });
   }
   const changed = found.some(({ previous, row }) =>
@@ -298,6 +353,31 @@ async function checkPage(
     }
   }
   return kept;
+}
+
+/** `read`, answering each language once and keeping the answer. */
+function onceForEach<T>(
+  read: (ctx: PluginContext, locale: string | undefined) => Promise<T>
+): (ctx: PluginContext, locale: string | undefined) => Promise<T> {
+  const answers = new Map<string, Promise<T>>();
+  return (ctx, locale) => {
+    const key = locale ?? "";
+    let answer = answers.get(key);
+    if (answer === undefined) {
+      answer = read(ctx, locale);
+      answers.set(key, answer);
+    }
+    return answer;
+  };
+}
+
+/** `readers`, each read once for each language. */
+function readOnceEach(readers: CheckReaders): CheckReaders {
+  return {
+    readRules: onceForEach(readers.readRules),
+    readStructuredDataRules: onceForEach(readers.readStructuredDataRules),
+    readSocialCardRules: onceForEach(readers.readSocialCardRules),
+  };
 }
 
 /** Pages read per step of a full check. */
@@ -320,13 +400,25 @@ async function checkType(
       after,
       limit: HELD_PAGE,
     });
-    for (const document of page.items) {
-      if (document.holds.length === 0) continue;
-      const { id } = document.holder;
-      // In the page's turn, so a check of a save made meanwhile and this one
-      // never write over each other.
+    const ids = page.items
+      .filter(document => document.holds.length > 0)
+      .map(document => document.holder.id);
+    // What every page of the batch reads first, read together; each page's
+    // writes still wait for its turn. A page saved since its batch was read
+    // reads again then, so this never writes an older reading over a newer
+    // check's.
+    const writes = new Map(ids.map(id => [id, writesTo(slug, id)]));
+    const batch = await readBatch(ctx, slug, ids);
+    for (const id of ids) {
       await inTurn(slug, id, async () => {
-        for (const key of await checkPage(ctx, checks, slug, id)) {
+        const current = writes.get(id) === writesTo(slug, id);
+        for (const key of await checkPage(
+          ctx,
+          checks,
+          slug,
+          id,
+          current ? batch.get(id) : undefined
+        )) {
           seen.add(key);
         }
       });
@@ -341,8 +433,10 @@ async function checkType(
  */
 async function runSiteCheck(
   ctx: PluginContext,
-  checks: ProblemChecks
+  siteChecks: ProblemChecks
 ): Promise<void> {
+  // The site's rules, read once for each language for the whole scan.
+  const checks = { ...siteChecks, readers: readOnceEach(siteChecks.readers) };
   const seen = new Set<string>();
   const siteTypes = new Set(
     (await ctx.publicAddresses.types())
@@ -356,9 +450,15 @@ async function runSiteCheck(
   // was walked, its row written by its save's own check: it is checked
   // again in its turn, which keeps it while it is public and forgets it
   // where it is not.
+  const checked = new Set(checks.targets.filter(slug => siteTypes.has(slug)));
   for (const row of await readPages(ctx)) {
     const { type, id } = row.subject;
     if (seen.has(pageKey(type, id, row.locale))) continue;
+    // A collection no longer checked, or no longer there: its rows go.
+    if (!checked.has(type)) {
+      await inTurn(type, id, () => removePage(ctx, row));
+      continue;
+    }
     await inTurn(type, id, async () => {
       for (const key of await checkPage(ctx, checks, type, id)) {
         seen.add(key);
@@ -480,6 +580,20 @@ export function checkSite(
   return running;
 }
 
+/** How many saves and deletions of each page have been queued. */
+const pageWrites = new Map<string, number>();
+
+/** The count of queued saves and deletions of a page, to tell whether one came since. */
+function writesTo(type: string, id: string): number {
+  return pageWrites.get(`${type}\u0000${id}`) ?? 0;
+}
+
+/** Count a save or deletion of a page. */
+function countWrite(type: string, id: string): void {
+  const key = `${type}\u0000${id}`;
+  pageWrites.set(key, (pageWrites.get(key) ?? 0) + 1);
+}
+
 /** The work waiting or running for each page, one piece after another. */
 const pageQueue = new Map<string, Promise<void>>();
 
@@ -532,6 +646,7 @@ export function recheckSaved(
   type: string,
   id: string
 ): void {
+  countWrite(type, id);
   inTurnAfterWrite(
     ctx,
     type,
@@ -552,6 +667,7 @@ export function forgetDeleted(
   type: string,
   id: string
 ): void {
+  countWrite(type, id);
   inTurnAfterWrite(
     ctx,
     type,

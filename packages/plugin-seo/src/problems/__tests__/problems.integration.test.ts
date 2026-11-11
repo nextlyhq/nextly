@@ -34,7 +34,7 @@ import {
   type Reader,
 } from "../check";
 import type { Problem } from "../contract";
-import { PROBLEMS_SLUG } from "../store";
+import { PROBLEMS_SLUG, savePage } from "../store";
 
 let current: TestNextly | undefined;
 
@@ -456,9 +456,15 @@ describe.each(getConfiguredTestDialects())(
       const { t, ctx } = await boot(dialect);
       const id = await publish(t, { title: "Harbour", slug: "harbour" });
       await until(t, checkedSince(id));
-      // A full check that reached no page of posts, as one that passed
-      // posts before this page was published.
-      await checkSite(ctx, { ...CHECKS, targets: ["notes"] });
+      // A full check whose walk reached no page of posts, as one that
+      // passed posts before this page was published.
+      const publicAddresses = Object.create(ctx.publicAddresses, {
+        held: { value: async () => ({ items: [] }) },
+      }) as PluginContext["publicAddresses"];
+      const walkedPast = Object.create(ctx, {
+        publicAddresses: { value: publicAddresses },
+      }) as PluginContext;
+      await checkSite(walkedPast, CHECKS);
       expect((await rows(t)).some(row => row.holderId === id)).toBe(true);
     });
 
@@ -521,6 +527,58 @@ describe.each(getConfiguredTestDialects())(
         .filter(p => p.kind === "noDescription")
         .map(p => [p.subject.id, p.subject.detail]);
       expect(missing).toEqual([[id, "/blog/harbour"]]);
+    });
+
+    it("a full check reads a batch of pages' entries together, not one by one", async () => {
+      const { t, ctx } = await boot(dialect);
+      // One after another: three saves at once can deadlock on MySQL.
+      const ids: string[] = [];
+      for (const slug of ["a", "b", "c"]) {
+        ids.push(await publish(t, { title: slug, slug }));
+      }
+      await until(t, found => ids.every(id => checkedSince(id)(found)));
+      // The plugin's context, with its reads of collections counted.
+      const read: unknown[] = [];
+      const collections = ctx.services.collections;
+      const counted = Object.create(collections, {
+        listEntries: {
+          value: (...args: Parameters<typeof collections.listEntries>) => {
+            if (args[0] === "posts") read.push(args[1]?.where);
+            return collections.listEntries(...args);
+          },
+        },
+      }) as typeof collections;
+      const services = Object.create(ctx.services, {
+        collections: { value: counted },
+      }) as PluginContext["services"];
+      const watched = Object.create(ctx, {
+        services: { value: services },
+      }) as PluginContext;
+
+      await checkSite(watched, CHECKS);
+      // The checks' reads of the entries: none of one entry alone, and one
+      // of all three. (The sitemap's listing makes reads of its own.)
+      const byId = read.filter(
+        where => typeof where === "object" && where !== null && "id" in where
+      ) as { id: { equals?: unknown; in?: unknown[] } }[];
+      expect(byId.filter(where => where.id.equals !== undefined)).toEqual([]);
+      expect(byId.filter(where => where.id.in !== undefined)).toHaveLength(1);
+    });
+
+    it("a full check forgets the rows of a collection that is no longer checked", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, { title: "Harbour", slug: "harbour" });
+      await until(t, checkedSince(id));
+      await savePage(ctx, {
+        subject: { type: "removed", id: "9", label: "Gone" },
+        locale: "en",
+        problems: [],
+        checkedAt: new Date().toISOString(),
+      });
+      await checkSite(ctx, CHECKS);
+      const kept = await rows(t);
+      expect(kept.some(row => row.holderCollection === "removed")).toBe(false);
+      expect(kept.some(row => row.holderId === id)).toBe(true);
     });
   }
 );
