@@ -25,19 +25,39 @@ async function addField(page: Page, search: string, label: string) {
   await expect(picker).toHaveCount(0);
 }
 
+/** Opens a page of the form editor through its tab, a link in the header. */
+async function openPage(page: Page, label: string) {
+  await page
+    .getByRole("navigation", { name: "Form pages" })
+    .getByRole("link", { name: new RegExp(`^${label}`) })
+    .click();
+}
+
+/** The form editor's Save, in the admin's top bar. */
+const saveButton = (page: Page) =>
+  page.getByRole("banner").getByRole("button", { name: "Save", exact: true });
+
 /** A new form with the name given, on the create page. */
 async function newForm(page: Page, name: string) {
   await gotoAdmin(page, "/collections/forms/create");
-  await page.getByRole("textbox", { name: "Form Name" }).fill(name);
+  // The name is typed on Settings; the header shows it once given.
+  await openPage(page, "Settings");
+  await page.getByRole("textbox", { name: "Name" }).fill(name);
+  await openPage(page, "Builder");
 }
 
-/** Creates the form and opens it again from the list. */
+/** Creates the form, then opens it again from its own address. */
 async function createAndReopen(page: Page, name: string) {
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  // Dev cold-compiles routes, so the save and the list get a generous window.
-  await expect(page).toHaveURL(/\/collections\/forms$/, { timeout: 30_000 });
-  // Entry rows render as buttons (the whole row navigates).
-  await page.getByRole("button", { name: new RegExp(name) }).click();
+  await saveButton(page).click();
+  // A new form carries on at its own edit address. Dev cold-compiles routes,
+  // so the save and the next page get a generous window.
+  await expect(page).toHaveURL(/\/collections\/forms\/(?!create$)[^/]+$/, {
+    timeout: 30_000,
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible({
+    timeout: 30_000,
+  });
 }
 
 const cards = (page: Page) => page.locator('ul[aria-label="Form fields"] li');
@@ -101,8 +121,8 @@ test("saves and reloads, with no database review", async ({ page }) => {
   // reload.
   await expect(cards(page)).toHaveCount(1, { timeout: 30_000 });
   await addField(page, "number", "Guests");
-  await page.getByRole("button", { name: "Save Changes" }).click();
-  await expect(page.getByText("Form updated successfully")).toBeVisible({
+  await saveButton(page).click();
+  await expect(page.getByText("Form saved")).toBeVisible({
     timeout: 30_000,
   });
   await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -144,18 +164,14 @@ test("refuses to delete a field another refers to", async ({ page }) => {
 test("seeds a default notification, edits it in place, and guards referenced fields", async ({
   page,
 }) => {
-  await gotoAdmin(page, "/collections/forms/create");
-
-  await page
-    .getByRole("textbox", { name: "Form Name" })
-    .fill("E2E Notifications Form");
+  await newForm(page, "E2E Notifications Form");
 
   // One email field for reply-to / condition targets.
   await addField(page, "email", "Email");
 
   // A new form arrives pre-seeded with one admin-notification rule, ready to
   // send with the starter message rather than waiting for one.
-  await page.getByRole("tab", { name: /Notifications/ }).click();
+  await openPage(page, "Notifications");
   await expect(page.getByText("Admin notification")).toBeVisible();
   await expect(page.getByText("No template — will not send")).toHaveCount(0);
 
@@ -196,16 +212,14 @@ test("seeds a default notification, edits it in place, and guards referenced fie
 
   // The email field is referenced by the rule's reply-to and condition, so
   // its delete is blocked back on the Builder tab.
-  await page.getByRole("tab", { name: "Builder" }).click();
+  await openPage(page, "Builder");
   await page.getByRole("button", { name: "Actions for Email" }).click();
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
   await page.keyboard.press("Escape");
 
   // Round trip: the rule, its condition, and the guard all persist.
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page).toHaveURL(/\/collections\/forms$/, { timeout: 30_000 });
-  await page.getByRole("button", { name: /E2E Notifications Form/ }).click();
-  await page.getByRole("tab", { name: /Notifications/ }).click();
+  await createAndReopen(page, "E2E Notifications Form");
+  await openPage(page, "Notifications");
   await expect(page.getByText("Admin notification")).toBeVisible({
     timeout: 30_000,
   });
@@ -217,12 +231,9 @@ test("the preview is an interactive simulation with real confirmation", async ({
 }) => {
   // Self-sufficient: the preview needs no saved form — the builder state
   // previews live, so an unsaved form with one field is enough.
-  await gotoAdmin(page, "/collections/forms/create");
-  await page
-    .getByRole("textbox", { name: "Form Name" })
-    .fill("E2E Preview Form");
+  await newForm(page, "E2E Preview Form");
   await addField(page, "email", "Email");
-  await page.getByRole("tab", { name: "Preview" }).click();
+  await openPage(page, "Preview");
 
   // Inputs are enabled — this is a simulation, not a screenshot.
   const emailInput = page.getByRole("textbox", { name: /^Email/ });
