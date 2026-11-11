@@ -190,6 +190,28 @@ describe("the unique index name", () => {
     );
   });
 
+  it.each(DIALECTS)(
+    "is the bounded name for a one-to-one added to an existing table on %s",
+    dialect => {
+      const longTable = `dc_${"a".repeat(48)}`;
+      const longColumn = "b".repeat(48);
+      const sql = new DynamicCollectionSchemaService(
+        undefined,
+        dialect
+      ).generateAlterTableMigration(longTable, [], [
+        {
+          name: longColumn,
+          type: "relationship",
+          options: { target: "people", relationType: "oneToOne" },
+        },
+      ] as never);
+      const bounded = uniqueIndexNameForColumn(longTable, longColumn);
+
+      expect(sql).toContain(bounded);
+      expect(sql).not.toContain(`uq_${longTable}_${longColumn}`);
+    }
+  );
+
   it("stays DISTINCT for two long columns that share a prefix", () => {
     // Length alone is not the property. A plain truncation also produces a name within the limit —
     // and produces the SAME name for both of these, so a repair renaming pre-existing objects onto
