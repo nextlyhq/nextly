@@ -27,13 +27,13 @@ import { seoCan } from "../permissions";
 
 import {
   checkSite,
-  pageRefKey,
   problemList,
   type ProblemChecks,
   type Reader,
 } from "./check";
 import { PROBLEMS_CHECK_ROUTE_PATH, PROBLEMS_ROUTE_PATH } from "./contract";
-import { pageTypeOf, singleKey } from "./page-types";
+import { singleKey } from "./page-types";
+import { inChunks, readerAs } from "./reader";
 
 /**
  * The types the caller may read, of those SEO is added to, by the key their
@@ -60,73 +60,41 @@ async function readableTypes(
 /** How many ids one read of a type asks about. */
 const ID_CHUNK = 100;
 
-/** The pages of `refs` grouped by type, each id once. */
-function idsByType(
-  refs: Parameters<Reader["pages"]>[0]
-): Map<string, string[]> {
-  const byType = new Map<string, Set<string>>();
-  for (const { type, id } of refs) {
-    const ids = byType.get(type) ?? new Set<string>();
-    ids.add(id);
-    byType.set(type, ids);
-  }
-  return new Map([...byType].map(([type, ids]) => [type, [...ids]]));
-}
-
-/**
- * Which pages the caller may read, asked of the collections themselves as
- * the caller, so a read rule that admits only some entries (the caller's
- * own, say) decides, as it does for every other read. A type the caller may
- * not read at all is not asked about, and a Single's page is theirs where
- * they may read the Single.
- */
+/** Which pages the route's caller may read, each read made as them. */
 async function readerOf(
   ctx: PluginRouteContext,
   types: ReadonlySet<string>
 ): Promise<Reader> {
-  const asReader = {
+  const asCaller = {
     as: "user" as const,
     user: ctx.user ?? undefined,
     ...(ctx.authenticatedScope === undefined
       ? {}
       : { authenticatedScope: ctx.authenticatedScope }),
   };
-  const pages: Reader["pages"] = async refs => {
-    const allowed = new Set<string>();
-    for (const [type, ids] of idsByType(refs)) {
-      if (!types.has(type)) continue;
-      // A Single's one page is read by whoever may read the Single.
-      if (pageTypeOf(type).kind === "single") {
-        for (const id of ids) allowed.add(pageRefKey({ type, id }));
-        continue;
-      }
-      for (let at = 0; at < ids.length; at += ID_CHUNK) {
-        const chunk = ids.slice(at, at + ID_CHUNK);
-        const { data } = await ctx.services.collections.listEntries(
-          type,
-          {
-            where: { id: { in: chunk } },
-            select: { id: true },
-            depth: 0,
-            pagination: { limit: chunk.length, page: 1 },
-          },
-          asReader
-        );
-        for (const entry of data as { id?: unknown }[]) {
-          allowed.add(pageRefKey({ type, id: String(entry.id) }));
-        }
-      }
-    }
-    return allowed;
-  };
-  return {
-    pages,
-    readsType: type => types.has(type),
-    // Counted as the caller, so a rule admitting only some entries decides.
-    count: type => ctx.services.collections.count(type, {}, asReader),
+  return readerAs(
+    {
+      readable: (type, ids) =>
+        inChunks(ids, ID_CHUNK, async chunk => {
+          const { data } = await ctx.services.collections.listEntries(
+            type,
+            {
+              where: { id: { in: chunk } },
+              select: { id: true },
+              depth: 0,
+              pagination: { limit: chunk.length, page: 1 },
+            },
+            asCaller
+          );
+          return (data as { id?: unknown }[]).map(entry => String(entry.id));
+        }),
+      // Counted as the caller, so a rule admitting only some entries decides.
+      count: type => ctx.services.collections.count(type, {}, asCaller),
+    },
+    types,
     // Redirects are site-wide SEO's: named only to someone holding it.
-    seesRedirects: await seoCan(ctx, "manage"),
-  };
+    await seoCan(ctx, "manage")
+  );
 }
 
 /** The routes that read the list and check the site again. */

@@ -279,7 +279,7 @@ describe("seoPlugin", () => {
 });
 
 describe("the dashboard card the plugin contributes", () => {
-  it("declares seo/issues and its Needs attention lines through contributes.dashboard", () => {
+  it("declares seo/issues and its Needs attention line through contributes.dashboard", () => {
     const plugin = seoPlugin({
       collections: ["pages", "posts"],
       sitemap: false,
@@ -289,14 +289,13 @@ describe("the dashboard card the plugin contributes", () => {
     expect(dashboard?.widgets?.map(widget => widget.id)).toEqual([
       "seo/issues",
     ]);
-    // A line per collection it extends, which carry the `seo` group.
+    // One line counting the problem list, shown to a reader of any
+    // collection SEO is added to.
     expect(dashboard?.attention?.map(item => item.id)).toEqual([
-      "seo/issues-pages",
-      "seo/issues-posts",
+      "seo/problems",
     ]);
     expect(dashboard?.attention?.map(item => item.collections)).toEqual([
-      ["pages"],
-      ["posts"],
+      ["pages", "posts"],
     ]);
   });
 
@@ -318,10 +317,10 @@ describe("the dashboard card the plugin contributes", () => {
   });
 
   it("is withheld when no collection carries the fields", () => {
-    // 🔴 A plugin registered with no collections extends nothing, so the scan
-    // has nothing to read and every count answers zero. A card there would
-    // report a clean site for a plugin that is doing nothing at all -- which is
-    // worse than no card, because it is an answer rather than an absence.
+    // 🔴 A plugin registered with no collections checks no page of one, so
+    // every count answers zero. A card there would report a clean site for a
+    // plugin that is doing nothing at all -- which is worse than no card,
+    // because it is an answer rather than an absence.
     const plugin = seoPlugin({ collections: [], sitemap: false });
 
     expect(plugin.contributes?.dashboard).toBeUndefined();

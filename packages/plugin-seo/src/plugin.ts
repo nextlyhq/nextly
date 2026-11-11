@@ -56,6 +56,7 @@ import {
   MANAGE_SEO_PERMISSION,
   seoPermissionDeclarations,
 } from "./permissions";
+import { problemsForCard } from "./problems/card-source";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
 import { problemRoutes } from "./problems/route";
@@ -99,7 +100,7 @@ import {
   type StructuredDataOptions,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
-import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
+import { seoIssuesWidget, seoProblemsAttentionItem } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -624,18 +625,20 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
   };
 
-  // The SEO issues card and its Needs attention lines, one per collection,
-  // all counting the issues in those same collections. Bound to `targets`
-  // rather than to every collection: a collection this plugin never extended
-  // has no `seo` group, so every one of its documents would report the full
-  // set of missing fields and drown the real answer. Each is withheld where it
-  // would have nothing to say (see `widget-card`).
-  const issuesCard = seoIssuesWidget(targets, seoFields);
-  const issuesItems = seoIssuesAttentionItems(targets, seoFields);
-  if (issuesCard || issuesItems.length > 0) {
+  // The SEO issues card and its Needs attention line, counting what the
+  // problem list finds as each person may read it, so the dashboard and the
+  // list never disagree. Withheld where no collection carries SEO (see
+  // `widget-card`).
+  const issues = {
+    collections: targets,
+    problemsFor: problemsForCard(problemChecks),
+  };
+  const issuesCard = seoIssuesWidget(issues);
+  const issuesItem = seoProblemsAttentionItem(issues);
+  if (issuesCard || issuesItem) {
     contributes.dashboard = {
       ...(issuesCard ? { widgets: [issuesCard] } : {}),
-      ...(issuesItems.length > 0 ? { attention: issuesItems } : {}),
+      ...(issuesItem ? { attention: [issuesItem] } : {}),
     };
   }
 
