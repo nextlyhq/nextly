@@ -33,6 +33,9 @@ export {
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
+  type PluginDurableEvents,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginDatabase,
   type PluginDefinition,
   type PluginEmailService,
@@ -182,6 +185,9 @@ export type {
   Middleware,
   RouteMethod,
 } from "./routes/route-types";
+
+// Proxy handlers: `contributes.proxy`, asked by the app's Proxy.
+export type { PluginProxyHandler, ProxyAnswer } from "./proxy/proxy-types";
 
 // Plugin-defined kinds of signed-in person: `contributes.principals`, a
 // route's `principal`, `ctx.principals` and `nextly.principals`.

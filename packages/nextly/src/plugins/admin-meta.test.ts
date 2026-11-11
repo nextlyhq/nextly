@@ -80,6 +80,38 @@ describe("buildPluginAdminMeta", () => {
     });
   });
 
+  it("serves a field type's declared settings as declared, for the settings panel", () => {
+    const settings = [
+      { key: "max", label: "Most stars", control: "number" },
+      {
+        key: "shape",
+        label: "Shape",
+        control: "select",
+        tab: "display",
+        options: [{ label: "Star", value: "star" }],
+      },
+    ];
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              {
+                type: "rating",
+                storage: "number",
+                component: "@acme/p/admin#Rating",
+                settings,
+              },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0].settings).toEqual(settings);
+  });
+
   it("omits presentation and surfaces keys a field type does not declare", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
@@ -652,6 +684,35 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].collections).toEqual(["forms"]);
     expect(meta[0].singles).toEqual(["form-settings"]);
     expect(meta[0].fieldGroups).toEqual(["form-block"]);
+  });
+});
+
+describe("buildPluginAdminMeta — the slugs a plugin's entities are registered under", () => {
+  it("names each collection, Single and field group by the slug the host's rename gave it", () => {
+    const [meta] = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            collections: [{ slug: "forms" }, { slug: "submissions" }],
+            singles: [{ slug: "settings" }],
+            fieldGroups: [{ slug: "address" }],
+          },
+          // As `plugin.rename({ … })` leaves it: declared slug to registered slug.
+          renameMap: {
+            forms: "contact-forms",
+            settings: "form-settings",
+            address: "postal-address",
+          },
+        },
+      ]),
+      undefined
+    );
+    // What the admin lists, so a renamed entity is found under its plugin
+    // rather than shown among the site's own content.
+    expect(meta.collections).toEqual(["contact-forms", "submissions"]);
+    expect(meta.singles).toEqual(["form-settings"]);
+    expect(meta.fieldGroups).toEqual(["postal-address"]);
   });
 });
 

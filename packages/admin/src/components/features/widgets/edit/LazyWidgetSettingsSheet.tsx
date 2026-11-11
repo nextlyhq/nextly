@@ -17,27 +17,21 @@
  * @module components/features/widgets/edit/LazyWidgetSettingsSheet
  */
 
-import {
-  Button,
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@nextlyhq/ui";
+import { Button, Sheet, SheetContent } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { useRetryableModule } from "@admin/hooks/useRetryableModule";
 
 import type { CellSettingsProps } from "./CellSettings";
+import { DrawerHeader } from "./DrawerHeader";
 import { closeFocusTo } from "./panel-close-focus";
 import { settingsSheetModule } from "./settings-sheet-code";
 
 /**
  * The sheet as it stands while its code is still arriving: the same panel and
  * heading, saying it is loading. Opening can outrun the preload (a tap, or a
- * screen reader's activation, gives it little or no lead), and the menu and
- * popover that open the sheet close themselves without handing focus back, so
+ * screen reader's activation, gives it little or no lead), and the menu that
+ * opens the sheet closes itself without handing focus back, so
  * without a panel here focus would fall to the page and the action would seem
  * lost. The sheet takes focus into itself as it opens, and the status says why
  * the form is not there yet. `Sheet` is already part of the shell, so this
@@ -64,8 +58,8 @@ function SheetLoading({
       <SheetContent
         side="right"
         aria-busy={failure ? undefined : true}
-        // The loaded panel's width, so it does not jump once the form arrives.
-        className="flex w-full flex-col overflow-hidden sm:w-[520px] sm:min-w-[480px] sm:max-w-[560px]"
+        // The loaded drawer's width and padding, so it does not jump once the form arrives.
+        className="flex w-full flex-col gap-0 overflow-hidden p-0 sm:w-[440px] sm:max-w-[440px]"
         onInteractOutside={event => event.preventDefault()}
         // Closed before the code arrives, focus goes back where the loaded panel's would. Gone
         // while still open, it was replaced by the loaded panel, which is no close: focus stays
@@ -78,17 +72,14 @@ function SheetLoading({
           closeFocusTo(returnFocusTo)(event);
         }}
       >
-        <SheetHeader>
-          <SheetTitle>{title} settings</SheetTitle>
-          <SheetDescription>
-            These apply to this card only. Another copy of the same widget keeps
-            its own.
-          </SheetDescription>
-        </SheetHeader>
+        <DrawerHeader title={title} />
         {failure ? (
           // Contained in the panel: a failed fetch leaves the dashboard and
           // its cards as they were, and closing the panel still works.
-          <div role="alert" className="flex flex-col items-start gap-3 px-4">
+          <div
+            role="alert"
+            className="flex flex-col items-start gap-3 px-5 pt-4"
+          >
             <p className="text-sm text-muted-foreground">
               {failure.exhausted
                 ? "Settings still could not be loaded. Reload to start over."
@@ -108,7 +99,7 @@ function SheetLoading({
             )}
           </div>
         ) : (
-          <p role="status" className="px-4 text-sm text-muted-foreground">
+          <p role="status" className="px-5 pt-4 text-sm text-muted-foreground">
             Loading settings…
           </p>
         )}

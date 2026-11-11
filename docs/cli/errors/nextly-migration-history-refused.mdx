@@ -1,0 +1,25 @@
+---
+title: NEXTLY_MIGRATION_HISTORY_REFUSED
+description: "A Schema Builder save was refused before it wrote anything, because the migration history `nextly migrate` checks does not hold."
+---
+
+## Cause
+
+A Schema Builder save was refused before it wrote anything, because the migration history `nextly migrate` checks does not hold.
+
+A Schema Builder save writes a migration into your migrations folder, so before it writes anything it asks the checks `nextly migrate` asks: whether an applied migration file was edited or removed, and whether an earlier attempt is unfinished. One of them refused, and the save wrote nothing.
+
+## Fix
+
+- Read the message: it is the text `nextly migrate` prints for the same state, naming the file.
+- Restore an edited or removed applied file, or settle an unfinished attempt with `nextly migrate:resolve`, then save again.
+- [Production migrations](/docs/guides/production-migrations) explains each recovery.
+
+## Example
+
+```text
+✗ Applied migration 20261106_120000_000_posts_create.sql was changed after it ran. Restore it as it was applied, or record the change with `nextly migrate:resolve --applied 20261106_120000_000_posts_create.sql`.
+  Why:  A save writes a migration into the folder, and the folder or its ledger is in a state `nextly migrate` refuses: an applied file was edited or removed, or an attempt is unfinished.
+  Next: Settle what the message names, with `nextly migrate:resolve` or by restoring the file, then save again.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-migration-history-refused  (NEXTLY_MIGRATION_HISTORY_REFUSED)
+```

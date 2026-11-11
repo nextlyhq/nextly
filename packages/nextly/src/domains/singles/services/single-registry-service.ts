@@ -774,9 +774,18 @@ export class SingleRegistryService extends BaseRegistryService<
     const documentTable = (await this.adapter.listTables()).includes(
       fetched.tableName
     );
+    // The new address is judged again inside the schema lock `renameEntity` holds for the rename.
+    // `updateSingle` judged it before, which refuses early without work but cannot see a collection
+    // or Single that takes the same snake_case form in between; judged here, it does, and one that
+    // tries while the rename holds the lock is refused.
     const row = await renameEntity(this.adapter, {
       dialect: this.dialect,
       move: { kind: "single", from, to },
+      judgeTarget: () =>
+        assertGlobalResourceSlugAvailable(this.adapter, to, {
+          currentResourceType: "single",
+          currentResourceId: fetched.id,
+        }),
       writeRegistry: async tx => {
         const written = await tx.updateCount(
           this.registryTableName,
@@ -820,6 +829,74 @@ export class SingleRegistryService extends BaseRegistryService<
   // ============================================================
   // Single-Specific: Delete
   // ============================================================
+
+  /**
+   * Refuse, before anything is removed, to delete a Single another owner
+   * depends on: a foreign key a plugin or the app declares into one of its
+   * tables, or another owner's column, index, foreign key or check on one of
+   * them. Also refused when either cannot be read (`collection-dependents`,
+   * the one check every entity delete asks). No field names a Single, so no
+   * field is asked about.
+   *
+   * Asked by both ways a Single is deleted, before the first thing either
+   * removes: the Builder's, which drops its storage and then this row, and
+   * the schema route's, which removes the row.
+   *
+   * @param single the Single, as its registry row records it: its table and
+   *   its fields, whose many-to-many fields name its junction tables
+   */
+  async assertNothingDependsOn(single: {
+    slug: string;
+    tableName: string;
+    /** As stored: a damaged row may hold something that is not a list. */
+    fields?: unknown;
+  }): Promise<void> {
+    // Loaded when a delete asks, not with the registry: every caller of the
+    // registry would otherwise load the dependents readers it never uses.
+    const [
+      {
+        assertNothingDependsOn,
+        databaseDependentsSources,
+        unreadableFieldsRefusal,
+      },
+      { collectionOwnTables },
+      { getActiveExtensionSchema },
+    ] = await Promise.all([
+      import("../../collections/services/collection-dependents"),
+      import("../../schema/services/field-column-descriptor"),
+      import("../../schema/extension/active-schema"),
+    ]);
+    // A stored field list that is not a list names no junction tables, so
+    // what depends on them would go unasked: refused as unreadable fields,
+    // as a collection's delete refuses it, before anything else is read.
+    const fields = single.fields ?? [];
+    if (!Array.isArray(fields)) {
+      throw unreadableFieldsRefusal([single.slug], single.slug, "single");
+    }
+    await assertNothingDependsOn(
+      [
+        {
+          kind: "single",
+          slug: single.slug,
+          tables: collectionOwnTables(
+            single.tableName,
+            fields as readonly {
+              name?: string;
+              type?: unknown;
+              options?: unknown;
+            }[]
+          ),
+        },
+      ],
+      databaseDependentsSources(
+        this.adapter,
+        // The extension schema this process published at boot or on its last
+        // reload, read when the delete asks, so a failure to read it refuses.
+        () =>
+          Promise.resolve().then(() => getActiveExtensionSchema(this.dialect))
+      )
+    );
+  }
 
   /**
    * Delete a Single from the registry.

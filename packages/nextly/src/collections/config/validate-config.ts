@@ -29,6 +29,7 @@ import {
   COLLECTION_ID_TYPES,
 } from "../../domains/collections/services/collection-db-options";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -155,7 +156,9 @@ export type ValidationErrorCode =
   | "DB_OPTION_UNKNOWN"
   | "DB_ID_TYPE_INVALID"
   | "DB_ALLOW_ID_ON_CREATE_INVALID"
-  | "DB_SLUG_PATHS_INVALID";
+  | "DB_SLUG_PATHS_INVALID"
+  // Public address errors
+  | "PUBLIC_ADDRESS_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -825,6 +828,12 @@ export function validateCollectionConfig(
   validateAccess(config.access, errors);
 
   validateDbOptions(config.db, errors);
+
+  // Judged by the rule every public address is, so a template a plugin
+  // supplies for a Builder type and one declared here never disagree.
+  errors.push(
+    ...publicAddressErrors(config.publicAddress, "collection", config.fields)
+  );
 
   return {
     valid: errors.length === 0,

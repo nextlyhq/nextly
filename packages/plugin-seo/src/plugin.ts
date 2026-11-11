@@ -17,7 +17,14 @@ import {
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import { startCatchUp } from "./address-record/catch-up";
+import { addressRecordCollection } from "./address-record/collection";
+import {
+  addressRecord,
+  releaseOnCollectionDelete,
+} from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { seoPageMetadata } from "./resolver/provider";
 import {
   generateSitemap,
   resolveBaseOrigin,
@@ -160,6 +167,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
+    // The record that keeps each public address to one page.
+    collections: [addressRecordCollection()],
+    // Every page's head, worked out by the one order of who wins.
+    services: { pageMetadata: ctx => seoPageMetadata(ctx) },
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -256,6 +267,20 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
     category: "seo",
     tags: ["seo", "meta"],
+    // The route helpers ask this plugin for each page's head.
+    provides: ["page-metadata"],
     contributes,
+    init(ctx) {
+      // The site-wide record that keeps each public address to one page:
+      // asked on every save, and told what each document holds after it.
+      ctx.publicAddresses.participate(addressRecord(ctx));
+      releaseOnCollectionDelete(ctx);
+    },
+    onReady(ctx) {
+      // Started, not awaited: it waits for the boot to finish, and brings the
+      // record up to date with content saved while the plugin was absent or
+      // addresses a deploy moved.
+      void startCatchUp(ctx);
+    },
   });
 }

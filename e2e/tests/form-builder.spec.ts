@@ -1,79 +1,162 @@
 /**
- * The form builder's field editor against a real server: add fields from the
- * shared catalog picker, edit inline on the card, reorder without a pointer,
- * and refuse to delete a field something else references. These flows cross
- * the plugin, the SDK's field-UI kit, and the shared catalog — the seams unit
- * tests mock away.
+ * The form builder against a real server: fields are added through the shared
+ * field picker and edited in the shared settings panel, reordered without a
+ * pointer, refused deletion while something else refers to them, and saved
+ * with the form's own save. These flows cross the plugin, the SDK's field UI
+ * and the shared catalog: the seams unit tests mock away.
  */
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
-test("builds a form with catalog fields, keyboard reorder, and a guarded delete", async ({
-  page,
-}) => {
+/** Adds a field through the picker: its type, found by search, and a label. */
+async function addField(page: Page, search: string, label: string) {
+  await page.getByRole("button", { name: "Add field" }).first().click();
+  const picker = page.getByRole("dialog");
+  await picker
+    .getByRole("combobox", { name: "Search field types" })
+    .fill(search);
+  await picker
+    .getByRole("combobox", { name: "Search field types" })
+    .press("Enter");
+  await picker.getByRole("textbox", { name: "Label" }).fill(label);
+  await picker.getByRole("button", { name: "Add field" }).click();
+  await expect(picker).toHaveCount(0);
+}
+
+/** Opens a page of the form editor through its tab, a link in the header. */
+async function openPage(page: Page, label: string) {
+  await page
+    .getByRole("navigation", { name: "Form pages" })
+    .getByRole("link", { name: new RegExp(`^${label}`) })
+    .click();
+}
+
+/** The form editor's Save, in the admin's top bar. */
+const saveButton = (page: Page) =>
+  page.getByRole("banner").getByRole("button", { name: "Save", exact: true });
+
+/** A new form with the name given, on the create page. */
+async function newForm(page: Page, name: string) {
   await gotoAdmin(page, "/collections/forms/create");
+  // The name is typed on Settings; the header shows it once given.
+  await openPage(page, "Settings");
+  await page.getByRole("textbox", { name: "Name" }).fill(name);
+  await openPage(page, "Builder");
+}
 
-  await page.getByRole("textbox", { name: "Form Name" }).fill("E2E Form");
+/** Creates the form, then opens it again from its own address. */
+async function createAndReopen(page: Page, name: string) {
+  await saveButton(page).click();
+  // A new form carries on at its own edit address. Dev cold-compiles routes,
+  // so the save and the next page get a generous window.
+  await expect(page).toHaveURL(/\/collections\/forms\/(?!create$)[^/]+$/, {
+    timeout: 30_000,
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible({
+    timeout: 30_000,
+  });
+}
 
-  // Add email + text through the Add-field dialog (the kit's catalog picker).
-  for (const type of [/^Email/, /^Text Single-line/]) {
-    await page.getByRole("button", { name: "Add field" }).first().click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("radio", { name: type }).click();
-    await dialog.getByRole("button", { name: "Add field" }).click();
-  }
+const cards = (page: Page) => page.locator('ul[aria-label="Form fields"] li');
 
-  // Names come from the catalog type, readable and sequential.
-  const cards = page.locator('ul[aria-label="Form fields"] li');
-  await expect(cards).toHaveCount(2);
-  await expect(cards.nth(0)).toContainText("email");
-  await expect(cards.nth(1)).toContainText("text");
+test("adds, edits and reorders a field", async ({ page }) => {
+  await newForm(page, "E2E Form");
+  await addField(page, "email", "Email");
+  await addField(page, "text", "Company");
 
-  // The newest card is expanded inline: give the text field conditional
-  // logic that references the email field (the condition row defaults to
-  // the first other field, which is email).
-  await page.getByRole("tab", { name: "Conditional" }).click();
-  await page.getByRole("checkbox", { name: /Enable conditional/i }).click();
-  await page.getByRole("button", { name: /Add Condition/i }).click();
+  // Names come from the labels.
+  await expect(cards(page)).toHaveCount(2);
+  await expect(cards(page).nth(0)).toContainText("email");
+  await expect(cards(page).nth(1)).toContainText("company");
 
-  // The email field is now referenced, so its Delete is blocked; the text
-  // field's Delete stays available.
-  await page.getByRole("button", { name: "Actions for Email" }).click();
-  await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Actions for Text" }).click();
-  await expect(page.getByRole("menuitem", { name: "Delete" })).toBeEnabled();
-  await page.keyboard.press("Escape");
+  // The newest field's settings are open in the panel docked beside the list.
+  const panel = page.getByRole("complementary", { name: "Field settings" });
+  await expect(panel.getByRole("textbox", { name: "Name" })).toHaveValue(
+    "company"
+  );
+  await panel
+    .getByRole("textbox", { name: "Description" })
+    .fill("Where you work");
 
-  // Collapse the expanded card first so the two cards have comparable
-  // heights (dnd-kit's keyboard sorting picks targets by coordinates), then
-  // reorder with the keyboard alone: lift the text card, move it up, drop.
-  // The pauses give dnd-kit a frame to process each keyboard event.
-  await page.getByRole("button", { name: /^Text/ }).first().click();
-  const handle = page.getByRole("button", { name: /Reorder Text/ });
+  // Close the settings so the two cards have comparable heights (dnd-kit's
+  // keyboard sorting picks targets by coordinates), then reorder with the
+  // keyboard alone: lift the Company card, move it up, drop. The pauses give
+  // dnd-kit a frame to process each keyboard event.
+  await panel.getByRole("button", { name: "Close field settings" }).click();
+  const handle = page.getByRole("button", { name: /Reorder Company/ });
   await handle.focus();
   await page.keyboard.press("Space");
   await page.waitForTimeout(250);
   await page.keyboard.press("ArrowUp");
   await page.waitForTimeout(250);
   await page.keyboard.press("Space");
-  await expect(cards.nth(0)).toContainText("text");
+  await expect(cards(page).nth(0)).toContainText("company");
 
-  // Persist and verify the round trip. Dev cold-compiles routes, so the
-  // save + list render gets a generous window.
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page).toHaveURL(/\/collections\/forms$/, { timeout: 30_000 });
-
-  // Entry rows render as buttons (the whole row navigates).
-  await page.getByRole("button", { name: /E2E Form/ }).click();
+  // The order and the edit were saved with the form, not only shown.
+  await createAndReopen(page, "E2E Form");
+  await expect(cards(page).nth(0)).toContainText("company", {
+    timeout: 30_000,
+  });
+  await page
+    .getByRole("button", { name: /^Company/ })
+    .first()
+    .click();
   await expect(
-    page.locator('ul[aria-label="Form fields"] li').nth(0)
-  ).toContainText("text", { timeout: 30_000 });
+    page
+      .getByRole("complementary", { name: "Field settings" })
+      .getByRole("textbox", { name: "Description" })
+  ).toHaveValue("Where you work");
+});
 
-  // The reference guard survives the round trip: conditional logic was
-  // persisted with the form, not just held in editor state.
+test("saves and reloads, with no database review", async ({ page }) => {
+  await newForm(page, "E2E Saved Form");
+  await addField(page, "email", "Email");
+  await createAndReopen(page, "E2E Saved Form");
+
+  // A field added to a saved form is stored with the form itself: the save
+  // asks nothing about the database, and the page holds the change after a
+  // reload.
+  await expect(cards(page)).toHaveCount(1, { timeout: 30_000 });
+  await addField(page, "number", "Guests");
+  await saveButton(page).click();
+  await expect(page.getByText("Form saved")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await page.reload();
+  await expect(cards(page)).toHaveCount(2, { timeout: 30_000 });
+  await expect(cards(page).nth(1)).toContainText("guests");
+});
+
+test("refuses to delete a field another refers to", async ({ page }) => {
+  await newForm(page, "E2E Guarded Form");
+  await addField(page, "email", "Email");
+  await addField(page, "text", "Company");
+
+  // Company shows only once Email is answered: a condition in the form's own
+  // editor, which defaults to the first other field.
+  const panel = page.getByRole("complementary", { name: "Field settings" });
+  await panel.getByRole("tab", { name: "Conditions" }).click();
+  await panel
+    .getByRole("checkbox", { name: /Enable conditional logic/ })
+    .click();
+  await panel.getByRole("button", { name: /Add Condition/i }).click();
+
+  // Email is now referred to, so its Delete is refused; Company's is not.
+  await page.getByRole("button", { name: "Actions for Email" }).click();
+  await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Actions for Company" }).click();
+  await expect(page.getByRole("menuitem", { name: "Delete" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  // The condition was saved with the form, so the refusal survives a reload.
+  await createAndReopen(page, "E2E Guarded Form");
+  await expect(cards(page)).toHaveCount(2, { timeout: 30_000 });
   await page.getByRole("button", { name: "Actions for Email" }).click();
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
 });
@@ -81,23 +164,16 @@ test("builds a form with catalog fields, keyboard reorder, and a guarded delete"
 test("seeds a default notification, edits it in place, and guards referenced fields", async ({
   page,
 }) => {
-  await gotoAdmin(page, "/collections/forms/create");
-
-  await page
-    .getByRole("textbox", { name: "Form Name" })
-    .fill("E2E Notifications Form");
+  await newForm(page, "E2E Notifications Form");
 
   // One email field for reply-to / condition targets.
-  await page.getByRole("button", { name: "Add field" }).first().click();
-  const dialog = page.getByRole("dialog");
-  await dialog.getByRole("radio", { name: /^Email/ }).click();
-  await dialog.getByRole("button", { name: "Add field" }).click();
+  await addField(page, "email", "Email");
 
-  // A new form arrives pre-seeded with one admin-notification rule, honest
-  // about why it will not send yet.
-  await page.getByRole("tab", { name: /Notifications/ }).click();
+  // A new form arrives pre-seeded with one admin-notification rule, ready to
+  // send with the starter message rather than waiting for one.
+  await openPage(page, "Notifications");
   await expect(page.getByText("Admin notification")).toBeVisible();
-  await expect(page.getByText("No template — will not send")).toBeVisible();
+  await expect(page.getByText("No template — will not send")).toHaveCount(0);
 
   // Edit in place: the row expands into an editor on the page, not a panel
   // over it. Scoped to that region rather than to the page so a control with
@@ -136,16 +212,14 @@ test("seeds a default notification, edits it in place, and guards referenced fie
 
   // The email field is referenced by the rule's reply-to and condition, so
   // its delete is blocked back on the Builder tab.
-  await page.getByRole("tab", { name: "Builder" }).click();
+  await openPage(page, "Builder");
   await page.getByRole("button", { name: "Actions for Email" }).click();
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
   await page.keyboard.press("Escape");
 
   // Round trip: the rule, its condition, and the guard all persist.
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page).toHaveURL(/\/collections\/forms$/, { timeout: 30_000 });
-  await page.getByRole("button", { name: /E2E Notifications Form/ }).click();
-  await page.getByRole("tab", { name: /Notifications/ }).click();
+  await createAndReopen(page, "E2E Notifications Form");
+  await openPage(page, "Notifications");
   await expect(page.getByText("Admin notification")).toBeVisible({
     timeout: 30_000,
   });
@@ -157,15 +231,9 @@ test("the preview is an interactive simulation with real confirmation", async ({
 }) => {
   // Self-sufficient: the preview needs no saved form — the builder state
   // previews live, so an unsaved form with one field is enough.
-  await gotoAdmin(page, "/collections/forms/create");
-  await page
-    .getByRole("textbox", { name: "Form Name" })
-    .fill("E2E Preview Form");
-  await page.getByRole("button", { name: "Add field" }).first().click();
-  const dialog = page.getByRole("dialog");
-  await dialog.getByRole("radio", { name: /^Email/ }).click();
-  await dialog.getByRole("button", { name: "Add field" }).click();
-  await page.getByRole("tab", { name: "Preview" }).click();
+  await newForm(page, "E2E Preview Form");
+  await addField(page, "email", "Email");
+  await openPage(page, "Preview");
 
   // Inputs are enabled — this is a simulation, not a screenshot.
   const emailInput = page.getByRole("textbox", { name: /^Email/ });

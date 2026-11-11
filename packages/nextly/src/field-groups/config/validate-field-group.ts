@@ -4,7 +4,7 @@
  * Validates a {@link FieldGroupConfig} using shared base-validator helpers
  * for slug/field-name/relationship/component rules. Components do not have
  * domain-specific access rules or index validation; cross-component
- * checks (circular references, nesting depth) run at `defineConfig()` time
+ * checks (a field group placed inside itself, directly or through others) run at `defineConfig()` time
  * when all component definitions are available.
  *
  * Duplicated validation logic was moved to `src/shared/base-validator.ts`
@@ -61,14 +61,11 @@ export {
 // ============================================================
 
 /**
- * Maximum nesting depth for component-within-component references.
+ * The nesting depth field groups were once limited to.
  *
- * A depth of 3 means:
- * - Level 1: Component A used in a Collection/Single
- * - Level 2: Component B nested inside Component A
- * - Level 3: Component C nested inside Component B
- *
- * Enforced at `defineConfig()` time when all component definitions are available.
+ * @deprecated Nothing enforces it: a field group may hold another at any depth, and only a field
+ * group placed inside itself, directly or through others, is refused. Kept exported, with its old
+ * value, so code that imports it still builds; nothing in Nextly reads it.
  */
 export const MAX_FIELD_GROUP_NESTING_DEPTH = 3;
 
@@ -392,8 +389,8 @@ function validateFields(
  * SQL keyword blocking, recursive field validation, select options,
  * relationship targets, and component references.
  *
- * **Note:** Cross-component validation (circular references, nesting
- * depth, slug conflicts with Collections/Singles) is performed in
+ * **Note:** Cross-component validation (a field group placed inside itself,
+ * slug conflicts with Collections/Singles) is performed in
  * `defineConfig()`.
  *
  * @example

@@ -51,6 +51,7 @@ import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
+import { assertSaveLeavesNoFieldGroupCycle } from "../field-group-cycles";
 
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
@@ -217,6 +218,7 @@ export class FieldGroupMetadataService {
       input.fields,
       null
     );
+    await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     // A translated field marked unique needs an index this server may not be able to key. Refused
     // here, before the main table: the companion is provisioned after it, and a failure there is
     // recorded rather than raised. With no adapter, nothing is applied at all.
@@ -390,6 +392,7 @@ export class FieldGroupMetadataService {
         input.fields,
         existing.fields ?? []
       );
+      await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     }
 
     const localized = requestedLocalized ?? wasLocalized;
@@ -1064,6 +1067,21 @@ export class FieldGroupMetadataService {
    * Judge a new address by the one rule every road shares (`shared/address-rule`), and against the
    * other field groups' addresses: one with the same snake_case form names the same table.
    */
+  /**
+   * Refuse a save that would leave this field group placed inside itself, directly or through
+   * others. Judged inside the exclusion against every field group as stored now, so two saves that
+   * each close half of a cycle cannot both pass.
+   */
+  private async assertSaveLeavesNoCycle(
+    slug: string,
+    fields: unknown
+  ): Promise<void> {
+    assertSaveLeavesNoFieldGroupCycle({
+      saved: { slug, fields },
+      stored: await this.registry.getAllFieldLists(),
+    });
+  }
+
   private async assertAddressAllowed(slug: string): Promise<void> {
     assertAddressAllowed("fieldGroup", slug);
     const twin = findSameSnakeCaseAddress(

@@ -1,7 +1,7 @@
 {
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
-      "samples": 7,
+      "samples": 6,
       "compiled": 1
     },
     "docs/admin/customization.mdx": {
@@ -25,7 +25,7 @@
       "compiled": 1
     },
     "docs/configuration/collections.mdx": {
-      "samples": 8,
+      "samples": 9,
       "compiled": 3
     },
     "docs/configuration/environment.mdx": {
@@ -55,6 +55,10 @@
     "docs/configuration/nextly-config.mdx": {
       "samples": 25,
       "compiled": 8
+    },
+    "docs/configuration/public-addresses.mdx": {
+      "samples": 2,
+      "compiled": 2
     },
     "docs/configuration/singles.mdx": {
       "samples": 5,
@@ -129,8 +133,8 @@
       "compiled": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "samples": 11,
-      "compiled": 9
+      "samples": 12,
+      "compiled": 10
     },
     "docs/jobs/index.mdx": {
       "samples": 5,
@@ -189,16 +193,20 @@
       "compiled": 13
     },
     "docs/plugins/api-reference.mdx": {
-      "samples": 28,
-      "compiled": 3
+      "samples": 34,
+      "compiled": 7
     },
     "docs/plugins/auth.mdx": {
-      "samples": 4,
+      "samples": 5,
       "compiled": 4
     },
     "docs/plugins/author-guide.mdx": {
       "samples": 7,
       "compiled": 4
+    },
+    "docs/plugins/caching.mdx": {
+      "samples": 3,
+      "compiled": 2
     },
     "docs/plugins/commerce/index.mdx": {
       "samples": 2,
@@ -224,13 +232,17 @@
       "samples": 3,
       "compiled": 1
     },
+    "docs/plugins/public-addresses.mdx": {
+      "samples": 3,
+      "compiled": 2
+    },
     "docs/plugins/routes.mdx": {
-      "samples": 10,
+      "samples": 11,
       "compiled": 5
     },
     "docs/plugins/schema.mdx": {
-      "samples": 7,
-      "compiled": 5
+      "samples": 8,
+      "compiled": 6
     },
     "docs/plugins/security-helpers.mdx": {
       "samples": 5,

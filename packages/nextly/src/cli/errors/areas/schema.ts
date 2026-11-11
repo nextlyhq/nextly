@@ -271,4 +271,34 @@ export const SCHEMA_CODES = defineCodes({
       },
     ],
   },
+  // A Schema Builder save writes a migration, so it asks the history checks
+  // `nextly migrate` asks first; its refusal carries that command's own text.
+  NEXTLY_MIGRATION_HISTORY_REFUSED: {
+    cause:
+      "A Schema Builder save was refused before it wrote anything, because the migration history `nextly migrate` checks does not hold.",
+    from: [
+      {
+        code: "NEXTLY_MIGRATION_HISTORY_REFUSED",
+        describe: error => ({
+          what: error.publicMessage,
+          why: "A save writes a migration into the folder, and the folder or its ledger is in a state `nextly migrate` refuses: an applied file was edited or removed, or an attempt is unfinished.",
+          next: "Settle what the message names, with `nextly migrate:resolve` or by restoring the file, then save again.",
+        }),
+      },
+    ],
+  },
+  NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED: {
+    cause:
+      "A Schema Builder save would convert a column of a table an earlier version made that the person saving did not confirm.",
+    from: [
+      {
+        code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
+        describe: error => ({
+          what: error.publicMessage,
+          why: "The column's type differs from what its field makes now, and a save converts only the columns its review showed.",
+          next: "Review the save in the Schema Builder and confirm the conversion, or pass the column in `acknowledgedConversions`.",
+        }),
+      },
+    ],
+  },
 });

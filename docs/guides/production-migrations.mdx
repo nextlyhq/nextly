@@ -80,6 +80,19 @@ writing two files:
 Commit both. From then on the normal loop applies: edit `nextly.config.ts`, run
 `nextly migrate:create`, and get a file containing only what changed.
 
+To see what a sync would do before it does it, add `--dry-run` to any form of it:
+`nextly db:sync --dry-run` names each table and column operation the schema push would run,
+and each rename or data-loss question it would ask, and a note says what it does not show (the
+registry rows, the core, translation, Single and component tables, `user_ext` and the
+permissions it seeds), since the plan is made against the registry as it stands before the
+sync rewrites it. With `--remove-orphaned` it also names each table it would delete, in the
+words the data-loss consent uses; with `--promote <slug>` it shows the commented snippet it
+would append and the registry row it would remove (the table is kept); with `--demote <slug>`
+it shows the registry record it would write. A dry run opens the database read-only, takes no
+schema lock, asks nothing, and exits 0; where the real run would refuse (a slug that is not
+there, a collection defined in code, a field-group storage migration in flight), it says so and
+still exits 0. It cannot be combined with `--watch`.
+
 <Callout type="warn">
 **Do not keep using `db:sync` against a database that holds content.** It compares your
 config to the database, and when a column disappears and another appears on the same table
@@ -532,10 +545,17 @@ entity exists, and a Builder change missing from the commit cannot appear in any
 
 Two things to know before relying on it:
 
-- **The Builder's own `.sql` file is unpaired.** Saving a Collection writes a timestamped migration
-  but no `meta/*.snapshot.json`, and `nextly migrate:check` reports an unpaired `.sql` as
-  `MISSING_SNAPSHOT`. Run `nextly migrate:create` to regenerate the pair, and commit the `.sql` and
-  its snapshot together rather than committing the Builder's file as-is.
+- **The Builder's own `.sql` file is ignored.** Saving a Collection writes a timestamped migration
+  but no `meta/*.snapshot.json`. Every command ignores such a file, naming it with "ignored:
+  written by an earlier Schema Builder", so run `nextly migrate:create` to write the change as a
+  migration with its snapshot, and commit that pair. Only a file with the whole signature is
+  ignored. A file with the Builder's name and no snapshot that lacks another part of it, for
+  example one that also changes another entity's tables or has a dialect variant
+  (`.mysql.sql`) beside it, is refused by `nextly migrate` and a
+  production boot, as `BUILDER_MIGRATION_SNAPSHOT_MISSING`, naming the part it lacks: replace it
+  with the migration `migrate:create` writes, or delete it. `nextly migrate:check` names it too.
+  Keep the files an earlier Builder wrote until the first `nextly migrate` after upgrading has
+  run, which records the ledger rows that name them.
 - **A collection created with a starting field is mirrored without it.** The create call writes the
   manifest entry with an empty field list, so the fields arrive only on the next save. Open the new
   collection and save it once before generating the migration.

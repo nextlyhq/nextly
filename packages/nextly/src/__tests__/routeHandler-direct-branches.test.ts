@@ -97,6 +97,7 @@ import {
   createJsonErrorResponse,
 } from "../auth/middleware";
 import { container } from "../di/container";
+import { clearStart, publishStart } from "../init/start-in-flight";
 import { readAuthenticatedUser } from "../dispatcher/helpers/authenticated-user";
 import {
   _handleAdminMetaRequestForTest,
@@ -155,6 +156,39 @@ describe("handleAdminMetaRequest (GET /admin-meta)", () => {
     // Asserted as absent HERE rather than dropped, so the public payload's
     // boundary stays covered from this suite as well.
     expect(json.showBuilder).toBeUndefined();
+  });
+
+  it("answers with the saved branding when a start is still under way as it is asked", async () => {
+    // The start-up hook no longer holds the admin page, so it can ask for
+    // this mid-start; the settings service only exists once the start has
+    // registered it.
+    mockHandlerConfig.admin = { branding: { logoText: "From config" } };
+    let finish: () => void = () => {};
+    const start = new Promise<never>(resolve => {
+      finish = () => {
+        (container.has as ReturnType<typeof vi.fn>).mockImplementation(
+          (name: string) => name === "generalSettingsService"
+        );
+        (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+          getSettings: async () => ({ applicationName: "Saved name" }),
+          getCustomSidebarGroups: () => [],
+        });
+        resolve(undefined as never);
+      };
+    });
+    publishStart(start);
+    try {
+      const answer = _handleAdminMetaRequestForTest();
+      setTimeout(() => {
+        clearStart();
+        finish();
+      }, 20);
+      const json = (await (await answer).json()) as Record<string, unknown>;
+      expect(json.logoText).toBe("Saved name");
+    } finally {
+      clearStart();
+      (container.has as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    }
   });
 });
 

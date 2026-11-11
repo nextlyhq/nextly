@@ -87,7 +87,8 @@ beforeEach(async () => {
   // Real, as Node's resolver answers with it: macOS links the temp folder.
   dir = await realpath(await mkdtemp(path.join(tmpdir(), "cache-components-")));
   // A stand-in `nextly` with the two handler subpaths, so a loaded config's
-  // `require.resolve` finds them where an app's node_modules would.
+  // `require.resolve` finds them where an app's node_modules would, and the
+  // `nextly/next` entry a new config takes its crawler list from.
   const nextly = path.join(dir, "node_modules/nextly");
   await mkdir(nextly, { recursive: true });
   await writeFile(
@@ -97,12 +98,17 @@ beforeEach(async () => {
       exports: {
         "./cache-handler": { default: "./cache-handler.mjs" },
         "./cache-handlers": { default: "./cache-handlers.mjs" },
+        "./next": { default: "./next.mjs" },
       },
     }),
     "utf-8"
   );
   await writeFile(path.join(nextly, "cache-handler.mjs"), "export {};\n");
   await writeFile(path.join(nextly, "cache-handlers.mjs"), "export {};\n");
+  await writeFile(
+    path.join(nextly, "next.mjs"),
+    "export const nextlyHtmlLimitedBots = /stand-in-bot/i;\n"
+  );
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -132,6 +138,14 @@ function expectNextlyHandlers(config: Record<string, unknown>) {
 }
 
 describe("a new project's Next config", () => {
+  it("has search engines and AI crawlers read each page's whole head", () => {
+    const text = buildNextConfigTemplate(sqlite);
+    expect(text).toContain(
+      'import { nextlyHtmlLimitedBots } from "nextly/next";'
+    );
+    expect(text).toContain("  htmlLimitedBots: nextlyHtmlLimitedBots,");
+  });
+
   it("turns both options on, installs Nextly's cache handlers, and says why", () => {
     const text = buildNextConfigTemplate(sqlite);
     expect(text).toContain(
@@ -192,6 +206,8 @@ describe("a new project's Next config", () => {
     expect(config.cacheComponents).toBe(true);
     expect(config.partialPrefetching).toBe(true);
     expectNextlyHandlers(config);
+    // The crawlers that read each page's whole head, from `nextly/next`.
+    expect(config.htmlLimitedBots).toEqual(/stand-in-bot/i);
   });
 
   it("leaves nothing for the existing-app step to change", async () => {

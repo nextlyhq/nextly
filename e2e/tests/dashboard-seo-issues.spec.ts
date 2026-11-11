@@ -234,19 +234,18 @@ test("its issue count is a Needs attention line naming the pages it checks", asy
   const shown = issues > 99 ? "99+" : String(issues);
 
   // The line as Needs your attention draws it, found by its label among the
-  // card's rows: other specs' items share the card, and a row past the card's
-  // height waits behind "Show N more".
+  // card's rows: other specs' items share the card, which draws every item,
+  // with nothing folded behind "Show N more".
   const attention = page
     .getByTestId(`widget-cell-${ATTENTION_CARD}`)
     .filter({ visible: true });
   await expect(attention).toBeVisible();
+  await expect(
+    attention.getByRole("button", { name: /^Show \d+ more$/ })
+  ).toHaveCount(0);
   const line = attention
     .getByTestId("needs-attention-item")
     .filter({ hasText: `SEO issues in ${PAGES}` });
-  const more = attention.getByRole("button", { name: /^Show \d+ more$/ });
-  if (!(await line.isVisible()) && (await more.isVisible())) {
-    await more.click();
-  }
   await expect(line).toBeVisible();
   await expect(line).toContainText(`SEO issues in ${PAGES} · ${shown}`);
 

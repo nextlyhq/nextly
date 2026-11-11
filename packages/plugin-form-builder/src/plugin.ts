@@ -8,6 +8,7 @@
  * @since 0.1.0
  */
 
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 import {
@@ -28,6 +29,9 @@ import {
   asSubmissionDocument,
   asSubmissionDocuments,
 } from "./document-shapes";
+import { submissionAnswers } from "./emails/answers";
+import { formsEmailTemplates } from "./emails/starter-messages";
+import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -238,6 +242,23 @@ export function formBuilder(
       // names. Contributed, never suggested: where it goes is core's default's
       // to say, and a site's own default may leave it out.
       dashboard: { widgets: [newSubmissions] },
+      // Each page of the form editor (Preview, Settings, Notifications,
+      // Submissions) at an address of its own under the form's. Every one
+      // draws the form editor itself, so the admin hands the editor the page
+      // and keeps it mounted from tab to tab; Builder is the edit address.
+      admin: {
+        views: {
+          [resolvedConfig.formOverrides.slug]: {
+            documentViews: addressedFormPages().map(page => ({
+              ...page,
+              component: FORM_EDITOR_VIEW,
+            })),
+          },
+        },
+      },
+      // The team's and the visitor's starter emails, so a new notification has
+      // a message to send from the start; a site edits them in Settings › Email.
+      emailTemplates: formsEmailTemplates(),
       // A visitor submits a form without an account, so the Public role, the
       // role visitors are judged by, may create submissions. Granted once;
       // an owner who takes it away closes public submissions for good.
@@ -753,9 +774,18 @@ export function buildNotificationEmails(input: {
   formName: unknown;
   submissionId: unknown;
   defaultFrom?: string;
+  /**
+   * The form's fields, which turn the answers into `_submission.answers`, the
+   * list the starter messages loop over. Absent, the list is empty and
+   * templates that name answers by field (`{{ full_name }}`) still read them
+   * as before.
+   */
+  fields?: readonly AnyFormField[];
 }): { emails: FormEmailNotification[]; skipped: SkippedNotification[] } {
   const { notifications, submittedData, formName, submissionId, defaultFrom } =
     input;
+  // Built once: every notification of a submission lists the same answers.
+  const answers = submissionAnswers(input.fields ?? [], submittedData);
 
   const seen = new Set<string>();
   const emails: FormEmailNotification[] = [];
@@ -824,10 +854,14 @@ export function buildNotificationEmails(input: {
     emails.push({
       to,
       templateSlug: notification.templateSlug,
+      // `_submission` holds the answers by label and the id. A field name must
+      // start with a letter, so no submitted field can share this name, and
+      // every field still reaches templates under its own name as before.
       variables: {
         ...submittedData,
         formName,
         submissionId,
+        _submission: { id: submissionId, answers },
       },
       providerId: notification.providerId,
       from,
@@ -1257,6 +1291,7 @@ async function handleSubmissionCreated(
     formName: form.name,
     submissionId: submission.id,
     defaultFrom: config.notifications.defaultFrom,
+    fields: Array.isArray(form.fields) ? (form.fields as AnyFormField[]) : [],
   });
 
   for (const skip of skipped) {
@@ -1285,7 +1320,7 @@ async function handleSubmissionCreated(
     BeforeEmailFilterContext
   >("form-builder.beforeEmail", emails, { form, submission });
 
-  // -- Send phase: send the (possibly transformed) outgoing notifications,
+  // -- Send phase: queue the (possibly transformed) outgoing notifications,
   // once the submission is durable. An email cannot be taken back, and a
   // submission saved inside a caller's transaction runs this hook before that
   // transaction commits: sent here, it would go out, and its delivery be
@@ -1293,11 +1328,18 @@ async function handleSubmissionCreated(
   // `afterCommit` holds the send until the outermost transaction commits and
   // drops it on rollback; outside a transaction it sends at once, as before.
   const send = () =>
-    sendNotificationEmails({
+    queueNotificationEmails({
       emails: finalEmails,
       emailService,
       logger: nextly.logger,
       formSlug: form.slug,
+      // A submission's id is a string or a number by dialect.
+      submissionId:
+        typeof submission.id === "number"
+          ? `${submission.id}`
+          : typeof submission.id === "string"
+            ? submission.id
+            : "",
       fileAttachments,
     });
   const { afterCommit } = context as Pick<HookContext, "afterCommit">;
@@ -1305,31 +1347,55 @@ async function handleSubmissionCreated(
 }
 
 /**
- * Send each notification, and log what happened to it.
- *
- * The email service reports a provider's failure in its result rather than by
- * throwing, so the result is read: a notification the provider did not take is
- * logged as failed, with whether a retry can help, and never as sent. No log
- * line names a recipient: an address in a log outlives the submission it came
- * from, and the notification's id is enough to find it.
+ * The key a notification is queued under: its submission, its place among
+ * the submission's emails, and a short digest of its notification's id. The
+ * place keeps apart two emails of one notification (a `beforeEmail` hook
+ * may add a copy of one), and the digest keeps the key short whatever the
+ * id's length. The same submission's emails, built again, get the same keys.
  */
-export async function sendNotificationEmails(input: {
+function notificationKey(
+  submissionId: string,
+  index: number,
+  notificationId: string | undefined
+): string {
+  const digest = createHash("sha256")
+    .update(notificationId ?? "")
+    .digest("hex")
+    .slice(0, 16);
+  return `form-notification:${submissionId}:${index}:${digest}`;
+}
+
+/**
+ * Queue each notification, and log where it stands.
+ *
+ * Queued through the email service's queued send rather than sent once: the
+ * queue makes the first attempt at once, and a failure a retry can help is
+ * tried again through the job queue, with backoff, until it is sent or fails
+ * for good, never dropped. Each carries an idempotency key from its
+ * submission and notification (`notificationKey`), so a provider that takes keys delivers it
+ * once even if this hook runs again. No log line names a recipient: an
+ * address in a log outlives the submission it came from, and the
+ * notification's id and the queued email's id are enough to find it.
+ */
+export async function queueNotificationEmails(input: {
   emails: FormEmailNotification[];
-  emailService: Pick<PluginEmailService, "sendWithTemplate">;
+  emailService: Pick<PluginEmailService, "queueWithTemplate">;
   logger: Pick<NextlyInstance["logger"], "info" | "error">;
   /** The form's slug as stored, for the log lines only. */
   formSlug: unknown;
+  /** The submission the notifications are for, which keys each one. */
+  submissionId: string;
   fileAttachments: Array<{ mediaId: string; filename?: string }>;
 }): Promise<void> {
   const { emails, emailService, logger, formSlug, fileAttachments } = input;
-  for (const email of emails) {
+  for (const [index, email] of emails.entries()) {
     const identity = {
       formSlug,
       templateSlug: email.templateSlug,
       notificationId: email.notificationId,
     };
     try {
-      const result = await emailService.sendWithTemplate(
+      const queued = await emailService.queueWithTemplate(
         email.templateSlug,
         email.to,
         email.variables,
@@ -1340,29 +1406,33 @@ export async function sendNotificationEmails(input: {
           cc: email.cc,
           bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
+          idempotencyKey: notificationKey(
+            input.submissionId,
+            index,
+            email.notificationId
+          ),
         }
       );
-
-      if (result.success) {
-        logger.info?.("Form Builder: notification sent", {
-          ...identity,
-          attachmentCount: fileAttachments.length,
-        });
-      } else {
+      // The first attempt has been made: sent, waiting for a retry, or
+      // failed for good (a refusal no retry can change).
+      if (queued.state === "failed") {
         logger.error?.("Form Builder: notification failed", {
           ...identity,
-          retryable: result.failure?.retryable ?? true,
-          ...(result.failure?.status !== undefined
-            ? { status: result.failure.status }
-            : {}),
-          reason: result.failure?.reason ?? "The email was not sent.",
+          queuedId: queued.id,
+          retryable: false,
+        });
+      } else {
+        logger.info?.("Form Builder: notification queued", {
+          ...identity,
+          queuedId: queued.id,
+          state: queued.state,
+          attachmentCount: fileAttachments.length,
         });
       }
     } catch (err) {
-      // Thrown rather than returned: nothing was sent. A refusal of the send
-      // itself (an invalid address) would be refused again, so it is not
-      // retryable; anything else, a storage read or a lookup that failed, may
-      // pass, and counts as retryable, as an unclassified failure does.
+      // Thrown rather than returned: nothing was queued. A refusal of the
+      // email itself (an invalid address) would be refused again, so it is
+      // not retryable; anything else may pass on another submission.
       logger.error?.("Form Builder: notification failed", {
         ...identity,
         retryable: !NextlyError.isCode(err, "VALIDATION_ERROR"),

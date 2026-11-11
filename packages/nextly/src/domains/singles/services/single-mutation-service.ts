@@ -78,6 +78,7 @@ import {
 import { refusalIssues } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import {
+  hookChangedWholeNumberIssues,
   validateEntryData,
   type ValidationIssue,
 } from "../../../shared/lib/entry-validation";
@@ -1116,8 +1117,6 @@ export class SingleMutationService extends BaseService {
    * The pending change is found by the rule every read of "the draft" uses
    * (`resolveDraftOverlay`), as the system and in no request language, as the
    * document-wide write carries none.
-   *
-   * @experimental
    */
   async releaseGoingLiveDocument(params: {
     slug: string;
@@ -1196,8 +1195,6 @@ export class SingleMutationService extends BaseService {
    * rule the write asks under its row lock. Answered with the id of the row
    * it was asked of, so a caller can tell the Single's document from one it
    * held before; `null` for a Single with no stored document.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(params: {
     slug: string;
@@ -1581,8 +1578,6 @@ export class SingleMutationService extends BaseService {
    * since they may reach outside this process. Answered with the id of the
    * row it was asked of; `null` for a Single with no stored document or no
    * draft/published lifecycle.
-   *
-   * @experimental
    */
   async releasePublishIssues(params: {
     slug: string;
@@ -1952,6 +1947,12 @@ export class SingleMutationService extends BaseService {
     user: UpdateSingleOptions["user"];
     /** Who the refusal is told to, with the scope a key arrived with. */
     reader: IssueReader;
+    /**
+     * The paths that hold a value kept from the stored row because a rule
+     * denies it to this writer; the whole-number rule skips them — a legacy
+     * stored fraction under one is the row's own content, not this save's.
+     */
+    storedProvenancePaths?: ReadonlySet<string>;
   }): Promise<void> {
     const { slug, fieldConfigs } = args;
     const validationView = relationshipValidationView(args.data, fieldConfigs);
@@ -1961,6 +1962,9 @@ export class SingleMutationService extends BaseService {
       {
         mode: "update",
         req: args.user ? { user: args.user } : {},
+        ...(args.storedProvenancePaths
+          ? { storedProvenancePaths: args.storedProvenancePaths }
+          : {}),
         // A component inside a group or repeater is judged here, since no
         // component write reaches it. On the pool, as this is.
         componentFields: await containedComponentResolver(
@@ -2497,35 +2501,36 @@ export class SingleMutationService extends BaseService {
       const storedForAccess = await storedFieldGroupsIn(options.locale);
       // For a conditional write made whole, what this pass takes out or keeps
       // is recorded, and refuses it once every hook has run.
-      await storedFieldRead.fieldAccessPass(
-        options.context,
-        { kind: "single", slug },
-        currentData,
-        () =>
-          keepDeniedAtStoredOnUpdate({
-            data: currentData,
-            stored: storedForAccess,
-            storedIn: {
-              locales: storedLocales,
-              read: locale => storedFieldGroupsIn(locale),
-            },
-            fields: fieldConfigs,
-            source: this.fieldGroupDataService,
-            access: singleWriteAccess,
-            ownRules: document =>
-              applyFieldWriteAccess({
-                kind: "single",
-                slug,
-                data: document,
-                operation: "update",
-                user: options.user,
-                authenticatedScope: options.authenticatedScope,
-                overrideAccess: options.overrideAccess,
-                id: documentId,
-                grants: writeGrants,
-              }),
-          })
-      );
+      const { storedPaths, storedValues } =
+        await storedFieldRead.fieldAccessPass(
+          options.context,
+          { kind: "single", slug },
+          currentData,
+          () =>
+            keepDeniedAtStoredOnUpdate({
+              data: currentData,
+              stored: storedForAccess,
+              storedIn: {
+                locales: storedLocales,
+                read: locale => storedFieldGroupsIn(locale),
+              },
+              fields: fieldConfigs,
+              source: this.fieldGroupDataService,
+              access: singleWriteAccess,
+              ownRules: document =>
+                applyFieldWriteAccess({
+                  kind: "single",
+                  slug,
+                  data: document,
+                  operation: "update",
+                  user: options.user,
+                  authenticatedScope: options.authenticatedScope,
+                  overrideAccess: options.overrideAccess,
+                  id: documentId,
+                  grants: writeGrants,
+                }),
+            })
+        );
       await runFieldHooks({
         kind: "single",
         slug,
@@ -2577,6 +2582,7 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames,
         enforceLocalizedRequired,
         entryId: String(documentId),
+        storedProvenancePaths: storedPaths,
         // The language the save is in, also where only embedded field-group
         // content is kept per language; the default comes back out as none.
         writeLocale: snapshotLocale,
@@ -2668,6 +2674,33 @@ export class SingleMutationService extends BaseService {
         { kind: "single", slug },
         currentData
       );
+
+      // The whole-number floor judges what the hooks changed: a fraction a
+      // hook produced would reach the integer column and let the database
+      // decide. The hooks run after the validation gate, so what they leave
+      // behind is a write the gate never saw. Paths the restore kept from
+      // the row for a denied rule are the row's own, not judged.
+      const hookIssues = hookChangedWholeNumberIssues(
+        currentData,
+        fieldConfigs,
+        "",
+        // The component schemas the gate resolved before the hooks ran: the
+        // walk judges what a hook left in a component a container stores
+        // against those fields, as the gate judged the value before them.
+        // On the pool, as the gate reads.
+        await containedComponentResolver(
+          fieldConfigs,
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug
+            )) ?? null
+        ),
+        storedPaths,
+        storedValues
+      );
+      if (hookIssues.length > 0) {
+        throw NextlyError.validation({ errors: hookIssues });
+      }
 
       // 6.35. Authorize a change to the single's published state, judged on the
       // post-hook data. Publishing needs `publish-<slug>` and unpublishing

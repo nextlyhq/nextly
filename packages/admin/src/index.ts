@@ -331,6 +331,9 @@ export {
   type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
+// The app's generated component map registers through this, not a plugin:
+// it is not part of the plugin SDK's surface.
+export { registerComponentMap } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
 // Navigation a plugin may perform: a page of this admin, judged before it moves.
 export { navigateWithinAdmin } from "./lib/navigation";
@@ -412,6 +415,21 @@ export {
 // catalogs it declared in `contributes.translations`. Re-exported by
 // `@nextlyhq/plugin-sdk/admin`.
 export { usePluginTranslate } from "./lib/i18n/I18nProvider";
+
+// The shared settings panel that adds and edits a field, configured per
+// surface. Re-exported by `@nextlyhq/plugin-sdk/admin` as experimental.
+export { FieldSettingsPanel } from "./components/field-ui";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsConditionsProps,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "./components/field-ui";
 
 export {
   FieldPicker,
@@ -538,6 +556,12 @@ export type {
  * `@nextlyhq/builder`) may import.
  */
 export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
+export { useFoldedPanel } from "./components/layout/PanelFold";
+export { TopBarPlace } from "./components/layout/header/TopBarPlaces";
+export type {
+  TopBarPlaceName,
+  TopBarPlaceProps,
+} from "./components/layout/header/TopBarPlaces";
 /**
  * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
  * plugin's own page draws the contributions sent to a place it declared with

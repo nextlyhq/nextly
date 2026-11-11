@@ -114,7 +114,7 @@ describe("SortableRow", () => {
     );
     const badge = screen.getByText(/^50%$/);
     expect(badge.getAttribute("title")).toMatch(
-      /Width: 50%\. Configure in the field's Display tab\./
+      /Width: 50%\. Configure in the field's General tab\./
     );
   });
 

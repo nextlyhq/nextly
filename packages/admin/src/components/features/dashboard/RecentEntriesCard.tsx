@@ -7,7 +7,7 @@
  *
  * Drawn from the data its `load` answers, by the widget kit's table (`Widget.Table`), as core's
  * lists are: stacked rows with when each was updated and its status, or a table at the large
- * tier. It draws the rows its size and density hold, at most the reader's "Number of items"; the
+ * tier. It draws the reader's "Number of entries", whatever its size; the
  * load asked one more, which says more exist. The frame drew loading, no permission and error
  * before this is reached.
  *
@@ -120,7 +120,7 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
  * The table's parts the data and settings supply, each only where it has one:
  * how many entries there are, the list the rows come from (under the card's
  * Filter and Sort as its settings name them, the values its rows were read
- * under), and the reader's "Number of items".
+ * under), and the reader's "Number of entries".
  */
 function tableExtras(
   slug: string,

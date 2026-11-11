@@ -32,6 +32,7 @@ import {
   type PluginConsent,
   type PluginGrants,
   type PreSetupPlugin,
+  recordBootName,
   recordPreSetupPlugins,
 } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
@@ -357,6 +358,17 @@ export function resolveTransformedPlugins<
     opts
   );
   assertConsentDeclaredBeforeSetup(opts.declared, plugins);
+  // The name is part of the verdict, so it is recorded with it: `init` runs
+  // as a method on the definition, and a plugin could rename itself onto a
+  // listed one there — including from a context built after `init`, such as
+  // the auth bridge's hook contexts. Recording the boot-time name (rather
+  // than freezing the property) means every later grant check answers for
+  // the plugin the boot resolved while an `init` assigning its own name —
+  // even idempotently — touches its own definition harmlessly, as any
+  // lifecycle method may. `bootNameOf` reads the record.
+  for (const plugin of plugins) {
+    recordBootName(plugin);
+  }
   // Decided here, once, from the copies every check above read: the grants
   // travel beside the config to whatever builds a plugin context, and a
   // manifest changed after this point grants nothing.

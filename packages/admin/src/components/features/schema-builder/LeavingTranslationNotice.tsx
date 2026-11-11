@@ -89,7 +89,7 @@ function RefusalSteps({
     STEP_COUNTS[refusal.steps.length] ?? `${refusal.steps.length} steps`;
   return (
     <div className="flex items-start gap-2">
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-600 dark:text-warning-500" />
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-text" />
       <div className="space-y-1.5">
         <p>
           {/* The field is named on the badge row above, so the lead does not repeat it. */}

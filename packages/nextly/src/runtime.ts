@@ -75,6 +75,20 @@ export {
   type SeoMetaInput,
 } from "./runtime/seo";
 
+// The page-metadata contract: what a plugin that works out a page's head is
+// asked and answers. The route helpers ask it by default; see
+// `runtime/seo/page-metadata-contract`.
+export {
+  PAGE_METADATA_CAPABILITY,
+  PAGE_METADATA_SERVICE,
+  type PageMetadataAnswer,
+  type PageMetadataImage,
+  type PageMetadataInput,
+  type PageMetadataResolver,
+  type PageMetadataSource,
+  type PageMetadataValues,
+} from "./runtime/seo";
+
 // Draft previews — the route that turns a scoped preview link into a draft
 // session, and the reader a read path asks what that session may see. `next` is
 // not imported at all: the caller passes `draftMode` and `cookies` in, which
@@ -94,6 +108,10 @@ export {
 // short, which is the combination that gets retyped subtly wrong — and its
 // failure grants every draft rather than erroring.
 export { previewDraftGate } from "./runtime/preview/preview-draft-gate";
+
+// The site's Proxy: the app's `proxy.ts` hands each request to the handlers
+// plugins contribute (`contributes.proxy`).
+export { createNextlyProxy, type NextlyProxyDeps } from "./runtime/proxy";
 
 // The Single counterpart. A sibling rather than a branch: a collection gate
 // returns an entry id so the route can compare it against the row a PATH
@@ -207,6 +225,7 @@ export {
 export {
   resolveContent,
   isReservedPath,
+  contentPageMetadata,
   createContentRoute,
   createPublicContentRoute,
   createSingleRoute,
@@ -218,15 +237,22 @@ export {
   slugToPath,
   nextlySitemap,
   nextlyRobots,
+  confirmedLanguage,
+  requestLanguage,
+  servedAddress,
+  type RequestLanguage,
   type ContentEntry,
   type ResolveContentOptions,
   type ContentRoute,
   type StaticContentRoute,
   type ContentRouteArgs,
+  type ContentRouteParams,
+  type ContentStaticParamsArgs,
   type ContentRouteConfig,
   type RenderContext,
   type NextlyContentReader,
   type SingleRoute,
+  type SingleRouteArgs,
   type SingleRouteConfig,
   type SingleContext,
   type SingleDraftRequest,
@@ -237,6 +263,14 @@ export {
   type NextlySitemapOptions,
   type NextlyRobotsOptions,
 } from "./runtime/routing";
+
+// @experimental How each language's address is formed, as the site declares
+// it (`languageAddresses`), for a page's links to its other languages.
+export {
+  languageAddressOf,
+  type LanguageAddress,
+  type LanguageAddressRule,
+} from "./domains/i18n/language-addresses";
 
 // @experimental Keeps the app's generated component map up to date in
 // development. Call it from the admin's server layout, with the list the map's

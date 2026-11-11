@@ -75,7 +75,17 @@ function twoFactorPlugin(email: string): PluginDefinition {
 
 async function boot(plugins: PluginDefinition[]): Promise<TestNextly> {
   captured = undefined;
-  handle = await createTestNextly({ plugins });
+  // This test is the app, and it lists the login-capable plugins it installs:
+  // an unlisted one refuses the boot (D13), which is not what these cases exercise.
+  handle = await createTestNextly({
+    plugins,
+    pluginConsent: {
+      rawSql: [],
+      login: plugins
+        .filter(plugin => plugin.capabilities?.auth?.login === true)
+        .map(plugin => plugin.name),
+    },
+  });
   for (const statement of generateSqliteCoreTableStatements()) {
     await handle.adapter.executeQuery(statement);
   }

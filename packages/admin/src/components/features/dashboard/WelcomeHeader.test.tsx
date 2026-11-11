@@ -1,30 +1,13 @@
 /**
- * The dashboard keeps exactly one level-one heading in every state.
+ * The dashboard's one greeting line, its only level-one heading in every state.
  *
  * The heading is the page's landmark for screen-reader and keyboard users:
- * jumping by heading lands on it, and every card title (an `h2`) sits under it
- * in the outline. It used to vanish while the sample-content card was the
- * page's call to action and while the signed-in user was still loading, which
- * is what a first visit paints first. Sample content is now a step of the
- * setup card, which draws no heading of its own (`SetupCard.test.tsx`), so
- * these render the header against each state of the user read.
+ * jumping by heading lands on it, every card title (an `h2`) sits under it in
+ * the outline, and focus returns to it as customise mode ends. These render it
+ * against each state of the user read.
  */
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import type { DashboardSummary } from "@admin/types/dashboard/summary";
-
-// The New button reads collections and permissions of its own; the header's
-// tests are about where it stands, so it is a marker here.
-vi.mock("./header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
-}));
 
 type UserRead = {
   user: { id: string; name: string; email: string } | null;
@@ -36,482 +19,117 @@ vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => userRead,
 }));
 
-let summaryRead: { data: DashboardSummary | undefined; isError?: boolean } = {
-  data: undefined,
-};
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  useDashboardSummary: () => summaryRead,
-}));
-
-// Whether the reader's dismissed setup card can come back, as a case sets it;
-// the read and the write behind it are `ResumeSetupLink.test.tsx`'s.
-const setupResume = vi.hoisted(() => ({
-  resumable: false,
-  resume: vi.fn(),
-  isResuming: false,
-  failed: false,
-}));
-vi.mock("./setup/useSetupResume", () => ({
-  useSetupResume: () => setupResume,
-}));
-
-let appName = "Acme Site";
-vi.mock("@admin/context/providers/BrandingProvider", () => ({
-  useAppName: () => appName,
-}));
-
-import { CELL_PLACEMENT_ATTRIBUTE } from "../widgets/edit/drag/cell-placement";
-
 import {
-  DashboardChromeProvider,
-  usePublishDashboardChrome,
-  type DashboardChromeState,
-} from "./header/dashboard-chrome";
-import { greetingFor, WelcomeHeader } from "./WelcomeHeader";
+  DASHBOARD_HEADING_ID,
+  greetingFor,
+  WelcomeHeader,
+} from "./WelcomeHeader";
+
+const ADA = { id: "u1", name: "Ada Lovelace", email: "ada@example.com" };
 
 const USER_STATES: Array<[string, UserRead]> = [
   ["the user still loading", { user: null, isLoading: true, error: null }],
-  [
-    "the user loaded",
-    {
-      user: { id: "u1", name: "Ada Lovelace", email: "ada@example.com" },
-      isLoading: false,
-      error: null,
-    },
-  ],
+  ["the user loaded", { user: ADA, isLoading: false, error: null }],
   [
     "the user read failed",
     { user: null, isLoading: false, error: new Error("network") },
   ],
 ];
 
-/** The top of the dashboard: its header. */
-function renderDashboardTop() {
-  return render(<WelcomeHeader />);
-}
-
 afterEach(() => {
   userRead = { user: null, isLoading: true, error: null };
-  summaryRead = { data: undefined };
-  appName = "Acme Site";
-  setupResume.resumable = false;
-  setupResume.resume.mockReset();
+  vi.useRealTimers();
 });
 
-describe("the dashboard's main heading", () => {
-  for (const [userLabel, user] of USER_STATES) {
-    it(`is the one level-one heading with ${userLabel}`, () => {
+describe("the dashboard's greeting", () => {
+  for (const [label, user] of USER_STATES) {
+    it(`is the one level-one heading, with a name, and nothing else, with ${label}`, () => {
       userRead = user;
-      renderDashboardTop();
+      const { container } = render(<WelcomeHeader />);
 
       const mains = screen.getAllByRole("heading", { level: 1 });
       expect(mains).toHaveLength(1);
-      const main = mains[0]!;
-
-      // Card titles sit below it in the outline: each comes after it in the
-      // document, and none is another level-one heading.
-      for (const title of screen.queryAllByRole("heading", { level: 2 })) {
-        expect(
-          main.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING
-        ).toBeTruthy();
-      }
+      // A heading with no name is skipped by screen readers' heading lists.
+      expect(mains[0]!.textContent?.trim()).not.toBe("");
+      // The id whatever sends focus to the heading finds it by.
+      expect(mains[0]).toHaveAttribute("id", DASHBOARD_HEADING_ID);
+      // One line: no project name, badge, summary, freshness or controls.
+      expect(container.childElementCount).toBe(1);
+      expect(screen.queryAllByRole("button")).toEqual([]);
+      expect(screen.queryAllByRole("link")).toEqual([]);
     });
   }
 
-  it("is the project's name, before the person is known and after", () => {
-    // The first paint of a first visit: nothing has answered yet. A heading
-    // with an empty accessible name is skipped by screen readers' heading
-    // lists, so present is not enough.
-    renderDashboardTop();
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Acme Site" })
-    ).toBeInTheDocument();
-    cleanup();
-    userRead = USER_STATES[1]![1];
-    renderDashboardTop();
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Acme Site" })
-    ).toBeInTheDocument();
+  it.each([
+    [9, "Good morning, Ada"],
+    [14, "Good afternoon, Ada"],
+    [20, "Good evening, Ada"],
+  ])("at %i o'clock reads %s", (hour, words) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 11, hour, 5));
+    userRead = { user: ADA, isLoading: false, error: null };
+    render(<WelcomeHeader />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      new RegExp(`^${words}$`)
+    );
   });
-});
 
-/** What a grid would publish: here, the state a test names. */
-function Grid({ state }: { state: Partial<DashboardChromeState> }) {
-  usePublishDashboardChrome(
-    {
-      customizable: true,
-      awaitingArrangement: false,
-      editing: false,
-      writing: false,
-      oldestAnswerAt: null,
-      cards: {},
-      ...state,
-    },
-    { begin: () => {}, refresh: () => {}, customizeRef: () => {} }
-  );
-  return null;
-}
-
-function renderHeader(state?: Partial<DashboardChromeState>) {
-  return render(
-    <DashboardChromeProvider>
-      <WelcomeHeader />
-      {state === undefined ? null : <Grid state={state} />}
-    </DashboardChromeProvider>
-  );
-}
-
-describe("the dashboard header", () => {
-  it("draws the greeting, the project's name, the summary, then Customize, and no tagline", () => {
-    userRead = USER_STATES[1]![1];
-    summaryRead = {
-      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
+  it("says Welcome to a reader with no name, or whose read failed", () => {
+    userRead = {
+      user: { ...ADA, name: "  " },
+      isLoading: false,
+      error: null,
     };
-    renderHeader({});
-    const header = screen.getByTestId("dashboard-header");
-    const order = [
-      screen.getByTestId("dashboard-greeting"),
-      screen.getByRole("heading", { level: 1 }),
-      screen.getByTestId("dashboard-summary"),
-      screen.getByTestId("dashboard-edit-begin"),
-    ];
-    for (let i = 1; i < order.length; i++) {
-      expect(
-        order[i - 1]!.compareDocumentPosition(order[i]!) &
-          Node.DOCUMENT_POSITION_FOLLOWING
-      ).toBeTruthy();
-    }
-    expect(header).not.toHaveTextContent("Manage your content");
+    render(<WelcomeHeader />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      /^Welcome$/
+    );
+    cleanup();
+    userRead = USER_STATES[2]![1];
+    render(<WelcomeHeader />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      /^Welcome$/
+    );
   });
 
-  it("greets by the reader's own hour and first name, and says Welcome without one", () => {
-    expect(greetingFor("Ada Lovelace", new Date(2026, 9, 28, 9))).toBe(
+  it("holds the line's height while the reader is on its way, so the cards do not move when the name arrives", () => {
+    const view = render(<WelcomeHeader />);
+    const heading = screen.getByRole("heading", { level: 1 });
+    // jsdom lays nothing out: the hold is the line's own minimum height, the
+    // same with the placeholder and with the greeting, and the placeholder is
+    // a block the greeting's height, hidden from assistive tech.
+    expect(heading).toHaveClass("min-h-7", "text-xl");
+    const placeholder = screen.getByTestId("dashboard-greeting-placeholder");
+    expect(placeholder).toHaveAttribute("aria-hidden", "true");
+    expect(placeholder).toHaveClass("inline-block", "h-5");
+    expect(heading).toHaveAccessibleName("Dashboard");
+
+    userRead = { user: ADA, isLoading: false, error: null };
+    view.rerender(<WelcomeHeader />);
+    expect(screen.getByRole("heading", { level: 1 })).toBe(heading);
+    expect(heading).toHaveClass("min-h-7", "text-xl");
+    expect(screen.queryByTestId("dashboard-greeting-placeholder")).toBeNull();
+  });
+
+  it("can take focus when sent there, without being a Tab stop", () => {
+    userRead = { user: ADA, isLoading: false, error: null };
+    render(<WelcomeHeader />);
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).toHaveAttribute("tabindex", "-1");
+    heading.focus();
+    expect(heading).toHaveFocus();
+  });
+
+  it("words the greeting by the reader's own hour and first name", () => {
+    expect(greetingFor("Ada Lovelace", new Date(2026, 9, 28, 11, 59))).toBe(
       "Good morning, Ada"
     );
-    expect(greetingFor("Ada", new Date(2026, 9, 28, 14))).toBe(
+    expect(greetingFor("Ada", new Date(2026, 9, 28, 12))).toBe(
       "Good afternoon, Ada"
     );
-    expect(greetingFor("Ada", new Date(2026, 9, 28, 20))).toBe(
+    expect(greetingFor("Ada", new Date(2026, 9, 28, 18))).toBe(
       "Good evening, Ada"
     );
     expect(greetingFor(null, new Date())).toBe("Welcome");
-    expect(greetingFor("  ", new Date())).toBe("Welcome");
-  });
-
-  it("shows the environment the site names, in its tone, beside the name and not in it", () => {
-    summaryRead = {
-      data: {
-        parts: [],
-        failed: 0,
-        environment: { label: "Staging", tone: "warning" },
-      },
-    };
-    renderHeader();
-    const badge = screen.getByTestId("dashboard-environment");
-    expect(badge).toHaveTextContent("Staging");
-    expect(badge).toHaveAttribute("data-tone", "warning");
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Acme Site" })
-    ).toBeInTheDocument();
-  });
-
-  it("shows no badge where the site names no environment", () => {
-    summaryRead = { data: { parts: [], failed: 0 } };
-    renderHeader();
-    expect(screen.queryByTestId("dashboard-environment")).toBeNull();
-  });
-
-  it("offers Customize only where the grid lets the reader customise, and not while customising", () => {
-    renderHeader();
-    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
-    cleanup();
-    renderHeader({ customizable: false });
-    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
-    cleanup();
-    renderHeader({ customizable: true, editing: true });
-    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
-    cleanup();
-    renderHeader({ customizable: true, writing: true });
-    expect(screen.getByTestId("dashboard-edit-begin")).toBeDisabled();
-  });
-
-  it("offers New after Customize, and neither while customising", () => {
-    renderHeader({ customizable: true });
-    const customize = screen.getByTestId("dashboard-edit-begin");
-    const create = screen.getByTestId("dashboard-new");
-    expect(
-      customize.compareDocumentPosition(create) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    cleanup();
-    // A reader who may not customise still creates.
-    renderHeader({ customizable: false });
-    expect(screen.getByTestId("dashboard-new")).toBeInTheDocument();
-    cleanup();
-    renderHeader({ customizable: true, editing: true });
-    expect(screen.queryByTestId("dashboard-new")).toBeNull();
-  });
-
-  it("holds Customize's place before the grid has said, unseen and unreachable, with New after it", () => {
-    // No grid has published yet: the first paint of a cold load.
-    renderHeader();
-    const held = screen.getByTestId("dashboard-edit-reserve");
-    expect(held).toHaveClass("invisible");
-    expect(held).toHaveAttribute("aria-hidden", "true");
-    expect(held).toHaveAttribute("inert");
-    expect(held).toHaveAttribute("tabindex", "-1");
-    // Held in the place Customize takes: before New, in the one group.
-    const create = screen.getByTestId("dashboard-new");
-    expect(held.parentElement).toBe(create.parentElement);
-    expect(
-      held.compareDocumentPosition(create) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Customize" })).toBeNull();
-    cleanup();
-    // The grid has published, and the reader's arrangement is still on its
-    // way: not customizable YET, which says nothing, so the place stays held.
-    renderHeader({ customizable: false, awaitingArrangement: true });
-    expect(screen.getByTestId("dashboard-edit-reserve")).toHaveClass(
-      "invisible"
-    );
-    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
-    cleanup();
-    // Once the grid has said, the real control takes the place, or none does.
-    renderHeader({ customizable: true });
-    expect(screen.queryByTestId("dashboard-edit-reserve")).toBeNull();
-    expect(screen.getByTestId("dashboard-edit-begin")).toBeVisible();
-    cleanup();
-    renderHeader({ customizable: false });
-    expect(screen.queryByTestId("dashboard-edit-reserve")).toBeNull();
-  });
-
-  it("holds the summary's line while the summary is read, so its arrival moves nothing", () => {
-    // Pending: the line is not drawn, and its place is held all the same.
-    renderHeader({});
-    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
-    expect(screen.getByTestId("dashboard-summary-slot").className).toContain(
-      "min-h-[calc(1lh_+_3px)]"
-    );
-    cleanup();
-    // Answered: the line is drawn inside that same held place.
-    summaryRead = {
-      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
-    };
-    renderHeader({});
-    expect(screen.getByTestId("dashboard-summary").parentElement).toBe(
-      screen.getByTestId("dashboard-summary-slot")
-    );
-  });
-
-  it("says all caught up only when every part was read, and nothing when a part failed", () => {
-    summaryRead = { data: { parts: [], failed: 0 } };
-    renderHeader();
-    expect(screen.getByTestId("dashboard-summary")).toHaveTextContent(
-      "You're all caught up"
-    );
-    cleanup();
-    summaryRead = { data: { parts: [], failed: 1 } };
-    renderHeader();
-    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
-    cleanup();
-    summaryRead = {
-      data: { parts: [{ kind: "attention", count: 2 }], failed: 1 },
-    };
-    renderHeader();
-    const line = screen.getByTestId("dashboard-summary");
-    expect(line).toHaveTextContent("2 things need you");
-    expect(line).not.toHaveTextContent("caught up");
-  });
-
-  it("joins the parts with a middle dot, each a link", () => {
-    summaryRead = {
-      data: {
-        parts: [
-          { kind: "attention", count: 2, link: "releases" },
-          {
-            kind: "widget",
-            widget: "acme/forms",
-            card: "c1",
-            label: "new submissions",
-            count: 3,
-          },
-        ],
-        failed: 0,
-      },
-    };
-    renderHeader({ cards: { "acme/forms": ["c1"] } });
-    const line = screen.getByTestId("dashboard-summary");
-    expect(line).toHaveTextContent("2 things need you · 3 new submissions");
-    expect(within(line).getByRole("link")).toHaveTextContent(
-      "2 things need you"
-    );
-    expect(within(line).getByRole("button")).toHaveTextContent(
-      "3 new submissions"
-    );
-  });
-
-  it("draws a part with no list and no card on the dashboard as words, not a control", () => {
-    summaryRead = {
-      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
-    };
-    renderHeader({});
-    const line = screen.getByTestId("dashboard-summary");
-    expect(line).toHaveTextContent("2 things need you");
-    expect(within(line).queryByRole("button")).toBeNull();
-    expect(within(line).queryByRole("link")).toBeNull();
-  });
-
-  it("words nothing from an earlier answer once a later read of it failed", () => {
-    // A failed refetch keeps the last answer: its counts, or its "caught up",
-    // are no longer known to be true.
-    summaryRead = { data: { parts: [], failed: 0 }, isError: true };
-    renderHeader();
-    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
-    cleanup();
-    summaryRead = {
-      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
-      isError: true,
-    };
-    renderHeader();
-    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
-    cleanup();
-    // The control: the same answer, its latest read a success.
-    summaryRead = { data: { parts: [], failed: 0 }, isError: false };
-    renderHeader();
-    expect(screen.getByTestId("dashboard-summary")).toHaveTextContent(
-      "You're all caught up"
-    );
-  });
-
-  it("ends the summary line with Resume setup while the dismissed card can come back, and resumes it when pressed", () => {
-    setupResume.resumable = true;
-    summaryRead = {
-      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
-    };
-    renderHeader({});
-    const line = screen.getByTestId("dashboard-summary");
-    expect(line).toHaveTextContent("2 things need you · Resume setup");
-    const resume = within(line).getByRole("button", { name: "Resume setup" });
-    // The line's last control: after every part, not among them.
-    expect(line.lastElementChild).toBe(resume);
-    fireEvent.click(resume);
-    expect(setupResume.resume).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers Resume setup on a line of its own words when the summary says nothing", () => {
-    // 🔴 Drawn only inside a worded line, the way back to a dismissed card
-    // vanished while the summary loaded or a part of it failed.
-    setupResume.resumable = true;
-    summaryRead = { data: { parts: [], failed: 1 } };
-    renderHeader();
-    expect(screen.getByTestId("dashboard-summary")).toHaveTextContent(
-      /^Resume setup$/
-    );
-  });
-
-  it("offers no Resume setup when the card cannot come back", () => {
-    summaryRead = {
-      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
-    };
-    renderHeader({});
-    expect(screen.getByTestId("dashboard-summary")).not.toHaveTextContent(
-      "Resume setup"
-    );
-    cleanup();
-    summaryRead = { data: { parts: [], failed: 1 } };
-    renderHeader();
-    expect(screen.queryByTestId("dashboard-summary")).toBeNull();
-  });
-
-  it("says how old the data is only past five minutes, once, with Refresh", () => {
-    renderHeader({ oldestAnswerAt: Date.now() - 4 * 60_000 });
-    expect(screen.queryByTestId("dashboard-freshness")).toBeNull();
-    cleanup();
-    renderHeader({ oldestAnswerAt: Date.now() - 7 * 60_000 });
-    expect(screen.getByTestId("dashboard-freshness")).toHaveTextContent(
-      "Updated 7 min ago · Refresh"
-    );
-    expect(screen.getAllByTestId("dashboard-freshness")).toHaveLength(1);
-  });
-});
-
-/** A card drawn on the dashboard, as the grid draws one: focusable, by its placement id. */
-function drawnCard(placementId: string): HTMLElement {
-  const card = document.createElement("div");
-  card.setAttribute(CELL_PLACEMENT_ATTRIBUTE, placementId);
-  card.tabIndex = -1;
-  card.scrollIntoView = vi.fn();
-  document.body.append(card);
-  return card;
-}
-
-describe("following a summary part to its card", () => {
-  afterEach(() => {
-    for (const card of document.querySelectorAll(
-      `[${CELL_PLACEMENT_ATTRIBUTE}]`
-    )) {
-      card.remove();
-    }
-  });
-
-  const widgetPart = (card: string): DashboardSummary => ({
-    parts: [
-      {
-        kind: "widget",
-        widget: "acme/forms",
-        card,
-        label: "new submissions",
-        count: 3,
-      },
-    ],
-    failed: 0,
-  });
-
-  it("focuses the very card the part names, not its widget's first", () => {
-    // The widget's first card is not shown to this reader, so it is not drawn;
-    // the server named the one that is.
-    const shown = drawnCard("c2");
-    summaryRead = { data: widgetPart("c2") };
-    renderHeader({ cards: { "acme/forms": ["c1", "c2"] } });
-
-    fireEvent.click(screen.getByTestId("dashboard-summary-widget:acme/forms"));
-
-    expect(document.activeElement).toBe(shown);
-  });
-
-  it("draws a part whose card is not on the dashboard as words", () => {
-    summaryRead = { data: widgetPart("c3") };
-    renderHeader({ cards: { "acme/forms": ["c1", "c2"] } });
-    const line = screen.getByTestId("dashboard-summary");
-    expect(line).toHaveTextContent("3 new submissions");
-    expect(within(line).queryByRole("button")).toBeNull();
-  });
-
-  it("leaves a modified or non-primary click on a link to the browser", () => {
-    const card = drawnCard("a1");
-    summaryRead = {
-      data: {
-        parts: [{ kind: "attention", count: 2, link: "releases" }],
-        failed: 0,
-      },
-    };
-    renderHeader({ cards: { "core/needs-attention": ["a1"] } });
-    const link = screen.getByRole("link", { name: "2 things need you" });
-
-    for (const modified of [
-      { ctrlKey: true },
-      { metaKey: true },
-      { shiftKey: true },
-      { altKey: true },
-      { button: 1 },
-    ]) {
-      // `fireEvent` answers false only when the click's default was prevented.
-      expect(fireEvent.click(link, { button: 0, ...modified })).toBe(true);
-      expect(document.activeElement).not.toBe(card);
-    }
-    // The control: a plain primary click follows to the card instead.
-    expect(fireEvent.click(link, { button: 0 })).toBe(false);
-    expect(document.activeElement).toBe(card);
   });
 });

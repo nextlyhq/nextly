@@ -13,6 +13,8 @@
  */
 import type { Metadata } from "next";
 
+import { metadataFromAnswer } from "./answer-metadata";
+
 /** The `seo` field group shape this bridge reads (all fields optional). */
 export interface SeoMetaInput {
   metaTitle?: string | null;
@@ -134,41 +136,29 @@ export function buildMetadata(
   // A page is indexable unless it explicitly opts out.
   const noindex = seo.noindex === true;
 
-  const metadata: Metadata = {};
-  if (title !== undefined) metadata.title = title;
-  if (description !== undefined) metadata.description = description;
+  // Placed through the same mapping the page-metadata provider's answer goes
+  // through, so a value lands in the same place in the head either way.
+  const metadata = metadataFromAnswer({
+    title,
+    description,
+    canonical,
+    robots: { index: !noindex, follow: !noindex },
+    social: image === undefined ? undefined : { image: { url: image } },
+    languages: options.languages,
+  });
 
-  const languages = options.languages;
-  const hasLanguages =
-    languages !== undefined && Object.keys(languages).length > 0;
-  if (canonical !== undefined || hasLanguages) {
-    metadata.alternates = {
-      ...(canonical !== undefined ? { canonical } : {}),
-      ...(hasLanguages ? { languages } : {}),
-    };
-  }
-
-  // OpenGraph — caller extras win, so a page can set `type`/`publishedTime` etc.
+  // Caller extras win, so a page can set `type`/`publishedTime` etc.
   const openGraph: NonNullable<Metadata["openGraph"]> = {
-    ...(title !== undefined ? { title } : {}),
-    ...(description !== undefined ? { description } : {}),
-    ...(canonical !== undefined ? { url: canonical } : {}),
-    ...(image !== undefined ? { images: [{ url: image }] } : {}),
+    ...metadata.openGraph,
     ...options.openGraph,
   };
   if (Object.keys(openGraph).length > 0) metadata.openGraph = openGraph;
 
-  // Twitter — a large-image card whenever there is an image; caller extras win.
   const twitter: NonNullable<Metadata["twitter"]> = {
-    ...(image !== undefined ? { card: "summary_large_image" } : {}),
-    ...(title !== undefined ? { title } : {}),
-    ...(description !== undefined ? { description } : {}),
-    ...(image !== undefined ? { images: [image] } : {}),
+    ...metadata.twitter,
     ...options.twitter,
   };
   if (Object.keys(twitter).length > 0) metadata.twitter = twitter;
-
-  metadata.robots = { index: !noindex, follow: !noindex };
 
   return metadata;
 }

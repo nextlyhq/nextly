@@ -246,7 +246,7 @@ export default function WebhookDeliveriesPage(): React.JSX.Element {
 
   if (!id) {
     return (
-      <PageContainer width="wide">
+      <PageContainer type="list">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -265,7 +265,7 @@ export default function WebhookDeliveriesPage(): React.JSX.Element {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="wide">
+      <PageContainer type="list">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <DeliveriesContent id={id} />
         </SettingsLayout>
