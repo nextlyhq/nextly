@@ -251,15 +251,18 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   ): Promise<RecordRow[]> {
     const held = { kind: { in: ["address", "range"] } };
     const inLocale = { locale: { equals: asked.locale } };
+    // The address itself, held exactly or as a range, and every range above
+    // it, found through the unique claim key's index rather than a scan of
+    // the language's addresses.
+    const keys = [
+      claimKey("address", asked.locale, asked.path),
+      ...[asked.path, ...pathsAbove(asked.path)].map(path =>
+        claimKey("range", asked.locale, path)
+      ),
+    ];
     const atOrAbove = await rowsWhere(
       transaction,
-      {
-        and: [
-          held,
-          inLocale,
-          { path: { in: [asked.path, ...pathsAbove(asked.path)] } },
-        ],
-      },
+      { claimKey: { in: keys } },
       "share"
     );
     if (asked.range !== true) return atOrAbove;

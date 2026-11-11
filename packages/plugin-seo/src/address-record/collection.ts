@@ -44,7 +44,8 @@ export function addressRecordCollection(): CollectionConfig {
         index: true,
       }),
       text({ name: "holderId", label: "Holder id", index: true }),
-      text({ name: "holderLabel", label: "Holder label" }),
+      // Long text: a title of any length fits on every dialect.
+      textarea({ name: "holderLabel", label: "Holder label" }),
     ],
     access: {
       // Constants rather than bare `false`: access rules are validated as
