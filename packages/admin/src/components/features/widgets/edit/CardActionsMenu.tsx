@@ -1,28 +1,22 @@
 "use client";
 
 /**
- * Everything a reader can do to one card while customising, behind ONE menu.
+ * Everything a reader can do to one card while customising, behind ONE menu: the card menu at
+ * rest (`CardMenu`) with the moves added, in the same order — Settings…, Refresh, then Move
+ * earlier and Move later, then Remove.
  *
  * ## The moves are not a convenience
  *
  * 🔴 WCAG 2.2 SC 2.5.7 (Dragging Movements, AA) requires that anything achieved
- * by dragging can also be achieved with a single pointer. The four moves here
- * are that alternative for the drag handle, and they are reachable by keyboard
- * through the menu as well, so one control answers both criteria.
+ * by dragging can also be achieved with a single pointer. Move earlier and Move
+ * later are that alternative for the drag handle, on phones where there is no
+ * dragging, and they are reachable by keyboard through the menu as well, so one
+ * control answers both criteria.
  *
  * ## One button, not a toolbar
  *
- * A row of seven icon buttons per card was seven Tab stops per card and a
- * header too crowded for a narrow card. One named button opens every action,
- * and the card's width is shown beside it as a share of the row, so the reader can
- * see what the Width and Height submenus will change without opening them.
- *
- * ## Sizes within the widget's bounds, and only those
- *
- * The widths offered are the common steps (3, 4, 6, 8 and 12 columns) that lie
- * within the widget's bounds, and the bounds' own ends; the heights are every
- * one the bounds allow. A card can never be resized past its bounds from here,
- * and the editor refuses one that is (`setPlacementSize`).
+ * One named button opens every action, and the card's width is shown beside it as a share of
+ * the row. The width itself is changed in the card's settings drawer, or by dragging its edge.
  *
  * @module components/features/widgets/edit/CardActionsMenu
  */
@@ -32,73 +26,47 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import {
-  ArrowDown,
-  ArrowDownToLine,
-  ArrowUp,
-  ArrowUpToLine,
-  MoveHorizontal,
-  Settings,
-  Trash2,
-} from "lucide-react";
-import type { GridSize, WidgetSizeBounds } from "nextly/config";
+import { ArrowDown, ArrowUp, RefreshCw, Settings, Trash2 } from "lucide-react";
+import type { GridSize } from "nextly/config";
 import { useRef, type ComponentType, type JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
 
 import type { MoveDirection } from "../layout-editor";
-import {
-  sizeName,
-  widthChoiceName,
-  widthChoices,
-  widthPercent,
-} from "../sizes";
+import { sizeName, widthPercent } from "../sizes";
 
 import { settingsIntent } from "./settings-sheet-code";
 
 export interface CardActionsMenuProps {
   /** What the reader calls this card, which the button's name says. */
   title: string;
-  /** The size the card is DRAWN at, which the Width and Height choices check. */
-  size: GridSize;
-  /** Its widget's bounds, which the choices are taken from. */
-  bounds: WidgetSizeBounds;
   /** Which moves would move the card; the rest are disabled. */
   can: Record<MoveDirection, boolean>;
   /** Whether a layout write is in flight, which every action waits for. */
   disabled: boolean;
   /** Registers the menu button, so focus can be sent back to it. */
   triggerRef: (element: HTMLElement | null) => void;
-  /** Lists the sizes in the menu itself rather than in submenus: where it draws one column. */
-  sizesInPlace?: boolean;
   on: {
     move: (direction: MoveDirection) => void;
-    setSize: (size: GridSize) => void;
     remove: () => void;
-    /** ABSENT when the widget declares no settings: no item is drawn. */
-    openSettings?: () => void;
+    /** Opens the card's settings drawer. */
+    openSettings: () => void;
+    /** Ask again for this card's data alone, where it asks for any. */
+    refresh?: (() => void) | undefined;
   };
 }
 
-/** The four moves, in menu order, with what each is called. */
+/** The moves the menu offers, in menu order, with what each is called. */
 const MOVES: ReadonlyArray<{
   direction: MoveDirection;
   label: string;
   icon: ComponentType<{ "aria-hidden"?: boolean; className?: string }>;
 }> = [
-  { direction: "start", label: "Move to start", icon: ArrowUpToLine },
   { direction: "earlier", label: "Move earlier", icon: ArrowUp },
   { direction: "later", label: "Move later", icon: ArrowDown },
-  { direction: "end", label: "Move to end", icon: ArrowDownToLine },
 ];
 
 /**
@@ -118,134 +86,6 @@ export function CardSizeLabel({ size }: { size: GridSize }): JSX.Element {
   );
 }
 
-/** One direction of the card's size: what it is called, its choices and how each reads. */
-export interface SizeAxis {
-  kind: "width";
-  label: string;
-  icon: ComponentType<{ "aria-hidden"?: boolean; className?: string }>;
-  /** The value the card is drawn at in this direction. */
-  value: number;
-  choices: number[];
-  /** How a choice reads: its label, a detail beneath it, and the whole name it is announced by. */
-  name: (value: number) => { label: string; detail?: string; spoken: string };
-  choose: (value: number) => void;
-}
-
-/** One direction's choices under its label, the drawn one checked. */
-function AxisChoices({
-  axis,
-  disabled,
-}: {
-  axis: SizeAxis;
-  disabled: boolean;
-}) {
-  return (
-    <>
-      <DropdownMenuLabel className="text-xs text-muted-foreground">
-        {axis.label}
-      </DropdownMenuLabel>
-      <DropdownMenuRadioGroup
-        value={String(axis.value)}
-        // Narrowed rather than asserted: the value comes back from the DOM, and
-        // only a value this menu offered is chosen.
-        onValueChange={value => {
-          const chosen = Number(value);
-          if (axis.choices.includes(chosen)) axis.choose(chosen);
-        }}
-      >
-        {axis.choices.map(option => {
-          const name = axis.name(option);
-          return (
-            <DropdownMenuRadioItem
-              key={option}
-              value={String(option)}
-              data-testid={`card-${axis.kind}-${option}`}
-              aria-label={name.spoken}
-              disabled={disabled}
-            >
-              {name.detail === undefined ? (
-                name.label
-              ) : (
-                // The share first and the columns beneath it, for sight. Hidden
-                // from screen readers: the item's label already says both.
-                <span aria-hidden className="flex flex-col leading-tight">
-                  <span>{name.label}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {name.detail}
-                  </span>
-                </span>
-              )}
-            </DropdownMenuRadioItem>
-          );
-        })}
-      </DropdownMenuRadioGroup>
-    </>
-  );
-}
-
-/**
- * One direction's choices, as a submenu, or in place in the card menu itself.
- *
- * In place where the dashboard draws one column: on a phone the card menu sits mid-screen, and
- * a submenu beside it has room on neither side, so it was drawn partly off the screen. In place,
- * the choices share the menu's own box, which already fits.
- */
-export function AxisSection({
-  axis,
-  inPlace,
-  disabled = false,
-}: {
-  axis: SizeAxis;
-  inPlace: boolean;
-  /** A write is in flight, so no size can be chosen now. */
-  disabled?: boolean;
-}): JSX.Element {
-  if (inPlace) return <AxisChoices axis={axis} disabled={disabled} />;
-  const Icon = axis.icon;
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger
-        disabled={disabled}
-        data-testid={`card-${axis.kind}-menu`}
-      >
-        <Icon aria-hidden />
-        {axis.label}
-        <span aria-hidden className="ml-auto text-xs text-muted-foreground">
-          {axis.value}
-        </span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent>
-        <AxisChoices axis={axis} disabled={disabled} />
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}
-
-/**
- * The directions a card may be resized in: its width, where its bounds offer more than the one
- * width it has. Never its height: a card is as tall as its content, and a stored `h` sets no
- * height. The one reading of a card's size choices for both card menus and the quick popover.
- */
-export function sizeAxes(
-  size: GridSize,
-  bounds: WidgetSizeBounds,
-  setSize: (size: GridSize) => void
-): SizeAxis[] {
-  const axes: SizeAxis[] = [
-    {
-      kind: "width",
-      label: "Width",
-      icon: MoveHorizontal,
-      value: size.w,
-      choices: widthChoices(bounds, size.w),
-      name: widthChoiceName,
-      // The other direction kept as drawn, which already lies within the bounds.
-      choose: w => setSize({ w, h: size.h }),
-    },
-  ];
-  return axes.filter(axis => axis.choices.length > 1);
-}
-
 /**
  * How Remove is drawn in a card's menu, at rest and while customising: in the destructive colour,
  * highlighted or not, as the one item that takes something away. The deeper shade in light mode,
@@ -257,17 +97,14 @@ export const REMOVE_ITEM_CLASS =
 
 export function CardActionsMenu({
   title,
-  size,
-  bounds,
   can,
   disabled,
   triggerRef,
-  sizesInPlace = false,
   on,
 }: CardActionsMenuProps): JSX.Element {
   // 🔴 Set by the actions that send focus somewhere themselves -- a move back
   // to this button once it has moved, a removal to the next card, Settings to
-  // its panel. The menu's own close returns focus to its trigger a tick later,
+  // its drawer. The menu's own close returns focus to its trigger a tick later,
   // which would undo each of those.
   const focusIsHandled = useRef(false);
   const handled = (action: () => void) => () => {
@@ -276,16 +113,15 @@ export function CardActionsMenu({
   };
 
   return (
-    // `modal={false}`: Settings opens a sheet from inside this menu, and a
+    // `modal={false}`: Settings opens a drawer from inside this menu, and a
     // modal menu closing underneath a dialog opening leaves the page refusing
     // pointer input.
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button
           ref={triggerRef}
-          // With Settings in this menu, the sheet's code starts loading as
-          // the reader heads for the menu.
-          {...(on.openSettings ? settingsIntent : {})}
+          // The drawer's code starts loading as the reader heads for the menu.
+          {...settingsIntent}
           type="button"
           variant="ghost"
           size="icon"
@@ -308,20 +144,22 @@ export function CardActionsMenu({
           event.preventDefault();
         }}
       >
-        {/* Settings, Size, the moves, then Remove: the order of the card menu at rest, with
-            the moves customising adds in the middle. */}
-        {on.openSettings ? (
+        <DropdownMenuItem
+          onSelect={handled(on.openSettings)}
+          data-testid="card-settings"
+        >
+          <Settings aria-hidden className="size-4" />
+          Settings…
+        </DropdownMenuItem>
+        {on.refresh ? (
           <DropdownMenuItem
-            onSelect={handled(on.openSettings)}
-            data-testid="card-settings"
+            onSelect={() => on.refresh?.()}
+            data-testid="card-refresh"
           >
-            <Settings aria-hidden className="size-4" />
-            Settings
+            <RefreshCw aria-hidden className="size-4" />
+            Refresh
           </DropdownMenuItem>
         ) : null}
-        {sizeAxes(size, bounds, on.setSize).map(axis => (
-          <AxisSection key={axis.kind} axis={axis} inPlace={sizesInPlace} />
-        ))}
         <DropdownMenuSeparator />
         {MOVES.map(({ direction, label, icon: Icon }) => (
           <DropdownMenuItem
