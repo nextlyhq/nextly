@@ -233,6 +233,7 @@ export {
   slugToPath,
   nextlySitemap,
   nextlyRobots,
+  confirmedLanguage,
   requestLanguage,
   servedAddress,
   type RequestLanguage,

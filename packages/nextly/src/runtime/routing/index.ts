@@ -62,7 +62,11 @@ export type {
 // address it is served at in that language: for a route built on the content
 // route that reads the segment itself (`@nextlyhq/blocks-react`'s).
 // @experimental
-export { requestLanguage, servedAddress } from "./request-language";
+export {
+  confirmedLanguage,
+  requestLanguage,
+  servedAddress,
+} from "./request-language";
 export type { RequestLanguage } from "./request-language";
 
 export { nextlySitemap } from "./sitemap";

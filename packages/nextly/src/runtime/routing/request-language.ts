@@ -5,6 +5,7 @@
  *
  * @module runtime/routing/request-language
  */
+import { isServicesRegistered } from "../../di/service-access";
 import {
   languageAddressOf,
   languageOfSegment,
@@ -20,6 +21,13 @@ export interface RequestLanguage {
    * handed on (a redirect, the page's head) carries the language as well.
    */
   fromSegment: boolean;
+  /**
+   * Set where the segment was read before anything had started Nextly, so
+   * the site's languages could not be asked yet: a route whose reader starts
+   * Nextly on its first read reads in it, then confirms it
+   * ({@link confirmedLanguage}) before serving anything.
+   */
+  unchecked?: true;
 }
 
 /** Waits for Nextly to start, as a route reading through it does. */
@@ -51,8 +59,32 @@ export async function requestLanguage(
   }
   if (typeof segment !== "string") return null;
   await boot();
+  // A start already under way is waited for, so its languages are the ones
+  // asked. Loaded when first asked: the start imports the routing modules.
+  const { awaitStartOrRetry } = await import("../../init");
+  await awaitStartOrRetry();
+  // Nothing has started Nextly: a reader that starts it lazily, on its first
+  // read, has not read yet. Its languages are asked once it has.
+  if (!isServicesRegistered()) {
+    return { locale: segment, fromSegment: true, unchecked: true };
+  }
   const locale = await languageOfSegment(segment);
   return locale === undefined ? null : { locale, fromSegment: true };
+}
+
+/**
+ * Whether `language` names one of the site's languages: at once for one
+ * already checked, and, for one read before Nextly had started, now that the
+ * route's read has started it. A route asks this after its read and before
+ * it serves, answering not found where it is false.
+ */
+export async function confirmedLanguage(
+  language: RequestLanguage
+): Promise<boolean> {
+  if (language.unchecked !== true || language.locale === undefined) {
+    return true;
+  }
+  return (await languageOfSegment(language.locale)) !== undefined;
 }
 
 /**

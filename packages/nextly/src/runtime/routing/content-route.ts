@@ -43,6 +43,7 @@ import type { PageMetadataValues } from "../seo/page-metadata-contract";
 import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
 import { isReservedPath } from "./reserved-paths";
 import {
+  confirmedLanguage,
   requestLanguage,
   servedAddress,
   type RequestLanguage,
@@ -926,6 +927,9 @@ function buildRoute<TNode>(
         ))
       );
     }
+    // A language read before Nextly had started has no paths to build if it
+    // is not one of the site's.
+    if (!(await confirmedLanguage(language))) return [];
     return params;
   }
 
@@ -957,6 +961,9 @@ function buildRoute<TNode>(
     if (language === null) triggerNotFound();
     return runWithAccessMemo(async () => {
       const resolved = await resolvePath(slug, language);
+      // A language read before Nextly had started is confirmed now the read
+      // has started it, before anything is served in it.
+      if (!(await confirmedLanguage(language))) triggerNotFound();
       if (!resolved) triggerNotFound();
       return use(resolved, language);
     });

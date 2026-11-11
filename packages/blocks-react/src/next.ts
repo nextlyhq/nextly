@@ -65,6 +65,7 @@ import {
   nextlySingleTags,
   nextlySiteSettingsTags,
   readPublicSiteSettings,
+  confirmedLanguage,
   requestLanguage,
   servedAddress,
   LIST_PAGE_SEGMENT,
@@ -2054,6 +2055,21 @@ interface MediaReads {
   ) => Promise<boolean>;
 }
 
+/**
+ * `config` reading in the language the request is served in: the route's own
+ * `locale`, or the `[locale]` segment's, which the content route reads per
+ * request. What its media reads and their cache key are scoped by, so a
+ * German page draws its images' German URL and alt text.
+ */
+function inRequestLanguage(
+  config: BlocksPageConfig,
+  context: { readonly locale?: string }
+): BlocksPageConfig {
+  return context.locale === undefined || context.locale === config.locale
+    ? config
+    : { ...config, locale: context.locale };
+}
+
 function mediaResolver(
   config: BlocksPageConfig,
   reader: NextlyContentReader,
@@ -3946,7 +3962,12 @@ function blocksRouteConfig(
     const derived = await derivePageSeo(
       inputs.document,
       resolver,
-      mediaResolver(config, readerFor(config), budget, mediaCache).resolve,
+      mediaResolver(
+        inRequestLanguage(config, context),
+        readerFor(config),
+        budget,
+        mediaCache
+      ).resolve,
       // A later page of the page's list is its own address, so its
       // canonical names it rather than the list's first page.
       listPageSlug(context.slug, context.page),
@@ -4125,7 +4146,7 @@ function blocksRouteConfig(
         { onRefused: () => overrun.refused(budget) }
       );
       const media = mediaResolver(
-        config,
+        inRequestLanguage(config, context),
         readerFor(config),
         budget,
         mediaCache
@@ -5284,11 +5305,24 @@ function buildContentRoute(
     };
   }
 
+  /**
+   * What `segments` is served as in `language`, or null for not found,
+   * including where a language read before Nextly had started turns out,
+   * once the lookup has started it, not to be one of the site's.
+   */
+  async function answered(
+    segments: readonly string[],
+    language: RequestLanguage
+  ): Promise<ContentAnswer | null> {
+    const found = await answer(segments, language);
+    return (await confirmedLanguage(language)) ? found : null;
+  }
+
   async function ContentPage(args: ContentRouteArgs): Promise<ReactElement> {
     const request = await requestOf(args);
     if (request === null) return await contentNotFound();
     const { segments, language, params } = request;
-    const found = await answer(segments, language);
+    const found = await answered(segments, language);
     if (found === null) return await contentNotFound();
     if (found.kind === "page") {
       return await pagesRoute.ContentPage({ params });
@@ -5301,7 +5335,7 @@ function buildContentRoute(
     const request = await requestOf(args);
     if (request === null) return await contentNotFound();
     const { segments, language, params } = request;
-    const found = await answer(segments, language);
+    const found = await answered(segments, language);
     // Not found here as in the page: a crawler is answered once its head is
     // ready, so this is what gives it a 404 rather than a 200 carrying a
     // not-found body.
@@ -5338,6 +5372,9 @@ function buildContentRoute(
     );
     if (language === null) return own;
     const held = await config.addresses(language.locale, limit, mountSegments);
+    // A language read before Nextly had started builds none of its own
+    // addresses if it is not one of the site's.
+    if (!(await confirmedLanguage(language))) return own;
     // Then the entries' addresses under this route's mount, as the route
     // serves them, each listed once.
     const listed = new Set(own.map(param => param.slug.join("/")));

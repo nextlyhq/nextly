@@ -47,7 +47,11 @@ import type { PageMetadataValues } from "../seo/page-metadata-contract";
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
 import { triggerNotFound } from "./not-found";
-import { requestLanguage } from "./request-language";
+import {
+  confirmedLanguage,
+  requestLanguage,
+  type RequestLanguage,
+} from "./request-language";
 
 /** A resolved Single (loose by design — the shape is the app's own). */
 export type SingleDocument = Record<string, unknown>;
@@ -339,7 +343,9 @@ function buildSingleRoute<TNode>(
    * it has one. Not found where the segment names none of the site's
    * languages.
    */
-  async function contextFor(args?: SingleRouteArgs): Promise<SingleContext> {
+  async function contextFor(
+    args?: SingleRouteArgs
+  ): Promise<{ context: SingleContext; language: RequestLanguage }> {
     const language = await requestLanguage(
       (await args?.params)?.locale,
       config.locale,
@@ -347,9 +353,25 @@ function buildSingleRoute<TNode>(
     );
     if (language === null) triggerNotFound();
     return {
-      slug: config.slug,
-      ...(language.locale === undefined ? {} : { locale: language.locale }),
+      language,
+      context: {
+        slug: config.slug,
+        ...(language.locale === undefined ? {} : { locale: language.locale }),
+      },
     };
+  }
+
+  /**
+   * The document for this request, in its language: null where there is
+   * none, or where a language read before Nextly had started turns out not
+   * to be one of the site's.
+   */
+  async function documentFor(
+    context: SingleContext,
+    language: RequestLanguage
+  ): Promise<SingleDocument | null> {
+    const document = await resolve(context);
+    return (await confirmedLanguage(language)) ? document : null;
   }
 
   /** Whether this request was granted the working draft, and as whom. */
@@ -488,9 +510,9 @@ function buildSingleRoute<TNode>(
     // One memo of access lookups for the resolution and the callback, so a
     // preview's draft gate, the read it grants and any read the callback makes
     // look the person up once.
-    const context = await contextFor(args);
+    const { context, language } = await contextFor(args);
     return runWithAccessMemo(async () => {
-      const document = await resolve(context);
+      const document = await documentFor(context, language);
       if (!document) return {};
       const code = buildMetadata
         ? await buildMetadata(document, context)
@@ -519,11 +541,11 @@ function buildSingleRoute<TNode>(
   }
 
   async function SinglePage(args?: SingleRouteArgs): Promise<TNode> {
-    const context = await contextFor(args);
+    const { context, language } = await contextFor(args);
     // One memo of access lookups for the resolution and the render; see
     // `generateMetadata`.
     return runWithAccessMemo(async () => {
-      const document = await resolve(context);
+      const document = await documentFor(context, language);
       if (!document) triggerNotFound();
       return config.render(document, context);
     });

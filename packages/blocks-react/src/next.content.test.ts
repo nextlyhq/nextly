@@ -951,6 +951,49 @@ describe("under a [locale] segment", () => {
     expect(entryReads.every(args => args.locale === "de")).toBe(true);
   });
 
+  it("reads the images an entry's design draws in the language the segment names", async () => {
+    const IMAGE = "66666666-6666-4666-8666-666666666666";
+    const withImage = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "template",
+        nodes: [
+          {
+            id: "i",
+            type: "core/image",
+            version: 1,
+            props: { mediaId: IMAGE },
+          },
+        ],
+      })
+    ) as BlockDocument;
+    const options = config({
+      templates: {
+        collection: "templates",
+        read: async collection =>
+          collection === "posts" ? { id: "t1", document: withImage } : null,
+      },
+    });
+    const route = createContentPage({
+      ...options,
+      pages: { ...options.pages, mediaCollection: "photos" },
+    });
+
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { locale: "de", slug: ["blog", "hello"] } })
+    );
+    await renderToHtml(createElement(PageRenderer, element.props));
+
+    const nextly = options.pages.nextly as unknown as ReturnType<
+      typeof instance
+    >;
+    const imageReads = nextly.find.mock.calls
+      .map(([args]) => args)
+      .filter(args => args.collection === "photos");
+    expect(imageReads.length).toBeGreaterThan(0);
+    expect(imageReads.every(args => args.locale === "de")).toBe(true);
+  });
+
   it("answers not found for a segment naming none of the site's languages, asking nothing", async () => {
     const options = config();
     await expect(
