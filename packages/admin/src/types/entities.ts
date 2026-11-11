@@ -489,4 +489,12 @@ export interface ApiFieldGroup {
 
   /** Number of fields in the Component */
   fieldCount?: number;
+
+  /**
+   * How many fields place this field group (a field group field naming it),
+   * across collections, Singles and other field groups: the count a delete of
+   * it would be refused over. `null` when the list could not read it, which
+   * is not the same as unused.
+   */
+  placedBy?: number | null;
 }
