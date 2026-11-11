@@ -35,10 +35,16 @@ interface CollectionsHandler {
 }
 
 const HEADING = { name: "heading", type: "text" };
+// The delete action is stated, so the save changes only nullability: one derived from `required`
+// would move with it, which SQLite cannot alter in place.
 const author = (required: boolean) => ({
   name: "author",
   type: "relationship",
-  relationTo: "writers",
+  options: {
+    relationType: "manyToOne",
+    target: "writers",
+    onDelete: "restrict",
+  },
   ...(required ? { required: true } : {}),
 });
 
