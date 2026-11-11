@@ -22,6 +22,7 @@ import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { pageLanguageLinks } from "../languages/head";
 import { heldLanguages, type HeldLanguages } from "../languages/versions";
+import { originOf } from "../origin";
 import { listPages } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
@@ -203,6 +204,10 @@ async function examine(
     brokenLinks: await brokenLinks(content.links, {
       shapes: addressShapes(ctx.config.collections ?? []),
       productionAddresses,
+      // A language served on its own domain links from there.
+      ...(originOf(ownAddress) === undefined
+        ? {}
+        : { origin: originOf(ownAddress) }),
       // Read by the same rule a visitor's request is, as the Proxy reads it.
       keptOf: url => addressOfRequest(url),
       isHeld: async (path, locale) =>

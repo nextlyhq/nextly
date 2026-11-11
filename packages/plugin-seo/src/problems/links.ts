@@ -69,6 +69,12 @@ export interface LinkJudge {
   /** Where the site itself is served, so a full address on it is judged too. */
   productionAddresses: readonly string[];
   /**
+   * The origin the linking page is served on, which a path from the root is
+   * read on, as a visitor's browser reads it; the first production address
+   * where none is given.
+   */
+  origin?: string;
+  /**
    * The language a request for `url` is served in and the path its pages
    * are kept at, as the site's language rule reads it; none where no
    * language serves it.
@@ -83,16 +89,17 @@ const NO_ORIGIN = "https://site.invalid";
 
 /**
  * A link as the address a visitor's request would ask for: a path from the
- * root on the site's first production address, or a full address on one
- * of them. Nothing for any other link.
+ * root on the linking page's origin, or a full address on one of the
+ * production addresses. Nothing for any other link.
  */
 function requestOf(
   url: string,
-  productionAddresses: readonly string[]
+  productionAddresses: readonly string[],
+  pageOrigin: string | undefined
 ): URL | undefined {
   const own = productionAddresses.flatMap(each => originOf(each) ?? []);
   if (url.startsWith("/") && !url.startsWith("//")) {
-    return new URL(url, own[0] ?? NO_ORIGIN);
+    return new URL(url, pageOrigin ?? own[0] ?? NO_ORIGIN);
   }
   const origin = originOf(url);
   return origin !== undefined && own.includes(origin)
@@ -112,7 +119,11 @@ export async function brokenLinks(
   const answers = new Map<string, Promise<boolean>>();
   const broken: LinkFact[] = [];
   for (const link of links) {
-    const request = requestOf(link.url, judge.productionAddresses);
+    const request = requestOf(
+      link.url,
+      judge.productionAddresses,
+      judge.origin
+    );
     const kept =
       request === undefined ? undefined : await judge.keptOf(request);
     if (kept === undefined) continue;

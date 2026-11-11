@@ -239,4 +239,26 @@ describe("brokenLinks", () => {
       { field: "body", url: "/de/blog/hello" },
     ]);
   });
+
+  it("reads a path from the root on the origin the linking page is served on", async () => {
+    const keptOf = async (url: URL) => ({
+      locale: url.host === "fr.example.com" ? "fr" : "en",
+      path: url.pathname,
+    });
+    const held = new Set(["fr /blog/bonjour"]);
+    const judge = {
+      shapes,
+      productionAddresses: ["https://en.example.com", "https://fr.example.com"],
+      keptOf,
+      isHeld: async (path: string, locale: string) =>
+        held.has(`${locale} ${path}`),
+    };
+    const link = [{ field: "body", url: "/blog/bonjour" }];
+    expect(
+      await brokenLinks(link, { ...judge, origin: "https://fr.example.com" })
+    ).toEqual([]);
+    expect(
+      await brokenLinks(link, { ...judge, origin: "https://en.example.com" })
+    ).toEqual(link);
+  });
 });
