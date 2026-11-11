@@ -26,15 +26,25 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.74"
+    "nextly": "0.0.2-alpha.74",
+    "sharp": "^0.35.5"
+  },
+  "peerDependenciesMeta": {
+    "sharp": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/node": "^22.20.5",
     "nextly": "workspace:*",
+    "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "typescript": "7.0.2",
     "vitest": "^5.0.5"

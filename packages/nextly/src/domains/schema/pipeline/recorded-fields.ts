@@ -12,6 +12,8 @@
  */
 import type { FieldConfig } from "../../../collections/config/define-collection";
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 
 /** A registry row, as each registry service lists it. */
 export interface RegistryFieldsRow {
@@ -44,8 +46,8 @@ export function recordFieldsOnto(
 const REGISTRY_TABLES = {
   collections: ["dynamic_collections"],
   singles: ["dynamic_singles"],
-  // Before and after the field-group storage migration.
-  components: ["dynamic_components", "dynamic_field_groups"],
+  // Before and after the field-group storage migration, spelled by the storage catalog.
+  components: [STORAGE_FORMAT.registryTable, MIGRATION_TARGET.registryTable],
 } as const;
 
 /**

@@ -31,7 +31,7 @@ import {
 import { useKeyboardShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { cn } from "@admin/lib/utils";
 
-import { chartColour, type ChartSlot } from "./chart-colour";
+import { markColour, type ChartMark } from "./chart-colour";
 import {
   clampPosition,
   firstPosition,
@@ -241,7 +241,7 @@ function EscapeDismisses({ dismiss }: { dismiss: () => void }) {
 /** One line of a tooltip: the mark's colour, what it is, and its value as the table writes it. */
 export interface ChartTooltipLine {
   key: string;
-  slot: ChartSlot;
+  mark: ChartMark;
   name?: string;
   value: ReactNode;
 }
@@ -283,8 +283,8 @@ export function ChartTooltip({
           <span
             data-testid="chart-tooltip-swatch"
             className="size-2 shrink-0 rounded-full"
-            // design-lint-ok: the swatch IS the mark's chart colour.
-            style={{ backgroundColor: chartColour(line.slot) }}
+            // design-lint-ok: the swatch IS the mark's colour.
+            style={{ backgroundColor: markColour(line.mark) }}
           />
           {line.name ? (
             <span className="min-w-0 text-muted-foreground">{line.name}</span>

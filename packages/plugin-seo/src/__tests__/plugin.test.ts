@@ -81,25 +81,41 @@ describe("seoPlugin", () => {
       ["GET", "/sitemap.xml", "root", true],
       ["GET", "/robots.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
+      ["POST", "/share-image", undefined, undefined],
     ]);
+  });
+
+  it("offers making a share image to a person who may add to the media library", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    const route = plugin.contributes?.routes?.find(
+      ({ path }) => path === "/share-image"
+    );
+    expect(route).toMatchObject({
+      method: "POST",
+      requiredPermission: "create-media",
+    });
+    expect(route?.public).toBeUndefined();
   });
 
   it("omits the sitemap routes when sitemap is disabled, and keeps robots.txt", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
       "/robots.txt",
+      "/share-image",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
   });
 
-  it("serves no route at all with both turned off", () => {
+  it("serves neither file with both turned off", () => {
     const plugin = seoPlugin({
       collections: ["pages"],
       sitemap: false,
       robots: false,
     });
-    expect(plugin.contributes?.routes).toBeUndefined();
+    expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      "/share-image",
+    ]);
   });
 
   it("rejects a sitemap file size smaller than an empty file", () => {

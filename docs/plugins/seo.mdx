@@ -134,6 +134,7 @@ Overrides stay nested under `seo`: the example above reads at `entry.seo.focusKe
 | `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers                                                         |
 | `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole                                              |
 | `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
+| `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
 | `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
 | `basePath`       | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                  |
 
@@ -362,6 +363,53 @@ starts on a site:
 Without the plugin, `buildMetadata` from `nextly/runtime` still turns the `seo` group into a
 Next.js `Metadata` object by hand. The `buildMetadata` section of
 [Routing and SEO](/docs/guides/routing-and-seo) covers it.
+
+## Social cards
+
+When someone shares a page on LinkedIn, X, Slack, Facebook or WhatsApp, the network shows a card
+built from the page's head. The plugin states everything the card reads:
+
+- the title and description, the social ones where a page has them, else the page's own;
+- the **share image** at its full address, with its width, height and alt text. The media library
+  stores an upload with a path from the site's root (`/uploads/cover.jpg`), which a network cannot
+  load, so the plugin states it on `baseUrl`, else the first of the site's production addresses,
+  else the origin of the page's canonical where that is absolute;
+- the **site's name**, from `socialCard.siteName`;
+- the page's **language**: the one the route read it in, or else `socialCard.language`, or else
+  the site's default language (English on a site that declares no languages), written as Open
+  Graph writes it (`en-US` becomes `en_US`).
+
+```ts
+seoPlugin({
+  collections: ["posts"],
+  baseUrl: "https://example.com",
+  socialCard: { siteName: "Acme", language: "en-US" },
+});
+```
+
+The image's alt text is the media item's own, so give share images alt text in the media library.
+
+### Share images of the right size
+
+Networks show a share image in full at 1200 × 630. A picture narrower than 1200 pixels, or whose
+width is not between 1.8 and 2.0 times its height, is cropped or shrunk. `shareImageProblems(ctx,
+input)` says so for a page, such as `800 × 600, LinkedIn will crop it`, and says where it is fixed:
+by making a share image, in the route's code where the route set the picture, or in the settings
+where the site's address is missing. `shareImageSizeProblem({ width, height })` answers the same
+for one picture.
+
+Making a share image is one action. The plugin's `POST /share-image` route
+(`/admin/api/plugins/@nextlyhq/plugin-seo/share-image` in a scaffolded project), sent
+`{ "media": "<media id>" }`, makes a copy of the picture at exactly 1200 × 630, cut around the
+picture's focal point and enlarged where it is smaller, as a JPEG under 600 KB. It adds the copy to
+the media library, in the same folder and with the same alt text, and answers it as
+`{ message, item }`; set the item as the page's `seo.ogImage` to use it. The picture itself, and every page that shows it, are unchanged.
+
+The route is for a signed-in person who may add to the media library (`create-media`) and read it
+(`read-media`). It reads the picture from where the site serves its uploads, on `baseUrl` where it
+is set. A picture that storage will not serve to an anonymous reader is refused, since no network
+could load it either. It needs the `sharp` image library, which the media library uses to read image sizes:
+install it with `npm install sharp`.
 
 ## Structured data
 

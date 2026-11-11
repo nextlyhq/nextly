@@ -44,6 +44,12 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import {
+  socialCardRulesFromOptions,
+  withSocialCard,
+  type SocialCardOptions,
+} from "./social/card";
+import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
 import {
@@ -165,6 +171,23 @@ export interface SeoPluginOptions {
    * needed for any to be served.
    */
   structuredData?: StructuredDataOptions;
+  /**
+   * @experimental What every page's social card states beyond the page,
+   * until the SEO settings hold it: the site's name, and the language of a
+   * page the route read in no particular language, as a language tag.
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   baseUrl: "https://example.com",
+   *   socialCard: { siteName: "Example", language: "en-US" },
+   * });
+   * ```
+   *
+   * A share image stored with a path from the root is stated on `baseUrl`,
+   * since a network reading the card needs its full address.
+   */
+  socialCard?: SocialCardOptions;
 }
 
 /**
@@ -338,19 +361,32 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.baseUrl,
     options.structuredData
   );
+  const readSocialCardRules = socialCardRulesFromOptions(
+    options.baseUrl,
+    options.socialCard
+  );
+
+  // The site's sitemap and robots.txt, and the action that makes a share
+  // image of the right size; all added below.
+  const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
+    // Every page's head, worked out by the one order of who wins, its
+    // social card completed, and its structured data, worked out from that
+    // same answer.
     services: {
-      // Every page's head, worked out by the one order of who wins, and its
-      // structured data, worked out from that same answer.
       pageMetadata: ctx =>
         withStructuredData(
           ctx,
-          seoPageMetadata(ctx, readRules),
+          withSocialCard(
+            ctx,
+            seoPageMetadata(ctx, readRules),
+            readSocialCardRules
+          ),
           readStructuredDataRules
         ),
       // The pages the site lists and the problems that left any out, read by
@@ -366,6 +402,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           }),
       }),
     },
+    routes,
     // Every host but the site's production addresses is kept out of search.
     proxy: [stagingGuard(readRules)],
   };
@@ -385,8 +422,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     };
   }
 
-  const routes = siteFileRoutes(options, readRules, sitemapSubset);
-  if (routes.length > 0) contributes.routes = routes;
+  routes.push(
+    ...siteFileRoutes(options, readRules, sitemapSubset),
+    shareImageRoute(options.baseUrl)
+  );
 
   return definePlugin({
     name: "@nextlyhq/plugin-seo",

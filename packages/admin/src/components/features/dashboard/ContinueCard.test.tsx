@@ -164,7 +164,7 @@ describe("Continue where you left off", () => {
     );
   });
 
-  it("leads each row with its collection's icon, and draws its status as a pill in its tone", () => {
+  it("leads each row with its collection's icon, and draws its status as a quiet chip in its tone", () => {
     draw(
       answered([
         row(1, { status: "published", icon: "Bookmark" }),
@@ -183,10 +183,12 @@ describe("Continue where you left off", () => {
     // The collection's own icon where it names one, and the default otherwise.
     expect(leading[0]!.innerHTML).not.toBe(leading[2]!.innerHTML);
     expect(leading[1]!.innerHTML).toBe(leading[2]!.innerHTML);
-    const pills = screen
-      .getAllByTestId("status-pill")
-      .map(pill => [pill.textContent, pill.dataset.tone]);
-    expect(pills).toEqual([
+    const chips = screen.getAllByTestId("status-chip");
+    // Quiet chips on the card's surface, never a tinted fill.
+    for (const chip of chips) {
+      expect(chip.className).not.toMatch(/-surface\b/);
+    }
+    expect(chips.map(chip => [chip.textContent, chip.dataset.tone])).toEqual([
       ["Published", "good"],
       ["Changed", "warn"],
       ["Draft", "neutral"],
