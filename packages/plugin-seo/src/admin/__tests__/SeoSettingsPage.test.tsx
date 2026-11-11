@@ -200,7 +200,8 @@ describe("first-time setup", () => {
         .getByRole("tab", { name: /Content types/ })
         .getAttribute("aria-selected")
     ).toBe("true");
-    expect(window.location.search).toBe("?tab=types");
+    // The address is left alone: the admin mounts the page again on a change.
+    expect(window.location.search).toBe("");
     // Finished: no banner offers setup again.
     expect(screen.queryByText("Finish setting up SEO.")).toBeNull();
   });
@@ -522,6 +523,35 @@ describe("saving", () => {
   });
 });
 
+describe("switching tabs", () => {
+  it("leaves the address alone, which the admin answers by mounting the page again", async () => {
+    serving({ _rev: "5", siteName: "Rext AI", setupStep: 3 });
+    const replace = vi.spyOn(window.history, "replaceState");
+    const push = vi.spyOn(window.history, "pushState");
+    try {
+      render(<SeoSettingsPage />);
+      fireEvent.click(screen.getByRole("tab", { name: "General" }));
+      fireEvent.change(
+        screen.getAllByLabelText("Site name")[0] as HTMLElement,
+        {
+          target: { value: "Acme" },
+        }
+      );
+      fireEvent.click(screen.getByRole("tab", { name: /Content types/ }));
+      fireEvent.click(screen.getByRole("tab", { name: "General" }));
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+      expect(
+        (screen.getAllByLabelText("Site name")[0] as HTMLInputElement).value
+      ).toBe("Acme");
+    } finally {
+      replace.mockRestore();
+      push.mockRestore();
+    }
+  });
+});
+
 describe("the content types table", () => {
   const SET_UP = { _rev: "5", siteName: "Rext AI", setupStep: 3 };
 
@@ -707,6 +737,19 @@ describe("the content types table", () => {
         _rev: "5",
       },
     ]);
+
+    // Choosing no field returns the author to being found by its name.
+    const again = screen.getByRole("combobox", {
+      name: "Field that holds author",
+    }) as HTMLSelectElement;
+    fireEvent.change(again, { target: { value: "" } });
+    expect(again.selectedOptions[0]?.textContent).toBe("Author");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect(sent[1]).toEqual({
+      structuredData: { posts: { type: "article" } },
+      _rev: "6",
+    });
   });
 
   it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {

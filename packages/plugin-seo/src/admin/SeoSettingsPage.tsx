@@ -68,13 +68,6 @@ function tabInAddress(): TabId {
   return isTabId(named) ? named : FIRST_TAB;
 }
 
-/** Keeps the open tab in the address without adding to the history. */
-function showTabInAddress(tab: TabId): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("tab", tab);
-  window.history.replaceState(window.history.state, "", url);
-}
-
 /** The list the content types route answers with. */
 interface ContentTypesBody {
   items: ListedContentType[];
@@ -455,10 +448,11 @@ function SettingsScreen({
   const problem = draftProblem(draft, types);
   useLeaveWarning(changes !== null);
 
-  const choose = (next: TabId) => {
-    setTab(next);
-    showTabInAddress(next);
-  };
+  // The open tab is kept here, not written to the address: the admin
+  // answers any change to the address by mounting the page again, which
+  // would drop the edits not yet saved. An address naming a tab still opens
+  // on it.
+  const choose = (next: TabId) => setTab(next);
   const tabProps: TabProps = { draft, change: next => setDraft(next) };
   const saveChanges = () => {
     void save(draft).then(saved => {

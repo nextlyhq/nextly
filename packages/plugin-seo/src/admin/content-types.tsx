@@ -203,7 +203,10 @@ function detailHelp(
 /** What a detail's choice shows: the value chosen and the options round it. */
 interface DetailChoice {
   value: string;
-  /** The field found by its name, shown as chosen until another is. */
+  /**
+   * The field the markup finds by its name while none is chosen, which the
+   * choice of no field is shown as.
+   */
   guess?: MappableField;
   fixed?: string;
   /** A field chosen once that the type no longer has. */
@@ -223,7 +226,7 @@ function detailChoice(
   if (typeof source === "object") {
     return { ...base, value: FIXED, fixed: source.value };
   }
-  if (source === undefined) return { ...base, value: guess?.name ?? "" };
+  if (source === undefined) return { ...base, value: "" };
   if (!holdsField(type, source))
     return { ...base, value: source, gone: source };
   return type.mappableFields.some(field => field.name === source)
@@ -244,9 +247,12 @@ function DetailOptions({
   const labels = optionLabels(type.mappableFields);
   return (
     <>
-      {choice.guess === undefined ? (
-        <option value="">{FROM_THE_PAGE[detail] ?? "Not chosen yet"}</option>
-      ) : null}
+      {/* No field chosen: the markup finds one by its name, shown as that
+          field, or reads the page's own, so choosing it again returns a
+          detail to being found that way. */}
+      <option value="">
+        {choice.guess?.label ?? FROM_THE_PAGE[detail] ?? "Not chosen yet"}
+      </option>
       {choice.fixed === undefined ? null : (
         <option value={FIXED}>{`Always "${choice.fixed}"`}</option>
       )}
@@ -256,11 +262,16 @@ function DetailOptions({
       {choice.path === undefined ? null : (
         <option value={choice.path}>{choice.path}</option>
       )}
-      {type.mappableFields.map(each => (
-        <option key={each.name} value={each.name}>
-          {labels.get(each.name)}
-        </option>
-      ))}
+      {type.mappableFields
+        // The field found by its name is the first option while unchosen.
+        .filter(
+          each => each.name !== choice.guess?.name || choice.value === each.name
+        )
+        .map(each => (
+          <option key={each.name} value={each.name}>
+            {labels.get(each.name)}
+          </option>
+        ))}
     </>
   );
 }
@@ -283,10 +294,12 @@ function DetailLine({
   typeLabel: string;
   choose: (field: string) => void;
 }): JSX.Element {
-  // Until one is chosen, the field the markup finds by its name is shown as
-  // chosen. A field chosen is saved as chosen, even that one.
+  // A field chosen is saved as chosen; no field chosen is shown as the one
+  // the markup finds by its name.
   const choice = detailChoice(type, detail, source);
-  const shown = type.mappableFields.find(field => field.name === choice.value);
+  const shown =
+    type.mappableFields.find(field => field.name === choice.value) ??
+    (choice.value === "" ? choice.guess : undefined);
   const needed = required
     ? `Google needs this for ${typeLabel}`
     : `Optional for ${typeLabel}`;
