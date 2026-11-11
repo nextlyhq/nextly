@@ -420,6 +420,38 @@ export function getComponentRowColumnDescriptor(
 }
 
 /**
+ * The field as a Single's table stores it: a relationship or upload naming one entry is not
+ * required of the COLUMN, whatever the field says.
+ *
+ * A Single's one entry is created on its first read, from its fields' defaults, and a reference has
+ * none: it starts empty. So its column accepts NULL, and `required` is enforced when the entry is
+ * saved, from the registry's fields, which this never replaces. Every other field keeps its
+ * `required`: each has an empty value of its own kind to start from (`getDefaultValue`).
+ */
+export function asSingleRowColumnField(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): FieldDefinition {
+  return field.required === true &&
+    classifyFieldKind(field, builtBy) === "fkSingle"
+    ? { ...field, required: false }
+    : field;
+}
+
+/** A Single's column for `field` (`asSingleRowColumnField`). */
+export function getSingleRowColumnDescriptor(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): ColumnDescriptor | null {
+  return getColumnDescriptor(
+    asSingleRowColumnField(field, builtBy),
+    dialect,
+    builtBy
+  );
+}
+
+/**
  * A column's kind and the sizes it states, each only where stated: what the
  * index, row and key rules weigh a column by, read the same way from a
  * field's descriptor, a system column's, or a seeded column.

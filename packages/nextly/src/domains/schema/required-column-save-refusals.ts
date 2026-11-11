@@ -30,6 +30,7 @@ import {
 import {
   fieldProducesColumn,
   getColumnDescriptor,
+  getSingleRowColumnDescriptor,
   toSnakeCase,
   usesJunctionTable,
 } from "./services/field-column-descriptor";
@@ -41,13 +42,17 @@ function hasOwnColumn(field: FieldDefinition): boolean {
 
 /**
  * Whether the save writes the field's column NOT NULL, as the descriptor builds it: a required
- * field's, a relationship's included.
+ * field's, a relationship's included, except on a Single, whose references accept NULL
+ * (`getSingleRowColumnDescriptor`).
  */
 function columnIsNotNull(
   field: FieldDefinition,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  single: boolean
 ): boolean {
-  const descriptor = getColumnDescriptor(field, dialect, "collection");
+  const descriptor = (
+    single ? getSingleRowColumnDescriptor : getColumnDescriptor
+  )(field, dialect, "collection");
   return descriptor !== null && !descriptor.nullable;
 }
 
@@ -62,17 +67,19 @@ function columnToCount(
   field: FieldDefinition,
   args: {
     dialect: SupportedDialect;
+    entity: RequiredColumnEntity;
     previousOf: (field: FieldDefinition) => FieldDefinition | undefined;
     addedColumnBackfill: (field: FieldDefinition) => string | null;
     presentColumns: ReadonlySet<string>;
   }
 ): { column: string | null } | undefined {
-  if (!hasOwnColumn(field) || !columnIsNotNull(field, args.dialect)) {
+  const single = args.entity.kind === "single";
+  if (!hasOwnColumn(field) || !columnIsNotNull(field, args.dialect, single)) {
     return undefined;
   }
   const previous = args.previousOf(field);
   if (previous !== undefined && hasOwnColumn(previous)) {
-    if (columnIsNotNull(previous, args.dialect)) return undefined;
+    if (columnIsNotNull(previous, args.dialect, single)) return undefined;
     const held = toSnakeCase(previous.name);
     return args.presentColumns.has(held) ? { column: held } : undefined;
   }

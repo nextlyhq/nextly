@@ -41,7 +41,29 @@ describeEachDialect(
     const singles = (): SingleEntryService =>
       current!.getService("singleEntryService");
 
-    it("is created and read when code declares it", async () => {
+    /** A save leaving the required relationship empty is refused, naming it, and one filling it is not. */
+    async function expectRequiredOnSave(): Promise<void> {
+      const empty = await singles().update(
+        "banner",
+        { headline: "No tag", tag: null, _overwrite: true },
+        { overrideAccess: true }
+      );
+      expect(empty.success, JSON.stringify(empty)).toBe(false);
+      expect(JSON.stringify(empty)).toMatch(/tag/);
+
+      const tags = await current!.nextly.create({
+        collection: "tags",
+        data: { name: "News" },
+      });
+      const filled = await singles().update(
+        "banner",
+        { headline: "Tagged", tag: tags.item.id, _overwrite: true },
+        { overrideAccess: true }
+      );
+      expect(filled.success, JSON.stringify(filled)).toBe(true);
+    }
+
+    it("is created and read when code declares it, and a save still needs the relationship", async () => {
       current = await createTestNextly({
         dialect,
         collections: [TAGS],
@@ -59,9 +81,10 @@ describeEachDialect(
       const read = await singles().get("banner", { overrideAccess: true });
 
       expect(read.success, JSON.stringify(read)).toBe(true);
+      await expectRequiredOnSave();
     });
 
-    it("is created and read when the Schema Builder made it", async () => {
+    it("is created and read when the Schema Builder made it, and a save still needs the relationship", async () => {
       // The builder's paths run their migration in development only.
       vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({ dialect, collections: [TAGS] });
@@ -86,6 +109,7 @@ describeEachDialect(
       const read = await singles().get("banner", { overrideAccess: true });
 
       expect(read.success, JSON.stringify(read)).toBe(true);
+      await expectRequiredOnSave();
     });
   }
 );

@@ -55,6 +55,7 @@ import {
   junctionTableNameFor,
   junctionTablesOf,
   usesJunctionTable,
+  asSingleRowColumnField,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   relationshipStoresJson,
@@ -1194,6 +1195,14 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string {
+    const singleRow = this.singleRowFields(
+      tableName,
+      fields,
+      _options?.isSingle
+    );
+    if (singleRow)
+      return this.generateMigrationSQL(tableName, singleRow, _options);
+
     // Refuse an unusable decimal shape before any of it becomes SQL.
     this.assertDecimalDimensions(fields);
 
@@ -1599,6 +1608,17 @@ ${allColumnDefs.join(",\n")}
       targetTables?: CollectionTables;
     }
   ): string {
+    const singleOld = this.singleRowFields(tableName, oldFields);
+    const singleNew = this.singleRowFields(tableName, newFields);
+    if (singleOld || singleNew) {
+      return this.generateAlterTableMigration(
+        tableName,
+        singleOld ?? oldFields,
+        singleNew ?? newFields,
+        options
+      );
+    }
+
     // The added columns become SQL here too, so the same refusal applies.
     this.assertDecimalDimensions(newFields);
 
@@ -3721,6 +3741,24 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
    * and the scale-not-greater-than-precision check are one definition, so the Schema Builder cannot
    * accept a shape `defineCollection` rejects.
    */
+  /**
+   * A Single's fields as its table stores them (`asSingleRowColumnField`): a required relationship
+   * or upload naming one entry gets a column that accepts NULL, because the Single's one entry is
+   * created on its first read with nothing chosen. Null when the table is not a Single's, or no
+   * field changes, so the caller goes on with the list it has.
+   */
+  private singleRowFields(
+    tableName: string,
+    fields: FieldDefinition[],
+    isSingle?: boolean
+  ): FieldDefinition[] | null {
+    if (isSingle !== true && !tableName.startsWith("single_")) return null;
+    const shaped = fields.map(field =>
+      asSingleRowColumnField(field, "collection")
+    );
+    return shaped.some((field, i) => field !== fields[i]) ? shaped : null;
+  }
+
   private assertDecimalDimensions(fields: FieldDefinition[]): void {
     const errors: BaseValidationError[] = [];
     fields.forEach((field, index) => {

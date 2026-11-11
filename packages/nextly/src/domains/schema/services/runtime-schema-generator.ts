@@ -85,6 +85,7 @@ import {
   DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
   getColumnDescriptor,
+  getSingleRowColumnDescriptor,
   migrateStepColumnDescriptors,
   systemColumnsForFields,
 } from "./field-column-descriptor";
@@ -554,9 +555,14 @@ function buildDrizzleColumnRecord(
 
   // User-defined fields. Layout-only field types and unmapped types
   // come back as `null` from getColumnDescriptor and are skipped.
+  // A Single's reference columns accept NULL (`getSingleRowColumnDescriptor`).
+  const describeUserColumn =
+    options.isSingle === true
+      ? getSingleRowColumnDescriptor
+      : getColumnDescriptor;
   for (const field of fields) {
     if (localizedNames.has(field.name)) continue; // companion-owned
-    const desc = getColumnDescriptor(
+    const desc = describeUserColumn(
       field,
       dialect,
       options.builtBy ?? "codeFirst"

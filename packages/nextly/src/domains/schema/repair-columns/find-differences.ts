@@ -22,6 +22,7 @@ import type { ColumnSpec } from "../pipeline/diff/types";
 import {
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  getSingleRowColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
@@ -72,7 +73,9 @@ function describeColumn(
   const describe =
     entity.kind === "fieldGroup" && !translation
       ? getComponentRowColumnDescriptor
-      : getColumnDescriptor;
+      : entity.kind === "single" && !translation
+        ? getSingleRowColumnDescriptor
+        : getColumnDescriptor;
   const descriptor = describe(field, dialect, origin);
   return descriptor === null
     ? null
