@@ -159,7 +159,7 @@ async function addPhone(
 }
 
 async function save(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "Save Changes" }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
 }
 
 describe("the Form Builder on the shared picker and panel", () => {
@@ -407,6 +407,8 @@ describe("the Form Builder on the shared picker and panel", () => {
     let finish!: () => void;
     const pending = vi.fn(() => new Promise<void>(r => (finish = r)));
     const { user } = view({}, [], pending);
+    // Save is offered only with a change to save.
+    await addPhone(user, "Mobile");
     await save(user);
     // The action bar's save is held while the host's save is pending.
     const button = screen.getByRole("button", { name: /sav/i });
@@ -414,9 +416,7 @@ describe("the Form Builder on the shared picker and panel", () => {
     await user.click(button);
     expect(pending).toHaveBeenCalledTimes(1);
     finish();
-    expect(
-      await screen.findByRole("button", { name: "Save Changes" })
-    ).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Save" })).toBeEnabled();
   });
 
   it("drops a choice field's default when its choice is removed", async () => {
@@ -459,6 +459,8 @@ describe("the Form Builder on the shared picker and panel", () => {
       attempt += 1;
       if (attempt === 1) throw new Error("The host is offline");
     });
+    // Save is offered only with a change to save.
+    await addPhone(user, "Mobile");
     await save(user);
     expect(await screen.findByText("The host is offline")).toBeInTheDocument();
     await save(user);

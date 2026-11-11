@@ -99,6 +99,11 @@ export interface FormOption {
 
 interface SubmissionsViewProps {
   collectionSlug?: string;
+  /**
+   * Show only this form's submissions, with no choice of form: the list as a
+   * form's own Submissions tab draws it.
+   */
+  formId?: string;
 }
 
 type StatusTab = "all" | "new" | "read" | "archived" | "spam";
@@ -168,14 +173,18 @@ function summarizeData(data: Record<string, unknown>): string {
 
 export function SubmissionsView({
   collectionSlug,
+  formId,
 }: SubmissionsViewProps): JSX.Element {
   const [slugs, setSlugs] = useState<{ forms: string; submissions: string }>();
   const [forms, setForms] = useState<FormOption[]>([]);
-  const [selectedFormId, setSelectedFormId] = useState<string>(() => {
+  const [chosenFormId, setChosenFormId] = useState<string>(() => {
     // Deep links (?form=<id>) preselect the form filter.
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("form") ?? "";
   });
+  // A form's own tab names its form; the list of all submissions offers the
+  // choice.
+  const selectedFormId = formId ?? chosenFormId;
   const [statusTab, setStatusTab] = useState<StatusTab>("all");
   const [rows, setRows] = useState<SubmissionRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -508,29 +517,31 @@ export function SubmissionsView({
       {/* Toolbar: form filter, status tabs, export */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Select
-            value={selectedFormId || "__all"}
-            onValueChange={value => {
-              setSelectedFormId(value === "__all" ? "" : value);
-              setPage(1);
-              setOpenId(null);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Filter by form"
-              className="w-full sm:w-56 bg-transparent border-input dark:bg-muted/50"
+          {formId === undefined ? (
+            <Select
+              value={selectedFormId || "__all"}
+              onValueChange={value => {
+                setChosenFormId(value === "__all" ? "" : value);
+                setPage(1);
+                setOpenId(null);
+              }}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all">All forms</SelectItem>
-              {forms.map(form => (
-                <SelectItem key={form.id} value={form.id}>
-                  {form.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                aria-label="Filter by form"
+                className="w-full sm:w-56 bg-transparent border-input dark:bg-muted/50"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">All forms</SelectItem>
+                {forms.map(form => (
+                  <SelectItem key={form.id} value={form.id}>
+                    {form.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
 
           <Tabs
             value={statusTab}

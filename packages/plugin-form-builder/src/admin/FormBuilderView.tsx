@@ -3,54 +3,68 @@
 /**
  * Form Builder View
  *
- * Custom admin view that provides a visual drag-and-drop form builder.
- * Layout mirrors the Collection Builder for visual consistency.
+ * The form editor: an Editor page in the admin's frame, with the form's
+ * controls in the admin's one top bar, the form's name and its pages as the
+ * page header's tabs, and one set of unsaved changes across every page, saved
+ * once.
  *
  * @module admin/FormBuilderView
  * @since 0.1.0
  */
-
-"use client";
 
 import type {
   DocumentLockGates,
   FieldPickerChoice,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
-  Button,
-  Card,
-  FieldShell,
-  FormActions,
-  Input,
-  Textarea,
+  useFoldedPanel,
+  useReportUnsavedWork,
+} from "@nextlyhq/plugin-sdk/admin";
+import {
+  Alert,
+  AlertDescription,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   toast,
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
 } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import type { FormFieldCatalogType } from "nextly/field-catalog";
-import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { type JSX, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type JSX,
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
+import { FORM_PAGES, formPageOf, type FormPageId } from "../form-pages";
 import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
-import {
-  FormNotificationsTab,
-  type NotificationDefaults,
-} from "./components/builder/FormNotificationsTab";
+import { FormIdentitySection } from "./components/builder/FormIdentitySection";
+import { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
 import { FormPreview } from "./components/builder/FormPreview";
-import {
-  FormSettingsTab,
-  type SpamDefaults,
-} from "./components/builder/FormSettingsTab";
+import { FormSettingsTab } from "./components/builder/FormSettingsTab";
 import { notificationsBlockingSave } from "./components/builder/notification-addresses";
+import {
+  followWithinAdmin,
+  formPageAddress,
+} from "./components/editor/form-editor-address";
+import { FormEditorBar } from "./components/editor/FormEditorBar";
+import {
+  formEditorPages,
+  FormEditorHeader,
+  type FormEditorTab,
+} from "./components/editor/FormEditorHeader";
+import { useSubmissionCount } from "./components/editor/useSubmissionCount";
+import { SubmissionsView } from "./components/submissions/SubmissionsView";
 import {
   FormBuilderProvider,
   createFieldFromType,
@@ -59,6 +73,8 @@ import {
   useFieldBookkeeping,
   type FormNotification,
 } from "./context/FormBuilderContext";
+import { refusedPage, type SaveRefusal } from "./save-refusal";
+import { useBuilderConfig } from "./use-builder-config";
 
 /**
  * The key a form's version travels under, as the admin reads and sends it.
@@ -66,6 +82,12 @@ import {
  * which does not publish it.
  */
 const DOCUMENT_VERSION_KEY = "_rev";
+
+/**
+ * The name the editor reports its unsaved work under, to the admin page that
+ * guards leaving it.
+ */
+const UNSAVED_WORK_KEY = "forms.editor";
 
 /**
  * What a save sends: an existing form's save names the version the editor's
@@ -123,6 +145,8 @@ export interface FormBuilderViewProps {
    */
   onSave?: (data: unknown) => void | Promise<void>;
   onSuccess?: (entry?: Record<string, unknown>) => void;
+  /** Called once the form has been deleted from the editor's More menu. */
+  onDelete?: () => void;
   onCancel?: () => void;
   /**
    * What a colleague's claim on this form withholds, handed over by the admin
@@ -134,58 +158,92 @@ export interface FormBuilderViewProps {
    * it too.
    */
   documentLock?: DocumentLockGates;
+  /**
+   * The page of the editor the address names (`"settings"` at
+   * `/admin/collections/forms/<id>/settings`); absent on the form's edit
+   * address, which opens Builder.
+   */
+  view?: string;
 }
 
-// ============================================================================
-// Helper
-// ============================================================================
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s-]/g, "")
-    .replace(/[\s_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+/** The props the editor's inner tree reads. */
+interface FormEditorProps {
+  isCreating: boolean;
+  collectionSlug: string;
+  entryId: string | undefined;
+  onSave: FormBuilderViewProps["onSave"];
+  onSuccess: FormBuilderViewProps["onSuccess"];
+  onDelete: FormBuilderViewProps["onDelete"];
+  documentLock: DocumentLockGates | undefined;
+  /** The form's version as read; see `initialData._rev`. */
+  version: string | undefined;
+  view: string | undefined;
 }
 
 // ============================================================================
 // Inner Component (uses context)
 // ============================================================================
 
-function FormBuilderViewInner({
-  isCreating = false,
-  collectionSlug = "forms",
+/** A page's label, as its tab names it. */
+function pageLabel(page: FormPageId): string {
+  return (
+    FORM_PAGES.find(each => (each.path ?? "builder") === page)?.label ??
+    "Builder"
+  );
+}
+
+/**
+ * The page a saved form's address names, or the one a new form's tabs chose:
+ * a form with no address yet keeps its page in the editor.
+ */
+function useFormPage(
+  isCreating: boolean,
+  view: string | undefined
+): [FormPageId, (page: FormPageId) => void] {
+  const [chosen, setChosen] = useState<FormPageId>("builder");
+  return [isCreating ? chosen : formPageOf(view), setChosen];
+}
+
+/** The page's own width: a Form page is a column, the rest take the width. */
+function PageBody({
+  page,
+  children,
+}: {
+  page: FormPageId;
+  children: ReactNode;
+}): JSX.Element {
+  const column = page === "settings" || page === "notifications";
+  return (
+    <div
+      data-form-page={page}
+      className="min-w-0"
+      style={column ? { maxWidth: "var(--nx-measure-form)" } : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
+function FormEditor({
+  isCreating,
+  collectionSlug,
   entryId,
   onSave,
   onSuccess,
-  onCancel,
+  onDelete,
   documentLock,
   version,
-}: Pick<
-  FormBuilderViewProps,
-  | "isCreating"
-  | "collectionSlug"
-  | "entryId"
-  | "onSave"
-  | "onSuccess"
-  | "onCancel"
-  | "documentLock"
-> & {
-  /** The form's version as read; see `initialData._rev`. */
-  version?: string;
-}) {
+  view,
+}: FormEditorProps): JSX.Element {
   // The version the next save sends: the one read, then the one each save
   // answered, so a second save is not refused for this editor's first.
   const startedFrom = useRef(version);
   const {
     fields,
-    activeTab,
     isDirty,
     formData,
     settings,
     notifications,
-    setActiveTab,
     addField,
     selectField,
     seedNotifications,
@@ -193,121 +251,46 @@ function FormBuilderViewInner({
     markAsSaved,
     beginSave,
     markFieldsSaved,
+    changeCount,
+    undo,
+    readOnly,
   } = useFieldBookkeeping();
 
   const queryClient = useQueryClient();
-
+  const config = useBuilderConfig();
+  const [page, choosePage] = useFormPage(isCreating, view);
   const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<SaveRefusal | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  // The host's resolved field enable/disable map. `null` until the config
-  // request settles, so the Add dialog never flashes the unfiltered set. If
-  // the request errors, every type is offered: the exclude list is an
-  // authoring preference (the server accepts any field type in the form's
-  // JSON regardless), so hiding all types on a transient failure would cost
-  // more than a temporarily unfiltered picker.
-  const [enabledTypes, setEnabledTypes] = useState<
-    FormFieldCatalogType[] | null
-  >(null);
+  // The form editor needs the width: the Forms panel starts folded on it, and
+  // the bar's toggle brings it back. The admin remembers the reader's choice.
+  useFoldedPanel("forms.builder");
+  // Leaving the form with unsaved changes asks first; moving between its tabs
+  // stays on the form and does not.
+  useReportUnsavedWork(UNSAVED_WORK_KEY, isDirty);
 
-  // Type ids the host explicitly disabled (`config.fields[type] === false`),
-  // including plugin type ids — so the host exclude layer applies to
-  // contributed field types too, not just built-ins.
-  const [disabledFieldTypes, setDisabledFieldTypes] = useState<Set<string>>(
-    () => new Set()
+  const submissionCount = useSubmissionCount(
+    isCreating ? undefined : entryId,
+    config.submissionsSlug
   );
-
-  // The host's notification defaults (plugin options). `null` until the
-  // config request settles; `{}` when the request failed or nothing is
-  // configured, so consumers can distinguish "loading" from "no defaults".
-  const [notificationDefaults, setNotificationDefaults] =
-    useState<NotificationDefaults | null>(null);
-
-  // Plugin-level spam defaults, so the Settings tab can show what
-  // "inherit" resolves to. `null` while the config request settles.
-  const [spamDefaults, setSpamDefaults] = useState<SpamDefaults | null>(null);
-
-  // Collections a form may redirect to. `null` while the config request
-  // settles, so the Settings tab can tell "not configured" from "not known
-  // yet" and not flash the option away.
-  const [redirectCollections, setRedirectCollections] = useState<
-    string[] | null
-  >(null);
-
-  // Whether the configuration request FAILED, kept apart from what it
-  // returned. A 403 or a 500 mapped to an empty list is indistinguishable from
-  // "this site configures no redirect targets" — so the Settings tab would
-  // state that as fact, hide the option, and offer no way to tell the
-  // difference or try again.
-  const [redirectConfigFailed, setRedirectConfigFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const allTypes = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
-    void fetch(
-      "/admin/api/plugins/@nextlyhq/plugin-form-builder/builder-config",
-      { credentials: "include" }
-    )
-      .then(response => (response.ok ? response.json() : null))
-      .then(
-        (
-          config: {
-            fields?: Record<string, boolean>;
-            notifications?: NotificationDefaults;
-            spamProtection?: SpamDefaults;
-            redirectCollections?: string[];
-          } | null
-        ) => {
-          if (cancelled) return;
-          setEnabledTypes(
-            config?.fields
-              ? allTypes.filter(type => config.fields?.[type] !== false)
-              : allTypes
-          );
-          setDisabledFieldTypes(
-            new Set(
-              Object.entries(config?.fields ?? {})
-                .filter(([, enabled]) => enabled === false)
-                .map(([type]) => type)
-            )
-          );
-          setNotificationDefaults(config?.notifications ?? {});
-          setSpamDefaults(config?.spamProtection ?? {});
-          // `config === null` is the failure branch: the response was not ok.
-          setRedirectConfigFailed(config === null);
-          setRedirectCollections(config?.redirectCollections ?? []);
-        }
-      )
-      .catch(() => {
-        if (cancelled) return;
-        setEnabledTypes(allTypes);
-        setNotificationDefaults({});
-        setSpamDefaults({});
-        setRedirectConfigFailed(true);
-        setRedirectCollections([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Seed a new form with the default admin-notification rule once the host
   // defaults are known. Guarded by a ref so deleting the seeded rule is
   // final — the effect must never re-seed a list the user emptied.
   const seededRef = useRef(false);
+  const defaults = config.notificationDefaults;
   useEffect(() => {
-    if (!isCreating || notificationDefaults === null || seededRef.current) {
-      return;
-    }
+    if (!isCreating || defaults === null || seededRef.current) return;
     seededRef.current = true;
     seedNotifications([
       {
         ...createNotification(),
         name: "Admin notification",
-        to: notificationDefaults.defaultToEmail ?? "",
+        to: defaults.defaultToEmail ?? "",
       },
     ]);
-  }, [isCreating, notificationDefaults, seedNotifications]);
+  }, [isCreating, defaults, seedNotifications]);
 
   // A field from the picker, added and opened (`fieldFromChoice`).
   const handleAddField = useCallback(
@@ -323,38 +306,24 @@ function FormBuilderViewInner({
     [fields, addField, selectField]
   );
 
-  // ── Save / Cancel ─────────────────────────────────────────────────────────
+  // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
-    // A failed save, said in the page and as a toast.
-    const showSaveError = (message: string) => {
-      setSaveError(message);
-      toast.error(message);
+    // A refused save keeps every change and says what to fix, and where, in
+    // the page and as a toast.
+    const refuse = (next: SaveRefusal) => {
+      setRefusal(next);
+      toast.error(next.message);
     };
 
     // The commit is where the refusal lives, following the rule the entry
     // editor sets: a write passes one gate rather than each control being
-    // disabled separately. The button below reads the same fact, so the
+    // disabled separately. The Save button reads the same fact, so the
     // interface does not offer what this would refuse.
-    //
-    // Today that button is this callback's only caller, so the two cannot be
-    // told apart by a test. What the gate is for is the next caller - a
-    // shortcut, a second action bar - arriving without one.
     if (documentLock?.actionsDisabled === true) return;
 
-    // Check if there are fields
-    if (fields.length === 0) {
-      toast.error("Please add at least one field to the form");
-      return;
-    }
-
-    // A notification is written to the form as it is typed, so nothing between
-    // the editor and here refuses one. The sheet this replaced disabled its own
-    // commit for a blank name, and the field rejects a malformed address on
-    // blur — both preconditions move to this save, which is now the only
-    // commit, and both are answered by the module the editor itself asks.
-    const blocked = notificationsBlockingSave(notifications);
+    const blocked = blockedBeforeSave(fields, notifications);
     if (blocked) {
-      toast.error(blocked);
+      refuse(blocked);
       return;
     }
 
@@ -367,24 +336,20 @@ function FormBuilderViewInner({
     };
 
     beginSave();
+    setIsSaving(true);
+    setRefusal(null);
     if (onSave) {
       // The host's save. A field it stored is stored like one the builder
       // saved itself, so its type is fixed; the form's unsaved state is the
       // host's to clear, as before.
-      // Pending like the builder's own request, so Save cannot start a second
-      // host save while one is still under way.
-      setIsSaving(true);
-      setSaveError(null);
       await saveThroughHost(onSave, saveData, {
         saved: markFieldsSaved,
-        failed: showSaveError,
+        failed: message => refuse({ message }),
       });
       setIsSaving(false);
       return;
     }
 
-    setIsSaving(true);
-    setSaveError(null);
     try {
       const url = isCreating
         ? `/admin/api/collections/${collectionSlug}/entries`
@@ -398,12 +363,13 @@ function FormBuilderViewInner({
         ),
       });
       if (!response.ok) {
-        throw new Error(
-          saveErrorMessage(
-            await response.json().catch(() => ({})),
-            response.statusText
-          )
-        );
+        const body: unknown = await response.json().catch(() => ({}));
+        const where = refusedPage(body);
+        refuse({
+          message: saveErrorMessage(body, response.statusText),
+          ...(where === undefined ? {} : { page: where }),
+        });
+        return;
       }
 
       const result = (await response.json()) as {
@@ -424,12 +390,10 @@ function FormBuilderViewInner({
       markAsSaved();
       // What the stored form now holds, whatever was edited meanwhile.
       markFieldsSaved(namesOf(saveData.fields));
-      toast.success(
-        isCreating ? "Form created successfully" : "Form updated successfully"
-      );
+      toast.success(isCreating ? "Form created" : "Form saved");
       if (onSuccess) onSuccess(savedEntry);
     } catch (error) {
-      showSaveError(saveFailureMessage(error));
+      refuse({ message: saveFailureMessage(error) });
     } finally {
       setIsSaving(false);
     }
@@ -453,308 +417,263 @@ function FormBuilderViewInner({
     documentLock?.actionsDisabled,
   ]);
 
-  const handleCancel = useCallback(() => {
-    if (onCancel) onCancel();
-    else if (typeof window !== "undefined") window.history.back();
-  }, [onCancel]);
+  // ── Delete ────────────────────────────────────────────────────────────────
+  const handleDelete = useCallback(async () => {
+    if (entryId === undefined) return;
+    const response = await fetch(
+      `/admin/api/collections/${collectionSlug}/entries/${entryId}`,
+      { method: "DELETE", credentials: "include" }
+    ).catch(() => undefined);
+    if (response === undefined || !response.ok) {
+      const body: unknown = await response?.json().catch(() => ({}));
+      toast.error(
+        saveErrorMessage(body, response?.statusText ?? "").replace(
+          /^Failed to save form/,
+          "Couldn't delete the form"
+        )
+      );
+      return;
+    }
+    // Nothing is left to save, so leaving is not asked about.
+    markAsSaved();
+    void queryClient.invalidateQueries({
+      queryKey: ["entries", "list", collectionSlug],
+    });
+    toast.success("Form deleted");
+    onDelete?.();
+  }, [entryId, collectionSlug, markAsSaved, queryClient, onDelete]);
 
-  const handleNameChange = useCallback(
-    (name: string) => {
-      updateFormData({ name });
-      if (!formData.slug || formData.slug === slugify(formData.name)) {
-        updateFormData({ slug: slugify(name) });
-      }
-    },
-    [formData.name, formData.slug, updateFormData]
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  const saved = !isCreating && entryId !== undefined;
+  const tabs = formEditorPages(saved).map(
+    (each): FormEditorTab =>
+      editorTab(each, {
+        saved: saved ? { collectionSlug, entryId } : undefined,
+        choose: choosePage,
+        counts: {
+          builder: fields.length,
+          notifications: notifications.length,
+          submissions: submissionCount,
+        },
+      })
   );
+  const pageHref = (target: FormPageId): string =>
+    saved ? formPageAddress(collectionSlug, entryId, target) : `#${target}`;
 
-  // Main tabs
-  const mainTabs = [
-    {
-      value: "builder" as const,
-      label: "Builder",
-      count: fields.length > 0 ? fields.length : null,
-    },
-    {
-      value: "preview" as const,
-      label: "Preview",
-      count: null,
-    },
-    { value: "settings" as const, label: "Settings", count: null },
-    {
-      value: "notifications" as const,
-      label: "Notifications",
-      count: notifications.length > 0 ? notifications.length : null,
-    },
-  ];
+  const holdsWrites = documentLock?.actionsDisabled === true;
 
-  // ── Render ────────────────────────────────────────────────────────────────
-  // The host page owns the measure, the centring and the padding — this view
-  // renders as content inside its frame, under its breadcrumb. Declaring a
-  // shell here would nest one inset inside another and put this heading out of
-  // line with that breadcrumb. Nothing below hand-rolls a card, a width cap or
-  // a hack to escape either.
   return (
     <>
-      {/* ── Page header ── */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-foreground tracking-tight">
-          {isCreating ? "Create Form" : "Edit Form"}
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {isCreating
-            ? "Design a new form with drag-and-drop fields."
-            : "Modify your form fields and settings."}
-        </p>
-      </div>
+      <FormEditorBar
+        status={formData.status}
+        onStatusChange={status => updateFormData({ status })}
+        changeCount={changeCount}
+        saving={isSaving}
+        onUndo={undo}
+        {...(saved && submissionCount !== undefined
+          ? {
+              submissions: {
+                count: submissionCount,
+                href: pageHref("submissions"),
+              },
+            }
+          : {})}
+        formId={formData.slug}
+        onCopyFormId={() => {
+          void copyText(formData.slug).then(copied =>
+            copied
+              ? toast.success("Form ID copied")
+              : toast.error("Couldn't copy the form ID")
+          );
+        }}
+        {...(saved && onDelete !== undefined
+          ? { onDelete: () => setConfirmingDelete(true) }
+          : {})}
+        onSave={() => {
+          void handleSave();
+        }}
+        saveDisabled={
+          isSaving || holdsWrites || readOnly || (!isCreating && !isDirty)
+        }
+        readOnly={readOnly}
+      />
 
-      {/* ── Form metadata ──
-          A card, so the fields that identify the form read as one group and
-          have a surface to sit on. The builder canvas below is deliberately
-          NOT carded: it draws its own drop zone, and a frame around a frame
-          reads as a nested box rather than as structure. */}
-      {/* `pb-6` against `pt-5`: the box padding is equal at 20px, but the
-          first thing inside is a LABEL and the last is a control. A label's
-          line box carries 3px of leading above its glyphs, so the ink starts
-          lower than the box does while the control's border ends flush —
-          measured 24px of visible space above and 21px below. The extra step
-          on the bottom is what makes the two read as equal. */}
-      <Card className="mb-6 px-6 pt-5 pb-6">
-        <div className="flex flex-wrap gap-4">
-          <FieldShell
-            label="Form Name"
-            htmlFor="form-name"
-            className="flex-1 min-w-[200px]"
-          >
-            <Input
-              type="text"
-              value={formData.name || ""}
-              onChange={e => handleNameChange(e.target.value)}
-              placeholder="e.g., Contact Form"
-            />
-          </FieldShell>
+      <FormEditorHeader
+        name={formData.name}
+        fieldCount={fields.length}
+        formId={formData.slug}
+        tabs={tabs}
+        current={page}
+      />
 
-          <FieldShell
-            label="Slug"
-            htmlFor="form-slug"
-            className="flex-1 min-w-[160px]"
-          >
-            <Input
-              type="text"
-              value={formData.slug || ""}
-              onChange={e => updateFormData({ slug: e.target.value })}
-              placeholder="e.g., contact-form"
-              className="placeholder:text-muted-foreground"
-            />
-          </FieldShell>
-
-          {/* Status is a Radix Select: its Root accepts a fixed prop list and
-              forwards none of the rest to the trigger DOM node, so a
-              FieldShell clone's id/aria-describedby/aria-invalid would land
-              on a component that drops them rather than on the focusable
-              trigger. The render-function form of `children` sidesteps
-              that: FieldShell hands the computed wiring to this function,
-              which applies it to SelectTrigger — the actual focusable,
-              ARIA-bearing element — instead of a clone that can never reach
-              past `Select`'s root. */}
-          <div className="w-36">
-            <FieldShell label="Status" htmlFor="form-status">
-              {({ id, describedBy, invalid }) => (
-                <Select
-                  value={formData.status || "draft"}
-                  onValueChange={value =>
-                    updateFormData({
-                      status: value as "draft" | "published" | "closed",
+      {refusal === null ? null : (
+        <Alert variant="destructive" className="mb-6">
+          <AlertDescription>
+            <span>{refusal.message}</span>
+            {refusal.page === undefined || refusal.page === page ? null : (
+              <>
+                {" "}
+                <a
+                  href={pageHref(refusal.page)}
+                  className="font-medium underline underline-offset-2"
+                  onClick={event =>
+                    followTab(event, pageHref(refusal.page ?? "builder"), {
+                      saved,
+                      choose: () => choosePage(refusal.page ?? "builder"),
                     })
                   }
                 >
-                  <SelectTrigger
-                    id={id}
-                    aria-describedby={describedBy}
-                    aria-invalid={invalid}
-                  >
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="draft">Draft</SelectItem>
-                    <SelectItem value="published">Published</SelectItem>
-                    <SelectItem value="closed">Closed</SelectItem>
-                  </SelectContent>
-                </Select>
-              )}
-            </FieldShell>
-          </div>
-        </div>
+                  Go to {pageLabel(refusal.page)}
+                </a>
+              </>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
 
-        {/* Shown only once the author has chosen Closed. The explanation is
-            written at the moment the decision is made, which is when they know
-            what it should say; a box that is always there would sit empty on
-            the great majority of forms, which are never closed. */}
-        {formData.status === "closed" && (
-          <div className="mt-4">
-            <FieldShell
-              label="Message for visitors"
-              htmlFor="form-closed-message"
-              // Prose, not a value: the half width the other fields take is
-              // sized for a name or a slug, and wrapping a sentence every six
-              // words makes it harder to read back what was written.
-              width="full"
-              description="Shown to anyone who reaches this form now that it is closed. Left empty, they are told only that it is not accepting submissions."
-            >
-              <Textarea
-                value={formData.closedMessage ?? ""}
-                onChange={e =>
-                  updateFormData({ closedMessage: e.target.value })
-                }
-                placeholder="e.g., Applications closed on 31 March. Thank you to everyone who applied."
-                rows={3}
+      <PageBody page={page}>
+        {pageContent(page, {
+          builder: () => (
+            <FieldCards
+              enabledTypes={config.enabledTypes}
+              disabledFieldTypes={config.disabledFieldTypes}
+              onAddField={handleAddField}
+            />
+          ),
+          preview: () => <FormPreview fields={fields} formData={formData} />,
+          settings: () => (
+            <div className="flex flex-col gap-10">
+              <FormIdentitySection />
+              <FormSettingsTab
+                spamDefaults={config.spamDefaults}
+                redirectCollections={config.redirectCollections}
+                redirectConfigFailed={config.failed}
               />
-            </FieldShell>
-          </div>
-        )}
-      </Card>
+            </div>
+          ),
+          notifications: () => (
+            <FormNotificationsTab defaults={config.notificationDefaults} />
+          ),
+          submissions: () =>
+            entryId === undefined ? null : (
+              <SubmissionsView
+                formId={entryId}
+                {...(config.submissionsSlug === undefined
+                  ? {}
+                  : { collectionSlug: config.submissionsSlug })}
+              />
+            ),
+        })}
+      </PageBody>
 
-      {/* ── Main tab navigation ──
-          On the page rather than inside the card above: the rail switches what
-          is BELOW it, so grouping it with the metadata would attach it to the
-          wrong thing. */}
-      <div className="border-b border-border mb-6">
-        <Tabs
-          value={activeTab}
-          onValueChange={v => setActiveTab(v as typeof activeTab)}
-        >
-          {/* Layout only. The underline, the active and hover colours, the
-              focus ring and the disabled state all come from the shared
-              primitive; restating them here is how two copies of one
-              appearance start drifting.
-
-              The strip can overflow its container, so it asks for scrolling
-              through `scrollable` rather than by putting `overflow-x-auto` on
-              the list: that spelling makes the LIST the scroll container, which
-              costs the rail its indicator. */}
-          <TabsList scrollable className="bg-transparent justify-start gap-0">
-            {mainTabs.map(tab => (
-              <TabsTrigger
-                key={tab.value}
-                value={tab.value}
-                className="shrink-0 whitespace-nowrap"
-              >
-                {tab.label}
-                {/* `rounded-sm`, the adornment step, matching the shared
-                    Badge and the identically sized notification count.
-                    Square is the TAB's corner and it exists so the
-                    underline runs flush to the trigger's edges; a chip
-                    inside the label inherits none of that reasoning, and
-                    carrying it made the count read as a second tab. */}
-                {tab.count !== null && (
-                  <span
-                    className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-sm ml-2 transition-colors ${
-                      activeTab === tab.value
-                        ? "bg-primary/5 text-primary"
-                        : "bg-primary/5 text-muted-foreground"
-                    }`}
-                  >
-                    {tab.count}
-                  </span>
-                )}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-      </div>
-
-      {/* ── Tab content ── */}
-
-      {/* Builder tab */}
-      {activeTab === "builder" && (
-        <FieldCards
-          enabledTypes={enabledTypes}
-          disabledFieldTypes={disabledFieldTypes}
-          onAddField={handleAddField}
-        />
-      )}
-
-      {/* Preview tab */}
-      {activeTab === "preview" && (
-        <FormPreview fields={fields} formData={formData} />
-      )}
-
-      {/* Settings tab */}
-      {activeTab === "settings" && (
-        <FormSettingsTab
-          spamDefaults={spamDefaults}
-          redirectCollections={redirectCollections}
-          redirectConfigFailed={redirectConfigFailed}
-        />
-      )}
-
-      {/* Notifications tab */}
-      {activeTab === "notifications" && (
-        <FormNotificationsTab defaults={notificationDefaults} />
-      )}
-
-      {/* Save error */}
-      {saveError && (
-        // Full-strength destructive border so the error box boundary is perceivable over its tinted fill.
-        <div className="mt-6 p-3 text-sm text-destructive bg-destructive/10 border border-destructive rounded-none">
-          {saveError}
-        </div>
-      )}
-
-      {/* A form commits as one document, so there is exactly one action bar,
-          fed the dirty flag the form state already tracks rather than a
-          second computation of it. */}
-      <FormActions dirty={isDirty}>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleCancel}
-          disabled={isSaving}
-        >
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => {
-            void handleSave();
-          }}
-          disabled={isSaving || documentLock?.actionsDisabled === true}
-          className="flex items-center gap-1.5"
-        >
-          {isSaving ? (
-            <>
-              <svg
-                className="animate-spin h-3.5 w-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                />
-              </svg>
-              Saving…
-            </>
-          ) : isCreating ? (
-            "Create"
-          ) : (
-            "Save Changes"
-          )}
-        </Button>
-      </FormActions>
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this form?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {formData.name.trim() === ""
+                ? "The form is deleted for good, and the site can no longer show it."
+                : `"${formData.name}" is deleted for good, and the site can no longer show it.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep the form</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                void handleDelete();
+              }}
+            >
+              Delete form
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
+}
+
+/** The content of each page, drawn only for the page on screen. */
+function pageContent(
+  page: FormPageId,
+  pages: Record<FormPageId, () => ReactNode>
+): ReactNode {
+  return pages[page]();
+}
+
+/**
+ * Follow a tab: a saved form moves to the page's address through the admin;
+ * a new form, which has no address yet, switches the page in place.
+ */
+function followTab(
+  event: MouseEvent<HTMLAnchorElement>,
+  href: string,
+  target: { saved: boolean; choose: () => void }
+): void {
+  if (target.saved) {
+    followWithinAdmin(event, href);
+    return;
+  }
+  event.preventDefault();
+  target.choose();
+}
+
+/** One tab of the header: its label, address, count, and how it is followed. */
+function editorTab(
+  page: FormPageId,
+  context: {
+    saved: { collectionSlug: string; entryId: string } | undefined;
+    choose: (page: FormPageId) => void;
+    counts: Partial<Record<FormPageId, number | undefined>>;
+  }
+): FormEditorTab {
+  const href =
+    context.saved === undefined
+      ? `#${page}`
+      : formPageAddress(
+          context.saved.collectionSlug,
+          context.saved.entryId,
+          page
+        );
+  const count = context.counts[page];
+  return {
+    page,
+    label: pageLabel(page),
+    href,
+    ...(count === undefined || count === 0 ? {} : { count }),
+    onClick: event =>
+      followTab(event, href, {
+        saved: context.saved !== undefined,
+        choose: () => context.choose(page),
+      }),
+  };
+}
+
+/**
+ * What stops a save before it is sent, and where it is fixed: a form needs a
+ * field, and a notification needs a name and good addresses. A notification is
+ * written to the form as it is typed, so nothing between the editor and here
+ * refuses one; both preconditions are answered by the module the editor asks.
+ */
+function blockedBeforeSave(
+  fields: readonly AnyFormField[],
+  notifications: readonly FormNotification[]
+): SaveRefusal | undefined {
+  if (fields.length === 0) {
+    return { message: "Add at least one field to the form.", page: "builder" };
+  }
+  const blocked = notificationsBlockingSave(notifications);
+  return blocked ? { message: blocked, page: "notifications" } : undefined;
+}
+
+/** Copy text to the clipboard, answering whether it was copied. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ============================================================================
@@ -864,8 +783,9 @@ export function FormBuilderView({
   initialData,
   onSave,
   onSuccess,
-  onCancel,
+  onDelete,
   documentLock,
+  view,
 }: FormBuilderViewProps): JSX.Element {
   const resolvedEntryId = entryId || id || initialData?.id;
   const resolvedCollectionSlug = collectionSlug || collection || "forms";
@@ -888,15 +808,16 @@ export function FormBuilderView({
         notifications: initialData?.notifications as FormNotification[],
       }}
     >
-      <FormBuilderViewInner
+      <FormEditor
         isCreating={resolvedIsCreating}
         collectionSlug={resolvedCollectionSlug}
         entryId={resolvedEntryId}
         onSave={onSave}
         onSuccess={onSuccess}
-        onCancel={onCancel}
+        onDelete={onDelete}
         documentLock={documentLock}
         version={initialData?._rev}
+        view={view}
       />
     </FormBuilderProvider>
   );

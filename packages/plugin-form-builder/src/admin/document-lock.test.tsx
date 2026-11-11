@@ -62,16 +62,28 @@ function view(documentLock?: { readOnly: boolean; actionsDisabled: boolean }) {
   };
 }
 
-const save = () => screen.getByRole("button", { name: /save/i });
+const save = () => screen.getByRole("button", { name: "Save" });
+
+/**
+ * One unsaved change, made through the bar's status menu. Save is offered
+ * only with something to save, so without one a held save and an idle one
+ * look the same and nothing here would be about the claim.
+ */
+async function edit(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: /^Status:/ }));
+  await user.click(await screen.findByRole("menuitemradio", { name: /^Live/ }));
+}
 
 describe("the form builder under a colleague's claim", () => {
   it("saves normally when nobody else holds the document", async () => {
     // The control. Without it "did not save" is satisfied by a builder that
     // never saves, and every assertion below would pass on a broken view.
     const { onSave } = view({ readOnly: false, actionsDisabled: false });
+    const user = userEvent.setup();
+    await edit(user);
 
     expect(save()).toBeEnabled();
-    await userEvent.setup().click(save());
+    await user.click(save());
 
     expect(onSave).toHaveBeenCalledTimes(1);
   });
@@ -80,18 +92,25 @@ describe("the form builder under a colleague's claim", () => {
     // Creating has no document to claim, and a view rendered outside the entry
     // page is handed nothing. Neither is a reason to refuse a save.
     const { onSave } = view(undefined);
+    const user = userEvent.setup();
+    await edit(user);
 
     expect(save()).toBeEnabled();
-    await userEvent.setup().click(save());
+    await user.click(save());
 
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
   it("withholds the save while a colleague holds it", async () => {
-    const { onSave } = view({ readOnly: true, actionsDisabled: true });
+    // Writes held but edits allowed, so there IS a change to save: a form the
+    // editor cannot change has nothing to save either, and Save would be
+    // withheld for that reason with the claim ignored.
+    const { onSave } = view({ readOnly: false, actionsDisabled: true });
+    const user = userEvent.setup();
+    await edit(user);
 
     expect(save()).toBeDisabled();
-    await userEvent.setup().click(save());
+    await user.click(save());
 
     expect(onSave).not.toHaveBeenCalled();
   });
@@ -108,9 +127,11 @@ describe("the form builder under a colleague's claim", () => {
       readOnly: false,
       actionsDisabled: false,
     });
+    const user = userEvent.setup();
+    await edit(user);
 
     claimChangesTo({ readOnly: true, actionsDisabled: true });
-    await userEvent.setup().click(save());
+    await user.click(save());
 
     expect(onSave).not.toHaveBeenCalled();
   });

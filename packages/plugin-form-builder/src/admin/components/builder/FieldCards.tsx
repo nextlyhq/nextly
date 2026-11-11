@@ -294,12 +294,11 @@ function FieldCard({
 // ---------------------------------------------------------------------------
 
 /**
- * The width from which the settings panel docks beside the list. Wider than
- * the Schema Builder's, because the form editor still shows the Forms panel
- * beside the page: at 1024px a docked panel left the list too narrow to read
- * a field's label.
+ * The width from which the settings panel docks beside the list: the Schema
+ * Builder's. The form editor folds the Forms panel away, so from 1024px the
+ * list keeps room to read a field's label beside the docked panel.
  */
-const DOCKED = "(min-width: 1280px)";
+const DOCKED = "(min-width: 1024px)";
 
 function subscribeDocked(onChange: () => void): () => void {
   if (typeof window.matchMedia !== "function") return () => undefined;
