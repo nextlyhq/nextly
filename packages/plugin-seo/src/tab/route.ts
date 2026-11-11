@@ -28,9 +28,10 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
-import type { Levels } from "../resolver/order";
 import { productionAddressesOf } from "../canonical";
+import { servedAt } from "../languages/versions";
 import { mayChangePageSeo } from "../permissions";
+import type { Levels } from "../resolver/order";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import type { ReadSocialCardRules } from "../social/card";
@@ -246,6 +247,21 @@ function siteOf(
   };
 }
 
+/**
+ * The page's `address` as its language serves it. The resolver forms it in
+ * the language a read names; read in none, it is the site's default
+ * language's, formed here by the site's language rule, which may put that
+ * language in the address too.
+ */
+async function servedAddressOf(
+  ctx: PluginContext,
+  address: string | undefined,
+  locale: string | undefined
+): Promise<string | undefined> {
+  if (address === undefined || locale !== undefined) return address;
+  return servedAt(address, await ctx.publicAddresses.defaultLanguage());
+}
+
 /** The route the SEO tab reads its levels from. */
 export function seoTabRoute(setup: SeoTabRouteSetup): {
   method: "POST";
@@ -295,9 +311,11 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
       const rules = await readRules(ctx, locale);
       const levels = await levelsOf(reading, input, rules);
       const declaration = declarationOf(ctx, body);
+      const served = await servedAddressOf(ctx, levels.address, locale);
       const answer: SeoTabContext = {
         levels,
         site: siteOf(rules, setup.baseUrl, req),
+        ...(served === undefined ? {} : { served }),
         typeLabel: typeLabelOf(declaration, body.slug),
         fieldLabels: fieldLabelsOf(declaration, levels),
         fields: [...setup.fields],
