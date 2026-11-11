@@ -76,6 +76,17 @@ function pathsAbove(path: string): string[] {
   return above;
 }
 
+/**
+ * The claim keys of the rows that hold `path` in `locale`: the address
+ * itself, held exactly or as a range, and every range above it.
+ */
+function keysHolding(locale: string, path: string): string[] {
+  return [
+    claimKey("address", locale, path),
+    ...[path, ...pathsAbove(path)].map(at => claimKey("range", locale, at)),
+  ];
+}
+
 /** Whether `path` is `range` or below it. */
 function within(path: string, range: string): boolean {
   if (path === range) return true;
@@ -295,6 +306,32 @@ export async function heldNow(
   );
 }
 
+/**
+ * Who the record says holds the address `path` in `locale`, or in the site's
+ * default language where the route named none: the page holding it exactly,
+ * or holding a range it falls in, read by the rows' unique keys, so a page
+ * that still holds `path` in another language is never taken for its holder
+ * here. None where no page holds it, as before the record has caught up with
+ * a site's content.
+ */
+export async function addressHolders(
+  ctx: PluginContext,
+  path: string,
+  locale: string | undefined
+): Promise<AddressHolder[]> {
+  const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
+  const keys = keysHolding(language, path);
+  const { data } = await ctx.services.ownCollections.listEntries(
+    recordSlug(ctx),
+    {
+      where: { claimKey: { in: keys } },
+      pagination: { limit: keys.length, page: 1 },
+      depth: 0,
+    }
+  );
+  return (data as unknown[]).flatMap(entry => rowOf(entry).holder ?? []);
+}
+
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
@@ -345,15 +382,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     // The address itself, held exactly or as a range, and every range above
     // it, found through the unique claim key's index rather than a scan of
     // the language's addresses.
-    const keys = [
-      claimKey("address", asked.locale, asked.path),
-      ...[asked.path, ...pathsAbove(asked.path)].map(path =>
-        claimKey("range", asked.locale, path)
-      ),
-    ];
     const atOrAbove = await rowsWhere(
       transaction,
-      { claimKey: { in: keys } },
+      { claimKey: { in: keysHolding(asked.locale, asked.path) } },
       "share"
     );
     if (asked.range !== true) return atOrAbove;

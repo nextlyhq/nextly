@@ -89,7 +89,7 @@ export function DataRail({
         </h4>
         {unknownVariables.length > 0 ? (
           // Full-strength status border so the boundary is perceivable.
-          <div className="rounded-md border border-warning bg-warning/10 p-3">
+          <div className="rounded-md border border-warning-border bg-warning-surface p-3">
             <p className="text-xs text-foreground">
               Used but not declared or sampled (renders blank):
             </p>

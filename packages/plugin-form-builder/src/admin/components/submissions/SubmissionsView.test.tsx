@@ -16,7 +16,7 @@
  * integration suites in this package boot a real Nextly instance and have no
  * use for a DOM.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,6 +25,9 @@ import {
   submissionPatch,
   type SubmissionRow,
 } from "./SubmissionsView";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
 
 /** The page size the entries API answers with when a request names none. */
 const SERVER_DEFAULT_LIMIT = 10;
@@ -139,7 +142,11 @@ describe("a row's Not spam refused because the submission changed since", () => 
     );
     vi.stubGlobal("fetch", fetched);
     const user = userEvent.setup();
-    render(<SubmissionsView collectionSlug="form-submissions" />);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SubmissionsView collectionSlug="form-submissions" />
+      </QueryClientProvider>
+    );
 
     await user.click(
       (await screen.findAllByRole("button", { name: "Row actions" }))[0]
@@ -152,13 +159,90 @@ describe("a row's Not spam refused because the submission changed since", () => 
   });
 });
 
+// The form editor shows the form's submission count beside this list; a
+// change made here reads it again rather than leaving the one taken on open.
+describe("a row's status changed from the list", () => {
+  async function markNotSpam(answer: "stored" | "refused") {
+    const spam = { ...SUBMISSIONS[0], id: "submission-spam", status: "spam" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://localhost");
+        if (init?.method === "PATCH") {
+          return answer === "stored"
+            ? Response.json({ message: "Updated", item: spam })
+            : Response.json(
+                { error: { code: "FORBIDDEN", message: "No." } },
+                { status: 403 }
+              );
+        }
+        switch (url.pathname) {
+          case "/admin/api/plugins/@nextlyhq/plugin-form-builder/builder-config":
+            return Response.json({
+              slugs: { forms: "forms", submissions: "form-submissions" },
+            });
+          case "/admin/api/me/permissions":
+            return Response.json({ isSuperAdmin: true });
+          case "/admin/api/collections/forms/entries":
+            return entriesPage(FORMS, url);
+          case "/admin/api/collections/form-submissions/entries":
+            return entriesPage([spam], url);
+          default:
+            return new Response(null, { status: 404 });
+        }
+      })
+    );
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={client}>
+        <SubmissionsView collectionSlug="form-submissions" />
+      </QueryClientProvider>
+    );
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Row actions" }))[0]
+    );
+    await user.click(await screen.findByText("Not spam"));
+    return invalidate;
+  }
+
+  it("reads the form's submission count again once the change is stored", async () => {
+    const invalidate = await markNotSpam("stored");
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: SUBMISSION_COUNT_KEY,
+      })
+    );
+  });
+
+  it("leaves the count alone when the change is refused", async () => {
+    // The control: the count is read again because something changed, not
+    // on every click.
+    const invalidate = await markNotSpam("refused");
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: "Row actions" })
+      ).not.toHaveLength(0)
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(invalidate).not.toHaveBeenCalledWith({
+      queryKey: SUBMISSION_COUNT_KEY,
+    });
+  });
+});
+
 describe("SubmissionsView reads past the server's default page", () => {
   it("shows a deep-linked form's own columns", async () => {
     // The control for the case below: a form on the server's first page,
     // which any page size reaches. It passing while the next case fails is
     // what says the forms list was cut short, not that the columns never draw.
     window.history.replaceState(null, "", "/?form=form-3");
-    render(<SubmissionsView collectionSlug="form-submissions" />);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SubmissionsView collectionSlug="form-submissions" />
+      </QueryClientProvider>
+    );
 
     expect(
       await screen.findByRole("columnheader", { name: "Email for form 3" })
@@ -170,7 +254,11 @@ describe("SubmissionsView reads past the server's default page", () => {
     // the forms the view loaded, so a list that stopped at ten leaves it
     // unknown and the table falls back to the all-forms columns.
     window.history.replaceState(null, "", "/?form=form-12");
-    render(<SubmissionsView collectionSlug="form-submissions" />);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SubmissionsView collectionSlug="form-submissions" />
+      </QueryClientProvider>
+    );
 
     expect(
       await screen.findByRole("columnheader", { name: "Email for form 12" })
@@ -178,7 +266,11 @@ describe("SubmissionsView reads past the server's default page", () => {
   });
 
   it("shows every submission of a page, not the server's default count", async () => {
-    render(<SubmissionsView collectionSlug="form-submissions" />);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SubmissionsView collectionSlug="form-submissions" />
+      </QueryClientProvider>
+    );
 
     // The rows have drawn once the first one has: any page size shows it.
     expect(
@@ -219,5 +311,52 @@ describe("a change to a submission", () => {
     expect(submissionPatch(undefined, { status: "new" })).toEqual({
       status: "new",
     });
+  });
+});
+
+// A form's own Submissions tab needs that form's fields, not every form's:
+// walking the whole collection on a site with many forms delays the columns
+// and loads everything to use one.
+describe("the list fixed to one form", () => {
+  it("reads that form alone, and draws its own columns", async () => {
+    const fetched = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/admin/api/collections/forms/entries/form-11") {
+        return Response.json(FORMS[10]);
+      }
+      switch (url.pathname) {
+        case "/admin/api/plugins/@nextlyhq/plugin-form-builder/builder-config":
+          return Response.json({
+            slugs: { forms: "forms", submissions: "form-submissions" },
+          });
+        case "/admin/api/me/permissions":
+          return Response.json({ isSuperAdmin: true });
+        case "/admin/api/collections/forms/entries":
+          return entriesPage(FORMS, url);
+        case "/admin/api/collections/form-submissions/entries":
+          return entriesPage(SUBMISSIONS, url);
+        default:
+          return new Response(null, { status: 404 });
+      }
+    });
+    vi.stubGlobal("fetch", fetched);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SubmissionsView collectionSlug="form-submissions" formId="form-11" />
+      </QueryClientProvider>
+    );
+
+    expect(
+      await screen.findByRole("columnheader", { name: "Email for form 11" })
+    ).toBeInTheDocument();
+    const paths = fetched.mock.calls.map(
+      ([input]) => new URL(String(input), "http://localhost").pathname
+    );
+    expect(paths).toContain("/admin/api/collections/forms/entries/form-11");
+    expect(paths).not.toContain("/admin/api/collections/forms/entries");
+    // No choice of form: the tab is the form's.
+    expect(
+      screen.queryByRole("combobox", { name: "Filter by form" })
+    ).toBeNull();
   });
 });

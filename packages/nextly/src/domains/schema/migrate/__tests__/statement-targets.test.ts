@@ -10,6 +10,7 @@ import {
   indexesDroppedBy,
   indexesRenamedBy,
   registryRowWrittenBy,
+  renamesIn,
   tablesChangedIn,
   tablesDroppedBy,
 } from "../statement-targets";
@@ -533,5 +534,101 @@ describe("archiveWriteOf", () => {
     ),
   ])("reads nothing from %s", sql => {
     expect(archiveWriteOf(sql, "postgresql")).toBeUndefined();
+  });
+});
+
+// The renames a statement makes, read when the statement is renames alone, so a run's renames can
+// be judged before its first statement. Anything else, a rename beside another clause included, is
+// unreadable.
+describe("renamesIn", () => {
+  it.each([
+    [
+      "postgresql",
+      `ALTER TABLE "dc_posts" RENAME COLUMN "heading" TO "headline"`,
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
+    [
+      "postgresql",
+      `ALTER TABLE IF EXISTS ONLY "dc_posts" RENAME "heading" TO "headline"`,
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
+    [
+      "sqlite",
+      `ALTER TABLE dc_posts RENAME COLUMN heading TO headline`,
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
+    [
+      "mysql",
+      "ALTER TABLE `dc_posts` RENAME COLUMN `heading` TO `headline`",
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
+    [
+      "postgresql",
+      `ALTER TABLE "dc_posts" RENAME TO "dc_articles"`,
+      [{ kind: "table", from: "dc_posts", to: "dc_articles" }],
+    ],
+    [
+      "mysql",
+      "ALTER TABLE `dc_posts` RENAME AS `dc_articles`",
+      [{ kind: "table", from: "dc_posts", to: "dc_articles" }],
+    ],
+    [
+      "mysql",
+      "ALTER TABLE `dc_posts` RENAME `dc_articles`",
+      [{ kind: "table", from: "dc_posts", to: "dc_articles" }],
+    ],
+    [
+      "mysql",
+      "RENAME TABLE `dc_posts` TO `dc_articles`, `dc_pages` TO `dc_sheets`",
+      [
+        { kind: "table", from: "dc_posts", to: "dc_articles" },
+        { kind: "table", from: "dc_pages", to: "dc_sheets" },
+      ],
+    ],
+    [
+      "mysql",
+      "ALTER TABLE `dc_posts` RENAME COLUMN `a` TO `b`, RENAME COLUMN `c` TO `d`",
+      [
+        { kind: "column", table: "dc_posts", from: "a", to: "b" },
+        { kind: "column", table: "dc_posts", from: "c", to: "d" },
+      ],
+    ],
+    // MySQL and SQLite compare names without regard to case, so a quoted name in another case is
+    // read, lower-cased.
+    [
+      "mysql",
+      "ALTER TABLE `Dc_Posts` RENAME COLUMN `Heading` TO `HeadLine`",
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
+    [
+      "sqlite",
+      `ALTER TABLE "dc_posts" RENAME COLUMN "Heading" TO "HeadLine"`,
+      [{ kind: "column", table: "dc_posts", from: "heading", to: "headline" }],
+    ],
+  ] as const)("reads %s's %s", (dialect, sql, renames) => {
+    expect(renamesIn(sql, dialect)).toEqual(renames);
+  });
+
+  it.each([
+    // A rename beside a clause that does something else.
+    [
+      "mysql",
+      "ALTER TABLE `dc_posts` RENAME COLUMN `a` TO `b`, ADD COLUMN `c` text",
+    ],
+    // An index, key or constraint renamed renames no column and no table.
+    ["mysql", "ALTER TABLE `dc_posts` RENAME INDEX `i` TO `j`"],
+    ["postgresql", `ALTER TABLE "dc_posts" RENAME CONSTRAINT "k" TO "l"`],
+    // A schema-qualified name, and a quoted name in another case.
+    ["postgresql", `ALTER TABLE "public"."dc_posts" RENAME COLUMN "a" TO "b"`],
+    ["postgresql", `ALTER TABLE "dc_posts" RENAME COLUMN "a" TO "Headline"`],
+    // Not a rename.
+    ["postgresql", `ALTER TABLE "dc_posts" ADD COLUMN "a" text`],
+    ["postgresql", `ALTER INDEX "i" RENAME TO "j"`],
+    // MySQL's CHANGE renames as it restates, and is not read here.
+    ["mysql", "ALTER TABLE `dc_posts` CHANGE `a` `b` text"],
+    // Text after the new name.
+    ["postgresql", `ALTER TABLE "dc_posts" RENAME COLUMN "a" TO "b" CASCADE`],
+  ] as const)("reads nothing from %s's %s", (dialect, sql) => {
+    expect(renamesIn(sql, dialect)).toBeUndefined();
   });
 });

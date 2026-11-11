@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PAGINATION_DEFAULTS, clampLimit } from "../../../types/pagination";
 
-/** 600 posts, read through a `find` that clamps its limit as the query does. */
+/**
+ * 600 posts, read through a `find` that clamps its limit as the query does
+ * and answers the listing's own query: in id order, after the id it names.
+ */
 const posts = Array.from({ length: 600 }, (_, i) => ({
   id: String(i + 1).padStart(4, "0"),
   title: `Post ${i + 1}`,
@@ -11,10 +14,15 @@ const posts = Array.from({ length: 600 }, (_, i) => ({
 vi.mock("../../../init", () => ({
   getCachedNextly: () =>
     Promise.resolve({
-      find: (args: { offset?: number; limit?: number }) => {
+      find: (args: {
+        limit?: number;
+        where?: { id?: { greater_than?: string } };
+      }) => {
         const limit = clampLimit(args.limit ?? 10);
-        const offset = args.offset ?? 0;
-        return Promise.resolve({ items: posts.slice(offset, offset + limit) });
+        const after = args.where?.id?.greater_than;
+        const from =
+          after === undefined ? posts : posts.filter(post => post.id > after);
+        return Promise.resolve({ items: from.slice(0, limit) });
       },
     }),
 }));
@@ -50,5 +58,8 @@ describe("a page of held addresses", () => {
       after: page.next,
     });
     expect(page.items.length + rest.items.length).toBe(posts.length);
+    // Each post once: the second page starts after the first's last.
+    const ids = [...page.items, ...rest.items].map(item => item.holder.id);
+    expect(new Set(ids).size).toBe(posts.length);
   });
 });

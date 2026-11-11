@@ -87,7 +87,6 @@ import "../../../types/generated/plugin-admin-imports.generated";
 // src/app/admin/[[...params]]/layout.tsx
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { checkAdminComponents } from "nextly/runtime";
 
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
@@ -97,23 +96,28 @@ export default function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return (
+  return process.env.NODE_ENV === "development" ? (
     <Suspense fallback={null}>
-      <ForThisRequest>{children}</ForThisRequest>
+      <ComponentMapKeptCurrent>{children}</ComponentMapKeptCurrent>
     </Suspense>
+  ) : (
+    children
   );
 }
 
-async function ForThisRequest({ children }: { children: React.ReactNode }) {
+async function ComponentMapKeptCurrent({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   await connection();
+  const { checkAdminComponents } = await import("nextly/runtime");
   await checkAdminComponents({ config, registeredComponentPaths });
   return children;
 }
 ```
 
-Keep anything your layout already renders, such as branding styles, around the `<Suspense>`
-element. The check goes in the component beneath the boundary because, under Cache
-Components, request work outside one fails the build.
+Keep anything your layout already renders, such as branding styles, around that choice. The check runs in development only, and beneath a Suspense boundary because, under Cache Components, request work outside one fails the build. A production build leaves it out, so the admin page is prebuilt: the same page for every visitor, served at once, even while the server is still starting.
 
 Then run `npx nextly generate:types` once and commit the two generated files. The paths
 assume the default types location (`./src/types/generated/`); use the folder your

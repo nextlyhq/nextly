@@ -42,12 +42,23 @@ export const DEFAULT_FORM_SETTINGS: Required<
     | "confirmationType"
     | "successMessage"
     | "allowMultipleSubmissions"
+    | "oneResponse"
+    | "oneResponseVersion"
+    | "botCheck"
+    | "storeIpAndBrowser"
   >
 > = {
   submitButtonText: "Submit",
   confirmationType: "message",
   successMessage: "Thank you for your submission!",
+  // Kept for readers of this constant; forms read `oneResponse`.
   allowMultipleSubmissions: true,
+  // Today's behaviour for a form that has never set them: several responses
+  // allowed, the plugin's bot check, and the visitor's IP and browser kept.
+  oneResponse: "off",
+  oneResponseVersion: 0,
+  botCheck: "default",
+  storeIpAndBrowser: true,
 };
 
 /**
@@ -172,8 +183,10 @@ export function applyFormDefaults(config: FormConfig): FormConfig {
       plural: config.labels?.plural || pluralize(singularLabel),
     },
 
-    // Apply settings defaults
+    // Every setting the caller gave is kept, so one this helper does not name
+    // is not dropped on the way through; only these have defaults to fill.
     settings: {
+      ...config.settings,
       submitButtonText:
         config.settings?.submitButtonText ||
         DEFAULT_FORM_SETTINGS.submitButtonText,
@@ -182,15 +195,11 @@ export function applyFormDefaults(config: FormConfig): FormConfig {
         DEFAULT_FORM_SETTINGS.confirmationType,
       successMessage:
         config.settings?.successMessage || DEFAULT_FORM_SETTINGS.successMessage,
+      // Still filled, as callers have always read it here. Where `oneResponse`
+      // is given too, the reader takes `oneResponse`.
       allowMultipleSubmissions:
         config.settings?.allowMultipleSubmissions ??
         DEFAULT_FORM_SETTINGS.allowMultipleSubmissions,
-      // Preserve other settings that don't have defaults
-      redirectUrl: config.settings?.redirectUrl,
-      redirectRelation: config.settings?.redirectRelation,
-      honeypotEnabled: config.settings?.honeypotEnabled,
-      captchaEnabled: config.settings?.captchaEnabled,
-      captchaSiteKey: config.settings?.captchaSiteKey,
     },
 
     // Apply notification defaults if notifications are configured

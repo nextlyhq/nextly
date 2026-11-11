@@ -87,6 +87,8 @@ export {
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
+  type StructuredDataNode,
+  type StructuredDataValue,
 } from "./runtime/seo";
 
 // Draft previews — the route that turns a scoped preview link into a draft
@@ -108,6 +110,10 @@ export {
 // short, which is the combination that gets retyped subtly wrong — and its
 // failure grants every draft rather than erroring.
 export { previewDraftGate } from "./runtime/preview/preview-draft-gate";
+
+// The site's Proxy: the app's `proxy.ts` hands each request to the handlers
+// plugins contribute (`contributes.proxy`).
+export { createNextlyProxy, type NextlyProxyDeps } from "./runtime/proxy";
 
 // The Single counterpart. A sibling rather than a branch: a collection gate
 // returns an entry id so the route can compare it against the row a PATH
@@ -222,6 +228,7 @@ export {
   resolveContent,
   isReservedPath,
   contentPageMetadata,
+  contentPageStructuredData,
   createContentRoute,
   createPublicContentRoute,
   createSingleRoute,

@@ -24,12 +24,19 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { noRules, seoPageMetadata } from "./resolver/provider";
+import { decideStanding, stagingGuard } from "./staging/guard";
 import {
   generateSitemap,
   resolveBaseOrigin,
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { withStructuredData } from "./structured-data/provider";
+import {
+  rulesFromOptions,
+  type StructuredDataOptions,
+} from "./structured-data/rules";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -102,6 +109,31 @@ export interface SeoPluginOptions {
    * narrowing this list or disabling the route.
    */
   sitemap?: boolean | { collections?: string[] };
+  /**
+   * @experimental Each content type's structured data type, the fields that
+   * hold each detail it needs, and the brand facts every page names, until the
+   * SEO settings hold them. Keyed by collection slug, or `single:<slug>`:
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   baseUrl: "https://example.com",
+   *   structuredData: {
+   *     brand: { name: "Example", profiles: [{ url: "https://x.com/example" }] },
+   *     types: {
+   *       posts: {
+   *         type: "blogPosting",
+   *         details: { blogPosting: { author: "writer", datePublished: "date" } },
+   *       },
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * Structured data is written with absolute addresses, so `baseUrl` is
+   * needed for any to be served.
+   */
+  structuredData?: StructuredDataOptions;
 }
 
 /**
@@ -163,11 +195,25 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     );
   }
 
+  // Checked here, so a misspelled type or detail fails when the site starts.
+  const readStructuredDataRules = rulesFromOptions(
+    options.baseUrl,
+    options.structuredData
+  );
+
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
+    // Every page's head, worked out by the one order of who wins, and its
+    // structured data, worked out from that same answer.
+    services: {
+      pageMetadata: ctx =>
+        withStructuredData(ctx, seoPageMetadata(ctx), readStructuredDataRules),
+    },
+    // Every host but the site's production addresses is kept out of search.
+    proxy: [stagingGuard(noRules)],
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -264,6 +310,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
     category: "seo",
     tags: ["seo", "meta"],
+    // The route helpers ask this plugin for each page's head.
+    provides: ["page-metadata"],
     contributes,
     init(ctx) {
       // The site-wide record that keeps each public address to one page:
@@ -276,6 +324,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // Decided once, the first time the plugin starts on a site: whether a
+      // site with no production address known is kept out of search.
+      void decideStanding(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not record the site's standing",
+          {
+            error,
+          }
+        );
+      });
     },
   });
 }
