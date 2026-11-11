@@ -147,6 +147,8 @@ describe("pending changes", () => {
   it("a rename is a rename, with the name it had", () => {
     const current = structuredClone(saved);
     current[1] = text("summary", { name: "excerpt" });
+    // A rename alone: never a change of settings as well.
+    expect(summary(saved, current)).toEqual(["renamed summary"]);
     const [change] = pendingChanges(saved, current);
     expect(change).toMatchObject({
       kind: "renamed",
@@ -159,6 +161,8 @@ describe("pending changes", () => {
   it("a type change is a type change, with the type it had", () => {
     const current = structuredClone(saved);
     current[1] = text("summary", { type: "textarea" });
+    // A type change alone: never a change of settings as well.
+    expect(summary(saved, current)).toEqual(["typeChanged summary"]);
     const [change] = pendingChanges(saved, current);
     expect(change).toMatchObject({
       kind: "typeChanged",
