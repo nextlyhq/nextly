@@ -145,6 +145,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { publishedInLanguageCondition } from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -1344,6 +1345,15 @@ export class SingleQueryService extends BaseService {
       ) {
         return singleAbsentResult(slug);
       }
+      // A public read in a language the Single is not published in finds no
+      // Single, as a collection read finds no entry.
+      if (
+        statusFilter &&
+        translations &&
+        !(await this.publishedInRequestedLanguage(translations, statusFilter))
+      ) {
+        return singleAbsentResult(slug);
+      }
 
       // 6.9 - 7.7. Resolve translations and expand uploads, relationships and
       // components into the document.
@@ -1555,6 +1565,33 @@ export class SingleQueryService extends BaseService {
       dialect: this.adapter.dialect,
       status: publishesPerLanguage(singleMeta),
     });
+  }
+
+  /**
+   * Whether the Single, read with `translations`, is published in the
+   * requested language, judged by the one rule collection reads apply
+   * (`publishedInLanguageCondition`); true where that rule keeps nothing out.
+   */
+  private async publishedInRequestedLanguage(
+    translations: JoinedTranslations,
+    statusFilter: StatusFilter
+  ): Promise<boolean> {
+    const condition = publishedInLanguageCondition({
+      companion: translations.companion,
+      isPublicRead: statusFilter.isPublicRead,
+      localeChain: translations.localeChain,
+      mainIdColumn: (translations.mainTable as { id?: unknown }).id,
+      defaultLocale: this.localization?.defaultLocale,
+    });
+    if (!condition) return true;
+    const found = await selectEntryWithCompanion({
+      db: this.adapter.getDrizzle(),
+      mainTable: translations.mainTable,
+      where: condition,
+      companionTable: translations.companion.table,
+      localeChain: translations.localeChain.slice(0, 1),
+    });
+    return found.entry !== undefined && found.entry !== null;
   }
 
   /**

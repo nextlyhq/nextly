@@ -53,6 +53,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../domains/i18n/localization-source";
+import { readInFirstPublishedLanguage } from "../../domains/i18n/read-in-language";
 import { resolveLocaleChain } from "../../domains/i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
@@ -510,26 +511,9 @@ export class CollectionEntryService extends BaseService {
           params.fallbackLocale
         )
       : null;
-    if (!chain || chain.length === 0) return read(params.locale);
-    // Each language of the chain in turn, read as a request for that language
-    // alone: its relations, components, field fallback and rules all answer in
-    // it. The first that has the entry answers; a refusal other than not
-    // found ends the read as it is.
-    let answer = await read(chain[0]);
-    for (const [index, locale] of chain.entries()) {
-      if (index > 0) answer = await read(locale);
-      if (answer.success) {
-        return {
-          ...answer,
-          data:
-            answer.data && typeof answer.data === "object"
-              ? { ...answer.data, _locale: locale }
-              : answer.data,
-        };
-      }
-      if (answer.statusCode !== 404) return answer;
-    }
-    return answer;
+    const [first, ...rest] = chain ?? [];
+    if (first === undefined) return read(params.locale);
+    return readInFirstPublishedLanguage([first, ...rest], read);
   }
 
   /**

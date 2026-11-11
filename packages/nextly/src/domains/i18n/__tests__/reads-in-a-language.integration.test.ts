@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineSingle, text } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
 import {
   createTestNextly,
@@ -19,6 +19,8 @@ import {
 
 /** Translated, with a translatable unique `slug`. */
 const DOCS = "rlang_docs";
+/** A translated Single. */
+const SITE = "rlang_site";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -45,10 +47,37 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         ],
       }),
     ],
+    singles: [
+      defineSingle({
+        slug: SITE,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [text({ name: "title" })],
+      }),
+    ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
   return current;
 }
+
+/** The Single service, as reads and writes reach it. */
+const singlesOf = (t: TestNextly) =>
+  t.getService("singleEntryService") as unknown as {
+    update(
+      slug: string,
+      data: Record<string, unknown>,
+      options: Record<string, unknown>
+    ): Promise<{ success: boolean }>;
+    get(
+      slug: string,
+      options: Record<string, unknown>
+    ): Promise<{
+      success: boolean;
+      statusCode?: number;
+      data?: Record<string, unknown> | null;
+    }>;
+  };
 
 /** Creates a document published in English, and returns its id. */
 async function publishedInEnglish(
@@ -237,6 +266,41 @@ describe.each(getConfiguredTestDialects())(
       // A fallback the API does not know is refused, never ignored.
       const unknown = await restRead(englishOnly, "?locale=es&fallback=field");
       expect(unknown.status, JSON.stringify(unknown.json)).toBe(400);
+    }, 90_000);
+
+    // A Single answers as an entry does: not found in a language it is not
+    // published in, and in the first published language with whole-document
+    // fallback, named.
+    it("answers a Single's public read the same way", async () => {
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      const saved = await singles.update(
+        SITE,
+        { title: "Site in English", status: "published", _overwrite: true },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+      const missing = await singles.get(SITE, {
+        locale: "es",
+        status: "published",
+      });
+      expect(missing.statusCode, JSON.stringify(missing)).toBe(404);
+      expect(
+        (await singles.get(SITE, { locale: "en", status: "published" })).data
+          ?.title
+      ).toBe("Site in English");
+
+      const fellBack = await singles.get(SITE, {
+        locale: "es",
+        status: "published",
+        wholeDocumentFallback: true,
+      });
+      expect(fellBack.success, JSON.stringify(fellBack)).toBe(true);
+      expect(fellBack.data).toMatchObject({
+        title: "Site in English",
+        _locale: "en",
+      });
     }, 90_000);
   }
 );

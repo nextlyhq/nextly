@@ -85,6 +85,13 @@ export interface GetSingleOptions {
    */
   translationStatus?: boolean;
 
+  /**
+   * Whole-document fallback: where the Single is not published in the
+   * requested language, answer in the first language of its fallback chain it
+   * is published in, and say which (`_locale`).
+   */
+  wholeDocumentFallback?: boolean;
+
   /** User context for access control and hooks. */
   user?: UserContext;
 

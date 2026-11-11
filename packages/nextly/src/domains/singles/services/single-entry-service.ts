@@ -35,6 +35,8 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { readInFirstPublishedLanguage } from "../../i18n/read-in-language";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
@@ -190,15 +192,27 @@ export class SingleEntryService extends BaseService {
    * field values.
    */
   get(slug: string, options?: GetSingleOptions): Promise<SingleResult> {
-    return withRuleLanguage(
-      readLanguagesFor(
-        this.localization,
-        options?.locale,
-        options?.fallbackLocale,
-        options
-      ),
-      () => this.queryService.get(slug, options)
-    );
+    const read = (locale: string | undefined) => {
+      const inLanguage = { ...options, locale };
+      return withRuleLanguage(
+        readLanguagesFor(
+          this.localization,
+          inLanguage.locale,
+          inLanguage.fallbackLocale,
+          inLanguage
+        ),
+        () => this.queryService.get(slug, inLanguage)
+      );
+    };
+    const [first, ...rest] = options?.wholeDocumentFallback
+      ? (resolveLocaleChain(
+          this.localization,
+          options.locale,
+          options.fallbackLocale
+        ) ?? [])
+      : [];
+    if (first === undefined) return read(options?.locale);
+    return readInFirstPublishedLanguage([first, ...rest], read);
   }
 
   // ============================================================
