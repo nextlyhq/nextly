@@ -28,14 +28,27 @@ export type ReadRules = (
 /** No settings yet: the site's rules are empty. */
 const noRules: ReadRules = async () => NO_RULES;
 
+/**
+ * The one resolution of a page: its answer, every value with its source,
+ * and the site's rules it was worked out with, read once. Every view of a
+ * page's SEO is derived from this.
+ */
+async function resolvedPage(
+  ctx: PluginContext,
+  input: PageMetadataInput,
+  readRules: ReadRules
+): Promise<{ answer: SeoAnswer; rules: SiteRules }> {
+  const rules = await readRules(ctx, input.locale);
+  return { answer: resolveOrder(await levelsOf(ctx, input, rules)), rules };
+}
+
 /** The page `input` names, every value with its source. */
 export async function resolveSeo(
   ctx: PluginContext,
   input: PageMetadataInput,
   readRules: ReadRules = noRules
 ): Promise<SeoAnswer> {
-  const rules = await readRules(ctx, input.locale);
-  return resolveOrder(await levelsOf(ctx, input, rules));
+  return (await resolvedPage(ctx, input, readRules)).answer;
 }
 
 /** The answer core turns into the page's head, without the sources. */
@@ -69,9 +82,11 @@ export function seoPageMetadata(
     // A share image is read from the media library, so any write to it
     // expires the head that shows it, as a write to the page itself does.
     tags: () => nextlyTags("media"),
+    // The page's head is derived from the one resolution, never worked out
+    // beside it.
     async resolve(input) {
-      const rules = await readRules(ctx, input.locale);
-      return answerOf(resolveOrder(await levelsOf(ctx, input, rules)), rules);
+      const { answer, rules } = await resolvedPage(ctx, input, readRules);
+      return answerOf(answer, rules);
     },
   };
 }
