@@ -137,6 +137,18 @@ describe("the Count card", () => {
         expect.stringMatching(/^\/admin\/collections\/posts\?where=/),
       ],
     ]);
+    // 🔴 Scheduled entries are already published or drafts: a third segment would weigh them
+    // twice, so the bar is the two statuses that make up the number alone.
+    const bar = screen.getByTestId("count-split-bar");
+    expect(
+      Array.from(bar.querySelectorAll("span")).map(segment => [
+        segment.dataset.part,
+        segment.style.flexGrow,
+      ])
+    ).toEqual([
+      ["published", "104"],
+      ["draft", "24"],
+    ]);
   });
 
   it("leaves scheduled out of the split where none is scheduled or it was not read", () => {

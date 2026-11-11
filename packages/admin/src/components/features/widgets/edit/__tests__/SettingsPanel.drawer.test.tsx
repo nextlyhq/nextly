@@ -171,6 +171,15 @@ describe("the drawer for each kind of card", () => {
     ).toBeDisabled();
   });
 
+  it("reopens a card set to Users on Users, with nothing reset", () => {
+    drawer(core("core/count"), { collection: "users" });
+    const content = screen.getByRole("region", { name: "Content" });
+    expect(
+      within(content).getByRole("combobox", { name: /Source/ })
+    ).toHaveTextContent("Users");
+    expect(screen.queryByText(/was reset/)).toBeNull();
+  });
+
   it("rules a status split out beside Drafts, saying why, and a split held gives way to the change", () => {
     drawer(core("core/count"), {
       collection: "posts",

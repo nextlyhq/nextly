@@ -16,7 +16,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
@@ -245,8 +245,11 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(own);
     });
 
-    it("counts every account, and those made in the last 7 days", async () => {
+    it("counts every account, and those made in the last 7 days, reading no account's row", async () => {
       const total = await handle.adapter.count("users");
+      // 🔴 Counted in the database: rows read to be counted here would grow
+      // with the people on the site rather than with the answer.
+      const select = vi.spyOn(handle.adapter, "select");
       const data = await loadCard<CountWidgetData>(
         countWidget,
         { collection: "users" },
@@ -259,6 +262,10 @@ describe.each(getConfiguredTestDialects())(
         line: "change",
         change: total - 1,
       });
+      expect(select.mock.calls.filter(([table]) => table === "users")).toEqual(
+        []
+      );
+      select.mockRestore();
     });
 
     it("draws the people's trend ending at the number, and never a status split", async () => {

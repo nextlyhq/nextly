@@ -20,10 +20,7 @@ import { readAccessCaller } from "../../auth/entity-read-access";
 import { getService } from "../../di";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
-import {
-  bucketStartUtc,
-  intervalWindow,
-} from "../collections/query/timeseries-interval";
+import { intervalWindow } from "../collections/query/timeseries-interval";
 
 import {
   isTimeseriesRange,
@@ -77,59 +74,46 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
 /** The table every account is a row of. */
 const USERS_TABLE = "users";
 
-/** A stored instant as a `Date`, or `undefined` for one that cannot be read as one. */
-function instantOf(value: unknown): Date | undefined {
-  const at =
-    value instanceof Date
-      ? value
-      : typeof value === "string" || typeof value === "number"
-        ? new Date(value)
-        : undefined;
-  return at === undefined || Number.isNaN(at.getTime()) ? undefined : at;
-}
-
 /**
  * The accounts made in each interval of `range`, oldest first, every interval
  * present: the window a collection's series over the same range is drawn
  * across (`rangeWindow`), its first interval counting only what falls inside
- * the range. Read as the instants alone, then placed here, so the three
- * dialects bucket alike.
+ * the range. Each interval is one count in the database, so the read is a
+ * handful of numbers however many people joined, never their rows.
  */
 async function joinedSeries(
   range: TimeseriesRange,
   now: Date
 ): Promise<Extract<WidgetResult, { op: "timeseries" }>> {
   const window = rangeWindow(range, now);
-  const rows = await getService("adapter").select<{ createdAt?: unknown }>(
-    USERS_TABLE,
-    {
-      columns: ["createdAt"],
-      where: {
-        and: [
-          { column: "createdAt", op: ">=", value: window.start },
-          { column: "createdAt", op: "<", value: openWindowEnd(now) },
-        ],
-      },
-    }
-  );
   const starts = intervalWindow(
     window.anchor,
     window.interval,
     window.intervals
   );
-  const counts = new Map(starts.map(start => [start.getTime(), 0]));
-  for (const row of rows) {
-    const at = instantOf(row.createdAt);
-    if (at === undefined) continue;
-    const key = bucketStartUtc(at, window.interval).getTime();
-    const held = counts.get(key);
-    if (held !== undefined) counts.set(key, held + 1);
-  }
+  const end = openWindowEnd(now);
+  const adapter = getService("adapter");
+  const counts = await Promise.all(
+    starts.map((start, index) => {
+      // Clipped to the range: the first interval opens where the range does,
+      // and the last closes at the batch's instant.
+      const from = start < window.start ? window.start : start;
+      const to = starts[index + 1] ?? end;
+      return adapter.count(USERS_TABLE, {
+        where: {
+          and: [
+            { column: "createdAt", op: ">=", value: from },
+            { column: "createdAt", op: "<", value: to },
+          ],
+        },
+      });
+    })
+  );
   return {
     op: "timeseries",
-    points: starts.map(start => ({
+    points: starts.map((start, index) => ({
       start: start.toISOString(),
-      count: counts.get(start.getTime()) ?? 0,
+      count: counts[index] ?? 0,
     })),
     interval: window.interval,
   };

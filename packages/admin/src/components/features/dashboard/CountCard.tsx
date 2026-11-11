@@ -154,8 +154,10 @@ const SPLIT_TONE = {
 } as const;
 
 /**
- * The split by status: a thin bar of the published, draft and scheduled entries, and a legend
- * whose every part links to the list holding exactly it.
+ * The split by status: a thin bar of the published and draft entries, and a legend whose every
+ * part links to the list holding exactly it. What scheduled releases will publish is a legend
+ * entry alone: those entries are already published or drafts, so a third segment would count
+ * them twice.
  */
 function StatusSplit({
   line,
@@ -179,19 +181,23 @@ function StatusSplit({
           },
         ]),
   ];
-  const sum = parts.reduce((total, { part }) => total + part.count, 0);
+  // The two statuses that partition the number; scheduled overlaps them.
+  const statuses = parts.filter(({ key }) => key !== "scheduled");
+  const sum = statuses.reduce((total, { part }) => total + part.count, 0);
   return (
     <div data-testid="count-split">
       {sum === 0 ? null : (
         <div
           className="mt-2.5 flex h-1.5 gap-0.5 overflow-hidden rounded-[3px]"
           aria-hidden="true"
+          data-testid="count-split-bar"
         >
-          {parts
+          {statuses
             .filter(({ part }) => part.count > 0)
             .map(({ key, part }) => (
               <span
                 key={key}
+                data-part={key}
                 className={cn("block", SPLIT_TONE[key])}
                 style={{ flexGrow: part.count }}
               />

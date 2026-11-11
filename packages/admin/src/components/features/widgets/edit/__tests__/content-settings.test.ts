@@ -258,6 +258,25 @@ describe("a Collection setting's choices", () => {
     ).toEqual([...sources.map(source => source.collection), "users"]);
   });
 
+  it("keeps Users stored on a setting that offers them, reopened", () => {
+    // 🔴 Read against the collections alone, a saved Users card would be reset to no source.
+    expect(
+      staleContentValues(
+        [{ name: "collection", type: "collection", users: true }],
+        { collection: "users" },
+        sources
+      )
+    ).toEqual([]);
+    // The must-differ half: told without the offer, Users is a value that went away.
+    expect(
+      staleContentValues(
+        [{ name: "collection", type: "collection" }],
+        { collection: "users" },
+        sources
+      )
+    ).toHaveLength(1);
+  });
+
   it("offers no Users where the server told the setting without them", () => {
     expect(
       collectionOptions(collection, sources).map(option => option.value)
