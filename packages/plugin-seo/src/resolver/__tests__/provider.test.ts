@@ -64,6 +64,7 @@ function context(
   return {
     self: { collections: {} },
     config: {},
+    publicAddresses: { defaultLanguage: async () => "en" },
     services: {
       // The address record: who holds each path in English, read by the
       // rows' unique keys as the record stores them.

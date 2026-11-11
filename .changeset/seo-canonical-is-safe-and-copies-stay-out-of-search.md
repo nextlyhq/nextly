@@ -30,3 +30,5 @@
 ---
 
 The SEO plugin keeps every copy of a site out of search: its Proxy handler sends `X-Robots-Tag: noindex` from any host but the production addresses (`NEXTLY_PRODUCTION_ADDRESSES`, or the SEO settings), and a site with no address known stays listable if it already has pages and is kept out of search if it has none. A page whose address another page holds gets no canonical, and a typed canonical is taken only on the site itself unless `canonicalElsewhere` says the page first appeared elsewhere.
+
+A plugin can ask `ctx.publicAddresses.defaultLanguage()` for the language an address is held in where a read names none: the site's default language as it is now, one chosen in Settings included.

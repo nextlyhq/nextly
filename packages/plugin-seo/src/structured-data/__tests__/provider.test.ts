@@ -38,6 +38,7 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
 const ctx = {
   self: { collections: {} },
   config: {},
+  publicAddresses: { defaultLanguage: async () => "en" },
   services: {
     ownCollections: { listEntries: async () => ({ data: [] }) },
     collections: {

@@ -57,6 +57,7 @@ function context(): PluginContext {
   return {
     self: { collections: {} },
     config: {},
+    publicAddresses: { defaultLanguage: async () => "en" },
     services: {
       ownCollections: { listEntries: async () => ({ data: [] }) },
       collections: {

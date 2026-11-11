@@ -34,14 +34,15 @@ type Where = {
   and?: [{ kind: { equals: string } }, { path: { equals: string } }];
 };
 
-/** A context on a site in `localization`, whose record holds `rows`. */
-function context(
-  rows: ReturnType<typeof row>[],
-  localization: Record<string, unknown> | undefined
-) {
+/**
+ * A context on a site whose addresses read with no language named are held
+ * in `defaultLanguage`, whose record holds `rows`.
+ */
+function context(rows: ReturnType<typeof row>[], defaultLanguage: string) {
   return {
     self: { collections: {} },
-    config: { localization },
+    config: {},
+    publicAddresses: { defaultLanguage: async () => defaultLanguage },
     services: {
       ownCollections: {
         listEntries: async (_slug: string, query: { where: Where }) => {
@@ -65,26 +66,25 @@ describe("addressHolders", () => {
   const rows = [row("en", "/news", "b"), row("de", "/news", "a")];
 
   it("reads the language the route named", async () => {
-    const ctx = context(rows, { defaultLocale: "en", locales: [] });
+    const ctx = context(rows, "en");
     expect(await addressHolders(ctx, "/news", "de")).toEqual([
       { collection: "pages", id: "a" },
     ]);
   });
 
   it("reads the site's default language where the route named none", async () => {
-    const ctx = context(rows, {
-      defaultLocale: "en",
-      locales: [{ code: "en" }, { code: "de" }],
-    });
+    const ctx = context(rows, "en");
     expect(await addressHolders(ctx, "/news", undefined)).toEqual([
       { collection: "pages", id: "b" },
     ]);
   });
 
-  it("reads English on a site with no languages configured", async () => {
-    const ctx = context([row("en", "/about", "c")], undefined);
-    expect(await addressHolders(ctx, "/about", undefined)).toEqual([
-      { collection: "pages", id: "c" },
+  it("reads a default language chosen in Settings, not only in code", async () => {
+    // German is the default, set in Settings: the site's config names no
+    // languages, and the route named none.
+    const ctx = context(rows, "de");
+    expect(await addressHolders(ctx, "/news", undefined)).toEqual([
+      { collection: "pages", id: "a" },
     ]);
   });
 
@@ -92,7 +92,7 @@ describe("addressHolders", () => {
     // Page r holds everything under /go, so /go/a is its, not page a's.
     const ctx = context(
       [row("en", "/go", "r", "range"), row("en", "/other", "a")],
-      undefined
+      "en"
     );
     expect(await addressHolders(ctx, "/go/a", undefined)).toEqual([
       { collection: "pages", id: "r" },

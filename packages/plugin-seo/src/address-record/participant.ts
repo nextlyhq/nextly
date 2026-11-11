@@ -307,18 +307,6 @@ export async function heldNow(
 }
 
 /**
- * The language a read that names none is in: the site's default language, or
- * English on a site that configures none, as core records the addresses of a
- * page read without one.
- */
-function defaultLanguageOf(ctx: PluginContext): string {
-  const configured = ctx.config.localization?.defaultLocale;
-  return typeof configured === "string" && configured !== ""
-    ? configured
-    : "en";
-}
-
-/**
  * Who the record says holds the address `path` in `locale`, or in the site's
  * default language where the route named none: the page holding it exactly,
  * or holding a range it falls in, read by the rows' unique keys, so a page
@@ -331,7 +319,7 @@ export async function addressHolders(
   path: string,
   locale: string | undefined
 ): Promise<AddressHolder[]> {
-  const language = locale ?? defaultLanguageOf(ctx);
+  const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
   const keys = keysHolding(language, path);
   const { data } = await ctx.services.ownCollections.listEntries(
     recordSlug(ctx),
