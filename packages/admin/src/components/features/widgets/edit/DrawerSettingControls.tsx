@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The settings drawer's own controls, for the settings it draws as the founder's drawer does
+ * The settings drawer's own controls, for the settings it draws in a compact form of its own
  * rather than as the entry editor's fields: a short choice as a row of choices (a list's Number
  * of entries, Row spacing), an on/off as a switch beside its label, a note's text with how many
  * characters remain, and the card's Width. Each is bound to the drawer's form by the setting's
