@@ -29,7 +29,7 @@ import { loadedDialect } from "../../../database/dialect-tables";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
 import { consoleLogger } from "../../../shared/types";
-import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { inRegistryStep, writeRegistryRows } from "../schema-version";
 
 import {
   loadSnapshots,
@@ -235,13 +235,13 @@ function getDynamicSinglesSchema(dialect: SupportedDialect) {
  * @returns true if inserted, false if already exists
  */
 async function registerCollection(
-  adapter: DrizzleAdapter,
+  // The handle of the transaction the rows and the schema version are
+  // written in (`registerFromMigrations`).
+  db: DrizzleDatabase,
   dialect: SupportedDialect,
   collection: SnapshotCollection
 ): Promise<boolean> {
   const schema = getDynamicCollectionsSchema(dialect);
-  // getDrizzle returns untyped Drizzle instance; schema is passed to query ops
-  const db = adapter.getDrizzle<DrizzleDatabase>();
 
   // Check if collection already exists using Drizzle
   const existing = await db
@@ -288,13 +288,12 @@ async function registerCollection(
  * @returns true if inserted, false if already exists
  */
 async function registerSingle(
-  adapter: DrizzleAdapter,
+  // The transaction's handle, as for `registerCollection`.
+  db: DrizzleDatabase,
   dialect: SupportedDialect,
   single: SnapshotSingle
 ): Promise<boolean> {
   const schema = getDynamicSinglesSchema(dialect);
-  // getDrizzle returns untyped Drizzle instance; schema is passed to query ops
-  const db = adapter.getDrizzle<DrizzleDatabase>();
 
   // Check if single already exists using Drizzle
   const existing = await db
@@ -349,6 +348,7 @@ async function registerSingle(
  * saying so.
  */
 async function registerEach<T extends { slug: string }>(
+  adapter: DrizzleAdapter,
   entries: T[],
   kind: "collection" | "single",
   insert: (entry: T) => Promise<boolean>,
@@ -370,7 +370,9 @@ async function registerEach<T extends { slug: string }>(
     }
 
     try {
-      if (await insert(entry)) registered += 1;
+      // One entity's failure rolls back its own insert alone, inside the
+      // transaction every entity is written in (`inRegistryStep`).
+      if (await inRegistryStep(adapter, () => insert(entry))) registered += 1;
       logger.debug?.(`[Migration Metadata] Registered ${kind}: ${entry.slug}`);
     } catch (err) {
       // Per entity: one row that cannot be written must not cost the rest
@@ -415,27 +417,36 @@ export async function registerFromMigrations(
   const collections = mergeCollections(snapshots, logger);
   const singles = mergeSingles(snapshots, logger);
 
-  // Step 3: Register each entity, by kind. The rows are written directly, so
-  // the cached registry rows, collections' and Singles' alike, are cleared once
-  // the writes have run, landed or not (`collection-row-cache`).
-  let collectionsRegistered = 0;
-  let singlesRegistered = 0;
-  try {
-    collectionsRegistered = await registerEach(
-      collections,
-      "collection",
-      entry => registerCollection(typedAdapter, dialect, entry),
-      logger
-    );
-    singlesRegistered = await registerEach(
-      singles,
-      "single",
-      entry => registerSingle(typedAdapter, dialect, entry),
-      logger
-    );
-  } finally {
-    clearRegistryRowCache();
-  }
+  // Step 3: Register each entity, by kind, in one transaction with the
+  // stored schema version, whose count moves where any row was registered
+  // (`writeRegistryRows`, which also clears the cached registry rows once the
+  // writes have run, landed or not).
+  const { collectionsRegistered, singlesRegistered } = await writeRegistryRows(
+    typedAdapter,
+    async tx => {
+      const db = tx.getDrizzle<DrizzleDatabase>();
+      return {
+        collectionsRegistered: await registerEach(
+          typedAdapter,
+          collections,
+          "collection",
+          entry => registerCollection(db, dialect, entry),
+          logger
+        ),
+        singlesRegistered: await registerEach(
+          typedAdapter,
+          singles,
+          "single",
+          entry => registerSingle(db, dialect, entry),
+          logger
+        ),
+      };
+    },
+    {
+      wrote: registered =>
+        registered.collectionsRegistered + registered.singlesRegistered > 0,
+    }
+  );
 
   if (collectionsRegistered > 0 || singlesRegistered > 0) {
     logger.info?.(

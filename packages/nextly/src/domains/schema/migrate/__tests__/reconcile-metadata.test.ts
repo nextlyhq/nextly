@@ -99,6 +99,17 @@ async function run(opts: {
   }>;
 }) {
   vi.resetModules();
+  // The rows' transaction and the stored schema version beside them are the
+  // integration suite's subject (`schema-version-writers.integration.test.ts`):
+  // here the pass runs as it did before it had one.
+  vi.doMock("../../schema-version", () => ({
+    writeRegistryRows: (
+      _adapter: unknown,
+      work: (tx: { getDrizzle: () => unknown }) => Promise<unknown>
+    ) => work({ getDrizzle: () => ({}) }),
+    inRegistryStep: (_adapter: unknown, work: () => Promise<unknown>) => work(),
+    newestAppliedAppMigration: () => null,
+  }));
   const made = mockRegistries(
     opts.collections ?? [],
     opts.singles ?? [],

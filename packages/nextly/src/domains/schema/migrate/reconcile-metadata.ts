@@ -36,18 +36,28 @@
  * repairs; failing the command instead would report a successful migration as
  * broken.
  *
+ * The registry rows THIS pass writes, though, share one transaction with the
+ * stored schema version (`schema-version.ts`), so the version never names a
+ * migration whose rows are not written.
+ *
  * @module domains/schema/migrate/reconcile-metadata
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
+import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import {
+  inRegistryStep,
+  newestAppliedAppMigration,
+  writeRegistryRows,
+} from "../schema-version";
 
 import { registerFromMigrations } from "./metadata-register";
 import {
@@ -233,7 +243,11 @@ async function markApplied(
   let stillPending = 0;
   let awaitingMigration = 0;
 
-  const rows = await registry.getPendingMigrations();
+  // A step of its own: a registry that cannot be read must not abort the
+  // transaction the other registries are written in.
+  const rows = await inRegistryStep(adapter, () =>
+    registry.getPendingMigrations()
+  );
   for (const row of rows) {
     const named = identify(row);
     if (!named) {
@@ -271,14 +285,20 @@ async function markApplied(
        * old physical table, so this answers yes for a change that has not
        * migrated at all — which is why the header check above exists.
        */
-      if (!(await adapter.tableExists(named.tableName))) {
+      // Through the view a service in this registry write reads with, so the
+      // read runs on the write's transaction (`adapterForReads`).
+      if (!(await adapterForReads(adapter).tableExists(named.tableName))) {
         stillPending += 1;
         continue;
       }
 
-      const outcome = await registry.updateMigrationStatusWithVerification(
-        named.slug,
-        named.tableName
+      // Its own step of the registry write, so a row that fails is rolled
+      // back alone (`inRegistryStep`).
+      const outcome = await inRegistryStep(adapter, () =>
+        registry.updateMigrationStatusWithVerification(
+          named.slug,
+          named.tableName
+        )
       );
       if (outcome.verified) marked += 1;
       else stillPending += 1;
@@ -310,7 +330,7 @@ async function markApplied(
 export async function reconcileMigrationMetadata(
   deps: ReconcileMetadataDeps
 ): Promise<ReconcileMetadataResult> {
-  const { adapter, dialect, migrationsDir, logger } = deps;
+  const { adapter, dialect } = deps;
 
   /*
    * Step 1: rows the snapshots describe that the registry does not have yet.
@@ -326,25 +346,81 @@ export async function reconcileMigrationMetadata(
    * per migration, and `isFileApplied` is the same query `runFileMigrations`
    * already uses to decide what is outstanding — so registration and execution
    * read one source rather than two that can disagree.
+   *
+   * Every registry row this pass writes, and the stored schema version, are
+   * written in ONE transaction (`writeRegistryRows`): a run stopped part-way
+   * leaves the rows and the version as they were. The ledger is read on that
+   * transaction too, so no read of this pass takes a second connection while
+   * the transaction holds one. The version names the newest applied migration
+   * only where every row was written and every registry read; a row left
+   * behind keeps the version where it was, and the next run, which writes it,
+   * moves the version too.
    */
-  const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  const swept = await writeRegistryRows(
+    adapter,
+    async tx => {
+      const events = new SchemaEventsRepository(tx.getDrizzle(), dialect);
 
-  /*
-   * Memoized because both halves of this pass ask the ledger about the same
-   * files: registration, to decide what it may insert, and the sweep's
-   * evidence, to decide what shape the database has reached. One query per
-   * migration file rather than two, and — more usefully — one ANSWER, so the
-   * two halves cannot disagree about whether a file ran.
-   */
-  const appliedCache = new Map<string, Promise<boolean>>();
-  const isApplied = (filename: string): Promise<boolean> => {
-    const cached = appliedCache.get(filename);
-    if (cached) return cached;
-    const pending = events.isFileApplied(filename);
-    appliedCache.set(filename, pending);
-    return pending;
-  };
+      /*
+       * Memoized because both halves of this pass ask the ledger about the
+       * same files: registration, to decide what it may insert, and the
+       * sweep's evidence, to decide what shape the database has reached. One
+       * query per migration file rather than two, and — more usefully — one
+       * ANSWER, so the two halves cannot disagree about whether a file ran.
+       */
+      const appliedCache = new Map<string, Promise<boolean>>();
+      const isApplied = (filename: string): Promise<boolean> => {
+        const cached = appliedCache.get(filename);
+        if (cached) return cached;
+        const pending = inRegistryStep(adapter, () =>
+          events.isFileApplied(filename)
+        );
+        appliedCache.set(filename, pending);
+        return pending;
+      };
 
+      /*
+       * The newest app migration the ledger records applied: what the stored
+       * schema version says once this pass has written its registry rows. A
+       * ledger that cannot be read leaves the version's migration as it was.
+       */
+      let appliedMigration: string | null | undefined;
+      try {
+        appliedMigration = newestAppliedAppMigration(
+          await inRegistryStep(adapter, () => events.listFileApplies())
+        );
+      } catch {
+        appliedMigration = undefined;
+      }
+      return {
+        ...(await registerAndSweep(deps, isApplied)),
+        appliedMigration,
+      };
+    },
+    {
+      wrote: ({ result }) =>
+        result.collectionsRegistered +
+          result.singlesRegistered +
+          result.fieldGroupsRegistered +
+          result.marked >
+        0,
+      migration: ({ complete, appliedMigration }) =>
+        complete ? appliedMigration : undefined,
+    }
+  );
+  return swept.result;
+}
+
+/**
+ * Both steps of the pass, inside the registry write the caller opened:
+ * registration, then the sweep of rows waiting on a table. `complete` says
+ * every row was written and every registry read.
+ */
+async function registerAndSweep(
+  deps: ReconcileMetadataDeps,
+  isApplied: (filename: string) => Promise<boolean>
+): Promise<{ result: ReconcileMetadataResult; complete: boolean }> {
+  const { adapter, dialect, migrationsDir, logger } = deps;
   const registered = await registerRows(deps, isApplied);
 
   /*
@@ -431,12 +507,15 @@ export async function reconcileMigrationMetadata(
   }
 
   return {
-    ...registered,
-    marked,
-    stillPending,
-    awaitingMigration,
-    unscopedMigrations: awaiting.unscoped,
-    unreadable,
+    result: {
+      ...registered.rows,
+      marked,
+      stillPending,
+      awaitingMigration,
+      unscopedMigrations: awaiting.unscoped,
+      unreadable,
+    },
+    complete: registered.complete && unreadable.length === 0,
   };
 }
 
@@ -454,9 +533,12 @@ export async function reconcileMigrationMetadata(
 async function registerRows(
   deps: ReconcileMetadataDeps,
   isApplied: (filename: string) => Promise<boolean>
-): Promise<RegisteredRows> {
+): Promise<{ rows: RegisteredRows; complete: boolean }> {
   const { adapter, dialect, migrationsDir, logger } = deps;
-  const insertMissing = async (): Promise<RegisteredRows> => {
+  const insertMissing = async (): Promise<{
+    rows: RegisteredRows;
+    complete: boolean;
+  }> => {
     const inserted = await (deps.registerFn ?? registerFromMigrations)({
       migrationsDir,
       adapter,
@@ -464,7 +546,10 @@ async function registerRows(
       logger,
       isApplied,
     });
-    return { ...inserted, fieldGroupsRegistered: 0, rowsNotWritten: [] };
+    return {
+      rows: { ...inserted, fieldGroupsRegistered: 0, rowsNotWritten: [] },
+      complete: true,
+    };
   };
   if (deps.registryRows === "insert-missing") return insertMissing();
   const source = await readRegistrySource({ migrationsDir, isApplied });
@@ -475,11 +560,15 @@ async function registerRows(
       logger.warn(
         `The registry rows were not written: the newest applied snapshot (${source.file ?? "unknown"}) could not be read.`
       );
+      // Not complete: the rows the snapshot records are not written.
       return {
-        collectionsRegistered: 0,
-        singlesRegistered: 0,
-        fieldGroupsRegistered: 0,
-        rowsNotWritten: [],
+        rows: {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          fieldGroupsRegistered: 0,
+          rowsNotWritten: [],
+        },
+        complete: false,
       };
     }
     return insertMissing();
@@ -498,10 +587,13 @@ async function registerRows(
     }
   );
   return {
-    collectionsRegistered: written.written.collection,
-    singlesRegistered: written.written.single,
-    fieldGroupsRegistered: written.written.fieldGroup,
-    rowsNotWritten: written.failed,
+    rows: {
+      collectionsRegistered: written.written.collection,
+      singlesRegistered: written.written.single,
+      fieldGroupsRegistered: written.written.fieldGroup,
+      rowsNotWritten: written.failed,
+    },
+    complete: written.failed.length === 0,
   };
 }
 
