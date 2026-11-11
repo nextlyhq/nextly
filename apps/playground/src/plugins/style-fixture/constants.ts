@@ -24,3 +24,20 @@ export const FRAME_PAGE_PATHS = {
   "frame-workspace": "playground/style-fixture#FrameWorkspacePage",
   "frame-none": "playground/style-fixture#UnframedPage",
 } as const;
+
+/**
+ * The fixture's own collection, listed in its standalone panel and counted
+ * there, for e2e/tests/plugin-panel-declarations.spec.ts. Registered with the
+ * fixture, so only on the e2e server.
+ */
+export const SWATCHES_SLUG = "style-fixture-swatches";
+
+/** A swatch whose `state` is this is one the panel's checks badge counts. */
+export const SWATCH_TO_FIX = "to-fix";
+
+/** The panel's own pages, under `/admin/plugins/style-fixture/`. */
+export const PANEL_PAGE_PATHS = {
+  overview: "panel-overview",
+  checks: "panel-checks",
+  quiet: "panel-quiet",
+} as const;
