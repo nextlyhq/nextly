@@ -2,7 +2,8 @@
  * The SEO settings Single: one document of site-wide rules. The site's name,
  * production addresses, default description and share image, the title
  * pattern of each content type, the brand facts every output reads, what kind
- * of site it is, what AI tools may do, and how far first-time setup got.
+ * of site it is, what AI tools may do, which optional outputs for AI tools
+ * are switched on, and how far first-time setup got.
  *
  * A Single rather than plugin settings because it is content: its text is
  * kept per language where the site is translated, its images are media
@@ -131,6 +132,13 @@ export function seoSettingsSingle(): SingleConfig {
         name: "structuredData",
         label: "Structured data",
         validate: refusing(structuredDataSettingsProblem),
+      }),
+      // The optional connections and outputs, each off until switched on.
+      checkbox({ name: "indexNow", label: "IndexNow" }),
+      checkbox({ name: "llmsTxt", label: "llms.txt" }),
+      checkbox({
+        name: "plainTextCopies",
+        label: "Plain-text copies of pages",
       }),
       number({
         name: "setupStep",

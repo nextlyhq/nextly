@@ -192,7 +192,7 @@ describe("the panel of a page built in code", () => {
       within(panel).getByRole("switch", { name: "Hide this page from search" })
     );
 
-    expect(within(panel).getByText("Hidden from search")).toBeTruthy();
+    expect(within(panel).getByText(/^Hidden from search/)).toBeTruthy();
     fireEvent.keyDown(panel, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -208,9 +208,12 @@ describe("the share image of a page built in code", () => {
 
     fireEvent.click(within(panel).getByRole("button", { name: "Remove" }));
 
-    expect(panel.querySelector(".nx-seo-card img")?.getAttribute("src")).toBe(
-      "https://cdn.example/route.png"
-    );
+    expect(
+      within(panel)
+        .getByTestId("seo-share-card")
+        .querySelector("img")
+        ?.getAttribute("src")
+    ).toBe("https://cdn.example/route.png");
     expect(
       within(panel).getByText("Uses the share image the route's code sets.")
     ).toBeTruthy();

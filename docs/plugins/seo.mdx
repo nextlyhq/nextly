@@ -167,7 +167,9 @@ an address on another site is used only once marked confirmed.
 The count beside the tab's label is the number of problems the page's answer shows: a
 title longer than Google shows, a description that is too long, a title or a
 description that no level supplies, and each detail the page's structured data type
-lacks.
+lacks. The title and description are checked by the same rule the
+[problem list](#problems) uses, lengths counted in characters, so the tab and the list
+always agree; a page hidden from search has no title or description problem in either.
 
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
@@ -413,6 +415,105 @@ instead.
 builds a sitemap from its own route. They are deprecated, and list pages by the old rules:
 they do not read each page's answer.
 
+## Search Console and IndexNow
+
+Two optional connections on **SEO > Settings > Connections**. Neither is on until someone
+who may manage site-wide SEO turns it on, and if one fails, the Connections tab and the
+problem list say so in plain words and no page is affected.
+
+### Google Search Console
+
+Search Console shows the site's clicks from Google over the last 28 days, what people
+searched, and the pages where Google chose a different official address than the page
+names (of the most visited ten, checked with Google's URL inspection). Connecting it needs a
+Google sign-in for the site: create an OAuth client of the **Web application** kind in Google
+Cloud, add the redirect address below, and name it in the plugin's options, keeping the
+secret out of the code:
+
+```ts
+import { secret } from "@nextlyhq/plugin-sdk";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+seoPlugin({
+  collections: ["posts"],
+  searchConsole: {
+    clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+    clientSecret: secret(process.env.GOOGLE_CLIENT_SECRET ?? ""),
+  },
+});
+```
+
+The redirect address is the admin's own, on each host people sign in to the admin on:
+`https://<host>/admin/api/plugins/@nextlyhq/plugin-seo/connections/search-console/callback`.
+
+**Connect Search Console** sends the person to Google, which asks them to approve read-only
+access (`webmasters.readonly`, with `openid email` to show who connected). Nextly never
+changes anything in Search Console. The property used is the one for the site's production
+address: its URL-prefix property, else its domain property. The token that renews access is
+kept encrypted in the plugin's settings, with the sign-in's one-time state and PKCE verifier
+while it is under way; none of them is ever returned to the admin or any API, or logged.
+**Disconnect** withdraws the access at Google and forgets it.
+
+### IndexNow
+
+IndexNow tells Bing and the other search engines taking part the moment a page is published,
+changed, given a new address or taken down. Google does not take part. Changes are gathered
+for a few seconds after the last save, so a burst of saves makes one notice, and sent after
+the save has finished: a save never waits for IndexNow, and a working draft's save sends
+nothing.
+
+The site proves it owns its pages with a key served at its root, `/<key>.txt`, answered by the
+site's [Proxy](/docs/plugins/proxy) while IndexNow is on. The key is made the first time a
+notice is sent and kept encrypted in the plugin's settings. Every notice goes to
+`api.indexnow.org` only. A refused key (`403` or `422`), a rate limit (`429`) or an endpoint
+that cannot be reached is shown on the Connections tab and listed on the problem list until a
+later notice goes through; the next change is sent again. Notices name the site's production
+address, so IndexNow needs one saved.
+
+The plugin may reach only `api.indexnow.org`, `oauth2.googleapis.com`, `www.googleapis.com`
+and `searchconsole.googleapis.com`, each request given ten seconds and following no redirect.
+
+## llms.txt and plain-text copies
+
+Two optional outputs for AI tools, both off until someone switches them on in **SEO >
+Settings > Connections**. Few tools read them today, so neither is on by default.
+
+- **`/llms.txt`** is a plain list of the site's pages, in the format the
+  [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
+  default description beneath it, and each page as a link under its content type, with the
+  title and description its head carries, worked out from what the public may read of the
+  page; a page the public may not read is listed by its address alone. It lists exactly the pages the sitemap lists, by
+  the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
+  never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
+  answers `503` while the address record catches up at start.
+- **Plain-text copies** add a text version of each page the sitemap lists, at the page's
+  address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.html.md` for
+  the home page. The copy is the page's title as a heading, then the words of its text,
+  long text and rich text fields, in the order its type declares them, those inside its
+  groups and repeaters included, with rich text's headings, lists, links, quotes, code,
+  tables and images written as Markdown. A field group's rich text is read too. A page's SEO
+  fields, its address, fields holding a choice, a number or a date, and other documents
+  read with it, such as an author, are left out. Each copy is served as
+  `text/markdown; charset=utf-8` and names its page as canonical in a `Link` header, so
+  search engines keep listing the page. With copies on, `/llms.txt` links each page's copy.
+
+A copy is read as a visitor with no session reads the page: the Public role's grants, the
+type's read rule and each field's read rule decide what is in it, so a field kept from the
+public is never in a copy, and a page the public may not read has none. Where a page of the
+site already has a copy's address, such as a page at `/guide.md`, that page is served there
+and no copy is, and `/llms.txt` links the page itself. A page at `/index.html` keeps
+`/index.html.md`, and the home page is then linked as itself. A copy's words are escaped
+where Markdown would read them as markup, so it says what the page shows.
+
+Every reader gets the same answer: neither output looks at who is asking. Neither changes a
+page either: llms.txt is its own file, and a copy is answered only at a copy's address. A
+copy is answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its
+`proxy.ts`, as [redirects](#redirects) do; a site that ships its own `public/llms.txt` or
+`app/llms.txt/route.ts` keeps serving it.
+
+A copy is made from the page as it is stored, the fields the site renders, not from the
+rendered page: the words of a Page Builder layout are not in it.
+
 ## Languages
 
 On a site with [several languages](/docs/localization), each page's head links to the page in
@@ -464,6 +565,7 @@ with a line on the page to finish later. Every answer stays editable on the tabs
 | Content types | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
 | Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                                                                                           |
 | Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                                                                                    |
+| Connections   | Optional services and outputs, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow), [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies)                                                        |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
@@ -859,8 +961,8 @@ shared, grouped by kind, each with a button that goes straight to its fix: the p
 its content, the SEO settings, the media library, or a note to copy for a developer where the fix
 is in code. There is no score, and nothing on the list stops anyone publishing.
 
-Each public page of the collections the plugin extends is checked, in every language it is
-published in and at its address there, as its head would be served, for:
+Each public page of the collections and Singles the plugin extends is checked, in every language
+it is published in and at its address there, as its head would be served, for:
 
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
@@ -879,9 +981,18 @@ whole is checked for a missing production address, a collection with no public a
 redirect whose To address redirects again, and a page left out of the sitemap because another page
 holds its address.
 
-The list is for anyone who may read one of the content types the plugin extends, and shows each
-person the problems of the pages they may read. A redirect that takes more than one hop is listed
-only for someone holding `manage-seo`, who may see the redirects.
+The list is for anyone who may read one of the content types the plugin extends, a Single among
+them, and shows each person the problems of the pages they may read. A redirect that takes more
+than one hop is listed only for someone holding `manage-seo`, who may see the redirects.
+
+### On the dashboard
+
+The **SEO issues** card draws the list by kind, one bar for each kind of problem, and the
+**Needs attention** card has one **SEO problems** line counting the whole list, linked to it. Both
+read the list the person looking may read, from the same kept results, so their numbers are the
+list's. The card is offered to someone who may read every collection the plugin extends, the line
+to someone who may read one of them. A dashboard card can't ask for `manage-seo`, so neither counts
+a redirect that takes more than one hop: those are on the list itself.
 
 ### When the list is checked
 
@@ -924,8 +1035,9 @@ beside the route, a `noindex` sent in a header, or a firewall that turned a craw
 Where LinkedIn received something different, the explanation links its Post Inspector,
 which refreshes the card LinkedIn keeps for about a week.
 
-Open it from a page's SEO tab, or from the menu, where it checks the site's first listed
-page. Any address on the site can be typed in. What Nextly holds is the head the plugin
+Open it from a page's SEO tab, which names the page at the address its language serves it at
+(with the language in it, on a site that puts the language in every address), or from the menu,
+where it checks the site's first listed page. Any address on the site can be typed in. What Nextly holds is the head the plugin
 answers for the published page at that address, shown only to someone who may read that
 page's content type. Running a check, and the screen itself, need `check-seo`, since a check has
 the server fetch the site's pages.

@@ -2,13 +2,18 @@
  * What the problem list's server and the admin's screens agree on: the kinds
  * of problem, the words each kind is explained with, where each is fixed,
  * and the shape the list's routes answer with. Plain data only, importing
- * nothing but the settings' contract, itself import-free, so the admin's
+ * nothing but the settings' contract, itself import-free, and the limits of
+ * the title and description check, a leaf, so the admin's
  * client bundle and any other screen reading the list (a page's SEO tab)
  * take it without bringing server code along.
  *
  * @module problems/contract
  */
 import { SEO_ADMIN_SLUG, SETTINGS_PAGE_HREF } from "../settings/contract";
+
+// The limits the title and description are checked against, from the one
+// check the SEO tab and the list share, named in the kinds' explanations.
+import { DESCRIPTION_LIMIT, TITLE_LIMIT } from "./text-checks";
 
 /** Where the list is read, under the plugin's routes. */
 export const PROBLEMS_ROUTE_PATH = "/problems";
@@ -19,15 +24,10 @@ export const PROBLEMS_CHECK_ROUTE_PATH = "/problems/check";
 /** How old the last full check may be before opening the list rechecks the site. */
 export const FULL_CHECK_MAX_AGE_MS: number = 24 * 60 * 60 * 1000;
 
-/** About as many characters of a title as Google shows. */
-export const TITLE_LIMIT = 60;
-
-/** About as many characters of a description as Google shows. */
-export const DESCRIPTION_LIMIT = 160;
-
 /** Every kind of problem the list checks for. */
 export type ProblemKind =
   | "productionAddress"
+  | "connection"
   | "noAddress"
   | "redirectChain"
   | "languageCode"
@@ -55,6 +55,12 @@ export const KIND_TEXT: Readonly<
   productionAddress: {
     title: "Production address missing",
     explain: "Nextly can't tell the real site from a test copy.",
+    siteWide: true,
+  },
+  connection: {
+    title: "Optional connection not working",
+    explain:
+      "No page is affected, but the service isn't getting what the site sends it.",
     siteWide: true,
   },
   redirectChain: {
@@ -149,6 +155,7 @@ export const KIND_TEXT: Readonly<
 export const KIND_ORDER: readonly ProblemKind[] = [
   "productionAddress",
   "noAddress",
+  "connection",
   "redirectChain",
   "languageCode",
   "notListed",
@@ -211,7 +218,7 @@ const SEO_TAB_ID = "nextlyhq-plugin-seo.tab";
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };
 
 /** The SEO settings' tabs a fix can land on. */
-export type SettingsTab = "general" | "types" | "brand";
+export type SettingsTab = "general" | "types" | "brand" | "connections";
 
 /**
  * Where a problem is fixed:

@@ -458,3 +458,78 @@ async function listed(
     },
   };
 }
+
+/** The type a holder's documents are of, where it is one the site lists. */
+async function typeOf(
+  ctx: PluginContext,
+  holder: AddressHolder
+): Promise<PublicAddressType | undefined> {
+  const single = holder.collection.startsWith("single:")
+    ? holder.collection.slice("single:".length)
+    : undefined;
+  return (await ctx.publicAddresses.types()).find(type =>
+    single === undefined
+      ? type.kind === "collection" && type.slug === holder.collection
+      : type.kind === "single" && type.slug === single
+  );
+}
+
+/**
+ * The version of `holder`'s page at `path` in `language`, as the listing
+ * would list it, or null where it is not listed there.
+ */
+async function listedVersionOf(
+  ctx: PluginContext,
+  holder: AddressHolder,
+  at: { path: string; language: string; recordIn: string },
+  options: ListingOptions
+): Promise<ListedPage | null> {
+  const { path, language } = at;
+  const type = await typeOf(ctx, holder);
+  if (type === undefined || !(await covered(type, options, at.recordIn))) {
+    return null;
+  }
+  const document = (await documentsIn(ctx, type, [holder.id], language)).get(
+    holder.id
+  );
+  if (document === undefined) return null;
+  const own = await publicAddressOf(type, document, language);
+  // Held exactly at `path`: a page holding a range above it is not the page
+  // at `path`.
+  if (own.status !== "resolved" || own.path !== path) return null;
+  const outcome = await listed(
+    ctx,
+    { type, holder, document },
+    own,
+    language,
+    options
+  );
+  if (outcome === null || "lost" in outcome) return null;
+  // The record's word on what the page holds, as the listing reads it.
+  const held = await heldLanguages(ctx, holder.collection, [holder.id]);
+  if (held.get(holder.id)?.get(language)?.has(path) !== true) return null;
+  // Only a version on the site's own origin, as the listing keeps.
+  const site = new URL(options.origin).origin;
+  return new URL(outcome.page.loc).origin === site ? outcome.page : null;
+}
+
+/**
+ * The page listed at `path` in `language`, as {@link listPages} would list
+ * it, or null where no page listed there holds it: one read of who holds the
+ * address and one of that page, rather than the whole listing. Decided by
+ * the same steps as the listing, so a page is found here exactly where the
+ * listing lists it.
+ */
+export async function listedPageAt(
+  ctx: PluginContext,
+  path: string,
+  language: string,
+  options: ListingOptions
+): Promise<ListedPage | null> {
+  const at = { path, language, recordIn: await recordLanguage(ctx) };
+  for (const holder of await addressHolders(ctx, path, language)) {
+    const page = await listedVersionOf(ctx, holder, at, options);
+    if (page !== null) return page;
+  }
+  return null;
+}

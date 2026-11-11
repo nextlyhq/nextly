@@ -12,20 +12,24 @@ import { createRequire } from "node:module";
 import {
   definePlugin,
   group,
+  isSecret,
   type FieldConfig,
   type PageMetadataResolver,
   type PluginContext,
   type PluginContributions,
   type PluginDefinition,
   type PluginRoute,
+  type Secret,
 } from "@nextlyhq/plugin-sdk";
 
 import { startCatchUp } from "./address-record/catch-up";
 import { addressRecordCollection } from "./address-record/collection";
 import {
+  ADDRESSES_MOVED,
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import { bulkRoutes } from "./bulk/route";
 import { codePagesCollection } from "./code-pages/collection";
 import {
   keepCodeRoutes,
@@ -34,10 +38,23 @@ import {
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
 import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
+import {
+  indexNowKeyProxyHandler,
+  watchForIndexNow,
+} from "./connections/indexnow";
+import { INDEXNOW_HOST } from "./connections/indexnow-send";
+import { searchConsoleRoutes } from "./connections/search-console";
+import {
+  SEARCH_CONSOLE_HOSTS,
+  type GoogleClient,
+} from "./connections/search-console-send";
+import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
 import { defaultSeoFields } from "./fields";
+import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
 import { keepSeoContext } from "./not-found/report";
+import { plainCopyProxyHandler } from "./outputs/ai-outputs";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
 import {
@@ -56,6 +73,7 @@ import {
   MANAGE_SEO_PERMISSION,
   seoPermissionDeclarations,
 } from "./permissions";
+import { problemsForCard } from "./problems/card-source";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
 import { problemRoutes } from "./problems/route";
@@ -102,7 +120,7 @@ import {
 import { seoTabParts } from "./tab/install";
 import { PAGE_BUILDER_TAB } from "./template/contributions";
 import { seoTemplateRoute } from "./template/route";
-import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
+import { seoIssuesWidget, seoProblemsAttentionItem } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -263,6 +281,38 @@ export interface SeoPluginOptions {
    * for the Pages and addresses screen and the sitemap.
    */
   nextBuildDir?: string;
+  /**
+   * @experimental The Google sign-in Search Console is connected with, from
+   * a Google Cloud OAuth client of the "Web application" kind. Without it,
+   * the Connections tab says Search Console needs one. Keep the secret out
+   * of the code: read it from the environment, wrapped in `secret()`.
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   searchConsole: {
+   *     clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+   *     clientSecret: secret(process.env.GOOGLE_CLIENT_SECRET ?? ""),
+   *   },
+   * });
+   * ```
+   */
+  searchConsole?: { clientId: string; clientSecret: string | Secret<string> };
+}
+
+/** The Google sign-in `options` name, or none; a blank one is refused at boot. */
+function googleClientOf(options: SeoPluginOptions): GoogleClient | undefined {
+  const named = options.searchConsole;
+  if (named === undefined) return undefined;
+  const clientSecret = isSecret(named.clientSecret)
+    ? named.clientSecret.reveal()
+    : named.clientSecret;
+  if (named.clientId.trim() === "" || clientSecret.trim() === "") {
+    throw new Error(
+      "seoPlugin: searchConsole needs both a clientId and a clientSecret"
+    );
+  }
+  return { clientId: named.clientId.trim(), clientSecret };
 }
 
 /**
@@ -360,6 +410,20 @@ function sitemapConfig(
 }
 
 /**
+ * The configured origin, `{ origin }`, where the sitemap is served and a
+ * baseUrl is set; nothing otherwise, so a baseUrl is checked only where the
+ * sitemap, which robots.txt names by it, is served.
+ */
+function configuredOrigin(
+  options: SeoPluginOptions,
+  sitemap: RootFilesConfig["sitemap"]
+): { origin?: string } {
+  return sitemap !== undefined && options.baseUrl !== undefined
+    ? { origin: resolveBaseOrigin(options.baseUrl) }
+    : {};
+}
+
+/**
  * What the site's root files are served with. A configured baseUrl must be an
  * absolute http(s) origin, or every listed address is invalid: checked at
  * construction so a typo fails at boot, and only where the sitemap, which
@@ -372,12 +436,8 @@ function rootFilesConfig(
   codeRoutes: () => readonly CodeRoute[]
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
-  const origin =
-    sitemap !== undefined && options.baseUrl !== undefined
-      ? resolveBaseOrigin(options.baseUrl)
-      : undefined;
   return {
-    ...(origin === undefined ? {} : { origin }),
+    ...configuredOrigin(options, sitemap),
     readRules,
     codeRoutes,
     ...(sitemap === undefined ? {} : { sitemap }),
@@ -462,6 +522,15 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         ? {}
         : { buildDir: options.nextBuildDir }
     );
+  // The site's configured origin, where the sitemap is served and a baseUrl
+  // is set, for every output that names the site's addresses.
+  const siteOrigin = configuredOrigin(
+    options,
+    sitemapConfig(options, sitemapSubset)
+  );
+  const googleClient = googleClientOf(options);
+  // Stops noting changes for IndexNow when the plugin is taken down.
+  let stopIndexNow: (() => Promise<void>) | undefined;
 
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
@@ -506,6 +575,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // worked out by, so the list and the page never disagree.
   const problemChecks = {
     targets,
+    singles: singleTargets,
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -563,7 +633,27 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Every host but the site's production addresses is kept out of search,
     // and redirects answer before the page is served. Only a redirect
     // answers, so the order changes nothing a visitor gets.
-    proxy: [stagingGuard(readRules), redirectsProxyHandler()],
+    // A page's plain-text copy and the IndexNow key, once switched on, are
+    // answered here too, each at its own address only.
+    proxy: [
+      stagingGuard(readRules),
+      redirectsProxyHandler(),
+      plainCopyProxyHandler({
+        readRules,
+        ...siteOrigin,
+        ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
+      }),
+      indexNowKeyProxyHandler({ readRules, ...siteOrigin }),
+    ],
+    // The optional connections' own state, their credentials sealed: core
+    // encrypts each secret path and never returns it to the admin.
+    settings: connectionSettings,
+    // Changed only by whoever manages site-wide SEO, through core's own
+    // settings route as through the plugin's.
+    settingsPermission: MANAGE_SEO_PERMISSION,
+    // The event the address record announces each committed save's
+    // addresses on, which IndexNow takes its notes from.
+    events: [{ name: ADDRESSES_MOVED }],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -583,7 +673,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         structuredData: checkedTypeRules(options.structuredData?.types),
         // The collections whose pages the SEO tab edits, so the tab in the
         // Page Builder's Settings knows a page it has a group to edit.
-        tabCollections: tab.admin === undefined ? [] : [...targets],
+        tabCollections: tab.tabCollections,
       },
       menu: [
         // Shown to everyone in the admin: the list answers each person with
@@ -632,22 +722,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
   };
 
-  // The SEO issues card and its Needs attention lines, one per collection,
-  // all counting the issues in those same collections. Bound to `targets`
-  // rather than to every collection: a collection this plugin never extended
-  // has no `seo` group, so every one of its documents would report the full
-  // set of missing fields and drown the real answer. Each is withheld where it
-  // would have nothing to say (see `widget-card`).
-  const issuesCard = seoIssuesWidget(targets, seoFields);
-  const issuesItems = seoIssuesAttentionItems(targets, seoFields);
-  if (issuesCard || issuesItems.length > 0) {
+  // The SEO issues card and its Needs attention line, counting what the
+  // problem list finds as each person may read it, so the dashboard and the
+  // list never disagree. Withheld where no collection carries SEO (see
+  // `widget-card`).
+  const issues = {
+    collections: targets,
+    problemsFor: problemsForCard(problemChecks),
+  };
+  const issuesCard = seoIssuesWidget(issues);
+  const issuesItem = seoProblemsAttentionItem(issues);
+  if (issuesCard || issuesItem) {
     contributes.dashboard = {
       ...(issuesCard ? { widgets: [issuesCard] } : {}),
-      ...(issuesItems.length > 0 ? { attention: issuesItems } : {}),
+      ...(issuesItem ? { attention: [issuesItem] } : {}),
     };
   }
 
   routes.push(
+    // The Connections tab's reads, and Search Console's sign-in.
+    ...searchConsoleRoutes({ readRules, client: googleClient, ...siteOrigin }),
     ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
@@ -666,10 +760,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     }),
     ...tab.routes,
     // What a Page Builder template's SEO panel reads.
-    seoTemplateRoute({
-      readRules,
-      ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
-    }),
+    seoTemplateRoute({ readRules, baseUrl: options.baseUrl }),
     ...problemRoutes(problemChecks),
     // The Pages and addresses screen's list, and its save of a page with no
     // entry's SEO.
@@ -680,6 +771,19 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         options.baseUrl === undefined
           ? undefined
           : resolveBaseOrigin(options.baseUrl),
+    }),
+    // The bulk edit table, and the import beside it.
+    ...bulkRoutes({
+      targets,
+      readRules,
+      checks: problemChecks,
+      pagePermissions,
+    }),
+    ...importRoutes({
+      targets,
+      readRules,
+      checks: problemChecks,
+      pagePermissions,
     })
   );
 
@@ -728,6 +832,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // it does not, the tab is left out and the site starts as before.
     optionalDependsOn: { [PAGE_BUILDER_PLUGIN]: `>=${PLUGIN_VERSION}` },
     contributes,
+    capabilities: {
+      // IndexNow's shared endpoint and Google's Search Console addresses,
+      // and nothing else.
+      net: { outbound: [INDEXNOW_HOST, ...SEARCH_CONSOLE_HOSTS] },
+      secrets: CONNECTION_SECRETS,
+    },
     init(ctx) {
       // The settings Single's registered name, for readers other plugins call.
       rememberSettingsSingle(ctx);
@@ -746,6 +856,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
       keepCodeRoutes(codeRoutes);
+      // Changed pages noted for IndexNow, told once they settle.
+      stopIndexNow = watchForIndexNow(
+        ctx,
+        { readRules, ...siteOrigin },
+        targets
+      );
+    },
+    async destroy() {
+      // What was noted is still sent: a notice is not lost to a shutdown.
+      const stop = stopIndexNow;
+      stopIndexNow = undefined;
+      await stop?.();
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

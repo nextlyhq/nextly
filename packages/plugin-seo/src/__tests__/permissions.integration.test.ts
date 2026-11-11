@@ -33,7 +33,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, ServiceContainer, text } from "nextly";
+import { defineCollection, defineSingle, ServiceContainer, text } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -249,9 +249,12 @@ describe.each(getConfiguredTestDialects())(
       await as("siteSeo", ["manage-seo", ...SETTINGS, "read-posts"]);
       await as("storesOnly", [...SETTINGS, ...STORES, "read-posts"]);
       await as("manageOnly", ["manage-seo"]);
+      await as("settingsOnly", ["update-settings", "read-settings"]);
       await as("checker", ["check-seo"]);
       await as("media", ["create-media", "read-media"]);
       await as("addsMedia", ["create-media"]);
+      await as("importer", ["manage-seo", ...POST_EDITOR, "edit-seo-posts"]);
+      await as("importerWithoutPageSeo", ["manage-seo", ...POST_EDITOR]);
     }, 120_000);
 
     afterAll(async () => {
@@ -515,6 +518,121 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("bulk edit, where a page's SEO has its own permission", () => {
+      /** The posts' rows as the table reads them for `cookie`, by id. */
+      async function rowsFor(cookie: string) {
+        const read = await route("GET", "/bulk/rows?type=posts", cookie);
+        expect(read.status, JSON.stringify(read.body)).toBe(200);
+        const body = read.body as unknown as {
+          rows: { id: string; rev?: string; editable: boolean }[];
+        };
+        return new Map(body.rows.map(row => [row.id, row]));
+      }
+
+      it("shows the rows read-only, and saves none of them, for someone without it", async () => {
+        const id = await post(t, "bulk-kept");
+        const row = (await rowsFor(people.postEditor!)).get(id);
+        expect(row?.editable).toBe(false);
+        const saved = await route("POST", "/bulk/save", people.postEditor!, {
+          type: "posts",
+          changes: [{ id, rev: row?.rev, title: "Changed without leave" }],
+        });
+        expect(saved.status).toBe(403);
+        expect((await stored(t, id)).metaTitle).toBe("bulk-kept as searched");
+      });
+
+      it("saves the rows of someone holding it", async () => {
+        const id = await post(t, "bulk-changed");
+        const row = (await rowsFor(people.seoEditor!)).get(id);
+        expect(row?.editable).toBe(true);
+        const saved = await route("POST", "/bulk/save", people.seoEditor!, {
+          type: "posts",
+          changes: [{ id, rev: row?.rev, title: "Changed with leave" }],
+        });
+        expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+        expect((await stored(t, id)).metaTitle).toBe("Changed with leave");
+      });
+
+      it("shows a reader the rows, read-only", async () => {
+        const id = await post(t, "bulk-read");
+        expect((await rowsFor(people.reader!)).get(id)?.editable).toBe(false);
+      });
+    });
+
+    describe("imports need manage-seo", () => {
+      const source = { kind: "group", field: "seo", map: {} };
+
+      it("refuses the groups, a dry run and an apply without it", async () => {
+        for (const who of ["postEditor", "seoEditor", "storesOnly"] as const) {
+          expect(
+            (await route("GET", "/import/groups", people[who]!)).status
+          ).toBe(403);
+          expect(
+            (await route("POST", "/import/dry-run", people[who]!, { source }))
+              .status
+          ).toBe(403);
+          expect(
+            (
+              await route("POST", "/import/apply", people[who]!, {
+                source,
+                plan: "x",
+              })
+            ).status
+          ).toBe(403);
+        }
+        expect((await route("GET", "/import/groups", null)).status).toBe(401);
+      });
+
+      it("imports for someone holding it, leaving out pages whose SEO they may not change", async () => {
+        const id = await post(t, "imported");
+        // Its typed title made the same as its automatic one, whatever the
+        // settings earlier cases saved make that.
+        const rows = await route(
+          "GET",
+          "/bulk/rows?type=posts",
+          people.importer!
+        );
+        const automatic = (
+          rows.body as unknown as { rows: { id: string; autoTitle?: string }[] }
+        ).rows.find(row => row.id === id)?.autoTitle;
+        expect(automatic).toBeDefined();
+        await t.nextly.update({
+          collection: "posts",
+          id,
+          data: { seo: { metaTitle: automatic }, _overwrite: true },
+          overrideAccess: true,
+        });
+        // The typed title is the same as the automatic one, so the import
+        // makes it automatic, for someone who may change the page's SEO.
+        const without = await route(
+          "POST",
+          "/import/dry-run",
+          people.importerWithoutPageSeo!,
+          { source }
+        );
+        expect(without.status, JSON.stringify(without.body)).toBe(200);
+        const left = without.body as unknown as {
+          pages: number;
+          warnings: string[];
+        };
+        expect(left.pages).toBe(0);
+        expect(left.warnings.join(" ")).toContain("you may not change");
+
+        const dry = await route("POST", "/import/dry-run", people.importer!, {
+          source,
+        });
+        expect(dry.status, JSON.stringify(dry.body)).toBe(200);
+        const run = dry.body as unknown as { pages: number; plan: string };
+        expect(run.pages).toBeGreaterThan(0);
+        const applied = await route("POST", "/import/apply", people.importer!, {
+          source,
+          plan: run.plan,
+        });
+        expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+        expect((await stored(t, id)).metaTitle).toBe("");
+      });
+    });
+
     describe("the problem list", () => {
       it("answers someone who may read a type SEO is added to, and no one else", async () => {
         expect((await route("GET", "/problems", people.reader!)).status).toBe(
@@ -555,6 +673,60 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("the optional connections need manage-seo", () => {
+      const calls: [Method, string][] = [
+        ["GET", "/connections"],
+        ["POST", "/connections/search-console/connect"],
+        ["GET", "/connections/search-console/callback?state=s&code=c"],
+        ["POST", "/connections/search-console/disconnect"],
+        ["GET", "/connections/search-console/report"],
+      ];
+
+      it.each(calls)(
+        "answers %s %s to someone holding it",
+        async (method, path) => {
+          for (const who of ["siteSeo", "manageOnly"]) {
+            const { status } = await route(method, path, people[who]!);
+            // Past the gate: what is left is the route's own answer, such as no
+            // Google sign-in named or nothing connected.
+            expect([401, 403]).not.toContain(status);
+          }
+        }
+      );
+
+      it.each(calls)(
+        "refuses %s %s to someone without it, whatever else they hold",
+        async (method, path) => {
+          for (const who of ["reader", "storesOnly", "checker", "seoEditor"]) {
+            expect((await route(method, path, people[who]!)).status).toBe(403);
+          }
+        }
+      );
+
+      it.each(calls)(
+        "refuses %s %s to someone signed out",
+        async (method, path) => {
+          expect((await route(method, path, null)).status).toBe(401);
+        }
+      );
+
+      it("keeps the plugin's own settings, where connections are kept, to manage-seo", async () => {
+        const path = `plugins-settings/${PLUGIN}`;
+        const body = { indexNowLast: null };
+        expect(
+          (await request("PATCH", path, people.settingsOnly!, body)).status
+        ).toBe(403);
+        expect(
+          (await request("PATCH", path, people.manageOnly!, body)).status
+        ).toBe(200);
+      });
+
+      it("never answers a credential, even to someone holding it", async () => {
+        const { body } = await route("GET", "/connections", people.siteSeo!);
+        expect(JSON.stringify(body)).not.toMatch(/token|verifier|key/i);
+      });
+    });
+
     describe("share images and the public files", () => {
       it("makes a share image only for someone who may add to and read the media library", async () => {
         expect(
@@ -575,6 +747,21 @@ describe.each(getConfiguredTestDialects())(
           expect((await request("GET", file, null)).status).toBe(200);
         }
       );
+
+      it("serves llms.txt to anyone once it is switched on", async () => {
+        expect((await request("GET", "llms.txt", null)).status).toBe(404);
+        await t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: { _overwrite: true, llmsTxt: true },
+          overrideAccess: true,
+        });
+        expect((await request("GET", "llms.txt", null)).status).toBe(200);
+        await t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: { _overwrite: true, llmsTxt: false },
+          overrideAccess: true,
+        });
+      });
     });
 
     it("hides the admin's site-wide screens behind the plugin's own permissions", () => {
@@ -631,6 +818,90 @@ describe.each(getConfiguredTestDialects())(
             slug.startsWith("edit-seo-")
         );
       expect(slugs.sort()).toEqual(["check-seo", "manage-seo"]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "SEO permissions, the problem list of a Single (%s)",
+  dialect => {
+    let t: TestNextly;
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        dialect,
+        plugins: [
+          seoPlugin({
+            collections: ["posts"],
+            singles: ["home"],
+            baseUrl: "https://acme.example",
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            fields: [text({ name: "title" })],
+            publicAddress: "/",
+          }),
+        ],
+        seedPublic: true,
+      });
+      await t.nextly.users.create({
+        email: "owner@example.com",
+        password: "Password123!",
+        data: { name: "Owner", isActive: true },
+      });
+      await lastCatchUp();
+    }, 60_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("answers someone who may read the Single alone, with its page, and refuses someone who may read neither", async () => {
+      await t.nextly.updateSingle({
+        slug: "home",
+        data: { title: "t".repeat(70), _overwrite: true },
+      });
+      const homeReader = await holding(t, ["read-home"]);
+      const pagesOf = async (cookie: string) => {
+        for (let tries = 0; tries < 100; tries++) {
+          const list = await route("GET", "/problems", cookie);
+          expect(list.status).toBe(200);
+          const problems = itemOf(list.body).problems as {
+            subject: { type?: string };
+          }[];
+          const types = problems.map(problem => problem.subject.type);
+          if (types.includes("single:home")) return types;
+          // The save's check runs after the save: given a moment.
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        throw new Error("the Single's check never finished");
+      };
+      expect(await pagesOf(homeReader)).toContain("single:home");
+      // A reader of posts alone is not shown the Single's page.
+      const postsReader = await holding(t, ["read-posts"]);
+      const posts = await route("GET", "/problems", postsReader);
+      expect(posts.status).toBe(200);
+      expect(
+        (itemOf(posts.body).problems as { subject: { type?: string } }[]).some(
+          problem => problem.subject.type === "single:home"
+        )
+      ).toBe(false);
+      const refused = await route(
+        "GET",
+        "/problems",
+        await holding(t, ["check-seo"])
+      );
+      expect(refused.status).toBe(403);
+      expect(refused.body.problems).toBeUndefined();
     });
   }
 );

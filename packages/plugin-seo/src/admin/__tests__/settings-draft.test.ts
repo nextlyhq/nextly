@@ -39,6 +39,7 @@ const stored = {
   ],
   patterns: { posts: { title: "{Title} | {Site name}" } },
   setupStep: 1,
+  plainTextCopies: true,
   setupDismissed: false,
 };
 
@@ -78,6 +79,9 @@ describe("the form's values, from the stored settings", () => {
       setupDismissed: false,
       hiddenTypes: [],
       structuredData: {},
+      indexNow: false,
+      llmsTxt: false,
+      plainTextCopies: true,
     });
   });
 
@@ -99,6 +103,9 @@ describe("the form's values, from the stored settings", () => {
       setupDismissed: false,
       hiddenTypes: [],
       structuredData: {},
+      indexNow: false,
+      llmsTxt: false,
+      plainTextCopies: false,
     });
   });
 });

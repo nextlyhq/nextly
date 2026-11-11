@@ -39,7 +39,7 @@ const CSS = `
 .nx-seo-rcv-grid thead th b{display:block;color:var(--nx-foreground);font-size:13px}
 .nx-seo-rcv-grid thead th:first-child{width:130px}
 .nx-seo-rcv-grid tbody th{font-weight:600;color:var(--nx-foreground);background:var(--nx-muted)}
-.nx-seo-rcv-grid .nx-seo-mono{font-size:12.5px!important}
+.nx-seo .nx-seo-rcv-grid .nx-seo-mono{font-size:12.5px}
 .nx-seo-rcv-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .nx-seo-rcv-help{display:block;color:var(--nx-muted-foreground);font-size:12.5px}
 .nx-seo-rcv-same{display:inline-flex;align-items:center;gap:5px;color:var(--nx-muted-foreground)}

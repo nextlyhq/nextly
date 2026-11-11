@@ -166,7 +166,7 @@ async function readablePages(
 export function seoTemplateRoute(setup: {
   readRules?: ReadRules;
   /** The origin the plugin was configured with, where it was. */
-  baseUrl?: string;
+  baseUrl?: string | undefined;
 }): {
   method: "POST";
   path: string;

@@ -71,15 +71,15 @@ import { runBoundedDiagnostic } from "./bounded-diagnostic";
  * otherwise take a partial seeding for a whole one.
  */
 export async function seedAllPermissions(): Promise<void> {
-  // A start marks orphans as well as adding: what it reads and writes comes
-  // from the registered services.
-  await seedDeclaredPermissions(
-    {
-      permissionSeedService: getService("permissionSeedService"),
-      config: getService("config"),
-    },
-    { markOrphans: true }
-  );
+  // What a start reads and writes comes from the registered services. It adds
+  // and updates, and marks nothing orphaned: a permission its build no longer
+  // declares leaves only when `nextly migrate` applies the recorded migration
+  // that drops it, so an older or a misconfigured build starting against the
+  // database cannot take a permission away.
+  await seedDeclaredPermissions({
+    permissionSeedService: getService("permissionSeedService"),
+    config: getService("config"),
+  });
 }
 
 /** What seeding the declared permissions reads the declarations from and writes through. */
@@ -94,16 +94,17 @@ interface PermissionSeeding {
  * then grant whatever is new to super_admin: the one implementation a start
  * (`seedAllPermissions`) and `nextly migrate`
  * (`seedPermissionsRolesAndPresets`) share, so the two never add a different
- * set. `markOrphans` is the start's alone: `nextly migrate` adds and never
- * marks a permission orphaned.
+ * set. Neither marks a permission orphaned here: `nextly migrate` does that
+ * as each recorded migration applies, from the permissions its snapshot
+ * declares, never from the configuration a run or a start happens to have.
  *
  * Throws once everything that could be written has been, when a seeder
  * counted a permission it could not write (see `seedAllPermissions`).
  */
-async function seedDeclaredPermissions(
-  { permissionSeedService, config }: PermissionSeeding,
-  options: { markOrphans: boolean }
-): Promise<void> {
+async function seedDeclaredPermissions({
+  permissionSeedService,
+  config,
+}: PermissionSeeding): Promise<void> {
   const systemResult = await permissionSeedService.seedSystemPermissions();
   const collectionResult =
     await permissionSeedService.seedAllCollectionPermissions();
@@ -112,15 +113,6 @@ async function seedDeclaredPermissions(
   const declared = collectCustomPermissions(config, config.plugins ?? []);
   const customResult =
     await permissionSeedService.seedCustomPermissions(declared);
-
-  // Seeding only ever adds. A permission whose package has stopped declaring
-  // it keeps the attribution it had, which is read to decide whether it is a
-  // plugin's — so a declaration that goes away quietly changes what the
-  // presets grant. Marked here, against the same list that was just seeded;
-  // grants are untouched and nothing is deleted.
-  if (options.markOrphans) {
-    await permissionSeedService.markOrphanedPermissions(declared);
-  }
 
   const allNewIds = [
     ...systemResult.newPermissionIds,
@@ -164,8 +156,9 @@ async function seedDeclaredPermissions(
  * and configuration rather than the registered ones, which a command never
  * has: `seedDeclaredPermissions`, `seedRolePresets` and `seedPluginRoles`.
  * Each writes only where it finds a difference, so a database already in step
- * is read and not written. It marks nothing orphaned, and touches no Public
- * role, which a start still makes.
+ * is read and not written. It marks nothing orphaned (the command does that
+ * as each migration applies), and touches no Public role, which a start still
+ * makes.
  *
  * Throws when a permission could not be written, before any role is set: a
  * declared role is made once and never revisited, so made against a partial
@@ -179,13 +172,10 @@ export async function seedPermissionsRolesAndPresets(args: {
   config: PermissionSeeding["config"] & Pick<NextlyServiceConfig, "roles">;
 }): Promise<void> {
   const { adapter, logger, config } = args;
-  await seedDeclaredPermissions(
-    {
-      permissionSeedService: new PermissionSeedService(adapter, logger),
-      config,
-    },
-    { markOrphans: false }
-  );
+  await seedDeclaredPermissions({
+    permissionSeedService: new PermissionSeedService(adapter, logger),
+    config,
+  });
   await seedRolePresets(adapter, logger);
   // A declared role bundling a permission not seeded yet waits for a run that
   // has it, rather than being made without it for good.

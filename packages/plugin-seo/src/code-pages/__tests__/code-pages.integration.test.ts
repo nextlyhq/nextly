@@ -426,6 +426,29 @@ describe.each(getConfiguredTestDialects())(
       expect(locs).not.toContain(`${SITE}/pricing`);
     });
 
+    it("lists in llms.txt exactly the pages built in code the sitemap lists, with the SEO set for them", async () => {
+      const t = await boot();
+      const owner = await personWith(t, "owner", "all");
+      await seoMetadata("/contact");
+      await seoMetadata("/thank-you");
+      await save(owner, typed("/thank-you", { hidden: true }));
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, llmsTxt: true },
+      });
+
+      const response = await createDynamicHandlers().GET(
+        new Request(`${SITE}/admin/api/llms.txt`),
+        { params: Promise.resolve({ params: ["llms.txt"] }) }
+      );
+      const file = await response.text();
+      const links = [...file.matchAll(/^- \[[^\]]*\]\(([^)]*)\)/gm)].map(
+        match => match[1] ?? ""
+      );
+      expect([...links].sort()).toEqual([...(await listed())].sort());
+      expect(links).toContain(`${SITE}/contact`);
+    });
+
     it("leaves an address an entry holds to the entry, hidden from search or not", async () => {
       const t = await boot();
       const owner = await personWith(t, "owner", "all");
