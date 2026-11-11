@@ -3,6 +3,7 @@
 // Used by the Visual Schema Builder's "Save" flow to show what changed before applying.
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 
 // A single field change: what the field was and what it became
 export interface FieldChange {
@@ -27,11 +28,15 @@ export interface FieldDiffResult {
   warnings: string[];
 }
 
-// Compare old and new field definitions and return a structured diff
+// Compare old and new field definitions and return a structured diff. `options.localized` says
+// whether the entity is translated: a translated field's values live in the companion table, so a
+// field moving in or out of translation changes where they are stored.
 export function computeFieldDiff(
   oldFields: FieldDefinition[],
-  newFields: FieldDefinition[]
+  newFields: FieldDefinition[],
+  options: { localized?: boolean } = {}
 ): FieldDiffResult {
+  const entityLocalized = options.localized === true;
   const oldMap = new Map(oldFields.map(f => [f.name, f]));
   const newMap = new Map(newFields.map(f => [f.name, f]));
 
@@ -46,7 +51,7 @@ export function computeFieldDiff(
     const oldField = oldMap.get(name);
     if (!oldField) {
       added.push(newField);
-    } else if (hasFieldChanged(oldField, newField)) {
+    } else if (hasFieldChanged(oldField, newField, entityLocalized)) {
       changed.push({
         name,
         from: oldField.type,
@@ -114,12 +119,20 @@ function getChangeReason(
   return "options_changed";
 }
 
-// Check if a field's definition has changed (type, required, options, etc.)
+// Check if a field's definition has changed (type, required, options, where it is stored, etc.)
 function hasFieldChanged(
   oldField: FieldDefinition,
-  newField: FieldDefinition
+  newField: FieldDefinition,
+  entityLocalized: boolean
 ): boolean {
   if (oldField.type !== newField.type) return true;
+  // Read as resolved, not as stored: a field with no setting takes its type's default, so the
+  // Builder stating that same default moves nothing, while stating the other moves the values.
+  if (
+    isFieldLocalized(oldField, entityLocalized) !==
+    isFieldLocalized(newField, entityLocalized)
+  )
+    return true;
   if (isSet(oldField.required) !== isSet(newField.required)) return true;
   if (isSet(oldField.unique) !== isSet(newField.unique)) return true;
 

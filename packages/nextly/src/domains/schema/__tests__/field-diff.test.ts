@@ -244,4 +244,66 @@ describe("computeFieldDiff", () => {
       }),
     ]);
   });
+
+  describe("in a translated entity", () => {
+    // Where a field's values are stored is decided by the entity, then the field's own setting,
+    // then its type: a text field is translated unless it says otherwise, a number is not.
+    it("finds a change when a field stored without settings is turned translated", () => {
+      const diff = computeFieldDiff(
+        [{ name: "views", type: "number" }],
+        [
+          {
+            name: "views",
+            type: "number",
+            required: false,
+            unique: false,
+            localized: true,
+          },
+        ],
+        { localized: true }
+      );
+
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.changed).toEqual([
+        expect.objectContaining({ name: "views" }),
+      ]);
+    });
+
+    it("finds a change when a text field stored without settings is turned untranslated", () => {
+      const diff = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [{ name: "summary", type: "text", localized: false }],
+        { localized: true }
+      );
+
+      expect(diff.hasChanges).toBe(true);
+    });
+
+    it("finds no change when the Builder states the setting the field already had by default", () => {
+      const diff = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [
+          {
+            name: "summary",
+            type: "text",
+            required: false,
+            unique: false,
+            localized: true,
+          },
+        ],
+        { localized: true }
+      );
+
+      expect(diff.hasChanges).toBe(false);
+    });
+  });
+
+  it("finds no change in a field's translation setting where the entity is not translated", () => {
+    const diff = computeFieldDiff(
+      [{ name: "summary", type: "text" }],
+      [{ name: "summary", type: "text", localized: true }]
+    );
+
+    expect(diff.hasChanges).toBe(false);
+  });
 });

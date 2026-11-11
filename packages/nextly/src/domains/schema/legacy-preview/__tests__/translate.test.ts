@@ -608,4 +608,30 @@ describe("a removal the preview cannot count, and where it counts", () => {
       false
     );
   });
+
+  // Turning translation on for one field moves its values to the companion table, so the save is a
+  // schema change even when the field stored none of the yes-or-no settings the Builder sends.
+  it("reports a field turned translated as a change, though it stored no required, unique or hasMany", async () => {
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [{ name: "views", type: "number" } as FieldDefinition],
+      newFields: [
+        {
+          name: "views",
+          type: "number",
+          required: false,
+          unique: false,
+          localized: true,
+        } as FieldDefinition,
+      ],
+      db: {},
+      dialect: "sqlite",
+      localized: true,
+    });
+
+    expect(result.hasChanges).toBe(true);
+    expect(result.changes.changed).toEqual([
+      expect.objectContaining({ name: "views" }),
+    ]);
+  });
 });

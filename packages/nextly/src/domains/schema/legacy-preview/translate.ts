@@ -82,7 +82,7 @@ export async function translatePipelinePreviewToLegacy(
   const localized = context.localized === true;
 
   // Step 1: legacy field-level diff (pure function).
-  const diff = computeFieldDiff(currentFields, newFields);
+  const diff = computeFieldDiff(currentFields, newFields, { localized });
 
   if (!diff.hasChanges) {
     return {
