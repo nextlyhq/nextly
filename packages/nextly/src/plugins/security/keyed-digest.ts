@@ -217,24 +217,34 @@ function onItsOwn<T>(
 
 /** @experimental `ctx.security.digests` for one plugin. */
 export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
-  // The key never changes once made, so it is read once per process; the
-  // promise is dropped on a failure, so the next call tries again.
-  let key: Promise<Buffer> | undefined;
-  const keyOnce = () => {
+  // The key never changes once made, so it is read once per process; a
+  // failed read is forgotten, so the next call tries again.
+  // The key once read, and the read under way. A call made inside a
+  // transaction is refused until the key has been read, not merely asked
+  // for: one waiting on a read under way from inside a transaction would
+  // wait on a session that, on SQLite, waits for that transaction to end.
+  let ready: Buffer | undefined;
+  let pending: Promise<Buffer> | undefined;
+  const keyOnce = async (): Promise<Buffer> => {
+    if (ready !== undefined) return ready;
     // Never inside the caller's transaction: on SQLite, which shares one
     // connection, a key made there would be undone by a rollback while this
     // process kept using it, and on a pool of one a read beside the
     // transaction would wait for it.
-    if (key === undefined) {
-      assertNoOpenTransaction(options.adapter(), "security.digests first use");
-    }
-    key ??= onItsOwn(options.adapter(), () =>
+    assertNoOpenTransaction(options.adapter(), "security.digests first use");
+    pending ??= onItsOwn(options.adapter(), () =>
       loadKey(options.owner, options.store(), options.secrets())
-    ).catch((error: unknown) => {
-      key = undefined;
-      throw error;
-    });
-    return key;
+    ).then(
+      key => {
+        ready = key;
+        return key;
+      },
+      (error: unknown) => {
+        pending = undefined;
+        throw error;
+      }
+    );
+    return pending;
   };
   return {
     async prepare() {

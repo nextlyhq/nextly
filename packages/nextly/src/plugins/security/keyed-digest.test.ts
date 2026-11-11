@@ -138,6 +138,37 @@ describe("a plugin's keyed digests", () => {
     expect(store.rows.get(digestKeyMetaKey("@acme/forms"))).toBe(stored);
   });
 
+  it("refuse a call inside a transaction while the key is still being read", async () => {
+    // The store's first read waits until released: the key is asked for,
+    // and not yet read, when a call arrives from inside a transaction.
+    const store = memoryStore();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const slow: DigestKeyStore = {
+      ...store,
+      getEntry: async key => {
+        await gate;
+        return store.getEntry(key);
+      },
+    };
+    const helper = digests(slow, [A]);
+    const preparing = helper.prepare();
+
+    flow.inTransaction = true;
+    try {
+      // Refused at once, rather than waiting on a read that, on SQLite,
+      // waits for this caller's transaction to end.
+      await expect(helper.digest("email", "x")).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+      });
+    } finally {
+      flow.inTransaction = false;
+    }
+    release();
+    await preparing;
+    expect(await helper.digest("email", "x")).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("refuse a first use inside a transaction, and work there once prepared", async () => {
     const store = memoryStore();
     const helper = digests(store, [A]);
