@@ -6,10 +6,12 @@
  * The server's first answer is setup-status, held here on a promise the test
  * resolves, so "not answered yet" is a state the test holds open.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { WaitClockContext } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { resetSetupStatusCache } from "@admin/lib/auth/setup-status";
 
 import { Login } from "../index";
@@ -46,6 +48,10 @@ beforeEach(() => {
   post.mockRejectedValue(
     Object.assign(new Error("Invalid email or password."), { status: 401 })
   );
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 const signInButton = () => screen.getByRole("button", { name: /sign in/i });
@@ -131,6 +137,57 @@ describe("signing in before the server has answered", () => {
     const signIns = post.mock.calls.filter(([path]) => path === "/auth/login");
     expect(signIns).toHaveLength(1);
     // The same form, not one drawn afresh: what was typed is still in it.
+    expect(screen.getByRole("textbox", { name: /email/i })).toHaveValue(
+      "ada@example.com"
+    );
+  });
+
+  it("offers Try again on a server that never answers, and sends the held sign-in once after it", async () => {
+    // The sign-in page itself, as a direct visit draws it: the form on its
+    // own, in the admin's query client. Setup-status is held for good; past
+    // 45 s the form offers to ask again, and asking again (an answered ask
+    // this time) releases the held sign-in, once, from the same form.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The page's wait clock, which the admin's layout provides from when the
+    // page was opened.
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <WaitClockContext.Provider value={Date.now()}>
+          <Login />
+        </WaitClockContext.Provider>
+      </QueryClientProvider>
+    );
+    const user = userEvent.setup({
+      advanceTimers: ms => vi.advanceTimersByTime(ms),
+    });
+    await user.type(
+      screen.getByRole("textbox", { name: /email/i }),
+      "ada@example.com"
+    );
+    await user.type(screen.getByPlaceholderText(/password/i), "correct-horse");
+    await user.click(signInButton());
+    expect(
+      screen.queryByRole("button", { name: "Try again" })
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(45_000);
+    });
+    get.mockImplementation((path: string) =>
+      path === "/auth/setup-status"
+        ? Promise.resolve({ isSetup: true })
+        : Promise.resolve({
+            providers: [],
+            challengeViews: {},
+            slots: { beforeForm: [], afterForm: [], branding: [] },
+          })
+    );
+    expect(post).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    const signIns = post.mock.calls.filter(([path]) => path === "/auth/login");
+    expect(signIns).toHaveLength(1);
     expect(screen.getByRole("textbox", { name: /email/i })).toHaveValue(
       "ada@example.com"
     );

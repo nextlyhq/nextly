@@ -22,7 +22,7 @@ import {
 import { restartSessionCheck } from "@admin/hooks/queries/useAuthSession";
 
 /** From here asking again is offered alongside waiting. */
-const OFFER_RETRY_AFTER_MS = 45_000;
+export const OFFER_RETRY_AFTER_MS = 45_000;
 
 /**
  * "Try again" for a session check the server has held this long, below the

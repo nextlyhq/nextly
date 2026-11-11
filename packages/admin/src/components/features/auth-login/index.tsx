@@ -7,6 +7,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
 
+import {
+  OFFER_RETRY_AFTER_MS,
+  SessionStallNotice,
+} from "@admin/components/guards/AdminPending";
 import { ArrowRight, Loader2, Mail } from "@admin/components/icons";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
 import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
@@ -144,6 +148,56 @@ function useSignInWhenServerAnswers(
     held.current = values;
     setHolding(true);
   };
+}
+
+/**
+ * Everything the form does while the server has not answered the page: the
+ * held sign-in, the note under the button, whether the button reads as
+ * unavailable, and whether the wait has gone on long enough to offer asking
+ * again. A server that never answers would hold a pressed Sign in for good,
+ * here as on any page the form is drawn on, so past the wait the frame allows
+ * the form makes the frame's own offer to ask again.
+ */
+function useServerWait(send: (values: SignInValues) => Promise<void>): {
+  signIn: (values: SignInValues) => void;
+  note: string;
+  stalled: boolean;
+  unavailable: true | undefined;
+} {
+  const serverAnswered = useServerAnswered();
+  const note = useConnectingNote(serverAnswered);
+  const stalled = useDelayedReveal(!serverAnswered, OFFER_RETRY_AFTER_MS);
+  const signIn = useSignInWhenServerAnswers(serverAnswered, send);
+  return {
+    signIn,
+    note,
+    stalled,
+    unavailable: serverAnswered ? undefined : true,
+  };
+}
+
+/** The note under the button while the server is awaited, and the offer to ask again. */
+function ServerWaitNote({
+  note,
+  stalled,
+}: {
+  note: string;
+  stalled: boolean;
+}): JSX.Element {
+  return (
+    <>
+      {/* Holds its line from the start, so the note arriving moves nothing
+          below it. */}
+      <p
+        role="status"
+        data-testid="sign-in-connecting"
+        className="-mt-3 min-h-[18px] text-xs text-muted-foreground"
+      >
+        {note}
+      </p>
+      {stalled ? <SessionStallNotice /> : null}
+    </>
+  );
 }
 
 export function Login(): JSX.Element {
@@ -294,9 +348,7 @@ export function Login(): JSX.Element {
 
   // Whether the server has answered this page: until then a sign-in waits,
   // and the form says why.
-  const serverAnswered = useServerAnswered();
-  const connectingNote = useConnectingNote(serverAnswered);
-  const signIn = useSignInWhenServerAnswers(serverAnswered, onSubmit);
+  const wait = useServerWait(onSubmit);
 
   async function handleResendVerification() {
     const email = form.getValues("email");
@@ -419,7 +471,7 @@ export function Login(): JSX.Element {
           <FormProvider {...form}>
             <form
               onSubmit={e => {
-                void form.handleSubmit(signIn)(e);
+                void form.handleSubmit(wait.signIn)(e);
               }}
               className="space-y-6"
             >
@@ -516,7 +568,7 @@ export function Login(): JSX.Element {
                 // Not `disabled` while the server has not answered: a press
                 // is still taken, and the sign-in sent once it can be. It
                 // reads as unavailable meanwhile, to the eye and to a reader.
-                aria-disabled={serverAnswered ? undefined : true}
+                aria-disabled={wait.unavailable}
                 className="w-full h-11 rounded-md shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2 aria-disabled:opacity-50"
               >
                 {isLoading ? (
@@ -528,15 +580,7 @@ export function Login(): JSX.Element {
                   </>
                 )}
               </Button>
-              {/* Holds its line from the start, so the note arriving moves
-                  nothing below it. */}
-              <p
-                role="status"
-                data-testid="sign-in-connecting"
-                className="-mt-3 min-h-[18px] text-xs text-muted-foreground"
-              >
-                {connectingNote}
-              </p>
+              <ServerWaitNote note={wait.note} stalled={wait.stalled} />
             </form>
           </FormProvider>
           {authUi.slots.afterForm.length > 0 && (
