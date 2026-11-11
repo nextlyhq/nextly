@@ -107,4 +107,32 @@ describe("signing in before the server has answered", () => {
     );
     expect(post).not.toHaveBeenCalled();
   });
+
+  it("sends the held sign-in when a hung server is asked again, keeping what was typed", async () => {
+    // The first ask is held for good, as a server that never answers it; a
+    // retry drops it (resetting setup-status, as asking the session again
+    // does) and asks afresh, and that ask is answered.
+    render(<Login />);
+    const user = await fillIn();
+    await user.click(signInButton());
+    get.mockImplementation((path: string) =>
+      path === "/auth/setup-status"
+        ? Promise.resolve({ isSetup: true })
+        : Promise.resolve({
+            providers: [],
+            challengeViews: {},
+            slots: { beforeForm: [], afterForm: [], branding: [] },
+          })
+    );
+
+    resetSetupStatusCache();
+
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    const signIns = post.mock.calls.filter(([path]) => path === "/auth/login");
+    expect(signIns).toHaveLength(1);
+    // The same form, not one drawn afresh: what was typed is still in it.
+    expect(screen.getByRole("textbox", { name: /email/i })).toHaveValue(
+      "ada@example.com"
+    );
+  });
 });

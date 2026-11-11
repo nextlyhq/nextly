@@ -4,7 +4,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { useEffect, useState } from "react";
 
-import { AdminUnavailable } from "@admin/components/guards/AdminPending";
+import {
+  AdminUnavailable,
+  SessionStallNotice,
+} from "@admin/components/guards/AdminPending";
 import { ROUTES } from "@admin/constants/routes";
 import {
   restartSessionCheck,
@@ -156,17 +159,58 @@ export function PrivateRoute({
     [signInShown]
   );
 
+  return (
+    <GuardScreenView
+      screen={screen}
+      draw={children}
+      signIn={signIn}
+      checking={!settled}
+      onRetry={retry}
+      destination={redirect?.destination ?? "login"}
+    />
+  );
+}
+
+/**
+ * Draws the screen `guardScreen` chose. Its own component, so the guard
+ * decides and this draws, each simple enough to read whole.
+ */
+function GuardScreenView({
+  screen,
+  draw,
+  signIn,
+  checking,
+  onRetry,
+  destination,
+}: {
+  screen: GuardScreen;
+  draw: PrivateRouteProps["children"];
+  signIn: React.ReactNode;
+  /** Whether the session check is still out. */
+  checking: boolean;
+  onRetry: () => void;
+  /** Where a settled answer that is not a session sends the visitor. */
+  destination: string;
+}): React.JSX.Element {
   switch (screen) {
     case "unavailable":
-      return <AdminUnavailable onRetry={retry} />;
+      return <AdminUnavailable onRetry={onRetry} />;
     case "screen":
-      return <>{children(true)}</>;
+      return <>{draw(true)}</>;
     case "frame":
-      return <>{children(false)}</>;
+      return <>{draw(false)}</>;
     case "sign-in":
-      return <>{signIn}</>;
+      // While the session check is out, the same offer to ask again the
+      // frame makes: a server that holds the check for good would otherwise
+      // leave a pressed Sign in waiting for ever. Asking again keeps the form
+      // and what was typed in it.
+      return (
+        <>
+          {signIn}
+          {checking ? <SessionStallNotice /> : null}
+        </>
+      );
     case "redirecting":
-      // `redirect` is set whenever a settled answer is not a confirmed session.
-      return <RedirectNotice destination={redirect?.destination ?? "login"} />;
+      return <RedirectNotice destination={destination} />;
   }
 }

@@ -8,7 +8,7 @@
  * that pins the message is also pinning where the browser is being sent.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTES } from "@admin/constants/routes";
@@ -235,5 +235,26 @@ describe("PrivateRoute", () => {
 
     expect(screen.getByText("frame, no data")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("offers Try again on the sign-in form when the server holds the session check", () => {
+    // A browser with no record waits on the sign-in form, where a check the
+    // server never answers would leave a pressed Sign in waiting for good.
+    vi.useFakeTimers();
+    mockUseAuthSession.mockReturnValue(pendingSession());
+
+    renderGuard();
+    expect(screen.getByText("sign-in form")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Try again" })
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(45_000);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(mockRestart).toHaveBeenCalledTimes(1);
+    // Still the same form: asking again draws nothing afresh.
+    expect(screen.getByText("sign-in form")).toBeInTheDocument();
   });
 });
