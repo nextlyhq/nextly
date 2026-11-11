@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * The card as the settings panel's values would draw it, at the top of the panel: the same
- * renderer the dashboard uses, so what the reader sees is what Done keeps. Shown, not used: its
+ * The card as the settings drawer's values would draw it, at the top of the drawer: the same
+ * renderer the dashboard uses, so what the reader sees is what Save keeps, at the width the
+ * drawer holds. Shown, not used: its
  * links and controls are out of reach, since the card they would act on is the one behind the
  * panel.
  *
@@ -34,6 +35,7 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { observeSize } from "../frame/observe-size";
 import { tierForWidth } from "../frame/tier";
+import { widthPercent } from "../sizes";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { useSettingsPreview, type ShownAnswer } from "./useSettingsPreview";
@@ -229,7 +231,18 @@ export function SettingsPreview(props: {
       aria-label={`Preview of ${preview.definition.title}`}
       className="flex flex-col gap-2"
     >
-      <p className="text-xs font-medium text-muted-foreground">Preview</p>
+      {/* Headed as the drawer's sections are, with the share of the row it is drawn at. */}
+      <div className="flex flex-col gap-0.5">
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground">
+          Preview
+        </p>
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="settings-preview-width"
+        >
+          At {widthPercent(size.w)} of the dashboard
+        </p>
+      </div>
       <div
         ref={roomRef}
         className="relative w-full overflow-hidden"

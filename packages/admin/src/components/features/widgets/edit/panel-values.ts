@@ -17,11 +17,16 @@ import {
   startingValue,
 } from "./content-settings";
 
-/** What Done keeps: the settings, as `toStoredConfig` builds them, and the card's own title. */
+/**
+ * What Save keeps: the settings, as `toStoredConfig` builds them, the card's own title, and its
+ * width where the drawer offers one.
+ */
 export interface PanelKept {
   config: Record<string, unknown>;
   /** The title the reader gave the card, trimmed; `""` titles it automatically. */
   ownTitle: string;
+  /** The card's width in columns, from the drawer's Size; absent where it offers none. */
+  w?: number;
 }
 
 /**

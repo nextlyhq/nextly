@@ -51,6 +51,7 @@ import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CellDrag } from "./DraggableWidgetCell";
+import { isEntriesSetting } from "./drawer-choices";
 import type { CellSettingsWrite } from "./useCardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import type { ArrangedWidget } from "./useDashboardArrangement";
@@ -305,7 +306,7 @@ export function answerSizeOf(
   sources: ArrangedGridProps["writes"]["sources"]
 ): AnswerSize | undefined {
   if (asked === undefined) return undefined;
-  if (!(widget.settings ?? []).some(setting => setting.name === "limit")) {
+  if (!(widget.settings ?? []).some(isEntriesSetting)) {
     return undefined;
   }
   return { items: settingsAsAsked(widget, asked.settings, sources).limit };
