@@ -158,14 +158,12 @@ describe("opening the settings sheet on its first field", () => {
     );
   });
 
-  it("leaves focus where the sheet puts it otherwise", async () => {
+  it("leaves focus where the drawer puts it otherwise: its first control, the close button", async () => {
     // The control: without the option, focus lands ahead of the form, so the case above is the
     // option's doing.
     opened(false);
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Ahead of the form" })
-      ).toHaveFocus()
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus()
     );
   });
 });

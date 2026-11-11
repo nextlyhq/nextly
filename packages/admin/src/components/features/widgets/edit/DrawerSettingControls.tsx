@@ -17,7 +17,7 @@ import {
   type AnyWidgetSetting,
   type WidgetSetting,
 } from "nextly/config";
-import { useId, type JSX, type ReactNode } from "react";
+import { Fragment, useId, type JSX, type ReactNode } from "react";
 import { useController, useFormContext } from "react-hook-form";
 
 import { cn } from "@admin/lib/utils";
@@ -51,7 +51,8 @@ export function SettingDescription({
             {part.text}
           </code>
         ) : (
-          <span key={index}>{part.text}</span>
+          // Bare text, so the spaces around each example are kept where its words are read.
+          <Fragment key={index}>{part.text}</Fragment>
         )
       )}
     </p>

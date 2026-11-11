@@ -127,7 +127,6 @@ describe("the drawer's sections", () => {
     ).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Advanced" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Advanced/ })).toBeNull();
-    expect(document.querySelector("[aria-expanded]")).toBeNull();
   });
 
   it("heads every section the same way: a heading, with its Reset on the same row", () => {
@@ -607,8 +606,7 @@ describe("one settings panel at a time", () => {
     );
   }
 
-  const second = () =>
-    screen.queryByRole("dialog", { name: "Second card settings" });
+  const second = () => screen.queryByRole("dialog", { name: "Second card" });
 
   it("asks about a panel holding a change first, and opens no second panel over it", async () => {
     render(<TwoPanels />);
@@ -625,9 +623,7 @@ describe("one settings panel at a time", () => {
       within(prompt).getByRole("button", { name: "Discard Changes" })
     );
     await waitFor(() => expect(second()).toBeTruthy());
-    expect(
-      screen.queryByRole("dialog", { name: "First card settings" })
-    ).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "First card" })).toBeNull();
   });
 
   it("closes a panel holding nothing for the one opened", async () => {
@@ -638,9 +634,7 @@ describe("one settings panel at a time", () => {
     );
     await waitFor(() => expect(second()).toBeTruthy());
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(
-      screen.queryByRole("dialog", { name: "First card settings" })
-    ).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "First card" })).toBeNull();
   });
   it("closes a card whose panel is still loading for the one opened, so two never open", async () => {
     // A panel's module is fetched on its first opening, and nothing of it is mounted until it

@@ -307,7 +307,10 @@ async function chooseWidth(
   name: string
 ) {
   await user.click(within(widths).getByRole("radio", { name }));
-  await user.click(screen.getByRole("button", { name: "Save" }));
+  // The drawer's own Save, not the customise bar's.
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", { name: "Save" })
+  );
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 }
 
