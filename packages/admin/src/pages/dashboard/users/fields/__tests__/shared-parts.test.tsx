@@ -446,4 +446,30 @@ describe("user custom fields on the shared picker and panel", () => {
     await user.type(label, "{Backspace}");
     expect(screen.queryByText("You have unsaved changes")).toBeNull();
   });
+
+  it("shows a stored default its type cannot show, and lets it be cleared", async () => {
+    const onSubmit = vi.fn();
+    render(
+      <UserFieldForm
+        mode="edit"
+        userField={{
+          ...TEAM,
+          type: "number",
+          options: null,
+          defaultValue: "about ten",
+        }}
+        isPending={false}
+        onSubmit={onSubmit}
+      />
+    );
+    expect(screen.getByText("about ten")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Clear stored default" })
+    );
+    await user.click(screen.getByRole("button", { name: "Update Field" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultValue: "" })
+    );
+  });
 });

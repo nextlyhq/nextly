@@ -10,7 +10,11 @@ import {
   DEFAULT_VALUES,
   type UserFieldFormValues,
 } from "../schemas/userFieldSchema";
-import { panelFieldToValues, valuesToPanelField } from "../user-field-panel";
+import {
+  afterPanelEdit,
+  panelFieldToValues,
+  valuesToPanelField,
+} from "../user-field-panel";
 
 const base: UserFieldFormValues = {
   ...DEFAULT_VALUES,
@@ -131,4 +135,21 @@ describe("a user field in the panel and back", () => {
       ).toBe(stored);
     }
   );
+
+  it("lets the default control clear a default it could not show", () => {
+    const values = { ...base, type: "number", defaultValue: "about ten" };
+    const shown = valuesToPanelField(values);
+    // The person types a number, then clears it again.
+    const typed = afterPanelEdit(shown, { ...shown, defaultValue: 5 });
+    const { defaultValue: _five, ...withoutDefault } = typed;
+    const cleared = afterPanelEdit(typed, withoutDefault);
+    expect(panelFieldToValues(cleared, values).defaultValue).toBe("");
+    // A relabel alone still keeps it.
+    expect(
+      panelFieldToValues(
+        afterPanelEdit(shown, { ...shown, label: "Renamed" }),
+        values
+      ).defaultValue
+    ).toBe("about ten");
+  });
 });

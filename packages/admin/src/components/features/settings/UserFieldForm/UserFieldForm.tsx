@@ -39,7 +39,11 @@ import {
   LENGTH_BOUND_TYPES,
   type UserFieldFormValues,
 } from "./schemas/userFieldSchema";
-import { panelFieldToValues, valuesToPanelField } from "./user-field-panel";
+import {
+  afterPanelEdit,
+  panelFieldToValues,
+  valuesToPanelField,
+} from "./user-field-panel";
 import { userFieldName, usersFieldSurface } from "./users-field-surface";
 
 // ============================================================
@@ -255,7 +259,9 @@ export function UserFieldForm({
             saved={isEdit}
             readOnly={isLocked}
             onChange={(next: FieldSettingsField) =>
-              change(panelFieldToValues(next, values))
+              change(
+                panelFieldToValues(afterPanelEdit(panelField, next), values)
+              )
             }
             // Before the field exists its type is still a choice to remake.
             actions={

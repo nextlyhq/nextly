@@ -37,6 +37,20 @@ const UNSHOWN_DEFAULT: unique symbol = Symbol("user field: unshown default");
 
 type PanelField = FieldSettingsField & { [UNSHOWN_DEFAULT]?: string };
 
+/** The stored default the panel's editor cannot show, if there is one. */
+export function unshownDefault(field: FieldSettingsField): string | undefined {
+  return (field as PanelField)[UNSHOWN_DEFAULT];
+}
+
+/** The field with that stored default let go, as clearing it says. */
+export function withoutUnshownDefault(
+  field: FieldSettingsField
+): FieldSettingsField {
+  const next: PanelField = { ...field };
+  delete next[UNSHOWN_DEFAULT];
+  return next;
+}
+
 /**
  * The panel's default for the stored text, in the shape its editor takes, or
  * undefined when the editor has no shape for it.
@@ -146,4 +160,19 @@ export function panelFieldToValues(
     description: field.admin?.description ?? "",
     isActive: previous.isActive,
   };
+}
+
+/**
+ * The panel's next field after an edit. Once the default control itself has
+ * set or cleared a default, a stored default it could not show is no longer
+ * the field's: kept, it would come back after the person cleared it.
+ */
+export function afterPanelEdit(
+  previous: FieldSettingsField,
+  next: FieldSettingsField
+): FieldSettingsField {
+  if (Object.is(previous.defaultValue, next.defaultValue)) return next;
+  const edited: PanelField = { ...next };
+  delete edited[UNSHOWN_DEFAULT];
+  return edited;
 }

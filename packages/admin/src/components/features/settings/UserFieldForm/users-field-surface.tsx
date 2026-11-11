@@ -17,7 +17,7 @@
  * - the name and type fixed once the field exists, since its stored values
  *   are kept under them.
  */
-import { Input, Label, Switch } from "@nextlyhq/ui";
+import { Button, Input, Label, Switch } from "@nextlyhq/ui";
 import { useCallback, useId, useState, type JSX } from "react";
 
 import {
@@ -33,6 +33,7 @@ import {
   generateFieldName,
   LENGTH_BOUND_TYPES,
 } from "./schemas/userFieldSchema";
+import { unshownDefault, withoutUnshownDefault } from "./user-field-panel";
 
 /**
  * The name a label gives a new user field: lowercase letters, digits and
@@ -120,14 +121,45 @@ function userChoices(saved: boolean) {
   };
 }
 
-/** A default typed as text, for a type the panel's default editor skips. */
-function TextDefault({
+/**
+ * A stored default the panel's own editor cannot show (text in a number
+ * field, "yes" for a checkbox), shown as it is with a way to clear it: kept
+ * through other edits, it would otherwise be one nobody could remove.
+ */
+function UnshownDefault({
   field,
   readOnly,
   onChange,
 }: FieldSettingsSurfaceControlProps): JSX.Element | null {
+  const stored = unshownDefault(field);
+  if (stored === undefined) return null;
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-sm text-muted-foreground">
+        Stored default: <code>{stored}</code>, which this field&apos;s type
+        cannot show.
+      </p>
+      {!readOnly && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => onChange(withoutUnshownDefault(field))}
+        >
+          Clear stored default
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** A default typed as text, for a type the panel's default editor skips. */
+function TextDefault(
+  props: FieldSettingsSurfaceControlProps
+): JSX.Element | null {
+  const { field, readOnly, onChange } = props;
   const id = useId();
-  if (PANEL_DEFAULT_TYPES.has(field.type)) return null;
+  if (PANEL_DEFAULT_TYPES.has(field.type)) return <UnshownDefault {...props} />;
   const value =
     typeof field.defaultValue === "string" ? field.defaultValue : "";
   return (
