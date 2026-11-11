@@ -433,4 +433,31 @@ describe("saving", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText("Finish setting up SEO.")).toBeTruthy();
   });
+
+  it("keeps the form, and what was typed, when a later read of the settings fails", () => {
+    serving({ _rev: "1", siteName: "Acme", setupStep: 3 });
+    const { rerender } = render(<SeoSettingsPage />);
+    fireEvent.click(screen.getByRole("tab", { name: "General" }));
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+
+    const refetch = vi.fn(async () => ({ data: stored }));
+    vi.mocked(useSingleDocument).mockImplementation(
+      () =>
+        ({
+          data: stored,
+          error: new Error("The network is down."),
+          refetch,
+        }) as unknown as ReturnType<typeof useSingleDocument>
+    );
+    rerender(<SeoSettingsPage />);
+
+    expect((screen.getByLabelText("Site name") as HTMLInputElement).value).toBe(
+      "Acme Ltd"
+    );
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be read again"
+    );
+  });
 });

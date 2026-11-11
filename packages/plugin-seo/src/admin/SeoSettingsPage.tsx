@@ -85,31 +85,37 @@ export function SeoSettingsPage(): JSX.Element {
 
   const failed = where.error ?? settings.error;
   let body: JSX.Element;
-  if (failed) {
+  if (settings.data !== undefined && slug !== undefined && !types.pending) {
+    // Once read, the form stays: a later read that fails is said above it,
+    // never by replacing it and the edits it holds.
+    body = (
+      <>
+        {failed ? (
+          <p className="nx-seo-alert" role="alert">
+            The SEO settings could not be read again. What is on screen is kept.{" "}
+            {apiErrorMessage(failed)}
+          </p>
+        ) : null}
+        <SettingsScreen
+          slug={slug}
+          stored={settings.data}
+          types={types.data?.items ?? []}
+          typesFailed={types.error !== null}
+          reread={async () => (await settings.refetch()).data}
+        />
+      </>
+    );
+  } else if (failed) {
     body = (
       <p className="nx-seo-alert" role="alert">
         The SEO settings could not be read. {apiErrorMessage(failed)}
       </p>
     );
-  } else if (
-    slug === undefined ||
-    settings.data === undefined ||
-    types.pending
-  ) {
+  } else {
     body = (
       <p className="nx-seo-state" role="status">
         Loading the SEO settings…
       </p>
-    );
-  } else {
-    body = (
-      <SettingsScreen
-        slug={slug}
-        stored={settings.data}
-        types={types.data?.items ?? []}
-        typesFailed={types.error !== null}
-        reread={async () => (await settings.refetch()).data}
-      />
     );
   }
   return (
