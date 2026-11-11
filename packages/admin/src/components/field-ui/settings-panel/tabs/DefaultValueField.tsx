@@ -3,6 +3,7 @@
 // component keeps GeneralTab readable and the per-type renderer matrix
 // in one place.
 import {
+  Button,
   Input,
   Label,
   Select,
@@ -29,9 +30,6 @@ const TEXT_INPUT_TYPES = new Set([
 ]);
 
 const PICKER_TYPES = new Set(["select", "radio"]);
-
-/** The choice that stands for "no default" in a choice field's picker. */
-const NO_DEFAULT = "__no_default__";
 
 const SUPPORTED_TYPES = new Set([
   ...TEXT_INPUT_TYPES,
@@ -344,9 +342,9 @@ function StaleDefaultWarning({ field }: { field: BuilderField }) {
 }
 
 /**
- * A choice field's default: one of its options, or none. Radix Select keeps
- * the empty string for clearing its own selection and has no value for
- * "none", so a reserved one stands for it, offered once a default is set.
+ * A choice field's default: one of its options, or none. "Clear default" sits
+ * beside the list rather than in it: any value reserved inside the list for
+ * "none" is one an option could also have.
  */
 function ChoiceDefault({
   field,
@@ -366,24 +364,35 @@ function ChoiceDefault({
   const opts = (field.options ?? []).filter(o => o.value !== "");
   const chosen = typeof value === "string" ? value : undefined;
   return (
-    <Select
-      value={chosen}
-      disabled={readOnly}
-      onValueChange={v => onChange(v === NO_DEFAULT ? null : v)}
-    >
-      <SelectTrigger id={inputId}>
-        <SelectValue placeholder="None" />
-      </SelectTrigger>
-      <SelectContent>
-        {chosen !== undefined && (
-          <SelectItem value={NO_DEFAULT}>No default</SelectItem>
-        )}
-        {opts.map(o => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="flex items-center gap-2">
+      <Select
+        // "" is Radix Select's own "nothing chosen", which shows the
+        // placeholder again once the default is cleared.
+        value={chosen ?? ""}
+        disabled={readOnly}
+        onValueChange={v => onChange(v)}
+      >
+        <SelectTrigger id={inputId}>
+          <SelectValue placeholder="None" />
+        </SelectTrigger>
+        <SelectContent>
+          {opts.map(o => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {chosen !== undefined && !readOnly && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => onChange(null)}
+        >
+          Clear default
+        </Button>
+      )}
+    </div>
   );
 }

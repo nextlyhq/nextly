@@ -202,6 +202,24 @@ describe("user custom fields on the shared picker and panel", () => {
     );
   });
 
+  it("offers no Add and add another, adding one field at a time", async () => {
+    const { user } = createForm();
+    await user.click(
+      screen.getByRole("button", { name: "Choose a field type" })
+    );
+    const picker = screen.getByRole("dialog");
+    await user.type(
+      within(picker).getByRole("combobox", { name: "Search field types" }),
+      "text{Enter}"
+    );
+    expect(
+      within(picker).getByRole("button", { name: "Add field" })
+    ).toBeInTheDocument();
+    expect(
+      within(picker).queryByRole("button", { name: "Add and add another" })
+    ).toBeNull();
+  });
+
   it("saves on Enter in a text box", async () => {
     const { user, onSubmit } = createForm();
     await user.click(
@@ -228,8 +246,7 @@ describe("user custom fields on the shared picker and panel", () => {
       />
     );
     const user = userEvent.setup();
-    await user.click(screen.getByRole("combobox", { name: "Default value" }));
-    await user.click(screen.getByRole("option", { name: "No default" }));
+    await user.click(screen.getByRole("button", { name: "Clear default" }));
     await user.click(screen.getByRole("button", { name: "Update Field" }));
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ defaultValue: "" })

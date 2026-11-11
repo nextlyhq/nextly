@@ -337,6 +337,8 @@ export function UserFieldForm({
           config={pickerConfig}
           title={values ? "Change the field's type" : undefined}
           initialLabel={values?.label}
+          // One field per page: there is no "another" to add here.
+          offerAddAnother={false}
           onCancel={() => setPicking(false)}
           onAdd={choice => pick(choice)}
         />
