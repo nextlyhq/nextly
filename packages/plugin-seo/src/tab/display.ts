@@ -5,6 +5,7 @@
  *
  * @module tab/display
  */
+import { SHARE_IMAGE, shareImageSizeProblem } from "../social/contract";
 
 /**
  * An address as a person reads it: a path from the site's root is put under
@@ -64,4 +65,51 @@ export function fileNameOf(url: string): string {
   } catch {
     return name;
   }
+}
+
+/** `width × height`, as the tab writes a size. */
+const sizeText = (width: number, height: number) => `${width} × ${height}`;
+
+/** How a share image fits the card networks show, as the preview says it. */
+export interface ShareImageFit {
+  text: string;
+  /** Whether every network shows it in full. */
+  fits: boolean;
+  /** Whether the card cuts it at the top and bottom. */
+  cutTopAndBottom: boolean;
+}
+
+/**
+ * How a picture fits the shared card: whether it shows in full is the share
+ * image check's own answer; where it does not, the sentence says why, from
+ * its shape against the card's. Nothing where its size is not known.
+ */
+export function shareImageFit(
+  image: { width?: number; height?: number } | undefined
+): ShareImageFit | undefined {
+  const width = image?.width;
+  const height = image?.height;
+  if (width === undefined || height === undefined || height <= 0) {
+    return undefined;
+  }
+  const size = sizeText(width, height);
+  const fix = "Fix it under Advanced, Share image.";
+  const shape = width / height;
+  const cutTopAndBottom = shape < SHARE_IMAGE.minRatio;
+  if (shareImageSizeProblem({ width, height }) === undefined) {
+    const exact = width === SHARE_IMAGE.width && height === SHARE_IMAGE.height;
+    return {
+      text: `The image is ${size}, ${exact ? "the" : "a"} size every network shows in full.`,
+      fits: true,
+      cutTopAndBottom,
+    };
+  }
+  let why = `is smaller than the ${sizeText(SHARE_IMAGE.width, SHARE_IMAGE.height)} networks show in full`;
+  if (cutTopAndBottom) why = "is cut at the top and bottom to fit";
+  else if (shape > SHARE_IMAGE.maxRatio) why = "is cut at the sides to fit";
+  return {
+    text: `This ${size} image ${why}. ${fix}`,
+    fits: false,
+    cutTopAndBottom,
+  };
 }
