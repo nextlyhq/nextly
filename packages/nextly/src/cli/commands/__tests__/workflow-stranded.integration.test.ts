@@ -7,7 +7,7 @@
  *
  * Driven through the two functions the commands run, `strandedReviewStates` and
  * `moveStrandedReviewStates`, on the workflows the configuration registers, as the commands hand
- * them.
+ * them, and once through the table resolver the commands install (`installStrandedRunResolver`).
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -27,6 +27,7 @@ import {
   stateOf,
   workflowEvents,
 } from "../../../domains/workflows/__tests__/helpers/step-harness";
+import { installStrandedRunResolver } from "../workflow-stranded";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -69,6 +70,26 @@ const desk = defineWorkflow({
   ],
 });
 const HASH = workflowDefinitionHash(desk);
+
+/** Another workflow, with no stage named `legal` and nothing stranded. */
+const memo = defineWorkflow({
+  slug: "memo",
+  label: "Memo",
+  stages: [
+    { name: "open", label: "Open" },
+    { name: "done", label: "Done", allowsPublish: true },
+  ],
+  steps: [
+    {
+      name: "close",
+      label: "Close",
+      kind: "approve",
+      from: "open",
+      to: "done",
+      primary: true,
+    },
+  ],
+});
 const drafts = { status: true, versions: { drafts: true } } as const;
 
 let t: TestNextly | undefined;
@@ -99,6 +120,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: "pages",
         ...drafts,
         workflow: desk,
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: "notes",
+        ...drafts,
+        workflow: memo,
         fields: [text({ name: "title" })],
       }),
     ],
@@ -201,6 +228,47 @@ describe.each(getConfiguredTestDialects())(
           state => state.entryId
         )
       ).toEqual([page]);
+    });
+
+    it("moves through the tables the command itself registers, with no boot to have registered them", async () => {
+      await boot(dialect);
+      const { page } = await strandedInstall();
+      const workflows = [...registeredWorkflows()];
+      // The resolver the command installs, in place of the one this boot registered.
+      await installStrandedRunResolver(app().adapter, workflows);
+
+      const moved = await moveStrandedReviewStates(app().adapter, {
+        workflows,
+        collection: "pages",
+        to: "draft",
+        as: "ann@example.test",
+        comment: "Back to draft.",
+      });
+
+      expect(moved.map(each => each.document.entryId)).toEqual([page]);
+      expect(await stateOf(app(), partOf("pages", page, null))).toMatchObject({
+        stage: "draft",
+      });
+    });
+
+    it("judges the stage only by the workflows whose parts it moves", async () => {
+      await boot(dialect);
+      const { both, one, page } = await strandedInstall();
+
+      // `memo` has no `legal`, but nothing of it is stranded, so it has no say in where they go.
+      const moved = await moveStrandedReviewStates(app().adapter, {
+        workflows: registeredWorkflows(),
+        to: "legal",
+        as: "ann@example.test",
+        comment: "Back to legal.",
+      });
+
+      expect(moved.map(each => each.document.entryId).sort()).toEqual(
+        [both, one, page].sort()
+      );
+      expect(await stateOf(app(), partOf("pages", page, null))).toMatchObject({
+        stage: "legal",
+      });
     });
 
     it("refuses an unknown or deactivated person, a stage the workflow lacks or one that allows publishing, and no comment, moving nothing", async () => {

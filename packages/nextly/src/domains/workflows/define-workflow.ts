@@ -601,6 +601,13 @@ function checkWhole(problems: Problems, workflow: Workflow): void {
       stage: workflow.onEdit.to,
       why: "an edited part would stay publishable without review (fields an edit may change freely go in `onEdit.exemptFields`)",
     },
+    // A deploy moves a removed stage's parts here, withdrawing their approvals as it does.
+    ...Object.entries(workflow.removedStages).map(([removed, stage]) => ({
+      path: `removedStages.${removed}`,
+      code: "workflow_removed_stage_to_publishable",
+      stage,
+      why: "a removed stage's parts would become publishable without an approval",
+    })),
   ];
   for (const { path, code, stage: name, why } of unapproved) {
     const stage = workflow.stages.find(each => each.name === name);
