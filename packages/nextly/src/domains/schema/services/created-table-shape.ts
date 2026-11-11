@@ -19,6 +19,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import type { TableSpec } from "../pipeline/diff/types";
@@ -72,6 +73,22 @@ export async function columnsTheCreateLeftOut(
         problem: "otherType",
         requestedType: requestedType.get(op.columnName) ?? op.toType,
         liveType: op.fromType,
+      });
+    }
+  }
+  // The comparison leaves out the columns a step of `nextly migrate` owns (`_revision`,
+  // `_changed_*`), so a push never fights that step over them. A create asks for them all the same,
+  // and a write expects them, so each one requested is looked for by name.
+  const liveNames = new Set(live.columns.map(column => column.name));
+  for (const column of requested.columns) {
+    if (
+      isNextlyOwnedDocumentColumn(column.name) &&
+      !liveNames.has(column.name)
+    ) {
+      leftOut.push({
+        column: column.name,
+        problem: "missing",
+        requestedType: column.type,
       });
     }
   }

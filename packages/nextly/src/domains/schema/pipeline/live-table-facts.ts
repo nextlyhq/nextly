@@ -121,6 +121,30 @@ export async function tableHasRows(
 }
 
 /**
+ * The views (materialized ones included) that read the table, on PostgreSQL: objects a
+ * `DROP TABLE ... CASCADE` removes along with it without being asked about, since they hold no
+ * foreign key `readReferencingTables` would find. MySQL and SQLite leave a view standing over a
+ * dropped table rather than removing it, so they answer none.
+ */
+export async function readDependentViews(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<string[]> {
+  if (dialect !== "postgresql") return [];
+  const rows = await rowsOf<{ view_name: string }>(
+    db,
+    dialect,
+    sql`SELECT DISTINCT v.relname AS view_name
+        FROM pg_depend d
+        JOIN pg_rewrite r ON r.oid = d.objid
+        JOIN pg_class v ON v.oid = r.ev_class
+        WHERE d.refobjid = to_regclass(${tableName}) AND v.oid <> d.refobjid`
+  );
+  return rows.map(row => row.view_name);
+}
+
+/**
  * How many rows the table holds: what a refusal to build over a standing table names, so whoever
  * deals with it can tell a stray test row from real content. `COUNT(*)` reads the whole table, so
  * it is asked only of a table already known to hold rows (`tableHasRows`).

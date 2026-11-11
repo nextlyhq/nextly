@@ -81,8 +81,15 @@ for (const dialect of getConfiguredTestDialects()) {
       return "'x'";
     }
 
-    /** Put `count` rows in a leftover table, each giving every column it requires a value. */
-    async function holdRows(table: string, count: number): Promise<void> {
+    /**
+     * Put `count` rows in a table, each giving every column it requires a value; `given` sets
+     * some columns to values of its own (a component row's parent, say).
+     */
+    async function holdRows(
+      table: string,
+      count: number,
+      given: Record<string, string> = {}
+    ): Promise<void> {
       const q = dialect === "mysql" ? "`" : '"';
       const columns =
         (
@@ -97,7 +104,11 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       for (let i = 0; i < count; i++) {
         const values = required.map(column =>
-          column.name === "id" ? `'leftover-${i}'` : valueFor(column.type)
+          column.name === "id"
+            ? `'leftover-${i}'`
+            : column.name in given
+              ? `'${given[column.name]}'`
+              : valueFor(column.type)
         );
         await app().adapter.executeQuery(
           `INSERT INTO ${q}${table}${q} (${required.map(c => `${q}${c.name}${q}`).join(", ")}) VALUES (${values.join(", ")})`
@@ -198,6 +209,23 @@ for (const dialect of getConfiguredTestDialects()) {
 
     // Two creates of one name at once: the schema lock lets one in and refuses the other until it
     // is done, and a create of a name already taken is refused by name, lock or no lock.
+    // A Single's field-group rows live in the shared field-group tables, naming its table as their
+    // parent: a leftover whose content is there is not wreckage, however empty its own table.
+    it("refuses a Single create over an empty leftover whose field-group rows name it, deleting nothing", async () => {
+      await leftoverSingleTable("single_lsfg");
+      await createFieldGroup("lsfgchip");
+      await holdRows("comp_lsfgchip", 1, { _parent_table: "single_lsfg" });
+
+      const refused = await refusalOf(createSingle("lsfg"));
+
+      expect(refused).toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining('"comp_lsfgchip" (1 row)'),
+      });
+      expect(await rowCount("comp_lsfgchip")).toBe(1);
+      expect(await liveColumns("single_lsfg")).toContain("stale");
+    });
+
     it("lets one of two field-group creates of one name at once stand, and refuses the other", async () => {
       const outcomes = await Promise.allSettled([
         createFieldGroup("lftwice"),

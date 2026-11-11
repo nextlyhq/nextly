@@ -511,6 +511,9 @@ export class SingleMetadataService {
     const { junctionTablesOf } = await import(
       "../../schema/services/field-column-descriptor"
     );
+    const { countEntityComponentRows } = await import(
+      "../../field-groups/services/teardown-entity-field-group-data"
+    );
     await clearLeftoverStorage({
       adapter,
       kind: "single",
@@ -520,6 +523,10 @@ export class SingleMetadataService {
       // this request's fields give them.
       makesJunctionTables: true,
       plannedJunctions: junctionTablesOf(input.tableName, input.fields ?? []),
+      // Its field-group rows live in the shared field-group tables, naming its table as their
+      // parent, and `dropSingleStorage` deletes them: they count as the leftover's content.
+      ownedElsewhere: () =>
+        countEntityComponentRows({ adapter, parentTable: input.tableName }),
       logger: this.logger,
       dropFamily: () =>
         this.dropSingleStorage(input.slug, input.tableName, adapter),

@@ -260,14 +260,13 @@ export class FieldGroupMetadataService {
         // makes no junction table: anything referencing its leftover belongs to something else.
         makesJunctionTables: false,
         logger: this.logger,
-        // The translations table references the main one, so it goes first.
+        // The translations table references the main one, so it goes first. No CASCADE: anything
+        // else depending on these tables has already refused the create rather than go with them.
         dropFamily: async () => {
-          const cascade = adapter.getCapabilities().dialect === "postgresql";
           await adapter.dropTable(`${input.tableName}_locales`, {
             ifExists: true,
-            cascade,
           });
-          await adapter.dropTable(input.tableName, { ifExists: true, cascade });
+          await adapter.dropTable(input.tableName, { ifExists: true });
         },
       });
     }

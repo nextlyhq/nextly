@@ -77,4 +77,20 @@ describe("columnsTheCreateLeftOut", () => {
       )
     ).toEqual(["id", "title", "views"]);
   });
+
+  // The comparison a push makes leaves out the columns a step of `nextly migrate` owns; a create
+  // asks for them all the same.
+  it("names a requested column a step of nextly migrate owns that the table does not hold", async () => {
+    const withRevision: TableSpec = {
+      ...requested,
+      columns: [
+        ...requested.columns,
+        { name: "_revision", type: "integer", nullable: false },
+      ],
+    };
+    liveTable(requested.columns);
+    expect(await columnsTheCreateLeftOut({}, "sqlite", withRevision)).toEqual([
+      { column: "_revision", problem: "missing", requestedType: "integer" },
+    ]);
+  });
 });

@@ -31,6 +31,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import {
   countTableRows,
+  readDependentViews,
   readReferencingTables,
   tableHasRows,
 } from "../pipeline/live-table-facts";
@@ -72,11 +73,18 @@ export interface ClearLeftoverStorageArgs {
    * names the create will build are looked at directly.
    */
   plannedJunctions?: readonly string[];
+  /**
+   * The rows that belong to the leftover in tables outside its family, which `dropFamily` would
+   * take with it: a Single's field-group rows, in the shared field-group tables, that name its
+   * table as their parent. Counted as the family's own rows are, so a leftover whose content
+   * lives there is refused rather than cleared.
+   */
+  ownedElsewhere?: () => Promise<OccupiedTable[]>;
   logger: { info(message: string): void };
 }
 
 /** A table holding rows, and how many. */
-interface OccupiedTable {
+export interface OccupiedTable {
   table: string;
   rows: number;
 }
@@ -163,25 +171,35 @@ export async function clearLeftoverStorage(
     referencing
   );
   if (others.length > 0) throw referencedRefusal(args, others);
+  // A table standing where the create will build a junction is dropped only when it is one this
+  // kind generates for this table; a name given by `options.junctionTable`, or any table not keyed
+  // as such a junction, may be someone else's, and refuses the create.
+  const planned = await sortReferencing(args, db, dialect, plannedStanding);
+  if (planned.others.length > 0) {
+    throw takenRefusal(args, planned.others);
+  }
 
   // A planned junction still referencing the main table was found above as well; once each.
-  const ownJunctions = [...new Set([...junctions, ...plannedStanding])];
+  const ownJunctions = [...new Set([...junctions, ...planned.junctions])];
   const family = [
     ...(mainStands ? [tableName] : []),
     ...(companionStands ? [companion] : []),
     ...ownJunctions,
   ];
-  const occupied = await occupiedAmong(db, dialect, family);
+  const occupied = [
+    ...(await occupiedAmong(db, dialect, family)),
+    ...((await args.ownedElsewhere?.()) ?? []),
+  ];
   if (occupied.length > 0) throw occupiedRefusal(args, occupied);
+  // A view reading one of these tables would go with it, unasked, under PostgreSQL's CASCADE.
+  const views = await viewsOver(db, dialect, family);
+  if (views.length > 0) throw takenRefusal(args, views);
 
   args.logger.info(
     `Dropping empty unregistered tables ${family.map(table => `"${table}"`).join(", ")} before creating the ${KIND_NAMES[args.kind]} "${args.slug}"`
   );
   for (const table of ownJunctions) {
-    await adapter.dropTable(table, {
-      ifExists: true,
-      cascade: dialect === "postgresql",
-    });
+    await adapter.dropTable(table, { ifExists: true });
   }
   await args.dropFamily();
 }
@@ -214,6 +232,45 @@ async function sortReferencing(
     (own ? junctions : others).push(table);
   }
   return { junctions, others };
+}
+
+/** The views reading any of `tables`. */
+async function viewsOver(
+  db: unknown,
+  dialect: SupportedDialect,
+  tables: readonly string[]
+): Promise<string[]> {
+  const views = new Set<string>();
+  for (const table of tables) {
+    for (const view of await readDependentViews(db, dialect, table)) {
+      views.add(view);
+    }
+  }
+  return [...views];
+}
+
+/** The refusal of a create where objects stand that nothing registered owns and it would remove. */
+function takenRefusal(
+  args: ClearLeftoverStorageArgs,
+  objects: readonly string[]
+): NextlyError {
+  const { kind, slug, tableName } = args;
+  const named = objects.map(object => `"${object}"`).join(", ");
+  return NextlyError.conflict({
+    reason: "state",
+    message:
+      `Creating the ${KIND_NAMES[kind]} "${slug}" was refused: ${named} ` +
+      `${objects.length === 1 ? "stands" : "stand"} where it would build, or ` +
+      `${objects.length === 1 ? "reads" : "read"} what it would replace, and nothing registered ` +
+      "owns it. Drop or rename it, then retry the create.",
+    logContext: {
+      reason: "create-objects-taken",
+      kind,
+      slug,
+      tableName,
+      objects,
+    },
+  });
 }
 
 /** The refusal of a create whose leftover other tables reference. */

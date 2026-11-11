@@ -12,6 +12,8 @@ const live = {
   rows: new Map<string, number>(),
   referencing: [] as string[],
   columns: new Map<string, string[]>(),
+  views: new Map<string, string[]>(),
+  elsewhere: [] as { table: string; rows: number }[],
 };
 
 vi.mock("../../pipeline/live-table-facts", () => ({
@@ -24,6 +26,10 @@ vi.mock("../../pipeline/live-table-facts", () => ({
       live.rows.get(table) ?? 0
   ),
   readReferencingTables: vi.fn(async () => live.referencing),
+  readDependentViews: vi.fn(
+    async (_db: unknown, _dialect: unknown, table: string) =>
+      live.views.get(table) ?? []
+  ),
 }));
 
 vi.mock("../../pipeline/diff/introspect-live", () => ({
@@ -67,6 +73,7 @@ function clear(
     tableName,
     makesJunctionTables: kind === "single",
     plannedJunctions,
+    ownedElsewhere: async () => live.elsewhere,
     logger: { info: () => {} },
     dropFamily: async () => {
       dropped.push(`family:${tableName}`);
@@ -79,6 +86,8 @@ beforeEach(() => {
   live.rows = new Map();
   live.referencing = [];
   live.columns = new Map();
+  live.views = new Map();
+  live.elsewhere = [];
   dropped.length = 0;
 });
 
@@ -163,6 +172,7 @@ describe("clearLeftoverStorage", () => {
   // themselves: one can stand with nothing referencing anything, where the create will build it.
   it("drops an empty junction the create will build when its main table is gone", async () => {
     live.tables = new Set(["dc_posts_single_home_picks"]);
+    live.columns.set("dc_posts_single_home_picks", ["id", "single_home_id"]);
 
     await clear("single", "single_home", ["dc_posts_single_home_picks"]);
 
@@ -174,6 +184,7 @@ describe("clearLeftoverStorage", () => {
 
   it("refuses over a junction the create will build that holds rows, its main table gone", async () => {
     live.tables = new Set(["dc_posts_single_home_picks"]);
+    live.columns.set("dc_posts_single_home_picks", ["id", "single_home_id"]);
     live.rows.set("dc_posts_single_home_picks", 4);
 
     await expect(
@@ -182,6 +193,39 @@ describe("clearLeftoverStorage", () => {
       publicMessage: expect.stringContaining(
         '"dc_posts_single_home_picks" (4 rows)'
       ),
+    });
+    expect(dropped).toEqual([]);
+  });
+
+  it("refuses, dropping nothing, when the leftover's rows live in tables outside its family", async () => {
+    live.tables = new Set(["single_home"]);
+    live.elsewhere = [{ table: "comp_chip", rows: 2 }];
+
+    await expect(clear("single", "single_home")).rejects.toMatchObject({
+      publicMessage: expect.stringContaining('"comp_chip" (2 rows)'),
+    });
+    expect(dropped).toEqual([]);
+  });
+
+  it("refuses an empty table standing where the create would build a junction it names itself", async () => {
+    // `options.junctionTable` names it: nothing says it is this Single's.
+    live.tables = new Set(["home_links"]);
+    live.columns.set("home_links", ["id", "post_id"]);
+
+    await expect(
+      clear("single", "single_home", ["home_links"])
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining('"home_links" stands'),
+    });
+    expect(dropped).toEqual([]);
+  });
+
+  it("refuses, dropping nothing, when a view reads an empty leftover", async () => {
+    live.tables = new Set(["comp_card"]);
+    live.views.set("comp_card", ["card_report"]);
+
+    await expect(clear("fieldGroup", "comp_card")).rejects.toMatchObject({
+      publicMessage: expect.stringContaining('"card_report"'),
     });
     expect(dropped).toEqual([]);
   });
