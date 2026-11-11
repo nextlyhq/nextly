@@ -180,9 +180,13 @@ function LineRuns({
           const column = fromColumn;
           fromColumn += width;
           return (
+            // The changed run is marked by a line in the status's text
+            // colour, not a fill: the syntax colours inside it are held to
+            // their contrast on the row's surface, and a stronger fill under
+            // them would drop them below it.
             <del
               key={index}
-              className="rounded-sm bg-danger-border"
+              className="line-through decoration-danger-text decoration-2"
             >
               <Painted text={segment.text} spans={before} column={column} />
             </del>
@@ -194,7 +198,7 @@ function LineRuns({
           return (
             <ins
               key={index}
-              className="rounded-sm no-underline bg-success-border"
+              className="underline decoration-success-text decoration-2 underline-offset-2"
             >
               <Painted text={segment.text} spans={after} column={column} />
             </ins>
