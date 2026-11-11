@@ -6,7 +6,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { CardMenu, type CardMenuProps } from "../CardMenu";
+import { CardMenu, removeLabelFor, type CardMenuProps } from "../CardMenu";
 
 /** Resizable from 3 by 2 up to 8 by 4. */
 const BOUNDS = {
@@ -74,6 +74,19 @@ describe("a card's menu at rest", () => {
     // No confirmation of any kind: Undo is the notice's.
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("calls Remove Hide setup on the setup card, and it removes the card as Remove does", async () => {
+    expect(removeLabelFor("core/setup")).toBe("Hide setup");
+    expect(removeLabelFor("core/note")).toBeUndefined();
+    const onRemove = vi.fn();
+    draw({ onRemove, removeLabel: removeLabelFor("core/setup") });
+    const { user, menu } = await open();
+    expect(itemNames(menu)).toEqual(["Hide setup"]);
+    await user.click(
+      within(menu).getByRole("menuitem", { name: "Hide setup" })
+    );
+    expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
   it("offers only the sizes the widget's bounds allow, and changes the size by them", async () => {
