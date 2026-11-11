@@ -426,6 +426,48 @@ describe("defineWorkflow", () => {
       ]);
     });
 
+    // A deploy moves the parts of a stage that is gone to a stage the definition names, by
+    // `removedStages` or by a stage's `renamedFrom`: each destination is judged alike.
+    describe.each([
+      {
+        kind: "removedStages",
+        /** `input` with the gone stage `legal`'s parts sent to `target`. */
+        send: (input: WorkflowInput, target: string): WorkflowInput => ({
+          ...input,
+          removedStages: { legal: target },
+        }),
+        path: () => "removedStages.legal",
+        publishableWhy: "a removed stage's parts would become publishable",
+      },
+      {
+        kind: "renamedFrom",
+        send: (input: WorkflowInput, target: string): WorkflowInput => ({
+          ...input,
+          stages: input.stages.map(stage =>
+            stage.name === target ? { ...stage, renamedFrom: "legal" } : stage
+          ),
+        }),
+        path: (index: number) => `stages[${index}].renamedFrom`,
+        publishableWhy: "the parts of `legal` would become publishable",
+      },
+    ])("a deploy's destination, by $kind", ({ send, path, publishableWhy }) => {
+      it("is refused where it allows publishing", () => {
+        expect(problemsOf(send(base(), "approved"))).toEqual([
+          `${path(2)}: \`approved\` allows publishing, so ${publishableWhy} without an approval; name a stage before review.`,
+        ]);
+        // A stage before review is accepted.
+        expect(problemsOf(send(base(), "inReview"))).toEqual([]);
+      });
+
+      it("is refused where no path leads from it to publishing", () => {
+        const input = base();
+        input.stages = [...input.stages, { name: "limbo", label: "Limbo" }];
+        expect(problemsOf(send(input, "limbo"))).toEqual([
+          `stages[3]: \`limbo\` can be reached (from \`${path(3)}\`), but no path of steps leads from it to a stage that allows publishing.`,
+        ]);
+      });
+    });
+
     it("refuses mapping a stage that still exists as removed", () => {
       expect(
         problemsOf({ ...base(), removedStages: { drafting: "inReview" } })
