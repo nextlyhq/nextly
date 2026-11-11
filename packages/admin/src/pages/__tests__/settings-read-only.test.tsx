@@ -121,9 +121,11 @@ describe("General settings", () => {
   });
 });
 
+// The user fields pages also ask read-users (the Users page that reaches them
+// asks it), so each role here holds it beside the settings grants under test.
 describe("User Fields", () => {
   it("offers nothing to change to a role that may only read settings", async () => {
-    holding("read-settings");
+    holding("read-settings", "read-users");
     render(<UserFieldsPage />);
     expect(screen.getAllByText("company").length).toBeGreaterThan(0);
     expect(screen.queryByText("Add Field")).not.toBeInTheDocument();
@@ -138,6 +140,7 @@ describe("User Fields", () => {
   it("offers adding, reordering and the field's menu to a role holding every settings permission", async () => {
     // The control: read, create, update and delete on settings offer it all.
     holding(
+      "read-users",
       "read-settings",
       "create-settings",
       "update-settings",
@@ -157,7 +160,7 @@ describe("User Fields", () => {
 
 describe("the edit pages", () => {
   it("shows a user field with nothing to save to a role that may only read settings", () => {
-    holding("read-settings");
+    holding("read-settings", "read-users");
     render(<EditUserFieldPage />);
     expect(screen.getByDisplayValue("Company")).toBeDisabled();
     expect(
@@ -166,7 +169,7 @@ describe("the edit pages", () => {
   });
 
   it("offers a user field's save to a role that may update settings", () => {
-    holding("read-settings", "update-settings");
+    holding("read-settings", "update-settings", "read-users");
     render(<EditUserFieldPage />);
     expect(screen.getByDisplayValue("Company")).toBeEnabled();
     expect(
@@ -196,7 +199,7 @@ describe("the create pages", () => {
 
     it(`offers ${what}'s form to a role that may read and create settings`, () => {
       // The control: the same page with read as well.
-      holding("read-settings", "create-settings");
+      holding("read-settings", "create-settings", "read-users");
       render(<Page />);
       expect(screen.getByRole("button", { name: save })).toBeInTheDocument();
     });

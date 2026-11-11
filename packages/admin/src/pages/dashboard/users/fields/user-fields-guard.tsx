@@ -13,7 +13,7 @@ import type { JSX, ReactNode } from "react";
 import { PermissionGuard } from "@admin/components/guards/PermissionGuard";
 
 /** The grant the Users page asks, which the user fields pages ask as well. */
-export const USER_FIELDS_ALSO_REQUIRE = "read-users";
+const USER_FIELDS_ALSO_REQUIRE = "read-users";
 
 export function UserFieldsGuard({
   children,
