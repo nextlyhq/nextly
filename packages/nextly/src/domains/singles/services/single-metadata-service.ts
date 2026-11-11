@@ -513,6 +513,8 @@ export class SingleMetadataService {
       kind: "single",
       slug: input.slug,
       tableName: input.tableName,
+      // A Single's many-to-many fields keep their links in junction tables of its own.
+      makesJunctionTables: true,
       logger: this.logger,
       dropFamily: () =>
         this.dropSingleStorage(input.slug, input.tableName, adapter),

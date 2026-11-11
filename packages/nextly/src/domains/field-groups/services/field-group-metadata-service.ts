@@ -256,6 +256,9 @@ export class FieldGroupMetadataService {
         kind: "fieldGroup",
         slug: input.slug,
         tableName: input.tableName,
+        // A component row keeps a many-to-many as a list of its own, so a field group's create
+        // makes no junction table: anything referencing its leftover belongs to something else.
+        makesJunctionTables: false,
         logger: this.logger,
         // The translations table references the main one, so it goes first.
         dropFamily: async () => {
@@ -1140,8 +1143,14 @@ export class FieldGroupMetadataService {
   private async assertTableUnowned(
     input: CreateFieldGroupInput
   ): Promise<void> {
-    const owner = (await this.registry.getAllComponents()).find(
-      existing => existing.tableName === input.tableName
+    // A field group's tables are its main table and its `_locales` translations table, which a
+    // localization creates under exactly that name. Two field groups must not share either: one
+    // whose main table is another's translations table (`foo-locales` beside `foo`) would clear or
+    // adopt that table as its own, and the other would lose its translations.
+    const family = (table: string) => [table, `${table}_locales`];
+    const wanted = new Set(family(input.tableName));
+    const owner = (await this.registry.getAllComponents()).find(existing =>
+      family(existing.tableName).some(name => wanted.has(name))
     );
     if (!owner) return;
 

@@ -139,6 +139,8 @@ function adapterDouble(
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
     executeQuery,
+    // Recorded so a refusal can be shown to have dropped nothing.
+    dropTable: vi.fn(async (_table: string) => {}),
     // Before the create's own DDL, its table is not there, so the leftover probe finds nothing to
     // clear; after it, the supplied answer governs the verification these tests inject.
     tableExists: vi.fn(async (name: string) => {
@@ -232,6 +234,50 @@ describe("a field-group create records its outcome rather than raising it", () =
     // rebound the existing field group's storage to this request's fields.
     expect(entityStatements(adapter)).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A field group's tables are its main table and its `_locales` translations table. A create that
+ * would share one with another field group is refused before anything runs, since building it
+ * would clear or adopt a table that belongs to the other. An address reading as another's
+ * translations table is refused by the address rule itself; a field group stored before that rule
+ * could still hold one, and creating the field group it reads as is refused by name.
+ */
+describe("a field-group create sharing a table with another's family", () => {
+  it("is refused by the address rule when its main table would be another's translations table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero", tableName: "comp_hero" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        slug: "hero-locales",
+        tableName: "comp_hero_locales",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
+  });
+
+  it("is refused by name when its translations table is another's main table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero_locales_legacy", tableName: "comp_hero_locales" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup(INPUT)
+    ).rejects.toMatchObject({
+      code: "DUPLICATE",
+      publicMessage: expect.stringContaining('"hero"'),
+    });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
   });
 });
 
