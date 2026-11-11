@@ -44,6 +44,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { toCliError } from "../../errors/from-thrown";
+import { formatCliError } from "../../errors/render";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
@@ -175,26 +177,34 @@ async function migrateCreate(
 
 /**
  * `nextly migrate --non-interactive`, with `--accept-data-loss=<consent>` when
- * given, over `config`: the exit code (undefined when it succeeded) and what
- * it said.
+ * given, over `config`: whether it was refused, and the refusal as the CLI
+ * prints it (`formatCliError`), after what the run said before it. The run
+ * throws its refusal (`throwOnFailure`) instead of exiting, so the test reads
+ * the error the command would have ended with.
  */
 async function migrate(
   config: unknown,
   consent?: string
-): Promise<{ code: number | undefined; said: string }> {
+): Promise<{ refused: boolean; said: string }> {
   loaded.config = config;
   const { context, said } = command();
   setNonInteractive(true);
-  const code = await exiting(() =>
-    runMigrate(
+  try {
+    await runMigrate(
       {
         cwd: dir,
+        throwOnFailure: true,
         ...(consent === undefined ? {} : { acceptDataLoss: consent }),
       },
       context
-    )
-  ).finally(() => setNonInteractive(false));
-  return { code, said: said.join("\n") };
+    );
+    return { refused: false, said: said.join("\n") };
+  } catch (error) {
+    said.push(formatCliError(toCliError(error)));
+    return { refused: true, said: said.join("\n") };
+  } finally {
+    setNonInteractive(false);
+  }
 }
 
 /** Whether the ledger records `file` applied. */
@@ -203,6 +213,17 @@ function applied(dialect: TestDialect, file: string): Promise<boolean> {
     (instance!.adapter as unknown as DrizzleAdapter).getDrizzle(),
     dialect
   ).isFileApplied(file);
+}
+
+/**
+ * Every attempt the ledger records for `file`, applied or not: a file that
+ * fails part-way records a failed attempt, one refused before it runs none.
+ */
+function attempts(dialect: TestDialect, file: string): Promise<unknown[]> {
+  return new SchemaEventsRepository(
+    (instance!.adapter as unknown as DrizzleAdapter).getDrizzle(),
+    dialect
+  ).findFileApplies(file);
 }
 
 const q = (dialect: TestDialect, name: string): string =>
@@ -255,7 +276,8 @@ describe.each(getConfiguredTestDialects())(
     beforeEach(async () => {
       instance = await boot(dialect);
       await migrateCreate(posts({ name: "subtitle" }), "create_posts");
-      expect((await migrate(posts({ name: "subtitle" }))).code).toBeUndefined();
+      const created = await migrate(posts({ name: "subtitle" }));
+      expect(created.refused, created.said).toBe(false);
     });
 
     it("a field made required over rows that all hold a value: MySQL asks consent for that column, the others none", async () => {
@@ -268,7 +290,9 @@ describe.each(getConfiguredTestDialects())(
 
       if (dialect === "mysql") {
         const refused = await migrate(config);
-        expect(refused.code, refused.said).toBeDefined();
+        expect(refused.refused, refused.said).toBe(true);
+        expect(refused.said).toContain("(DATA_LOSS_CONSENT_REQUIRED)");
+        expect(refused.said).toContain(`- column ${TABLE}.subtitle`);
         expect(refused.said).toContain(
           `--accept-data-loss=${TABLE}.subtitle`
         );
@@ -276,14 +300,16 @@ describe.each(getConfiguredTestDialects())(
         // The consent naming the column covers the run; consent to another
         // column of the same table would not.
         const other = await migrate(config, `${TABLE}.title`);
-        expect(other.code, other.said).toBeDefined();
+        expect(other.refused, other.said).toBe(true);
+        expect(other.said).toContain("(DATA_LOSS_CONSENT_NOT_COVERED)");
+        expect(other.said).toContain(`- column ${TABLE}.subtitle`);
         expect(await applied(dialect, file)).toBe(false);
 
         const run = await migrate(config, `${TABLE}.subtitle`);
-        expect(run.code, run.said).toBeUndefined();
+        expect(run.refused, run.said).toBe(false);
       } else {
         const run = await migrate(config);
-        expect(run.code, run.said).toBeUndefined();
+        expect(run.refused, run.said).toBe(false);
       }
 
       expect(await applied(dialect, file)).toBe(true);
@@ -307,10 +333,14 @@ describe.each(getConfiguredTestDialects())(
       // With the column's consent given, so that what stops the run is the
       // NULL row and not the consent.
       const refused = await migrate(config, `${TABLE}.subtitle`);
-      expect(refused.code, refused.said).toBeDefined();
-      expect(refused.said).toMatch(/subtitle/);
-      expect(refused.said).toMatch(/\b1\b/);
-      expect(await applied(dialect, file)).toBe(false);
+      expect(refused.refused, refused.said).toBe(true);
+      expect(refused.said).toContain("(REQUIRED_COLUMN_HAS_NULLS)");
+      expect(refused.said).toContain(
+        `Table '${TABLE}': column 'subtitle' cannot become required while 1 row holds no value in it`
+      );
+      // Refused before it ran, not failed part-way: no attempt is recorded,
+      // where a server refusing the ALTER mid-file would leave a failed one.
+      expect(await attempts(dialect, file)).toEqual([]);
       // Nothing ran: the NULL is still there, no server blanked it, and the
       // column still takes one.
       expect(await values(dialect, "subtitle")).toEqual({ r1: "one", r2: null });
@@ -326,7 +356,7 @@ describe.each(getConfiguredTestDialects())(
       const file = await migrateCreate(config, "rename_subtitle", true);
 
       const run = await migrate(config);
-      expect(run.code, run.said).toBeUndefined();
+      expect(run.refused, run.said).toBe(false);
       expect(await applied(dialect, file)).toBe(true);
       expect(await values(dialect, "strapline")).toEqual({
         r1: "one",
