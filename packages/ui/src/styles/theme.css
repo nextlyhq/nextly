@@ -190,6 +190,10 @@
    * so each can be solved for its own job. The ink that lands on it is
    * `-foreground`, which is white in light mode and black in dark. */
   --color-destructive-solid: var(--nx-destructive-solid);
+  /* The solid button's hover, one step deeper than the resting fill: its
+   * label holds 5.92:1 light and 5.67:1 dark, where a deeper step drops it
+   * under 4.5:1. Named, so no caller draws it from a numbered shade. */
+  --color-destructive-hover: color-mix(in srgb, var(--nx-destructive), black 10%);
   --color-destructive-foreground: var(--nx-destructive-foreground);
 
   --color-success: var(--nx-success);

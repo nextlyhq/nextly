@@ -227,6 +227,9 @@ const uiPreset: UiPreset = {
           DEFAULT: "var(--nx-destructive)",
           // Saturated fill for solid buttons, distinct from the text-tuned base.
           solid: "var(--nx-destructive-solid)",
+          // The solid button's hover: one step deeper, which keeps its label
+          // at 4.5:1 in both modes. Named, so no caller reaches for a shade.
+          hover: "color-mix(in srgb, var(--nx-destructive), black 10%)",
           foreground: "var(--nx-destructive-foreground)",
           ...tintScale("--nx-destructive"),
         },
