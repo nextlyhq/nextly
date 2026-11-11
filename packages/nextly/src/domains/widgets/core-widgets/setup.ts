@@ -10,8 +10,9 @@
  * - Only a super-admin is told it exists: its id is in `SUPER_ADMIN_WIDGET_IDS`,
  *   which the dashboard's audience reads (`widgetAudience`), so nobody else is
  *   placed it, offered it or handed it.
- * - `shows` leaves it out for an API key, and for a reader who dismissed it or
- *   was already told "You're all set", so nothing is fetched for them.
+ * - `shows` leaves it out for an API key, and for a reader already told
+ *   "You're all set", so nothing is fetched for them. Hiding it is removing
+ *   it from the layout, which Add widget undoes.
  * - `load` answers the steps with the reader's skips, and whether every step
  *   is done; that last answer is said once and
  *   recorded, so the next load leaves the card out.
@@ -130,6 +131,9 @@ export const setupWidget = defineWidget({
   shows: async ({ services }) => setupReads().shownTo(services),
   load: async ({ services, now }) => setupReads().dataFor(services, now),
   view: { component: "core#Setup" },
+  // Loads as a list's rows, as tall as a checklist of steps, so the card does
+  // not grow under the cards below it when its steps arrive.
+  skeleton: "list",
   // Never empty: `shows` decides whether the card is there, and while it is
   // it always has something to say, "could not check setup" included.
   isEmpty: () => false,

@@ -119,10 +119,16 @@ export interface FieldGroupInstanceVisit {
   /** The name of the field holding the instance, at its own level. */
   field: string;
   /**
-   * Whether the instance sits inside a container's value (a group, a repeater
-   * row, or another instance) rather than directly on the document. One that
-   * sits directly on the document is stored in its field group's own table; one
-   * inside a container is stored inline, in that container's column.
+   * Whether that field holds one instance of one field group, which its save replaces in place
+   * whatever id the instance is sent with; a list or a zone matches its instances by id.
+   */
+  single: boolean;
+  /**
+   * Whether the instance sits inside a container's value (a group or a repeater
+   * row, or anything held in one) rather than in a field-group field of the
+   * document or of a stored instance. One in such a field is stored in its field
+   * group's own table, at any depth; one inside a container is stored inline, in
+   * that container's column.
    */
   inline: boolean;
   /**
@@ -242,15 +248,20 @@ export async function forEachFieldGroupInstance(
         instance,
         slug,
         field: nameOf(field) ?? "",
+        single:
+          (field as { repeatable?: unknown }).repeatable !== true &&
+          extractFieldGroupReferences(field).many === undefined,
         inline,
         outer,
       });
       const inner = componentFields.get(slug);
       if (inner) {
+        // The instance's own fields are stored as it is: a field group placed directly in a stored
+        // instance is a row of its own, and one in an inline instance is inline with it.
         await walkLevel(
           instance,
           inner,
-          true,
+          inline,
           new WeakSet(),
           inline ? outer : instance
         );

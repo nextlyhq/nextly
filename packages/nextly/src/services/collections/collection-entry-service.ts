@@ -330,7 +330,7 @@ export class CollectionEntryService extends BaseService {
       hookExemptRead?: HookExemptRead;
     } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
       Parameters<CollectionQueryService["listEntries"]>[0],
-      "sort" | "offset" | "unknownSort" | "hiddenFields"
+      "sort" | "offset" | "unknownSort" | "hiddenFields" | "countUpTo"
     >
   ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (

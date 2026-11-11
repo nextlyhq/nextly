@@ -313,6 +313,7 @@ export default function SingleBuilderEditPage({
     <BuilderPageLayout
       config={SINGLE_BUILDER_CONFIG}
       builder={builder}
+      entitySlug={entitySlug}
       name={settings.singularName || slug}
       locked={isLocked}
       configPath={single?.configPath}

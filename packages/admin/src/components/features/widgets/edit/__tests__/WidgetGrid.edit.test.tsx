@@ -33,11 +33,9 @@ import type {
 } from "@admin/types/dashboard/widgets";
 import { MAX_PLACEMENTS } from "nextly/config";
 
-import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { FrameState } from "../../frame/card-state";
 import { WidgetGrid } from "../../WidgetGrid";
-import { DRAG_INSTRUCTIONS } from "../drag/drag-messages";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
   resizeDashboard,
@@ -51,12 +49,6 @@ let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 let layoutRejects = false;
 
-// The header's New button reads collections and permissions of its own,
-// which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
-  NewMenu: () => <div data-testid="dashboard-new" />,
-}));
-
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useAppName: () => "Acme Site",
@@ -68,11 +60,6 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
-}));
-// The page's header beside the grid holds Customize: its own reads stubbed.
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
-  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({
@@ -193,10 +180,10 @@ function renderGrid() {
   return {
     client,
     ...render(
-      <DashboardChromeProvider>
+      <>
         <WelcomeHeader />
         <WidgetGrid />
-      </DashboardChromeProvider>,
+      </>,
       { wrapper: Wrapper }
     ),
   };
@@ -258,6 +245,23 @@ async function beginEditing() {
   await user.click(await screen.findByTestId("dashboard-edit-begin"));
   await screen.findAllByTestId("card-actions");
   return user;
+}
+
+/**
+ * Leaves customise mode from the bar's Cancel, agreeing to discard when the
+ * mode asks first (it asks only while there are unsaved changes).
+ */
+async function cancelEditing(
+  user: ReturnType<typeof userEvent.setup>
+): Promise<void> {
+  await user.click(screen.getByTestId("dashboard-edit-cancel"));
+  const ask = screen.queryByTestId("dashboard-leave-ask");
+  if (ask !== null) {
+    await user.click(
+      within(ask).getByRole("button", { name: "Discard changes" })
+    );
+  }
+  await screen.findByTestId("dashboard-edit-begin");
 }
 
 /** The order the grid draws its cells in, by widget id. */
@@ -604,157 +608,6 @@ describe("choosing a width in the settings drawer while customising", () => {
       w: 12,
       h: 6,
     });
-  });
-});
-
-describe("dragging a card from the keyboard", () => {
-  /** Enters customise mode and focuses one card's handle. */
-  async function handleOf(title: string) {
-    renderGrid();
-    await beginEditing();
-    const handle = screen.getByRole("button", { name: `Move ${title}` });
-    handle.focus();
-    return handle;
-  }
-
-  function press(handle: HTMLElement, key: string) {
-    fireEvent.keyDown(handle, { key });
-  }
-
-  it("names the card on its handle, and reads the keys from the handle's description", async () => {
-    const handle = await handleOf("Widget core/b");
-    expect(handle).toHaveAccessibleDescription(DRAG_INSTRUCTIONS);
-  });
-
-  it("picks a card up with Space, saying which, where it sits and how to move it", async () => {
-    const handle = await handleOf("Widget core/b");
-    press(handle, " ");
-
-    expect(live()).toHaveTextContent(
-      "Picked up Widget core/b, position 2 of 3. Use the arrow keys to move it, Space to drop it, Escape to cancel."
-    );
-    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
-      "data-held"
-    );
-    // Picked up, not moved: nothing would change yet, so no line is drawn.
-    expect(screen.queryByTestId("widget-drop-line")).toBeNull();
-  });
-
-  it("steps one place per arrow, saying each, with every card still where it was", async () => {
-    const handle = await handleOf("Widget core/b");
-    press(handle, " ");
-    press(handle, "ArrowDown");
-
-    expect(live()).toHaveTextContent("Position 3 of 3.");
-    expect(screen.getByTestId("widget-drop-line")).toBeInTheDocument();
-    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
-
-    // Stops at the end rather than wrapping round to the start.
-    press(handle, "ArrowRight");
-    expect(live()).toHaveTextContent("Position 3 of 3.");
-  });
-
-  it("moves it on Space, says both positions, rings it and keeps focus on its handle", async () => {
-    const handle = await handleOf("Widget core/b");
-    press(handle, " ");
-    press(handle, "ArrowUp");
-    press(handle, " ");
-
-    await waitFor(() =>
-      expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"])
-    );
-    expect(live()).toHaveTextContent("Widget core/b moved from 2 to 1 of 3.");
-    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
-      "data-highlighted"
-    );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Move Widget core/b" })
-      ).toHaveFocus()
-    );
-    expect(screen.queryByTestId("widget-drop-line")).toBeNull();
-    expect(screen.getByTestId("dashboard-edit-save")).toBeEnabled();
-  });
-
-  it("animates nothing for a reader who asks for reduced motion: the ring fades only under motion-safe, the line never", async () => {
-    // jsdom applies no media query, so what is asserted is the gate itself: every animation
-    // class is one `prefers-reduced-motion: reduce` switches off.
-    const moving = /animate|fade|transition|duration/;
-    const handle = await handleOf("Widget core/b");
-    press(handle, " ");
-    press(handle, "ArrowDown");
-    const line = screen.getByTestId("widget-drop-line");
-    expect([...line.classList].filter(c => moving.test(c))).toEqual([]);
-    press(handle, " ");
-
-    const ringed = await screen.findByTestId("widget-cell-core/b");
-    await waitFor(() => expect(ringed).toHaveAttribute("data-highlighted"));
-    const animated = [...ringed.classList].filter(c => moving.test(c));
-    expect(animated.length).toBeGreaterThan(0);
-    expect(animated.filter(c => !c.startsWith("motion-safe:"))).toEqual([]);
-  });
-
-  it("puts it down where it was when nothing changed, and says so", async () => {
-    const handle = await handleOf("Widget core/b");
-    press(handle, " ");
-    press(handle, "Enter");
-
-    expect(live()).toHaveTextContent("Widget core/b dropped where it was.");
-    expect(screen.getByTestId("widget-cell-core/b")).not.toHaveAttribute(
-      "data-held"
-    );
-    expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
-  });
-
-  for (const key of ["Escape", "Tab"]) {
-    it(`cancels on ${key}: nothing moves, and it says so`, async () => {
-      const handle = await handleOf("Widget core/b");
-      press(handle, " ");
-      press(handle, "ArrowDown");
-      press(handle, key);
-
-      expect(live()).toHaveTextContent("Move cancelled. Nothing moved.");
-      expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
-      expect(screen.queryByTestId("widget-drop-line")).toBeNull();
-      expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
-    });
-  }
-
-  it("cancels when focus leaves the handle mid-drag", async () => {
-    const handle = await handleOf("Widget core/b");
-    press(handle, " ");
-    press(handle, "ArrowDown");
-    act(() => handle.blur());
-
-    expect(live()).toHaveTextContent("Move cancelled. Nothing moved.");
-    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
-  });
-
-  it("lands a card where the menu would, stepping over a removed one", async () => {
-    // core/x is removed: one gesture must give one order, whichever way it was made.
-    mockBranding = branding(["core/a", "core/b", "core/x", "core/c"]);
-    layoutResponse = layout([
-      { id: "p1", widgetId: "core/a" },
-      { id: "p2", widgetId: "core/b" },
-      { id: "px", widgetId: "core/x", removed: true },
-      { id: "p3", widgetId: "core/c" },
-    ]);
-    const handle = await handleOf("Widget core/a");
-    press(handle, " ");
-    press(handle, "ArrowDown");
-    press(handle, " ");
-    await waitFor(() =>
-      expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"])
-    );
-
-    await userEvent.setup().click(screen.getByTestId("dashboard-edit-save"));
-    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
-    expect(putBody().placements.map(p => p.id)).toEqual([
-      "p2",
-      "p1",
-      "px",
-      "p3",
-    ]);
   });
 });
 
@@ -1270,7 +1123,7 @@ describe("cancelling", () => {
 
     await choose(user, "Widget core/a", "Move later");
     await choose(user, "Widget core/c", "Remove");
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     expect(api.put).not.toHaveBeenCalled();
@@ -1288,7 +1141,7 @@ describe("cancelling", () => {
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await screen.findByTestId("dashboard-edit-error");
 
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     await waitFor(() =>
       expect(screen.queryByTestId("dashboard-edit-error")).toBeNull()
@@ -1443,7 +1296,7 @@ describe("resetting to the default dashboard", () => {
       })
     );
 
-    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+    await cancelEditing(user);
 
     expect(drawnOrder()).toEqual(["core/c", "core/a"]);
     expect(api.delete).not.toHaveBeenCalled();
@@ -1517,7 +1370,7 @@ describe("a stored dashboard the server could not read", () => {
   it("says so above the grid", async () => {
     renderGrid();
     expect(await screen.findByTestId("dashboard-unreadable")).toHaveTextContent(
-      "Your saved dashboard couldn't be loaded, so you're seeing the default. Saving from Customize replaces the saved one."
+      "Your saved dashboard couldn't be loaded, so you're seeing the default. Saving from Customize dashboard replaces the saved one."
     );
   });
 
@@ -1633,15 +1486,74 @@ describe("when the schema changes underneath an open dashboard", () => {
   });
 });
 
+describe("the drag handle and the resize edge", () => {
+  it("draws each card's handle over its header's leading slot, before the title, for a pointer only", async () => {
+    renderGrid();
+    await beginEditing();
+    for (const id of ["core/a", "core/b", "core/c"]) {
+      const cell = screen.getByTestId(`widget-cell-${id}`);
+      const handle = within(cell).getByTestId("widget-drag-handle");
+      // Read by no screen reader and reached by no Tab: the menu's Move earlier and Move later
+      // are the keyboard's way.
+      expect(handle).toHaveAttribute("aria-hidden", "true");
+      expect(handle).not.toHaveAttribute("tabindex");
+      const header = within(cell).getByTestId("widget-card-header");
+      const space = within(header).getByTestId("card-handle-space");
+      // The header's first part, so the title starts after it on the header's own row.
+      expect(header.firstElementChild).toContainElement(space);
+      const title = within(header).getByRole("heading", { level: 2 });
+      expect(
+        space.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    }
+  });
+
+  it("keeps no room for a handle at rest", async () => {
+    renderGrid();
+    await screen.findAllByTestId("widget-card-header");
+    expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([]);
+    expect(screen.queryAllByTestId("card-handle-space")).toEqual([]);
+  });
+
+  it("draws a right edge on each card with more than one width, and none on a card bounded 5 to 5", async () => {
+    mockBranding = branding(["core/a", "core/b", "core/c"], {
+      "core/b": {
+        size: {
+          default: { w: 5, h: 2 },
+          min: { w: 5, h: 2 },
+          max: { w: 5, h: 2 },
+        },
+      },
+    });
+    renderGrid();
+    await beginEditing();
+    const edgeOf = (id: string) =>
+      within(screen.getByTestId(`widget-cell-${id}`)).queryByTestId(
+        "widget-resize-edge"
+      );
+    expect(edgeOf("core/a")).not.toBeNull();
+    expect(edgeOf("core/b")).toBeNull();
+    expect(edgeOf("core/c")).not.toBeNull();
+  });
+
+  it("draws no edge below 1,024px, where the card's settings set its width, and keeps the handles", async () => {
+    stubDashboardWidth(1000);
+    renderGrid();
+    await beginEditing();
+    expect(screen.queryAllByTestId("widget-resize-edge")).toEqual([]);
+    expect(screen.getAllByTestId("widget-drag-handle")).toHaveLength(3);
+  });
+});
+
 describe("at one column", () => {
   // jsdom lays nothing out; the dashboard's width is stubbed, as the grid measures it.
 
   it("offers customising at every width", async () => {
     stubDashboardWidth(390);
     renderGrid();
-    const offer = await screen.findByTestId("dashboard-edit-offer");
-    expect(offer).not.toHaveClass("hidden");
-    expect(offer).toContainElement(screen.getByTestId("dashboard-edit-begin"));
+    const begin = await screen.findByTestId("dashboard-edit-begin");
+    expect(begin).not.toHaveClass("hidden");
+    expect(begin).toHaveAccessibleName("Customize dashboard");
   });
 
   it("draws no handle, and leaves every move to the card menu", async () => {
@@ -1701,56 +1613,6 @@ describe("at one column", () => {
     } finally {
       errors.mockRestore();
     }
-  });
-
-  it("cancels a drag when the dashboard narrows to one column, and says why", async () => {
-    renderGrid();
-    await beginEditing();
-    const handle = screen.getByRole("button", { name: "Move Widget core/b" });
-    handle.focus();
-    fireEvent.keyDown(handle, { key: " " });
-    fireEvent.keyDown(handle, { key: "ArrowDown" });
-
-    resizeDashboard(390);
-
-    await waitFor(() =>
-      expect(live()).toHaveTextContent(
-        "The dashboard is one column now, so the move was cancelled. Nothing moved. Use the card's menu to move it."
-      )
-    );
-    // 🔴 The handle that had focus is gone at one column; focus goes to the card's menu, where
-    // the move goes on, rather than falling to the page.
-    await waitFor(() =>
-      expect(document.activeElement).toBe(menuButton("Widget core/b"))
-    );
-    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
-    expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([]);
-  });
-
-  it("cancels a drag when the dashboard changes width but keeps its columns, and says why", async () => {
-    // 🔴 Only narrowing to one column ended a drag. A change between two wider bands reflows
-    // the cards while the drag kept the places it measured at pick-up, so the line, and the
-    // drop, pointed somewhere other than where the cards had gone.
-    renderGrid();
-    await beginEditing();
-    const handle = screen.getByRole("button", { name: "Move Widget core/b" });
-    handle.focus();
-    fireEvent.keyDown(handle, { key: " " });
-    fireEvent.keyDown(handle, { key: "ArrowDown" });
-
-    resizeDashboard(900);
-
-    await waitFor(() =>
-      expect(live()).toHaveTextContent(
-        "The dashboard changed width, so the move was cancelled. Nothing moved."
-      )
-    );
-    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
-    expect(screen.queryByTestId("widget-drop-line")).toBeNull();
-    // Still more than one column: the handles stay, and the card can be picked up again.
-    expect(
-      screen.getByRole("button", { name: "Move Widget core/b" })
-    ).toBeInTheDocument();
   });
 
   it("tells a reader with an empty dashboard to customise it, at any width", async () => {
