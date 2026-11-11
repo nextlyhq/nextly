@@ -70,6 +70,7 @@ import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
 import {
+  checkedTypeRules,
   rulesFromOptions,
   type StructuredDataOptions,
 } from "./structured-data/rules";
@@ -454,6 +455,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       clientConfig: {
         aiCrawlers: options.aiCrawlers ?? "all",
         hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
+        // Each type's structured data choice the options make, which the
+        // screen shows until the site chooses its own.
+        structuredData: checkedTypeRules(options.structuredData?.types),
       },
       menu: [
         {

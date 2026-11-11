@@ -21,6 +21,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
 }));
 
 import {
+  usePluginClientConfig,
   usePluginRoute,
   useSingleDocument,
   useUpdateSingleDocument,
@@ -529,6 +530,70 @@ describe("the content types table", () => {
     expect(sent).toEqual([{ hiddenTypes: ["posts"], _rev: "5" }]);
   });
 
+  it("keeps the types the plugin hides hidden when the site hides another", async () => {
+    serving(SET_UP);
+    vi.mocked(usePluginClientConfig).mockReturnValue({
+      hiddenTypes: ["cases"],
+    });
+    try {
+      render(<SeoSettingsPage />);
+      expect(
+        screen
+          .getByRole("switch", { name: "Hide all Case studies from search" })
+          .getAttribute("aria-checked")
+      ).toBe("true");
+
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Hide all Blog posts from search" })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await settle();
+
+      expect(sent).toEqual([{ hiddenTypes: ["cases", "posts"], _rev: "5" }]);
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
+  it("shows the plugin's structured data choice and mapping until the site chooses", async () => {
+    serving(SET_UP);
+    vi.mocked(usePluginClientConfig).mockReturnValue({
+      structuredData: {
+        posts: {
+          type: "article",
+          details: { article: { author: { value: "The Rext team" } } },
+        },
+      },
+    });
+    try {
+      render(<SeoSettingsPage />);
+      const select = screen.getByRole("combobox", {
+        name: "Structured data for Blog posts",
+      }) as HTMLSelectElement;
+      expect(select.value).toBe("article");
+      expect(screen.getByText("· all set")).toBeTruthy();
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Save changes",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+
+      // A value the site's code fixes is shown as that value.
+      fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+      const author = screen.getByRole("combobox", {
+        name: "Field that holds author",
+      }) as HTMLSelectElement;
+      expect(author.selectedOptions[0]?.textContent).toBe(
+        'Always "The Rext team"'
+      );
+      expect(screen.getByText("set in the site's code")).toBeTruthy();
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
   it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
@@ -537,8 +602,9 @@ describe("the content types table", () => {
       screen.getByRole("combobox", { name: "Structured data for Blog posts" }),
       { target: { value: "article" } }
     );
-    // The date is found by its field's name; nothing holds the author or the image.
-    expect(screen.getByText("· 2 missing")).toBeTruthy();
+    // The date is found by its field's name, and the image is the page's
+    // share image; nothing holds the author.
+    expect(screen.getByText("· 1 missing")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Map details" }));
     expect(
@@ -549,7 +615,8 @@ describe("the content types table", () => {
       { target: { value: "byline" } }
     );
     expect(screen.getByText("from each entry's Byline")).toBeTruthy();
-    expect(screen.getByText("· 1 missing")).toBeTruthy();
+    expect(screen.getByText("from each page's share image")).toBeTruthy();
+    expect(screen.getByText("· all set")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await settle();

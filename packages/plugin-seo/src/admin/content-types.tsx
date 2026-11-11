@@ -20,8 +20,10 @@ import {
   type StructuredDataDetail,
   type StructuredDataTypeKey,
 } from "../structured-data/catalog";
+import type { DetailSource } from "../structured-data/rules";
 
 import {
+  FROM_THE_PAGE,
   isHidden,
   mappingOf,
   missingDetails,
@@ -144,6 +146,80 @@ function guessedField(
     ?.label;
 }
 
+/** A fixed value the site's code gives a detail, in the field choice. */
+const FIXED = "=fixed";
+
+/** What a detail is read from until a field is chosen, as the choice says it. */
+function unchosenLabel(
+  type: SeoContentType,
+  detail: StructuredDataDetail
+): { option: string; help?: string } {
+  const fromPage = FROM_THE_PAGE[detail];
+  if (fromPage !== undefined) {
+    return {
+      option: fromPage,
+      help: `from each page's ${fromPage.replace(/^The page's /, "")}`,
+    };
+  }
+  const guess = guessedField(type, detail);
+  return guess === undefined
+    ? { option: "Not chosen yet" }
+    : { option: `${guess}, by its name`, help: `from each entry's ${guess}` };
+}
+
+/** One detail's row: the field it is read from, and where that leaves it. */
+function DetailLine({
+  type,
+  detail,
+  source,
+  lacking,
+  typeLabel,
+  choose,
+}: {
+  type: SeoContentType;
+  detail: StructuredDataDetail;
+  source: DetailSource | undefined;
+  lacking: boolean;
+  typeLabel: string;
+  choose: (field: string) => void;
+}): JSX.Element {
+  const fixed = typeof source === "object" ? source.value : undefined;
+  const field =
+    typeof source === "string" ? source : fixed === undefined ? "" : FIXED;
+  const chosenLabel = type.mappableFields.find(
+    each => each.name === field
+  )?.label;
+  const unchosen = unchosenLabel(type, detail);
+  let help = unchosen.help ?? `Google needs this for ${typeLabel}`;
+  if (chosenLabel !== undefined) help = `from each entry's ${chosenLabel}`;
+  else if (fixed !== undefined) help = "set in the site's code";
+  return (
+    <div className="nx-seo-mapline">
+      <span className="nx-seo-label">{DETAIL_LABELS[detail]}</span>
+      <select
+        className="nx-seo-select"
+        aria-label={`Field that holds ${DETAIL_LABELS[detail]}`}
+        aria-invalid={lacking}
+        value={field}
+        onChange={event => {
+          if (event.target.value !== FIXED) choose(event.target.value);
+        }}
+      >
+        <option value="">{unchosen.option}</option>
+        {fixed === undefined ? null : (
+          <option value={FIXED}>{`Always "${fixed}"`}</option>
+        )}
+        {type.mappableFields.map(each => (
+          <option key={each.name} value={each.name}>
+            {each.label}
+          </option>
+        ))}
+      </select>
+      <span className="nx-seo-help">{help}</span>
+    </div>
+  );
+}
+
 /** Which field each detail of a structured data type is read from. */
 function DetailsEditor({
   type,
@@ -190,56 +266,27 @@ function DetailsEditor({
         </span>
       </div>
       <div className="nx-seo-mapgrid">
-        {STRUCTURED_DATA_TYPES[structuredType].needs.map(detail => {
-          const chosen = mapping[detail];
-          const field = typeof chosen === "string" ? chosen : "";
-          const guess = guessedField(type, detail);
-          const lacking = missing.includes(detail);
-          const chosenLabel = type.mappableFields.find(
-            each => each.name === field
-          )?.label;
-          return (
-            <div key={detail} className="nx-seo-mapline">
-              <span className="nx-seo-label">{DETAIL_LABELS[detail]}</span>
-              <select
-                className="nx-seo-select"
-                aria-label={`Field that holds ${DETAIL_LABELS[detail]}`}
-                aria-invalid={lacking}
-                value={field}
-                onChange={event => {
-                  const value = event.target.value;
-                  change(current =>
-                    withDetailField(
-                      current,
-                      type.key,
-                      structuredType,
-                      detail,
-                      value
-                    )
-                  );
-                }}
-              >
-                <option value="">
-                  {guess === undefined
-                    ? "Not chosen yet"
-                    : `${guess}, by its name`}
-                </option>
-                {type.mappableFields.map(each => (
-                  <option key={each.name} value={each.name}>
-                    {each.label}
-                  </option>
-                ))}
-              </select>
-              <span className="nx-seo-help">
-                {chosenLabel !== undefined
-                  ? `from each entry's ${chosenLabel}`
-                  : guess !== undefined
-                    ? `from each entry's ${guess}`
-                    : `Google needs this for ${label}`}
-              </span>
-            </div>
-          );
-        })}
+        {STRUCTURED_DATA_TYPES[structuredType].needs.map(detail => (
+          <DetailLine
+            key={detail}
+            type={type}
+            detail={detail}
+            source={mapping[detail]}
+            lacking={missing.includes(detail)}
+            typeLabel={label}
+            choose={field =>
+              change(current =>
+                withDetailField(
+                  current,
+                  type.key,
+                  structuredType,
+                  detail,
+                  field
+                )
+              )
+            }
+          />
+        ))}
       </div>
       <p className="nx-seo-help">
         {missing.length > 0

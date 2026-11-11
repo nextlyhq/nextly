@@ -37,6 +37,7 @@ import { ContentTypesTab } from "./content-types";
 import {
   changesOf,
   draftOf,
+  structuredDataOf,
   type SettingsDefaults,
   type SettingsDraft,
   type StoredSettings,
@@ -149,12 +150,23 @@ export function SeoSettingsPage(): JSX.Element {
 function useSettingsDefaults(): SettingsDefaults {
   const config = usePluginClientConfig(SEO_PLUGIN_NAME);
   const aiCrawlers = config?.aiCrawlers;
+  const hiddenTypes = config?.hiddenTypes;
+  const structuredData = config?.structuredData;
   return useMemo(
-    () =>
-      (AI_CRAWLER_CHOICES as readonly unknown[]).includes(aiCrawlers)
+    () => ({
+      ...((AI_CRAWLER_CHOICES as readonly unknown[]).includes(aiCrawlers)
         ? { aiCrawlers: aiCrawlers as AiCrawlerChoice }
-        : {},
-    [aiCrawlers]
+        : {}),
+      ...(Array.isArray(hiddenTypes)
+        ? {
+            hiddenTypes: hiddenTypes.filter(
+              (key): key is string => typeof key === "string"
+            ),
+          }
+        : {}),
+      structuredData: structuredDataOf(structuredData),
+    }),
+    [aiCrawlers, hiddenTypes, structuredData]
   );
 }
 

@@ -111,6 +111,11 @@ export interface SettingsDefaults {
   aiCrawlers?: AiCrawlerChoice;
   /** The plugin's `hiddenTypes` option: what is hidden until the site chooses. */
   hiddenTypes?: readonly string[];
+  /**
+   * The plugin's `structuredData.types` option: each content type's choice
+   * and mapping until the site makes its own for that type.
+   */
+  structuredData?: Readonly<Record<string, StructuredDataTypeRule>>;
 }
 
 /** The form's values for the stored settings, `defaults` where nothing is stored. */
@@ -150,12 +155,17 @@ export function draftOf(
           (key): key is string => typeof key === "string"
         )
       : [...(defaults.hiddenTypes ?? [])],
-    structuredData: structuredDataOf(stored.structuredData),
+    // The rules in force: the site's own for a type it chose for, else the
+    // plugin's, as the page's markup reads them.
+    structuredData: {
+      ...defaults.structuredData,
+      ...structuredDataOf(stored.structuredData),
+    },
   };
 }
 
 /** Each type's stored structured data choice, as far as the form edits it. */
-function structuredDataOf(
+export function structuredDataOf(
   value: unknown
 ): Record<string, StructuredDataTypeRule> {
   if (!isRecord(value)) return {};
@@ -189,18 +199,56 @@ export function structuredTypeOf(
   return draft.structuredData[key]?.type;
 }
 
-/** `draft` with only the type `key`'s rule changed, an empty rule removed. */
+/**
+ * `draft` with only the type `key`'s rule changed. An empty rule is kept: it
+ * is the type described automatically, over any choice the plugin makes.
+ */
 function withRule(
   draft: SettingsDraft,
   key: string,
   rule: StructuredDataTypeRule
 ): SettingsDraft {
-  const structuredData = { ...draft.structuredData };
-  const empty =
-    rule.type === undefined && Object.keys(rule.details ?? {}).length === 0;
-  if (empty) delete structuredData[key];
-  else structuredData[key] = rule;
-  return { ...draft, structuredData };
+  return {
+    ...draft,
+    structuredData: { ...draft.structuredData, [key]: rule },
+  };
+}
+
+/** A value as text with every object's keys in order, to compare rules by. */
+function sorted(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sorted);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map(key => [key, sorted(value[key])])
+  );
+}
+
+const sameRule = (a: StructuredDataTypeRule, b: StructuredDataTypeRule) =>
+  JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
+
+const isEmptyRule = (rule: StructuredDataTypeRule): boolean =>
+  rule.type === undefined && Object.keys(rule.details ?? {}).length === 0;
+
+/**
+ * The rules the site saves: those that differ from the plugin's, so a type
+ * the site never chose for keeps following the plugin's option. An empty
+ * rule is saved only where it overrides one of the plugin's.
+ */
+function savedRules(
+  rules: SettingsDraft["structuredData"],
+  defaults: SettingsDefaults
+): SettingsDraft["structuredData"] {
+  const fromPlugin = defaults.structuredData ?? {};
+  return Object.fromEntries(
+    Object.entries(rules).filter(([key, rule]) => {
+      const plugin = fromPlugin[key];
+      return plugin === undefined
+        ? !isEmptyRule(rule)
+        : !sameRule(rule, plugin);
+    })
+  );
 }
 
 /** `draft` with the type `key` described as `type`, or automatically. */
@@ -248,6 +296,17 @@ export function withDetailField(
 }
 
 /**
+ * The details a page supplies itself until a field is chosen, with what the
+ * mapping screen calls that source.
+ */
+export const FROM_THE_PAGE: Readonly<
+  Partial<Record<StructuredDataDetail, string>>
+> = {
+  // The page's own share image, from the order of who wins.
+  image: "The page's share image",
+};
+
+/**
  * The details `type` needs that the content type has no field for yet:
  * neither mapped nor held by a field named like the detail, which is where
  * the page's markup looks when nothing is mapped.
@@ -262,6 +321,7 @@ export function missingDetails(
   return STRUCTURED_DATA_TYPES[structuredType].needs.filter(
     detail =>
       mapping[detail] === undefined &&
+      FROM_THE_PAGE[detail] === undefined &&
       !DETAIL_GUESSES[detail].some(guess => named.has(tokenKey(guess)))
   );
 }
@@ -270,9 +330,13 @@ export function missingDetails(
  * The values as they are stored: blank addresses and profiles left out, and
  * each profile's network read from its address.
  */
-function storedForm(draft: SettingsDraft): Record<string, unknown> {
+function storedForm(
+  draft: SettingsDraft,
+  defaults: SettingsDefaults
+): Record<string, unknown> {
   return {
     ...draft,
+    structuredData: savedRules(draft.structuredData, defaults),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -300,8 +364,8 @@ export function changesOf(
   draft: SettingsDraft,
   defaults: SettingsDefaults = {}
 ): Record<string, unknown> | null {
-  const before = storedForm(draftOf(stored, defaults));
-  const after = storedForm(draft);
+  const before = storedForm(draftOf(stored, defaults), defaults);
+  const after = storedForm(draft, defaults);
   const changes: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(after)) {
     if (!same(value, before[key])) changes[key] = value;

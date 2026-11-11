@@ -402,9 +402,14 @@ newest page updates as you type.
 out of the sitemap. The **Structured data** column chooses what the type's pages are described as;
 **Automatic** describes a page with an author and a date as an Article, and any other as a Web page.
 For a type that needs details, such as an Article's author, **Map details** chooses the field each
-detail is read from. A detail left unchosen is read from a field named like it, and a type missing a
-detail is left out of the page's markup and listed in Problems. Both are saved with the settings and
-take over from the plugin's `hiddenTypes` and `structuredData` options.
+detail is read from. A detail left unchosen is read from a field named like it, the image from the
+page's share image, and a type missing a detail is left out of the page's markup and listed in
+Problems.
+
+Until the site chooses, the table shows what the plugin's `hiddenTypes` and `structuredData` options
+say. Hiding or showing a type saves the whole list, which then takes over from `hiddenTypes`. A
+type's structured data choice takes over from the option for that type only; other types keep
+following the option, and choosing **Automatic** over a type the option names is kept as a choice.
 
 ### Changes reach pages without a redeploy
 
