@@ -155,7 +155,7 @@ export const defaultLayoutTemplate: OwnerTemplate = {
       label: "Body",
       description: "Template body injected here",
       required: true,
-      example: "<p>The email's body.</p>",
+      example: "Your email content appears here.",
     },
     {
       name: "year",
