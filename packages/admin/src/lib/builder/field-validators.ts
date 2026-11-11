@@ -10,91 +10,93 @@ export interface FieldBuilderValidationResult {
   errorMessage?: string;
 }
 
+/** What is wrong with a field, in the order a save reports them. */
+type FieldErrorKind = "unnamed" | "no-field-group" | "no-options";
+
+/** One field's error: what kind it is, and what to tell the person. */
+export interface BuilderFieldError {
+  kind: FieldErrorKind;
+  message: string;
+}
+
+/** The order a save names the kinds in: the first kind found is reported. */
+const REPORT_ORDER: readonly FieldErrorKind[] = [
+  "unnamed",
+  "no-field-group",
+  "no-options",
+];
+
+/** The one error a field has, or null; a field reports its first. */
+function errorOf(field: BuilderField): BuilderFieldError | null {
+  if (!field.name) {
+    return { kind: "unnamed", message: "All fields must have a name" };
+  }
+  // Either spelling of the stored field type: a migrated definition whose
+  // references were cleared must fail HERE, with the actionable message,
+  // rather than at the API boundary after submission.
+  if (isFieldGroupFieldType(field.type)) {
+    const refs = extractFieldGroupReferences(field);
+    const hasSingle = refs.single !== undefined;
+    const hasMulti = (refs.many?.length ?? 0) > 0;
+    if (!hasSingle && !hasMulti) {
+      return {
+        kind: "no-field-group",
+        message: `Field "${field.name}" must have a field group selected`,
+      };
+    }
+  }
+  if (field.type === "select" || field.type === "radio") {
+    const hasOptions = Array.isArray(field.options) && field.options.length > 0;
+    if (!hasOptions) {
+      return {
+        kind: "no-options",
+        message: `Select/Radio field "${field.name}" must have at least one option`,
+      };
+    }
+  }
+  return null;
+}
+
 /**
- * Run the schema-save preflight checks against the user-defined fields:
- * unnamed-field guard, component-reference guard, and select-options guard.
+ * Every field's error, by field id, at every depth.
  *
- * legitimate state. The auto-create flow creates schemas with empty user
- * fields (system columns id/title/slug/timestamps/status are auto-injected),
- * so blocking save on `userFields.length === 0` paternalistically prevents
- * users from removing all custom fields and saving the result. This used to
- * fail the second save in the reported reproduction (07-admin-bugs-feedback
- * item 3): create → add field → save → remove field → save → "Please add at
- * least one field". The validation never had a real invariant to enforce.
+ * The one place the Builder decides what is wrong with a field: the outline
+ * marks each row from this map, and the save's refusal is read from it too, so
+ * a row can never look fine while the save refuses it, or the reverse.
+ */
+export function builderFieldErrors(
+  fields: readonly BuilderField[]
+): Map<string, BuilderFieldError> {
+  const errors = new Map<string, BuilderFieldError>();
+  const walk = (list: readonly BuilderField[]): void => {
+    for (const field of list) {
+      const error = errorOf(field);
+      if (error) errors.set(field.id, error);
+      if (Array.isArray(field.fields)) walk(field.fields);
+    }
+  };
+  walk(fields);
+  return errors;
+}
+
+/**
+ * Run the schema-save preflight checks against the user-defined fields: every
+ * field named, every field-group field pointing at a field group, every select
+ * or radio given an option. The refusal names the first kind of error found,
+ * in that order, and the first field of that kind.
+ *
+ * An empty field list is a legitimate state. The auto-create flow creates
+ * schemas with empty user fields (system columns id/title/slug/timestamps/
+ * status are auto-injected), so blocking save on `userFields.length === 0`
+ * would prevent users from removing all custom fields and saving the result.
  */
 export function validateBuilderFields(
   userFields: BuilderField[]
 ): FieldBuilderValidationResult {
-  const unnamedField = userFields.find(f => !f.name);
-  if (unnamedField) {
-    return { valid: false, errorMessage: "All fields must have a name" };
+  const errors = [...builderFieldErrors(userFields).values()];
+  for (const kind of REPORT_ORDER) {
+    const first = errors.find(error => error.kind === kind);
+    if (first) return { valid: false, errorMessage: first.message };
   }
-
-  const missingRef = findComponentFieldMissingReference(userFields);
-  if (missingRef) {
-    return {
-      valid: false,
-      errorMessage: `Field "${missingRef}" must have a field group selected`,
-    };
-  }
-
-  const missingOptions = findSelectFieldMissingOptions(userFields);
-  if (missingOptions) {
-    return {
-      valid: false,
-      errorMessage: `Select/Radio field "${missingOptions}" must have at least one option`,
-    };
-  }
-
   return { valid: true };
-}
-
-/**
- * Recursively validate that all component-type fields have a component reference.
- * Returns the name of the first field missing a reference, or null if all valid.
- */
-export function findComponentFieldMissingReference(
-  fields: BuilderField[]
-): string | null {
-  for (const field of fields) {
-    // Either spelling of the stored field type: a migrated definition whose
-    // references were cleared must fail HERE, with the actionable message,
-    // rather than at the API boundary after submission.
-    if (isFieldGroupFieldType(field.type)) {
-      const refs = extractFieldGroupReferences(field);
-      const hasSingle = refs.single !== undefined;
-      const hasMulti = (refs.many?.length ?? 0) > 0;
-      if (!hasSingle && !hasMulti) {
-        return field.name || field.label || "unnamed";
-      }
-    }
-    if (Array.isArray(field.fields)) {
-      const nested = findComponentFieldMissingReference(field.fields);
-      if (nested) return nested;
-    }
-  }
-  return null;
-}
-
-/**
- * Recursively validate that all select/radio fields have at least one option.
- * Returns the name of the first field missing options, or null if all valid.
- */
-export function findSelectFieldMissingOptions(
-  fields: BuilderField[]
-): string | null {
-  for (const field of fields) {
-    if (field.type === "select" || field.type === "radio") {
-      const hasOptions =
-        Array.isArray(field.options) && field.options.length > 0;
-      if (!hasOptions) {
-        return field.name || field.label || "unnamed";
-      }
-    }
-    if (Array.isArray(field.fields)) {
-      const nested = findSelectFieldMissingOptions(field.fields);
-      if (nested) return nested;
-    }
-  }
-  return null;
 }
