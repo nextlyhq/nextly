@@ -53,8 +53,9 @@ const PLAYGROUND = join(
 );
 
 const PAGE_TITLE = "Bindings page 5e7a";
-const VISIBLE_TITLE = "Visible entry 3b1f";
-const DRAFT_TITLE = "Draft entry 8c2d";
+/** This run's entries, the only ones the page's list holds: see `PAGE_DOCUMENT`. */
+const VISIBLE_TITLE = `Visible entry ${RUN}`;
+const DRAFT_TITLE = `Draft entry ${RUN}`;
 const DRAFT_BODY = "Draft body 4a9e";
 /** A value the public may not read, which must appear nowhere it is served. */
 const SENTINEL = "internal-note-sentinel-91f0";
@@ -86,7 +87,13 @@ function text(nodeId: string, binding: Record<string, unknown>) {
   };
 }
 
-/** The page: its own title, then a list of bound entries, each bound field by field. */
+/**
+ * The page: its own title, then a list of bound entries, each bound field by
+ * field. The list holds this run's entries only, the draft among them, so the
+ * draft is left out by its status alone. Other specs leave published entries
+ * in the collection, and ten of theirs sorted first would push this run's off
+ * the list.
+ */
 const PAGE_DOCUMENT = {
   formatVersion: 1,
   kind: "page",
@@ -96,7 +103,12 @@ const PAGE_DOCUMENT = {
       id: id("20"),
       type: "core/collection-loop",
       version: 1,
-      props: { collection: "bound-entries", limit: 10, sort: "title" },
+      props: {
+        collection: "bound-entries",
+        limit: 10,
+        sort: "title",
+        filters: [{ field: "title", op: "contains", value: RUN }],
+      },
       slots: {
         children: [
           heading("21", { $bind: "title", source: "item" }),

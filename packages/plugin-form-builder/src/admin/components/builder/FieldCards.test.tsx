@@ -50,10 +50,10 @@ function view() {
 }
 
 describe("renaming a field from its card", () => {
-  it("keeps the Field Name input mounted and focused across the rename", () => {
+  it("keeps the Name input mounted and focused across the rename", () => {
     view();
 
-    // Open the email card: the Field Name input lives in its expanded body.
+    // Open the email card: the settings panel, with its Name input, opens in it.
     // Two buttons match /email/i with aria-expanded — the header toggle and
     // the actions-menu trigger beside it ("Actions for Email") — and the
     // drag handle matches on name alone; the toggle is the one that is not a
@@ -64,7 +64,9 @@ describe("renaming a field from its card", () => {
     if (!toggle) throw new Error("field card header toggle not found");
     fireEvent.click(toggle);
 
-    const input = screen.getByLabelText(/Field Name/i) as HTMLInputElement;
+    const input = screen.getByRole("textbox", {
+      name: "Name",
+    }) as HTMLInputElement;
     input.focus();
     expect(document.activeElement).toBe(input);
 
@@ -83,7 +85,7 @@ describe("renaming a field from its card", () => {
     // The separating property: the input the author was typing in is still
     // the one in the document (the card was not unmounted and re-mounted
     // under a new key), and it still holds focus.
-    expect(screen.getByLabelText(/Field Name/i)).toBe(input);
+    expect(screen.getByRole("textbox", { name: "Name" })).toBe(input);
     expect(document.activeElement).toBe(input);
   });
 
@@ -99,15 +101,17 @@ describe("renaming a field from its card", () => {
       .find(button => !button.hasAttribute("aria-haspopup"));
     if (!toggle) throw new Error("field card header toggle not found");
     fireEvent.click(toggle);
-    const input = screen.getByLabelText(/Field Name/i) as HTMLInputElement;
+    const input = screen.getByRole("textbox", {
+      name: "Name",
+    }) as HTMLInputElement;
     input.focus();
 
     fireEvent.change(input, { target: { value: "" } });
-    expect(screen.queryByLabelText(/Field Name/i)).toBe(input);
+    expect(screen.queryByRole("textbox", { name: "Name" })).toBe(input);
     expect(document.activeElement).toBe(input);
 
     fireEvent.change(input, { target: { value: "sms" } });
-    expect(screen.getByLabelText(/Field Name/i)).toBe(input);
+    expect(screen.getByRole("textbox", { name: "Name" })).toBe(input);
     expect(input).toHaveValue("sms");
   });
 });

@@ -16,6 +16,7 @@ import {
   FormBuilderProvider,
   useFormBuilder,
   createNotification,
+  type FieldBookkeeping,
   type FormBuilderContextValue,
 } from "./FormBuilderContext";
 
@@ -42,6 +43,13 @@ const CHANGES_THE_DOCUMENT: Record<
   setFields: c => c.setFields([FIELD]),
   addField: c => c.addField(FIELD),
   updateField: c => c.updateField("email", { label: "Changed" }),
+  // The builder's own bookkeeping, on the same value though off its type.
+  replaceField: c =>
+    (c as FormBuilderContextValue & FieldBookkeeping).replaceField("email", {
+      type: "email",
+      name: "email",
+      label: "Changed",
+    }),
   deleteField: c => c.deleteField("email"),
   moveField: c => c.moveField(0, 1),
   duplicateField: c => c.duplicateField("email"),
@@ -55,7 +63,13 @@ const CHANGES_THE_DOCUMENT: Record<
 };
 
 /** The actions that are navigation or bookkeeping rather than an edit. */
-const READS = ["selectField", "setActiveTab", "markAsSaved"];
+const READS = [
+  "selectField",
+  "setActiveTab",
+  "markAsSaved",
+  "beginSave",
+  "markFieldsSaved",
+];
 
 function mount(readOnly: boolean) {
   let ctx!: FormBuilderContextValue;
