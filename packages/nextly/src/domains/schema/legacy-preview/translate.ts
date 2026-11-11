@@ -52,6 +52,12 @@ export interface TranslateContext {
    * the companion table, so that is where its removal is counted.
    */
   localized?: boolean;
+  /**
+   * Whether the save asks for the entity to be translated, when it says. Turning
+   * translation on or off moves every field translated by default between the
+   * tables, so a save that does only that is still a change.
+   */
+  requestedLocalized?: boolean;
 }
 
 /**
@@ -82,7 +88,10 @@ export async function translatePipelinePreviewToLegacy(
   const localized = context.localized === true;
 
   // Step 1: legacy field-level diff (pure function).
-  const diff = computeFieldDiff(currentFields, newFields, { localized });
+  const diff = computeFieldDiff(currentFields, newFields, {
+    localized,
+    newLocalized: context.requestedLocalized ?? localized,
+  });
 
   if (!diff.hasChanges) {
     return {

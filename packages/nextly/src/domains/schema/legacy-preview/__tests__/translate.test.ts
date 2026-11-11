@@ -634,4 +634,25 @@ describe("a removal the preview cannot count, and where it counts", () => {
       expect.objectContaining({ name: "views" }),
     ]);
   });
+
+  it("reports turning the entity's translation on as a change, fields otherwise unchanged", async () => {
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [{ name: "summary", type: "text" } as FieldDefinition],
+      newFields: [
+        {
+          name: "summary",
+          type: "text",
+          required: false,
+          unique: false,
+        } as FieldDefinition,
+      ],
+      db: {},
+      dialect: "sqlite",
+      localized: false,
+      requestedLocalized: true,
+    });
+
+    expect(result.hasChanges).toBe(true);
+  });
 });

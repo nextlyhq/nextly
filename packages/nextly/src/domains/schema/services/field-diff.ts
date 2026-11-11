@@ -29,14 +29,18 @@ export interface FieldDiffResult {
 }
 
 // Compare old and new field definitions and return a structured diff. `options.localized` says
-// whether the entity is translated: a translated field's values live in the companion table, so a
-// field moving in or out of translation changes where they are stored.
+// whether the entity is translated now, and `options.newLocalized` whether the save asks for it to
+// be (the same when not given): a translated field's values live in the companion table, so a field
+// moving in or out of translation, its own setting or its entity's, changes where they are stored.
 export function computeFieldDiff(
   oldFields: FieldDefinition[],
   newFields: FieldDefinition[],
-  options: { localized?: boolean } = {}
+  options: { localized?: boolean; newLocalized?: boolean } = {}
 ): FieldDiffResult {
-  const entityLocalized = options.localized === true;
+  const translated = {
+    before: options.localized === true,
+    after: (options.newLocalized ?? options.localized) === true,
+  };
   const oldMap = new Map(oldFields.map(f => [f.name, f]));
   const newMap = new Map(newFields.map(f => [f.name, f]));
 
@@ -51,7 +55,7 @@ export function computeFieldDiff(
     const oldField = oldMap.get(name);
     if (!oldField) {
       added.push(newField);
-    } else if (hasFieldChanged(oldField, newField, entityLocalized)) {
+    } else if (hasFieldChanged(oldField, newField, translated)) {
       changed.push({
         name,
         from: oldField.type,
@@ -123,14 +127,15 @@ function getChangeReason(
 function hasFieldChanged(
   oldField: FieldDefinition,
   newField: FieldDefinition,
-  entityLocalized: boolean
+  translated: { before: boolean; after: boolean }
 ): boolean {
   if (oldField.type !== newField.type) return true;
   // Read as resolved, not as stored: a field with no setting takes its type's default, so the
-  // Builder stating that same default moves nothing, while stating the other moves the values.
+  // Builder stating that same default moves nothing, while stating the other moves the values. The
+  // old field is judged where its entity is translated now, the new one where the save asks.
   if (
-    isFieldLocalized(oldField, entityLocalized) !==
-    isFieldLocalized(newField, entityLocalized)
+    isFieldLocalized(oldField, translated.before) !==
+    isFieldLocalized(newField, translated.after)
   )
     return true;
   if (isSet(oldField.required) !== isSet(newField.required)) return true;

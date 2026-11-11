@@ -306,4 +306,60 @@ describe("computeFieldDiff", () => {
 
     expect(diff.hasChanges).toBe(false);
   });
+
+  // Positive controls: the missing-flag reading must not hide a real change to uniqueness.
+  it.each([
+    ["absent to on", undefined, true],
+    ["on to absent", true, undefined],
+    ["off to on", false, true],
+  ])("finds a change when uniqueness goes %s", (_case, from, to) => {
+    const diff = computeFieldDiff(
+      [
+        {
+          name: "code",
+          type: "text",
+          ...(from === undefined ? {} : { unique: from }),
+        },
+      ],
+      [
+        {
+          name: "code",
+          type: "text",
+          ...(to === undefined ? {} : { unique: to }),
+        },
+      ]
+    );
+
+    expect(diff.hasChanges).toBe(true);
+    expect(diff.changed).toEqual([expect.objectContaining({ name: "code" })]);
+  });
+
+  describe("when the entity's translation is turned on or off", () => {
+    // The old field is judged where the entity is translated now, the new one where the save asks.
+    it("finds a change for a field translated by default, otherwise unchanged", () => {
+      const turnedOn = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [{ name: "summary", type: "text", required: false, unique: false }],
+        { localized: false, newLocalized: true }
+      );
+      const turnedOff = computeFieldDiff(
+        [{ name: "summary", type: "text" }],
+        [{ name: "summary", type: "text", required: false, unique: false }],
+        { localized: true, newLocalized: false }
+      );
+
+      expect(turnedOn.hasChanges).toBe(true);
+      expect(turnedOff.hasChanges).toBe(true);
+    });
+
+    it("finds no change for a field that stays shared either way", () => {
+      const diff = computeFieldDiff(
+        [{ name: "views", type: "number" }],
+        [{ name: "views", type: "number", required: false, unique: false }],
+        { localized: false, newLocalized: true }
+      );
+
+      expect(diff.hasChanges).toBe(false);
+    });
+  });
 });
