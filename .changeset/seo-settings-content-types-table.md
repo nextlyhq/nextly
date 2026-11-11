@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The SEO settings screen's content types table lets an admin hide a whole content type from search, choose what each type's pages are described as in structured data, and pick the field each detail (such as an Article's author) is read from. Each type shows how many entries it has, and the table scrolls sideways where it does not fit.
+The SEO settings screen's content types table lets an admin hide a whole content type from search, choose what each type's pages are described as in structured data, and pick the field each detail (such as an Article's author) is read from. Each type shows how many entries it has, and the table scrolls sideways where it does not fit. A page's social card names the site by the name saved in the settings, as its title and structured data do, and states share images on the saved production address; the `socialCard` option answers until the settings are saved.

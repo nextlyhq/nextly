@@ -509,9 +509,11 @@ built from the page's head. The plugin states everything the card reads:
 - the title and description, the social ones where a page has them, else the page's own;
 - the **share image** at its full address, with its width, height and alt text. The media library
   stores an upload with a path from the site's root (`/uploads/cover.jpg`), which a network cannot
-  load, so the plugin states it on `baseUrl`, else the first of the site's production addresses,
-  else the origin of the page's canonical where that is absolute;
-- the **site's name**, from `socialCard.siteName`;
+  load, so the plugin states it on the site's production address (the page's language's own, where
+  it has one on its own domain), else `baseUrl`, else the origin of the page's canonical where that
+  is absolute;
+- the **site's name**, the one saved on the SEO settings' General tab, so the card, the title
+  pattern and structured data name the site the same way; until it is saved, `socialCard.siteName`;
 - the page's **language**: the one the route read it in, or else `socialCard.language`, or else
   the site's default language (English on a site that declares no languages), written as Open
   Graph writes it (`en-US` becomes `en_US`).

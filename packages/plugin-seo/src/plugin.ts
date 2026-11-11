@@ -54,6 +54,7 @@ import {
 } from "./settings/contract";
 import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
+import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
 import {
   resolveBaseOrigin,
@@ -188,9 +189,10 @@ export interface SeoPluginOptions {
    */
   structuredData?: StructuredDataOptions;
   /**
-   * @experimental What every page's social card states beyond the page,
-   * until the SEO settings hold it: the site's name, and the language of a
-   * page the route read in no particular language, as a language tag.
+   * @experimental What every page's social card states beyond the page:
+   * the site's name, until one is saved in the SEO settings, and the
+   * language of a page the route read in no particular language, as a
+   * language tag.
    *
    * ```ts
    * seoPlugin({
@@ -200,8 +202,9 @@ export interface SeoPluginOptions {
    * });
    * ```
    *
-   * A share image stored with a path from the root is stated on `baseUrl`,
-   * since a network reading the card needs its full address.
+   * A share image stored with a path from the root is stated on the site's
+   * production address, else on `baseUrl`, since a network reading the card
+   * needs its full address.
    */
   socialCard?: SocialCardOptions;
 }
@@ -390,9 +393,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.baseUrl,
     options.structuredData
   );
-  const readSocialCardRules = socialCardRulesFromOptions(
-    options.baseUrl,
-    options.socialCard
+  const readSocialCardRules = socialCardFromSettings(
+    socialCardRulesFromOptions(options.baseUrl, options.socialCard)
   );
 
   // The site's sitemap and robots.txt, and the action that makes a share
