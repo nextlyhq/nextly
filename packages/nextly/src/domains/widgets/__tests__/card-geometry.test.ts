@@ -87,8 +87,9 @@ describe("cardTierAt", () => {
       "large",
       "large",
     ]);
+    // Below 640 px a quarter card pairs with another at half the row, small there.
     expect(tiers(358)).toEqual([
-      "medium",
+      "small",
       "medium",
       "medium",
       "medium",
