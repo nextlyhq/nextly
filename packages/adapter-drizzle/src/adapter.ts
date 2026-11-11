@@ -12,6 +12,7 @@
  */
 
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
+import { TLSSocket } from "node:tls";
 
 import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
@@ -67,6 +68,7 @@ import type {
   TransactionOptions,
   SessionOptions,
   StatementSession,
+  ConnectionEncryption,
   ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
@@ -2113,8 +2115,51 @@ export abstract class DrizzleAdapter {
    *
    * @returns The inspection, holding no address
    */
-  async inspectConnection(): Promise<ConnectionInspection> {
-    return { encryption: "unknown", local: false };
+  inspectConnection(): Promise<ConnectionInspection> {
+    return Promise.resolve({ encryption: "unknown", local: false });
+  }
+
+  /**
+   * Whether a connection is encrypted, from the two things a dialect adapter
+   * reads: what the database session said about itself, and whether this
+   * process's own socket to the server negotiated TLS.
+   *
+   * The session decides first. Where it says it is not encrypted but this
+   * process's own socket is TLS, the connection is encrypted: behind a
+   * connection pooler (PgBouncer, a hosted provider's pooler) the session
+   * describes the pooler's own connection to the server, which can be plain
+   * inside the provider's network, while this machine's traffic leaves it
+   * encrypted. A session that could not say is `"unknown"` whatever the
+   * socket is, so the answer is never "encrypted" on less than a read that
+   * succeeded.
+   *
+   * @param read.session - The session's own answer; `undefined` when it gave none
+   * @param read.ownSocketTls - Whether this process's socket negotiated TLS
+   */
+  protected encryptionOf(read: {
+    session: boolean | undefined;
+    ownSocketTls: boolean;
+  }): ConnectionEncryption {
+    if (read.session === undefined) return "unknown";
+    return read.session || read.ownSocketTls ? "encrypted" : "unencrypted";
+  }
+
+  /**
+   * Whether a driver's connection handle talks to its server over a socket
+   * that negotiated TLS: node-postgres' client and mysql2's connection each
+   * hold their socket at `connection.stream`, which each replaces with a
+   * `TLSSocket` once TLS is negotiated. Anything else, a handle shaped
+   * otherwise included, is not TLS, so a pooled session is never excused on a
+   * socket that could not be read.
+   *
+   * @param handle - A pooled client or connection, as the driver hands it
+   */
+  protected ownSocketIsTls(handle: unknown): boolean {
+    if (typeof handle !== "object" || handle === null) return false;
+    if (!("connection" in handle)) return false;
+    const connection = handle.connection;
+    if (typeof connection !== "object" || connection === null) return false;
+    return "stream" in connection && connection.stream instanceof TLSSocket;
   }
 
   /**

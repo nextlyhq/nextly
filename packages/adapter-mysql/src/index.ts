@@ -608,10 +608,10 @@ export class MySqlAdapter extends DrizzleAdapter {
    * is encrypted and is empty when it is not.
    *
    * @remarks
-   * An adapter configured with `ssl` counts as encrypted whatever the status
-   * says: mysql2 refuses to connect once `ssl` is set and the server will not
-   * speak TLS, and behind a proxy the status can describe the proxy's own
-   * connection rather than this machine's.
+   * The status and the connection's own socket are weighed by
+   * `encryptionOf`: behind a proxy the status can describe the proxy's own
+   * connection to the server, while this connection's socket is TLS. The
+   * socket is read as it is, never inferred from the `ssl` setting.
    *
    * Whether the database is on this machine is judged from the configured
    * address, which never leaves this method. Any failure answers `"unknown"`.
@@ -630,15 +630,12 @@ export class MySqlAdapter extends DrizzleAdapter {
         "SHOW SESSION STATUS LIKE 'Ssl_cipher'"
       );
       const cipher: unknown = statusRows[0]?.Value;
-      let encryption: ConnectionInspection["encryption"] = "unknown";
-      if (this.config.ssl || (typeof cipher === "string" && cipher !== "")) {
-        encryption = "encrypted";
-      } else if (cipher === "") {
-        encryption = "unencrypted";
-      }
       const version: unknown = versionRows[0]?.version;
       return {
-        encryption,
+        encryption: this.encryptionOf({
+          session: typeof cipher === "string" ? cipher !== "" : undefined,
+          ownSocketTls: this.ownSocketIsTls(connection),
+        }),
         local,
         roundTripMs,
         ...(typeof version === "string" && version !== ""

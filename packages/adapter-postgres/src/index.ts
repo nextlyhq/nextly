@@ -94,7 +94,7 @@ import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient, PoolConfig } from "pg";
-import { Client, Pool } from "pg";
+import { Pool } from "pg";
 
 import { reportPoolWaitTimeout } from "./pool-wait";
 import {
@@ -348,6 +348,19 @@ function applyHappyEyeballsTimeoutOnce(): void {
  * shift.
  */
 const PG_WALL_CLOCK_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.MS';
+
+/**
+ * The host a pooled client connected to, as node-postgres resolved it from its
+ * options, the connection string, `PGHOST` and its default; `undefined` when
+ * the client does not hold one.
+ */
+function resolvedHost(client: object): string | undefined {
+  return "host" in client &&
+    typeof client.host === "string" &&
+    client.host !== ""
+    ? client.host
+    : undefined;
+}
 
 /**
  * PostgreSQL database adapter for Nextly.
@@ -928,21 +941,24 @@ export class PostgresAdapter extends DrizzleAdapter {
    * round trip.
    *
    * @remarks
-   * A client that negotiated TLS itself counts as encrypted whatever the row
-   * says: node-postgres refuses to connect at all once `ssl` is set and the
-   * server will not speak TLS, so a connected client with `ssl` set is
-   * encrypted on the way out of this machine. Behind a connection pooler such
-   * as PgBouncer the row describes the pooler's own connection to the server,
-   * which can be plain inside the provider's network.
+   * The row and the client's own socket are weighed by `encryptionOf`: behind
+   * a connection pooler such as PgBouncer the row describes the pooler's own
+   * connection to the server, which can be plain inside the provider's
+   * network while this client's socket is TLS. The socket is read as it is,
+   * never inferred from the `ssl` setting.
    *
-   * Whether the database is on this machine is judged from the configured
-   * address, which never leaves this method. Any failure answers `"unknown"`.
+   * Whether the database is on this machine is judged from the host the
+   * client connected to, as node-postgres resolved it (its options, the
+   * connection string, `PGHOST`, its default); before a client is had, from
+   * the configured address alone. The address never leaves this method. Any
+   * failure answers `"unknown"`.
    */
   override async inspectConnection(): Promise<ConnectionInspection> {
-    const local = this.isLocalHost(this.connectionHost());
+    let local = this.isLocalHost(this.configuredHost());
     let client: PoolClient | undefined;
     try {
       client = await this.ensurePool().connect();
+      local = this.isLocalHost(resolvedHost(client) ?? this.configuredHost());
       const started = performance.now();
       const result = await client.query<{
         version: string | null;
@@ -953,13 +969,12 @@ export class PostgresAdapter extends DrizzleAdapter {
       );
       const roundTripMs = Math.max(0, Math.round(performance.now() - started));
       const row = result.rows[0];
-      const clientTls = client instanceof Client && Boolean(client.ssl);
-      let encryption: ConnectionInspection["encryption"] = "unknown";
-      if (row?.ssl === true || clientTls) encryption = "encrypted";
-      else if (row?.ssl === false) encryption = "unencrypted";
       const version = row?.version?.split(" ")[0];
       return {
-        encryption,
+        encryption: this.encryptionOf({
+          session: typeof row?.ssl === "boolean" ? row.ssl : undefined,
+          ownSocketTls: this.ownSocketIsTls(client),
+        }),
         local,
         roundTripMs,
         ...(version ? { serverVersion: version } : {}),
@@ -972,17 +987,15 @@ export class PostgresAdapter extends DrizzleAdapter {
   }
 
   /**
-   * The host this adapter connects to, as node-postgres resolves it: the
-   * connection string's when one is set, else the `host` option, else the
-   * `PGHOST` environment variable, else `localhost`. `undefined` when the
-   * connection string cannot be read.
+   * The host this adapter is configured with: the connection string's when one
+   * is set, else the `host` option. `undefined` when it names none, which is
+   * judged remote, or when the connection string cannot be read.
    */
-  private connectionHost(): string | undefined {
+  private configuredHost(): string | undefined {
     const configured = this.config.url
       ? this.hostOfUrl(this.config.url)
       : (this.config.host ?? "");
-    if (configured !== "") return configured;
-    return process.env.PGHOST || "localhost";
+    return configured === "" ? undefined : configured;
   }
 
   /**

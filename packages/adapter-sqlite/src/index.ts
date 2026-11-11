@@ -415,29 +415,29 @@ export class SqliteAdapter extends DrizzleAdapter {
    * no network connection to encrypt, and the library's version, timed for
    * the round trip. A read that fails leaves the version and time out.
    */
-  // better-sqlite3 is synchronous; the method is async to match the base class.
-  // eslint-disable-next-line @typescript-eslint/require-await
-  override async inspectConnection(): Promise<ConnectionInspection> {
+  // better-sqlite3 is synchronous: the answer is read at once and handed back
+  // as the base class's promise.
+  override inspectConnection(): Promise<ConnectionInspection> {
     const inspection: ConnectionInspection = {
       encryption: "not-applicable",
       local: true,
     };
-    if (!this.db) return inspection;
+    if (!this.db) return Promise.resolve(inspection);
     try {
       const started = performance.now();
       const row = this.db
         .prepare("SELECT sqlite_version() AS version")
         .get() as { version?: unknown } | undefined;
       const roundTripMs = Math.max(0, Math.round(performance.now() - started));
-      return {
+      return Promise.resolve({
         ...inspection,
         roundTripMs,
         ...(typeof row?.version === "string" && row.version !== ""
           ? { serverVersion: row.version }
           : {}),
-      };
+      });
     } catch {
-      return inspection;
+      return Promise.resolve(inspection);
     }
   }
 
