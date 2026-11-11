@@ -239,6 +239,12 @@ interface PageState {
    * it, and can still tell the other tabs when that session ends.
    */
   confirmedHere: boolean;
+  /**
+   * Tab preferences held in memory alone: where the site turned remembering
+   * off, or the tab's session storage refused them. They last as long as the
+   * page, as this tab's own choices.
+   */
+  tabMemory: Map<string, string>;
 }
 
 const state: PageState = {
@@ -247,6 +253,7 @@ const state: PageState = {
   pending: new Map(),
   forgotten: false,
   confirmedHere: false,
+  tabMemory: new Map(),
 };
 
 function storage(): Storage | null {
@@ -488,6 +495,56 @@ export function rememberPreference(key: string, value: string): boolean {
 }
 
 /**
+ * The preference this tab keeps under `key`, one of the admin's own keys:
+ * what this page holds in memory, else the tab's session storage, read only
+ * while the site lets the admin remember.
+ */
+export function recallTabPreference(key: string): string | null {
+  if (!isPreferenceKey(key)) return null;
+  const held = state.tabMemory.get(key);
+  if (held !== undefined) return held;
+  if (state.remembering === "off") return null;
+  try {
+    return sessionStore()?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Keep a preference for this tab alone under `key`: in the tab's session
+ * storage, or, where the site turned remembering off or the storage refuses
+ * it, in this page's memory, so it still holds while the page does.
+ */
+export function rememberTabPreference(key: string, value: string): void {
+  if (!isPreferenceKey(key)) return;
+  if (state.remembering === "off") {
+    state.tabMemory.set(key, value);
+    return;
+  }
+  let kept = false;
+  try {
+    const store = sessionStore();
+    store?.setItem(key, value);
+    kept = store !== null;
+  } catch {
+    // Refused (a private window, a full quota): held in memory below.
+  }
+  if (!kept) state.tabMemory.set(key, value);
+}
+
+/** Remove the preference this tab keeps under `key`, wherever it is kept. */
+export function forgetTabPreference(key: string): void {
+  if (!isPreferenceKey(key)) return;
+  state.tabMemory.delete(key);
+  try {
+    sessionStore()?.removeItem(key);
+  } catch {
+    // Refused: nothing could have been kept there either.
+  }
+}
+
+/**
  * Whether the site turned remembering off: for a writer that keeps a
  * preference under a key of its host's choosing (the theme), which must not
  * keep it either.
@@ -513,6 +570,24 @@ export function confirmLabels(labels: ServerLabels): void {
   const pending = [...state.pending.entries()];
   state.pending.clear();
   for (const [key, entry] of pending) writeEntry(entry.kind, key, entry.data);
+}
+
+/**
+ * The server's answer gave no permission version (it could not vouch for
+ * one): nothing can say whether the person's access changed since the menu
+ * and the schemas were kept, so they are discarded, and nothing labelled is
+ * kept on this page.
+ */
+export function discardLabelledMemory(): void {
+  state.labels = null;
+  state.pending.clear();
+  state.forgotten = true;
+  for (const key of keysOf(storage(), k =>
+    k.startsWith(DEVICE_MEMORY_PREFIX)
+  )) {
+    const kind = key.slice(DEVICE_MEMORY_PREFIX.length).split(":")[0];
+    if (!isMemoryKind(kind) || KINDS[kind].labelled) removeRaw(key);
+  }
 }
 
 /**
@@ -572,9 +647,11 @@ export function applyRememberingSwitch(on: boolean): void {
  */
 export function forgetPerson(): boolean {
   const knewSomeone = hasSignedInHere() || state.confirmedHere;
-  // Only forgetting the person ends what this tab knew of their session: the
-  // off switch removes what is stored, and the session goes on.
+  // Only forgetting the person ends what this tab knew of their session, and
+  // its choices held in memory: the off switch removes what is stored, and
+  // the session goes on.
   state.confirmedHere = false;
+  state.tabMemory.clear();
   forget(key => key !== REMEMBERED_BRANDING_KEY);
   return knewSomeone;
 }
@@ -638,11 +715,10 @@ export function onSignedOutElsewhere(listener: () => void): () => void {
   receiver.onmessage = (event: MessageEvent<unknown>) => {
     const type = (event.data as { type?: unknown } | null)?.type;
     if (type !== "signed-out") return;
-    state.labels = null;
-    state.pending.clear();
-    state.forgotten = true;
-    // The session this tab held ended with the other tab's.
-    state.confirmedHere = false;
+    // Forgotten here as in the tab that signed out, this tab's own session
+    // storage and memory included, which no other tab can reach. Not told
+    // on: the tab that signed out already told every tab.
+    forgetPerson();
     listener();
   };
   return () => receiver.close();
@@ -660,4 +736,5 @@ export function resetDeviceMemoryForTests(): void {
   state.pending.clear();
   state.forgotten = false;
   state.confirmedHere = false;
+  state.tabMemory.clear();
 }

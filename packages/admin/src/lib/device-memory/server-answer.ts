@@ -15,6 +15,7 @@ import { startupResponseHeaders } from "@admin/lib/api/startup-request";
 import {
   applyRememberingSwitch,
   confirmLabels,
+  discardLabelledMemory,
   type ServerLabels,
 } from "./device-memory";
 
@@ -67,6 +68,11 @@ export async function confirmDeviceMemory(user: string): Promise<void> {
   if (headers === null) return;
   applyServerSwitch(headers);
   const versions = versionsOf(headers);
-  if (versions === null) return;
+  // An answer without both versions cannot vouch for what was kept: it is
+  // discarded rather than read as still true.
+  if (versions === null) {
+    discardLabelledMemory();
+    return;
+  }
   confirmLabels({ user, ...versions });
 }
