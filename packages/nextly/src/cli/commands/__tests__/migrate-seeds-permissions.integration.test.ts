@@ -37,11 +37,14 @@ import {
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { reviewWorkflow } from "../../../domains/workflows/preset";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "../../../plugins/test-nextly";
+import { buildCollectionRevalidationIntent } from "../../../revalidation/intent-builders";
+import { CACHE_TAG_EXPIRIES_TABLE } from "../../../schemas/cache-tag-expiries/table-name";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from "../../utils/config-loader";
@@ -107,6 +110,48 @@ const CONFIG = defineConfig({
   // The app's own permission, beside the collection's built-in ones.
   permissions: [{ action: "export", resource: "msp-posts" }],
   plugins: [PLUGIN],
+  db: { migrationsDir: "./migrations" },
+});
+
+/**
+ * A collection a review workflow is attached to, and a plugin role bundling the
+ * permission the workflow's step adds (`approve-msp-docs`): a permission only
+ * the workflow seeds, so the role has it only if the run seeded the workflow's
+ * permissions before it made the role. And one bundling a permission nothing
+ * declares, which the run does not make without it.
+ */
+const WORKFLOW_CONFIG = defineConfig({
+  collections: [
+    defineCollection({
+      slug: "msp-docs",
+      status: true,
+      versions: { drafts: true },
+      workflow: reviewWorkflow(),
+      fields: [text({ name: "title" })],
+    }),
+  ],
+  plugins: [
+    definePlugin({
+      name: "@test/msp-review",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        roles: [
+          {
+            slug: "msp-reviewer",
+            name: "Docs reviewer",
+            permissionSlugs: ["approve-msp-docs", "read-msp-docs"],
+          },
+          // Bundles a permission nothing declares, so no run has it.
+          {
+            slug: "msp-archivist",
+            name: "Docs archivist",
+            permissionSlugs: ["read-msp-docs", "archive-msp-docs"],
+          },
+        ],
+      },
+    }),
+  ],
   db: { migrationsDir: "./migrations" },
 });
 
@@ -207,8 +252,8 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `nextly migrate:create --name=initial --non-interactive`, which must succeed. */
-    async function migrateCreate(): Promise<void> {
-      loaded.config = CONFIG;
+    async function migrateCreate(config: unknown = CONFIG): Promise<void> {
+      loaded.config = config;
       tick();
       const { context, said } = command();
       setNonInteractive(true);
@@ -219,8 +264,8 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `nextly migrate`, which must succeed. */
-    async function migrate(): Promise<void> {
-      loaded.config = CONFIG;
+    async function migrate(config: unknown = CONFIG): Promise<void> {
+      loaded.config = config;
       tick();
       const { context, said } = command();
       const code = await exiting(() => runMigrate({ cwd: dir }, context));
@@ -348,6 +393,82 @@ describe.each(getConfiguredTestDialects())(
       // The control: the first run's writes are seen.
       expect(firstWrites.length).toBeGreaterThan(0);
       expect(secondWrites).toEqual([]);
+    }, 180_000);
+
+    it("seeds a workflow's permissions before the roles that bundle them", async () => {
+      await migrateCreate(WORKFLOW_CONFIG);
+      await migrate(WORKFLOW_CONFIG);
+
+      const adapter = await open();
+      try {
+        const slugs = (await permissions(adapter)).map(p => p.slug);
+        expect(slugs).toEqual(
+          expect.arrayContaining([
+            "approve-msp-docs",
+            "publish-without-review-msp-docs",
+          ])
+        );
+        // Made once and never revisited, so it holds the workflow's
+        // permission only if that existed when the run made it.
+        expect(await grantsOf(adapter, "msp-reviewer")).toEqual([
+          "approve-msp-docs",
+          "read-msp-docs",
+        ]);
+        // A role whose permission does not exist is not made without it: made
+        // once and never revisited, it would lack that permission for good.
+        const archivist = await adapter.executeQuery<{ id: unknown }>(
+          `SELECT ${q}id${q} AS id FROM ${q}roles${q} WHERE ${q}slug${q} = 'msp-archivist'`
+        );
+        expect(archivist).toEqual([]);
+        // No preset is given a workflow's permission, here as at a start.
+        expect(await grantsOf(adapter, "admin")).not.toContain(
+          "approve-msp-docs"
+        );
+      } finally {
+        await adapter.disconnect();
+      }
+    }, 180_000);
+
+    it("records every scope's content-cache expiry when it changes a grant, and only then", async () => {
+      await migrateCreate();
+      await migrate();
+
+      const adapter = await open();
+      /** The tags the ledger records an expiry for. */
+      const recorded = async (): Promise<string[]> =>
+        (
+          await adapter.executeQuery<{ tag: unknown }>(
+            `SELECT ${q}tag${q} AS tag FROM ${q}${CACHE_TAG_EXPIRIES_TABLE}${q}`
+          )
+        ).map(row => String(row.tag));
+      const clear = () =>
+        adapter.executeQuery(`DELETE FROM ${q}${CACHE_TAG_EXPIRIES_TABLE}${q}`);
+      try {
+        // A grant the admin preset gives, taken away by hand: the next run
+        // gives it back, a change to what the role may read.
+        await adapter.executeQuery(
+          `DELETE FROM ${q}role_permissions${q} WHERE ${q}role_id${q} = (SELECT ${q}id${q} FROM ${q}roles${q} WHERE ${q}slug${q} = 'admin') AND ${q}permission_id${q} = (SELECT ${q}id${q} FROM ${q}permissions${q} WHERE ${q}slug${q} = 'read-msp-posts')`
+        );
+        await clear();
+
+        await migrate();
+
+        expect(await grantsOf(adapter, "admin")).toContain("read-msp-posts");
+        // The collection's own tags, as every content read of it carries.
+        const tags = buildCollectionRevalidationIntent(
+          "msp-posts",
+          undefined
+        )!.tags;
+        expect(tags.length).toBeGreaterThan(0);
+        expect(await recorded()).toEqual(expect.arrayContaining(tags));
+
+        // Nothing changed: nothing is expired.
+        await clear();
+        await migrate();
+        expect(await recorded()).toEqual([]);
+      } finally {
+        await adapter.disconnect();
+      }
     }, 180_000);
   }
 );

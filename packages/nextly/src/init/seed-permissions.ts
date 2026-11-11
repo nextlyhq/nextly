@@ -187,10 +187,13 @@ export async function seedPermissionsRolesAndPresets(args: {
     { markOrphans: false }
   );
   await seedRolePresets(adapter, logger);
+  // A declared role bundling a permission not seeded yet waits for a run that
+  // has it, rather than being made without it for good.
   await seedPluginRoles(
     adapter,
     collectRoles(config, config.plugins ?? []),
-    logger
+    logger,
+    { deferIncomplete: true }
   );
 }
 

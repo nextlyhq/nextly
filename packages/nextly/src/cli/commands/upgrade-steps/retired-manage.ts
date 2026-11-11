@@ -21,7 +21,7 @@ import { rolesHoldingRetiredManage } from "../../../domains/auth/retired-manage"
 import { afterGrantsChanged } from "../../../domains/auth/services/role-grants-changed";
 import { RolePermissionService } from "../../../domains/auth/services/role-permission-service";
 import { consoleLogger } from "../../../services/shared";
-import { withAdapterLent } from "../../utils/with-adapter-lent";
+import { withCommandServicesLent } from "../../utils/lend-command-services";
 import type { UpgradeStepContext } from "../upgrade-step";
 
 const adapterOf = (context: UpgradeStepContext) =>
@@ -44,7 +44,7 @@ export async function convertRoles(
   let kept = 0;
   // Each role's cached answers are retired as it converts; the scheduled
   // releases are checked once, after the last, not once a role.
-  await withAdapterLent(adapter, async () => {
+  await withCommandServicesLent(adapter, consoleLogger, async () => {
     for (const role of await rolesHoldingRetiredManage(adapter)) {
       if (
         await roles.convertRetiredManage(role.id, { recheckReleases: false })

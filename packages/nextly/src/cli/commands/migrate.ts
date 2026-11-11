@@ -181,6 +181,10 @@ import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
+import {
+  buildWorkflowRegistry,
+  publishWorkflows,
+} from "../../domains/workflows/registry";
 import { NextlyError, describeError } from "../../errors";
 import { seedPermissionsRolesAndPresets } from "../../init/seed-permissions";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
@@ -206,6 +210,7 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
+import { withCommandServicesLent } from "../utils/lend-command-services";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   migrationFilesInRunOrder,
@@ -216,7 +221,6 @@ import {
   type DeclaredNames,
 } from "../utils/migration-discovery";
 import { installRegistryResolver } from "../utils/registry-resolver";
-import { withAdapterLent } from "../utils/with-adapter-lent";
 
 import {
   plainTextPasswordCleanup,
@@ -557,7 +561,7 @@ export async function runMigrate(
         seedPermissions: () =>
           seedAccessOnCommandConnection(
             adapter as unknown as DrizzleAdapter,
-            configResult.config,
+            configResult,
             logger
           ),
         // A translations column already in place that cannot hold a field the config newly
@@ -740,27 +744,56 @@ export async function runMigrate(
 /**
  * Phase 4 of `nextly migrate`: the permissions, declared roles and preset grants
  * (`seedPermissionsRolesAndPresets`), on the command's own connection, lent to
- * the service container for the step (`withAdapterLent`) so that what it writes
- * retires the answers every running instance has cached.
+ * the services a grants change goes through (`withCommandServicesLent`), so the
+ * cached permission answers and content reads of every running instance are
+ * retired when it changes a grant.
+ *
+ * The configuration's attached workflows are judged and published first, as a
+ * start publishes them before it seeds: the permissions a workflow's steps add
+ * are seeded with their collection's, and the presets leave them out, so a
+ * declared role bundling one is made with it. A configuration whose workflows
+ * cannot attach is refused by every start; here it is said, its workflows'
+ * permissions are left to a later run, and a role bundling one is not made yet.
+ * The workflows published before are put back after.
  */
 async function seedAccessOnCommandConnection(
   adapter: DrizzleAdapter,
-  config: SanitizedNextlyConfig,
+  configResult: { config: SanitizedNextlyConfig; configPath?: string | null },
   logger: Logger
 ): Promise<void> {
-  await withAdapterLent(adapter, () =>
-    seedPermissionsRolesAndPresets({
-      adapter,
-      config,
-      // Each seeder's progress is detail here; its warnings and errors are the operator's.
-      logger: {
-        debug: message => logger.debug(message),
-        info: message => logger.debug(message),
-        warn: message => logger.warn(message),
-        error: message => logger.error(message),
-      },
-    })
-  );
+  const { config } = configResult;
+  // Each seeder's progress is detail here; its warnings and errors are the operator's.
+  const seedLogger = {
+    debug: (message: string) => logger.debug(message),
+    info: (message: string) => logger.debug(message),
+    warn: (message: string) => logger.warn(message),
+    error: (message: string) => logger.error(message),
+  };
+  await withCommandServicesLent(adapter, seedLogger, async () => {
+    let previous: ReturnType<typeof publishWorkflows> | undefined;
+    try {
+      // Judged as a configuration reload judges them: the configuration's own
+      // components as written, any other from the registry Phase 3 just wrote.
+      previous = publishWorkflows(
+        await buildWorkflowRegistry(config, configResult.configPath ?? null, {
+          components: config.fieldGroups ?? [],
+        })
+      );
+    } catch (error) {
+      logger.warn(
+        `The configuration's workflows could not be attached, so their permissions were not added: ${describeError(error)}`
+      );
+    }
+    try {
+      await seedPermissionsRolesAndPresets({
+        adapter,
+        config,
+        logger: seedLogger,
+      });
+    } finally {
+      if (previous !== undefined) publishWorkflows(previous);
+    }
+  });
 }
 
 /**
