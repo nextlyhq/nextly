@@ -100,10 +100,10 @@ describe("the three bands, by the dashboard's own width", () => {
     }
   });
 
-  it("draws every card at 12, one column, below 640 px", () => {
+  it("draws every card at 12 below 640 px but a quarter one, which pairs at 6", () => {
     for (const w of EVERY_W) {
-      expect(drawnSpan(w, TWO_UP_FROM_PX - 1)).toBe(12);
-      expect(drawnSpan(w, 360)).toBe(12);
+      expect(drawnSpan(w, TWO_UP_FROM_PX - 1)).toBe(w <= 3 ? 6 : 12);
+      expect(drawnSpan(w, 360)).toBe(w <= 3 ? 6 : 12);
     }
     expect(isOneColumn(TWO_UP_FROM_PX - 1)).toBe(true);
     expect(isOneColumn(TWO_UP_FROM_PX)).toBe(false);

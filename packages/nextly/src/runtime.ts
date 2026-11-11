@@ -233,15 +233,22 @@ export {
   slugToPath,
   nextlySitemap,
   nextlyRobots,
+  confirmedLanguage,
+  requestLanguage,
+  servedAddress,
+  type RequestLanguage,
   type ContentEntry,
   type ResolveContentOptions,
   type ContentRoute,
   type StaticContentRoute,
   type ContentRouteArgs,
+  type ContentRouteParams,
+  type ContentStaticParamsArgs,
   type ContentRouteConfig,
   type RenderContext,
   type NextlyContentReader,
   type SingleRoute,
+  type SingleRouteArgs,
   type SingleRouteConfig,
   type SingleContext,
   type SingleDraftRequest,
@@ -252,6 +259,14 @@ export {
   type NextlySitemapOptions,
   type NextlyRobotsOptions,
 } from "./runtime/routing";
+
+// @experimental How each language's address is formed, as the site declares
+// it (`languageAddresses`), for a page's links to its other languages.
+export {
+  languageAddressOf,
+  type LanguageAddress,
+  type LanguageAddressRule,
+} from "./domains/i18n/language-addresses";
 
 // @experimental Keeps the app's generated component map up to date in
 // development. Call it from the admin's server layout, with the list the map's

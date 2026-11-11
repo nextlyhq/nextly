@@ -46,17 +46,21 @@ export type PublicAddress =
   | { status: "unavailable" };
 
 /** A type's address template, and how its values are filled in. */
-interface Declared {
+export interface Declared {
   template: string;
   pathFields: readonly string[];
 }
 
 /** A type as the configuration or the registry holds it. */
-interface TypeRecord {
+export interface TypeRecord {
   fields?: readonly unknown[];
   publicAddress?: string;
   db?: { slugPaths?: boolean };
   source?: string;
+  /** Whether it has Draft/Published. */
+  status?: boolean;
+  /** Whether it is translated. */
+  localized?: boolean;
 }
 
 /** The type `type` names in the configuration, where it is declared in code. */
@@ -69,20 +73,38 @@ function configured(type: PublicAddressType): TypeRecord | undefined {
   );
 }
 
-/** The registry's row for `type`, for a type made in the Schema Builder. */
+/**
+ * The registry's row for `type`, for a type made in the Schema Builder, read
+ * on `executor` where a caller inside a transaction passes one, so the read
+ * takes no second connection and sees the transaction's own writes.
+ */
 async function registered(
-  type: PublicAddressType
+  type: PublicAddressType,
+  executor?: unknown
 ): Promise<TypeRecord | undefined> {
   if (type.kind === "collection") {
     const registry = container.get<CollectionRegistryService>(
       "collectionRegistryService"
     );
-    return (await registry.getCollectionBySlug(type.slug)) ?? undefined;
+    return (
+      (await registry.getCollectionBySlug(type.slug, executor)) ?? undefined
+    );
   }
   const registry = container.get<SingleRegistryService>(
     "singleRegistryService"
   );
-  return (await registry.getSingleBySlug(type.slug)) ?? undefined;
+  return (await registry.getSingleBySlug(type.slug, executor)) ?? undefined;
+}
+
+/**
+ * `type` as the configuration declares it, or else as the registry holds it,
+ * read on `executor`; undefined where neither does.
+ */
+export async function typeRecordOn(
+  type: PublicAddressType,
+  executor?: unknown
+): Promise<TypeRecord | undefined> {
+  return configured(type) ?? (await registered(type, executor));
 }
 
 /**
@@ -118,16 +140,21 @@ async function supplied(
  * plugin's own or a system type, which are never pages of the site.
  *
  * `row` is the type's registry row where the caller has read it already, so
- * a list of types costs no lookup per type; without it, the row is read.
+ * a list of types costs no lookup per type; without it, the row is read, on
+ * `executor` when one is given.
  *
  * @throws NextlyError `NOT_FOUND` when no such type exists
  */
-async function declaredFor(
+export async function declaredFor(
   type: PublicAddressType,
   locale?: string,
-  row?: TypeRecord
+  row?: TypeRecord,
+  executor?: unknown
 ): Promise<Declared | undefined> {
-  await getCachedNextly();
+  // No wait for the boot here: a save made during the boot (a plugin's
+  // `onReady` writing an entry) reaches this through the address phase, and
+  // waiting for the boot it is part of would never finish. The public entry
+  // points wait instead.
   const code = configured(type);
   if (code !== undefined) {
     if (code.publicAddress === undefined) return undefined;
@@ -136,7 +163,7 @@ async function declaredFor(
       pathFields: code.db?.slugPaths === true ? ["slug"] : [],
     };
   }
-  const record = row ?? (await registered(type));
+  const record = row ?? (await registered(type, executor));
   if (record === undefined) {
     throw NextlyError.notFound({
       logContext: { reason: "no such content type", ...type },
@@ -158,7 +185,20 @@ export async function publicAddressOf(
   entry?: Readonly<Record<string, unknown>>,
   locale?: string
 ): Promise<PublicAddress> {
-  const declared = await declaredFor(type, locale);
+  await getCachedNextly();
+  return addressFrom(type, await declaredFor(type, locale), entry);
+}
+
+/**
+ * The address `declared` gives `entry`, an entry of `type`: what
+ * {@link publicAddressOf} answers once it knows the declaration, for a
+ * caller that read the declaration itself (on a transaction).
+ */
+export function addressFrom(
+  type: PublicAddressType,
+  declared: Declared | undefined,
+  entry?: Readonly<Record<string, unknown>>
+): PublicAddress {
   if (declared === undefined) return { status: "none" };
   if (type.kind === "single") {
     return { status: "resolved", path: declared.template };
@@ -179,6 +219,23 @@ export async function publicAddressOf(
  * listed, since they are not pages of the site.
  */
 export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
+  const without: PublicAddressType[] = [];
+  for (const { type, row } of await siteTypes()) {
+    if ((await declaredFor(type, undefined, row)) === undefined) {
+      without.push(type);
+    }
+  }
+  return without;
+}
+
+/**
+ * The site's own content types with their registry rows: those declared in
+ * code and those made in the Schema Builder, never a plugin's own or the
+ * system's. One list for every reader that walks the site's types.
+ */
+export async function siteTypes(): Promise<
+  { type: PublicAddressType; row: TypeRecord }[]
+> {
   await getCachedNextly();
   const collections = container.get<CollectionRegistryService>(
     "collectionRegistryService"
@@ -194,12 +251,5 @@ export async function typesWithoutAddress(): Promise<PublicAddressType[]> {
       row: row as TypeRecord,
     })),
   ];
-  const without: PublicAddressType[] = [];
-  for (const { type, row } of rows) {
-    if (row.source !== "code" && row.source !== "ui") continue;
-    if ((await declaredFor(type, undefined, row)) === undefined) {
-      without.push(type);
-    }
-  }
-  return without;
+  return rows.filter(({ row }) => row.source === "code" || row.source === "ui");
 }

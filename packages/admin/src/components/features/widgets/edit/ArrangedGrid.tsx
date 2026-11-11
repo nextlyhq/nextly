@@ -36,7 +36,6 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { listDensityOf } from "../frame/list-rows";
 import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
@@ -52,6 +51,7 @@ import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CellDrag } from "./DraggableWidgetCell";
+import { isEntriesSetting } from "./drawer-choices";
 import type { CellSettingsWrite } from "./useCardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import type { ArrangedWidget } from "./useDashboardArrangement";
@@ -72,12 +72,7 @@ export interface ArrangedGridProps {
    */
   drag?: Pick<
     CardDrag,
-    | "enabled"
-    | "oneColumn"
-    | "drag"
-    | "line"
-    | "onHandleKeyDown"
-    | "onHandleBlur"
+    "enabled" | "drag" | "line" | "onHandleKeyDown" | "onHandleBlur"
   >;
   /** What a card may write now, and how: one prop, as they are one concern. */
   writes: {
@@ -102,19 +97,12 @@ export interface ArrangedGridProps {
             config: Record<string, unknown>,
             callbacks: CardSettingsWriteCallbacks,
             /** The title the reader gave the card, where the change sets it. */
-            ownTitle?: string
-          ) => void;
-          /**
-           * Save a card's size at once: the card menu's and the quick popover's Size. Absent
-           * where only a card's settings are written, as a card body's own controls write them.
-           */
-          resize?: (
-            placementId: string,
-            title: string,
-            size: GridSize,
-            /** The card's widget's bounds, which the size is held to. */
-            bounds: WidgetSizeBounds,
-            callbacks: CardSettingsWriteCallbacks
+            ownTitle?: string,
+            /**
+             * The card's size, where the change sets it (the settings drawer's Width), with its
+             * widget's bounds, which the size is held to.
+             */
+            size?: { size: GridSize; bounds: WidgetSizeBounds }
           ) => void;
           isWriting: boolean;
           unavailable?: string;
@@ -234,29 +222,17 @@ function cellSettingsWrite(
   shownTitle: string
 ): { settingsWrite?: CellSettingsWrite } {
   if (!settingsWrite) return {};
-  const { resize } = settingsWrite;
   return {
     settingsWrite: {
-      write: (config, callbacks, ownTitle) =>
+      write: (config, callbacks, ownTitle, size) =>
         settingsWrite.write(
           row.placementId,
           shownTitle,
           config,
           callbacks,
-          ownTitle
+          ownTitle,
+          size === undefined ? undefined : { size, bounds: row.widget.size }
         ),
-      ...(resize === undefined
-        ? {}
-        : {
-            resize: (size: GridSize, callbacks: CardSettingsWriteCallbacks) =>
-              resize(
-                row.placementId,
-                shownTitle,
-                size,
-                row.widget.size,
-                callbacks
-              ),
-          }),
       isWriting: settingsWrite.isWriting,
       ...(settingsWrite.unavailable === undefined
         ? {}
@@ -317,22 +293,23 @@ function shownTitleOf(
 }
 
 /**
- * The size an answer was fetched at, as a card counts its rows by it: its tier and height, and
- * the density its settings asked for, read as the card reads its own (`settingsAsAsked`, then
- * `listDensityOf`), so a density its widget sets by default counts as the card would have drawn
- * it. `undefined` for an answer asked with no size.
+ * What an answer was fetched with, as a card counts its rows by it: the "Number of entries" its
+ * settings asked for, read as the card reads its own (`settingsAsAsked`), so a number its widget
+ * sets by default counts as the card would have drawn it. Only for a widget that declares that
+ * setting (`limit`), whose `load` reads by it: a widget's own component may hand its list a
+ * limit of its own with no such setting, and its answer then holds what its `load` chose, which
+ * no setting says. `undefined` for that, and for an answer not asked.
  */
-function answerSizeOf(
+export function answerSizeOf(
   widget: DashboardWidget,
   asked: AskedWith | undefined,
   sources: ArrangedGridProps["writes"]["sources"]
 ): AnswerSize | undefined {
-  if (asked?.size === undefined) return undefined;
-  return {
-    tier: asked.size.tier,
-    h: asked.size.h,
-    density: listDensityOf(settingsAsAsked(widget, asked.settings, sources)),
-  };
+  if (asked === undefined) return undefined;
+  if (!(widget.settings ?? []).some(isEntriesSetting)) {
+    return undefined;
+  }
+  return { items: settingsAsAsked(widget, asked.settings, sources).limit };
 }
 
 /** What the batch answered for one card, as its cell draws it (`ArrangedCellProps.data`). */
@@ -359,9 +336,9 @@ function cellData(
     // 🔴 This card's own request, not the batch's: partitions settle independently, and a
     // settled card must not dim.
     isFetching: answers.fetchingPlacementIds.has(placementId),
-    // The size and density its answer was fetched at: a card that grew or changed density keeps
-    // its old answer on screen while the new one loads, and drawn by the new ones that answer's
-    // one row past its rows, the sign that more exist, would read as a row.
+    // The "Number of entries" its answer was fetched with: a card whose reader asked for more
+    // keeps its old answer on screen while the new one loads, and drawn by the new number that
+    // answer's one row past its rows, the sign that more exist, would read as a row.
     answerSize: answerSizeOf(
       row.widget,
       answers.fetchedAskFor(placementId),
@@ -481,8 +458,6 @@ export function ArrangedGrid({
             drawnW={widths.get(row.placementId)}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
-            // At one column each card menu lists its sizes in place, where a submenu has no room.
-            sizesInPlace={drag?.oneColumn === true}
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}

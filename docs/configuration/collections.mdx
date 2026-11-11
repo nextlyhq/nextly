@@ -508,7 +508,8 @@ runs differently: its hooks run inside that transaction (after the row is
 locked and matched, where the `delete` rule answers a filter), and `afterDelete`
 runs before the transaction commits. An
 effect made there still happens if the transaction then rolls back, so make it
-once `withTransaction` has resolved.
+once `withTransaction` has resolved. The delete's `collection.<slug>.deleted`
+event waits for the transaction to commit, and is never sent if it rolls back.
 
 ### Publishing or unpublishing every language
 
