@@ -313,3 +313,50 @@ describe("a change to a submission", () => {
     });
   });
 });
+
+// A form's own Submissions tab needs that form's fields, not every form's:
+// walking the whole collection on a site with many forms delays the columns
+// and loads everything to use one.
+describe("the list fixed to one form", () => {
+  it("reads that form alone, and draws its own columns", async () => {
+    const fetched = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/admin/api/collections/forms/entries/form-11") {
+        return Response.json(FORMS[10]);
+      }
+      switch (url.pathname) {
+        case "/admin/api/plugins/@nextlyhq/plugin-form-builder/builder-config":
+          return Response.json({
+            slugs: { forms: "forms", submissions: "form-submissions" },
+          });
+        case "/admin/api/me/permissions":
+          return Response.json({ isSuperAdmin: true });
+        case "/admin/api/collections/forms/entries":
+          return entriesPage(FORMS, url);
+        case "/admin/api/collections/form-submissions/entries":
+          return entriesPage(SUBMISSIONS, url);
+        default:
+          return new Response(null, { status: 404 });
+      }
+    });
+    vi.stubGlobal("fetch", fetched);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SubmissionsView collectionSlug="form-submissions" formId="form-11" />
+      </QueryClientProvider>
+    );
+
+    expect(
+      await screen.findByRole("columnheader", { name: "Email for form 11" })
+    ).toBeInTheDocument();
+    const paths = fetched.mock.calls.map(
+      ([input]) => new URL(String(input), "http://localhost").pathname
+    );
+    expect(paths).toContain("/admin/api/collections/forms/entries/form-11");
+    expect(paths).not.toContain("/admin/api/collections/forms/entries");
+    // No choice of form: the tab is the form's.
+    expect(
+      screen.queryByRole("combobox", { name: "Filter by form" })
+    ).toBeNull();
+  });
+});

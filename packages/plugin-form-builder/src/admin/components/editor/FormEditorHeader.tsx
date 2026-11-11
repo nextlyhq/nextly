@@ -41,10 +41,13 @@ function formApiPath(formId: string): string | undefined {
   return formId === "" ? undefined : `/api/forms/${formId}`;
 }
 
-/** The pages a form's tabs show: every page, less Submissions for a new form. */
-export function formEditorPages(saved: boolean): FormPageId[] {
+/**
+ * The pages a form's tabs show: every page, less Submissions where it is not
+ * offered (a new form has none; a role may not read them).
+ */
+export function formEditorPages(withSubmissions: boolean): FormPageId[] {
   return FORM_PAGES.map(formPageId).filter(
-    page => saved || page !== "submissions"
+    page => withSubmissions || page !== "submissions"
   );
 }
 

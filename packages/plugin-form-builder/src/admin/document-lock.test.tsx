@@ -145,12 +145,13 @@ describe("the form builder under a colleague's claim", () => {
     // The question is asked with the document held; the answer comes after a
     // colleague has taken it. The claim is advisory on the server, so the
     // editor is the only thing between that answer and the delete.
-    const fetchMock = vi.fn(() =>
+    // An admin, so Delete is offered: the claim is what is under test.
+    const fetchMock = vi.fn((url: string) =>
       Promise.resolve(
-        new Response("{}", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })
+        new Response(
+          url.includes("/me/permissions") ? '{"isSuperAdmin":true}' : "{}",
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
       )
     );
     vi.stubGlobal("fetch", fetchMock);

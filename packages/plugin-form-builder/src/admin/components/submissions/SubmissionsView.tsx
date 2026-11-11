@@ -51,6 +51,7 @@ import {
 
 import type { FormField } from "../../../types";
 import { formatExportValue } from "../../../utils/export-formats";
+import { readPermissions } from "../../use-admin-permissions";
 import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
 
 import { SubmissionSheet } from "./SubmissionSheet";
@@ -141,6 +142,56 @@ function formatDate(value: string | null | undefined): string {
   });
 }
 
+/** A form entry as the entries API answers it. */
+type FormEntry = { id: string; name?: string; fields?: FormField[] };
+
+/** A form as the list uses it: its id, name and fields. */
+function formOptionOf(item: FormEntry): FormOption {
+  return {
+    id: item.id,
+    name: item.name ?? item.id,
+    fields: Array.isArray(item.fields) ? item.fields : [],
+  };
+}
+
+/**
+ * Every form, page by page: a capped single fetch would silently drop forms
+ * from the filter and the per-field column lookup. The entries API reads the
+ * page size from `limit` and answers its default page when that is absent, so
+ * the size goes there: under any other name the first page comes back short
+ * and the loop reads it as the last.
+ */
+async function readAllForms(formsSlug: string): Promise<FormOption[]> {
+  const allForms: FormOption[] = [];
+  const formsPageSize = 200;
+  for (let formsPage = 1; ; formsPage += 1) {
+    const formsRes = await fetch(
+      `/admin/api/collections/${formsSlug}/entries?limit=${formsPageSize}&page=${formsPage}`,
+      { credentials: "include" }
+    );
+    if (!formsRes.ok) break;
+    const json = (await formsRes.json()) as { items?: FormEntry[] };
+    const items = json.items ?? [];
+    allForms.push(...items.map(formOptionOf));
+    if (items.length < formsPageSize) break;
+  }
+  return allForms;
+}
+
+/** One form, for the list fixed to it; none if it cannot be read. */
+async function readOneForm(
+  formsSlug: string,
+  formId: string
+): Promise<FormOption[]> {
+  const response = await fetch(
+    `/admin/api/collections/${formsSlug}/entries/${encodeURIComponent(formId)}`,
+    { credentials: "include" }
+  );
+  if (!response.ok) return [];
+  const json = (await response.json()) as FormEntry & { item?: FormEntry };
+  return [formOptionOf(json.item ?? json)];
+}
+
 /** Status → badge styling. Tokens only; spam reads as a warning state. */
 function StatusBadge({ status }: { status: string }) {
   const label = status.charAt(0).toUpperCase() + status.slice(1);
@@ -221,50 +272,18 @@ export function SubmissionsView({
         if (cancelled) return;
         setSlugs(resolved);
 
-        // Page through ALL forms — a capped single fetch would silently
-        // drop forms from the filter and the per-field column lookup. The
-        // entries API reads the page size from `limit` and answers its
-        // default page when that is absent, so the size goes there: under
-        // any other name the first page comes back short and the loop below
-        // reads it as the last.
-        const allForms: FormOption[] = [];
-        const formsPageSize = 200;
-        for (let formsPage = 1; ; formsPage += 1) {
-          const formsRes = await fetch(
-            `/admin/api/collections/${resolved.forms}/entries?limit=${formsPageSize}&page=${formsPage}`,
-            { credentials: "include" }
-          );
-          if (!formsRes.ok) break;
-          const json = (await formsRes.json()) as {
-            items?: Array<{ id: string; name?: string; fields?: FormField[] }>;
-          };
-          const items = json.items ?? [];
-          allForms.push(
-            ...items.map(item => ({
-              id: item.id,
-              name: item.name ?? item.id,
-              fields: Array.isArray(item.fields) ? item.fields : [],
-            }))
-          );
-          if (items.length < formsPageSize) break;
-        }
-        if (!cancelled) setForms(allForms);
+        // One form's tab needs that form alone; the list of all
+        // submissions needs every form, for its filter and its columns.
+        const found =
+          formId === undefined
+            ? await readAllForms(resolved.forms)
+            : await readOneForm(resolved.forms, formId);
+        if (!cancelled) setForms(found);
 
-        const permsRes = await fetch("/admin/api/me/permissions", {
-          credentials: "include",
-        });
-        if (permsRes.ok) {
-          const perms = (await permsRes.json()) as {
-            permissions?: string[];
-            isSuperAdmin?: boolean;
-          };
-          const has = (slug: string) =>
-            Boolean(perms.isSuperAdmin) ||
-            (perms.permissions ?? []).includes(slug);
-          if (!cancelled) {
-            setCanUpdate(has(`update-${resolved.submissions}`));
-            setCanDelete(has(`delete-${resolved.submissions}`));
-          }
+        const has = await readPermissions().catch(() => undefined);
+        if (has !== undefined && !cancelled) {
+          setCanUpdate(has(`update-${resolved.submissions}`));
+          setCanDelete(has(`delete-${resolved.submissions}`));
         }
       } catch {
         // Bootstrap failures degrade to the default slugs — without them
@@ -280,7 +299,7 @@ export function SubmissionsView({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [formId]);
 
   // --- the list fetch ------------------------------------------------------
   // Monotonic request sequence: rapid filter changes overlap fetches, and

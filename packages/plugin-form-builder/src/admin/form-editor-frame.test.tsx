@@ -34,6 +34,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   submissionTotal = 12;
+  permissions = { isSuperAdmin: true };
 });
 
 const answer = (status: number, body: unknown) =>
@@ -47,6 +48,9 @@ const answer = (status: number, body: unknown) =>
 /** How many submissions the server says the form has. */
 let submissionTotal = 12;
 
+/** What the permissions route answers: everything, unless a case says less. */
+let permissions: Record<string, unknown> = { isSuperAdmin: true };
+
 /**
  * The admin's answers: the builder's configuration, the form's submissions
  * (12 of them), and each save in turn from `saves`.
@@ -55,6 +59,9 @@ function server(...saves: (() => Promise<Response>)[]) {
   return vi.fn((url: string, init?: RequestInit) => {
     if (init?.method === "PATCH") {
       return (saves.shift() ?? (() => answer(500, {})))();
+    }
+    if (url.includes("/me/permissions")) {
+      return answer(200, permissions);
     }
     if (url.includes("/builder-config")) {
       return answer(200, {
@@ -316,9 +323,11 @@ describe("the form editor's header", () => {
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
-  it("draws the pages as links, each at its own address, the current one marked", () => {
+  it("draws the pages as links, each at its own address, the current one marked", async () => {
     vi.stubGlobal("fetch", server());
     view({ view: "notifications" });
+    // Submissions joins once the role's permissions say it may read them.
+    await screen.findByRole("link", { name: /^Submissions/ });
     const tabs = within(
       screen.getByRole("navigation", { name: "Form pages" })
     ).getAllByRole("link");
@@ -348,5 +357,68 @@ describe("the form editor's header", () => {
       "aria-current",
       "page"
     );
+  });
+});
+
+describe("what a role may do from the editor", () => {
+  /** Opens More and reads its items. */
+  async function moreItems(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(within(bar()).getByRole("button", { name: "More" }));
+    const items = await screen.findAllByRole("menuitem");
+    return items.map(item => item.textContent);
+  }
+
+  /**
+   * The editor for a role holding `held`, once its permissions have arrived:
+   * the submissions count, which reading submissions allows, is the sign.
+   */
+  async function asRole(held: string[]) {
+    permissions = { permissions: [...held, "read-form-submissions"] };
+    vi.stubGlobal("fetch", server());
+    const user = view({ onDelete: vi.fn() });
+    await within(bar()).findByRole("link", { name: "12 submissions" });
+    return user;
+  }
+
+  it("offers Delete form to a role that may delete forms", async () => {
+    // The control for the case below.
+    const user = await asRole(["read-forms", "update-forms", "delete-forms"]);
+    expect(await moreItems(user)).toContain("Delete form…");
+  });
+
+  it("does not offer Delete form to a role that may only change forms", async () => {
+    const user = await asRole(["read-forms", "update-forms"]);
+    expect(await moreItems(user)).not.toContain("Delete form…");
+  });
+
+  it("leaves Submissions out for a role that may not read them", async () => {
+    permissions = { permissions: ["read-forms", "update-forms"] };
+    vi.stubGlobal("fetch", server());
+    view({ view: "submissions" });
+    expect(
+      await screen.findByText(/can't see this form's submissions/)
+    ).toBeVisible();
+    const tabs = within(
+      screen.getByRole("navigation", { name: "Form pages" })
+    ).getAllByRole("link");
+    expect(tabs.map(tab => tab.textContent?.replace(/\d+$/, ""))).not.toContain(
+      "Submissions"
+    );
+    expect(
+      within(bar()).queryByRole("link", { name: /submissions?$/ })
+    ).toBeNull();
+  });
+
+  it("shows Submissions to a role that may read them", async () => {
+    // The control: the tab and the count come with the permission.
+    permissions = {
+      permissions: ["read-forms", "update-forms", "read-form-submissions"],
+    };
+    vi.stubGlobal("fetch", server());
+    view();
+    expect(
+      await within(bar()).findByRole("link", { name: "12 submissions" })
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: /^Submissions/ })).toBeVisible();
   });
 });

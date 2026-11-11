@@ -39,7 +39,6 @@ import {
   type MouseEvent,
   type ReactNode,
   useCallback,
-  useEffect,
   useRef,
   useState,
 } from "react";
@@ -68,11 +67,15 @@ import { SubmissionsView } from "./components/submissions/SubmissionsView";
 import {
   FormBuilderProvider,
   createFieldFromType,
-  createNotification,
   generateFieldName,
   useFieldBookkeeping,
   type FormNotification,
 } from "./context/FormBuilderContext";
+import {
+  useEditorAccess,
+  useFormDelete,
+  useSeededNotification,
+} from "./form-editor-hooks";
 import { refusedPage, type SaveRefusal } from "./save-refusal";
 import { useBuilderConfig } from "./use-builder-config";
 
@@ -224,87 +227,52 @@ function PageBody({
   );
 }
 
-function FormEditor({
+/** What `useFormSave` saves, and for whom. */
+interface FormSaveTarget {
+  isCreating: boolean;
+  collectionSlug: string;
+  entryId: string | undefined;
+  onSave: FormBuilderViewProps["onSave"];
+  onSuccess: FormBuilderViewProps["onSuccess"];
+  /** Writes held by a colleague's claim, read when Save is pressed. */
+  writesHeld: boolean;
+  /** The form's version as read; see `initialData._rev`. */
+  version: string | undefined;
+}
+
+/**
+ * The form's one save: the whole form (fields, settings, notifications and
+ * status) sent once, through the host's own save where it gives one. A
+ * refused save keeps every change and says what to fix, and where.
+ */
+function useFormSave({
   isCreating,
   collectionSlug,
   entryId,
   onSave,
   onSuccess,
-  onDelete,
-  documentLock,
+  writesHeld,
   version,
-  view,
-}: FormEditorProps): JSX.Element {
+}: FormSaveTarget): {
+  handleSave: () => Promise<void>;
+  isSaving: boolean;
+  refusal: SaveRefusal | null;
+} {
   // The version the next save sends: the one read, then the one each save
   // answered, so a second save is not refused for this editor's first.
   const startedFrom = useRef(version);
   const {
     fields,
-    isDirty,
     formData,
     settings,
     notifications,
-    addField,
-    selectField,
-    seedNotifications,
-    updateFormData,
     markAsSaved,
     beginSave,
     markFieldsSaved,
-    changeCount,
-    undo,
-    readOnly,
   } = useFieldBookkeeping();
-
   const queryClient = useQueryClient();
-  const config = useBuilderConfig();
-  const [page, choosePage] = useFormPage(isCreating, view);
   const [isSaving, setIsSaving] = useState(false);
   const [refusal, setRefusal] = useState<SaveRefusal | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-
-  // The form editor needs the width: the Forms panel starts folded on it, and
-  // the bar's toggle brings it back. The admin remembers the reader's choice.
-  useFoldedPanel("forms.builder");
-  // Leaving the form with unsaved changes asks first; moving between its tabs
-  // stays on the form and does not.
-  useReportUnsavedWork(UNSAVED_WORK_KEY, isDirty);
-
-  const submissionCount = useSubmissionCount(
-    isCreating ? undefined : entryId,
-    config.submissionsSlug
-  );
-
-  // Seed a new form with the default admin-notification rule once the host
-  // defaults are known. Guarded by a ref so deleting the seeded rule is
-  // final — the effect must never re-seed a list the user emptied.
-  const seededRef = useRef(false);
-  const defaults = config.notificationDefaults;
-  useEffect(() => {
-    if (!isCreating || defaults === null || seededRef.current) return;
-    seededRef.current = true;
-    seedNotifications([
-      {
-        ...createNotification(),
-        name: "Admin notification",
-        to: defaults.defaultToEmail ?? "",
-      },
-    ]);
-  }, [isCreating, defaults, seedNotifications]);
-
-  // A field from the picker, added and opened (`fieldFromChoice`).
-  const handleAddField = useCallback(
-    (type: FormFieldTypeId, choice?: FieldPickerChoice) => {
-      const newField = fieldFromChoice(
-        type,
-        choice,
-        fields.map(f => f.name)
-      );
-      addField(newField);
-      selectField(newField.name);
-    },
-    [fields, addField, selectField]
-  );
 
   // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
@@ -319,7 +287,7 @@ function FormEditor({
     // editor sets: a write passes one gate rather than each control being
     // disabled separately. The Save button reads the same fact, so the
     // interface does not offer what this would refuse.
-    if (documentLock?.actionsDisabled === true) return;
+    if (writesHeld) return;
 
     const blocked = blockedBeforeSave(fields, notifications);
     if (blocked) {
@@ -414,51 +382,97 @@ function FormEditor({
     // Read inside, so it belongs here. Without it the callback closes over the
     // claim as it stood when the form mounted, and a colleague taking the
     // document over mid-session would leave this still committing.
-    documentLock?.actionsDisabled,
+    writesHeld,
   ]);
 
-  // ── Delete ────────────────────────────────────────────────────────────────
-  const handleDelete = useCallback(async () => {
-    // The commit is where the refusal lives, as for Save: a colleague who
-    // took the form while the question was open holds it now, and the claim
-    // is advisory on the server, so nothing else would stop the delete.
-    if (entryId === undefined || documentLock?.actionsDisabled === true) {
-      return;
-    }
-    const response = await fetch(
-      `/admin/api/collections/${collectionSlug}/entries/${entryId}`,
-      { method: "DELETE", credentials: "include" }
-    ).catch(() => undefined);
-    if (response === undefined || !response.ok) {
-      const body: unknown = await response?.json().catch(() => ({}));
-      toast.error(
-        saveErrorMessage(body, response?.statusText ?? "").replace(
-          /^Failed to save form/,
-          "Couldn't delete the form"
-        )
-      );
-      return;
-    }
-    // Nothing is left to save, so leaving is not asked about.
-    markAsSaved();
-    void queryClient.invalidateQueries({
-      queryKey: ["entries", "list", collectionSlug],
-    });
-    toast.success("Form deleted");
-    onDelete?.();
-  }, [
-    entryId,
-    collectionSlug,
+  return { handleSave, isSaving, refusal };
+}
+
+function FormEditor({
+  isCreating,
+  collectionSlug,
+  entryId,
+  onSave,
+  onSuccess,
+  onDelete,
+  documentLock,
+  version,
+  view,
+}: FormEditorProps): JSX.Element {
+  const {
+    fields,
+    isDirty,
+    formData,
+    notifications,
+    addField,
+    selectField,
+    seedNotifications,
+    updateFormData,
     markAsSaved,
-    queryClient,
+    changeCount,
+    undo,
+    readOnly,
+  } = useFieldBookkeeping();
+
+  const config = useBuilderConfig();
+  const access = useEditorAccess(collectionSlug, config.submissionsSlug);
+  const { canDelete, canReadSubmissions } = access;
+  const [page, choosePage] = useFormPage(isCreating, view);
+  const { handleSave, isSaving, refusal } = useFormSave({
+    isCreating,
+    collectionSlug,
+    entryId,
+    onSave,
+    onSuccess,
+    writesHeld: documentLock?.actionsDisabled === true,
+    version,
+  });
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // The form editor needs the width: the Forms panel starts folded on it, and
+  // the bar's toggle brings it back. The admin remembers the reader's choice.
+  useFoldedPanel("forms.builder");
+  // Leaving the form with unsaved changes asks first; moving between its tabs
+  // stays on the form and does not.
+  useReportUnsavedWork(UNSAVED_WORK_KEY, isDirty);
+
+  const submissionCount = useSubmissionCount(
+    isCreating || !canReadSubmissions ? undefined : entryId,
+    config.submissionsSlug
+  );
+
+  useSeededNotification(
+    isCreating,
+    config.notificationDefaults,
+    seedNotifications
+  );
+
+  // A field from the picker, added and opened (`fieldFromChoice`).
+  const handleAddField = useCallback(
+    (type: FormFieldTypeId, choice?: FieldPickerChoice) => {
+      const newField = fieldFromChoice(
+        type,
+        choice,
+        fields.map(f => f.name)
+      );
+      addField(newField);
+      selectField(newField.name);
+    },
+    [fields, addField, selectField]
+  );
+
+  // ── Delete ────────────────────────────────────────────────────────────────
+  const handleDelete = useFormDelete({
+    collectionSlug,
+    entryId,
+    writesHeld: documentLock?.actionsDisabled === true,
+    markAsSaved,
     onDelete,
-    // Read inside, so a claim taken while the dialog is open is the one read.
-    documentLock?.actionsDisabled,
-  ]);
+  });
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
   const saved = !isCreating && entryId !== undefined;
-  const tabs = formEditorPages(saved).map(
+  const tabs = formEditorPages(saved && canReadSubmissions).map(
     (each): FormEditorTab =>
       editorTab(each, {
         saved: saved ? { collectionSlug, entryId } : undefined,
@@ -499,7 +513,7 @@ function FormEditor({
               : toast.error("Couldn't copy the form ID")
           );
         }}
-        {...(saved && onDelete !== undefined
+        {...(saved && onDelete !== undefined && canDelete
           ? { onDelete: () => setConfirmingDelete(true) }
           : {})}
         onSave={() => {
@@ -526,30 +540,17 @@ function FormEditor({
           current={page}
         />
 
-        {refusal === null ? null : (
-          <Alert variant="destructive" className="mb-6">
-            <AlertDescription>
-              <span>{refusal.message}</span>
-              {refusal.page === undefined || refusal.page === page ? null : (
-                <>
-                  {" "}
-                  <a
-                    href={pageHref(refusal.page)}
-                    className="font-medium underline underline-offset-2"
-                    onClick={event =>
-                      followTab(event, pageHref(refusal.page ?? "builder"), {
-                        saved,
-                        choose: () => choosePage(refusal.page ?? "builder"),
-                      })
-                    }
-                  >
-                    Go to {pageLabel(refusal.page)}
-                  </a>
-                </>
-              )}
-            </AlertDescription>
-          </Alert>
-        )}
+        <RefusalAlert
+          refusal={refusal}
+          current={page}
+          hrefOf={pageHref}
+          follow={(event, target) =>
+            followTab(event, pageHref(target), {
+              saved,
+              choose: () => choosePage(target),
+            })
+          }
+        />
 
         <PageBody page={page}>
           {pageContent(page, {
@@ -574,44 +575,148 @@ function FormEditor({
             notifications: () => (
               <FormNotificationsTab defaults={config.notificationDefaults} />
             ),
-            submissions: () =>
-              entryId === undefined ? null : (
-                <SubmissionsView
-                  formId={entryId}
-                  {...(config.submissionsSlug === undefined
-                    ? {}
-                    : { collectionSlug: config.submissionsSlug })}
-                />
-              ),
+            submissions: () => (
+              <SubmissionsPage
+                formId={entryId}
+                submissionsSlug={config.submissionsSlug}
+                allowed={canReadSubmissions}
+                known={access.known}
+              />
+            ),
           })}
         </PageBody>
       </div>
 
-      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this form?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {formData.name.trim() === ""
-                ? "The form is deleted for good, and the site can no longer show it."
-                : `"${formData.name}" is deleted for good, and the site can no longer show it.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep the form</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={holdsWrites || readOnly}
-              onClick={() => {
-                void handleDelete();
-              }}
-            >
-              Delete form
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteFormDialog
+        open={confirmingDelete}
+        onOpenChange={setConfirmingDelete}
+        name={formData.name}
+        disabled={holdsWrites || readOnly}
+        onConfirm={() => {
+          void handleDelete();
+        }}
+      />
     </>
+  );
+}
+
+/** A refused save: what to fix, and a link to the page that holds it. */
+function RefusalAlert({
+  refusal,
+  current,
+  hrefOf,
+  follow,
+}: {
+  refusal: SaveRefusal | null;
+  current: FormPageId;
+  hrefOf: (page: FormPageId) => string;
+  follow: (event: MouseEvent<HTMLAnchorElement>, page: FormPageId) => void;
+}): JSX.Element | null {
+  if (refusal === null) return null;
+  const elsewhere =
+    refusal.page !== undefined && refusal.page !== current
+      ? refusal.page
+      : undefined;
+  return (
+    <Alert variant="destructive" className="mb-6">
+      <AlertDescription>
+        <span>{refusal.message}</span>
+        {elsewhere === undefined ? null : (
+          <>
+            {" "}
+            <a
+              href={hrefOf(elsewhere)}
+              className="font-medium underline underline-offset-2"
+              onClick={event => follow(event, elsewhere)}
+            >
+              Go to {pageLabel(elsewhere)}
+            </a>
+          </>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/** The Submissions page: this form's list, for a role that may read it. */
+function SubmissionsPage({
+  formId,
+  submissionsSlug,
+  allowed,
+  known,
+}: {
+  formId: string | undefined;
+  submissionsSlug: string | undefined;
+  allowed: boolean;
+  known: boolean;
+}): JSX.Element | null {
+  if (formId === undefined) return null;
+  if (!allowed) return <SubmissionsWithheld known={known} />;
+  return (
+    <SubmissionsView
+      formId={formId}
+      {...(submissionsSlug === undefined
+        ? {}
+        : { collectionSlug: submissionsSlug })}
+    />
+  );
+}
+
+/** Delete's question: the form is gone for good once answered. */
+function DeleteFormDialog({
+  open,
+  onOpenChange,
+  name,
+  disabled,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  name: string;
+  disabled: boolean;
+  onConfirm: () => void;
+}): JSX.Element {
+  const which = name.trim() === "" ? "The form" : `"${name}"`;
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this form?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {which} is deleted for good, and the site can no longer show it.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep the form</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={disabled}
+            onClick={onConfirm}
+          >
+            Delete form
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * The Submissions page for a person who may not read submissions: said once
+ * the permissions are known, rather than a list every read of which is refused.
+ */
+function SubmissionsWithheld({
+  known,
+}: {
+  known: boolean;
+}): JSX.Element | null {
+  if (!known) return null;
+  return (
+    <p className="rounded-md border border-border bg-card px-4 py-6 text-sm text-muted-foreground">
+      {
+        "Your role can't see this form's submissions. Ask an admin for access to Submissions."
+      }
+    </p>
   );
 }
 

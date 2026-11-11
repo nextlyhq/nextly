@@ -336,7 +336,13 @@ export function editViewPage(
 ): string | undefined {
   if (editView === undefined) return undefined;
   const routed = routedDocumentView("collection", slug, view);
-  return routed !== undefined && routed.component === editView
+  // Declared on this collection, not offered on a field type: a field-type
+  // view that happened to draw the same component would otherwise skip the
+  // check that the document has its field.
+  return routed !== undefined &&
+    "slug" in routed &&
+    routed.slug === slug &&
+    routed.component === editView
     ? routed.path
     : undefined;
 }
