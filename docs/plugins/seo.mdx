@@ -379,6 +379,7 @@ import { readBrandFacts, readSeoRules } from "@nextlyhq/plugin-seo";
 export const brandCard = definePlugin({
   name: "@acme/brand-card",
   version: "1.0.0",
+  nextly: ">=0.0.2-alpha.74",
   async init(ctx) {
     const rules = await readSeoRules(ctx);
     const brand = await readBrandFacts(ctx);
