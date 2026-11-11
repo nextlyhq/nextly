@@ -14,17 +14,17 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../di";
 import { whenServicesRegistered } from "../../di/service-access";
+import { PAGINATION_DEFAULTS } from "../../types/pagination";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { resolveLocaleChain } from "../i18n/resolve-locale";
-import { getCachedNextly } from "../../init";
-import { PAGINATION_DEFAULTS } from "../../types/pagination";
 
 import { addressLanguages, heldIn, readEveryLanguage } from "./held-addresses";
 import type { HeldAddressUpdate } from "./participants";
 import {
   declaredFor,
   siteTypes,
+  startedNextly,
   type PublicAddressType,
 } from "./public-address";
 
@@ -102,7 +102,7 @@ async function heldNow(
  * in, read as a save reads it, on a transaction of its own.
  */
 async function singleHeld(type: PublicAddressType): Promise<HeldDocument[]> {
-  const nextly = await getCachedNextly();
+  const nextly = await startedNextly();
   // Read only: a Single never saved has nothing to hold, and listing must
   // not create it.
   const single = (await nextly.findSingle({
@@ -140,7 +140,7 @@ export async function heldPage(args: {
     return { items: after === undefined ? await singleHeld(type) : [] };
   }
   const limit = Math.min(Math.max(args.limit ?? DEFAULT_PAGE, 1), MAX_PAGE);
-  const nextly = await getCachedNextly();
+  const nextly = await startedNextly();
   // By id, each page after the last id of the one before, so a document
   // deleted or made while a caller pages through can never move one it has
   // not read yet behind where it has been. One more than asked, to know
@@ -152,7 +152,7 @@ export async function heldPage(args: {
     limit: limit + 1,
     status: "all",
   } as never);
-  const documents = (page.items as Record<string, unknown>[]).slice(0, limit);
+  const documents = page.items.slice(0, limit);
   if (documents.length === 0) return { items: [] };
 
   // Each document read exactly as a save reads it, so a catch-up records
