@@ -1,0 +1,24 @@
+---
+title: PLUGIN_PACKAGE_NOT_INSTALLED
+description: "`nextly plugins add` found no installed package by the name it was given."
+---
+
+## Cause
+
+`nextly plugins add` found no installed package by the name it was given.
+
+`nextly plugins add` reads the package it adds from the project's `node_modules`, the way Node finds a package by its name: in the project's folder, or the nearest folder above it with one. It looks after its own install, or straight away with `--skip-install`. The package is not there by that name. A version or a tag after the name (`@acme/seo@1.2.0`) is fine; a folder or a git address is installed under the name in its own package.json, which is the name to give.
+
+## Fix
+
+- Check the package name for a typo.
+- For a folder or a git address, install it with your package manager, then run `nextly plugins add <name> --skip-install` with the name from its package.json.
+
+## Example
+
+```text
+✗ No installed package is named "@acme/seo".
+  Why:  The package is read from the project's node_modules once it is installed, and it is not there. A folder or a git address is installed under the name in its own package.json.
+  Next: Install it, or give the name it is installed under, then run `nextly plugins add @acme/seo --skip-install`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-package-not-installed  (PLUGIN_PACKAGE_NOT_INSTALLED)
+```

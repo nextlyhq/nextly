@@ -60,6 +60,15 @@ const saves = (fetchMock: ReturnType<typeof vi.fn>) =>
         >
     );
 
+/** Picks a status in the bar's menu: an unsaved change, so Save is offered. */
+async function pickStatus(
+  user: ReturnType<typeof userEvent.setup>,
+  state: RegExp
+) {
+  await user.click(screen.getByRole("button", { name: /^Status:/ }));
+  await user.click(await screen.findByRole("menuitemradio", { name: state }));
+}
+
 /** Answers the builder's settings read; `saved` answers each save in turn. */
 function server(...saved: (() => Promise<Response>)[]) {
   return vi.fn((_url: string, init?: RequestInit) =>
@@ -81,11 +90,11 @@ describe("the form editor's save", () => {
     view();
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await pickStatus(user, /^Live/);
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
-    await user.click(
-      await screen.findByRole("button", { name: "Save Changes" })
-    );
+    await pickStatus(user, /^Closed/);
+    await user.click(await screen.findByRole("button", { name: "Save" }));
     await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
 
     expect(saves(fetchMock).map(body => body._rev)).toEqual(["3", "4"]);
@@ -108,9 +117,9 @@ describe("the form editor's save", () => {
       )
     );
     view();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Save Changes" }));
+    const user = userEvent.setup();
+    await pickStatus(user, /^Live/);
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(
       await screen.findByText(

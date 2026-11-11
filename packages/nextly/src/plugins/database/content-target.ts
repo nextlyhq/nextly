@@ -23,13 +23,6 @@ export type ContentTarget =
   | { kind: "collection"; slug: string; id: string }
   | { kind: "single"; slug: string };
 
-/**
- * How many field groups a walk climbs before it stops. Each step is one read,
- * so a parent chain that loops (a row naming itself, or two naming each
- * other) ends here rather than reading for ever.
- */
-export const MAX_COMPONENT_DEPTH = 8;
-
 export interface ContentTargetDeps {
   /** The collection, Single or field group a table stores, by SQL name. */
   contentEntity: (tableName: string) => EntityOwner | undefined;
@@ -62,15 +55,20 @@ export async function contentTarget(
 ): Promise<ContentTarget | undefined> {
   let table = tableName;
   let rowId = String(id);
-  // One bound, the `break` below: each pass reads one parent at most.
-  for (let climbed = 0; ; climbed++) {
+  // Field groups nest to any depth, so the climb goes as far as the rows do. Each row is climbed
+  // through once: a parent chain that names a row already climbed (a row naming itself, or two
+  // naming each other) loops, and the `break` below ends it rather than reading for ever.
+  const climbed = new Set<string>();
+  for (;;) {
     const owner = deps.contentEntity(table);
     if (owner === undefined) return undefined;
     if (owner.kind === "collection") {
       return { kind: "collection", slug: owner.slug, id: rowId };
     }
     if (owner.kind === "single") return { kind: "single", slug: owner.slug };
-    if (climbed === MAX_COMPONENT_DEPTH) break;
+    const key = JSON.stringify([table, rowId]);
+    if (climbed.has(key)) break;
+    climbed.add(key);
     const parent = await readParent(table, rowId, deps);
     if (parent === undefined) return undefined;
     table = parent.table;
@@ -79,8 +77,8 @@ export async function contentTarget(
   // Said rather than dropped in silence: the document this row sits in may
   // now show the previous value until something else expires it.
   getNextlyLogger().warn({
-    kind: "contributed-write-parent-too-deep",
-    message: `A write to "${tableName}" was not traced to its document within ${MAX_COMPONENT_DEPTH} field groups, so no cached read was expired for it.`,
+    kind: "contributed-write-parent-loops",
+    message: `A write to "${tableName}" was not traced to its document: its rows name each other as parents in a loop, so no cached read was expired for it.`,
     table: tableName,
   });
   return undefined;

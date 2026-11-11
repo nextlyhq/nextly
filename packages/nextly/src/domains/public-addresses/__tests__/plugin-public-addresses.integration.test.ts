@@ -306,6 +306,10 @@ describe.each(getConfiguredTestDialects())(
       expect(listed.map(item => item.holder.id)).toEqual(
         created.items.map(item => String(item.id))
       );
+      // Each carries when it was made, for ordering across types.
+      expect(listed.every(item => typeof item.createdAt === "string")).toBe(
+        true
+      );
       const one = listed.find(item => item.holder.id === ids[0]);
       expect(one?.holds).toEqual([{ locale: "en", path: "/blog/one" }]);
     });
@@ -489,6 +493,128 @@ describe.each(getConfiguredTestDialects())(
       expect(await fingerprintWith(false)).not.toBe(
         await fingerprintWith(true)
       );
+    });
+
+    it("a participant's own write rolls back when the save fails", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const writer: PublicAddressParticipant = {
+        holderOf: () => Promise.resolve(null),
+        record: async (batch, { transaction }) => {
+          const ctx = seen.ctx;
+          if (!ctx) throw new Error("no context");
+          for (const update of batch) {
+            await ctx.services.collections.createEntryInTransaction(
+              transaction,
+              "addr_log",
+              { holder: `${update.holder.collection}:${update.holder.id}` }
+            );
+          }
+        },
+      };
+      const failing: PublicAddressParticipant = {
+        holderOf: () => Promise.resolve(null),
+        record: () => Promise.reject(new Error("second record failed")),
+      };
+      const plugin = definePlugin({
+        name: "@test/address-log-rollback",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          collections: [
+            defineCollection({
+              slug: "addr_log",
+              fields: [text({ name: "holder" })],
+            }),
+          ],
+        },
+        init(ctx) {
+          seen.ctx = ctx;
+          ctx.publicAddresses.participate(writer);
+          ctx.publicAddresses.participate(failing);
+        },
+      });
+      current = await createTestNextly({
+        dialect,
+        plugins: [plugin],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+
+      await expect(publish(current, "hello")).rejects.toThrow();
+
+      expect(
+        (await current.nextly.find({ collection: "posts" })).items
+      ).toEqual([]);
+      expect(
+        (await current.nextly.find({ collection: "addr_log" })).items
+      ).toEqual([]);
+    });
+
+    it("a participant writes its own collection on the save's transaction", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const participant: PublicAddressParticipant = {
+        holderOf: () => Promise.resolve(null),
+        record: async (batch, { transaction }) => {
+          const ctx = seen.ctx;
+          if (!ctx) throw new Error("no context");
+          for (const update of batch) {
+            await ctx.services.collections.createEntryInTransaction(
+              transaction,
+              "addr_log",
+              { holder: `${update.holder.collection}:${update.holder.id}` }
+            );
+          }
+        },
+      };
+      const plugin = definePlugin({
+        name: "@test/address-log",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          collections: [
+            defineCollection({
+              slug: "addr_log",
+              fields: [text({ name: "holder" })],
+            }),
+          ],
+        },
+        init(ctx) {
+          seen.ctx = ctx;
+          ctx.publicAddresses.participate(participant);
+        },
+      });
+      current = await createTestNextly({
+        dialect,
+        plugins: [plugin],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+
+      const post = await publish(current, "hello");
+
+      const { items } = await current.nextly.find({ collection: "addr_log" });
+      expect(items.map(item => item.holder)).toEqual([`posts:${post}`]);
+    });
+
+    it("types lists the site's content types, and no plugin's or system one", async () => {
+      const { ctx } = await boot(dialect);
+
+      const types = await ctx.publicAddresses.types();
+
+      expect(types).toContainEqual({ kind: "collection", slug: "posts" });
+      expect(types.map(type => type.slug)).not.toContain("users");
     });
 
     it("withdraw stops the asking", async () => {

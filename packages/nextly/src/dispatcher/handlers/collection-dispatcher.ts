@@ -58,6 +58,7 @@ import {
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import {
   applyCollectionSchemaChange,
   fieldsAsStored,
@@ -111,6 +112,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   isTruthyParam,
+  parseCountParam,
   parseRichTextFormat,
   parseSelectParam,
   parseStatusParam,
@@ -123,6 +125,7 @@ import {
 import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
@@ -505,16 +508,21 @@ const COLLECTIONS_METHODS: Record<
     // reading that stops at the first page, and everything past it is
     // unreachable. The singles dispatcher resolves its allowlist the same way.
     execute: async (svc, p) => {
+      // Read first, so an owner it does not know is refused before any work.
+      const owner = readListOwner(p.owner);
       // The SHARED resolver, which the singles listing asks too, handed the
       // SAME caller every other read decision takes. `undefined` means no
       // filter — an unauthenticated caller, gated at the route layer, or a
       // session super admin. An empty list means nothing is visible, which
       // the registry short-circuits to a zero-row, zero-total answer.
       const reader = readAuthenticatedUser();
-      const slugAllowlist = await readableSlugAllowlist(
+      const readable = await readableSlugAllowlist(
         reader ? readAccessCallerForDispatch(reader) : undefined,
         "collection"
       );
+      // The site's own collections or the plugins', as conditions on the
+      // same query: the plugins' list only narrows what the reader may read.
+      const slugLists = slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -527,7 +535,7 @@ const COLLECTIONS_METHODS: Record<
           | "updatedAt"
           | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
-        slugAllowlist,
+        ...slugLists,
       });
       // Service returns legacy { success, data, meta }. Unwrap throws on
       // failure (which the dispatcher converts to a NextlyError response).
@@ -969,6 +977,24 @@ const COLLECTIONS_METHODS: Record<
           // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
           const dialect = adapter.dialect;
 
+          // A field renamed onto a column that is already there is refused before anything
+          // changes, on either way below: written and run as a migration, or pushed. The dialog
+          // never offers such a change as a rename, only as the old column dropped beside a field
+          // kept on the column that is there, so it is found from the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: (collection.fields ??
+                []) as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: storesPerLanguage({ localized: wasLocalized }),
+              isLocalized: isStoredPerLanguage,
+              dialect,
+              builtBy: "collection",
+            },
+            { collection: p.collectionName }
+          );
           // A column made unique over entries that already repeat a value is refused before
           // anything runs, on either road below: the save writer runs no push that would ask it.
           await refuseUniqueOverRepeats({
@@ -1280,6 +1306,8 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?count=capped` counts the total no further than the list shows.
+        countUpTo: parseCountParam(p.count),
       });
 
       type PaginatedShape = {
@@ -1290,6 +1318,7 @@ const COLLECTIONS_METHODS: Record<
         totalPages: number;
         hasNextPage: boolean;
         hasPrevPage: boolean;
+        totalCapped?: true;
       };
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         collectionName: p.collectionName,
@@ -1781,7 +1810,13 @@ async function writerSaveOf(change: WriterChange): Promise<
   if (!container.has("builderSaveSetup")) return undefined;
   const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
   const adapter = getAdapterFromDI();
-  if (!adapter) throw new Error("Database adapter not initialized");
+  // A writer registered with no adapter is a wiring fault of the app, not the editor's: reported
+  // as an internal error, with what was missing in the log.
+  if (!adapter) {
+    throw NextlyError.internal({
+      logContext: { reason: "database adapter not initialized" },
+    });
+  }
   const logger = getLoggerFromDI() ?? consoleLogger;
   const dynamic = new DynamicCollectionService(adapter, logger);
   const before = change.collection.fields ?? [];

@@ -257,7 +257,7 @@ export function PreviewPane({
         <div
           data-testid="preview-error"
           role="status"
-          className="shrink-0 border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          className="shrink-0 border-b border-border bg-danger-surface px-3 py-2 text-xs text-danger-text"
         >
           Preview could not be rendered: {error}
         </div>

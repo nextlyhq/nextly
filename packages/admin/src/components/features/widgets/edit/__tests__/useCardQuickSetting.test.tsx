@@ -1,27 +1,25 @@
 /**
- * A card's quick settings, as the header's control and the quick popover change them.
+ * A card's quick setting, as the header's control changes it.
  *
  * At rest a change is written at once and offered back with Undo, which writes what the card had
- * just before THAT change; while customising it is staged in the draft and nothing is written. A
- * new collection resets the settings that work over it. Said once, in the toast that offers Undo,
- * once the card shows the change:
+ * just before THAT change; while customising no control is drawn. Said once, in the toast that
+ * offers Undo, once the card shows the change:
  * a change of the card's settings is asked again for that card alone, and the old answer
  * stays on screen until the new one arrives; a quiet re-ask that is refused keeps the old answer
  * for good, so it is announced as saved but not shown.
  */
 import { act, renderHook } from "@testing-library/react";
-import type { PublishedContentSource } from "nextly/config";
+import { isValidElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { gridBounds } from "../../__tests__/grid-bounds";
+import type { CardQuickSettingProps } from "../CardQuickSetting";
 import type { QuickSetting } from "../quick-setting";
 import type { CardSettingsWriteCallbacks } from "../useCardSettingsWrite";
 import {
   useCardQuickSetting,
   type CellSettingsWrite,
-  type CellStagedWrite,
 } from "../useCardQuickSetting";
 
 const toast = vi.hoisted(() => ({
@@ -32,18 +30,6 @@ const toast = vi.hoisted(() => ({
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast,
-}));
-
-const sources = vi.hoisted(() => ({ value: [] as PublishedContentSource[] }));
-vi.mock("@admin/context/providers/BrandingProvider", () => ({
-  useBranding: () => ({ widgetSources: sources.value }),
-}));
-
-// What a card asks is its settings, which its widget's `load` reads, so a change of range asks
-// again through the real reading of them; only which collections are offered is stood in for.
-vi.mock("../../widget-as-asked", async importOriginal => ({
-  ...(await importOriginal<typeof import("../../widget-as-asked")>()),
-  askableWith: () => true,
 }));
 
 /** The widget's quick setting: its range. */
@@ -64,11 +50,10 @@ const WIDGET: DashboardWidget = {
   id: "core/activity",
   title: "Activity",
   archetype: "custom",
-  // Resizable, so the popover holds a Size.
   size: { default: { w: 4, h: 3 }, min: { w: 3, h: 2 }, max: { w: 12, h: 6 } },
   settings: [
     range,
-    // Changed in the sheet, never quick: what a later save changes beside the quick setting.
+    // Changed in the drawer, never quick: what a later save changes beside the quick setting.
     { name: "limit", type: "number", label: "Rows", defaultValue: 5 },
   ],
 };
@@ -82,21 +67,27 @@ function landingWrite(patch: Partial<CellSettingsWrite> = {}) {
     (_config: Record<string, unknown>, callbacks: CardSettingsWriteCallbacks) =>
       callbacks.onLanded?.()
   );
-  const resize = vi.fn(
-    (_size: { w: number; h: number }, callbacks: CardSettingsWriteCallbacks) =>
-      callbacks.onLanded?.()
-  );
   const settingsWrite: CellSettingsWrite = {
     write,
-    resize,
     isWriting: false,
     ...patch,
   };
-  return { settingsWrite, write, resize };
+  return { settingsWrite, write };
 }
 
-function staging(): CellStagedWrite {
-  return { config: vi.fn(), size: vi.fn(), isWriting: false };
+/**
+ * Change the card's header control to `next`, as the reader would: through the control the hook
+ * draws, handed what it is told when the change does not land.
+ */
+function change(
+  inline: unknown,
+  next: string,
+  reverted: () => void = () => {}
+) {
+  if (!isValidElement<CardQuickSettingProps>(inline)) {
+    throw new Error("no header control drawn");
+  }
+  act(() => inline.props.onChange(next, reverted));
 }
 
 function base(
@@ -108,12 +99,10 @@ function base(
     widget: WIDGET,
     title: "Activity",
     config: undefined,
-    size: { w: 4, h: 3 },
     isEditing: false,
     isFetching: false,
     updatedAt: SHOWN,
     settingsWrite,
-    staged: staging(),
     ...patch,
   };
 }
@@ -145,7 +134,6 @@ function pressUndo() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  sources.value = [];
 });
 
 /** A card whose change lands at once, then is asked again and settles at `settledAt`. */
@@ -155,7 +143,7 @@ function changeAndSettle(settledAt: Date) {
   const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
     initialProps: props,
   });
-  act(() => result.current.popover?.changeSetting(range, "30d"));
+  change(result.current.inline, "30d");
   // Nothing said while the old answer is still on screen.
   expect(toast.success).not.toHaveBeenCalled();
   settle(rerender, props, settledAt);
@@ -189,7 +177,7 @@ describe("a quick setting that asks the card again", () => {
     const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
       initialProps: props,
     });
-    act(() => result.current.popover?.changeSetting(range, "30d"));
+    change(result.current.inline, "30d");
     const asked = { ...props, config: { range: "30d" } };
     settle(rerender, asked, REPLACED);
     expect(toast.success).not.toHaveBeenCalled();
@@ -208,19 +196,9 @@ describe("a quick setting changed at rest", () => {
     const { result } = renderHook(p => useCardQuickSetting(p), {
       initialProps: base(settingsWrite, { config: { range: "30d" } }),
     });
-    act(() => result.current.popover?.changeSetting(range, "90d"));
+    change(result.current.inline, "90d");
     expect(write).toHaveBeenCalledTimes(1);
     expect(write.mock.calls[0]?.[0]).toEqual({ range: "90d" });
-  });
-
-  it("is shown in the popover at once, ahead of the write landing", () => {
-    // A write still in flight: nothing has landed, and the stored config is unchanged.
-    const { settingsWrite } = landingWrite({ write: vi.fn() });
-    const { result } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(settingsWrite, { config: { range: "30d" } }),
-    });
-    act(() => result.current.popover?.changeSetting(range, "90d"));
-    expect(result.current.popover?.values.range).toBe("90d");
   });
 
   it("is undone to what the card had just before the latest change, not its first value or its default", () => {
@@ -231,10 +209,10 @@ describe("a quick setting changed at rest", () => {
     });
     // Two changes, each landing, read back as the stored config and shown by the card: 30d,
     // then 90d, then 7d, the default, which is stored as nothing.
-    act(() => result.current.popover?.changeSetting(range, "90d"));
+    change(result.current.inline, "90d");
     const second = { ...props, config: { range: "90d" } };
     settle(rerender, second, new Date(2_000));
-    act(() => result.current.popover?.changeSetting(range, "7d"));
+    change(result.current.inline, "7d");
     const third = { ...props, config: {}, updatedAt: new Date(2_000) };
     settle(rerender, third, new Date(3_000));
     expect(write.mock.calls.map(call => call[0])).toEqual([
@@ -261,10 +239,10 @@ describe("a quick setting changed at rest", () => {
     const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
       initialProps: props,
     });
-    act(() => result.current.popover?.changeSetting(range, "90d"));
+    change(result.current.inline, "90d");
     const changed = { ...props, config: { range: "90d" } };
     settle(rerender, changed, new Date(2_000));
-    // The sheet's Done saves Rows after it, while the change's Undo is still on offer.
+    // The drawer's Save saves Rows after it, while the change's Undo is still on offer.
     rerender({
       ...changed,
       updatedAt: new Date(2_000),
@@ -275,7 +253,7 @@ describe("a quick setting changed at rest", () => {
     expect(write.mock.calls.at(-1)?.[0]).toEqual({ range: "30d", limit: 9 });
   });
 
-  it("goes back to the stored value, and offers no Undo, when the write does not land", () => {
+  it("tells the control to go back to the stored value, and offers no Undo, when the write does not land", () => {
     const { settingsWrite } = landingWrite({
       write: vi.fn((_config, callbacks: CardSettingsWriteCallbacks) =>
         callbacks.onFailed?.("refused")
@@ -284,69 +262,26 @@ describe("a quick setting changed at rest", () => {
     const { result } = renderHook(p => useCardQuickSetting(p), {
       initialProps: base(settingsWrite, { config: { range: "30d" } }),
     });
-    act(() => result.current.popover?.changeSetting(range, "90d"));
-    expect(result.current.popover?.values.range).toBe("30d");
+    const reverted = vi.fn();
+    change(result.current.inline, "90d", reverted);
+    expect(reverted).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
   });
 });
 
-describe("a quick setting changed while customising", () => {
-  it("is staged in the draft, and nothing is written or offered back", () => {
-    const { write } = landingWrite();
-    const staged = staging();
+describe("a card while customising", () => {
+  it("draws no header control, so nothing is written or offered back", () => {
+    const { settingsWrite, write } = landingWrite();
     const { result } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(undefined, {
+      initialProps: base(settingsWrite, {
         isEditing: true,
-        staged,
         config: { range: "30d" },
       }),
     });
-    act(() => result.current.popover?.changeSetting(range, "90d"));
-    expect(staged.config).toHaveBeenCalledWith({ range: "90d" });
+    // Every setting is changed in the drawer while customising, staged with the rest.
+    expect(result.current.inline).toBeUndefined();
     expect(write).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
-    // The header's own control is a resting one: while customising the popover alone changes it.
-    expect(result.current.inline).toBeUndefined();
-  });
-
-  it("stages a size through the draft too", () => {
-    const staged = staging();
-    const { result } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(undefined, { isEditing: true, staged }),
-    });
-    act(() => result.current.popover?.changeSize({ w: 6, h: 3 }));
-    expect(staged.size).toHaveBeenCalledWith({ w: 6, h: 3 });
-  });
-});
-
-describe("the card's size, changed at rest", () => {
-  it("is written at once, said, and undone back to the size it had", () => {
-    const { settingsWrite, resize } = landingWrite();
-    const { result } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(settingsWrite, { size: { w: 4, h: 3 } }),
-    });
-    expect(result.current.popover?.size?.size).toEqual({ w: 4, h: 3 });
-    act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
-    expect(resize.mock.calls[0]?.[0]).toEqual({ w: 12, h: 3 });
-    expect(toasts()).toEqual(["Activity: Size set to 100% wide."]);
-    pressUndo();
-    expect(resize.mock.calls.at(-1)?.[0]).toEqual({ w: 4, h: 3 });
-  });
-
-  it("is not offered where the grid gives no size write, nor for a card of one size", () => {
-    const { settingsWrite } = landingWrite({ resize: undefined });
-    const noResize = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(settingsWrite),
-    });
-    expect(noResize.result.current.popover?.size).toBeUndefined();
-
-    const fixed = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(landingWrite().settingsWrite, {
-        widget: { ...WIDGET, size: gridBounds(12, 3), settings: [] },
-      }),
-    });
-    // Nothing quick and nothing to resize: no popover at all.
-    expect(fixed.result.current.popover).toBeUndefined();
   });
 });
 
@@ -360,7 +295,7 @@ describe("an Undo offered at rest, once customising begins", () => {
     const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
       initialProps: props,
     });
-    act(() => result.current.popover?.changeSetting(range, "90d"));
+    change(result.current.inline, "90d");
     const changed = { ...props, config: { range: "90d" } };
     settle(rerender, changed, new Date(2_000));
     expect(toasts()).toEqual(["Activity: Date range set to Last 90 days."]);
@@ -371,26 +306,13 @@ describe("an Undo offered at rest, once customising begins", () => {
     expect(write).toHaveBeenCalledTimes(1);
   });
 
-  it("does the same for a size", () => {
-    const { settingsWrite, resize } = landingWrite();
-    const props = base(settingsWrite, { size: { w: 4, h: 3 } });
-    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: props,
-    });
-    act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
-    rerender({ ...props, size: { w: 12, h: 3 }, ...customising });
-    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
-    pressUndo();
-    expect(resize).toHaveBeenCalledTimes(1);
-  });
-
   it("is not said, nor offered later, when customising begins before the card shows the change", () => {
     const { settingsWrite } = landingWrite();
     const props = base(settingsWrite, { config: { range: "30d" } });
     const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
       initialProps: props,
     });
-    act(() => result.current.popover?.changeSetting(range, "90d"));
+    change(result.current.inline, "90d");
     // The write landed and the card is still asking again when customising begins.
     rerender({ ...props, config: { range: "90d" }, isFetching: true });
     rerender({ ...props, config: { range: "90d" }, ...customising });
@@ -412,7 +334,7 @@ describe("an Undo offered at rest, once its card is removed", () => {
       p => useCardQuickSetting(p),
       { initialProps: props }
     );
-    act(() => result.current.popover?.changeSetting(range, "90d"));
+    change(result.current.inline, "90d");
     settle(rerender, { ...props, config: { range: "90d" } }, REPLACED);
     expect(toasts()).toEqual(["Activity: Date range set to Last 90 days."]);
 
@@ -420,74 +342,5 @@ describe("an Undo offered at rest, once its card is removed", () => {
     expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
     pressUndo();
     expect(write).toHaveBeenCalledTimes(1);
-  });
-
-  it("does the same for a size", () => {
-    const { settingsWrite, resize } = landingWrite();
-    const { result, unmount } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: base(settingsWrite, { size: { w: 4, h: 3 } }),
-    });
-    act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
-    expect(toasts()).toEqual(["Activity: Size set to 100% wide."]);
-
-    unmount();
-    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
-    pressUndo();
-    expect(resize).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("a new collection from the popover", () => {
-  const LISTED: DashboardWidget = {
-    ...WIDGET,
-    settings: [
-      { name: "collection", type: "collection", label: "Collection" },
-      {
-        name: "sort",
-        type: "sort",
-        of: "collection",
-        label: "Sort",
-        defaultValue: "-updatedAt",
-      },
-    ],
-  };
-  const source = (
-    collection: string,
-    fields: string[]
-  ): PublishedContentSource => ({
-    collection,
-    label: collection[0]?.toUpperCase() + collection.slice(1),
-    lifecycle: false,
-    fields: fields.map(name => ({ name, label: name, type: "string" })),
-  });
-
-  it("resets the settings that work over it, and is said by the collection's label", () => {
-    sources.value = [
-      source("posts", ["title", "updatedAt"]),
-      source("pages", ["updatedAt"]),
-    ];
-    const { settingsWrite, write } = landingWrite();
-    const props = base(settingsWrite, {
-      widget: LISTED,
-      config: { collection: "posts", sort: "title" },
-    });
-    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
-      initialProps: props,
-    });
-    const collection = result.current.popover?.settings[0];
-    if (collection?.type !== "collection")
-      throw new Error("no Collection drawn");
-    expect(result.current.popover?.collections).toEqual([
-      { label: "Posts", value: "posts" },
-      { label: "Pages", value: "pages" },
-    ]);
-    act(() => result.current.popover?.changeSetting(collection, "pages"));
-    // Pages has no `title`, so the sort goes back to where it starts there: its default.
-    expect(write.mock.calls[0]?.[0]).toEqual({ collection: "pages" });
-    // A new collection is a new question for the card's `load`: said once its answer arrives.
-    settle(rerender, props, REPLACED);
-    expect(toast.success.mock.calls[0]?.[0]).toBe(
-      "Activity: Collection set to Pages."
-    );
   });
 });
