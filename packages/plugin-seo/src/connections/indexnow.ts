@@ -30,6 +30,7 @@ import { productionAddressesOf } from "../canonical";
 import { heldLanguages, servedAt } from "../languages/versions";
 import { siteOriginFor } from "../outputs/site-origin";
 import { isRecord } from "../plain-values";
+import { idOf } from "../problems/hooks";
 import type { ReadRules } from "../resolver/provider";
 
 import type { ConnectionResult } from "./contract";
@@ -41,7 +42,7 @@ import {
 import { attemptNow, readConnections, writeConnections } from "./store";
 
 /** How long the notes are gathered after the last save before one is sent. */
-export const INDEXNOW_SETTLE_MS = 5_000;
+const INDEXNOW_SETTLE_MS = 5_000;
 
 /** How long a stream of saves may keep a notice waiting, at most. */
 const MOST_WAIT_MS = 30_000;
@@ -117,7 +118,7 @@ async function urlsByHost(
 }
 
 /** The notes taken since the last notice, and when the next one goes. */
-export interface IndexNowQueue {
+interface IndexNowQueue {
   /** Note pages whose addresses a save recorded. */
   noteMoves(moves: readonly AddressMove[]): void;
   /** Note a page saved without its addresses changing. */
@@ -290,14 +291,6 @@ async function sendOne(
   } catch {
     return "failed";
   }
-}
-
-/** The id of the document a hook was handed, as text. */
-function idOf(context: { data?: unknown }): string | undefined {
-  const id = isRecord(context.data) ? context.data.id : undefined;
-  return typeof id === "string" || typeof id === "number"
-    ? String(id)
-    : undefined;
 }
 
 /**
