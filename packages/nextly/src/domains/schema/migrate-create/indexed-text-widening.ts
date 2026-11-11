@@ -25,25 +25,20 @@ export function refuseIndexedTextWidening(args: {
 }): void {
   if (args.dialect !== "mysql" || args.previous === undefined) return;
   const errors: { path: string; code: string; message: string }[] = [];
-  for (const op of args.operations) {
-    if (op.type !== "change_column_type") continue;
-    if (
-      !isMysqlTextOrBlobType(op.toType) ||
-      isMysqlTextOrBlobType(op.fromType)
-    ) {
-      continue;
-    }
-    const index = args.previous.tables
-      .find(table => table.name === op.tableName)
-      ?.indexes?.find(spec => spec.columns.includes(op.columnName));
-    if (index === undefined) continue;
+  for (const widening of wideningsOf(args.operations)) {
+    const blocking = indexesBlocking(widening, args.operations, args.previous);
+    if (blocking === "none") continue;
     errors.push({
-      path: `${op.tableName}.${op.columnName}`,
+      path: `${widening.table}.${widening.column}`,
       code: "INDEXED_COLUMN_WIDENING",
       message:
-        `${op.tableName}.${op.columnName} would change from ${op.fromType} to ${op.toType}, ` +
-        `which MySQL cannot do while the index ${index.name} keys the whole column. Give the ` +
-        "field a maxLength, which keeps the column bounded and its index, or remove the " +
+        `${widening.table}.${widening.column} would change from ${widening.fromType} to ` +
+        `${widening.toType}, which MySQL cannot do while ` +
+        (blocking === "unknown"
+          ? "an index may key the whole column: the newest snapshot predates recording indexes, so " +
+            "whether one does cannot be read. "
+          : `the index ${blocking.join(", ")} keys the whole column. `) +
+        "Give the field a maxLength, which keeps the column bounded and its index, or remove the " +
         "field's index, then run migrate:create again.",
     });
   }
@@ -59,4 +54,94 @@ export function refuseIndexedTextWidening(args: {
       columns: errors.map(e => e.path),
     },
   });
+}
+
+/** A column this run widens into TEXT or BLOB, by its names before and after the run. */
+interface Widening {
+  /** The table and column as the run leaves them. */
+  table: string;
+  column: string;
+  /** The table and column as the newest snapshot recorded them. */
+  recordedTable: string;
+  recordedColumn: string;
+  fromType: string;
+  toType: string;
+}
+
+/**
+ * Every column the operations widen from a type MySQL keys whole into TEXT or BLOB: a type change,
+ * and a rename that changes the type with it. A renamed column or table is traced back to the
+ * name the snapshot recorded, which its indexes still use: the rename decisions are applied
+ * before this is asked, so a type change names the column as it will be.
+ */
+function wideningsOf(operations: readonly Operation[]): Widening[] {
+  const tableBefore = new Map<string, string>();
+  const columnBefore = new Map<string, string>();
+  for (const op of operations) {
+    if (op.type === "rename_table") tableBefore.set(op.toName, op.fromName);
+    if (op.type === "rename_column") {
+      columnBefore.set(`${op.tableName}.${op.toColumn}`, op.fromColumn);
+    }
+  }
+  const widens = (from: string, to: string) =>
+    isMysqlTextOrBlobType(to) && !isMysqlTextOrBlobType(from);
+  const out: Widening[] = [];
+  for (const op of operations) {
+    const change =
+      op.type === "change_column_type"
+        ? { table: op.tableName, column: op.columnName, recorded: undefined }
+        : op.type === "rename_column"
+          ? {
+              table: op.tableName,
+              column: op.toColumn,
+              recorded: op.fromColumn,
+            }
+          : undefined;
+    if (change === undefined || !widens(op.fromType, op.toType)) continue;
+    out.push({
+      table: change.table,
+      column: change.column,
+      recordedTable: tableBefore.get(change.table) ?? change.table,
+      recordedColumn:
+        change.recorded ??
+        columnBefore.get(`${change.table}.${change.column}`) ??
+        change.column,
+      fromType: op.fromType,
+      toType: op.toType,
+    });
+  }
+  return out;
+}
+
+/**
+ * The recorded indexes that key `widening`'s column and that the run keeps, by name; `none`; or
+ * `unknown` where the snapshot recorded no indexes for the table, which a snapshot written before
+ * indexes were recorded does not, and an index there cannot be ruled out. An index the same run
+ * drops (a unique flag turned off with the widening) stands no longer when the column changes.
+ */
+function indexesBlocking(
+  widening: Widening,
+  operations: readonly Operation[],
+  previous: NextlySchemaSnapshot
+): string[] | "none" | "unknown" {
+  const table = previous.tables.find(t => t.name === widening.recordedTable);
+  if (table === undefined) return "none";
+  if (table.indexes === undefined) return "unknown";
+  const dropped = new Set(
+    operations.flatMap(op =>
+      op.type === "drop_index" &&
+      (op.tableName === widening.table ||
+        op.tableName === widening.recordedTable)
+        ? [op.index.name]
+        : []
+    )
+  );
+  const blocking = table.indexes
+    .filter(
+      index =>
+        index.columns.includes(widening.recordedColumn) &&
+        !dropped.has(index.name)
+    )
+    .map(index => index.name);
+  return blocking.length === 0 ? "none" : blocking;
 }

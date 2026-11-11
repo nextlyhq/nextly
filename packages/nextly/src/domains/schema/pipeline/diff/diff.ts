@@ -40,6 +40,7 @@
 //      their diff produced them.
 
 import { isNextlyOwnedDocumentColumn } from "../../../../lib/system-columns";
+import { isMysqlTextOrBlobType } from "../sql-templates/create-index";
 import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
@@ -203,6 +204,14 @@ export function diffSnapshots(
   const retypedForSwitches = retypedForReferenceSwitches(columnOps);
   for (const op of retypedForSwitches) {
     columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
+  }
+  // So does any column retyped to TEXT or BLOB, a field's Unique turned off among them: MySQL
+  // refuses the retype while an index keys the whole column, so an index this run drops goes
+  // first. Dropping it ahead of the change is as good on the other dialects.
+  for (const op of columnOps) {
+    if (op.type === "change_column_type" && isMysqlTextOrBlobType(op.toType)) {
+      columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
+    }
   }
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];

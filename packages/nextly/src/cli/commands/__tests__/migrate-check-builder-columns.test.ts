@@ -296,6 +296,51 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     );
 
     it.runIf(dialect === "mysql")(
+      "widens one whose unique key the same run drops, dropping the key first",
+      async () => {
+        const unique = manifestWith({
+          name: "code",
+          type: "text",
+          unique: true,
+        });
+        expect((await create(unique)).code).toBeUndefined();
+
+        // Unique turned off: the key goes, and the column widens to what the field states.
+        const plain = manifestWith({ name: "code", type: "text" });
+        const widened = await create(plain);
+
+        expect(widened.code, widened.said.join("\n")).toBeUndefined();
+        const files = sqlFiles();
+        expect(files).toHaveLength(2);
+        const { upSql } = parseSqlSections(
+          await readFile(join(dir, "migrations", files[1]), "utf-8")
+        );
+        for (const table of TABLES) {
+          const dropped = upSql.search(
+            new RegExp(`DROP INDEX \`uq_${table}_code\``, "i")
+          );
+          const modified = upSql.search(
+            new RegExp(
+              `ALTER TABLE \`${table}\` MODIFY COLUMN \`code\` text`,
+              "i"
+            )
+          );
+          expect({
+            table,
+            dropped: dropped >= 0,
+            modified: modified >= 0,
+          }).toEqual({
+            table,
+            dropped: true,
+            modified: true,
+          });
+          // MySQL refuses the MODIFY while the key stands, so the key goes first.
+          expect(dropped).toBeLessThan(modified);
+        }
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
       "still widens one no index keys",
       async () => {
         const manifest = manifestWith({ name: "summary", type: "text" });
