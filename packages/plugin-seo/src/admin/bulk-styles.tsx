@@ -61,6 +61,9 @@ const CSS = `
 .nx-seo-note.ok{border-color:var(--nx-success-border);background:var(--nx-success-surface)}
 .nx-seo-note.ok > svg{color:var(--nx-success-text)}
 .nx-seo-bulkside .nx-seo-sidebtn{justify-self:stretch}
+.nx-seo-refused{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+.nx-seo-refused > span{flex:1;min-width:200px}
+.nx-seo-vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .nx-seo-filepick{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 @media (max-width:1100px){
 .nx-seo-bulkwrap{flex-direction:column}

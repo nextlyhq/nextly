@@ -22,6 +22,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type JSX,
@@ -30,6 +31,7 @@ import {
 
 import {
   BULK_ROWS_PATH,
+  BULK_SAVE_LIMIT,
   BULK_SAVE_PATH,
   BULK_TYPES_PATH,
   type BulkRow,
@@ -66,61 +68,79 @@ const FILTERS: readonly [BulkFilter, string][] = [
 
 /** A type's pages as read so far, page by page. */
 interface Loaded {
-  type: string;
   rows: BulkRow[];
   total: number;
   more: boolean;
-  page: number;
+  /** How many pages of rows have been read. */
+  pages: number;
 }
 
-/** One type's rows, read a page at a time, and read again on asking. */
+/** One page of a type's rows. */
+function readRows(slug: string, page: number) {
+  return readPluginRoute<BulkRowsBody>({
+    plugin: SEO_PLUGIN_NAME,
+    path: `${BULK_ROWS_PATH}?type=${encodeURIComponent(slug)}&page=${page}`,
+  });
+}
+
+/**
+ * Each type's rows, read a page at a time and kept per type, so moving to
+ * another type and back shows the same rows (and every edit made on them).
+ * Only the latest read is taken: one that answers after another was asked
+ * is dropped. Reading again reads every page read so far.
+ */
 function useRows(type: string | undefined) {
-  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
+  const latest = useRef(0);
 
   const read = useCallback(
-    async (slug: string, page: number, keep: BulkRow[]) => {
+    async (slug: string, pages: number, keep: readonly BulkRow[]) => {
+      const asked = ++latest.current;
       setReading(true);
       setError(null);
       try {
-        const body = await readPluginRoute<BulkRowsBody>({
-          plugin: SEO_PLUGIN_NAME,
-          path: `${BULK_ROWS_PATH}?type=${encodeURIComponent(slug)}&page=${page}`,
-        });
+        const rows = [...keep];
+        let body: BulkRowsBody | undefined;
+        const first = keep.length === 0 ? 1 : pages;
+        for (let page = first; page <= pages; page++) {
+          body = await readRows(slug, page);
+          if (body === undefined || asked !== latest.current) return;
+          rows.push(...body.rows);
+        }
         if (body === undefined) return;
-        setLoaded({
-          type: slug,
-          rows: [...keep, ...body.rows],
-          total: body.total,
-          more: body.more,
-          page,
-        });
+        const answer = body;
+        setLoaded(current => ({
+          ...current,
+          [slug]: { rows, total: answer.total, more: answer.more, pages },
+        }));
       } catch (failure) {
-        setError(apiErrorMessage(failure));
+        if (asked === latest.current) setError(apiErrorMessage(failure));
       } finally {
-        setReading(false);
+        if (asked === latest.current) setReading(false);
       }
     },
     []
   );
 
+  const known = type === undefined ? undefined : loaded[type];
   useEffect(() => {
-    if (type !== undefined) void read(type, 1, []);
-  }, [type, read]);
+    if (type !== undefined && known === undefined) void read(type, 1, []);
+  }, [type, known, read]);
 
-  const current = loaded !== null && loaded.type === type ? loaded : null;
   return {
-    loaded: current,
+    loaded: known ?? null,
     error,
     reading,
     more: () => {
-      if (current !== null)
-        void read(current.type, current.page + 1, current.rows);
+      if (type !== undefined && known !== undefined) {
+        void read(type, known.pages + 1, known.rows);
+      }
     },
     // Every page read so far, read again from the first.
-    again: () => {
-      if (type !== undefined) void read(type, 1, []);
+    again: (slug: string | undefined = type) => {
+      if (slug !== undefined) void read(slug, loaded[slug]?.pages ?? 1, []);
     },
   };
 }
@@ -131,7 +151,8 @@ function useRows(type: string | undefined) {
  */
 function useFittedRows(
   table: RefObject<HTMLTableElement | null>,
-  deps: unknown
+  shown: readonly BulkRow[],
+  edits: BulkEdits
 ) {
   useLayoutEffect(() => {
     const element = table.current;
@@ -153,7 +174,7 @@ function useFittedRows(
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [table, deps]);
+  }, [table, shown, edits]);
 }
 
 /** The height a text box's grey placeholder needs, which it does not report. */
@@ -182,11 +203,14 @@ function Cell({
   row,
   field,
   edits,
+  locked,
   onEdit,
 }: {
   row: BulkRow;
   field: BulkField;
   edits: BulkEdits;
+  /** While a save runs, nothing more is typed. */
+  locked: boolean;
   onEdit: (row: BulkRow, field: BulkField, value: string) => void;
 }): JSX.Element {
   const meta = cellMeta(row, field, edits);
@@ -202,7 +226,7 @@ function Cell({
         aria-label={`${name} for ${row.label}`}
         placeholder={automatic}
         value={cellValue(row, field, edits)}
-        readOnly={!row.editable}
+        readOnly={!row.editable || locked}
         title={
           row.editable ? undefined : "You can't change this page's SEO here."
         }
@@ -210,8 +234,16 @@ function Cell({
       />
       <span className="nx-seo-cm">
         <span>{meta.typed ? "Typed" : "Automatic"}</span>
-        <span className={meta.over ? "over" : undefined}>
+        <span
+          className={meta.over ? "over" : undefined}
+          title={
+            meta.over ? "Longer than Google shows, which cuts it" : undefined
+          }
+        >
           {meta.length} / {meta.limit}
+          {meta.over ? (
+            <span className="nx-seo-vh">, longer than Google shows</span>
+          ) : null}
         </span>
       </span>
     </div>
@@ -284,22 +316,30 @@ function Toolbar({
 /** The bar of unsaved changes, with their discard and save. */
 function ChangesBar({
   count,
+  pages,
   busy,
   onDiscard,
   onSave,
 }: {
   count: number;
+  /** How many pages the changes are on. */
+  pages: number;
   busy: boolean;
   onDiscard: () => void;
   onSave: () => void;
 }): JSX.Element | null {
   if (count === 0) return null;
+  const tooMany = pages > BULK_SAVE_LIMIT;
   return (
     <div className="nx-seo-changes" role="status">
       <b>
         {count} {count === 1 ? "change" : "changes"}
       </b>
-      <span className="nx-seo-grow nx-seo-help">Not saved yet.</span>
+      <span className="nx-seo-grow nx-seo-help">
+        {tooMany
+          ? `Not saved yet. One save takes up to ${BULK_SAVE_LIMIT} pages; discard some first.`
+          : "Not saved yet."}
+      </span>
       <Button
         type="button"
         variant="outline"
@@ -314,7 +354,7 @@ function ChangesBar({
         type="button"
         size="sm"
         className="nx-seo-sbtn"
-        disabled={busy}
+        disabled={busy || tooMany}
         onClick={onSave}
       >
         Save all
@@ -325,20 +365,35 @@ function ChangesBar({
 
 /**
  * The edits typed into one type's rows, kept per type so moving to another
- * type and back keeps them, and their save in one step.
+ * type and back keeps them, each page's version as it was when first edited,
+ * and their save in one step. A save takes only what it sends out of the
+ * edits, so anything typed while it runs stays.
  */
 function useBulkEdits(
   type: string | undefined,
   rows: readonly BulkRow[],
-  onSaved: () => void
+  onSaved: (type: string) => void
 ) {
   const [edits, setEdits] = useState<Record<string, BulkEdits>>({});
+  const [revs, setRevs] = useState<Record<string, Record<string, string>>>({});
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const typeEdits = (type === undefined ? undefined : edits[type]) ?? {};
+  const typeRevs = (type === undefined ? undefined : revs[type]) ?? {};
+  const changes = changesOf(rows, typeEdits, typeRevs);
 
-  const clear = () => {
-    if (type !== undefined) setEdits(current => ({ ...current, [type]: {} }));
+  /** Drop `ids`' edits and versions in `slug`, or every one. */
+  const forget = (slug: string, ids?: ReadonlySet<string>) => {
+    const keep = <T,>(record: Record<string, T> | undefined) =>
+      ids === undefined
+        ? {}
+        : Object.fromEntries(
+            Object.entries(record ?? {}).filter(
+              ([key]) => !ids.has(key.split(":")[0] ?? key)
+            )
+          );
+    setEdits(current => ({ ...current, [slug]: keep(current[slug]) }));
+    setRevs(current => ({ ...current, [slug]: keep(current[slug]) }));
   };
 
   const edit = (row: BulkRow, field: BulkField, value: string) => {
@@ -347,14 +402,18 @@ function useBulkEdits(
       ...current,
       [type]: { ...current[type], [editKey(row.id, field)]: value },
     }));
+    if (row.rev !== undefined && typeRevs[row.id] === undefined) {
+      const rev = row.rev;
+      setRevs(current => ({
+        ...current,
+        [type]: { ...current[type], [row.id]: rev },
+      }));
+    }
   };
 
   const save = async () => {
-    if (type === undefined) return;
-    const request: BulkSaveRequest = {
-      type,
-      changes: changesOf(rows, typeEdits),
-    };
+    if (type === undefined || changes.length > BULK_SAVE_LIMIT) return;
+    const request: BulkSaveRequest = { type, changes };
     setBusy(true);
     setFailed(null);
     try {
@@ -363,8 +422,8 @@ function useBulkEdits(
       );
       if (answer === undefined) return;
       toastMutationResult(answer.message, []);
-      clear();
-      onSaved();
+      forget(type, new Set(changes.map(change => change.id)));
+      onSaved(type);
     } catch (error) {
       setFailed(apiErrorMessage(error));
     } finally {
@@ -372,7 +431,18 @@ function useBulkEdits(
     }
   };
 
-  return { edits: typeEdits, edit, clear, save, busy, failed };
+  return {
+    edits: typeEdits,
+    edit,
+    changes,
+    clear: () => {
+      if (type !== undefined) forget(type);
+    },
+    save,
+    busy,
+    failed,
+    dismiss: () => setFailed(null),
+  };
 }
 
 /** What the table says in place of rows, when it has none to show. */
@@ -389,16 +459,18 @@ function Sheet({
   shown,
   edits,
   rows,
+  locked,
   onEdit,
 }: {
   type: BulkType;
   shown: readonly BulkRow[];
   edits: BulkEdits;
   rows: ReturnType<typeof useRows>;
+  locked: boolean;
   onEdit: (row: BulkRow, field: BulkField, value: string) => void;
 }): JSX.Element {
   const table = useRef<HTMLTableElement | null>(null);
-  useFittedRows(table, [shown, edits]);
+  useFittedRows(table, shown, edits);
   return (
     <div className="nx-seo-tbox">
       <table className="nx-seo-sheet" ref={table}>
@@ -424,13 +496,20 @@ function Sheet({
                 ) : null}
               </td>
               <td data-label="Title on Google">
-                <Cell row={row} field="title" edits={edits} onEdit={onEdit} />
+                <Cell
+                  row={row}
+                  field="title"
+                  edits={edits}
+                  locked={locked}
+                  onEdit={onEdit}
+                />
               </td>
               <td data-label="Description on Google">
                 <Cell
                   row={row}
                   field="description"
                   edits={edits}
+                  locked={locked}
                   onEdit={onEdit}
                 />
               </td>
@@ -471,16 +550,30 @@ function Sheet({
 function Notices({
   failure,
   type,
+  onReadAgain,
 }: {
   failure: string | null;
   type: BulkType | undefined;
+  /** Where a save was refused: discard the edits and read the table again. */
+  onReadAgain?: () => void;
 }): JSX.Element {
   return (
     <>
       {failure !== null ? (
-        <p className="nx-seo-error" role="alert">
-          {failure}
-        </p>
+        <div className="nx-seo-error nx-seo-refused" role="alert">
+          <span>{failure}</span>
+          {onReadAgain === undefined ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="nx-seo-sbtn"
+              onClick={onReadAgain}
+            >
+              Discard changes and read again
+            </Button>
+          )}
+        </div>
       ) : null}
       {type?.drafts === true ? (
         <p className="nx-seo-note">
@@ -521,7 +614,7 @@ export function SeoBulkPage(): JSX.Element {
   const [filter, setFilter] = useState<BulkFilter>("all");
   const loaded = rows.loaded?.rows ?? [];
   const editing = useBulkEdits(type?.slug, loaded, rows.again);
-  const shown = shownRows(loaded, editing.edits, filter);
+  const shown = useMemo(() => shownRows(loaded, filter), [loaded, filter]);
   const failure = failureOf(editing.failed, rows.error, read.error);
   return (
     <div className={`${ROOT} nx-seo-page`}>
@@ -531,8 +624,8 @@ export function SeoBulkPage(): JSX.Element {
         <div>
           <h1>Bulk edit</h1>
           <p>
-            Titles and descriptions for every page of one type. Changes are
-            saved as drafts where the type has drafts.
+            Titles and descriptions for every page of one type. Every change is
+            saved in one step, or none of them is.
           </p>
         </div>
       </div>
@@ -548,9 +641,22 @@ export function SeoBulkPage(): JSX.Element {
               onFilter={setFilter}
             />
           ) : null}
-          <Notices failure={failure} type={type} />
+          <Notices
+            failure={failure}
+            type={type}
+            {...(editing.failed === null
+              ? {}
+              : {
+                  onReadAgain: () => {
+                    editing.clear();
+                    editing.dismiss();
+                    rows.again();
+                  },
+                })}
+          />
           <ChangesBar
             count={changeCount(loaded, editing.edits)}
+            pages={editing.changes.length}
             busy={editing.busy}
             onDiscard={editing.clear}
             onSave={() => void editing.save()}
@@ -563,6 +669,7 @@ export function SeoBulkPage(): JSX.Element {
               shown={shown}
               edits={editing.edits}
               rows={rows}
+              locked={editing.busy}
               onEdit={editing.edit}
             />
           )}

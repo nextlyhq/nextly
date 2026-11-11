@@ -41,19 +41,26 @@ export function changed(
   return row.editable && edit !== undefined && edit !== row[field];
 }
 
-/** The changes a save sends: one per row with a changed cell. */
+/**
+ * The changes a save sends: one per row with a changed cell, each with the
+ * version its page was read at when it was first edited (`revs`), so a page
+ * saved by someone else since, and read again here, is refused rather than
+ * overwritten.
+ */
 export function changesOf(
   rows: readonly BulkRow[],
-  edits: BulkEdits
+  edits: BulkEdits,
+  revs: Readonly<Record<string, string>> = {}
 ): BulkChange[] {
   const changes: BulkChange[] = [];
   for (const row of rows) {
     const title = changed(row, "title", edits);
     const description = changed(row, "description", edits);
     if (!title && !description) continue;
+    const rev = revs[row.id] ?? row.rev;
     changes.push({
       id: row.id,
-      ...(row.rev === undefined ? {} : { rev: row.rev }),
+      ...(rev === undefined ? {} : { rev }),
       ...(title ? { title: cellValue(row, "title", edits) } : {}),
       ...(description
         ? { description: cellValue(row, "description", edits) }
@@ -76,17 +83,18 @@ export function changeCount(
   return count;
 }
 
-/** The rows `filter` shows: every one, those with typed text, or none typed. */
+/**
+ * The rows `filter` shows: every one, those with typed text, or none typed,
+ * judged by what each page holds, so a row does not leave the table while
+ * someone types in it.
+ */
 export function shownRows(
   rows: readonly BulkRow[],
-  edits: BulkEdits,
   filter: BulkFilter
 ): BulkRow[] {
   if (filter === "all") return [...rows];
   return rows.filter(row => {
-    const typed =
-      cellValue(row, "title", edits) !== "" ||
-      cellValue(row, "description", edits) !== "";
+    const typed = row.title !== "" || row.description !== "";
     return filter === "typed" ? typed : !typed;
   });
 }

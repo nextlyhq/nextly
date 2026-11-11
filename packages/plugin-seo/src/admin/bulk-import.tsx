@@ -126,10 +126,12 @@ function suggestedMap(
 function MatchFields({
   group,
   map,
+  busy,
   onMap,
 }: {
   group: ImportGroup;
   map: Readonly<Record<string, ImportTarget>>;
+  busy: boolean;
   onMap: (field: string, target: ImportTarget) => void;
 }): JSX.Element {
   const holding = group.fields.filter(field => field.filled > 0);
@@ -157,6 +159,7 @@ function MatchFields({
                 <select
                   className="nx-seo-select"
                   aria-label={`Import ${field.name} into`}
+                  disabled={busy}
                   value={map[field.name] ?? "skip"}
                   onChange={event =>
                     onMap(field.name, event.target.value as ImportTarget)
@@ -256,10 +259,12 @@ function DryRun({
 function FilePick({
   kind,
   file,
+  busy,
   onFile,
 }: {
   kind: ImportFileSource;
   file: ChosenFile | undefined;
+  busy: boolean;
   onFile: (file: File) => void;
 }): JSX.Element {
   const input = useRef<HTMLInputElement | null>(null);
@@ -300,6 +305,7 @@ function FilePick({
         variant="outline"
         size="sm"
         className="nx-seo-sbtn"
+        disabled={busy}
         onClick={() => input.current?.click()}
       >
         {file === undefined ? "Choose file" : "Choose another"}
@@ -363,6 +369,9 @@ function useImportFlow(groups: readonly ImportGroup[], onImported: () => void) {
   const [done, setDone] = useState<Done | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  // Which dry run is the current one: an answer to any earlier one, or to
+  // one asked before the source changed, is dropped.
+  const latest = useRef(0);
 
   const sourceOf = (
     current: Record<string, ImportTarget> = map
@@ -391,22 +400,26 @@ function useImportFlow(groups: readonly ImportGroup[], onImported: () => void) {
     }
   };
 
-  const dryRun = (source: ImportSource | undefined, again = false) =>
-    attempt(async () => {
+  const dryRun = (source: ImportSource | undefined, again = false) => {
+    const asked = ++latest.current;
+    return attempt(async () => {
       if (source === undefined) return;
       const body = await writePluginRoute<DryRunBody>({
         plugin: SEO_PLUGIN_NAME,
         path: IMPORT_DRY_RUN_PATH,
         body: { source },
       });
-      if (body === undefined) return;
+      if (body === undefined || asked !== latest.current) return;
       setRun({ body, source });
       setRemapped(again);
     });
+  };
 
   const apply = () =>
     attempt(async () => {
       if (run === null) return;
+      // A refused import asks for another dry run, so this one is put away.
+      setRun(null);
       const answer = await writePluginRoute<ApplyBody & { message: string }>({
         plugin: SEO_PLUGIN_NAME,
         path: IMPORT_APPLY_PATH,
@@ -423,6 +436,8 @@ function useImportFlow(groups: readonly ImportGroup[], onImported: () => void) {
     });
 
   const reset = () => {
+    // A dry run still on its way is for the source being left.
+    latest.current++;
     setRun(null);
     setDone(null);
     setFailed(null);
@@ -450,9 +465,12 @@ function useImportFlow(groups: readonly ImportGroup[], onImported: () => void) {
     const next = { ...map, [name]: target };
     setMaps(current => ({ ...current, [group.field]: next }));
     setDone(null);
-    // A dry run on screen is run again for the matching it now shows, so
-    // the import always applies what the person sees.
-    if (run !== null) void dryRun(sourceOf(next), true);
+    // A dry run on screen is put away and run again for the matching it
+    // now shows, so the import always applies what the person sees.
+    const shown = run !== null;
+    setRun(null);
+    latest.current++;
+    if (shown) void dryRun(sourceOf(next), true);
   };
 
   return {
@@ -510,6 +528,7 @@ function SourcePicker({
               type="radio"
               name="nx-seo-import-source"
               value={source.kind}
+              disabled={flow.busy}
               checked={flow.kind === source.kind}
               onChange={() => flow.choose(source.kind)}
             />
@@ -528,6 +547,7 @@ function SourcePicker({
           <select
             id="nx-seo-import-group"
             className="nx-seo-select"
+            disabled={flow.busy}
             value={flow.group?.field ?? ""}
             onChange={event => flow.chooseGroup(event.target.value)}
           >
@@ -550,6 +570,7 @@ function SourceDetail({ flow }: { flow: ImportFlow }): JSX.Element | null {
       <FilePick
         kind={flow.kind}
         file={flow.files[flow.kind]}
+        busy={flow.busy}
         onFile={chosen => void flow.chooseFile(chosen)}
       />
     );
@@ -564,7 +585,14 @@ function SourceDetail({ flow }: { flow: ImportFlow }): JSX.Element | null {
       </p>
     );
   }
-  return <MatchFields group={flow.group} map={flow.map} onMap={flow.remap} />;
+  return (
+    <MatchFields
+      group={flow.group}
+      map={flow.map}
+      busy={flow.busy}
+      onMap={flow.remap}
+    />
+  );
 }
 
 /** Why the dry run can't start yet, or what it does. */

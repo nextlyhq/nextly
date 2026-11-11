@@ -7,7 +7,13 @@
  * panel's dry run and import of exactly what it showed. What each write
  * sends is read from the write itself.
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -34,7 +40,7 @@ const TYPES: BulkTypesBody = {
       slug: "posts",
       label: "Blog posts",
       singular: "Post",
-      total: 3,
+      total: 4,
       titlePattern: "{Title} | {Site name}",
       drafts: false,
     },
@@ -61,6 +67,15 @@ const ROWS: BulkRow[] = [
     description: "",
     autoTitle: "Jasper vs Rext | Rext AI",
     rev: "1",
+    editable: true,
+  },
+  {
+    id: "p4",
+    label: "Koala row",
+    title: "",
+    description: "",
+    autoTitle: "Koala row | Rext AI",
+    rev: "2",
     editable: true,
   },
   {
@@ -149,7 +164,7 @@ describe("the bulk edit screen", () => {
       "Surfer vs Rext | Rext AI"
     );
     expect(titleOf("Jasper vs Rext").value).toBe("Jasper, compared");
-    expect(screen.getByText(/Showing 3 of 3/)).toBeTruthy();
+    expect(screen.getByText(/Showing 4 of 4/)).toBeTruthy();
     expect(screen.getByText("{Title} | {Site name}")).toBeTruthy();
   });
 
@@ -271,5 +286,108 @@ describe("the bulk edit screen", () => {
     expect(
       screen.getByText("Choose the export file first; the dry run reads it.")
     ).toBeTruthy();
+  });
+});
+
+describe("the bulk edit screen, when things happen in between", () => {
+  it("drops a dry run's answer once the source it was asked for is left", async () => {
+    let answer: (body: DryRunBody) => void = () => undefined;
+    vi.mocked(writePluginRoute).mockImplementation((async (request: {
+      path: string;
+      body?: unknown;
+    }) => {
+      writes.push({ path: request.path, body: request.body });
+      return new Promise(resolve => {
+        answer = resolve as (body: DryRunBody) => void;
+      });
+    }) as unknown as typeof writePluginRoute);
+    render(<SeoBulkPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    // Leaving the source once the answer is on its way.
+    fireEvent.click(screen.getByLabelText(/Yoast SEO/));
+    await act(async () => answer(DRY));
+    expect(screen.queryByText("Pages that would change")).toBeNull();
+  });
+
+  it("offers another dry run once an import is refused", async () => {
+    vi.mocked(writePluginRoute).mockImplementation((async (request: {
+      path: string;
+    }) => {
+      if (request.path === "/import/dry-run") return DRY;
+      throw new Error("Pages have changed since the dry run.");
+    }) as unknown as typeof writePluginRoute);
+    render(<SeoBulkPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Import 2 pages, all or nothing",
+      })
+    );
+    await screen.findByRole("button", { name: "Do a dry run" });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Pages have changed"
+    );
+  });
+
+  it("saves a change with the version its page was read at when it was made", async () => {
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.change(titleOf("Surfer vs Rext"), {
+      target: { value: "Surfer or Rext?" },
+    });
+    // The table is read again (an import went through), at a newer version.
+    vi.mocked(readPluginRoute).mockImplementation((async () => ({
+      type: "posts",
+      rows: ROWS.map(row => ({ ...row, rev: "9" })),
+      total: 3,
+      more: false,
+    })) as unknown as typeof readPluginRoute);
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Import 2 pages, all or nothing",
+      })
+    );
+    await screen.findByText("Imported 2 pages in one step.");
+    await waitFor(() => expect(readPluginRoute).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await waitFor(() =>
+      expect(writes.some(write => write.path === "/bulk/save")).toBe(true)
+    );
+    expect(writes.find(write => write.path === "/bulk/save")?.body).toEqual({
+      type: "posts",
+      changes: [{ id: "p1", rev: "3", title: "Surfer or Rext?" }],
+    });
+  });
+
+  it("keeps a row in the table while it is typed in", async () => {
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Locked post");
+    fireEvent.click(screen.getByRole("button", { name: "Automatic only" }));
+    fireEvent.change(titleOf("Koala row"), { target: { value: "K" } });
+    expect(titleOf("Koala row").value).toBe("K");
+  });
+
+  it("locks the cells while a save runs, and offers to read the table again after a refusal", async () => {
+    let refuse: (error: Error) => void = () => undefined;
+    vi.mocked(writePluginRoute).mockImplementation(
+      (async () =>
+        new Promise((_, reject) => {
+          refuse = reject;
+        })) as unknown as typeof writePluginRoute
+    );
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await waitFor(() => expect(titleOf("Surfer vs Rext").readOnly).toBe(true));
+    await act(async () => refuse(new Error("Saved by someone else.")));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Discard changes and read again",
+      })
+    );
+    await waitFor(() => expect(titleOf("Surfer vs Rext").value).toBe(""));
   });
 });
