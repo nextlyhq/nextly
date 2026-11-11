@@ -110,7 +110,8 @@ async function forget(t: TestNextly) {
 /** Forget the fingerprint of the last run, as a changed template would. */
 async function forgetFingerprint(t: TestNextly) {
   for (const row of await rows(t)) {
-    if (row.kind === "meta") {
+    // The fingerprint alone; the list of site types beside it stays.
+    if (row.kind === "meta" && !String(row.path).startsWith("[")) {
       await t.nextly.delete({
         collection: ADDRESS_RECORD_SLUG,
         id: String(row.id),
@@ -248,6 +249,64 @@ describe.each(getConfiguredTestDialects())(
       await expect(publish(t, "posts", "new")).rejects.toMatchObject({
         code: "DUPLICATE",
       });
+    });
+
+    it("lets go of a type removed since the last run, and keeps a plugin's own holder", async () => {
+      const { t, ctx } = await boot(dialect);
+      const hold = (collection: string, id: string, path: string) =>
+        ctx.services.collections.withTransaction(tx =>
+          ctx.publicAddresses.move(
+            [
+              {
+                holder: { collection, id },
+                holds: [{ locale: "en", path }],
+              },
+            ],
+            tx
+          )
+        );
+      // As a site whose `articles` type was later removed, or pruned, left it.
+      await hold("articles", "1", "/article");
+      // A plugin's own page, never one of the site's types.
+      await hold("lists", "1", "/list");
+      await restart();
+      const [types] = (await rows(t)).filter(
+        row => row.kind === "meta" && String(row.path).startsWith("[")
+      );
+      if (types === undefined) throw new Error("no site types were stored");
+      await t.nextly.update({
+        collection: ADDRESS_RECORD_SLUG,
+        id: String(types.id),
+        data: {
+          path: JSON.stringify(["articles", "pages", "posts"]),
+          _overwrite: true,
+        },
+      });
+      await forgetFingerprint(t);
+
+      await restart();
+
+      expect(await recorded(t)).toEqual({ "en|/list": "lists:1" });
+    });
+
+    it("keeps a page it did not see while listing, that still exists", async () => {
+      const { t } = await boot(dialect);
+      const first = await publish(t, "pages", "first");
+      // A later second, so the listing reads the first before it.
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      const second = await publish(t, "pages", "second");
+      await forgetFingerprint(t);
+
+      // One page per read: deleting the first between reads moves the second
+      // to where the listing has already been, so it is not seen.
+      await catchUp({
+        pageSize: 1,
+        betweenPages: async () => {
+          await t.nextly.delete({ collection: "pages", id: first });
+        },
+      });
+
+      expect(await recorded(t)).toEqual({ "en|/second": `pages:${second}` });
     });
 
     it("lets go of a page that no longer exists", async () => {

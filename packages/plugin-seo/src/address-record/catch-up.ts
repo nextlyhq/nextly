@@ -59,6 +59,14 @@ const FINGERPRINT_KEY = createHash("sha256")
   .update("meta:fingerprint", "utf8")
   .digest("hex");
 
+/**
+ * The key of the row that stores which types were the site's at the last
+ * run, so a holder of a type since removed is told apart from a plugin's own.
+ */
+const SITE_TYPES_KEY = createHash("sha256")
+  .update("meta:site-types", "utf8")
+  .digest("hex");
+
 /** How many rows or pages one read takes. */
 const PAGE = 200;
 
@@ -89,6 +97,9 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
  */
 interface CatchUpOptions {
   afterListing?: () => Promise<void>;
+  /** How many pages one listing read takes, and what runs between reads. */
+  pageSize?: number;
+  betweenPages?: () => Promise<void>;
 }
 
 /** Run the catch-up again with the last context, as the next start would. */
@@ -157,13 +168,24 @@ async function holdsAny(ctx: PluginContext): Promise<boolean> {
   return (data as unknown[]).length > 0;
 }
 
-/** The record's rows, held addresses and the stored fingerprint. */
+/** A stored meta row: its id, and the value it keeps. */
+interface MetaRow {
+  id: string;
+  value: unknown;
+}
+
+/**
+ * The record's rows: held addresses, the stored fingerprint, and the types
+ * that were the site's at the last run.
+ */
 async function readRecord(ctx: PluginContext): Promise<{
   held: RecordRow[];
-  fingerprint?: { id: string; value: unknown };
+  fingerprint?: MetaRow;
+  siteTypes?: MetaRow;
 }> {
   const held: RecordRow[] = [];
-  let fingerprint: { id: string; value: unknown } | undefined;
+  let fingerprint: MetaRow | undefined;
+  let siteTypes: MetaRow | undefined;
   for (let page = 1; ; page++) {
     const { data } = await ctx.services.ownCollections.listEntries(
       recordSlug(ctx),
@@ -177,11 +199,15 @@ async function readRecord(ctx: PluginContext): Promise<{
     for (const entry of data as Record<string, unknown>[]) {
       if (entry.claimKey === FINGERPRINT_KEY) {
         fingerprint = { id: String(entry.id), value: entry.path };
-      } else {
+      } else if (entry.claimKey === SITE_TYPES_KEY) {
+        siteTypes = { id: String(entry.id), value: entry.path };
+      } else if (entry.kind !== "meta") {
         held.push(rowOf(entry));
       }
     }
-    if ((data as unknown[]).length < PAGE) return { held, fingerprint };
+    if ((data as unknown[]).length < PAGE) {
+      return { held, fingerprint, siteTypes };
+    }
   }
 }
 
@@ -189,14 +215,22 @@ async function readRecord(ctx: PluginContext): Promise<{
  * Every page of every site type, oldest first across all of them, by when
  * each was made; pages made at the same moment keep the order listed.
  */
-async function everyPage(ctx: PluginContext): Promise<HeldDocument[]> {
+async function everyPage(
+  ctx: PluginContext,
+  options: CatchUpOptions
+): Promise<HeldDocument[]> {
   const updates: HeldDocument[] = [];
   for (const type of await ctx.publicAddresses.types()) {
     let after: string | undefined;
     do {
-      const page = await ctx.publicAddresses.held({ type, after, limit: PAGE });
+      const page = await ctx.publicAddresses.held({
+        type,
+        after,
+        limit: options.pageSize ?? PAGE,
+      });
       updates.push(...page.items);
       after = page.next;
+      if (after !== undefined) await options.betweenPages?.();
     } while (after !== undefined);
   }
   const madeAt = (page: HeldDocument) =>
@@ -316,23 +350,68 @@ async function keepWhatStands(
   return kept;
 }
 
+/** The holder collection each of the site's types records its pages under. */
+async function siteTypeKeys(ctx: PluginContext): Promise<string[]> {
+  return (await ctx.publicAddresses.types())
+    .map(type => (type.kind === "single" ? `single:${type.slug}` : type.slug))
+    .sort();
+}
+
+/** The site types a stored meta row names; none where it names nothing usable. */
+function typesIn(row: MetaRow | undefined): Set<string> {
+  if (typeof row?.value !== "string") return new Set();
+  try {
+    const parsed: unknown = JSON.parse(row.value);
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.filter((each): each is string => typeof each === "string")
+        : []
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 /**
- * A page of a site type that no longer exists lets go of everything. A holder
- * of any other type (a plugin's own page) is that plugin's to judge.
+ * Whether the entry `holder` names is gone: found missing, never merely
+ * unseen. A listing read in pages can skip an entry when one before it is
+ * deleted between reads, and an entry it skipped still holds its addresses.
+ * A Single is listed whole, so one not listed has nothing saved.
+ */
+async function entryIsGone(
+  ctx: PluginContext,
+  holder: AddressHolder
+): Promise<boolean> {
+  if (holder.collection.startsWith("single:")) return true;
+  try {
+    await ctx.services.collections.findEntryById(holder.collection, holder.id);
+    return false;
+  } catch (error) {
+    return NextlyError.isCode(error, "NOT_FOUND");
+  }
+}
+
+/**
+ * A page that no longer exists lets go of everything: one of a site type
+ * found gone, and any of a type that was the site's at the last run and is
+ * not now, removed or pruned. A holder of any other type (a plugin's own
+ * page) is that plugin's to judge.
  */
 async function letGoOfTheGone(
   ctx: PluginContext,
   was: ReadonlyMap<string, { holder: AddressHolder }>,
   kept: ReadonlyMap<string, unknown>,
-  expected: Expected
+  expected: Expected,
+  types: { now: ReadonlySet<string>; before: ReadonlySet<string> }
 ): Promise<void> {
-  const siteTypes = new Set(
-    (await ctx.publicAddresses.types()).map(type =>
-      type.kind === "single" ? `single:${type.slug}` : type.slug
-    )
-  );
   for (const [key, entry] of was) {
-    if (!kept.has(key) && siteTypes.has(entry.holder.collection)) {
+    if (kept.has(key)) continue;
+    const { collection } = entry.holder;
+    const removed = types.before.has(collection) && !types.now.has(collection);
+    const gone =
+      removed ||
+      (types.now.has(collection) && (await entryIsGone(ctx, entry.holder)));
+    if (gone) {
       await moveIfCurrent(ctx, { holder: entry.holder, holds: [] }, expected);
     }
   }
@@ -371,35 +450,47 @@ async function runCatchUp(
   const stored = await storedFingerprint(ctx);
   if (stored?.value === fingerprint && (await holdsAny(ctx))) return NOTHING;
   const record = await readRecord(ctx);
-  const pages = await everyPage(ctx);
+  const siteTypes = await siteTypeKeys(ctx);
+  const pages = await everyPage(ctx, options);
   await options.afterListing?.();
   const was = heldBefore(record.held);
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
   const kept = await keepWhatStands(ctx, pages, was, expected);
-  await letGoOfTheGone(ctx, was, kept, expected);
+  await letGoOfTheGone(ctx, was, kept, expected, {
+    now: new Set(siteTypes),
+    before: typesIn(record.siteTypes),
+  });
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
+  await storeMeta(
+    ctx,
+    record.siteTypes?.id,
+    SITE_TYPES_KEY,
+    JSON.stringify(siteTypes)
+  );
   // Stored last: a start interrupted before this point runs it all again.
-  await storeFingerprint(ctx, record.fingerprint?.id, fingerprint);
+  await storeMeta(ctx, record.fingerprint?.id, FINGERPRINT_KEY, fingerprint);
   return { ran: true, recorded, lost };
 }
 
-async function storeFingerprint(
+/** Keep `value` in the meta row `key`, made where it is not there yet. */
+async function storeMeta(
   ctx: PluginContext,
   id: string | undefined,
-  fingerprint: string
+  key: string,
+  value: string
 ): Promise<void> {
   if (id === undefined) {
     await ctx.services.collections.createEntry(recordSlug(ctx), {
-      claimKey: FINGERPRINT_KEY,
+      claimKey: key,
       kind: "meta",
-      path: fingerprint,
+      path: value,
     });
     return;
   }
   await ctx.services.collections.updateEntry(recordSlug(ctx), id, {
-    path: fingerprint,
+    path: value,
     _overwrite: true,
   });
 }

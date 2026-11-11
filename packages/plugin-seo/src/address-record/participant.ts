@@ -248,10 +248,14 @@ function recordRows(ctx: PluginContext) {
     });
   }
 
-  /** The addresses and ranges `holder` keeps, read for update. */
+  /**
+   * The addresses and ranges `holder` keeps, read for update, or with no row
+   * lock (`none`) where the page's own lock already keeps them from changing.
+   */
   async function rowsOf(
     transaction: Transaction,
-    holder: AddressHolder
+    holder: AddressHolder,
+    lock: "update" | "none" = "update"
   ): Promise<RecordRow[]> {
     return rowsWhere(
       transaction,
@@ -262,7 +266,7 @@ function recordRows(ctx: PluginContext) {
           { holderId: { equals: holder.id } },
         ],
       },
-      "update"
+      lock
     );
   }
 
@@ -273,6 +277,11 @@ function recordRows(ctx: PluginContext) {
  * What the record says `holder` holds now, read on `transaction` with the
  * page's own lock held until it ends: a save of the page waits for it, so
  * what is read cannot change before the transaction's own writes.
+ *
+ * The rows themselves are read with no row lock. Every write to a page's rows
+ * takes the page's lock first, so none can change them meanwhile, and a lock
+ * on them here, before the path locks a move takes next, would invert the
+ * order a save of another page takes them in: path locks, then the rows.
  */
 export async function heldNow(
   ctx: PluginContext,
@@ -281,7 +290,7 @@ export async function heldNow(
 ): Promise<HeldAddress[]> {
   const rows = recordRows(ctx);
   if (ctx.dialect !== "sqlite") await rows.holdHolderLock(transaction, holder);
-  return (await rows.rowsOf(transaction, holder)).flatMap(row =>
+  return (await rows.rowsOf(transaction, holder, "none")).flatMap(row =>
     row.address === null ? [] : [row.address]
   );
 }
