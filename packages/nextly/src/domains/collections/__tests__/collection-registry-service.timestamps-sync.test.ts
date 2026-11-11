@@ -8,15 +8,23 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
-import { CollectionRegistryService } from "../services/collection-registry-service";
+import {
+  CollectionRegistryService,
+  type CodeFirstCollectionConfig,
+} from "../services/collection-registry-service";
 import { toCodeFirstCollectionConfig } from "../services/collection-sync-service";
 
 import { silentLogger } from "./collection-test-helpers";
 
-const declared = (timestamps?: boolean) =>
+// Typed as the registry types it, so the literal `type` is not widened.
+const fields: CodeFirstCollectionConfig["fields"] = [
+  { name: "title", type: "text" },
+];
+
+const declared = (timestamps?: boolean): CodeFirstCollectionConfig =>
   toCodeFirstCollectionConfig({
     slug: "notes",
-    fields: [{ name: "title", type: "text" }],
+    fields,
     ...(timestamps === undefined ? {} : { timestamps }),
   });
 
