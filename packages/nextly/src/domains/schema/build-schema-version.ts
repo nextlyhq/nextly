@@ -13,9 +13,13 @@
  *
  * @module domains/schema/build-schema-version
  */
-import { readdirSync } from "node:fs";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { dialectVariantOf } from "./migrate/dialect-variant";
+import {
+  readMigrationFolderSync,
+  type MigrationFolder,
+} from "../../cli/utils/migration-discovery";
+
 import { compareMigrationBaseNames } from "./migrate/migration-order";
 
 /** The environment variable that carries the build's schema version. */
@@ -39,24 +43,25 @@ export function newestMigrationName(
 }
 
 /**
- * The newest app migration in `dir`, by base name: a dialect's variant
- * (`<base>.mysql.sql`) counts as its base, as the runner groups it. Undefined
- * for a folder with no migration, or one that cannot be read: the comparison
- * this feeds only ever logs, so a folder it cannot read leaves it with
- * nothing to compare rather than failing the build.
+ * The newest app migration in `dir` that `nextly migrate` runs on `dialect`,
+ * by base name: the folder as the runner reads it (`readMigrationFolderSync`),
+ * so a dialect's variant counts as its base and a file an earlier Schema
+ * Builder wrote, which the runner sets aside, is never the build's version.
+ * Undefined for a folder with no migration, or one that cannot be read: the
+ * comparison this feeds only ever logs, so a folder it cannot read leaves it
+ * with nothing to compare rather than failing the build.
  */
-export function newestMigrationIn(dir: string): string | undefined {
-  let files: string[];
+export function newestMigrationIn(
+  dir: string,
+  dialect: SupportedDialect
+): string | undefined {
+  let folder: MigrationFolder;
   try {
-    files = readdirSync(dir);
+    folder = readMigrationFolderSync(dir, dialect);
   } catch {
     return undefined;
   }
-  return newestMigrationName(
-    files
-      .filter(file => file.endsWith(".sql"))
-      .map(file => dialectVariantOf(file)?.baseName ?? file.slice(0, -4))
-  );
+  return newestMigrationName(folder.groups.keys());
 }
 
 /**

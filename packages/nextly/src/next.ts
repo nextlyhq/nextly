@@ -27,6 +27,7 @@ import {
   BUILD_SCHEMA_VERSION_ENV,
   newestMigrationIn,
 } from "./domains/schema/build-schema-version";
+import { statedDialect } from "./shared/lib/stated-dialect";
 import { DEFAULT_MIGRATIONS_DIR } from "./shared/types/migrations-dir-default";
 
 /**
@@ -195,6 +196,14 @@ export interface WithNextlyOptions {
    * database's.
    */
   migrationsDir?: string;
+  /**
+   * The database dialect the app's migrations run on, which decides which of
+   * a migration's dialect variants runs and how an earlier Schema Builder's
+   * files are recognised. Defaults to the one the environment states
+   * (`DB_DIALECT`, else the one `DATABASE_URL` implies, else PostgreSQL), as
+   * Nextly reads it at run time.
+   */
+  dialect?: "postgresql" | "mysql" | "sqlite";
 }
 
 type Rewrite = Record<string, unknown>;
@@ -332,8 +341,11 @@ export function withNextly<T extends Record<string, unknown>>(
   // for the server `next start` starts after loading the config, for a hook
   // that passes none. No migration, no version, and a production start then
   // compares nothing.
+  // Read as the runner reads it on the app's dialect, so a file the runner
+  // sets aside is never named.
   const buildVersion = newestMigrationIn(
-    resolve(process.cwd(), options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR)
+    resolve(process.cwd(), options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR),
+    options.dialect ?? statedDialect(process.env)
   );
   if (buildVersion !== undefined) {
     process.env[BUILD_SCHEMA_VERSION_ENV] = buildVersion;

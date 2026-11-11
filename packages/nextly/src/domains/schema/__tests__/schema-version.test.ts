@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { readMigrationFolderSync } from "../../../cli/utils/migration-discovery";
 import { loadDialectTables } from "../../../database/dialect-tables";
 import {
   newestMigrationIn,
@@ -103,12 +104,36 @@ describe("the newest migration", () => {
     ]) {
       writeFileSync(join(dir, file), "-- UP\n");
     }
-    expect(newestMigrationIn(dir)).toBe(NEWER);
+    expect(newestMigrationIn(dir, "postgresql")).toBe(NEWER);
+  });
+
+  it("in a folder, is never a file an earlier Schema Builder wrote, which the runner sets aside", () => {
+    dir = mkdtempSync(join(tmpdir(), "nextly-schema-version-"));
+    // A hand-named migration, which sorts before the Builder's 13-digit
+    // millisecond names, and a file the Builder wrote for a collection.
+    const handNamed = "0001_000000_init";
+    const builderFile = "1730000000000_create_pages.sql";
+    writeFileSync(join(dir, `${handNamed}.sql`), "-- UP\n");
+    writeFileSync(
+      join(dir, builderFile),
+      'CREATE TABLE "dc_pages" ("id" text PRIMARY KEY);'
+    );
+    // The control: the runner's own reading sets the Builder file aside, so
+    // the fixture reaches the classification this relies on.
+    expect(
+      readMigrationFolderSync(dir, "postgresql").oldBuilderFiles.map(
+        file => file.file
+      )
+    ).toEqual([builderFile]);
+    expect(newestMigrationIn(dir, "postgresql")).toBe(handNamed);
   });
 
   it("is none for a folder that is not there", () => {
     expect(
-      newestMigrationIn(join(tmpdir(), "nextly-no-such-folder-schema-version"))
+      newestMigrationIn(
+        join(tmpdir(), "nextly-no-such-folder-schema-version"),
+        "postgresql"
+      )
     ).toBeUndefined();
   });
 });
