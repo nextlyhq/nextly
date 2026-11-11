@@ -443,9 +443,18 @@ export async function putRedirect(
   const end = await followChain(
     from.source,
     storedTarget(input.target),
+    // Each hop is the redirect a request meets, as the Proxy matches it: a
+    // page serving the address ends the chain, and a pattern carries the
+    // rest of the address on.
     async path => {
-      const next = await read.from(locale, path);
-      return next === undefined || next.id === editing ? null : next.target;
+      const id = await redirectMeeting(
+        ctx,
+        { locale, path },
+        transaction,
+        editing
+      );
+      const next = id === null ? undefined : await read.byId(id);
+      return next === undefined ? null : destinationOf(next, path);
     }
   );
   if ("error" in end) return { refused: end.error, reason: "loop" };

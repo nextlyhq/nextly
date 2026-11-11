@@ -328,7 +328,7 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
       reason: "loop",
     });
     expect(await put(seo, { source: "/new/x", target: "/old/x" })).toEqual({
-      refused: "That makes a loop: /new/x → /old/* → /new/x.",
+      refused: "That makes a loop: /new/x → /old/x → /new/x.",
       reason: "loop",
     });
     // A page at /new/live is served, so nothing comes back round.
@@ -371,6 +371,33 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
 
     expect(await redirects(t)).toMatchObject({
       "en|/x": "/b?campaign=1 permanent person",
+    });
+  });
+
+  it("stops a chain where a page now serves the address, and goes on through patterns as the Proxy does", async () => {
+    const { t, ctx, seo } = await boot(dialect);
+    await put(seo, { source: "/old/a", target: "/elsewhere" });
+    // A page then takes every address below /old, as a list's pages are held.
+    const page = await publish(t, "pages", "list");
+    await ctx.services.collections.withTransaction(tx =>
+      ctx.publicAddresses.move(
+        [
+          {
+            holder: { collection: "pages", id: page },
+            holds: [{ locale: "en", path: "/old", range: true }],
+          },
+        ],
+        tx
+      )
+    );
+    await put(seo, { source: "/moved/*", target: "/new/*" });
+
+    await put(seo, { source: "/entry", target: "/old/a" });
+    await put(seo, { source: "/gone", target: "/moved/b" });
+
+    expect(await redirects(t)).toMatchObject({
+      "en|/entry": "/old/a permanent person",
+      "en|/gone": "/new/b permanent person",
     });
   });
 
