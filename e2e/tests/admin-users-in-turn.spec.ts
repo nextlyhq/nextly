@@ -1,18 +1,18 @@
 /**
  * Two people signing in to the admin in turn each see their own admin.
  *
- * The admin is rendered at request time, with no server state cached between
- * people. Under Cache Components a route's render can be kept and served again,
- * so an admin rendered above its request boundary would be one shared answer.
- * The admin page draws nothing from the session on the server (it is a client
- * page, filled in from the session's own API answers), so what is checked of
- * the server is that each person's admin page is answered for that request and
- * never from a shared cache. The greeting and navigation then check that the
- * per-person answers the page draws from are not shared either. Asked in turn
+ * The admin page is prebuilt: one page for every visitor, which a CDN or the
+ * browser may keep. It draws nothing from the session on the server (it is a
+ * client page, filled in from the session's own API answers), so what is
+ * checked of the server is that each person is sent the very same page, and
+ * that nothing of either person is in it. The greeting and navigation then
+ * check that the per-person answers the page draws from are not shared. Asked in turn
  * (the super-admin, a reader of posts, then the super-admin again), so an
  * answer kept from either person would show up on the other's next load.
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+
+import { sharedCacheMayKeep } from "../support/shared-cache.mjs";
 
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
@@ -60,25 +60,23 @@ async function dashboard(page: Page): Promise<string> {
   return greetedName(page);
 }
 
+/** The admin page as the first person was sent it, to compare the next with. */
+let firstAdminPage: string | undefined;
+
 /**
- * The admin page, as the server answers it for this person: rendered for the
- * request, never kept for a shared cache. A production server sends a dynamic
- * render as `private` and `no-store`, and a prerendered one with a shared
- * lifetime (`s-maxage`) instead. The dev server sends `no-store` for every
- * page, so only `no-store` is asked of it.
+ * The admin page, as the server sends it to this person: the same bytes as
+ * everyone else's, and, from a production server, with cache headers that give
+ * a shared cache a lifetime to keep it for. The dev server renders every page afresh and sends
+ * `no-store`, so it is held to answering only.
  */
-async function expectAnsweredForThisRequest(page: Page): Promise<void> {
+async function expectTheSamePrebuiltPage(page: Page): Promise<void> {
   const response = await page.request.get("/admin");
   expect(response.status()).toBe(200);
-  const directives = (response.headers()["cache-control"] ?? "")
-    .split(",")
-    .map(directive => directive.trim().split("=")[0].toLowerCase());
-  expect(directives).toContain("no-store");
-  if (process.env.E2E_SERVER === "production") {
-    expect(directives).toContain("private");
-  }
-  expect(directives).not.toContain("s-maxage");
-  expect(directives).not.toContain("public");
+  if (process.env.E2E_SERVER !== "production") return;
+  expect(sharedCacheMayKeep(response.headers()["cache-control"])).toBe(true);
+  const body = await response.text();
+  firstAdminPage ??= body;
+  expect(body).toBe(firstAdminPage);
 }
 
 /** No Settings, asked once the shell's permission answer is in. */
@@ -92,20 +90,20 @@ async function expectNoSettings(page: Page): Promise<void> {
 test("each person signing in sees their own admin, whoever signed in before", async ({
   page,
 }) => {
-  await expectAnsweredForThisRequest(page);
+  await expectTheSamePrebuiltPage(page);
   const adminName = await dashboard(page);
   // The control: the super-admin is offered the settings, so its absence for
   // the reader below is about who is signed in.
   await expect(settingsLink(page)).toBeVisible();
 
   const readerPage = await reader.context.newPage();
-  await expectAnsweredForThisRequest(readerPage);
+  await expectTheSamePrebuiltPage(readerPage);
   const readerName = await dashboard(readerPage);
   expect(readerName).not.toBe(adminName);
   await expectNoSettings(readerPage);
 
   // The super-admin again, after the reader's render.
-  await expectAnsweredForThisRequest(page);
+  await expectTheSamePrebuiltPage(page);
   await page.reload();
   await expect
     .poll(() => greetedName(page), { timeout: 30_000 })
@@ -113,7 +111,7 @@ test("each person signing in sees their own admin, whoever signed in before", as
   await expect(settingsLink(page)).toBeVisible();
 
   // And the reader once more, after the super-admin's.
-  await expectAnsweredForThisRequest(readerPage);
+  await expectTheSamePrebuiltPage(readerPage);
   await readerPage.reload();
   await expect
     .poll(() => greetedName(readerPage), { timeout: 30_000 })

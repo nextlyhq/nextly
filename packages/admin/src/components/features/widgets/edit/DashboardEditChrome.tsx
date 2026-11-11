@@ -182,12 +182,12 @@ function SaveProblem({
     // work stays on screen while they decide.
     return (
       <div
-        className="flex flex-wrap items-start gap-3 rounded-md border border-border bg-muted/50 px-4 py-3 text-sm"
+        className="flex flex-wrap items-start gap-3 rounded-md border border-warning-border bg-warning-surface px-4 py-3 text-sm"
         data-testid="dashboard-edit-conflict"
       >
         <Icons.AlertTriangle
           aria-hidden
-          className="mt-0.5 size-4 shrink-0 text-warning"
+          className="mt-0.5 size-4 shrink-0 text-warning-text"
         />
         <p className="min-w-0 flex-1">
           Your dashboard changed somewhere else while you were customizing it.

@@ -21,6 +21,7 @@ import { useMemo } from "react";
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
@@ -33,7 +34,10 @@ import {
   type LoadedFieldGroup,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
-import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
+import {
+  fieldsWithDeleted,
+  markPending,
+} from "@admin/lib/builder/outline/pending-rows";
 import { navigateTo } from "@admin/lib/navigation";
 
 import type { BuilderConfig } from "./builder-config";
@@ -164,12 +168,25 @@ function BuilderWorkspace(
     | "onRowDragEnd"
     | "savedFieldIds"
     | "settings"
+    | "pending"
   >
 ): JSX.Element {
-  const { outline, fieldGroups, fieldGroupsLoad } = useBuilderOutline(
-    props.builder.fields,
-    props.locked,
-    props.settings.i18n === true
+  const { builder, pending } = props;
+  // Drawn with every pending delete shown where it was saved, marked, so a
+  // delete stays in sight until it is saved or undone. Only drawn: the save
+  // sends the builder's fields as they are.
+  const shown = useMemo(
+    () => fieldsWithDeleted(builder.fields, pending.saved),
+    [builder.fields, pending.saved]
+  );
+  const {
+    outline: built,
+    fieldGroups,
+    fieldGroupsLoad,
+  } = useBuilderOutline(shown, props.locked, props.settings.i18n === true);
+  const outline = useMemo(
+    () => markPending(built, pending.marks, pending.changes),
+    [built, pending.marks, pending.changes]
   );
   // Leaves for a field group's own editor, where its fields are changed. The
   // page's guard asks first while changes are pending, as it does for every

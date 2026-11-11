@@ -1,7 +1,6 @@
 /**
- * What the add gallery lists from the server's read and the reader's draft: what each tile does,
- * what a chip and a search keep (a collection's pairs among them), which suggestions the draft
- * still has room for, and what the add step starts with.
+ * What the add panel lists from the server's read and the reader's draft: what each row's control
+ * does, what a search keeps, and the collection a new card starts on.
  */
 import { sizeBounds } from "nextly/config";
 import { describe, expect, it } from "vitest";
@@ -12,19 +11,16 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import {
-  addWidths,
+  canAdd,
   collectionsFor,
-  type CanAsk,
-  galleryCount,
-  galleryTiles,
+  galleryRows,
   newCardSettings,
-  periodOf,
-  removedCards,
-  searchGallery,
+  pluginShownName,
+  rowsCount,
+  searchRows,
   startingCollection,
-  suggestionsFor,
-  tilesInChip,
-  widthsLabel,
+  usersOffer,
+  type CanAsk,
   type GalleryRead,
   type GalleryTile,
 } from "../add-panel-model";
@@ -40,28 +36,21 @@ const COUNT = tile({
   id: "core/count",
   name: "Count",
   description: "How many entries a collection holds.",
-  category: "content",
   collectionSetting: "collection",
   allowsSeveral: true,
 });
-const TEAM = tile({ id: "core/team", name: "Team", category: "activity" });
+const TEAM = tile({ id: "core/team", name: "Team", description: "People." });
 const SEO = tile({
   id: "seo/score",
   name: "SEO score",
-  category: "plugins",
-  declaredCategory: "Marketing",
+  plugin: "@acme/plugin-seo",
 });
 
 const READ: GalleryRead = {
   tiles: [COUNT, TEAM, SEO],
   collections: [
-    { slug: "posts", label: "Posts", lifecycle: true, entries: 3 },
-    { slug: "pages", label: "Pages", lifecycle: false, entries: 9 },
-  ],
-  mostEdited: "pages",
-  suggested: [
-    { widgetId: "core/count", collection: "posts", label: "Posts count" },
-    { widgetId: "core/team", collection: "posts", label: "not a pair" },
+    { slug: "posts", label: "Posts", lifecycle: true },
+    { slug: "pages", label: "Pages", lifecycle: false },
   ],
 };
 
@@ -79,8 +68,9 @@ const BY_ID = new Map<string, DashboardWidget>([
   drawn("core/count", "Count"),
   drawn("core/team", "Team"),
   drawn("seo/score", "SEO score"),
-  drawn("core/single", "Single"),
 ]);
+
+const every: CanAsk = () => true;
 
 const card = (over: Partial<WidgetPlacement>): WidgetPlacement => ({
   id: "p1",
@@ -91,349 +81,232 @@ const card = (over: Partial<WidgetPlacement>): WidgetPlacement => ({
   ...over,
 });
 
-describe("galleryTiles", () => {
-  it("offers Add, then Add another for a widget that allows several", () => {
-    const [count] = galleryTiles(
-      READ,
-      [card({ widgetId: "core/count", config: { collection: "posts" } })],
-      BY_ID
-    );
-    expect(count.action).toEqual({ kind: "add-another" });
-    expect(count.placed).toBe(1);
-    expect(galleryTiles(READ, [], BY_ID)[0].action).toEqual({ kind: "add" });
-  });
+const actions = (placements: WidgetPlacement[], canAsk: CanAsk = every) =>
+  galleryRows(READ, placements, BY_ID, canAsk).map(row => [
+    row.tile.id,
+    row.action,
+  ]);
 
-  it("says a one-card widget the draft holds is on the dashboard", () => {
-    const team = galleryTiles(READ, [card({})], BY_ID).find(
-      view => view.tile.id === "core/team"
-    );
-    expect(team?.action).toEqual({ kind: "on-dashboard" });
-  });
-
-  it("has no tile for a one-card widget removed this session: its card comes back from Removed", () => {
-    const ids = galleryTiles(READ, [card({ removed: true })], BY_ID).map(
-      view => view.tile.id
-    );
-    expect(ids).toEqual(["core/count", "seo/score"]);
-  });
-
-  it("names each tile as the dashboard titles its card, never by its id", () => {
-    const named = galleryTiles(
-      { tiles: [tile({ id: "acme/open-orders", name: "acme/open-orders" })] },
-      [],
-      new Map([drawn("acme/open-orders", "Open orders")])
-    );
-    expect(named.map(view => view.tile.name)).toEqual(["Open orders"]);
-  });
-
-  it("has no tile for a widget this admin cannot draw", () => {
-    const ids = galleryTiles(
-      READ,
-      [],
-      new Map([...BY_ID].filter(([id]) => id !== "seo/score"))
-    ).map(view => view.tile.id);
-    expect(ids).toEqual(["core/count", "core/team"]);
-  });
-
-  it("counts a removed card of a several-card widget as not placed", () => {
-    const [count] = galleryTiles(
-      READ,
-      [card({ widgetId: "core/count", removed: true })],
-      BY_ID
-    );
-    expect(count.action).toEqual({ kind: "add" });
-  });
-});
-
-describe("collections a widget can be set to (canAsk)", () => {
-  // Count can ask Posts alone.
-  const canAsk: CanAsk = (widgetId, slug) =>
-    widgetId !== "core/count" || slug === "posts";
-
-  it("keeps only the collections the widget can ask", () => {
-    expect(
-      collectionsFor("core/count", READ.collections, canAsk).map(c => c.slug)
-    ).toEqual(["posts"]);
-  });
-
-  it("starts on the most-edited collection only when the widget can ask it", () => {
-    const own = collectionsFor("core/count", READ.collections, canAsk);
-    // Pages is most edited, but Count cannot ask it.
-    expect(startingCollection(READ, own)).toBe("posts");
-    expect(startingCollection(READ, [])).toBeUndefined();
-  });
-
-  it("says a widget no readable collection suits cannot be added", () => {
-    const [count] = galleryTiles(READ, [], BY_ID, () => false);
-    expect(count?.action).toEqual({ kind: "no-collection" });
-    // A widget that reads no collection is untouched by it.
-    expect(
-      galleryTiles(READ, [], BY_ID, () => false).find(
-        view => view.tile.id === "core/team"
-      )?.action
-    ).toEqual({ kind: "add" });
-  });
-
-  it("pairs a collection only with the widgets that can ask it", () => {
-    const found = searchGallery(
-      {
-        removed: [],
-        tiles: galleryTiles(READ, [], BY_ID, canAsk),
-        collections: READ.collections,
-        canAsk,
-      },
-      "pages"
-    );
-    expect(found.pairs).toEqual([]);
-  });
-
-  it("suggests no pair the widget cannot ask", () => {
-    const views = galleryTiles(READ, [], BY_ID, canAsk);
-    expect(
-      suggestionsFor(
-        {
-          suggested: [
-            { widgetId: "core/count", collection: "pages", label: "x" },
-          ],
-        },
-        views,
-        [],
-        canAsk
-      )
-    ).toEqual([]);
-  });
-});
-
-describe("removedCards", () => {
-  it("lists the draft's removed cards this admin can draw, in the draft's order", () => {
-    const byId = new Map<string, DashboardWidget>([
-      [
-        "core/team",
-        {
-          id: "core/team",
-          title: "Team",
-          archetype: "custom",
-          size: sizeBounds({ default: { w: 4, h: 3 } }),
-        },
-      ],
+describe("galleryRows", () => {
+  it("lists each widget once, in the read's order, with Add", () => {
+    expect(actions([])).toEqual([
+      ["core/count", { kind: "add" }],
+      ["core/team", { kind: "add" }],
+      ["seo/score", { kind: "add" }],
     ]);
-    expect(
-      removedCards(
-        [
-          card({ id: "a", removed: true }),
-          card({ id: "b" }),
-          card({ id: "c", widgetId: "gone/widget", removed: true }),
-        ],
-        byId
-      )
-    ).toEqual([{ placementId: "a", widgetId: "core/team", title: "Team" }]);
-  });
-});
-
-describe("tilesInChip", () => {
-  const views = galleryTiles(READ, [], BY_ID);
-  it("keeps every tile under All, and a chip's own under the chip", () => {
-    expect(tilesInChip(views, "all")).toHaveLength(3);
-    expect(tilesInChip(views, "plugins").map(v => v.tile.id)).toEqual([
-      "seo/score",
-    ]);
-    expect(tilesInChip(views, "trends")).toEqual([]);
-  });
-});
-
-describe("searchGallery", () => {
-  const input = {
-    removed: [{ placementId: "r", widgetId: "core/team", title: "Team" }],
-    tiles: galleryTiles(READ, [], BY_ID),
-    collections: READ.collections,
-  };
-
-  it("keeps everything and lists no pairs for an empty query", () => {
-    const found = searchGallery(input, "  ");
-    expect(found.tiles).toHaveLength(3);
-    expect(found.removed).toHaveLength(1);
-    expect(found.pairs).toEqual([]);
   });
 
-  it("matches a name, a description, a declared category and a chip's label, ignoring case", () => {
-    expect(searchGallery(input, "COUNT").tiles.map(v => v.tile.id)).toEqual([
-      "core/count",
+  it("says a one-card widget the draft holds is on the dashboard; one that allows several is offered again", () => {
+    const placed = [
+      card({ id: "t", widgetId: "core/team" }),
+      card({ id: "c", widgetId: "core/count" }),
+    ];
+    expect(actions(placed)).toEqual([
+      ["core/count", { kind: "add" }],
+      ["core/team", { kind: "on-dashboard" }],
+      ["seo/score", { kind: "add" }],
     ]);
-    expect(searchGallery(input, "entries a").tiles.map(v => v.tile.id)).toEqual(
-      ["core/count"]
-    );
-    expect(searchGallery(input, "market").tiles.map(v => v.tile.id)).toEqual([
-      "seo/score",
-    ]);
-    expect(searchGallery(input, "activity").tiles.map(v => v.tile.id)).toEqual([
+  });
+
+  it("puts a one-card widget removed this session back, rather than adding a second", () => {
+    expect(actions([card({ id: "t-1", removed: true })])[1]).toEqual([
       "core/team",
+      { kind: "add-back", placementId: "t-1" },
     ]);
   });
 
-  it("lists each collection a query names as pairs with every widget that reads one", () => {
-    const found = searchGallery(input, "pos");
-    expect(found.tiles).toEqual([]);
-    expect(found.pairs.map(pair => [pair.label, pair.collection.slug])).toEqual(
-      [["Count · Posts", "posts"]]
-    );
+  it("offers nothing to add for a widget no readable collection suits, and leaves the others", () => {
+    const rows = galleryRows(READ, [], BY_ID, () => false);
+    expect(rows.map(row => [row.tile.id, canAdd(row)])).toEqual([
+      ["core/count", false],
+      ["core/team", true],
+      ["seo/score", true],
+    ]);
+    expect(rows[0]?.action).toEqual({ kind: "needs-collection" });
+    // With no collection at all, the same.
+    expect(
+      galleryRows({ ...READ, collections: [] }, [], BY_ID, every)[0]?.action
+    ).toEqual({ kind: "needs-collection" });
   });
 
-  it("pairs no widget the draft holds its one card of", () => {
-    const oneCard = tile({
-      id: "core/single",
-      name: "Single",
-      collectionSetting: "collection",
+  it("offers Count on Users to a reader who may read users and no collection, starting it there", () => {
+    // As the server tells a reader who may read users: Count's setting offers them.
+    const offering = new Map(BY_ID).set("core/count", {
+      ...BY_ID.get("core/count")!,
+      settings: [{ name: "collection", type: "collection", users: true }],
     });
-    const found = searchGallery(
-      {
-        ...input,
-        tiles: galleryTiles(
-          { tiles: [oneCard] },
-          [card({ widgetId: "core/single" })],
-          BY_ID
-        ),
-      },
-      "posts"
+    const offersUsers = usersOffer(offering);
+    const none = { ...READ, collections: [] };
+    const rows = galleryRows(none, [], offering, every, undefined, offersUsers);
+    expect(rows[0]?.action).toEqual({ kind: "add" });
+    const own = collectionsFor("core/count", [], every, offersUsers);
+    expect(own.map(collection => collection.slug)).toEqual(["users"]);
+    const start = startingCollection(COUNT, own, []);
+    expect(newCardSettings(COUNT, start?.slug)).toEqual({
+      collection: "users",
+    });
+    // A reader with a collection starts on it, never on Users.
+    expect(
+      collectionsFor("core/count", READ.collections, every, offersUsers).map(
+        collection => collection.slug
+      )
+    ).toEqual(["posts", "pages"]);
+    // The must-differ half: told without the offer, Count still needs a collection.
+    expect(
+      galleryRows(none, [], BY_ID, every, undefined, usersOffer(BY_ID))[0]
+        ?.action
+    ).toEqual({ kind: "needs-collection" });
+  });
+
+  it("names each row as the dashboard titles its card, and lists none this admin cannot draw", () => {
+    const rows = galleryRows(
+      { ...READ, tiles: [{ ...TEAM, name: "core/team" }, tile({ id: "x/y" })] },
+      [],
+      BY_ID,
+      every
     );
-    expect(found.pairs).toEqual([]);
+    expect(rows.map(row => row.tile.name)).toEqual(["Team"]);
   });
 
-  it("finds a removed card by its title", () => {
-    expect(searchGallery(input, "tea").removed).toHaveLength(1);
-  });
-});
-
-describe("galleryCount", () => {
-  it("says the widgets with no query, and the results for one", () => {
-    expect(galleryCount(1, "")).toBe("1 widget");
-    expect(galleryCount(3, "")).toBe("3 widgets");
-    expect(galleryCount(1, " po ")).toBe("1 result for “po”");
-    expect(galleryCount(0, "x")).toBe("0 results for “x”");
-  });
-});
-
-describe("suggestionsFor", () => {
-  const views = galleryTiles(READ, [], BY_ID);
-  it("keeps a pair whose widget reads a collection and can be added", () => {
-    expect(suggestionsFor(READ, views, []).map(s => s.label)).toEqual([
-      "Posts count",
+  it("names a plugin's widget by its plugin, as the admin names the plugin", () => {
+    const rows = galleryRows(READ, [], BY_ID, every, plugin =>
+      plugin === "@acme/plugin-seo" ? "SEO" : plugin
+    );
+    expect(rows.map(row => row.pluginName)).toEqual([
+      undefined,
+      undefined,
+      "SEO",
     ]);
   });
+});
 
-  it("leaves out a pair the draft already holds, but not one it removed", () => {
-    expect(
-      suggestionsFor(READ, views, [
-        card({ widgetId: "core/count", config: { collection: "posts" } }),
-      ])
-    ).toEqual([]);
-    expect(
-      suggestionsFor(READ, views, [
-        card({
-          widgetId: "core/count",
-          config: { collection: "posts" },
-          removed: true,
-        }),
-      ])
-    ).toHaveLength(1);
+describe("searchRows", () => {
+  const rows = galleryRows(READ, [], BY_ID, every, () => "SEO");
+
+  it("keeps every row for an empty query", () => {
+    expect(searchRows(rows, "  ")).toHaveLength(3);
+  });
+
+  it("matches a name, a one line and a plugin's name, ignoring case", () => {
+    const ids = (query: string) =>
+      searchRows(rows, query).map(row => row.tile.id);
+    expect(ids("TEAM")).toEqual(["core/team"]);
+    expect(ids("entries a collection")).toEqual(["core/count"]);
+    expect(ids("seo")).toEqual(["seo/score"]);
+    expect(ids("nothing like it")).toEqual([]);
+  });
+});
+
+describe("rowsCount", () => {
+  it("counts widgets, one in the singular", () => {
+    expect(rowsCount(0)).toBe("0 widgets");
+    expect(rowsCount(1)).toBe("1 widget");
+    expect(rowsCount(12)).toBe("12 widgets");
   });
 });
 
 describe("startingCollection", () => {
-  it("starts on the most-edited collection, else the first readable, else none", () => {
-    expect(startingCollection(READ)).toBe("pages");
-    expect(startingCollection({ ...READ, mostEdited: undefined })).toBe(
-      "posts"
-    );
-    // A most-edited collection that is no longer readable is not offered.
-    expect(startingCollection({ ...READ, mostEdited: "gone" })).toBe("posts");
-    expect(startingCollection({ collections: [] })).toBeUndefined();
-  });
-});
-
-describe("periodOf", () => {
-  const widget = (settings: DashboardWidget["settings"]): DashboardWidget => ({
-    id: "w",
-    title: "W",
-    archetype: "custom",
-    size: sizeBounds({ default: { w: 6, h: 3 } }),
-    settings,
-  });
-
-  it("offers a dateRange choice's options, starting at its default", () => {
+  it("starts on the first collection no card of the widget is set to", () => {
+    expect(startingCollection(COUNT, READ.collections, [])).toEqual({
+      slug: "posts",
+      taken: false,
+    });
     expect(
-      periodOf(
-        widget([
-          {
-            name: "dateRange",
-            type: "select",
-            label: "Date range",
-            defaultValue: "30d",
-            options: [
-              { value: "7d", label: "7 days" },
-              { value: "30d", label: "30 days" },
-            ],
-          },
-        ])
-      )
-    ).toEqual({
-      name: "dateRange",
-      initial: "30d",
-      options: [
-        { value: "7d", label: "7 days" },
-        { value: "30d", label: "30 days" },
-      ],
-    });
+      startingCollection(COUNT, READ.collections, [
+        card({ widgetId: "core/count", config: { collection: "posts" } }),
+        // Another widget's card, and a removed one, hold no collection of Count's.
+        card({ id: "p2", config: { collection: "pages" } }),
+        card({
+          id: "p3",
+          widgetId: "core/count",
+          removed: true,
+          config: { collection: "pages" },
+        }),
+      ])
+    ).toEqual({ slug: "pages", taken: false });
   });
 
-  it("has no period for a widget without one, or with a choice of another name", () => {
-    expect(periodOf(widget(undefined))).toBeUndefined();
+  it("gives the first, taken, when every collection has its card", () => {
     expect(
-      periodOf(
-        widget([
-          {
-            name: "style",
-            type: "select",
-            label: "Style",
-            options: [{ value: "line", label: "Line" }],
-          },
-        ])
-      )
-    ).toBeUndefined();
-    expect(periodOf(undefined)).toBeUndefined();
+      startingCollection(COUNT, READ.collections, [
+        card({ widgetId: "core/count", config: { collection: "pages" } }),
+        card({
+          id: "p2",
+          widgetId: "core/count",
+          config: { collection: "posts" },
+        }),
+      ])
+    ).toEqual({ slug: "posts", taken: true });
   });
-});
 
-describe("widths", () => {
-  it("offers the widths within the widget's sizes, and names them on the tile", () => {
-    const size = sizeBounds({
-      default: { w: 4, h: 3 },
-      min: { w: 3, h: 3 },
-      max: { w: 6, h: 4 },
+  it("reads a card's collection as it is asked, its declared default where it stores none", () => {
+    // A card storing no collection reads its widget's default, Posts.
+    const asked = (placement: WidgetPlacement, setting: string) =>
+      placement.config?.[setting] ?? "posts";
+    expect(
+      startingCollection(
+        COUNT,
+        READ.collections,
+        [card({ widgetId: "core/count" })],
+        asked
+      )
+    ).toEqual({ slug: "pages", taken: false });
+  });
+
+  it("starts on none for a widget that reads none, or with none to start on", () => {
+    expect(startingCollection(TEAM, READ.collections, [])).toBeUndefined();
+    expect(startingCollection(COUNT, [], [])).toBeUndefined();
+  });
+
+  it("starts only on a collection the widget can ask", () => {
+    // Count can ask Pages alone.
+    const canAsk: CanAsk = (_, slug) => slug === "pages";
+    const own = collectionsFor("core/count", READ.collections, canAsk);
+    expect(own.map(c => c.slug)).toEqual(["pages"]);
+    expect(startingCollection(COUNT, own, [])).toEqual({
+      slug: "pages",
+      taken: false,
     });
-    expect(addWidths(size).map(width => width.w)).toEqual([3, 4, 6]);
-    expect(addWidths(size)[2]).toEqual({
-      w: 6,
-      label: "50%",
-      spoken: "50% width",
-    });
-    expect(widthsLabel(size)).toBe("25% to 50% wide");
-    expect(widthsLabel(sizeBounds({ default: { w: 12, h: 3 } }))).toBe(
-      "100% wide"
-    );
   });
 });
 
 describe("newCardSettings", () => {
-  it("stores the collection under the widget's own setting, and the period chosen", () => {
+  it("stores the collection under the widget's own setting", () => {
     expect(
-      newCardSettings(COUNT, {
-        collection: "posts",
-        period: { name: "dateRange", value: "7d" },
-      })
-    ).toEqual({ collection: "posts", dateRange: "7d" });
+      newCardSettings({ ...COUNT, collectionSetting: "source" }, "posts")
+    ).toEqual({ source: "posts" });
   });
 
-  it("starts a card that reads no collection with no settings", () => {
-    expect(newCardSettings(TEAM, { collection: "posts" })).toBeUndefined();
+  it("starts a card that reads no collection, or has none to start on, with no settings", () => {
+    expect(newCardSettings(TEAM, "posts")).toBeUndefined();
+    expect(newCardSettings(COUNT, undefined)).toBeUndefined();
+  });
+});
+
+describe("pluginShownName", () => {
+  const catalogue = [{ id: "@nextlyhq/plugin-seo", name: "SEO" }];
+
+  it("names a plugin by its own label, else the catalogue's name, else its package name", () => {
+    expect(
+      pluginShownName(
+        "@nextlyhq/plugin-seo",
+        { appearance: { label: "Search" } },
+        catalogue
+      )
+    ).toBe("Search");
+    // An empty label counts as none.
+    expect(
+      pluginShownName(
+        "@nextlyhq/plugin-seo",
+        { appearance: { label: "" } },
+        catalogue
+      )
+    ).toBe("SEO");
+    expect(pluginShownName("@acme/plugin-reviews", undefined, catalogue)).toBe(
+      "reviews"
+    );
+    expect(pluginShownName("widget-kit-fixture", undefined, catalogue)).toBe(
+      "widget-kit-fixture"
+    );
   });
 });

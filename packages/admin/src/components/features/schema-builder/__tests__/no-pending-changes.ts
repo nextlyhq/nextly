@@ -8,6 +8,7 @@ import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 export const NO_PENDING_CHANGES: BuilderPendingChanges = {
   changes: [],
   marks: new Map(),
+  saved: [],
   canUndo: false,
   canRedo: false,
   undo: () => null,

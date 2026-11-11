@@ -13,6 +13,7 @@ import {
   flattenOutline,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
+import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
 
 import type { OutlineActions, OutlineCallbacks } from "./outline-types";
 
@@ -97,7 +98,10 @@ export function useOutlineActions(
       setMenuOpen: setMenuFor,
       focusRow: id => focusRow(id),
       select: id => {
-        call().select(id);
+        const node = nodeOf(id);
+        // A registered block, or its prop, is no field: nothing to open; nor
+        // is a deleted field, which the builder no longer holds.
+        if (!node?.meta && !(node && isPendingDelete(node))) call().select(id);
         focusRow(id);
       },
       addInside: id => call().addAt({ parentFieldId: id }),
@@ -122,7 +126,23 @@ export function useOutlineActions(
         );
       },
       duplicate: id => call().duplicate(id),
-      remove: id => call().remove(id),
+      remove: id => {
+        const node = nodeOf(id);
+        call().remove(id);
+        // Pending until the save, and said so, with what goes with it.
+        if (node) {
+          const inside = flattenOutline(node.children).filter(
+            row => !row.meta
+          ).length;
+          setAnnouncement(
+            `Deleted ${spokenName(node)}${
+              inside
+                ? ` and ${inside} ${inside === 1 ? "field" : "fields"} inside`
+                : ""
+            }. Undo brings ${inside ? "them" : "it"} back.`
+          );
+        }
+      },
       setHidden: (id, hidden) => call().setHidden(id, hidden),
       openFieldGroup: slug => call().openFieldGroup(slug),
     };

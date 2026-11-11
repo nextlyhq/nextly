@@ -19,7 +19,13 @@ export function registerRepairColumnsCommand(
   program
     .command(REPAIR_COLUMNS_COMMAND)
     .description(
-      "Report every column whose type or nullability differs from its field (changes nothing)"
+      "Report every column whose type or nullability differs from its field; with --apply, convert the safe ones"
+    )
+    // Without it the run only reports and changes nothing; with it the run takes the schema lock.
+    .option(
+      "--apply",
+      "Convert each column whose stored values all convert exactly, and record each repair",
+      false
     )
     // One versioned document on standard output, for CI; nothing else is written there.
     .option(

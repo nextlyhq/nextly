@@ -343,7 +343,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
         }
       }
     },
-    [fields]
+    [fields, setFields]
   );
 
   // -------------------------------------------------------------------------
@@ -383,7 +383,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
       setSelectedFieldId(newField.id);
       setSidebarTab("edit");
     },
-    [activeContainerId, fields]
+    [activeContainerId, fields, setFields]
   );
 
   const handleFieldSelect = useCallback((fieldId: string) => {
@@ -391,9 +391,12 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     setSidebarTab("edit");
   }, []);
 
-  const handleFieldsReorder = useCallback((reorderedFields: BuilderField[]) => {
-    setFields(reorderedFields);
-  }, []);
+  const handleFieldsReorder = useCallback(
+    (reorderedFields: BuilderField[]) => {
+      setFields(reorderedFields);
+    },
+    [setFields]
+  );
 
   // Why: PR D parent-aware "+ Add field" inside group/repeater editors.
   // Unlike handleFieldAdd (which builds an empty field by type), this
@@ -414,7 +417,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
         return prev;
       });
     },
-    []
+    [setFields]
   );
 
   const handleFieldDelete = useCallback(
@@ -424,7 +427,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
         setSelectedFieldId(null);
       }
     },
-    [selectedFieldId]
+    [selectedFieldId, setFields]
   );
 
   // Keyed by the field, so a setting typed a character at a time is one

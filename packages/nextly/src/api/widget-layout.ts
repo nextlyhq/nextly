@@ -45,6 +45,7 @@ import {
   type WidgetSizeFacts,
 } from "../domains/widgets/canonical";
 import {
+  addedCardWithoutCollection,
   collectionSettingsToken,
   collectionWidgets,
   unreadableCollectionCard,
@@ -423,7 +424,11 @@ async function visibleWidgets(auth: AuthContext) {
     // A card set to a collection this reader may not read, withheld as a card
     // of a widget they may not see is, judged by the Collection setting the
     // canonical summary carries from either channel.
-    withheld: unreadableCollectionCard(collectionWidgets(widgets), readable),
+    withheld: unreadableCollectionCard(
+      collectionWidgets(widgets),
+      readable,
+      audience.readsUsers
+    ),
     // Over everything that decides what is withheld: the widgets, the gates,
     // the collections this reader may read, and each Collection setting's
     // default, which decides a card that stores no value.
@@ -439,7 +444,12 @@ async function visibleWidgets(auth: AuthContext) {
       widgets.map(widget => widget.id),
       audience.heldActionGates,
       readable,
-      collectionSettingsToken(widgets),
+      [
+        ...collectionSettingsToken(widgets),
+        // Whether a card set to Users is this reader's, as the audience's own
+        // token holds it.
+        ...(audience.readsUsers ? ["reads-users"] : []),
+      ],
       notShown
     );
   }
@@ -889,6 +899,38 @@ function refuseUnreadableCollections(
   });
 }
 
+/**
+ * Refuses a card the write adds that reads a collection, from a reader who may read none that the
+ * dashboard shows (`addedCardWithoutCollection`): the add panel offers none to them, so one here
+ * was sent around it. A Count set to Users, from a reader who may read users, reads no collection
+ * and is kept.
+ */
+function refuseCollectionCardWithNone(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[],
+  widgets: readonly CanonicalWidget[],
+  readable: ReadonlySet<string>,
+  readsUsers: boolean
+): void {
+  const added = addedCardWithoutCollection(
+    submitted,
+    collectionWidgets(widgets),
+    new Set(shown.map(placement => placement.id)),
+    publishableContentSources(readable).length > 0,
+    readsUsers
+  );
+  if (added === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "placements",
+        code: "INVALID_VALUE",
+        message: "This card needs a collection you can read.",
+      },
+    ],
+  });
+}
+
 /** The collections a reader may read, each by the label its source is listed under. */
 function namedCollections(readable: ReadonlySet<string>): NamedCollection[] {
   return [...readable].map(slug => ({
@@ -1325,6 +1367,13 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     replaceUnreadable
   );
   const shown = visibleArrangement(stored.layout, view, notShown);
+  refuseCollectionCardWithNone(
+    submitted,
+    shown,
+    view.widgets,
+    view.audience.readableCollections,
+    view.audience.readsUsers
+  );
   refuseExtraCards(submitted, shown, sizesOf(view.widgets));
   refuseOverlongText(submitted, shown, view.widgets);
   refuseUnusableSettings(

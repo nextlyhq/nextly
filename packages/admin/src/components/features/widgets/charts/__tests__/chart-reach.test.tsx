@@ -299,13 +299,13 @@ describe("a chart over time, from the keyboard", () => {
 });
 
 describe("the tooltip", () => {
-  it("is drawn on the popover surface, with its mark's chart colour", async () => {
+  it("is drawn on the popover surface, with its mark's colour", async () => {
     await drawGroups();
     await userEvent.setup().tab();
     const tip = tooltip() as HTMLElement;
     expect(tip).toHaveClass("bg-popover");
     const swatch = within(tip).getByTestId("chart-tooltip-swatch");
-    expect(swatch.style.backgroundColor).toBe("var(--nx-chart-3)");
+    expect(swatch.style.backgroundColor).toBe("var(--nx-success-solid)");
   });
 });
 

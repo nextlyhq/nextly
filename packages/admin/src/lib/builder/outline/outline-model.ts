@@ -19,12 +19,20 @@ import type { FieldDefinition } from "@admin/types/collection";
 import { fieldLocalized } from "../field-localized";
 import type { FieldPlacement } from "../field-placement";
 import { convertToBuilderField } from "../field-transformers";
+import type { RowMark } from "../pending-changes";
+
+import { fillBlocks, type BlockCatalog } from "./block-rows";
 
 /** A field group the entity uses, as the Builder loaded it. */
 export interface LoadedFieldGroup {
   slug: string;
   label: string;
   fields: FieldDefinition[];
+  /**
+   * How many fields place it, across every collection, Single and field
+   * group; null or absent when that is not known.
+   */
+  placedBy?: number | null;
   /** Whether the field group is translated, so its fields can be. */
   localized?: boolean;
 }
@@ -35,7 +43,8 @@ export type ReadOnlyReason =
   | { kind: "code" }
   | { kind: "plugin"; owner?: string }
   | { kind: "locked" }
-  | { kind: "field-group"; slug: string; label: string };
+  | { kind: "field-group"; slug: string; label: string }
+  | { kind: "block"; source: string | null };
 
 /** The sentence a read-only row shows: where it is defined. */
 export function describeReadOnly(reason: ReadOnlyReason): string {
@@ -49,6 +58,11 @@ export function describeReadOnly(reason: ReadOnlyReason): string {
       return "Locked";
     case "field-group":
       return `Defined in the field group ${reason.label}`;
+    case "block":
+      // A registered block, and its props, are defined where it was registered.
+      return reason.source === null
+        ? "A registered block"
+        : `Defined by ${reason.source}`;
   }
 }
 
@@ -112,7 +126,8 @@ export type OutlineContainer =
   | "repeater"
   | "field-group"
   | "field-group-entry"
-  | "blocks";
+  | "blocks"
+  | "block";
 
 /** One row of the outline and the rows beneath it. */
 export interface OutlineNode {
@@ -145,12 +160,36 @@ export interface OutlineNode {
     unavailable?: "loading" | "failed" | "not-found";
   };
   /**
+   * For a row standing for one field group (a field using one, or one entry of
+   * a field accepting several): how many fields place that field group; null
+   * when that is not known. Absent on any other row.
+   */
+  usedIn?: number | null;
+  /**
    * For a blocks field: the blocks it accepts, as its policy names them (a
    * block's name or a pattern); absent when it accepts any block.
    */
-  blocks?: { allow: readonly string[] | undefined };
+  blocks?: {
+    allow: readonly string[] | undefined;
+    /** Why the blocks it accepts are not shown yet, when they are not. */
+    unavailable?: "loading" | "failed" | "unavailable";
+    /** Allow-list entries that admit no registered block. */
+    unmatched?: readonly string[];
+  };
+  /**
+   * A row that is no field: a registered block a blocks field accepts, or one
+   * of its props. It can be read, never selected or changed.
+   */
+  meta?: "block" | "prop";
+  /** What the row's type column says, when it is not a field type. */
+  typeName?: string;
   /** Keeps a value per language: its own rule, in a translated holder. */
   translatable: boolean;
+  /**
+   * The row's pending changes, when it has any: its marks, and for a
+   * container deleted with fields in it, how many go with it.
+   */
+  pending?: { marks: readonly RowMark[]; inside?: number };
 }
 
 /** Whether the field groups the outline reads have arrived. */
@@ -159,6 +198,7 @@ export type FieldGroupsLoad = "loading" | "loaded" | "failed";
 interface BuildContext {
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   load: FieldGroupsLoad;
+  blockCatalogs: ReadonlyMap<string, BlockCatalog> | undefined;
 }
 
 /** A field group's own field, as a Builder field with an id from its place. */
@@ -230,9 +270,9 @@ function fillContainer(
       fillFieldGroup(node, ctx, level.chain);
       return;
     case "blocks":
-      // The policy as written: no list accepts any block, an empty list none,
-      // and an entry may be a pattern standing for many.
-      node.blocks = { allow: node.field.blocks?.allow };
+      // The policy as written (no list accepts any block, an empty list none,
+      // and an entry may be a pattern), with the blocks it admits once read.
+      fillBlocks(node, ctx.blockCatalogs);
       return;
     default:
       return;
@@ -326,6 +366,7 @@ function fillFieldGroup(
         readOnly: { kind: "field-group", slug, label: group?.label ?? slug },
         own: false,
         translatable: false,
+        usedIn: group?.placedBy ?? null,
       };
       entry.children = record(
         slug,
@@ -333,6 +374,11 @@ function fillFieldGroup(
       );
       return entry;
     });
+  }
+  // A field using one field group stands for it; one accepting several
+  // stands for none of them, and each entry row carries its own count.
+  if (refs.single !== undefined) {
+    node.usedIn = ctx.fieldGroups.get(refs.single)?.placedBy ?? null;
   }
   node.fieldGroup = {
     slugs,
@@ -363,6 +409,8 @@ export function buildOutline(
     fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
     /** Whether `fieldGroups` has arrived; loaded unless said. */
     fieldGroupsLoad?: FieldGroupsLoad;
+    /** The blocks each allow-list admits, by `blockCatalogKey`. */
+    blockCatalogs?: ReadonlyMap<string, BlockCatalog>;
   }
 ): OutlineNode[] {
   return buildLevel(
@@ -370,6 +418,7 @@ export function buildOutline(
     {
       fieldGroups: options.fieldGroups,
       load: options.fieldGroupsLoad ?? "loaded",
+      blockCatalogs: options.blockCatalogs,
     },
     {
       parent: null,

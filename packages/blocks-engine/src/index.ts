@@ -417,6 +417,11 @@ export type {
 // noticed: a module the entry does not name is absent from `dist` however
 // thoroughly it is tested.
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
+// The one reading of an allow-list of block names (an exact name, or "ns/*"
+// for a namespace), stable public API: a blocks field's accepted blocks, a
+// slot's, and any reader listing what one accepts all match by it, so the
+// three cannot come to admit different blocks.
+export { slotAdmits } from "./nesting";
 export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // The one placement rule over the nesting rule above: declared slots, the
