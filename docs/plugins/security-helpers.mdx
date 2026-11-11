@@ -65,7 +65,9 @@ export default definePlugin({
   version: "1.0.0",
   nextly: ">=0.0.2-alpha.67",
   init(ctx) {
-    ctx.logger.info(`passwords up to ${ctx.security.passwords.ceiling} characters`);
+    ctx.logger.info(
+      `passwords up to ${ctx.security.passwords.ceiling} characters`
+    );
     void signUp;
     void signIn;
   },
@@ -112,11 +114,11 @@ export default definePlugin({
 `check(password, rules?)` goes by length and lists, never by the kinds of
 characters a password holds: a long password of lowercase letters is accepted.
 
-| Rule | Bounds | Default |
-| --- | --- | --- |
-| `minLength` | 8 to 64 code points | 8 |
-| `maxLength` | 64 to 256 code points | 128 |
-| `breached` | `true` or `false` | `false` |
+| Rule        | Bounds                | Default |
+| ----------- | --------------------- | ------- |
+| `minLength` | 8 to 64 code points   | 8       |
+| `maxLength` | 64 to 256 code points | 128     |
+| `breached`  | `true` or `false`     | `false` |
 
 Rules outside their bounds throw a validation error naming the rule and its
 bounds. Lengths are counted in code points after NFC, as NIST SP 800-63B
@@ -193,6 +195,37 @@ function sessionKey(opaque: OpaqueSecrets, cookieValue: string) {
   which cannot be found by trying values.
 - `equal(a, b)` compares two values in time that depends only on their lengths,
   for when you hold both rather than looking one up by its hash.
+
+## Keyed digests
+
+`ctx.security.digests` (`@experimental`) gives a one-way digest of a value a
+plugin needs to compare without keeping it, such as the email address or IP
+address a form uses to accept one response per person.
+
+```ts
+import type { KeyedDigests } from "@nextlyhq/plugin-sdk";
+
+/** What a submission stores to find an earlier one from the same address. */
+function addressKey(digests: KeyedDigests, email: string) {
+  // Normalised first: the comparison is exact.
+  return digests.digest("email", email.trim().toLowerCase());
+}
+```
+
+- `digest(purpose, value)` returns an HMAC-SHA256 in hex: the same for the
+  same purpose and value, and different for another purpose, so one value
+  used two ways gives two unrelated digests. `purpose` is a short lowercase
+  name (`email`, `ip`, `browser`).
+- Unlike `opaque.hash`, it is keyed. An address or an IP has few enough likely
+  values to be found by hashing each, so a stored digest is useful only to
+  someone holding the key.
+- The key is your plugin's own, made the first time it is needed and kept in
+  `nextly_meta` sealed under `NEXTLY_SECRET` in your plugin's name. It is
+  made once: two instances asking at the same moment use the same key.
+- Digests outlive a secret rotation. Keep the old secret in
+  `NEXTLY_SECRET_PREVIOUS` for one start: the key is sealed again under the new
+  secret at that start, and on its first read, so digests stored before the
+  rotation still match once the old secret is removed.
 
 ## One-purpose secrets
 
@@ -311,15 +344,15 @@ a code whose effect fails stays spent, and the person asks for a new one.
 
 ### Bounds
 
-| Input | Bound |
-| --- | --- |
-| `purpose` | a lowercase letter, then up to 63 lowercase letters, digits, dots or hyphens |
-| `subject` | 1 to 255 characters of well-formed Unicode, with no NUL character; compared exactly, case and spaces included, on every database |
-| a token's `expiresInMs` | 1 minute to 30 days |
-| a code's `expiresInMs` | 1 to 60 minutes |
-| `digits` | 6 (the default), 7 or 8 |
-| `maxWrongTries` | 1 to 10 |
-| `data` | a plain object (not a `Date` or class instance) holding strings, finite numbers, booleans and nulls, at most 1 KB as JSON, stored in clear |
+| Input                   | Bound                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `purpose`               | a lowercase letter, then up to 63 lowercase letters, digits, dots or hyphens                                                               |
+| `subject`               | 1 to 255 characters of well-formed Unicode, with no NUL character; compared exactly, case and spaces included, on every database           |
+| a token's `expiresInMs` | 1 minute to 30 days                                                                                                                        |
+| a code's `expiresInMs`  | 1 to 60 minutes                                                                                                                            |
+| `digits`                | 6 (the default), 7 or 8                                                                                                                    |
+| `maxWrongTries`         | 1 to 10                                                                                                                                    |
+| `data`                  | a plain object (not a `Date` or class instance) holding strings, finite numbers, booleans and nulls, at most 1 KB as JSON, stored in clear |
 
 A value outside its bound is refused with a validation error before anything
 is written. Keep secrets out of `data`: it is stored as given and returned to

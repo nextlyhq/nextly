@@ -151,6 +151,11 @@ import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
 import {
+  createKeyedDigests,
+  type DigestKeyStore,
+  type KeyedDigests,
+} from "./security/keyed-digest";
+import {
   createOneTimeSecrets,
   type OneTimeSecrets,
   type SecretsAdapter,
@@ -1046,6 +1051,11 @@ export interface PluginSecurityApi {
   readonly opaque: OpaqueSecrets;
   /** One-purpose links and codes, spent once. */
   readonly secrets: OneTimeSecrets;
+  /**
+   * Keyed one-way digests of values to compare without keeping them, under
+   * the plugin's own key, stable across secret rotations.
+   */
+  readonly digests: KeyedDigests;
   /** Verifying the webhooks the plugin receives, in a common scheme or its own. */
   readonly webhooks: PluginReceivedWebhooks;
 }
@@ -1661,6 +1671,9 @@ export const PLUGIN_SERVICE_NAMES = [
   // registered, so a plugin's committed event is offered to the drain of the
   // instance that recorded it.
   "webhookFastDrainScheduler",
+  // `nextly_meta`, where each plugin's sealed digest key is kept
+  // (`ctx.security.digests`).
+  "metaService",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -2317,7 +2330,9 @@ export function createPluginContext(
                                     ? JobsPassDatabase
                                     : T extends "webhookFastDrainScheduler"
                                       ? WebhookFastDrainScheduler | null
-                                      : never,
+                                      : T extends "metaService"
+                                        ? DigestKeyStore
+                                        : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -3017,6 +3032,20 @@ export function createPluginContext(
       // outlives a container being cleared, as on a reload while old plugins
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
+      // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
+      // The store and the install's secrets are read per call, as above.
+      digests: createKeyedDigests({
+        owner,
+        store: () => getServiceFn("metaService"),
+        // The keyed generations only: a key is sealed and opened with one.
+        secrets: () =>
+          secretGenerations(
+            env.NEXTLY_SECRET,
+            env.NEXTLY_SECRET_PREVIOUS
+          ).filter(
+            (generation): generation is string => typeof generation === "string"
+          ),
+      }),
       secrets: createOneTimeSecrets({
         owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),

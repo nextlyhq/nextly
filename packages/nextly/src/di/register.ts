@@ -254,6 +254,7 @@ import {
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
 import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
+import { resealPluginDigestKeys } from "../plugins/security/keyed-digest";
 import {
   clearPluginServices,
   registerPluginService,
@@ -1271,6 +1272,13 @@ async function registerServicesOnce(
   // since rotated is sealed again under the current one while the previous
   // can still open it, so a message outlives any number of rotations.
   await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
+  // And each plugin's digest key, for the same reason: a digest stored beside
+  // a plugin's records must match for as long as they are kept.
+  await resealPluginDigestKeys(
+    transformedConfig.plugins,
+    getService("metaService"),
+    pluginSettingsSecrets(env)
+  );
 
   // In production, until the install has an administrator, setup needs a
   // token: an install with none gets one here, printed once to this output.
@@ -4799,6 +4807,7 @@ async function initializePlugins(
       | JobRegistry
       | JobsPassDatabase
       | WebhookFastDrainScheduler
+      | MetaService
       | null
   > = {
     collectionService: () =>
@@ -4852,6 +4861,9 @@ async function initializePlugins(
             "webhookFastDrainScheduler"
           )
         : null,
+    // This registration's `nextly_meta`, where each plugin's sealed digest
+    // key is kept.
+    metaService: () => services.container.get<MetaService>("metaService"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>

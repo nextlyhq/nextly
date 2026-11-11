@@ -514,6 +514,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "JobSlug (type)",
   "JsonObject (type)",
   "JsonValue (type)",
+  "KeyedDigests (type)",
   "LanguageAddress (type)",
   "LanguageAddressRule (type)",
   "LimitCheck (type)",
