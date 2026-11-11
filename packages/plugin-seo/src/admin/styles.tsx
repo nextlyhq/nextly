@@ -29,7 +29,8 @@ const CSS = `
 .nx-seo-tab{flex:none;border:0;background:transparent;padding:9px 12px;font:inherit;font-size:13px;font-weight:500;color:var(--nx-muted-foreground);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .nx-seo-tab:hover{color:var(--nx-foreground)}
 .nx-seo-tab[aria-selected="true"]{color:var(--nx-foreground);border-bottom-color:var(--nx-foreground);font-weight:600}
-.nx-seo-cnt{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--nx-warning-surface);color:var(--nx-warning-text);border:1px solid var(--nx-warning-border);font-size:12px;font-weight:600;display:inline-grid;place-items:center;line-height:1}
+/* The border in longhands, so the neutral .n count changes its colour alone. */
+.nx-seo-cnt{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--nx-warning-surface);color:var(--nx-warning-text);border-width:1px;border-style:solid;border-color:var(--nx-warning-border);font-size:12px;font-weight:600;display:inline-grid;place-items:center;line-height:1}
 .nx-seo-body{padding:20px 24px 32px}
 .nx-seo-lead{margin:0 0 16px;color:var(--nx-muted-foreground);font-size:13px}
 .nx-seo-form2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 20px;max-width:880px}
@@ -118,7 +119,41 @@ const CSS = `
 .nx-seo-minilist .grow{flex:1;min-width:0}
 .nx-seo-warnc{color:var(--nx-warning-text);display:inline-flex;flex:none}
 .nx-seo-okc{color:var(--nx-success-text);display:inline-flex;flex:none}
+.nx-seo-phead > div:first-child{flex:1 1 360px;min-width:0}
+.nx-seo-pmeta{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--nx-muted-foreground);flex-wrap:wrap}
+.nx-seo .nx-seo-sbtn{height:28px;padding:0 9px;font-size:12px;gap:6px;border-radius:8px}
+.nx-seo .nx-seo-sbtn svg{width:14px;height:14px}
+.nx-seo-pgroups{display:grid;gap:12px}
+.nx-seo-pgroup{border:1px solid var(--nx-border);border-radius:10px;background:var(--nx-card);overflow:hidden}
+.nx-seo-pg-h{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:var(--nx-muted);border-bottom:1px solid var(--nx-border-subtle)}
+.nx-seo-pg-h .nx-seo-warnc{margin-top:1px}
+.nx-seo-grow{flex:1;min-width:0}
+.nx-seo-pg-h h2{margin:0;font-weight:600;font-size:14px;line-height:1.45}
+.nx-seo-pg-h p{margin:2px 0 0;color:var(--nx-muted-foreground);font-size:13px;line-height:1.45}
+.nx-seo-cnt.n{background:var(--nx-muted);color:var(--nx-muted-foreground);border-color:transparent;vertical-align:1px}
+.nx-seo-chip{font-size:12px;font-weight:600;padding:1px 7px;border-radius:5px;border:1px solid var(--nx-border);color:var(--nx-muted-foreground);white-space:nowrap;flex:none}
+.nx-seo-prows{list-style:none;margin:0;padding:0}
+.nx-seo-prow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) 300px;gap:14px;align-items:center;padding:10px 14px;border-top:1px solid var(--nx-border-subtle);font-size:13px}
+.nx-seo-prow:first-child{border-top:0}
+.nx-seo-where{min-width:0}
+.nx-seo-where b{font-weight:600;display:block;overflow-wrap:anywhere}
+.nx-seo-where .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:12px!important;overflow-wrap:anywhere}
+.nx-seo-what{line-height:1.45;overflow-wrap:anywhere}
+.nx-seo-fixes{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+/* The SEO screens' one select: a native select in the admin's select styling. */
+.nx-seo-select{appearance:none;-webkit-appearance:none;height:var(--nx-control-height-md);width:100%;max-width:170px;border:1px solid var(--nx-input);border-radius:6px;padding:0 30px 0 10px;background-color:var(--nx-background);background-image:linear-gradient(45deg,transparent 50%,var(--nx-muted-foreground) 50%),linear-gradient(135deg,var(--nx-muted-foreground) 50%,transparent 50%);background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;background-size:5px 5px;background-repeat:no-repeat;color:var(--nx-foreground);font:inherit;font-size:14px;cursor:pointer;transition:border-color .15s}
+.nx-seo-select:hover,.nx-seo-select:focus,.nx-seo-select:focus-visible{border-color:var(--nx-primary);outline:none}
+.nx-seo-select[aria-invalid="true"]{border-color:var(--nx-warning-border)}
+@media (max-width:1100px){
+.nx-seo-prow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"where fixes" "what what";gap:6px 14px}
+.nx-seo-where{grid-area:where}
+.nx-seo-what{grid-area:what}
+.nx-seo-fixes{grid-area:fixes}
+}
 @media (max-width:720px){
+.nx-seo-select{max-width:none}
+.nx-seo-prow{grid-template-columns:minmax(0,1fr);grid-template-areas:"where" "what" "fixes"}
+.nx-seo-fixes{justify-content:flex-start}
 .nx-seo-head{padding:18px 16px 0}
 .nx-seo-tabs{padding:0 16px}
 .nx-seo-body{padding:16px 16px 28px}
@@ -157,7 +192,8 @@ export type IconName =
   | "check"
   | "arrow"
   | "upload"
-  | "pen";
+  | "pen"
+  | "refresh";
 
 const PATHS: Record<IconName, JSX.Element> = {
   warn: (
@@ -196,6 +232,12 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   pen: <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />,
+  refresh: (
+    <>
+      <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />
+      <path d="M21 3v5h-5" />
+    </>
+  ),
 };
 
 /** One of the screen's icons, in the text colour around it. */

@@ -6,7 +6,7 @@
  * @module admin/share-image-row
  */
 import { Button } from "@nextlyhq/ui";
-import { CircleCheck } from "lucide-react";
+import { Check } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
@@ -103,6 +103,32 @@ function ImageProblems({
   );
 }
 
+/** The picture a share image was made from, as the row names it. */
+interface MadeFrom {
+  /** Its name in a sentence, such as `cover image`. */
+  name: string;
+  /** Whether it is one of the page's own fields, shown on the page. */
+  onPage: boolean;
+}
+
+/** A share image made in this visit, and what it was made from. */
+interface Made {
+  id: string;
+  from: MadeFrom;
+}
+
+/**
+ * What a share image made now is made from: the image chosen for the page,
+ * or the page's own picture the automatic one is taken from.
+ */
+function madeFromOf(props: AdvancedProps, chosen: boolean): MadeFrom {
+  if (chosen) return { name: "chosen image", onPage: false };
+  const field = props.answer?.image?.field;
+  const label =
+    field === undefined ? undefined : (props.names.fieldLabels[field] ?? field);
+  return { name: label?.toLowerCase() ?? "picture", onPage: true };
+}
+
 /** Where the picture comes from, with one way back once one is chosen. */
 function ImageSource({
   chosen,
@@ -113,7 +139,7 @@ function ImageSource({
   onAutomatic,
 }: {
   chosen: boolean;
-  made: boolean;
+  made: MadeFrom | undefined;
   image: SeoAnswer["image"];
   names: AdvancedProps["names"];
   writable: boolean;
@@ -129,6 +155,7 @@ function ImageSource({
       <Chip kind="typed">
         {made ? "Made for this page" : "Chosen for this page"}
       </Chip>
+      {made ? <span>from the {made.name}</span> : null}
       <LinkAction disabled={!writable} onClick={onAutomatic}>
         Go back to automatic
       </LinkAction>
@@ -163,14 +190,21 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
     onMakeShareImage,
   } = props;
   // The copy made in this visit; the row says so while it is the page's image.
-  const [madeId, setMadeId] = useState<string | undefined>(undefined);
+  const [copy, setCopy] = useState<Made | undefined>(undefined);
   const chosen = values.ogImage !== null && values.ogImage !== undefined;
-  const made = madeId !== undefined && madeId === imageIdOf(values.ogImage);
+  const made =
+    copy !== undefined && copy.id === imageIdOf(values.ogImage)
+      ? copy.from
+      : undefined;
   const shown = shownImage(props, chosen);
   const make =
     onMakeShareImage &&
     (() => {
-      void onMakeShareImage().then(setMadeId);
+      // Named as it was when the copy was asked for, before it replaces it.
+      const from = madeFromOf(props, chosen);
+      void onMakeShareImage().then(id => {
+        setCopy(id === undefined ? undefined : { id, from });
+      });
     });
   return (
     <Row
@@ -210,9 +244,11 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
         </div>
       </div>
       {made ? (
-        <Note icon={<CircleCheck className="size-4 text-success-text" />}>
-          Made a 1200 × 630 copy for sharing. The picture on the page is
-          unchanged.
+        <Note tone="success" icon={<Check className="size-4" />}>
+          <span data-testid="seo-share-made">
+            Made a 1200 × 630 copy for sharing. The {made.name}
+            {made.onPage ? " on the page" : ""} is unchanged.
+          </span>
         </Note>
       ) : (
         <ImageProblems

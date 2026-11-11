@@ -9,7 +9,6 @@
 import type { JSX } from "react";
 
 const CSS = `
-.nx-seo-cnt.n{background:var(--nx-muted);color:var(--nx-muted-foreground);border-color:var(--nx-border)}
 .nx-seo-addform{display:grid;grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr) 160px auto;gap:8px;align-items:end;padding:14px;border:1px solid var(--nx-border);border-radius:10px;background:var(--nx-card)}
 .nx-seo-addform .nx-seo-arrow{align-self:center;padding-top:20px;color:var(--nx-muted-foreground);display:grid;place-items:center}
 .nx-seo-addform label{font-size:12px;font-weight:600;color:var(--nx-muted-foreground);display:block;margin-bottom:4px}
@@ -24,7 +23,6 @@ const CSS = `
 .nx-seo-in{width:100%;height:36px;border:1px solid var(--nx-control-border,var(--nx-input));border-radius:8px;background:var(--nx-background);color:var(--nx-foreground);padding:0 10px;font-family:var(--seo-mono);font-size:13px}
 .nx-seo-in::placeholder{color:var(--nx-muted-foreground)}
 .nx-seo-in[aria-invalid="true"]{border-color:var(--nx-danger-border)}
-select.nx-seo-in{font-family:inherit}
 .nx-seo-rtbl td.nx-seo-mono,.nx-seo-rtbl td .nx-seo-mono{overflow-wrap:anywhere}
 .nx-seo-rtbl td{vertical-align:middle}
 .nx-seo-rtbl td.nx-seo-from{max-width:340px}
@@ -37,6 +35,7 @@ select.nx-seo-in{font-family:inherit}
 .nx-seo-rowacts{display:flex;gap:2px;justify-content:flex-end;white-space:nowrap}
 .nx-seo-iconbtn{width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--nx-muted-foreground);display:inline-grid;place-items:center;cursor:pointer}
 .nx-seo-iconbtn:hover{background:var(--nx-muted);color:var(--nx-foreground)}
+.nx-seo-rtbl .nx-seo-select{min-width:150px}
 .nx-seo-editrow td{background:var(--nx-table-row-hover,var(--nx-muted))}
 .nx-seo-rowerr{margin:0;display:flex;gap:6px;align-items:flex-start;color:var(--nx-danger-text);font-size:13px}
 .nx-seo-impbox{border:1px solid var(--nx-foreground);border-radius:10px;background:var(--nx-card);overflow:hidden;margin-bottom:14px}

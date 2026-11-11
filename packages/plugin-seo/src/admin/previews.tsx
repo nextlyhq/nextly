@@ -9,7 +9,13 @@ import { useId, useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
-import { absoluteAddress, cutAt, hostOf, resultsAddress } from "../tab/display";
+import {
+  absoluteAddress,
+  cutAt,
+  hostOf,
+  resultsAddress,
+  shareImageFit,
+} from "../tab/display";
 import { DESCRIPTION_LIMIT } from "../tab/problems";
 
 import { cx } from "./parts";
@@ -186,6 +192,7 @@ function ShareCard({
   sharedTitleTyped: boolean;
 }): ReactNode {
   const image = answer.image?.value;
+  const fit = shareImageFit(image);
   return (
     <div className="grid gap-[18px] @xl:grid-cols-[minmax(0,500px)_1fr] @xl:items-start">
       <div
@@ -204,6 +211,15 @@ function ShareCard({
               className="size-full object-cover"
             />
           )}
+          {/* Where the card cuts a picture taller than itself. The line sits
+              over the picture whatever the theme, so it is drawn light. */}
+          {fit?.cutTopAndBottom ? (
+            <span
+              aria-hidden="true"
+              data-testid="seo-share-crop"
+              className="absolute inset-x-0 top-0 border-t border-dashed border-white/70"
+            />
+          ) : null}
         </div>
         <div className="border-t border-border-subtle bg-muted px-3 py-2.5">
           <div className="text-xs text-muted-foreground lowercase">
@@ -233,6 +249,14 @@ function ShareCard({
           <b className="font-semibold text-foreground">X</b> shows the image and
           the site name only.
         </li>
+        {fit === undefined ? null : (
+          <li
+            data-testid="seo-share-fit"
+            className={cx(!fit.fits && "font-semibold text-warning-text")}
+          >
+            {fit.text}
+          </li>
+        )}
         <li>
           {sharedTitleTyped
             ? "Using the different title for sharing, set under Advanced."

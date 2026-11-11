@@ -95,6 +95,9 @@ describe("seoPlugin", () => {
       ["POST", "/redirects/import", undefined, undefined],
       ["GET", "/not-found", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
+      // The problem list, read and checked again by a signed-in reader.
+      ["GET", "/problems", undefined, undefined],
+      ["POST", "/problems/check", undefined, undefined],
     ]);
   });
 
@@ -155,6 +158,8 @@ describe("seoPlugin", () => {
       "/redirects/import",
       "/not-found",
       "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -177,6 +182,8 @@ describe("seoPlugin", () => {
       "/redirects/import",
       "/not-found",
       "/resolve",
+      "/problems",
+      "/problems/check",
     ]);
   });
 

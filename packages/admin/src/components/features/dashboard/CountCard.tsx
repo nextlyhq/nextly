@@ -58,7 +58,9 @@ export const CountCard: React.FC<CountCardProps> = ({ data, settings }) => {
   const number = (
     <Link
       href={view.href}
-      className="block w-fit whitespace-nowrap rounded-sm text-[30px] font-semibold leading-[1.1] tracking-[-0.02em] tabular-nums text-foreground hover:underline"
+      // At least 24px wide however few digits it holds, so a single figure is a target a finger
+      // can hit.
+      className="block w-fit min-w-6 whitespace-nowrap rounded-sm text-[30px] font-semibold leading-[1.1] tracking-[-0.02em] tabular-nums text-foreground hover:underline"
       aria-label={spoken}
     >
       <CardFigure value={view.total} tier="medium" />

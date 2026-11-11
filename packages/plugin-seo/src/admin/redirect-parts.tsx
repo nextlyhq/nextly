@@ -49,7 +49,7 @@ const TYPE_LABEL: Record<RedirectType, string> = {
   temporary: "Temporary",
 };
 
-/** A Permanent or Temporary choice. */
+/** A Permanent or Temporary choice, in the SEO screens' select styling. */
 function TypeSelect(props: {
   id: string;
   value: RedirectType;
@@ -58,7 +58,7 @@ function TypeSelect(props: {
 }): JSX.Element {
   return (
     <select
-      className="nx-seo-in"
+      className="nx-seo-select"
       id={props.id}
       aria-label={props.label}
       value={props.value}

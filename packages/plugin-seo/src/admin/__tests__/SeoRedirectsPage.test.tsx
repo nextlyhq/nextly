@@ -355,4 +355,18 @@ describe("the redirects screen", () => {
     expect(from().value).toBe("https://example.de/weg");
     expect(to().value).toBe("https://example.de/neu");
   });
+
+  it("keeps what was typed when switching tabs, and never writes the tab to the address", () => {
+    // The admin remounts a plugin page whenever its address changes, which
+    // would throw typed input away.
+    const before = window.location.href;
+    render(<SeoRedirectsPage />);
+
+    fireEvent.change(from(), { target: { value: "/half-typed" } });
+    fireEvent.click(screen.getByRole("tab", { name: /Not found/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /Redirects/ }));
+
+    expect(from().value).toBe("/half-typed");
+    expect(window.location.href).toBe(before);
+  });
 });

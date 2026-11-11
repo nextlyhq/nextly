@@ -40,6 +40,10 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
+import { watchSaves } from "./problems/hooks";
+import { problemRoutes } from "./problems/route";
+import { problemsCollection } from "./problems/store";
 import { REDIRECTS_SLUG, redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE } from "./redirects/contract";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
@@ -419,20 +423,35 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     readSocialCardRules,
   });
 
+  // What the problem list checks, read with the rules every page's head is
+  // worked out by, so the list and the page never disagree.
+  const problemChecks = {
+    targets,
+    readers: {
+      readRules,
+      readStructuredDataRules: structuredDataFromSettings(
+        readStructuredDataRules
+      ),
+      readSocialCardRules,
+    },
+  };
+
   // The site's sitemap and robots.txt, the action that makes a share image
-  // of the right size, the settings and redirects screens' routes, and the
-  // SEO tab's own; all added below.
+  // of the right size, the settings and redirects screens' routes, the SEO
+  // tab's own and the problem list's; all added below.
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
     // The record that keeps each public address to one page, the redirects
-    // whose From addresses it holds, and the log of addresses not found.
+    // whose From addresses it holds, the log of addresses not found, and
+    // what the problem list's checks found.
     collections: [
       addressRecordCollection(),
       redirectsCollection(),
       notFoundCollection(),
+      problemsCollection(),
     ],
     // Every page's head, worked out by the one order of who wins, with its
     // links to its other languages, its social card completed, and its
@@ -476,6 +495,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       ...tab.admin,
       clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
       menu: [
+        // Shown to everyone in the admin: the list answers each person with
+        // the pages of the types they may read, and says so where none.
+        { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
         {
           label: "Redirects",
           to: REDIRECTS_PAGE_HREF,
@@ -490,6 +512,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
+        PROBLEMS_PAGE,
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
         { ...REDIRECTS_PAGE, requiredPermission: `read-${REDIRECTS_SLUG}` },
       ],
@@ -520,7 +543,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),
-    ...tab.routes
+    ...tab.routes,
+    ...problemRoutes(problemChecks)
   );
 
   return definePlugin({
@@ -579,6 +603,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       releaseOnCollectionDelete(ctx);
       // Kept for the site's not-found page, which logs through it.
       keepSeoContext(ctx);
+      // Each saved page checked again for the problem list.
+      watchSaves(ctx, problemChecks);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the
