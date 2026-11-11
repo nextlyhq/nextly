@@ -1092,6 +1092,10 @@ export class FieldGroupQueryService extends BaseService {
         // A caller judging a document by what it holds cannot take a default
         // for a field it failed to read.
         if (strict) throw error;
+        // A field read only in part, its instances without what is placed in
+        // them, takes its default whole, as the one-entry read gives it: what
+        // was read of it is not returned.
+        fieldDataMaps.delete(field.name);
         this.logger.debug("Could not batch populate component field", {
           fieldName: field.name,
           error: error instanceof Error ? error.message : String(error),

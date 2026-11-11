@@ -17,7 +17,9 @@ import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { storedAtThisLevel } from "../../../shared/lib/field-level-registry";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
@@ -181,6 +183,16 @@ export async function sharedComparison(args: {
   };
 }
 
+/**
+ * A component's fields whose values its instance holds: those at the top of its fields, and those
+ * in a group with no name, which only lays them out where it sits.
+ */
+function storedOnInstance(fields: readonly FieldConfig[]): FieldConfig[] {
+  return addressableFields(fields, {
+    descendInto: storedAtThisLevel,
+  }) as FieldConfig[];
+}
+
 /** What projecting a component value to its shared parts reads. */
 interface SharedProjection {
   componentFields: ReadonlyMap<string, FieldConfig[]>;
@@ -244,7 +256,9 @@ async function sharedSubFields(
   const shared = new Map<string, ((value: unknown) => unknown) | null>();
   const translated = await projection.isLocalized(slug);
   const open = new Set([...projection.open, slug]);
-  for (const sub of projection.componentFields.get(slug) ?? []) {
+  for (const sub of storedOnInstance(
+    projection.componentFields.get(slug) ?? []
+  )) {
     const name = sub.name;
     if (!name) continue;
     if (translated && isFieldLocalized({ ...sub, name }, true)) continue;

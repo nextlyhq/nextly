@@ -1210,6 +1210,33 @@ describe("FieldGroupDataService", () => {
       expect(ctx.adapter.select).not.toHaveBeenCalled();
     });
 
+    // A field group placed directly in another is read a level down, after the outer instances.
+    it("defaults a field whose nested level could not be read, as a one-entry read does", async () => {
+      ctx.registry.registerComponent("seo", {
+        ...seoComponentMeta(),
+        fields: [
+          { name: "metaTitle", type: "text" },
+          { name: "badge", type: "component", component: "badge" },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([
+        { id: "seo-1", _parent_id: "entry-1", _order: 0, meta_title: "One" },
+      ]);
+      // The outer instances read; the lookup a level down then fails.
+      const lookUp = ctx.registry.getComponent.getMockImplementation();
+      ctx.registry.getComponent
+        .mockImplementationOnce(lookUp)
+        .mockRejectedValueOnce(new Error("lookup failed"));
+
+      const result = await ctx.service.populateComponentDataMany({
+        entries: [{ id: "entry-1", title: "Page 1" }],
+        parentTable: "dc_pages",
+        fields: [seoComponentField()],
+      });
+
+      expect(result[0].seo).toBeNull();
+    });
+
     it("applies default values to entries without matching component data", async () => {
       ctx.adapter.select.mockResolvedValue([
         { id: "seo-1", _parent_id: "entry-1", _order: 0, meta_title: "One" },
