@@ -84,7 +84,7 @@ export function useTemplateVariables({
     const parsed = analysis;
     const liquidPaths = parsed
       ? parsed.usedVariables(allLiquidTexts).map(use => use.path)
-      : [...new Set(liquidTexts.flatMap(collectVariableNames))];
+      : [...new Set(allLiquidTexts.flatMap(collectVariableNames))];
     const legacyPaths = !liquid
       ? [...new Set(texts.flatMap(collectVariableNames))]
       : [];
