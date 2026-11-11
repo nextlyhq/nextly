@@ -543,6 +543,15 @@ describe.each(getConfiguredTestDialects())(
       expect(items.map(item => item.holder)).toEqual([`posts:${post}`]);
     });
 
+    it("types lists the site's content types, and no plugin's or system one", async () => {
+      const { ctx } = await boot(dialect);
+
+      const types = await ctx.publicAddresses.types();
+
+      expect(types).toContainEqual({ kind: "collection", slug: "posts" });
+      expect(types.map(type => type.slug)).not.toContain("users");
+    });
+
     it("withdraw stops the asking", async () => {
       const { record, participant } = asPluginParticipant();
       const { t, ctx } = await boot(dialect, participant);

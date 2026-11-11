@@ -27,7 +27,11 @@ import {
   type HeldAddressUpdate,
   type ParticipantRunner,
 } from "../domains/public-addresses/participants";
-import type { PublicAddressType } from "../domains/public-addresses/public-address";
+import {
+  siteTypes,
+  type PublicAddressType,
+} from "../domains/public-addresses/public-address";
+import { whenServicesRegistered } from "../di/service-access";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
@@ -119,6 +123,12 @@ export interface PluginPublicAddresses {
    * settings do.
    */
   fingerprint(): Promise<string>;
+  /**
+   * The site's own content types, declared in code or made in the Schema
+   * Builder, never a plugin's own or the system's: what a catch-up walks
+   * with `held`. Waits for the boot to finish, as `held` does.
+   */
+  types(): Promise<PublicAddressType[]>;
 }
 
 /** What the plugin context hands this surface. */
@@ -197,6 +207,10 @@ export function pluginPublicAddresses(
     },
     held: args => heldPage(args),
     fingerprint: () => addressFingerprint(),
+    types: async () => {
+      await whenServicesRegistered();
+      return (await siteTypes()).map(({ type }) => type);
+    },
   };
 }
 

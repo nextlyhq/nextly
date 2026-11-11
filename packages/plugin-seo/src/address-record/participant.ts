@@ -31,7 +31,7 @@ import { ADDRESS_RECORD_SLUG } from "./collection";
 type RowKind = "address" | "range" | "lock";
 
 /** A row of the record, read back. */
-interface RecordRow {
+export interface RecordRow {
   id: string;
   kind: RowKind;
   address: HeldAddress | null;
@@ -90,7 +90,7 @@ function sameHolder(a: AddressHolder, b: AddressHolder): boolean {
 }
 
 /** A stored row read back, every column checked rather than trusted. */
-function rowOf(entry: unknown): RecordRow {
+export function rowOf(entry: unknown): RecordRow {
   const row = entry as Record<string, unknown>;
   const text = (value: unknown) => (typeof value === "string" ? value : null);
   const locale = text(row.locale);
