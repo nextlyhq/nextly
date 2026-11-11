@@ -572,4 +572,42 @@ describe("validateEntryData: icon fields", () => {
       },
     ]);
   });
+
+  // A group with no name only lays fields out: its fields are stored, and judged, at the level it
+  // sits in. A group with a name holds its own value, and a repeater with no name holds rows.
+  describe("a group with no name", () => {
+    const laidOut: ValidatableField[] = [
+      { name: "title", type: "text" },
+      {
+        type: "group",
+        fields: [
+          { name: "subtitle", type: "text", required: true, maxLength: 5 },
+        ],
+      },
+    ];
+
+    it("judges the fields it lays out at its own level", async () => {
+      expect(await validateEntryData({}, laidOut, { mode: "create" })).toEqual([
+        {
+          path: "subtitle",
+          code: "REQUIRED",
+          message: "subtitle is required.",
+        },
+      ]);
+      expect(
+        await validateEntryData({ subtitle: "far too long" }, laidOut, {
+          mode: "create",
+        })
+      ).toEqual([expect.objectContaining({ path: "subtitle" })]);
+      expect(
+        await validateEntryData({ subtitle: "ok" }, laidOut, { mode: "create" })
+      ).toEqual([]);
+    });
+
+    it("leaves an absent key alone on update, as at any level", async () => {
+      expect(
+        await validateEntryData({ title: "t" }, laidOut, { mode: "update" })
+      ).toEqual([]);
+    });
+  });
 });

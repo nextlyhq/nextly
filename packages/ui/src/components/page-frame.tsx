@@ -18,8 +18,9 @@ import { PageShell, type PageShellProps } from "./page-shell";
  *   height down through `height: 100%` (a split pane, a media grid) keeps it.
  * - `form`: a 56rem column under the page's left edge (settings, create and
  *   edit pages).
- * - `editor`: full width; the editor draws its own field column and side
- *   panel inside it.
+ * - `editor`: full width with no gutter and no padding: the editor draws its
+ *   own field column (inset by the gutter, and measured) and a side panel that
+ *   meets the window's edge.
  * - `workspace`: no gutter and no padding, for a page that lays out its own
  *   surface (the dashboard, a builder canvas).
  * @experimental
@@ -31,11 +32,10 @@ export type PageType = "list" | "form" | "editor" | "workspace";
  * the four widths are read in one place and a fifth type is one row.
  */
 const SHELL_FOR: Record<
-  Exclude<PageType, "workspace" | "list">,
+  Exclude<PageType, "workspace" | "list" | "editor">,
   Pick<PageShellProps, "width" | "align">
 > = {
   form: { width: "form", align: "start" },
-  editor: { width: "full", align: "start" },
 };
 
 /** @experimental */
@@ -54,7 +54,7 @@ export const PageFrame: ForwardRefExoticComponent<
   PropsWithoutRef<PageFrameProps> & RefAttributes<HTMLDivElement>
 > = forwardRef<HTMLDivElement, PageFrameProps>(
   ({ type, className, children, ...props }, ref) => {
-    if (type === "workspace" || type === "list") {
+    if (type !== "form") {
       return (
         <div
           ref={ref}
@@ -62,7 +62,8 @@ export const PageFrame: ForwardRefExoticComponent<
           data-page-type={type}
           // A list is inset by the same gutter a shell spends as columns
           // (`.nx-page-pad` reads `--nx-gutter`, which steps with the panel);
-          // a workspace draws its own surface and takes none.
+          // a workspace draws its own surface and takes none, and an editor
+          // insets its own field column so its panel can meet the edge.
           className={cn("min-w-0", type === "list" && "nx-page-pad", className)}
           {...props}
         >

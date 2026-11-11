@@ -13,11 +13,8 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import {
-  addressFingerprint,
-  heldPage,
-  type HeldDocument,
-} from "../domains/public-addresses/held-listing";
+import { whenServicesRegistered } from "../di/service-access";
+import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
   firstHolder,
@@ -32,7 +29,6 @@ import {
   siteTypes,
   type PublicAddressType,
 } from "../domains/public-addresses/public-address";
-import { whenServicesRegistered } from "../di/service-access";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
@@ -208,13 +204,23 @@ export function pluginPublicAddresses(
         })
       );
     },
-    held: args => heldPage(args),
-    fingerprint: () => addressFingerprint(),
+    held: async args => (await heldListing()).heldPage(args),
+    fingerprint: async () => (await heldListing()).addressFingerprint(),
     types: async () => {
       await whenServicesRegistered();
       return (await siteTypes()).map(({ type }) => type);
     },
   };
+}
+
+/**
+ * The listing of every document's held addresses, loaded when a participant
+ * first reads it rather than imported at the top: this module is part of
+ * every plugin's context, which most of the package imports, and the listing
+ * reaches the boot entry, which loads nearly all of it.
+ */
+function heldListing() {
+  return import("../domains/public-addresses/held-listing");
 }
 
 /**

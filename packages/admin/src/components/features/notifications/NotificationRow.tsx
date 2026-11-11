@@ -87,7 +87,7 @@ export function NotificationRow({ row }: NotificationRowProps): ReactElement {
           {expanded && row.errorMessage && (
             <pre
               data-testid="notification-row-error-detail"
-              className="mt-2 text-xs whitespace-pre-wrap break-words text-destructive bg-destructive/5 rounded-md p-2"
+              className="mt-2 text-xs whitespace-pre-wrap break-words text-danger-text bg-danger-surface rounded-md p-2"
             >
               {row.errorMessage}
             </pre>
@@ -125,7 +125,7 @@ function StatusIcon({
   }
   if (status === "in_progress") {
     return (
-      <span className="text-warning-600 font-mono text-base leading-5">⏳</span>
+      <span className="text-warning-text font-mono text-base leading-5">⏳</span>
     );
   }
   // aborted (rare)
