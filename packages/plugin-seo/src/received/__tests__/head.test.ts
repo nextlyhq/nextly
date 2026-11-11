@@ -97,6 +97,17 @@ describe("reading a page's head", () => {
     });
   });
 
+  it("reads named characters as the characters they name", () => {
+    const head = readHead(
+      `<title>Caf&eacute; &ndash; news &amp; more&hellip;</title>
+       <meta name="description" content="&ldquo;Fast&rdquo; &mdash; &copy; 2026 &euro;5 &nbsp;x &unknownname;">`
+    );
+    expect(head).toMatchObject({
+      title: "Café – news & more…",
+      description: "“Fast” — © 2026 €5 x &unknownname;",
+    });
+  });
+
   it("reads a quoted value with a > in it whole", () => {
     const head = readHead(
       `<meta name="description" content="Surfer > Rext? A -> B">

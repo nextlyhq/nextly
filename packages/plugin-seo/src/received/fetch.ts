@@ -133,6 +133,11 @@ function headersOf(message: IncomingMessage): Record<string, string> {
     if (value === undefined) continue;
     headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
+  // Each robots header on a line of its own: a crawler a header names
+  // covers only the rules after it in that header, so merging two would
+  // put the second header's rules under the first one's crawler.
+  const robots = message.headersDistinct["x-robots-tag"];
+  if (robots !== undefined) headers["x-robots-tag"] = robots.join("\n");
   return headers;
 }
 

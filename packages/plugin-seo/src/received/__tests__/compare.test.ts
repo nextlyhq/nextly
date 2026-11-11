@@ -252,6 +252,36 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     });
   });
 
+  it("reads a rule in a robots header of its own as one for every crawler", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: STORED,
+      fetched: everyone(page(), {
+        googlebot: received(page(), {
+          headers: { "x-robots-tag": "bingbot: noindex\nnoindex" },
+        }),
+      }),
+    });
+    expect(compared.rows.robots.googlebot).toMatchObject({
+      kind: "different",
+      received: "Hidden from search",
+    });
+  });
+
+  it("says a value worked out automatically may be set by the page's design or route", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: { ...STORED, automatic: { title: true } },
+      fetched: everyone(page(), {
+        googlebot: received(page(head => (head.title = "From the design"))),
+      }),
+    });
+    expect(compared.differences[0]).toMatchObject({
+      title: "Googlebot received a different title.",
+      text: "Nextly's automatic title is “Surfer SEO vs Rext AI: Which Fits? | Rext AI”; the page served “From the design”. A Page Builder design or the page's route can set the title, and theirs wins over the automatic one, so this is expected where the page sets its own.",
+    });
+  });
+
   it("reads a noindex meant for another crawler as no noindex", () => {
     const compared = compareReceived({
       address: ADDRESS,

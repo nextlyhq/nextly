@@ -30,7 +30,8 @@ import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 import { listPages } from "../outputs/listing";
-import type { ReadRules } from "../resolver/provider";
+import type { SeoLevel, Sourced } from "../resolver/order";
+import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { publishedWhere } from "../sitemap";
 
 import { addressToCheck } from "./addresses";
@@ -148,6 +149,21 @@ async function publishedDocument(
   return isRecord(first) ? first : undefined;
 }
 
+/** The levels a design or the page's route outrank. */
+const AUTOMATIC_LEVELS: ReadonlySet<SeoLevel> = new Set([
+  "pattern",
+  "content",
+  "site",
+]);
+
+/**
+ * Whether a value was worked out automatically, or there is none: either way
+ * a design or the page's route may set one that wins.
+ */
+function isAutomatic(value: Sourced<unknown> | undefined): boolean {
+  return value === undefined || AUTOMATIC_LEVELS.has(value.from);
+}
+
 /**
  * A Single's published document, read as the route's caller with the
  * Single's access and field rules enforced: nothing where it has none or
@@ -259,14 +275,27 @@ async function storedAt(
   for (const holder of await addressHolders(ctx, path, kept.locale)) {
     const source = await sourceOf(ctx, holder, kept.locale, setup);
     if (source === undefined) continue;
-    const answer = await setup.pageMetadata(ctx).resolve({
+    // What the page's route and design supply cannot be known here: they
+    // run only where the page is served.
+    const input: PageMetadataInput = {
       path,
       locale: kept.locale,
       source,
       code: {},
       derived: {},
-    });
-    return storedHeadOf(answer, url.origin);
+    };
+    const answer = await setup.pageMetadata(ctx).resolve(input);
+    // Where each value came from, so one Nextly worked out automatically is
+    // said to be one a design or the route may set instead.
+    const sourced = await resolveSeo(ctx, input, setup.readRules);
+    return {
+      ...storedHeadOf(answer, url.origin),
+      automatic: {
+        title: isAutomatic(sourced.title),
+        description: isAutomatic(sourced.description),
+        image: isAutomatic(sourced.image),
+      },
+    };
   }
   return undefined;
 }

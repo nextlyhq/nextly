@@ -36,6 +36,12 @@ export interface StoredHead {
   image?: { url: string; width?: number; height?: number };
   canonical?: string;
   listed: boolean;
+  /**
+   * The values Nextly worked out automatically, from the content type's
+   * pattern, the page's content or the site's defaults: a Page Builder
+   * design or the page's route may set its own, which wins over them.
+   */
+  automatic?: { title?: boolean; description?: boolean; image?: boolean };
 }
 
 /** The comparison of one page, as the screen shows it. */
@@ -84,6 +90,12 @@ function absolute(
  */
 function headerNoindex(header: string | undefined): boolean {
   if (header === undefined) return false;
+  // Each header, a line of its own, starts out naming no crawler.
+  return header.split("\n").some(oneHeaderNoindex);
+}
+
+/** Whether one robots header tells Googlebot not to index the page. */
+function oneHeaderNoindex(header: string): boolean {
   let crawler: string | undefined;
   for (const part of header.toLowerCase().split(",")) {
     const named = /^\s*([a-z0-9_-]+)\s*:\s*(.*)$/.exec(part);
@@ -245,11 +257,17 @@ function cachedText(group: Group): string | undefined {
 }
 
 /** The words of a difference in a text value, the title or description. */
+/** Why an automatic value may rightly differ: something above it set its own. */
+function setAbove(what: string): string {
+  return `A Page Builder design or the page's route can set the ${what}, and theirs wins over the automatic one, so this is expected where the page sets its own.`;
+}
+
 function textDifference(
   group: Group,
   stored: string | undefined,
   names: string,
-  what: "title" | "description"
+  what: "title" | "description",
+  automatic: boolean
 ): { title: string; text: string } {
   const cached = cachedText(group);
   if (group.received === undefined) {
@@ -261,7 +279,13 @@ function textDifference(
   if (stored === undefined) {
     return {
       title: `${names} received a ${what} Nextly doesn't hold.`,
-      text: `The page served “${group.received}”. ${cached ?? "It comes from the page's route or the site's layout, not from Nextly."}`,
+      text: `The page served “${group.received}”. ${cached ?? "It comes from the page's route, its Page Builder design or the site's layout, not from Nextly."}`,
+    };
+  }
+  if (automatic && cached === undefined) {
+    return {
+      title: `${names} received a different ${what}.`,
+      text: `Nextly's automatic ${what} is “${stored}”; the page served “${group.received}”. ${setAbove(what)}`,
     };
   }
   return {
@@ -303,7 +327,13 @@ function cardTextSaid(
 ): Said {
   const card = row === "title" ? stored?.cardTitle : stored?.cardDescription;
   const own = group.keys.includes("googlebot") ? stored?.[row] : card;
-  return textDifference(group, own, names, row);
+  return textDifference(
+    group,
+    own,
+    names,
+    row,
+    stored?.automatic?.[row] === true
+  );
 }
 
 /** The words of a different share image. */
@@ -320,9 +350,15 @@ function imageSaid(
       text: `Nextly holds ${own}, but the page's head names none. ${cached ?? "The page's route may not build its head from Nextly."}`,
     };
   }
+  const automatic = stored?.automatic?.image === true;
+  const why =
+    cached ??
+    (automatic
+      ? setAbove("share image")
+      : "An image file named opengraph-image or twitter-image beside the page's route replaces the one Nextly holds.");
   return {
     title: `${names} received a different share image.`,
-    text: `Nextly holds ${own}; the page served ${group.received}. ${cached ?? "An image file named opengraph-image or twitter-image beside the page's route replaces the one Nextly holds."}`,
+    text: `${automatic && cached === undefined ? `Nextly's automatic share image is ${own}` : `Nextly holds ${own}`}; the page served ${group.received}. ${why}`,
   };
 }
 

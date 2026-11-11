@@ -120,6 +120,20 @@ describe("fetching a page as a crawler", () => {
     expect(agent).toBe(GOOGLEBOT);
   });
 
+  it("keeps each robots header apart, so one crawler's rule never covers the next", async () => {
+    const origin = await serve((_req, res) => {
+      res.setHeader("x-robots-tag", ["bingbot: noindex", "noindex"]);
+      res.writeHead(200).end("<title>Two headers</title>");
+    });
+    const fetched = await fetchAs(new URL(`${origin}/`), GOOGLEBOT, {
+      origins: [origin],
+    });
+    expect(fetched).toMatchObject({
+      kind: "received",
+      headers: { "x-robots-tag": "bingbot: noindex\nnoindex" },
+    });
+  });
+
   it("refuses a redirect to another site, and never asks it", async () => {
     const transport = scripted({
       "https://rext.ai/pricing": {

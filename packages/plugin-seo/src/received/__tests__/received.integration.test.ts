@@ -105,6 +105,8 @@ interface SiteState {
   googlebotTitle?: string;
   /** LinkedIn is turned away. */
   blockLinkedIn: boolean;
+  /** The description served to Googlebot, where it differs from the page's. */
+  googlebotDescription?: string;
 }
 
 const site: SiteState = { asked: [], blockLinkedIn: false };
@@ -117,7 +119,12 @@ function pageHtml(origin: string, agent: string): string {
   return [
     "<!DOCTYPE html><html><head>",
     `<title>${title}</title>`,
-    `<meta name="description" content="Surfer grades drafts; Rext writes them."/>`,
+    `<meta name="description" content="${
+      agent.includes("Googlebot")
+        ? (site.googlebotDescription ??
+          "Surfer grades drafts; Rext writes them.")
+        : "Surfer grades drafts; Rext writes them."
+    }"/>`,
     `<link rel="canonical" href="${origin}/blog/surfer-vs-rext"/>`,
     `<meta property="og:title" content="Surfer vs Rext | Rext AI"/>`,
     `<meta property="og:description" content="Surfer grades drafts; Rext writes them."/>`,
@@ -170,6 +177,7 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "title" }),
               text({ name: "slug" }),
               text({ name: "team" }),
+              text({ name: "excerpt" }),
             ],
             publicAddress: "/blog/{slug}",
           }),
@@ -181,11 +189,10 @@ describe.each(getConfiguredTestDialects())(
           title: "Surfer vs Rext",
           slug: "surfer-vs-rext",
           team: "open",
+          // The description is automatic, from the post's excerpt.
+          excerpt: "Surfer grades drafts; Rext writes them.",
           status: "published",
-          seo: {
-            metaTitle: "Surfer vs Rext | Rext AI",
-            metaDescription: "Surfer grades drafts; Rext writes them.",
-          },
+          seo: { metaTitle: "Surfer vs Rext | Rext AI" },
         },
       });
       await t.nextly.create({
@@ -235,6 +242,7 @@ describe.each(getConfiguredTestDialects())(
     beforeEach(() => {
       site.asked = [];
       delete site.googlebotTitle;
+      delete site.googlebotDescription;
       site.blockLinkedIn = false;
     });
 
@@ -274,6 +282,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("numbers and explains each difference from what Nextly holds", async () => {
       site.googlebotTitle = "An old title";
+      site.googlebotDescription = "Written by the design";
       site.blockLinkedIn = true;
       const answer = await check(reader, "/blog/surfer-vs-rext");
       if (answer.kind !== "checked") throw new Error(JSON.stringify(answer));
@@ -290,7 +299,14 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.differences.map(each => each.title)).toEqual([
         "LinkedIn was answered 403.",
         "Googlebot received a different title.",
+        "Googlebot received a different description.",
       ]);
+      // A typed title is Nextly's to hold; an automatic description may be
+      // set by the page's design or route.
+      expect(answer.differences[1]?.text).toMatch(/^Nextly holds /);
+      expect(answer.differences[2]?.text).toMatch(
+        /^Nextly's automatic description is “Surfer grades drafts; Rext writes them\.”/
+      );
     });
 
     it("holds nothing to compare for a page the caller may not read", async () => {
