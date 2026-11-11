@@ -26,7 +26,7 @@ const CollectionsPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <CollectionBreadcrumbs currentPage="list" />
         </div>
 

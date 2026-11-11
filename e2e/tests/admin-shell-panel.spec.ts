@@ -71,7 +71,7 @@ test("opens the second panel over the main column on a phone", async ({
   await waitForShellAnswers(page);
   const before = await mainColumnBox(page);
 
-  await page.getByRole("button", { name: "Toggle mobile menu" }).click();
+  await page.getByRole("button", { name: "Open the navigation menu" }).click();
   const drawer = page.getByRole("dialog", { name: "Navigation menu" });
   // On a phone the rail's Content entry opens its panel in the drawer rather than navigating.
   await drawer.getByRole("button", { name: "Content" }).click();
