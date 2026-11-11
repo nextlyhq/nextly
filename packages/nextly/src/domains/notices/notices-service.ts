@@ -488,19 +488,23 @@ export class NoticesService {
       const known = links.get(row.kind) ?? null;
       const link = known?.get(row.subjectId) ?? null;
       const gone = known !== null && link === null;
-      // A subject that still exists but that the person may not read: nothing of what the
-      // snapshot says. One that is gone has no rules left to ask, so its kind says it is gone.
-      if (!gone && readable.get(row.kind)?.has(row.id) === false) {
+      // A subject the person may not read, or one that is gone, which no rule can be asked of
+      // any more: nothing of what the snapshot says, failing closed whoever reads it.
+      const judged = readable.get(row.kind);
+      if (judged !== undefined && (gone || !judged.has(row.id))) {
         return [
           {
             id: row.id,
             kind: row.kind,
             title: UNSHOWN_NOTICE_TITLE,
+            ...(gone && kind.goneText !== undefined
+              ? { body: kind.goneText }
+              : {}),
             subject: {
               type: row.subjectType,
               id: row.subjectId,
               link: null,
-              gone: false,
+              gone,
             },
             createdAt: row.createdAt,
             readAt: row.readAt,

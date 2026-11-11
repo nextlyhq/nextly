@@ -101,13 +101,20 @@ export interface NoticeKind<TData = unknown> {
    * its snapshot, so a kind can judge what a notice names beyond its subject, such as the
    * language it is about. A notice not among them is listed with none of its snapshot's text and
    * no link, and its email is not sent: what the person may not read, a notice does not tell
-   * them. A subject `link` finds gone is listed as gone, since there is nothing left to ask.
-   * Omitted, every notice may be.
+   * them. A notice whose subject `link` finds gone is withheld the same way, whoever reads it:
+   * there are no rules left to ask, so it fails closed, saying only {@link goneText}. Omitted,
+   * every notice may be.
    */
   readable?: (
     userId: string,
     notices: readonly NoticeToJudge<TData>[]
   ) => Promise<ReadonlySet<string>>;
+  /**
+   * What a notice of a kind with `readable` says, in place of its snapshot, once its subject is
+   * gone, such as "The document has since been deleted.". Omitted, it says only that it can no
+   * longer be shown.
+   */
+  goneText?: string;
 }
 
 /**
