@@ -19,6 +19,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   defineCollection,
   defineFieldGroup,
+  defineSingle,
   fieldGroup,
   group,
   text,
@@ -27,6 +28,7 @@ import {
   CARD,
   HOME,
   HOME_TABLE,
+  LANGUAGES,
   LINKS_PLUGIN,
   LINKS_TABLE,
   MARKER_COLUMN,
@@ -37,6 +39,7 @@ import {
   markerPluginOn,
   plainHome,
   plainSeoGroup,
+  seoGroup,
 } from "../../../domains/field-groups/__tests__/helpers/used-field-group-fixtures";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -152,6 +155,13 @@ const card = defineFieldGroup({
   ],
 });
 
+/** HOME, translated: its translatable values are in its `_locales` table. */
+const translatedHome = defineSingle({
+  slug: HOME,
+  localized: true,
+  fields: [text({ name: "title", localized: true })],
+});
+
 describeEachDialect(
   "migrate:create removing a field group or Single something depends on",
   dialect => {
@@ -258,6 +268,54 @@ describeEachDialect(
       const run = await generate(dialect, "drop_home", {
         singles: [],
         plugins: [links],
+      });
+
+      expect(run.exited).toBe("process.exit(1)");
+      const said = run.errors.join("\n");
+      expect(said).toContain(
+        `"${HOME}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
+      );
+      expect(said).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+      expect(await migrationFiles()).toEqual(before);
+    });
+
+    it("refuses to drop a translated field group a plugin's declared key into its translation table points at", async () => {
+      const links = linksPluginTo(`${SEO_TABLE}_locales`);
+      await generate(dialect, "initial", {
+        fieldGroups: [seoGroup],
+        plugins: [links],
+        localization: LANGUAGES,
+      });
+      const before = await migrationFiles();
+
+      const run = await generate(dialect, "drop_seo", {
+        fieldGroups: [],
+        plugins: [links],
+        localization: LANGUAGES,
+      });
+
+      expect(run.exited).toBe("process.exit(1)");
+      const said = run.errors.join("\n");
+      expect(said).toContain(
+        `"${SEO}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
+      );
+      expect(said).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+      expect(await migrationFiles()).toEqual(before);
+    });
+
+    it("refuses to drop a translated Single a plugin's declared key into its translation table points at", async () => {
+      const links = linksPluginTo(`${HOME_TABLE}_locales`);
+      await generate(dialect, "initial", {
+        singles: [translatedHome],
+        plugins: [links],
+        localization: LANGUAGES,
+      });
+      const before = await migrationFiles();
+
+      const run = await generate(dialect, "drop_home", {
+        singles: [],
+        plugins: [links],
+        localization: LANGUAGES,
       });
 
       expect(run.exited).toBe("process.exit(1)");

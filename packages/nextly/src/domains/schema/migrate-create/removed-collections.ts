@@ -137,15 +137,17 @@ export async function assertRemovedEntitiesUnused(input: {
         fieldSlug: collection.namedBy,
       })),
       ...collections.unplaced.map(slug => ({ slug, tables: [] })),
+      // A Single's and a field group's tables are their own and their translation table, as
+      // their deletes ask; the snapshot records neither's translation table, so it is named here.
       ...singles.map(single => ({
         kind: "single" as const,
         slug: single.slug,
-        tables: [single.tableName],
+        tables: collectionOwnTables(single.tableName, []),
       })),
       ...fieldGroups.named.map(group => ({
         kind: "fieldGroup" as const,
         slug: group.slug,
-        tables: [group.tableName],
+        tables: collectionOwnTables(group.tableName, []),
         fieldSlug: group.namedBy,
       })),
       ...fieldGroups.unplaced.map(slug => ({
