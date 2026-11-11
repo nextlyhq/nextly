@@ -415,10 +415,12 @@ describe.each(getConfiguredTestDialects())(
       // Shown as the visitor asked for it, not as the rule spells it.
       expect(items(listed.body).map(item => item.path)).toEqual(["/gone"]);
     });
-    it("refuses to replace a redirect from a file for someone who may add redirects but not change them", async () => {
+    it("replaces a redirect from a file for whoever may import, since both are site-wide SEO", async () => {
       const { seo } = await boot(dialect);
       await call(seo, "POST", "/redirects", { from: "/a", to: "/b" });
-      const addOnly = {
+      // Holds site-wide SEO, and not the redirects collection's own update,
+      // which no longer decides anything.
+      const siteWide = {
         can: async (action: string) => action !== "update",
       };
 
@@ -427,32 +429,16 @@ describe.each(getConfiguredTestDialects())(
         "POST",
         "/redirects/import",
         { file: "/a,/c\n/d,/e", apply: true },
-        addOnly
+        siteWide
       );
 
-      const result = tried.body.item as {
-        rows: Record<string, unknown>[];
-        applied: boolean;
-      };
-      expect(result.applied).toBe(false);
-      expect(result.rows.map(row => `${row.kind} ${row.says}`)).toEqual([
-        "refused You can add redirects but not change them, so /a can't be replaced.",
-        "new New.",
-      ]);
+      const result = tried.body.item as { applied: boolean };
+      expect(result.applied).toBe(true);
       expect(
-        items((await call(seo, "GET", "/redirects")).body).map(
-          item => `${item.from} ${item.to}`
-        )
-      ).toEqual(["/a /b"]);
-
-      const added = await call(
-        seo,
-        "POST",
-        "/redirects/import",
-        { file: "/d,/e", apply: true },
-        addOnly
-      );
-      expect((added.body.item as { applied: boolean }).applied).toBe(true);
+        items((await call(seo, "GET", "/redirects")).body)
+          .map(item => `${item.from} ${item.to}`)
+          .sort((x, y) => x.localeCompare(y))
+      ).toEqual(["/a /c", "/d /e"]);
     });
 
     it("imports a row that only changes a redirect's type", async () => {
