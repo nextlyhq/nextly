@@ -4505,7 +4505,9 @@ export class SingleMutationService extends BaseService {
                 await readComponentSubtrees({
                   fieldGroupDataService: this.fieldGroupDataService,
                   tx,
-                  entryId: existingDoc.id,
+                  // The draft's own key: the Single's id, read before this
+                  // closure, where it is known to exist.
+                  entryId: draftRef.entryId,
                   parentTable: singleMeta.tableName,
                   fieldConfigs,
                   locale: options.locale,

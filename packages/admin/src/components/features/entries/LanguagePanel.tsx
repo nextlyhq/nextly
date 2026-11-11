@@ -714,6 +714,28 @@ function publishOptions(
   return hasStatus === undefined ? {} : { hasStatus };
 }
 
+/**
+ * Says, in whichever language is on screen, that the document's shared fields
+ * hold unpublished changes; nothing while they hold none.
+ */
+function SharedChangesNotice({
+  pending,
+}: {
+  pending: boolean;
+}): JSX.Element | null {
+  if (!pending) return null;
+  return (
+    <p
+      role="status"
+      aria-label="Shared changes pending"
+      className="border-b border-border px-3 py-2 text-xs text-muted-foreground"
+    >
+      Shared fields have unpublished changes. They go live with the next
+      publish, in every language.
+    </p>
+  );
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
@@ -722,7 +744,7 @@ export function LanguagePanel({
   actionsDisabled = false,
   publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
-  sharedChangesPending = false,
+  sharedChangesPending,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -767,16 +789,7 @@ export function LanguagePanel({
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
-      {sharedChangesPending && (
-        <p
-          role="status"
-          aria-label="Shared changes pending"
-          className="border-b border-border px-3 py-2 text-xs text-muted-foreground"
-        >
-          Shared fields have unpublished changes. They go live with the next
-          publish, in every language.
-        </p>
-      )}
+      <SharedChangesNotice pending={sharedChangesPending === true} />
 
       <PublishAllConfirm
         open={confirmPublishAll}

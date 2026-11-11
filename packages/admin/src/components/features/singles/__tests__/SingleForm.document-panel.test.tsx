@@ -135,6 +135,14 @@ describe("the Single editor's document panel", () => {
         name: "Shared changes pending",
       })
     ).toBeInTheDocument();
+    // And the inline panel, kept in the page while the docked layout hides
+    // it, says it too: both read the one answer.
+    expect(
+      screen.getAllByRole("status", {
+        name: "Shared changes pending",
+        hidden: true,
+      })
+    ).toHaveLength(2);
     unmount();
 
     // The control: the same docked panel without a pending shared change.
@@ -152,6 +160,12 @@ describe("the Single editor's document panel", () => {
         name: "Shared changes pending",
       })
     ).toBeNull();
+    expect(
+      screen.queryAllByRole("status", {
+        name: "Shared changes pending",
+        hidden: true,
+      })
+    ).toHaveLength(0);
   });
 
   it("reads Status, Publishing and Details beside the fields, addressing the Single's releases by its slug", () => {
