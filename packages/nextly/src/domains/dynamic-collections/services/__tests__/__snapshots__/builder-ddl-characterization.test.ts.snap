@@ -681,6 +681,8 @@ CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
 --> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_created_at\` ON \`comp_pinned\` (\`created_at\`);
+--> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\` (\`author\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_tags\` ON \`comp_pinned\` (\`tags\`);"
@@ -717,6 +719,8 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
 --> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_tags" ON "comp_pinned" ("tags");
@@ -751,6 +755,8 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint
@@ -788,6 +794,8 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
 --> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_tags" ON "comp_pinned" ("tags");
@@ -822,6 +830,8 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint

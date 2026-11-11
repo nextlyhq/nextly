@@ -558,9 +558,6 @@ export class FieldGroupSchemaService {
         parentIdx: pgIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
-        createdAtIdx: pgIndex(createdAtIndexName(tableName)).on(
-          table.created_at
-        ),
       })
     );
   }
@@ -607,9 +604,6 @@ export class FieldGroupSchemaService {
         parentIdx: mysqlIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
-        createdAtIdx: mysqlIndex(createdAtIndexName(tableName)).on(
-          table.created_at
-        ),
       })
     );
   }
@@ -649,9 +643,6 @@ export class FieldGroupSchemaService {
         parentIdx: sqliteIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
-        createdAtIdx: sqliteIndex(createdAtIndexName(tableName)).on(
-          table.created_at
-        ),
         // The contributed enum checks, keyed by their names: SQLite creates
         // a check only with the table, so the definition a rebuild uses
         // must carry them — as an entity table's does.
