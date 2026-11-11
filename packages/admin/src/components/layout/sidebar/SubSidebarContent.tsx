@@ -19,6 +19,7 @@ import { visibleSettingsNav } from "./lib/settings-nav";
 import { MediaSidebarContent } from "./MediaSidebarContent";
 import type { MainMenuCategory } from "./sidebar-types";
 import { SidebarSearch } from "./SidebarSearch";
+import { StandalonePanelItems } from "./StandalonePanelItems";
 
 import { SidebarMenu, SidebarMenuItem, SidebarMenuButton } from "./index";
 
@@ -186,8 +187,9 @@ export function SubSidebarContent({
               );
             })}
           </SidebarMenu>
-          {/* And the menu items the plugin places in its own section. */}
-          <PluginMenuItems isActive={isActive} section={selectedMain} asMenu />
+          {/* And the menu items the plugin places in its own section, under
+              the groups and with the numbers it declares, if any. */}
+          <StandalonePanelItems isActive={isActive} section={selectedMain} />
         </div>
       </div>
     );

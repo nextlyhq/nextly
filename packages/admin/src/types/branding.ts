@@ -44,7 +44,32 @@ export interface PluginMenuItemMeta {
    * defers to the plugin's own `placement` rather than meaning "Plugins".
    */
   section?: PluginNavSectionMeta;
+  /**
+   * The id of one of the plugin's `panel.groups`, the heading the item is
+   * listed under in its own standalone panel. The server sends only one the
+   * plugin declares.
+   */
+  group?: string;
+  /** A quiet number beside the label, shown at 0 too. */
+  count?: PluginItemCountMeta;
+  /** A pill beside the label, shown only while its number is above 0. */
+  badge?: PluginItemCountMeta;
   children?: PluginMenuItemMeta[];
+}
+
+/**
+ * What a panel item's number counts, as the server checked it: one of the
+ * plugin's own collections, by the slug the host registered it under, or one
+ * of its own attention items, by id.
+ */
+export type PluginItemCountMeta =
+  | { collection: string; where?: Record<string, unknown> }
+  | { attention: string };
+
+/** A heading of a standalone plugin's own panel. */
+export interface PluginPanelGroupMeta {
+  id: string;
+  label: string;
 }
 
 /** A plugin custom admin page, delivered via `/admin-meta`. */
@@ -178,6 +203,11 @@ export interface PluginMetadata {
   };
   /** Declarative sidebar menu items contributed via `contributes.admin.menu`. */
   menu?: PluginMenuItemMeta[];
+  /**
+   * The headings of the plugin's own standalone panel, in the order declared
+   * (`contributes.admin.panel`); absent when it declares none.
+   */
+  panel?: { groups: PluginPanelGroupMeta[] };
   /** Custom admin pages contributed via `contributes.admin.pages`. */
   pages?: PluginPageMeta[];
   /**

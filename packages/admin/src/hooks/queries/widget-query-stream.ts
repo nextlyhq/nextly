@@ -36,6 +36,18 @@ export type CardAsk =
  */
 export type SentCardAsk = CardAsk & { size?: WidgetRenderSize };
 
+/**
+ * A query of a source asked as it is rather than as a card: `{ source, op }`,
+ * which the endpoint reads as a widget query and answers by the same read
+ * access a card's own reads get. A sidebar's counts are asked this way.
+ */
+export interface SourceAsk {
+  source: string;
+  op: string;
+  where?: Record<string, unknown>;
+  limit?: number;
+}
+
 /** The media type the endpoint streams settled slots in. */
 const NDJSON = "application/x-ndjson";
 
@@ -82,7 +94,7 @@ export function readResults(body: unknown): unknown[] {
 }
 
 /**
- * Asks for `queries`, one card each, and hands each settled slot to `onSlots` as it arrives,
+ * Asks for `queries`, one card or source query each, and hands each settled slot to `onSlots` as it arrives,
  * resolving with every slot by position once the answer has ended: `undefined`
  * where the stream never carried one.
  *
@@ -95,7 +107,7 @@ export function readResults(body: unknown): unknown[] {
  * stream cut off partway, so the caller's retry and failure states see it.
  */
 export async function fetchWidgetBatch(
-  queries: readonly SentCardAsk[],
+  queries: readonly (SentCardAsk | SourceAsk)[],
   options: {
     signal?: AbortSignal;
     onSlots: (slots: readonly StreamedSlot[]) => void;
