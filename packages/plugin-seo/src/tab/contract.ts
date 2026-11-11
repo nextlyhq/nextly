@@ -11,7 +11,7 @@ import type { Levels } from "../resolver/order";
 export const SEO_RESOLVE_PATH = "/resolve";
 
 /** The plugin's name, which its admin components address its routes by. */
-export const SEO_PLUGIN_NAME = "@nextlyhq/plugin-seo";
+export { SEO_PLUGIN_NAME } from "../settings/contract";
 
 /** The `seo` group's field holding the page's own structured data type. */
 export const STRUCTURED_DATA_FIELD = "structuredDataType";

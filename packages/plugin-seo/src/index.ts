@@ -44,6 +44,16 @@ export type {
 // `hide`, `overrides`). The card and its Needs attention lines reach the
 // dashboard through `seoPlugin`, so no declaration is exported.
 export { SEO_ISSUES_WIDGET_ID } from "./widget-card";
+// The site's SEO settings, as rules for a page's head and as brand facts,
+// and the cache tags a read of them carries, which every save expires.
+export { readBrandFacts, readSeoRules } from "./settings/rules";
+export type {
+  BrandFacts,
+  SeoRules,
+  SocialProfile,
+  TypePatterns,
+} from "./settings/rules";
+export { seoSettingsCacheTags } from "./settings/single";
 // Structured data: the types a page can be described as, a page's graph and
 // the problems that keep a chosen type out, and the rules it is read with.
 export {

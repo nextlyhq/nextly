@@ -185,8 +185,8 @@ instead, where each one can still be edited, and no tab is drawn.
 | `baseUrl`        | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
 | `sitemap`        | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
 | `robots`         | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
-| `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers                                                         |
-| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole                                              |
+| `aiCrawlers`     | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
+| `hiddenTypes`    | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some           |
 | `structuredData` | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
 | `socialCard`     | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
 | `urlFor`         | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
@@ -363,6 +363,89 @@ instead.
 builds a sitemap from its own route. They are deprecated, and list pages by the old rules:
 they do not read each page's answer.
 
+## The SEO settings
+
+The plugin adds an **SEO** item to the admin's rail. Its **Settings** page holds the rules for the
+whole site; a page's own values always win over them.
+
+The first time someone opens it, three short questions come first: the site's name and production
+address, what kind of site it is and what AI tools may do, and a logo with a default share image.
+Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
+with a line on the page to finish later. Every answer stays editable on the tabs:
+
+| Tab           | What it holds                                                                                                  |
+| ------------- | -------------------------------------------------------------------------------------------------------------- |
+| General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description |
+| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                        |
+| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                         |
+| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none |
+
+The production addresses saved on General are the ones the page's canonical, the sitemap,
+robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
+them for all of them. The AI tools choice on Crawlers is what robots.txt asks, and content types the
+settings hide are hidden from every output; until the site chooses, the plugin's `aiCrawlers` and
+`hiddenTypes` options answer.
+
+Opening the page needs `read-seo-settings`, and saving needs `update-seo-settings`. Both are
+seeded with the plugin's `seo-settings` Single, which holds the settings.
+
+### Title patterns
+
+A content type's titles are made from its pattern wherever a page has no title typed. Every type
+starts with `{Title} | {Site name}`, using the separator chosen on General. Click a pattern to
+change it: the variables the type offers can be clicked in, and an example title from the type's
+newest page updates as you type.
+
+- `{Title}` is the page's own title, `{Site name}` the site's name, and any other variable one of
+  the type's own text or number fields, such as `{Category}`.
+- A pattern naming a variable the type has no field for is refused before it can be saved.
+- A pattern whose variables a page has no value for gives way to the next source in the order
+  below, rather than leaving a gap in the title.
+- The site's name is never added right after a title that already ends with it: with the pattern
+  `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays `Pricing | Acme`.
+
+**Reset to default** returns a type to the site's default pattern.
+
+### Changes reach pages without a redeploy
+
+Every save of the settings expires the cached heads built from them, so the next request for any
+page reads the new rules. The settings are one set for every language of a translated site.
+
+### Reading the settings in code
+
+```ts
+import { definePlugin, respondDoc } from "@nextlyhq/plugin-sdk";
+import { readBrandFacts, readSeoRules } from "@nextlyhq/plugin-seo";
+
+export const brandCard = definePlugin({
+  name: "@acme/brand-card",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.74",
+  contributes: {
+    routes: [
+      {
+        method: "GET",
+        path: "/brand",
+        public: true,
+        handler: async (_req, ctx) => {
+          const rules = await readSeoRules(ctx);
+          const brand = await readBrandFacts(ctx);
+          return respondDoc({ site: rules.siteName, profiles: brand.profiles });
+        },
+      },
+    ],
+  },
+});
+```
+
+Read them while handling a request or a job, never while the site starts: they wait for the start
+to finish, so awaiting one in a plugin's `init` or `onReady` would wait on itself.
+
+`readSeoRules` answers the site's name, default description and share image, production addresses,
+the default pattern and each type's own patterns. `readBrandFacts` answers the brand's names, logo,
+social profiles and kind of site. Each reads the settings once; a read cached by your own code
+should carry `seoSettingsCacheTags()`, which every save expires.
+
 ## Turning the fields into tags
 
 With the plugin installed, every page served by a content route or a Single route gets its head
@@ -530,6 +613,11 @@ seoPlugin({
   },
 });
 ```
+
+The [SEO settings](#the-seo-settings) take over from these options fact by fact: their first
+production address is the origin, their brand name (else the site's name), other names, logo and
+social profiles describe the organisation, and a content type's choice kept in the settings wins
+over the one given here. Whatever the settings leave empty, the options still answer.
 
 **A type missing a detail it needs is left out**, rather than sending search engines a description
 they would reject; the page and the site are still described. `structuredDataProblems(ctx, input)`

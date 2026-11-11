@@ -2,12 +2,12 @@
   "extends": "@nextlyhq/tsconfig/base-bundler.json",
   "compilerOptions": {
     "types": ["node"],
-    "jsx": "react-jsx",
     // Every export states its type, so tsdown can write the published
     // declarations with oxc, one file at a time and without a type checker.
     "isolatedDeclarations": true,
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "jsx": "react-jsx"
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.test.tsx"]

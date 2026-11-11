@@ -84,6 +84,9 @@ describe("seoPlugin", () => {
       ["GET", "/robots.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
+      // The settings screen's reads, for a signed-in reader of the settings.
+      ["GET", "/settings/content-types", undefined, undefined],
+      ["GET", "/settings/document", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
     ]);
   });
@@ -105,6 +108,8 @@ describe("seoPlugin", () => {
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
       "/robots.txt",
       "/share-image",
+      "/settings/content-types",
+      "/settings/document",
       "/resolve",
     ]);
     // The SEO fields are still contributed.
@@ -119,6 +124,8 @@ describe("seoPlugin", () => {
     });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
       "/share-image",
+      "/settings/content-types",
+      "/settings/document",
       "/resolve",
     ]);
   });
@@ -215,13 +222,12 @@ describe("the dashboard card the plugin contributes", () => {
     // `admin.widgets`, and no data source under `widgetSources`.
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
+    expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
     // Its admin contributions are the SEO tab and its side panel line.
-    expect(plugin.contributes?.admin).toEqual({
-      contributions: [
-        expect.objectContaining({ kind: "tab" }),
-        expect.objectContaining({ kind: "sidebarSection" }),
-      ],
-    });
+    expect(plugin.contributes?.admin?.contributions).toEqual([
+      expect.objectContaining({ kind: "tab" }),
+      expect.objectContaining({ kind: "sidebarSection" }),
+    ]);
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
     expect(plugin.contributes).toBeDefined();
@@ -321,7 +327,7 @@ describe("the SEO tab and fields of a project's own", () => {
         text({ name: "focusKeyword" }),
       ],
     });
-    expect(plugin.contributes?.admin).toBeUndefined();
+    expect(plugin.contributes?.admin?.contributions).toBeUndefined();
   });
 
   it("leaves a group whose fields say they may not be edited among the page's fields", () => {
@@ -339,7 +345,10 @@ describe("the SEO tab and fields of a project's own", () => {
           text({ name: "metaDescription" }),
         ],
       });
-      expect(plugin.contributes?.admin, JSON.stringify(admin)).toBeUndefined();
+      expect(
+        plugin.contributes?.admin?.contributions,
+        JSON.stringify(admin)
+      ).toBeUndefined();
     }
   });
 
@@ -356,7 +365,7 @@ describe("the SEO tab and fields of a project's own", () => {
         sitemap: false,
         fields: [metaTitle, text({ name: "metaDescription" })],
       });
-      expect(plugin.contributes?.admin).toBeUndefined();
+      expect(plugin.contributes?.admin?.contributions).toBeUndefined();
     }
   });
 

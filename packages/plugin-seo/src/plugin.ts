@@ -37,8 +37,19 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
-import { NO_RULES } from "./resolver/page-levels";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
+import {
+  contentTypesRoute,
+  settingsDocumentRoute,
+} from "./settings/content-types-route";
+import {
+  SEO_SETTINGS_SLUG,
+  SETTINGS_PAGE,
+  SETTINGS_PAGE_HREF,
+} from "./settings/contract";
+import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
+import { seoSettingsSingle } from "./settings/single";
+import { structuredDataFromSettings } from "./settings/structured-data-rules";
 import {
   resolveBaseOrigin,
   type SitemapOptions,
@@ -258,14 +269,23 @@ function subsetOf(
 }
 
 /**
- * The site's rules as every page's head and the sitemap read them alike, so
- * a hidden type is hidden in both.
+ * The site's rules as every page's head, the sitemap, robots.txt and the
+ * staging guard read them alike: the SEO settings, with the plugin's hidden
+ * types answering where the settings name none, so a hidden type is hidden in
+ * every output and one production address answers for all of them. The
+ * robots.txt route falls back to the plugin's own AI crawler option.
  */
-function rulesReader(hidden: readonly string[] | undefined): ReadRules {
-  const hiddenTypes = [...new Set(hidden ?? [])];
-  const rules =
-    hiddenTypes.length > 0 ? { ...NO_RULES, hiddenTypes } : NO_RULES;
-  return () => Promise.resolve(rules);
+function rulesReader(options: { hiddenTypes?: readonly string[] }): ReadRules {
+  const hiddenTypes = [...new Set(options.hiddenTypes ?? [])];
+  return async (ctx, locale) => {
+    const saved = await readSeoRules(ctx, locale);
+    return {
+      ...saved,
+      ...(saved.hiddenTypes === undefined && hiddenTypes.length > 0
+        ? { hiddenTypes }
+        : {}),
+    };
+  };
 }
 
 /** What the sitemap is served with, or nothing where it is turned off. */
@@ -360,7 +380,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const singleTargets = [...new Set(options.singles ?? [])];
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
-  const readRules = rulesReader(options.hiddenTypes);
+  const readRules = rulesReader(options);
 
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
@@ -395,7 +415,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     collections: [addressRecordCollection()],
     // Every page's head, worked out by the one order of who wins, its
     // social card completed, and its structured data, worked out from that
-    // same answer.
+    // same answer and the settings' brand facts, with the plugin's options
+    // where the settings say nothing.
     services: {
       pageMetadata: ctx =>
         withStructuredData(
@@ -405,7 +426,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
             seoPageMetadata(ctx, readRules),
             readSocialCardRules
           ),
-          readStructuredDataRules
+          structuredDataFromSettings(readStructuredDataRules)
         ),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
@@ -423,7 +444,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     routes,
     // Every host but the site's production addresses is kept out of search.
     proxy: [stagingGuard(readRules)],
-    ...(tab.admin === undefined ? {} : { admin: tab.admin }),
+    // The site-wide SEO settings: name, defaults, patterns and brand facts.
+    singles: [seoSettingsSingle()],
+    // The SEO settings screen, for whoever may read the settings, told what
+    // robots.txt asks AI tools until the site chooses: not a secret, it is
+    // what the site's own robots.txt says.
+    admin: {
+      ...tab.admin,
+      clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
+      menu: [
+        {
+          label: "Settings",
+          to: SETTINGS_PAGE_HREF,
+          icon: "Settings",
+          requiredPermission: `read-${SEO_SETTINGS_SLUG}`,
+        },
+      ],
+      pages: [
+        { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
+      ],
+    },
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -444,6 +484,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   routes.push(
     ...siteFileRoutes(options, readRules, sitemapSubset),
     shareImageRoute(options.baseUrl),
+    // What the settings screen reads: the types SEO is added to, and which
+    // Single holds the settings.
+    contentTypesRoute(targets),
+    settingsDocumentRoute(),
     ...tab.routes
   );
 
@@ -477,6 +521,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // what installing this does. The other first-party plugins declare theirs
     // in the same place.
     admin: {
+      // Its own place in the admin's rail, after Media, as SEO.
+      placement: "standalone",
+      after: "media",
+      appearance: { icon: "Search", label: "SEO" },
       description:
         "Add an SEO meta field group to your collections, with title, description and social preview fields",
     },
@@ -486,6 +534,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     provides: ["page-metadata"],
     contributes,
     init(ctx) {
+      // The settings Single's registered name, for readers other plugins call.
+      rememberSettingsSingle(ctx);
       if (options.urlFor !== undefined || options.basePath !== undefined) {
         ctx.logger.warn(
           "seoPlugin: urlFor and basePath no longer shape the sitemap, which lists each page at the address its content type declares. Declare publicAddress on each public collection instead."
