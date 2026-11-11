@@ -89,11 +89,19 @@ const switchNamed = (name: string) => screen.getByRole("switch", { name });
 describe("the Connections tab", () => {
   it("shows llms.txt and plain-text copies off by default, at the site's own address", () => {
     serving({ _rev: "1", productionAddresses: ["https://rext.ai"] });
+    // A link can land on the tab.
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/plugins/nextlyhq-plugin-seo/settings?tab=connections"
+    );
     render(<SeoSettingsPage />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Connections" }));
-
-    expect(window.location.search).toBe("?tab=connections");
+    expect(
+      screen
+        .getByRole("tab", { name: "Connections" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
     expect(
       screen.getByText("Optional services. If one fails, no page is affected.")
     ).toBeTruthy();
