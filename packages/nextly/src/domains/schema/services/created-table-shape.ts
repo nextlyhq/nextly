@@ -48,6 +48,9 @@ export async function columnsTheCreateLeftOut(
   const requestedType = new Map(
     requested.columns.map(column => [column.name, column.type])
   );
+  const requestedSpec = new Map(
+    requested.columns.map(column => [column.name, column])
+  );
   if (!live) {
     return requested.columns.map(column => ({
       column: column.name,
@@ -67,7 +70,10 @@ export async function columnsTheCreateLeftOut(
         problem: "missing",
         requestedType: op.column.type,
       });
-    } else if (op.type === "change_column_type") {
+    } else if (
+      op.type === "change_column_type" &&
+      !keysSameReference(requestedSpec.get(op.columnName), op.fromType)
+    ) {
       leftOut.push({
         column: op.columnName,
         problem: "otherType",
@@ -93,6 +99,36 @@ export async function columnsTheCreateLeftOut(
     }
   }
   return leftOut;
+}
+
+/** The scalar types an id is held in: `uuid`, and a text or fixed-width character column. */
+const SCALAR_ID_TYPES = new Set([
+  "uuid",
+  "text",
+  "varchar",
+  "character varying",
+  "char",
+  "character",
+  "bpchar",
+]);
+
+/**
+ * Whether a requested single reference is held as asked in a column of `liveType`. The creating
+ * SQL keys a reference to one entry by its target's id type (a PostgreSQL `uuid`, a MySQL
+ * `varchar(36)`), where the desired table names the descriptor's `text`; a push leaves either
+ * spelling as it is. Any scalar id type holds the reference; anything else (a number, JSON) does
+ * not.
+ */
+function keysSameReference(
+  requested: TableSpec["columns"][number] | undefined,
+  liveType: string
+): boolean {
+  if (requested?.holdsSingleReference !== true) return false;
+  const base = liveType
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\(.*$/, "");
+  return SCALAR_ID_TYPES.has(base);
 }
 
 /** The left-out columns as one line for a log or a refusal: each column and what is wrong. */

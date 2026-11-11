@@ -93,4 +93,52 @@ describe("columnsTheCreateLeftOut", () => {
       { column: "_revision", problem: "missing", requestedType: "integer" },
     ]);
   });
+
+  // The creating SQL keys a reference to one entry by its target's id type, where the desired table
+  // names the descriptor's text: the reference is held as asked either way.
+  it("takes a single reference held in its target's id type as asked", async () => {
+    const withReference: TableSpec = {
+      ...requested,
+      columns: [
+        ...requested.columns,
+        {
+          name: "owner",
+          type: "text",
+          nullable: true,
+          holdsSingleReference: true,
+        },
+      ],
+    };
+    liveTable([
+      ...requested.columns,
+      { name: "owner", type: "uuid", nullable: true },
+    ]);
+    expect(
+      await columnsTheCreateLeftOut({}, "postgresql", withReference)
+    ).toEqual([]);
+  });
+
+  it("still names a single reference held in a type no id is held in", async () => {
+    const withReference: TableSpec = {
+      ...requested,
+      columns: [
+        ...requested.columns,
+        {
+          name: "owner",
+          type: "text",
+          nullable: true,
+          holdsSingleReference: true,
+        },
+      ],
+    };
+    liveTable([
+      ...requested.columns,
+      { name: "owner", type: "integer", nullable: true },
+    ]);
+    expect(
+      (await columnsTheCreateLeftOut({}, "postgresql", withReference)).map(
+        e => e.column
+      )
+    ).toEqual(["owner"]);
+  });
 });
