@@ -4,6 +4,11 @@
  * The unit tests pin the decisions; this pins the thing they cannot — that a
  * snapshot resubmitted through the normal update path actually lands, and that
  * the restore is itself recorded as a version pointing back at its source.
+ *
+ * Each collection and Single here keeps working drafts (`status` with
+ * versions), which a restore writes: one kept without them is refused, as
+ * `restore-writes-drafts.integration.test.ts` shows. The documents are never
+ * published, so their own row is their working draft.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -52,6 +57,7 @@ async function bootPosts(): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: "posts",
+        status: true,
         versions: true,
         fields: [text({ name: "title" })],
       }),
@@ -187,6 +193,7 @@ describe("restoreVersion (integration)", () => {
       collections: [
         defineCollection({
           slug: "posts",
+          status: true,
           versions: { enabled: true, maxPerDoc: 1 },
           fields: [text({ name: "title" })],
         }),
@@ -291,6 +298,7 @@ describe("restoreVersion (integration)", () => {
       singles: [
         defineSingle({
           slug: "preferences",
+          status: true,
           versions: true,
           fields: [text({ name: "title" })],
         }),
@@ -420,6 +428,7 @@ describe("restoreVersion (integration)", () => {
       singles: [
         defineSingle({
           slug: "notice",
+          status: true,
           versions: true,
           fields: [text({ name: "heading" })],
         }),
@@ -496,6 +505,7 @@ describe("restoreVersion (integration)", () => {
       singles: [
         defineSingle({
           slug: "prefs",
+          status: true,
           versions: true,
           fields: [
             text({ name: "title" }),
