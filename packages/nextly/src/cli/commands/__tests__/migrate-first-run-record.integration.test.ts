@@ -63,7 +63,10 @@ type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
 
 /** A stop armed for the next registry record write: it is written, then the run fails. */
-const stops = vi.hoisted(() => ({ afterRecordWritten: false }));
+const stops = vi.hoisted(() => ({
+  afterRecordWritten: false,
+  expiryRefused: false,
+}));
 
 vi.mock("../../utils/config-loader", async importOriginal => {
   const original =
@@ -109,6 +112,22 @@ vi.mock(
     };
   }
 );
+
+/**
+ * The tag expiry ledger's record, refused while a test arms it: a grants
+ * change's content expiry then cannot be recorded where every instance reads it.
+ */
+vi.mock("../../../runtime/cache/tag-expiry-view", async importOriginal => {
+  const original =
+    await importOriginal<
+      typeof import("../../../runtime/cache/tag-expiry-view")
+    >();
+  return {
+    ...original,
+    expireTags: async (...args: Parameters<typeof original.expireTags>) =>
+      stops.expiryRefused ? ("failed" as const) : original.expireTags(...args),
+  };
+});
 
 const SLUG = "fr-posts";
 
@@ -209,6 +228,7 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(async () => {
       stops.afterRecordWritten = false;
+      stops.expiryRefused = false;
       vi.useRealTimers();
       vi.unstubAllEnvs();
       _resetEnvCache();
@@ -808,6 +828,29 @@ describe.each(getConfiguredTestDialects())(
           expect(state.record.baseline).toBeDefined();
         }
       }
+
+      it("rolls the whole commit back when the content expiry its grants owe cannot be recorded", async () => {
+        const url = await scratch();
+        use(url);
+        const earlier = await migrateCreate("one", config());
+        asEarlierRelease(earlier);
+
+        stops.expiryRefused = true;
+        const refused = await migrateRun(config());
+        stops.expiryRefused = false;
+
+        // Committed without it, nothing durable would be left owing the
+        // expiry once the command exits: the grants, the rows and the record
+        // stay out with it, and the run says it failed.
+        expect(refused.failure, refused.said.join("\n")).toBeDefined();
+        expect((await bookkeeping(url)).record).toBeUndefined();
+        await stoppedCleanly(url);
+
+        await migrate(config());
+        const after = await bookkeeping(url);
+        expect(after.record?.point).toBe(earlier);
+        expect(after.expired).toContain(`nextly:${SLUG}`);
+      }, 240_000);
 
       it.each([
         [

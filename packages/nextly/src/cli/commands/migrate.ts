@@ -814,6 +814,16 @@ async function seedAccessOnCommandConnection(
     error: (message: string) => logger.error(message),
   };
   const { config } = configResult;
+  // Inside a first run's commit no job is queued ahead of a grants change, since its content
+  // expiry is recorded on the commit's transaction: an expiry that cannot be recorded there then
+  // fails the commit (`withGrantsExpiryRequired`), so the grants never commit without it.
+  const inCommit = adapter !== pooled;
+  const { withGrantsExpiryRequired } = await import(
+    "../../domains/flush-content-change"
+  );
+  const seeding = inCommit
+    ? withGrantsExpiryRequired
+    : <T>(write: () => Promise<T>): Promise<T> => write();
   await withCommandServicesLent(
     adapter,
     seedLogger,
@@ -841,12 +851,14 @@ async function seedAccessOnCommandConnection(
         // it too, so they, the release record and the announcements commit
         // with the registry record or not at all.
         const release = getCoreVersion();
-        const { leftTo } = await withPresetGrantsRecorded(release, () =>
-          seedPermissionsRolesAndPresets({
-            adapter,
-            config,
-            logger: seedLogger,
-          })
+        const { leftTo } = await seeding(() =>
+          withPresetGrantsRecorded(release, () =>
+            seedPermissionsRolesAndPresets({
+              adapter,
+              config,
+              logger: seedLogger,
+            })
+          )
         );
         if (leftTo !== undefined) {
           logger.info(
@@ -860,7 +872,7 @@ async function seedAccessOnCommandConnection(
     // Inside a first run's commit the content expiry a grants change owes is
     // recorded on the transaction with the change, so no job is queued ahead
     // of it; anywhere else the queue is lent as it always was.
-    { queue: adapter === pooled }
+    { queue: !inCommit }
   );
 }
 
