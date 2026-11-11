@@ -152,7 +152,13 @@ export function pluginDeclarations(variables: unknown): {
   }
   const issue = parsed.error.issues[0];
   return {
-    variables: declarationSubstance(variables) as EmailTemplateVariable[],
+    // The never-refuse fallback holds declarations or nothing: a non-array
+    // root is not declarations at all, and carried through it would reach
+    // owner defaults and throw on the first read of a row with real ones
+    // (withOwnerPresentation maps whatever it is handed).
+    variables: Array.isArray(variables)
+      ? (declarationSubstance(variables) as EmailTemplateVariable[])
+      : null,
     problem: issue
       ? `${issue.path.join(".") || "variables"}: ${issue.message}`
       : "the declarations don't parse",

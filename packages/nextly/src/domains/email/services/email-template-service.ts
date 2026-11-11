@@ -2504,7 +2504,21 @@ export class EmailTemplateService extends BaseService {
       kind: row.kind ?? "template",
       ...detailsOf(row),
     };
-    if (sameStoredValue(current, wanted)) {
+    // Compared presentation aside, the rule `followOwnerDetails` states: the
+    // owner's presentation reaches the row on read (withOwnerPresentation),
+    // and a presentation key the site saved alone is never the row's own
+    // version, so the owner's columns must not rewrite it away. When the
+    // owner's version HAS moved, the write is whole, presentation included,
+    // as an owner update is.
+    const followsOwner = (
+      a: typeof current | typeof wanted,
+      b: typeof current | typeof wanted
+    ) =>
+      sameStoredValue(
+        { ...a, variables: declarationSubstance(a.variables) },
+        { ...b, variables: declarationSubstance(b.variables) }
+      );
+    if (followsOwner(current, wanted)) {
       await this.settleOwnersEngine(row, entry, false);
       return;
     }

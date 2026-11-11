@@ -178,6 +178,28 @@ describe("pluginDeclarations", () => {
     });
   });
 
+  it("keeps a non-array root out of the never-refuse fallback", async () => {
+    // A string or bare object as the declarations root is not declarations
+    // at all: carried through, it reached the registry's owner defaults and
+    // threw on the first read of a row with real ones, because
+    // withOwnerPresentation maps whatever it is handed. The fallback holds
+    // declarations or nothing; the template still registers, the problem is
+    // still reported. Watched failing: the string came back through.
+    const { withOwnerPresentation } = await import("../template-variables");
+    for (const root of ["invalid", { name: "a" }]) {
+      const result = pluginDeclarations(root as unknown);
+      expect(result.variables).toBeNull();
+      expect(result.problem).toBeTruthy();
+    }
+    // Owner defaults so built are safe to read beside a site's row.
+    expect(() =>
+      withOwnerPresentation(
+        [{ name: "user", description: "The site's" }],
+        pluginDeclarations("invalid").variables
+      )
+    ).not.toThrow();
+  });
+
   it("retains substance and reports problem for unparseable presentation", () => {
     const invalid = [
       {
