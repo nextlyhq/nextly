@@ -91,8 +91,8 @@ function uniqueAsRead(stored: StoredField, relationType: unknown): boolean {
 /**
  * The stored options of the earlier-shaped relationship a saved field was read from, or
  * `undefined` when it was not read from one: the stored field has no `relationTo` of its own and
- * keeps a one-entry `options.target`, and the saved field still points at that one target, for
- * one entry.
+ * keeps a one-entry `options.target`, and the saved field still points at that one target, and
+ * holds many entries only where the stored one did.
  */
 function storedOptionsReadInto(
   sent: StoredField,
@@ -101,7 +101,8 @@ function storedOptionsReadInto(
   const relationships =
     sent.type === "relationship" && stored.type === "relationship";
   if (!relationships || stored.relationTo !== undefined) return undefined;
-  if (sent.hasMany === true) return undefined;
+  // One made to hold many is saved as sent: a list on the row is not what the options described.
+  if (sent.hasMany === true && stored.hasMany !== true) return undefined;
   const options = stored.options;
   if (typeof options !== "object" || options === null) return undefined;
   const { target, relationType } = options as {
@@ -154,9 +155,12 @@ function restoredRelationship(
     ...rest,
     // A stored field with a Unique mark of its own keeps the one the save sent.
     ...(stored.unique === undefined ? {} : { unique: sentUnique }),
+    // What the save sends over what was stored, as any edit is: the stored target, which the
+    // save still points at, and the cardinality that follows its Unique mark stay as derived.
     options: {
-      ...sentOptions,
       ...options,
+      ...sentOptions,
+      target: options.target,
       ...(nextRelationType === undefined
         ? {}
         : { relationType: nextRelationType }),

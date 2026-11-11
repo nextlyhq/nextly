@@ -209,6 +209,28 @@ describe("withStoredRelationshipOptions", () => {
     ).toEqual([renamed]);
   });
 
+  it("writes back a relationship that held many as stored, and takes options the save sends", () => {
+    const many = legacy(undefined, { hasMany: true });
+    expect(withStoredRelationshipOptions([sentFrom(many)], [many])).toEqual([
+      many,
+    ]);
+    expect(
+      withStoredRelationshipOptions(
+        [sentFrom(legacy("oneToOne"), { options: { onDelete: "set null" } })],
+        [legacy("oneToOne")]
+      )
+    ).toEqual([
+      {
+        ...legacy("oneToOne"),
+        options: {
+          target: "people",
+          onDelete: "set null",
+          relationType: "oneToOne",
+        },
+      },
+    ]);
+  });
+
   it("matches by name, not by position", () => {
     const other = {
       name: "person",
