@@ -160,10 +160,6 @@ const CSS = `
 .nx-seo-where .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:12px!important;overflow-wrap:anywhere}
 .nx-seo-what{line-height:1.45;overflow-wrap:anywhere}
 .nx-seo-fixes{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
-/* The SEO screens' one select: a native select in the admin's select styling. */
-.nx-seo-select{appearance:none;-webkit-appearance:none;height:var(--nx-control-height-md);width:100%;max-width:170px;border:1px solid var(--nx-input);border-radius:6px;padding:0 30px 0 10px;background-color:var(--nx-background);background-image:linear-gradient(45deg,transparent 50%,var(--nx-muted-foreground) 50%),linear-gradient(135deg,var(--nx-muted-foreground) 50%,transparent 50%);background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;background-size:5px 5px;background-repeat:no-repeat;color:var(--nx-foreground);font:inherit;font-size:14px;cursor:pointer;transition:border-color .15s}
-.nx-seo-select:hover,.nx-seo-select:focus,.nx-seo-select:focus-visible{border-color:var(--nx-primary);outline:none}
-.nx-seo-select[aria-invalid="true"]{border-color:var(--nx-warning-border)}
 @media (max-width:1100px){
 .nx-seo-prow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"where fixes" "what what";gap:6px 14px}
 .nx-seo-where{grid-area:where}
@@ -171,7 +167,6 @@ const CSS = `
 .nx-seo-fixes{grid-area:fixes}
 }
 @media (max-width:720px){
-.nx-seo-select{max-width:none}
 .nx-seo-prow{grid-template-columns:minmax(0,1fr);grid-template-areas:"where" "what" "fixes"}
 .nx-seo-fixes{justify-content:flex-start}
 .nx-seo-head{padding:18px 16px 0}
