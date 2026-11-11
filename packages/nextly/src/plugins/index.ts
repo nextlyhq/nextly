@@ -33,6 +33,7 @@ export {
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
+  type PluginDurableEvents,
   type PluginEmitOptions,
   type PluginEvents,
   type PluginDatabase,

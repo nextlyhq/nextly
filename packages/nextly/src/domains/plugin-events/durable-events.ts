@@ -90,11 +90,16 @@ async function runDurableWrite<R>(
 ): Promise<R> {
   if (tx !== undefined) {
     const link = linkedTransaction(tx, "events.recordDurable");
-    const result = await link.run(work);
-    // Held until the plugin's transaction commits, and dropped if it rolls
-    // back: there is nothing to deliver for a discarded event.
-    link.afterCommit(committed);
-    return result;
+    return link.run(async adapterTx => {
+      const result = await work(adapterTx);
+      // Held until the plugin's transaction commits, and dropped if it rolls
+      // back: there is nothing to deliver for a discarded event. Registered
+      // while the write is still tracked, so the transaction cannot end in
+      // between: a callback that did not await the emit returns at once, and
+      // its transaction ends as soon as the write lands.
+      link.afterCommit(committed);
+      return result;
+    });
   }
   const result = await adapter.transaction(work);
   // Held until the transaction the calling flow holds commits, if it holds

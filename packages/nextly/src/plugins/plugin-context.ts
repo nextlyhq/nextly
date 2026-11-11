@@ -720,6 +720,13 @@ export type PluginEvents = Omit<EventBus, "emit"> & {
     payload: P,
     options?: PluginEmitOptions
   ): void;
+};
+
+/**
+ * @experimental A plugin's durable events, beside its bus on `ctx.events`.
+ * A type of its own, so `PluginEvents` stays what it was.
+ */
+export interface PluginDurableEvents {
   /**
    * @experimental Record one of this plugin's durable events (declared
    * `durable: true` in `contributes.events`) with the work that emits it, by
@@ -741,12 +748,8 @@ export type PluginEvents = Omit<EventBus, "emit"> & {
    * reordered. The handler may run again for one event; de-duplicate on
    * `event.id`.
    */
-  onDurable(
-    name: EventName,
-    subscriber: string,
-    handler: DurableHandler
-  ): void;
-};
+  onDurable(name: EventName, subscriber: string, handler: DurableHandler): void;
+}
 
 /** The read itself, as the caller resolved from the plugin's options. */
 function readEventsAs(
@@ -895,7 +898,7 @@ export interface PluginContext {
    * transaction, at once. Never for work that rolled back, nor for an
    * attempt that was retried.
    */
-  events: PluginEvents;
+  events: PluginEvents & PluginDurableEvents;
 
   /**
    * @experimental Running Nextly core version, for feature-detection.
@@ -2764,10 +2767,12 @@ export function createPluginContext(
   const durable = pluginDurableEvents(plugin, () =>
     asDurableEventsAdapter(getServiceFn("adapter"))
   );
-  const events = new Proxy(bus as unknown as PluginEvents, {
+  const emitDurable = durable.emitDurable.bind(durable);
+  const onDurable = durable.onDurable.bind(durable);
+  const events = new Proxy(bus as unknown as PluginContext["events"], {
     get(target, prop) {
-      if (prop === "emitDurable") return durable.emitDurable;
-      if (prop === "onDurable") return durable.onDurable;
+      if (prop === "emitDurable") return emitDurable;
+      if (prop === "onDurable") return onDurable;
       const value = Reflect.get(target, prop, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -3118,13 +3123,13 @@ function emitAfterCommit(
  * A plugin's `emitDurable` and `onDurable`: its durable events, recorded by
  * the one rule its `emit` follows, and offered for prompt dispatch once
  * they commit; its subscribers, keyed by its boot-time name and the name it
- * gives each, and forgotten when the plugin is torn down. A context built
+ * gives each, and retired when the plugin is torn down. A context built
  * without a plugin has no events of its own to record, and refuses both.
  */
 function pluginDurableEvents(
   plugin: PluginDefinition | undefined,
   adapter: () => DurableEventsAdapter
-): Pick<PluginEvents, "emitDurable" | "onDurable"> {
+): PluginDurableEvents {
   if (plugin === undefined) {
     const refusal = (): NextlyError =>
       NextlyError.forbidden({
@@ -3152,10 +3157,11 @@ function pluginDurableEvents(
       recorder.record(name, payload, options),
     onDurable(name, subscriber, handler) {
       getDurableSubscribers().register(owner, name, subscriber, handler);
-      // Torn down with the plugin, as its other subscriptions are, so a
-      // re-initialised plugin can register the same names again.
+      // Torn down with the plugin, as its other subscriptions are: retired,
+      // so a re-initialised plugin registers the same names again, and an
+      // event dispatched before it has is still owed to them.
       recordPluginSubscription(owner, () =>
-        getDurableSubscribers().removeOwner(owner)
+        getDurableSubscribers().retireOwner(owner)
       );
     },
   };

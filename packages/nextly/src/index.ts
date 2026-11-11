@@ -563,6 +563,7 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginDurableEvents,
   type PluginEmitOptions,
   type PluginEvents,
   type PluginContributions,

@@ -578,6 +578,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginDeleteCheck (type)",
   "PluginDocumentActionOverride (type)",
   "PluginDocumentActionOverrides (type)",
+  "PluginDurableEvents (type)",
   "PluginEmailProvider (type)",
   "PluginEmailService (type)",
   "PluginEmailSettings (type)",

@@ -127,7 +127,9 @@ describe("recording a durable event", () => {
     let open = true;
     const held: Array<() => unknown> = [];
     const handle = {} as PluginTransaction;
-    const tx = { insert: async () => undefined } as unknown as TransactionContext;
+    const tx = {
+      insert: async () => undefined,
+    } as unknown as TransactionContext;
     linkPluginTransaction(
       handle,
       tx,
@@ -150,9 +152,11 @@ describe("recording a durable event", () => {
     const events = createDurableEventRecorder({
       owner: OWNER,
       durable: durableEventNames([{ name: "test-orders.paid", durable: true }]),
-      adapter: () => {
-        throw new Error("not used: the event is written on the handle");
-      },
+      // Not used: the event is written on the handle.
+      adapter: () => ({
+        transaction: () => Promise.reject(new Error("used the adapter")),
+        afterCommit: () => Promise.reject(new Error("used the adapter")),
+      }),
       kick: () => ({ offer }),
     });
 

@@ -295,7 +295,11 @@ subscriber until each has it.
 // Declared in contributes.events with `durable: true`.
 await ctx.db.transaction(async tx => {
   await tx.insert(orders).values(order);
-  await ctx.events.emitDurable("acme-billing.charged", { orderId: order.id }, { tx });
+  await ctx.events.emitDurable(
+    "acme-billing.charged",
+    { orderId: order.id },
+    { tx }
+  );
 });
 
 // Any plugin, in its init: a subscriber named within the plugin.
@@ -314,7 +318,11 @@ ctx.events.onDurable("acme-billing.charged", "award-points", async event => {
   your plugin, 1 to 64 lower-case letters, digits, dots, dashes or underscores.
   A delivery is owed to that name, so it reaches the same handler after a restart,
   however subscribers were added or reordered. Each subscriber registered when an
-  event is dispatched gets one delivery.
+  event is dispatched gets one delivery. A plugin reloading in development is
+  still owed what is dispatched before it registers again. In a rolling
+  deployment, an instance still running the previous release dispatches with
+  that release's subscribers, so a subscriber you add receives the events
+  dispatched once every instance runs it.
 - Deliveries run on the `events:dispatch` job, and promptly once the emitting work
   commits inside a request. A handler that throws is tried again with backoff,
   across restarts, up to 10 times; a delivery whose subscriber is no longer

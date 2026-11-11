@@ -15,6 +15,7 @@
  * @module domains/plugin-events/kick
  * @experimental
  */
+import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { container } from "../../di/container";
 import type { Logger } from "../../shared/types";
 import { loadNextAfter } from "../webhooks/after-drain";
@@ -80,9 +81,14 @@ export class DurableEventsKick {
     }
     this.running = true;
     try {
+      const dispatch = this.options.dispatch ?? (() => this.dispatchOnce());
       do {
         this.queued = false;
-        await (this.options.dispatch ?? (() => this.dispatchOnce()))();
+        // As the scheduled dispatch runs it: `after()` runs this in the
+        // emitting request's context, and a handler must not act as that
+        // request's caller, under its key's scope or its route actor, for
+        // every event the pass delivers.
+        await runDetachedFromRequest(dispatch);
       } while (this.queued);
     } catch (error) {
       this.options.logger?.warn(
