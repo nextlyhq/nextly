@@ -3,6 +3,7 @@
 import { Button } from "@nextlyhq/ui";
 import { useEffect, useState, type JSX } from "react";
 
+import { NewMenu } from "@admin/components/features/new-menu/NewMenu";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useDashboardSummary } from "@admin/hooks/queries/useDashboardSummary";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
@@ -11,7 +12,6 @@ import type { DashboardSummary } from "@admin/types/dashboard/summary";
 import { useDashboardChrome } from "./header/dashboard-chrome";
 import { EnvironmentBadge } from "./header/EnvironmentBadge";
 import { Freshness } from "./header/Freshness";
-import { NewSplitButton } from "./header/NewSplitButton";
 import { ResumeSetupLink } from "./header/ResumeSetupLink";
 import { SummaryLine } from "./header/SummaryLine";
 import { useSetupResume } from "./setup/useSetupResume";
@@ -85,7 +85,10 @@ export function WelcomeHeader(): JSX.Element {
 
   return (
     <header
-      className="flex flex-wrap items-end justify-between gap-3 px-0.5 pt-1 pb-4"
+      // Below 640 px the actions always take their own row under the title and its summary
+      // line, rather than wrapping there once a summary long enough arrives: a wrap after the
+      // first paint moved the actions and every card under them.
+      className="flex flex-wrap items-end justify-between gap-3 px-0.5 pt-1 pb-4 max-sm:flex-col max-sm:items-start"
       data-testid="dashboard-header"
     >
       <div className="min-w-0">
@@ -153,7 +156,7 @@ export function WelcomeHeader(): JSX.Element {
 /**
  * The header's actions, Customize then New, as the approved design places
  * them; both give way to customise mode's own bar. The group may narrow to the
- * header's width (New's label then cuts short), so it never widens a phone's
+ * header's width, so it never widens a phone's
  * page. What the grid's chrome says decides whether Customize is offered, held
  * or absent.
  */
@@ -204,7 +207,7 @@ function HeaderActions({
           </Button>
         </div>
       ) : null}
-      {chrome?.editing ? null : <NewSplitButton />}
+      {chrome?.editing ? null : <NewMenu variant="rail" />}
     </div>
   );
 }

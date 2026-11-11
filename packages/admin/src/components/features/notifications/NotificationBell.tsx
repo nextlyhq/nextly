@@ -35,11 +35,16 @@ export interface NotificationBellProps {
    * journal, a super-admin's alone, only where it is offered.
    */
   journalOffered?: boolean;
+  /** Where the list opens from the bell: to the right of the rail. */
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
 }
 
 export function NotificationBell({
   className,
   journalOffered = true,
+  side = "bottom",
+  align = "end",
 }: NotificationBellProps): JSX.Element | null {
   const { isSuperAdmin, isLoading: permissionsLoading } =
     useCurrentUserPermissions();
@@ -99,7 +104,8 @@ export function NotificationBell({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        align="end"
+        side={side}
+        align={align}
         sideOffset={8}
         className="p-0 w-auto"
         data-testid="notification-bell-popover"

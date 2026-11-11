@@ -19,7 +19,8 @@ type Props = {
   field: BuilderField;
   /** The fields beside it, which a condition may read. */
   siblings: readonly BuilderField[];
-  conditions: FieldSettingsSurface["conditions"];
+  /** The shared modes; a surface's own editor replaces this tab instead. */
+  conditions: Extract<FieldSettingsSurface["conditions"], string>;
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
 };

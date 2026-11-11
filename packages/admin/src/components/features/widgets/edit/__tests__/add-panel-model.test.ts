@@ -413,12 +413,12 @@ describe("widths", () => {
     expect(addWidths(size).map(width => width.w)).toEqual([3, 4, 6]);
     expect(addWidths(size)[2]).toEqual({
       w: 6,
-      label: "½",
-      spoken: "Half width, 6 columns",
+      label: "50%",
+      spoken: "50% width",
     });
-    expect(widthsLabel(size)).toBe("¼ to ½ width");
+    expect(widthsLabel(size)).toBe("25% to 50% wide");
     expect(widthsLabel(sizeBounds({ default: { w: 12, h: 3 } }))).toBe(
-      "Full width"
+      "100% wide"
     );
   });
 });

@@ -30,14 +30,9 @@
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import { useContext, useRef } from "react";
 
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { CardFigure } from "@admin/components/features/widgets/frame/figure";
-import {
-  leavesRowsEmpty,
-  useCardFitsContent,
-} from "@admin/components/features/widgets/frame/fit";
 import {
   ListCard,
   type ListModel,
@@ -48,7 +43,6 @@ import {
   StatusPill,
 } from "@admin/components/features/widgets/frame/row-parts";
 import {
-  CardHeightContext,
   useCardTier,
   useRowsDrawn,
 } from "@admin/components/features/widgets/frame/tier";
@@ -149,22 +143,6 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
 
   const { attention, releases } = rowsOf(data.items);
   const rowsUnder = attention.length > 0 ? drawnUnderLine : drawn;
-  // What the body draws, the line and the rows, for its height to be asked for while the rows
-  // drawn leave at least one whole row of the stored body empty under the line's room. None for
-  // the empty state, which holds no element here.
-  const content = useRef<HTMLDivElement | null>(null);
-  const storedRows = useContext(CardHeightContext);
-  const shown = Math.min(releases.length, rowsUnder);
-  useCardFitsContent(
-    content,
-    leavesRowsEmpty(
-      shown,
-      storedRows,
-      density,
-      attention.length > 0 ? ATTENTION_LINE_PX : 0
-    ),
-    `${shown} ${attention.length} ${tier} ${density}`
-  );
   if (attention.length === 0 && releases.length === 0) {
     return (
       <FrameState
@@ -182,7 +160,7 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
     );
   }
   return (
-    <div ref={content} className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       {attention.length > 0 && <AttentionLine counts={attention} />}
       {releases.length > 0 && (
         // The release rows alone, so the footer counts releases and never the attention line's

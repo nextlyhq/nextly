@@ -24,7 +24,7 @@
  * Skip is offered on "Fill in your Singles" and "Invite a teammate" only, and Restore on a step
  * skipped. The Singles are one tile;
  * choosing it opens a short list of them, each with its state and link, and only then, the
- * reader's own action, does the card grow in place. Sample content
+ * reader's own action, does the card grow. Sample content
  * is the first tile, with its load and decline in its hint line and a load's progress and outcome
  * in full under the tiles (`setup/SampleContentStep`), and is left out where the project's
  * sample-content route says it cannot be loaded by this reader.
@@ -51,16 +51,7 @@ import {
 } from "nextly/config";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import {
-  Fragment,
-  useContext,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Check, ChevronDown, ChevronUp, X } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -71,7 +62,6 @@ import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
 import { useCardCollapsed } from "../widgets/frame/collapse";
-import { CardGrowContext } from "../widgets/frame/grow";
 import { CardHeaderContent } from "../widgets/frame/header-slot";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 
@@ -636,27 +626,6 @@ function SinglesList({
   );
 }
 
-/**
- * Asks the frame to grow the card only while the reader has asked to see more of it: the Singles'
- * list open, which is their own action, or a sample-content load's progress or outcome on show
- * under the tiles. At rest the steps are one row at every width (`SETUP_ROW`), which fits 12 × 2
- * (`SETUP_ROW_BODY_PX`), so the card asks for nothing and is drawn at its own rows from its first
- * paint: a card that grew at rest would be painted at its rows first and grow a frame later,
- * moving every card under it. Measured after every draw; drawn at its own rows again once the list
- * closes or the steps are not drawn.
- */
-function useGrowToFit(
-  drawn: boolean,
-  showingMore: boolean,
-  content: React.RefObject<HTMLDivElement | null>
-): void {
-  const report = useContext(CardGrowContext);
-  useLayoutEffect(() => {
-    report?.(drawn && showingMore ? content.current?.offsetHeight : undefined);
-  });
-  useEffect(() => () => report?.(undefined), [report]);
-}
-
 function AllSet({ write }: { write: SetupStateWrite }) {
   return (
     <div
@@ -769,7 +738,6 @@ function CollapsedSetup({
  * list; its controls are drawn in the frame's header, beside the card's menu.
  */
 function ExpandedSetup({
-  content,
   counted,
   write,
   singles: singlesList,
@@ -778,7 +746,6 @@ function ExpandedSetup({
   failure,
   controls,
 }: {
-  content: React.RefObject<HTMLDivElement | null>;
   counted: CountedSetup;
   write: SetupStateWrite;
   singles: SinglesListControl;
@@ -794,7 +761,6 @@ function ExpandedSetup({
   );
   return (
     <div
-      ref={content}
       // Its width is the card's, whatever its tiles' widths: the row scrolls inside it.
       className={cn("@container grid", SETUP_GAP.className)}
       data-testid="setup-card"
@@ -872,16 +838,13 @@ function useCollapsedHere(
 /**
  * The card in its frame: "N of M done" in the header beside the title, so the body holds the bar
  * and the tiles alone (a change that could not be saved says so there instead, where it is seen);
- * grown only while the reader is shown more than the steps (`showingMore`); and one grid row
- * while collapsed, whose line is then the whole card. Answers the count's words while steps are
+ * and one header line while collapsed, whose line is then the whole card. Answers the count's words while steps are
  * drawn.
  */
 function useSetupInFrame(
   counted: CountedSetup | undefined,
   collapsed: boolean,
-  failed: string | undefined,
-  showingMore: boolean,
-  content: React.RefObject<HTMLDivElement | null>
+  failed: string | undefined
 ): string | undefined {
   const progress =
     counted === undefined
@@ -889,7 +852,6 @@ function useSetupInFrame(
       : progressText(counted.done, counted.total);
   const drawn = progress !== undefined;
   useCardTitleCount(failed ?? progress);
-  useGrowToFit(drawn && !collapsed, showingMore, content);
   useCardCollapsed(drawn && collapsed);
   return progress;
 }
@@ -924,15 +886,8 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   );
   const [singlesOpen, setSinglesOpen] = useState(false);
   const singlesListId = useId();
-  const content = useRef<HTMLDivElement>(null);
   const { allSet, counted } = useDrawnSetup(card, sample, write);
-  const progress = useSetupInFrame(
-    counted,
-    collapsed,
-    write.failed,
-    singlesOpen || sample.panelShown || sample.refreshFailed,
-    content
-  );
+  const progress = useSetupInFrame(counted, collapsed, write.failed);
 
   if (!card.setup.known) return <NotKnown retry={retry} />;
   if (allSet) {
@@ -948,7 +903,6 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   }
   return (
     <ExpandedSetup
-      content={content}
       counted={counted}
       write={write}
       singles={{

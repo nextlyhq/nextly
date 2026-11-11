@@ -22,8 +22,8 @@ import type { DashboardSummary } from "@admin/types/dashboard/summary";
 
 // The New button reads collections and permissions of its own; the header's
 // tests are about where it stands, so it is a marker here.
-vi.mock("./header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
+vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
+  NewMenu: () => <div data-testid="dashboard-new" />,
 }));
 
 type UserRead = {

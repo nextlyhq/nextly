@@ -8,11 +8,16 @@
 // editor, which drew the same set independently. What stays here is the part
 // that is genuinely this surface's: resolving the allowed set from the plugin
 // registry, and mapping the builder's own storage.
-import { validationRulesForFieldType } from "nextly/field-catalog";
+import {
+  validationRulesForFieldType,
+  type FieldSurface,
+  type FieldValidationRule,
+} from "nextly/field-catalog";
 import type { JSX } from "react";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { isSurfaceBuiltInType } from "@admin/lib/builder/field-type-label";
 import { pluginFieldTypeStorage } from "@admin/lib/builder/plugin-field-type-entries";
 
 import {
@@ -21,15 +26,24 @@ import {
 } from "../../ValidationRulesEditor";
 
 type Props = {
+  /** The surface the panel is on, which decides who owns a type's id. */
+  surface: FieldSurface;
   field: BuilderField;
   readOnly?: boolean;
   onChange: (next: BuilderField) => void;
+  /** The surface's narrowing of the rules core allows for the type. */
+  narrow?: (
+    type: string,
+    allowed: readonly FieldValidationRule[]
+  ) => readonly FieldValidationRule[];
 };
 
 export function ValidationTab({
+  surface,
   field,
   readOnly = false,
   onChange,
+  narrow,
 }: Props): JSX.Element {
   const branding = useBranding();
   const validation = field.validation ?? {};
@@ -37,10 +51,20 @@ export function ValidationTab({
   // This surface stores the rules under the names core uses, so the kit's
   // values pass through unmapped. The form builder does not, and maps at its
   // own call site rather than here.
-  const allowed = validationRulesForFieldType(
+  // A type this surface builds in answers from its own storage, even when a
+  // plugin declares the same id for another surface.
+  const coreAllowed = validationRulesForFieldType(
     field.type,
-    pluginFieldTypeStorage(branding.plugins, field.type)
+    isSurfaceBuiltInType(surface, field.type)
+      ? undefined
+      : pluginFieldTypeStorage(branding.plugins, field.type)
   );
+  // Narrowed, never widened: a surface can only take away rules core allows,
+  // so a rule the type cannot hold is never offered whatever it returns.
+  const narrowed = narrow?.(field.type, coreAllowed);
+  const allowed = narrowed
+    ? coreAllowed.filter(rule => narrowed.includes(rule))
+    : coreAllowed;
 
   // A type that takes none of the rules drawn here (a link, a group) says so,
   // rather than leaving the tab blank: Required is in General for every type.

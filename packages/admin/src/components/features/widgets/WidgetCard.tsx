@@ -69,8 +69,7 @@ import {
   type CardState,
   type SkeletonHint,
 } from "./frame/card-state";
-import { COLLAPSED_PADDING_CLASS, useFrameCollapsed } from "./frame/collapse";
-import { useLoadingFitsOneItem } from "./frame/fit";
+import { useFrameCollapsed } from "./frame/collapse";
 import {
   CardFooterClaimProvider,
   CardFooterSlotProvider,
@@ -268,11 +267,6 @@ function useDrawnCollapsed(customizing: boolean): boolean {
   return collapsed && !customizing;
 }
 
-/** The frame's padding: its own, or the collapsed card's one line. */
-function framePaddingClass(collapsed: boolean): string {
-  return collapsed ? COLLAPSED_PADDING_CLASS : FRAME_PADDING.className;
-}
-
 /** A boolean as a data attribute: present and empty while it holds, absent otherwise. */
 function presentWhile(holds: boolean): "" | undefined {
   return holds ? "" : undefined;
@@ -446,7 +440,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
               data-hidden-empty={presentWhile(flags.hiddenEmpty)}
               className={cn(
                 "flex h-full flex-col",
-                framePaddingClass(collapsed),
+                FRAME_PADDING.className,
                 props.className
               )}
             >
@@ -616,24 +610,17 @@ function CentredState({ children }: { children: ReactNode }) {
 /**
  * The loading skeleton: shaped as the body reported, or else as the card's own declaration says,
  * holding the place of the rows the card will draw at its tier, by the rule the list and table
- * bodies draw by. Medium until the card has measured itself, as those bodies are.
- *
- * A card whose body reports its content's height asks its cell, while loading, for the height a
- * one-item answer takes (`useLoadingFitsOneItem`), so the row it shares stands at the height the
- * common answer draws rather than at the stored rows the answer would then shrink it from.
+ * bodies draw by. Medium until the card has measured itself, as those bodies are. Its height is
+ * the default for the card's kind; a card drawn before holds the height it was last drawn at
+ * (`frame/held-height`).
  */
 function LoadingBody({
   hint,
   props,
 }: {
   hint: SkeletonHint | undefined;
-  props: Pick<
-    WidgetCardProps,
-    "skeleton" | "skeletonItems" | "skeletonFields" | "widgetId"
-  >;
+  props: Pick<WidgetCardProps, "skeleton" | "skeletonItems" | "skeletonFields">;
 }) {
-  // Drawn one row high when it asks for a one-item answer's height, so its skeleton is one row.
-  const oneItem = useLoadingFitsOneItem(props.widgetId);
   const tier = useCardTier() ?? "medium";
   // The card's height and density, as the rows that will arrive are counted at.
   const h = useContext(CardHeightContext);
@@ -641,11 +628,7 @@ function LoadingBody({
   return (
     <CardSkeleton
       shape={hint?.shape ?? props.skeleton}
-      rows={
-        oneItem
-          ? 1
-          : (hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density))
-      }
+      rows={hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density)}
       layout={hint?.layout ?? heldLayout(tier, props.skeletonFields)}
     />
   );

@@ -1,235 +1,118 @@
 import type { JSX } from "react";
 
-import { NotificationBell } from "@admin/components/features/notifications";
-import { Discord, Github, HelpCircle } from "@admin/components/icons";
+import { Menu, PanelLeftClose, PanelLeftOpen } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
-import { ThemeToggle } from "@admin/components/shared/theme-toggle";
-import {
-  useBranding,
-  useBrandingStatus,
-} from "@admin/context/providers/BrandingProvider";
-import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import { useDashboardUser } from "@admin/hooks/useDashboardUser";
-import { useLogout } from "@admin/hooks/useLogout";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 
-import { shellAnswersMarker } from "../lib/shell-answers";
-import { UserProfileDropdown } from "../sidebar/UserProfileDropdown";
+import { useSuppressedChrome } from "../ChromeSuppression";
+import { usePanelFold } from "../PanelFold";
+import { RailAccount } from "../sidebar/RailAccount";
 
-import {
-  computeHiddenHeaderButtons,
-  headerControlsSettled,
-  type HeaderAnswersPending,
-  type HeaderButtonId,
-} from "./header-visibility";
+import { pluginHeaderItems } from "./header-visibility";
 import { HeaderTrail } from "./HeaderTrail";
+import { TopBarPlaceTarget } from "./TopBarPlaces";
 
 interface DashboardHeaderProps {
   className?: string;
+  /** Opens the navigation drawer, below the width where the rail shows. */
+  onOpenMenu?: () => void;
 }
 
+/**
+ * The admin's one top bar: the page's own place, and nothing global.
+ *
+ * Its left part says where the page is: the trail an open document registered,
+ * or the breadcrumb the page drew into the bar's `start` place. Its right part,
+ * the `end` place, holds the page's own actions. On a page that started its
+ * panel folded, the toggle that brings the panel back comes first, and below
+ * the width where the rail shows, the menu button that opens it in a drawer
+ * comes before that. The reader's Inbox and account menu are at the foot of the
+ * icon rail, so the bar's width belongs to the page, save for one thing: a
+ * plugin's own header item (`header.slot`) stays at the bar's far right, on
+ * every page, where plugins have always put it. Some draw a button there, and
+ * some draw nothing and register what a page needs, so it is mounted for as
+ * long as the bar is.
+ *
+ * A surface that takes the rail away but keeps the bar (translation mode)
+ * would take the Inbox and the account menu with it, so while the rail is
+ * suppressed they are drawn at the bar's right end instead.
+ *
+ * Its height is `--admin-bar-height`, which whatever measures against the bar
+ * reads too.
+ */
 export function DashboardHeader({
   className,
+  onOpenMenu,
 }: DashboardHeaderProps): JSX.Element {
-  const { user } = useDashboardUser();
-  const logout = useLogout();
-  const branding = useBranding();
-  const hidden = computeHiddenHeaderButtons(branding?.plugins);
-  const { isPending: isWorkspacePending } = useBrandingStatus();
-  // Wherever no plugin hides it: every reader's own notices are in the bell.
-  const bellOffered = !hidden.has("notifications");
-  // The schema-change journal in it only where the builder runs (see the bell
-  // below). Gated on an explicit `false`, so a server that does not say keeps it.
-  const journalOffered = branding?.showBuilder !== false;
-  // Plugin-contributed header-slot components; each self-gates on
-  // permission. Read `header.slot` (current) with `headerSlot` (deprecated)
-  // fallback.
-  const headerSlots = (branding?.plugins ?? [])
-    .map(p => ({ name: p.name, slot: p.header?.slot ?? p.headerSlot }))
-    .filter((p): p is { name: string; slot: string } => Boolean(p.slot));
-
+  const pluginItems = pluginHeaderItems(useBranding()?.plugins);
+  const railSuppressed = useSuppressedChrome().has("primaryRail");
   return (
     <header
       className={cn(
-        "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
-        "flex items-center px-6",
-        // A container, so the trail on the left answers to the bar's own
-        // width: a sidebar narrows it as much as a small window does.
+        "h-(--admin-bar-height) shrink-0 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
+        "flex items-center gap-3 px-6 max-lg:px-3",
+        // A container, so the trail answers to the bar's own width: a sidebar
+        // narrows it as much as a small window does.
         "@container/topbar",
         className
       )}
     >
-      {/* One row across the whole bar: the trail, the controls, then the
-          account menu at its right end. Its box is the bar's whatever it
-          holds, so neither a trail nor controls arriving in it moves it. */}
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
-        {/* The trail the page on screen registered, such as an open
-            document's place under Content. It takes the width the controls
-            leave, from a basis of none, so it shrinks and truncates rather
-            than pushing into them; the controls keep their size. Controls
-            arriving narrow it from its right end, so nothing in it moves. */}
-        <div className="mr-3 flex min-w-0 flex-1 items-center gap-4">
-          <HeaderTrail />
-        </div>
-        {/* The bell is the one control the row waits on the reader's
-            permissions for, so the permissions are read only where it is
-            offered: elsewhere nothing would use that answer, and reading it
-            asks for it again each time the bar is drawn. Whether it is offered
-            changes only as the workspace answer arrives, while the row is
-            still hidden, so swapping one row for the other is never seen. */}
-        {bellOffered ? (
-          <ControlsAwaitingPermissions
-            workspacePending={isWorkspacePending}
-            hidden={hidden}
-            headerSlots={headerSlots}
-            journalOffered={journalOffered}
-          />
-        ) : (
-          <ControlsRow
-            pending={{ workspace: isWorkspacePending, permissions: false }}
-            hidden={hidden}
-            headerSlots={headerSlots}
-            journalOffered={journalOffered}
-            bellOffered={false}
-          />
-        )}
-        <div className="ml-2">
-          <UserProfileDropdown
-            user={user}
-            onLogout={() => {
-              void logout();
-            }}
-          />
-        </div>
+      {onOpenMenu && (
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          aria-label="Open the navigation menu"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary lg:hidden"
+        >
+          <Menu className="h-5 w-5" aria-hidden="true" />
+        </button>
+      )}
+      <div className="flex min-w-0 flex-1 items-center gap-4">
+        <PanelFoldToggle />
+        <HeaderTrail />
+        <TopBarPlaceTarget
+          name="start"
+          className="flex min-w-0 items-center empty:hidden"
+        />
       </div>
+      <TopBarPlaceTarget
+        name="end"
+        className="flex shrink-0 items-center gap-2 empty:hidden"
+      />
+      {pluginItems.length > 0 && (
+        <div
+          className="flex shrink-0 items-center gap-1"
+          data-testid="plugin-header-items"
+        >
+          {pluginItems.map(item => (
+            <PluginSlot key={item.name} path={item.slot} />
+          ))}
+        </div>
+      )}
+      {railSuppressed && <RailAccount placement="bar" />}
     </header>
   );
 }
 
-/** What the controls row is drawn from. */
-interface ControlsProps {
-  hidden: ReadonlySet<HeaderButtonId>;
-  headerSlots: readonly { name: string; slot: string }[];
-  /** Whether the bell shows the schema-change journal: where the builder runs. */
-  journalOffered: boolean;
-}
-
 /**
- * The controls where the bell is offered: they wait on the reader's permissions as well as the
- * workspace answer, from the same answer the bell reads to decide whether it is the reader's.
+ * The panel toggle, at the bar's left end, on a page that started its panel
+ * folded. Nothing on any other page: there the panel follows the rail.
  */
-function ControlsAwaitingPermissions({
-  workspacePending,
-  ...controls
-}: ControlsProps & { workspacePending: boolean }): JSX.Element {
-  const { isLoading } = useCurrentUserPermissions();
+function PanelFoldToggle(): JSX.Element | null {
+  const { declared, open, toggle } = usePanelFold();
+  if (!declared) return null;
+  const Icon = open ? PanelLeftClose : PanelLeftOpen;
   return (
-    <ControlsRow
-      {...controls}
-      pending={{ workspace: workspacePending, permissions: isLoading }}
-      bellOffered
-    />
-  );
-}
-
-/**
- * The controls left of the account menu, mounted from the first paint and hidden until they
- * settle (see `headerControlsSettled`), rather than mounted late: the bell and plugin controls
- * read the same permissions, and a reader mounted after that answer arrives asks for it again,
- * one round trip later. Mounted early, each joins the request already out. Hidden, the wrapper
- * takes no space; settled, `contents` lays its controls out as the row's own. No display utility
- * while hidden, as one would override the `hidden` attribute's `display: none`.
- */
-function ControlsRow({
-  pending,
-  bellOffered,
-  ...controls
-}: ControlsProps & {
-  pending: HeaderAnswersPending;
-  bellOffered: boolean;
-}): JSX.Element {
-  const settled = headerControlsSettled(pending, bellOffered);
-  return (
-    <div
-      hidden={!settled}
-      // One box that does not shrink: each control is a 44 px target, and
-      // the trail beside it, not the controls, gives way when plugin
-      // controls fill a narrow bar.
-      className={settled ? "flex shrink-0 items-center gap-1" : undefined}
-      // Whether the answers that decide the row are in, so a reader of the
-      // page (the layout-shift browser test) can tell when the row is done.
-      data-shell-answers={shellAnswersMarker(settled)}
+    <button
+      type="button"
+      onClick={toggle}
+      aria-pressed={open}
+      aria-label={open ? "Hide the panel" : "Show the panel"}
+      title={open ? "Hide the panel" : "Show the panel"}
+      className="-ml-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
-      <HeaderControls {...controls} bellOffered={bellOffered} />
-    </div>
-  );
-}
-
-/** The header's controls left of the account menu, shown together once what decides them is known. */
-function HeaderControls({
-  hidden,
-  headerSlots,
-  journalOffered,
-  bellOffered,
-}: ControlsProps & { bellOffered: boolean }): JSX.Element {
-  return (
-    <>
-      {!hidden.has("github") && (
-        <a
-          href="https://github.com/nextlyhq/nextly"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="relative flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
-          title="GitHub Repository"
-        >
-          {/* Muted foreground so this resting icon meets contrast; it brightens to the
-                foreground ink on hover, not to the action token. */}
-          <Github className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-          <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
-        </a>
-      )}
-      {!hidden.has("discord") && (
-        <a
-          href="https://discord.gg/hJUg9AZMn"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
-          title="Discord Community"
-        >
-          {/* Muted foreground so this resting icon meets contrast; it brightens to the
-                foreground ink on hover, not to the action token. */}
-          <Discord className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-        </a>
-      )}
-
-      {!hidden.has("docs") && (
-        <a
-          href="https://nextlyhq.com/docs"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
-          title="Documentation"
-        >
-          {/* Muted foreground so this resting icon meets contrast; it brightens to the
-                foreground ink on hover, not to the action token. */}
-          <HelpCircle className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-        </a>
-      )}
-
-      {/* Plugin header-slot components, rendered before the bell. */}
-      {headerSlots.map(p => (
-        <PluginSlot key={p.name} path={p.slot} />
-      ))}
-
-      <ThemeToggle />
-
-      {/* The bell holds every reader's own notices. Its schema-change list is
-            a super-admin's (self-gated via useCurrentUserPermissions), and only
-            where the builder runs: schema changes are journaled by the builder
-            and the dev-time code-first push. Elsewhere the schema arrives
-            through committed migrations, which write no journal, so the list
-            would have nothing in it (`journalOffered`). */}
-      {bellOffered && <NotificationBell journalOffered={journalOffered} />}
-    </>
+      <Icon className="h-5 w-5" aria-hidden="true" />
+    </button>
   );
 }

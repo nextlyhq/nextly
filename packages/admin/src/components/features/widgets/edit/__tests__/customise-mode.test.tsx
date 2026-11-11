@@ -28,8 +28,6 @@ import type {
 
 import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
-import { oneItemBodyPx, requestedCardHeightPx } from "../../frame/fit";
-import { cardHeightPx } from "../../sizes";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
@@ -44,8 +42,8 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 
 // The header's New button reads collections and permissions of its own,
 // which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/dashboard/header/NewSplitButton", () => ({
-  NewSplitButton: () => <div data-testid="dashboard-new" />,
+vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
+  NewMenu: () => <div data-testid="dashboard-new" />,
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -352,9 +350,7 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
       });
       // By keyboard: jsdom has no geometry, so a pointer crossing into the
       // submenu reads as leaving it.
-      within(widths)
-        .getByRole("menuitemradio", { name: "Half width, 6 columns" })
-        .focus();
+      within(widths).getByRole("menuitemradio", { name: "50% width" }).focus();
       await user.keyboard("{Enter}");
     },
   ],
@@ -384,7 +380,7 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
         within(popover).getByRole("combobox", { name: "Width" })
       );
       await user.click(
-        await screen.findByRole("option", { name: "Half width, 6 columns" })
+        await screen.findByRole("option", { name: "50% width" })
       );
       await user.keyboard("{Escape}");
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -466,8 +462,9 @@ describe("the card menu and quick popover while customising", () => {
       .map(item => item.textContent?.trim() ?? "");
     expect(names[0]).toBe("Settings");
     expect(names[1]).toMatch(/^Width/);
-    expect(names[2]).toMatch(/^Height/);
-    expect(names.slice(3, 7)).toEqual([
+    // 🔴 Width alone: a card is as tall as its content, so no Height is offered.
+    expect(names.some(name => name.startsWith("Height"))).toBe(false);
+    expect(names.slice(2, 6)).toEqual([
       "Move to start",
       "Move earlier",
       "Move later",
@@ -485,14 +482,12 @@ describe("the card menu and quick popover while customising", () => {
       name: "Quick settings for Notes",
     });
     await user.click(within(popover).getByRole("combobox", { name: "Width" }));
-    await user.click(
-      await screen.findByRole("option", { name: "Half width, 6 columns" })
-    );
+    await user.click(await screen.findByRole("option", { name: "50% width" }));
 
     // Drawn at once in the draft, the popover still open over the card, and nothing written.
     await waitFor(() => expect(sizeLabels()).not.toEqual(before));
-    // The label's glyphs, then the name a screen reader hears.
-    expect(sizeLabels()).toContain("6×36 columns by 3 rows");
+    // The label's percent, then the name a screen reader hears.
+    expect(sizeLabels()).toContain("50%50% wide");
     expect(
       screen.getByRole("dialog", { name: "Quick settings for Notes" })
     ).toBeInTheDocument();
@@ -534,81 +529,23 @@ describe("the bar", () => {
     expect(bar()).toHaveClass("sticky", "top-0");
   });
 
-  it("draws fixed rows and every card at its stored rows while customising, and rows as tall as their cards at rest", async () => {
-    // 🔴 Fails with fixed rows at rest, where no cell asks its rows for a height and no card can
-    // be drawn shorter than its stored size; and with content rows while customising, where the
-    // stored sizes are what is being edited.
+  it("draws rows as tall as their cards at rest and while customising, no cell spanning rows or clipping its card", async () => {
+    // 🔴 Fails with fixed rows while customising, where a card is drawn at its stored rows rather
+    // than its content's height, and so at another height than at rest.
+    const drawnAsTallAsTheirCards = () => {
+      const grid = screen.getByLabelText("Dashboard widgets");
+      expect(grid).toHaveClass("auto-rows-auto");
+      expect(grid).not.toHaveClass("auto-rows-[72px]");
+      const cell = screen.getByTestId("widget-cell-core/a");
+      expect(cell.style.gridRow).toBe("");
+      expect(cell).not.toHaveClass("overflow-hidden");
+      expect(cell).not.toHaveClass("contain-size");
+    };
     renderDashboard();
-    const resting = await screen.findByTestId("widget-cell-core/a");
-    expect(screen.getByLabelText("Dashboard widgets")).toHaveClass(
-      "auto-rows-auto"
-    );
-    // A body that reports nothing asks for its stored height, and holds its row at it.
-    expect(resting.style.minHeight).toBe(`${cardHeightPx(3)}px`);
-    expect(resting).toHaveClass("contain-size");
-
+    await screen.findByTestId("widget-cell-core/a");
+    drawnAsTallAsTheirCards();
     await beginEditing();
-    const grid = screen.getByLabelText("Dashboard widgets");
-    expect(grid).toHaveClass("auto-rows-[72px]");
-    expect(grid).not.toHaveClass("auto-rows-auto");
-    const editing = screen.getByTestId("widget-cell-core/a");
-    expect(editing.style.gridRow).toBe("span 3 / span 3");
-    expect(editing.style.minHeight).toBe("");
-    expect(editing).not.toHaveClass("contain-size");
-  });
-
-  it("draws a loading content-sized card at its one-item answer's height at rest, and at its stored rows while customising", async () => {
-    // 🔴 Fails at rest where the loading state asks for nothing: the cell asks for its stored
-    // height, 336 px. Fails while customising wherever the loading request reaches fixed rows.
-    mockBranding = {
-      widgets: [
-        ...(mockBranding?.widgets ?? []),
-        {
-          id: "core/needs-attention",
-          title: "Needs your attention",
-          archetype: "custom",
-          size: RESIZABLE,
-          component: "core#NotesBody",
-        },
-      ],
-    } as unknown as AdminBranding;
-    layoutResponse = layout({
-      placements: [
-        ...OPENED.map(p => ({ ...p })),
-        {
-          id: "p4",
-          widgetId: "core/needs-attention",
-          w: 8,
-          h: 4,
-          removed: false,
-        },
-      ],
-      widgets: {
-        "core/a": facts(),
-        "core/b": facts(),
-        "core/c": facts(),
-        "core/d": facts(),
-        "core/needs-attention": facts(),
-      },
-    });
-    // The answers never arrive, so the card stays loading in both modes.
-    api.post.mockImplementation(() => new Promise(() => {}));
-    renderDashboard();
-    const resting = await screen.findByTestId(
-      "widget-cell-core/needs-attention"
-    );
-    await within(resting).findByTestId("card-skeleton");
-    expect(resting.style.minHeight).toBe(
-      `${requestedCardHeightPx(4, oneItemBodyPx("default"))}px`
-    );
-
-    await beginEditing();
-    const editing = screen.getByTestId("widget-cell-core/needs-attention");
-    expect(editing.style.gridRow).toBe("span 4 / span 4");
-    expect(editing.style.minHeight).toBe("");
-    expect(screen.getByLabelText("Dashboard widgets")).toHaveClass(
-      "auto-rows-[72px]"
-    );
+    drawnAsTallAsTheirCards();
   });
 
   it("keeps exactly one level-one heading, the page's own", async () => {

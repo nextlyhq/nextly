@@ -15,7 +15,13 @@
  * @module components/entries/APIPlayground/ApiPlaygroundPage
  */
 
-import { Alert, AlertDescription, AlertTitle, Skeleton } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  PageHeader,
+  Skeleton,
+} from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { AlertCircle } from "@admin/components/icons";
@@ -121,16 +127,16 @@ export function ApiPlaygroundPage({
     // response panes scroll on their own. Otherwise a long response stretches
     // the page and takes the response's own status line off-screen with it.
     <PageContainer className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="mb-8 shrink-0">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">
-          API Playground
-        </h1>
-        {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-        <p className="text-sm font-normal text-muted-foreground mt-1">
-          Test API endpoints for the <strong>{label}</strong> {noun}. Build
-          requests, execute them, and view responses.
-        </p>
-      </div>
+      <PageHeader
+        className="shrink-0"
+        title="API Playground"
+        description={
+          <>
+            Test API endpoints for the <strong>{label}</strong> {noun}. Build
+            requests, execute them, and view responses.
+          </>
+        }
+      />
 
       <div className="min-h-0 flex-1">
         <APIPlayground

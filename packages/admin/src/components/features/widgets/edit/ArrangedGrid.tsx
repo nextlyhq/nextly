@@ -44,18 +44,8 @@ import {
   type MoveDirection,
 } from "../layout-editor";
 import { widenLoneOfPair, WidenLonePairContext } from "../lone-pair";
-import {
-  useReportedPlacements,
-  useReportedSpans,
-} from "../reported-placements";
-import { contentSizedPlacements } from "../row-bands";
-import {
-  cardRowStyle,
-  dashboardGridClass,
-  drawnSize,
-  drawnSpan,
-} from "../sizes";
-import { useDashboardWidthAround } from "../useDashboardWidth";
+import { useReportedPlacements } from "../reported-placements";
+import { GRID_CLASS } from "../sizes";
 import { settingsAsAsked, titleAsAsked } from "../widget-as-asked";
 
 import { ArrangedCell, type ArrangedCellProps } from "./ArrangedCell";
@@ -186,9 +176,6 @@ function EmptyArrangement({
   return (
     <p
       data-testid="widget-grid-empty"
-      // Two rows, so its sentence fits inside the fixed rows of customise mode; at rest the rows
-      // take its own height.
-      style={cardRowStyle(2)}
       className="col-span-full flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"
     >
       {isEditing
@@ -432,46 +419,6 @@ function useGridRows(
   };
 }
 
-/** No card drawn at its content's height. */
-const NONE_FITTING: ReadonlySet<string> = new Set();
-
-/**
- * The placements whose cards may be drawn at their content's height at rest
- * (`contentSizedPlacements`): the cards on show, placed in their order at the columns they are
- * drawn across at the dashboard's width (their own `w`, or the width the grid draws them at in
- * its place) and the rows each is drawn across now, banded by the rows they share. A cell reports
- * here the rows it spans when they are not its stored rows (`reportDrawnRows`), so a card grown or
- * collapsed moves the cards after it in the walk as it does in the grid, and keeps its band at
- * stored heights. None while customising, whose rows are fixed, and none before the dashboard has
- * a width to place the cards at.
- */
-function useContentSized(
-  rows: ArrangedWidget[],
-  isEditing: boolean,
-  shown: { hidden: ReadonlySet<string>; widths: ReadonlyMap<string, number> }
-) {
-  const { spans, report: reportDrawnRows } = useReportedSpans();
-  const dashboardWidth = useDashboardWidthAround();
-  const { hidden, widths } = shown;
-  const fitting = useMemo(() => {
-    if (isEditing || dashboardWidth === undefined) return NONE_FITTING;
-    const cards = rows
-      .filter(row => !hidden.has(row.placementId))
-      .map(row => {
-        const size = drawnSize(row.size, row.widget.size);
-        const w = widths.get(row.placementId) ?? size.w;
-        return {
-          id: row.placementId,
-          span: drawnSpan(w, dashboardWidth),
-          rows: spans.get(row.placementId) ?? size.h,
-          storedRows: size.h,
-        };
-      });
-    return contentSizedPlacements(cards);
-  }, [rows, isEditing, dashboardWidth, hidden, widths, spans]);
-  return { fitting, reportDrawnRows };
-}
-
 export function ArrangedGrid({
   rows,
   placements,
@@ -494,11 +441,6 @@ export function ArrangedGrid({
     isEditing,
     answers
   );
-  // Which cards may stand at their content's height: those whose band of rows is even.
-  const { fitting, reportDrawnRows } = useContentSized(rows, isEditing, {
-    hidden,
-    widths,
-  });
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -510,11 +452,11 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        // The grid's columns, rows and gaps (`dashboardGridClass`), the ones a card's predicted
-        // width counts: fixed rows while customising, rows as tall as their cards at rest.
+        // The grid's columns, rows and gaps (`GRID_CLASS`), the ones a card's predicted width
+        // counts: rows as tall as their tallest card, at rest and while customising.
         // `relative` so the drop line is placed from the grid's own corner, where the drag
         // measures from.
-        className={cn("relative", dashboardGridClass(isEditing))}
+        className={cn("relative", GRID_CLASS)}
         // When the oldest answer on show arrived, for the page's one freshness line: no card
         // says when its own data arrived.
         data-answered-at={answeredAt?.toISOString()}
@@ -550,8 +492,6 @@ export function ArrangedGrid({
               shownTitleOf(row, writes.sources)
             )}
             reportHidden={reportHidden}
-            fitsContent={fitting.has(row.placementId)}
-            reportDrawnRows={reportDrawnRows}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}
