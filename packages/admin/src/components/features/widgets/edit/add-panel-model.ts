@@ -17,7 +17,7 @@ import type {
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
 
-import { askableWith } from "../widget-as-asked";
+import { askableWith, USERS_SOURCE } from "../widget-as-asked";
 
 /**
  * One widget, as the gallery read sends it: the parts of the server's `GalleryTileItem` this
@@ -106,13 +106,48 @@ export function collectionAsker(
   };
 }
 
-/** The collections a widget may be set to: those it can ask anything of, in the read's order. */
+/** Whether a widget's Collection setting offers Users beside its collections. */
+export type OffersUsers = (widgetId: string) => boolean;
+
+/**
+ * Whether each widget's Collection setting offers Users, as the server told this reader the
+ * setting: it sends the offer only to a reader who may read users.
+ */
+export function usersOffer(
+  byId: ReadonlyMap<string, DashboardWidget>
+): OffersUsers {
+  return widgetId =>
+    byId
+      .get(widgetId)
+      ?.settings?.some(
+        setting => setting.type === "collection" && setting.users === true
+      ) === true;
+}
+
+/** Users, as a collection a widget whose setting offers them may start on. */
+const USERS_COLLECTION: GalleryCollection = {
+  slug: USERS_SOURCE,
+  label: "Users",
+  lifecycle: false,
+};
+
+/**
+ * The collections a widget may be set to: those it can ask anything of, in the read's order; or,
+ * where there is none and its setting offers Users (`offersUsers`), Users, so a Count added by a
+ * reader who may read no collection but may read users counts the people.
+ */
 export function collectionsFor(
   widgetId: string,
   collections: readonly GalleryCollection[],
-  canAsk: CanAsk
+  canAsk: CanAsk,
+  offersUsers: OffersUsers = () => false
 ): GalleryCollection[] {
-  return collections.filter(collection => canAsk(widgetId, collection.slug));
+  const asked = collections.filter(collection =>
+    canAsk(widgetId, collection.slug)
+  );
+  return asked.length === 0 && offersUsers(widgetId)
+    ? [USERS_COLLECTION]
+    : asked;
 }
 
 /** Whether a row's Add is offered: not a placed one-card widget, nor one with no collection. */
@@ -130,8 +165,9 @@ export function canAdd(row: GalleryRow): boolean {
  * - one card only, and it was removed this session: Add puts that card back, with its settings,
  *   rather than adding a second;
  * - it reads a collection, and none the reader may read is one it can ask anything of
- *   (`canAsk`): listed, saying so, with nothing to add, so no card lands that could only ever be
- *   drawn as not available;
+ *   (`canAsk`), nor does it offer Users to a reader who may read them (`offersUsers`): listed,
+ *   saying so, with nothing to add, so no card lands that could only ever be drawn as not
+ *   available;
  * - otherwise Add.
  */
 export function galleryRows(
@@ -139,7 +175,8 @@ export function galleryRows(
   placements: readonly WidgetPlacement[],
   byId: ReadonlyMap<string, DashboardWidget>,
   canAsk: CanAsk,
-  pluginName: (plugin: string) => string = plugin => plugin
+  pluginName: (plugin: string) => string = plugin => plugin,
+  offersUsers: OffersUsers = () => false
 ): GalleryRow[] {
   return read.tiles.flatMap((sent): GalleryRow[] => {
     const widget = byId.get(sent.id);
@@ -149,7 +186,11 @@ export function galleryRows(
     const named =
       tile.plugin === undefined ? {} : { pluginName: pluginName(tile.plugin) };
     return [
-      { tile, action: actionOf(tile, placements, read, canAsk), ...named },
+      {
+        tile,
+        action: actionOf(tile, placements, read, canAsk, offersUsers),
+        ...named,
+      },
     ];
   });
 }
@@ -159,7 +200,8 @@ function actionOf(
   tile: GalleryTile,
   placements: readonly WidgetPlacement[],
   read: GalleryRead,
-  canAsk: CanAsk
+  canAsk: CanAsk,
+  offersUsers: OffersUsers
 ): RowAction {
   const mine = placements.filter(p => p.widgetId === tile.id);
   if (!tile.allowsSeveral) {
@@ -171,7 +213,7 @@ function actionOf(
   }
   if (
     tile.collectionSetting !== undefined &&
-    collectionsFor(tile.id, read.collections, canAsk).length === 0
+    collectionsFor(tile.id, read.collections, canAsk, offersUsers).length === 0
   ) {
     return { kind: "needs-collection" };
   }

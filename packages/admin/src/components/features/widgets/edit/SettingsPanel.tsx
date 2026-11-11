@@ -63,7 +63,12 @@ import {
   type RefObject,
   type JSX,
 } from "react";
-import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
+import {
+  FormProvider,
+  useForm,
+  useWatch,
+  type UseFormReturn,
+} from "react-hook-form";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
@@ -94,6 +99,7 @@ import {
 } from "./panel-values";
 import { PendingRowsContext, usePendingRows } from "./pending-rows";
 import { overlongMessage, overlongSetting } from "./setting-length";
+import { settingRulesOf, type SettingRule } from "./setting-rules";
 import { SettingEditorControl } from "./SettingEditorControl";
 import {
   bringRefusedPanelForward,
@@ -571,6 +577,7 @@ function SettingControl({
   saving,
   widget,
   opened,
+  rule,
 }: {
   setting: AnyWidgetSetting;
   sources: WidgetSources;
@@ -578,6 +585,8 @@ function SettingControl({
   widget: DashboardWidget | undefined;
   /** The setting's value as the drawer opened on it: the card's own, for a choice to keep. */
   opened: unknown;
+  /** What it does beside the card's other settings as the drawer holds them now. */
+  rule: SettingRule | undefined;
 }) {
   // A setting with its own editor is drawn by it, whatever its type.
   if (setting.editor !== undefined) {
@@ -591,7 +600,7 @@ function SettingControl({
     );
   }
   // A short choice, an on/off or a note's text: the drawer's own controls.
-  const own = drawerControlOf(setting, saving, opened);
+  const own = drawerControlOf(setting, saving, opened, rule);
   if (own !== undefined) return own;
   if (isContentSetting(setting)) {
     return (
@@ -661,17 +670,30 @@ function SectionFields({
   /** The values the drawer opened on (`usePanelBaseline`), by setting name. */
   baseline: Readonly<Record<string, unknown>>;
 }) {
+  // The card's settings as the drawer holds them now, for its rules: one setting's choices follow
+  // another's as the reader changes it.
+  const values = useWatch() as Record<string, unknown> | undefined;
+  const rules = settingRulesOf(widget?.id);
+  const ruled = settings.map(setting => ({
+    setting,
+    rule: rules?.(setting.name, values ?? {}, sources ?? []),
+  }));
   return (
     <>
-      {settings.map(setting => (
-        <div key={setting.name} className="flex flex-col gap-1.5">
-          <SettingControl
-            {...{ setting, sources, saving, widget }}
-            opened={baseline[setting.name]}
-          />
-          <ResetNotice setting={setting} notice={resetNotices[setting.name]} />
-        </div>
-      ))}
+      {ruled.map(({ setting, rule }) =>
+        rule?.hidden === true ? null : (
+          <div key={setting.name} className="flex flex-col gap-1.5">
+            <SettingControl
+              {...{ setting, sources, saving, widget, rule }}
+              opened={baseline[setting.name]}
+            />
+            <ResetNotice
+              setting={setting}
+              notice={resetNotices[setting.name]}
+            />
+          </div>
+        )
+      )}
     </>
   );
 }

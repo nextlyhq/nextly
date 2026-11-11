@@ -256,8 +256,8 @@ describe("the Recent entries card", () => {
     expect(headings).toEqual(["Headline", "Status", "Updated"]);
   });
 
-  it("leads each row with the initial of its collection's label, not its slug", () => {
-    // 🔴 Posts are published to this reader as "Articles": a chip read off the slug says "P".
+  it("leads each row with its title, never with a chip", () => {
+    // 🔴 Every row repeated one letter: the collection's initial, which the card's title names.
     mockBranding = {
       widgetSources: [
         {
@@ -269,14 +269,14 @@ describe("the Recent entries card", () => {
       ],
     };
     drawAt("medium");
-    const leading = screen
-      .getAllByTestId("entity-row")
-      .map(each => within(each).getByTestId("entity-row-leading").textContent);
-    expect(leading.length).toBeGreaterThan(0);
-    expect(new Set(leading)).toEqual(new Set(["A"]));
+    const rows = screen.getAllByTestId("entity-row");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(within(row).queryByTestId("entity-row-leading")).toBeNull();
+    }
   });
 
-  it("draws its status as a pill, in the tone of done for a published entry", () => {
+  it("draws its status as a quiet chip with a dot, in the tone of done for a published entry", () => {
     drawAt(
       "medium",
       listed(
@@ -299,13 +299,17 @@ describe("the Recent entries card", () => {
       )
     );
     // 🔴 One tone for both says nothing about which is live.
-    const pills = screen
-      .getAllByTestId("status-pill")
-      .map(pill => [pill.textContent, pill.dataset.tone]);
-    expect(pills).toEqual([
+    const chips = screen
+      .getAllByTestId("status-chip")
+      .map(chip => [chip.textContent, chip.dataset.tone]);
+    expect(chips).toEqual([
       ["Published", "good"],
       ["Draft", "neutral"],
     ]);
+    // Each marked by a dot beside its word, never by colour alone.
+    for (const chip of screen.getAllByTestId("status-chip")) {
+      expect(chip.querySelector('[data-slot="badge-dot"]')).not.toBeNull();
+    }
   });
 
   it("shows the fields its reader chose, each on the meta line or at the row's end", () => {
@@ -373,7 +377,7 @@ describe("the Recent entries card", () => {
     );
     const [row] = screen.getAllByTestId("entity-row");
     expect(within(row!).getByText("Published")).toBeInTheDocument();
-    expect(within(row!).queryByTestId("status-pill")).toBeNull();
+    expect(within(row!).queryByTestId("status-chip")).toBeNull();
   });
 
   it("says it is not available for a collection that names no title", () => {

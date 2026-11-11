@@ -19,6 +19,7 @@ import {
   rowsCount,
   searchRows,
   startingCollection,
+  usersOffer,
   type CanAsk,
   type GalleryRead,
   type GalleryTile,
@@ -125,6 +126,35 @@ describe("galleryRows", () => {
     // With no collection at all, the same.
     expect(
       galleryRows({ ...READ, collections: [] }, [], BY_ID, every)[0]?.action
+    ).toEqual({ kind: "needs-collection" });
+  });
+
+  it("offers Count on Users to a reader who may read users and no collection, starting it there", () => {
+    // As the server tells a reader who may read users: Count's setting offers them.
+    const offering = new Map(BY_ID).set("core/count", {
+      ...BY_ID.get("core/count")!,
+      settings: [{ name: "collection", type: "collection", users: true }],
+    });
+    const offersUsers = usersOffer(offering);
+    const none = { ...READ, collections: [] };
+    const rows = galleryRows(none, [], offering, every, undefined, offersUsers);
+    expect(rows[0]?.action).toEqual({ kind: "add" });
+    const own = collectionsFor("core/count", [], every, offersUsers);
+    expect(own.map(collection => collection.slug)).toEqual(["users"]);
+    const start = startingCollection(COUNT, own, []);
+    expect(newCardSettings(COUNT, start?.slug)).toEqual({
+      collection: "users",
+    });
+    // A reader with a collection starts on it, never on Users.
+    expect(
+      collectionsFor("core/count", READ.collections, every, offersUsers).map(
+        collection => collection.slug
+      )
+    ).toEqual(["posts", "pages"]);
+    // The must-differ half: told without the offer, Count still needs a collection.
+    expect(
+      galleryRows(none, [], BY_ID, every, undefined, usersOffer(BY_ID))[0]
+        ?.action
     ).toEqual({ kind: "needs-collection" });
   });
 
