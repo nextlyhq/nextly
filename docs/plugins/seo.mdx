@@ -404,7 +404,9 @@ A copy is read as a visitor with no session reads the page: the Public role's gr
 type's read rule and each field's read rule decide what is in it, so a field kept from the
 public is never in a copy, and a page the public may not read has none. Where a page of the
 site already has a copy's address, such as a page at `/guide.md`, that page is served there
-and no copy is, and `/llms.txt` links the page itself.
+and no copy is, and `/llms.txt` links the page itself. A page at `/index.html` keeps
+`/index.html.md`, and the home page is then linked as itself. A copy's words are escaped
+where Markdown would read them as markup, so it says what the page shows.
 
 Every reader gets the same answer: neither output looks at who is asking. Neither changes a
 page either: llms.txt is its own file, and a copy is answered only at a copy's address. A
