@@ -62,7 +62,7 @@ import { RoleService } from "../domains/auth/services/role-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
-import { awaitStartInFlight, startInFlight } from "../init/start-in-flight";
+import { startInFlight } from "../init/start-in-flight";
 import { createNextlyPrincipals } from "../plugins/principals/api";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
@@ -879,17 +879,22 @@ export function requireNextly(config?: DirectAPIConfig): Nextly {
 }
 
 /**
- * `requireNextly()`, once any start in flight has finished.
+ * `requireNextly()`, once any start in flight has finished, or a failed one
+ * has been made again.
  *
  * The start-up hook begins Nextly's start without waiting for it, so a request
  * can reach a reader while the start is under way. A reader that can wait
  * (the module-level `nextly` object below, a content route's default reader)
- * waits here for that one start, then reads as `requireNextly()` does; where
- * nothing is starting it reads at once, and where nothing has started it
- * refuses exactly as `requireNextly()` does.
+ * waits here for that one start, then reads as `requireNextly()` does. A start
+ * that failed is made again first (`awaitStartOrRetry`), so the worker recovers
+ * once the database is back. Where nothing is starting it reads at once, and
+ * where nothing has started it refuses exactly as `requireNextly()` does.
  */
 export async function requireNextlyOnceStarted(): Promise<Nextly> {
-  await awaitStartInFlight();
+  // Loaded when a reader first waits: the start imports this module, so a
+  // static import here would be a cycle.
+  const { awaitStartOrRetry } = await import("../init");
+  await awaitStartOrRetry();
   return requireNextly();
 }
 

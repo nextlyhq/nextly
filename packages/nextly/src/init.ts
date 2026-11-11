@@ -52,7 +52,10 @@ import {
 } from "./init/build-service-config";
 import { driftCheckCollections, runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
-import { runPostInitTasks } from "./init/post-init-tasks";
+import {
+  provisionUserFieldsAtStart,
+  runPostInitTasks,
+} from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
 import {
   awaitBootSeeding,
@@ -481,6 +484,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // from instrumentation and scripts.
         await seedPermissionsAndRolePresets();
         releaseSeeding();
+        // The merged user fields too, before getNextly() resolves: a request
+        // served before they load sees the code's user fields alone.
+        await provisionUserFieldsAtStart();
 
         // The remaining post-initialisation tasks (templates, code-field sync,
         // and the like) run in the background so that getNextly() returns as
@@ -534,6 +540,29 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   );
 
   return initPromise;
+}
+
+/**
+ * Wait until Nextly has started, for a reader that needs the services: wait
+ * for a start in flight, then, when it failed and left nothing registered,
+ * start again with the failed start's options. Resolves without starting
+ * anything when nothing was started or the services are registered, so the
+ * reader's own check (`requireNextly()`, say) answers as it always has. A
+ * retry that fails rejects with its own error, which says what is wrong.
+ *
+ * The start-up hook no longer waits for its start, so a failed one leaves no
+ * caller to begin it again: without this, a worker whose readers only wait
+ * would refuse every read until something else started Nextly. Only a failed
+ * start is retried, never the app's registered start, so a reader running
+ * while `next build` prerenders opens no database it did not open before.
+ *
+ * @internal
+ */
+export async function awaitStartOrRetry(): Promise<void> {
+  await awaitStartInFlight();
+  if (isServicesRegistered()) return;
+  const failed = globalForInit.__nextly_failedStartOptions;
+  if (failed !== undefined) await getNextly(failed);
 }
 
 /**

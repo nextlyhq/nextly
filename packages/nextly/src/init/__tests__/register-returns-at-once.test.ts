@@ -108,3 +108,27 @@ describe("createRegister's register()", () => {
     expect(startInFlight()).toBeNull();
   });
 });
+
+describe("a reader after the start-up hook's start failed", () => {
+  it("starts Nextly again, rather than refusing until something else does", async () => {
+    vi.spyOn(consoleLogger, "error").mockImplementation(() => {});
+    const { registerServices } = await import("../../di/register");
+    const { nextly } = await import("../../direct-api/nextly");
+
+    await createRegister(config, { cacheComponents: "true" })();
+    await vi.waitFor(() => expect(registration).not.toBeNull());
+    registration?.reject(new Error("the database refused the connection"));
+    registration = null;
+    await awaitStartInFlight();
+    expect(registerServices).toHaveBeenCalledTimes(1);
+
+    // The read makes the start again; that start fails too, and the read
+    // reports why, rather than "services not initialized".
+    const read = nextly.count({ collection: "posts" });
+    await vi.waitFor(() => expect(registration).not.toBeNull());
+    expect(registerServices).toHaveBeenCalledTimes(2);
+    registration?.reject(new Error("still refused"));
+    registration = null;
+    await expect(read).rejects.toThrow("still refused");
+  });
+});
