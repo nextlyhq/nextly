@@ -2144,8 +2144,9 @@ export async function migrateCore(
 
       // Each one-to-one an earlier release left without its uniqueness gets it, judged on the
       // definitions the files just left, and refused, creating nothing, while any repeats a value.
-      // A run `--step` stops short leaves it to one that runs every file.
-      if (deps.step === undefined) {
+      // A run `--step` stops short leaves it to one that runs every file; a step of zero or less
+      // limits nothing, as the planners read it (`appStepAfter`).
+      if (appStepAfter(deps.step, 0) === undefined) {
         const { makeOneToOnesUnique } = await import(
           "../../domains/schema/migrate/one-to-one-uniques"
         );

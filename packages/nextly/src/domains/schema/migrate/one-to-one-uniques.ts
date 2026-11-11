@@ -21,6 +21,7 @@
  */
 
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -35,6 +36,7 @@ import {
 } from "../pipeline/diff/introspect-live";
 import {
   readIndexUniqueness,
+  readNameHoldersElsewhere,
   readUniqueColumns,
   uniqueIndexNames,
 } from "../pipeline/live-table-facts";
@@ -67,6 +69,8 @@ interface MissingUniqueness {
   language?: string;
   /** A translated text column, whose index leaves a blank out, so blanks never repeat. */
   blankRepeatsNothing?: boolean;
+  /** The index the statements create, whose name nothing else may hold. */
+  index: string;
   statements: string[];
 }
 
@@ -135,6 +139,7 @@ async function missingOnMainTable(
       field: field.name,
       table,
       column,
+      index: index.name,
       statements: [createIndexSql(table, index, dialect, quoted(dialect))],
     });
   }
@@ -173,6 +178,7 @@ async function missingOnTranslations(
       column: c.column,
       language: "_locale",
       blankRepeatsNothing: c.text,
+      index: companionUniqueIndexName(companionTable, c.column),
       statements: companionUniqueIndexStatements({
         dialect,
         companionTable,
@@ -202,6 +208,36 @@ async function missingUniqueness(
     );
   }
   return missing;
+}
+
+/**
+ * Refuse, before any index is created, a uniqueness whose index name another object already
+ * holds (`readNameHoldersElsewhere`): PostgreSQL's and SQLite's `IF NOT EXISTS` would skip the
+ * create, and the run would report a uniqueness nothing enforces.
+ */
+async function refuseNamesHeldElsewhere(
+  db: unknown,
+  dialect: SupportedDialect,
+  missing: readonly MissingUniqueness[]
+): Promise<void> {
+  const held: string[] = [];
+  for (const target of missing) {
+    const holders = await readNameHoldersElsewhere(db, dialect, target.table, [
+      target.index,
+    ]);
+    const holder = holders.get(target.index);
+    if (holder !== undefined) {
+      held.push(
+        `${target.entity.slug}.${target.field} (its index ${target.index} is the name of the ${holder.type} ${holder.table === null ? holder.name : `on ${holder.table}`})`
+      );
+    }
+  }
+  if (held.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `${ONE_TO_ONE_UNIQUES_STEP} was not applied: ${held.join("; ")}. Rename or drop what holds the name, then run \`nextly migrate\` again.`,
+    logContext: { reason: "unique-index-name-held", held },
+  });
 }
 
 /**
@@ -238,6 +274,7 @@ export async function makeOneToOnesUnique(
   if (refused.length > 0) {
     throw uniqueColumnRepeatsError(refused, ONE_TO_ONE_UNIQUES_STEP);
   }
+  await refuseNamesHeldElsewhere(db, dialect, missing);
 
   for (const target of missing) {
     for (const statement of target.statements) {

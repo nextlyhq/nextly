@@ -114,8 +114,10 @@ describe.each(LOCK_DIALECTS)(
       await world.dispose();
     }, 60_000);
 
-    function migrate() {
+    /** `nextly migrate`, with `--step` when given. */
+    function migrate(step?: number) {
       return migrateCore({
+        ...(step === undefined ? {} : { step }),
         extensionSchema: undefined,
         dialect,
         db: adapter.getDrizzle(),
@@ -736,6 +738,85 @@ describe.each(LOCK_DIALECTS)(
       );
 
       expect(adoption).toEqual({ statements, adopted: [] });
+    }, 120_000);
+
+    it("judges at its statement a unique index after an earlier update whose table is not read, refusing the repeat it makes", async () => {
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      writeFileAs(NAME, [
+        // An alias: the statement's table is not read, so it counts as writing every table.
+        `UPDATE ${q(PROFILES)} AS p SET ${q("person")} = 'ada' WHERE p.${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+      );
+      expect(await personIsUnique()).toBe(false);
+    }, 120_000);
+
+    it.runIf(dialect === "mysql")(
+      "adopts no unique index after an earlier statement renames the table away",
+      async () => {
+        await run([
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+        const statements = [
+          `RENAME TABLE ${q(PROFILES)} TO ${q("dc_profiles_old")}`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ];
+
+        const adoption = await adoptUniqueIndexesAlreadyThere(
+          adapter.getDrizzle(),
+          dialect,
+          statements
+        );
+
+        expect(adoption).toEqual({ statements, adopted: [] });
+      },
+      120_000
+    );
+
+    // MySQL names an index per table, so nothing elsewhere can hold one of its names.
+    it.skipIf(dialect === "mysql")(
+      "refuses to make a one-to-one unique while another object holds its index's name, creating nothing",
+      async () => {
+        await recordOneToOnes("person");
+        await run([`CREATE TABLE ${q(UNIQUE)} (${q("id")} varchar(36))`]);
+
+        const error = await refusal();
+
+        expect(error.publicMessage).toContain(
+          `profiles.person (its index ${UNIQUE} is the name of the table ${UNIQUE})`
+        );
+        expect(await isUnique("person")).toBe(false);
+      },
+      120_000
+    );
+
+    it("makes a one-to-one unique on a run whose step limits nothing", async () => {
+      await recordOneToOnes("person");
+      await run([profile("p1", "ada")]);
+
+      await migrate(0);
+
+      expect(await isUnique("person")).toBe(true);
     }, 120_000);
   }
 );

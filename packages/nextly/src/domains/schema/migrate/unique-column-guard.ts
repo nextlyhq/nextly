@@ -267,7 +267,9 @@ function uniqueTargets(
 
 /**
  * Whether a statement before `at` writes rows of `table` (INSERT, UPDATE, DELETE, MySQL's
- * REPLACE): the values a unique index made at `at` must hold are then the ones those leave.
+ * REPLACE): the values a unique index made at `at` must hold are then the ones those leave. One
+ * whose table is not read here (an alias, several tables) counts as writing it: an unknown target
+ * is no proof the values were left alone.
  */
 function writtenBefore(
   statements: readonly string[],
@@ -280,7 +282,7 @@ function writtenBefore(
     .some(
       statement =>
         /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(statement) &&
-        tablesChangedIn(statement, dialect)?.includes(table) === true
+        (tablesChangedIn(statement, dialect)?.includes(table) ?? true)
     );
 }
 
@@ -400,9 +402,9 @@ export interface AdoptedUniqueIndex {
 
 /**
  * Whether a statement drops `table`, or may drop an index of it: a DROP TABLE naming it, a DROP
- * INDEX naming `index`, MySQL's DROP INDEX on the table, whose index is not read here, or an
- * ALTER TABLE on it that drops or renames anything (a column, a constraint, an index), which may
- * take the index with it.
+ * INDEX naming `index`, MySQL's DROP INDEX on the table, whose index is not read here, MySQL's
+ * RENAME TABLE, or an ALTER TABLE on it that drops or renames anything (a column, a constraint, an
+ * index), which may take the index with it.
  */
 function dropsTableOrIndex(
   statement: string,
@@ -414,6 +416,9 @@ function dropsTableOrIndex(
   if (indexesDroppedBy(statement, dialect)?.includes(index)) return true;
   const onTable = tablesChangedIn(statement, dialect)?.includes(table) === true;
   if (/^\s*DROP\s+INDEX\b/i.test(statement)) return onTable;
+  // MySQL's RENAME TABLE moves the table, with its indexes, away from the name a later create
+  // makes the index on. Its targets are not read here, so any one counts.
+  if (/^\s*RENAME\s+TABLE\b/i.test(statement)) return true;
   return (
     onTable &&
     /^\s*ALTER\s+TABLE\b/i.test(statement) &&
