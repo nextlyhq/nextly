@@ -186,9 +186,13 @@ describe("seedSampleForms", () => {
   });
 
   it("names a message on every enabled notification, so each can send", () => {
-    const enabled = SAMPLE_FORMS.flatMap(f => f.notifications).filter(
-      n => n.enabled
-    );
+    // Named, so `flatMap` reads one element type across the forms' differing
+    // notification tuples (one form has none).
+    type SampleNotification =
+      (typeof SAMPLE_FORMS)[number]["notifications"][number];
+    const enabled = SAMPLE_FORMS.flatMap(
+      (f): readonly SampleNotification[] => f.notifications
+    ).filter(n => n.enabled);
     expect(enabled.length).toBeGreaterThan(0);
     for (const n of enabled) {
       expect(n.templateSlug, n.id).toBe(
