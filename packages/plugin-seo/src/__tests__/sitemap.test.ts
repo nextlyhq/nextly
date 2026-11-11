@@ -270,25 +270,30 @@ describe("buildSitemapUrls", () => {
     expect(query.sort).toEqual({ field: "id", direction: "asc" });
   });
 
-  it("advertises a same-host declared canonical instead of the generated URL", async () => {
-    const services = stubServices({
-      posts: [
-        [
-          { slug: "a", seo: { canonical: "https://x.com/real-a" } },
-          { slug: "b" },
+  it("advertises a declared canonical on the site's production address instead of the generated URL", async () => {
+    vi.stubEnv("NEXTLY_PRODUCTION_ADDRESSES", "https://x.com");
+    try {
+      const services = stubServices({
+        posts: [
+          [
+            { slug: "a", seo: { canonical: "https://x.com/real-a" } },
+            { slug: "b" },
+          ],
         ],
-      ],
-    });
+      });
 
-    const urls = await buildSitemapUrls(services, {
-      collections: ["posts"],
-      baseUrl: "https://x.com",
-    });
+      const urls = await buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "https://x.com",
+      });
 
-    expect(urls.map(u => u.loc)).toEqual([
-      "https://x.com/real-a",
-      "https://x.com/posts/b",
-    ]);
+      expect(urls.map(u => u.loc)).toEqual([
+        "https://x.com/real-a",
+        "https://x.com/posts/b",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("applies basePath per collection, including the site root", async () => {
@@ -439,6 +444,21 @@ describe("buildSitemapUrls", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("with no production address named, takes no canonical on the sitemap's own host", async () => {
+    // The page's head reads the same production addresses, none here, so it
+    // keeps the page's own address; the sitemap must list that one too.
+    const services = stubServices({
+      posts: [[{ slug: "copy", seo: { canonical: "https://x.com/original" } }]],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+    });
+
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/copy"]);
   });
 
   it("lists an entry at its own address where its canonical is no address", async () => {

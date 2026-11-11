@@ -134,6 +134,31 @@ describe("the Proxy handler", () => {
     expect(reads.count).toBe(0);
   });
 
+  it("reads the standing again until it is decided", async () => {
+    // The first request comes before the start has recorded the standing;
+    // the guarded standing recorded next must count from the next request.
+    let standing: string | undefined;
+    const ctx = {
+      self: { collections: {} },
+      services: {
+        ownCollections: {
+          listEntries: async () => ({
+            data: standing === undefined ? [] : [{ id: "m1", path: standing }],
+          }),
+        },
+      },
+    } as unknown as PluginContext;
+    const guard = stagingGuard(rules([]));
+
+    expect(
+      await guard.handle(new Request("https://acme.example/"), ctx)
+    ).toBeUndefined();
+    standing = "guarded";
+    expect(
+      await guard.handle(new Request("https://acme.example/"), ctx)
+    ).toEqual({ headers: { "X-Robots-Tag": "noindex" } });
+  });
+
   it("reads the standing at most every half minute", async () => {
     const { ctx, reads } = context("listable");
     const guard = stagingGuard(rules([]));

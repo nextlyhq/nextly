@@ -175,6 +175,10 @@ export function stagingGuard(readRules: ReadRules): PluginProxyHandler {
         });
       }
       const { addresses, standing } = await read.value;
+      // Where the answer hangs on a standing the start has not recorded yet,
+      // it is not kept: the next request reads again, so a new site is
+      // guarded from the moment its standing is.
+      if (addresses.length === 0 && standing === undefined) read = undefined;
       const origin = new URL(request.url).origin;
       return keptOutOfSearch(origin, addresses, standing)
         ? { headers: { "X-Robots-Tag": "noindex" } }
