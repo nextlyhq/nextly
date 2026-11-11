@@ -14,6 +14,7 @@
 
 import type { FieldConfig } from "nextly/config";
 
+import { sameFormValue } from "./same-form-value";
 import { formFieldsOf, snapshotToFormValues } from "./snapshot-to-form-values";
 
 /** Why a field is listed but cannot be restored. */
@@ -94,7 +95,7 @@ export function restorePlan(input: RestorePlanInput): RestoreRow[] {
     // A field the version does not hold is not the version's to restore.
     if (!Object.hasOwn(input.snapshot, name)) continue;
     const value = versionValues[name];
-    if (sameValue(value, input.current[name])) continue;
+    if (sameFormValue(value, input.current[name])) continue;
     rows.push(
       input.canEdit(name)
         ? { ...base, chosen: true, value }
@@ -128,26 +129,4 @@ function disabledAs(disabled: RestoreRowDisabled): {
 function labelOf(field: FieldConfig): string {
   const label = (field as { label?: unknown }).label;
   return typeof label === "string" && label.length > 0 ? label : field.name;
-}
-
-/**
- * Whether two form values are the same value: structural, key order aside,
- * array order kept. An absent value and null are the same empty value, as the
- * form renders both blank.
- */
-function sameValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (a == null || b == null) return a == null && b == null;
-  if (typeof a !== "object" || typeof b !== "object") return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((item, i) => sameValue(item, b[i]));
-  }
-  const left = a as Record<string, unknown>;
-  const right = b as Record<string, unknown>;
-  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-  for (const key of keys) {
-    if (!sameValue(left[key], right[key])) return false;
-  }
-  return true;
 }
