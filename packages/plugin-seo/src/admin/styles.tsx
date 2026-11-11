@@ -66,7 +66,8 @@ const CSS = `
 .nx-seo-tname b{font-weight:600;display:block}
 .nx-seo-off .nx-seo-switchcell{opacity:.6}
 .nx-seo-off .nx-seo-tname b{color:var(--nx-muted-foreground);font-weight:500}
-.nx-seo-off .nx-seo-tname small{white-space:normal}
+.nx-seo-off .nx-seo-tname small{white-space:normal;max-width:150px}
+.nx-seo-types .nx-seo-select{min-width:150px}
 .nx-seo-eg{color:var(--nx-muted-foreground);font-size:12px}
 .nx-seo-tname small{display:block;color:var(--nx-muted-foreground);font-size:12px;white-space:nowrap}
 .nx-seo-code{font-family:var(--seo-mono);font-size:12px;background:var(--nx-muted);padding:2px 6px;border-radius:4px;overflow-wrap:anywhere}
