@@ -252,7 +252,7 @@ export const parseRichTextFormat = (
  * shows the cap with a "+", as counting every row of a very large collection
  * is slow and the exact number is rarely used.
  */
-export const LIST_TOTAL_CAP = 1000;
+const LIST_TOTAL_CAP = 1000;
 
 /**
  * Parse a list's `?count=` param into the number its total is counted up to:
