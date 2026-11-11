@@ -155,6 +155,11 @@ function applyFoldedToBase(
     fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
+    // The app's own declared permissions as the boot collects them: from the transformed config,
+    // which a plugin's setup() may add to, replace or clear. Left at the base, `migrate:create`
+    // recorded a list the running server does not declare, and the permission check below judged
+    // one the boot never sees.
+    permissions: transformed.permissions,
     // The admin block as the boot registers it: a plugin's setup() may add or
     // replace the site's dashboard widgets, and `generate:types` and its
     // `--check` list their components from this config. Left at the base, the

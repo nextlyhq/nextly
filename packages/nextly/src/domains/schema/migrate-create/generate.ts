@@ -129,6 +129,12 @@ import {
   type AppStreamTables,
 } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
+import {
+  describePermissionChange,
+  permissionsForRun,
+  type PermissionChange,
+  type PermissionRecord,
+} from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
 import {
   describeSettingsChange,
@@ -301,6 +307,13 @@ export interface GenerateArgs {
    */
   scope?: GenerateScope;
   /**
+   * Every permission the configuration declares, by owner
+   * (`declared-permissions.ts`), which every snapshot records. A change to an
+   * app's or a plugin's alone is a migration of its own. Absent, the latest
+   * snapshot's record is carried forward (`permissionsForRun`).
+   */
+  permissions?: PermissionRecord;
+  /**
    * Tables to describe as the database has them rather than as their entity's
    * declaration maps them: a Schema Builder save adopting a table an earlier
    * version made writes a file that describes it exactly, so recording it
@@ -411,6 +424,8 @@ export interface GenerateResult {
    * not this migration changes its table. Empty when only tables changed.
    */
   settingsChanges: EntitySettingsChange[];
+  /** Each app's or plugin's added and removed permissions; empty when none changed. */
+  permissionChanges: PermissionChange[];
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
@@ -510,6 +525,25 @@ function streamInScope(
       ? {}
       : { contributions: latest.contributions }),
   });
+}
+
+/**
+ * The one entity a scoped run saves, and whether it is still declared, as the permission record
+ * reads it (`permissionsForRun`); nothing for a run with no scope.
+ */
+function permissionScopeOf(args: GenerateArgs): {
+  scope?: { kind: GenerateScope["kind"]; slug: string; present: boolean };
+} {
+  const { scope } = args;
+  if (scope === undefined) return {};
+  const declared = [...args.collections, ...args.singles, ...args.components];
+  return {
+    scope: {
+      kind: scope.kind,
+      slug: scope.slug,
+      present: declared.some(entity => entity.slug === scope.slug),
+    },
+  };
 }
 
 /**
@@ -847,6 +881,17 @@ export async function generateMigration(
     previous?.data ?? null
   );
   const hasSettingsChanges = changedSettings.length > 0;
+  // 3f. Permissions: every one the configuration declares, by owner. A plugin release that only
+  //     adds or removes one changes no table and no setting, so it is a change of its own too.
+  const { record: permissionRecord, changes: changedPermissions } =
+    permissionsForRun({
+      given: args.permissions,
+      latest: previous === null ? null : previous.data.permissions,
+      ...permissionScopeOf(args),
+    });
+  // What a run writes a file for even when no table changes.
+  const changesBeyondTables =
+    hasSettingsChanges || changedPermissions.length > 0;
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -860,17 +905,18 @@ export async function generateMigration(
         ...fieldJoinsPlans.map(({ plan }) => plan),
       ].map(({ spec }) => spec.mainTable),
     ],
-    hasSettingsChanges,
+    hasSettingsChanges: changesBeyondTables,
     record: {
       written,
       contributions: stream.contributions,
       entities: settingsRecord,
+      permissions: permissionRecord,
       metaDir,
       now,
     },
   });
   if (recorded !== undefined) return recorded;
-  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
+  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
     return null;
   }
 
@@ -908,7 +954,7 @@ export async function generateMigration(
       next: desiredSnapshot,
     });
   }
-  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
+  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
     return null;
   }
 
@@ -1062,6 +1108,7 @@ export async function generateMigration(
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
     settingsChanges: changedSettings.map(describeSettingsChange),
+    permissionChanges: changedPermissions.map(describePermissionChange),
     // A junction table the caller adds is a table this file changes.
     changesNoTable:
       operations.length === 0 &&
@@ -1076,6 +1123,7 @@ export async function generateMigration(
     written,
     contributions: stream.contributions,
     entities: settingsRecord,
+    permissions: permissionRecord,
   });
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
@@ -1231,6 +1279,7 @@ export async function generateMigration(
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
+    permissionChanges: changedPermissions,
   };
 }
 
@@ -1486,6 +1535,7 @@ async function recordSnapshot(
     operationCount: 0,
     renamesAccepted: 0,
     settingsChanges: [],
+    permissionChanges: [],
   };
 }
 
@@ -1495,6 +1545,7 @@ interface MigrationPair {
   written: NextlySchemaSnapshot;
   contributions: Parameters<typeof writeSnapshot>[4];
   entities: Parameters<typeof writeSnapshot>[5];
+  permissions: Parameters<typeof writeSnapshot>[6];
   metaDir: string;
   now: Date;
 }
@@ -1522,7 +1573,8 @@ async function writeMigrationPair(
     pair.written,
     pair.sqlContent,
     pair.contributions,
-    pair.entities
+    pair.entities,
+    pair.permissions
   );
   return { sqlPath, snapshotPath };
 }
