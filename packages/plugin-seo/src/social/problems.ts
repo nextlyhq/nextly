@@ -13,14 +13,18 @@ import type { PageMetadataInput, PluginContext } from "@nextlyhq/plugin-sdk";
 import type { SeoLevel } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { readSeoRules } from "../settings/rules";
+import { socialCardFromSettings } from "../settings/social-card-rules";
 
 import {
   cardOrigin,
   isAbsolute,
-  noSocialCardRules,
+  socialCardRulesFromOptions,
   type ReadSocialCardRules,
 } from "./card";
 import { shareImageSizeProblem } from "./contract";
+
+/** The card's rules with no plugin options: the site's environment alone. */
+const fromEnvironment = socialCardRulesFromOptions(undefined, undefined);
 
 /** Something about a page's share image that keeps its card from showing well. */
 export interface ShareImageProblem {
@@ -89,7 +93,10 @@ export async function shareImageProblems(
       ...where,
     });
   }
-  const readCard = readers.readSocialCardRules ?? noSocialCardRules;
+  // The card's rules as the head reads them: the SEO settings, then the
+  // site's environment, when the caller gives none.
+  const readCard =
+    readers.readSocialCardRules ?? socialCardFromSettings(fromEnvironment);
   const rules = await readCard(ctx, input.locale);
   if (
     !isAbsolute(image.value.url) &&

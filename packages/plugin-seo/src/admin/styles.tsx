@@ -64,14 +64,34 @@ const CSS = `
 .nx-seo-tbl td{padding:10px 12px;border-bottom:1px solid var(--nx-border-subtle);vertical-align:top;font-size:13px}
 .nx-seo-tbl tr:last-child td{border-bottom:0}
 .nx-seo-tname b{font-weight:600;display:block}
-.nx-seo-tname small{display:block;color:var(--nx-muted-foreground);font-size:12px}
+.nx-seo-off .nx-seo-switchcell{opacity:.6}
+.nx-seo-off .nx-seo-tname b{color:var(--nx-muted-foreground);font-weight:500}
+.nx-seo-off .nx-seo-tname small{white-space:normal;max-width:150px}
+.nx-seo-types .nx-seo-select{min-width:150px}
+.nx-seo-eg{color:var(--nx-muted-foreground);font-size:12px}
+.nx-seo-tname small{display:block;color:var(--nx-muted-foreground);font-size:12px;white-space:nowrap}
 .nx-seo-code{font-family:var(--seo-mono);font-size:12px;background:var(--nx-muted);padding:2px 6px;border-radius:4px;overflow-wrap:anywhere}
 .nx-seo-notpublic{color:var(--nx-warning-text);font-weight:600;display:inline-flex;gap:6px;align-items:center}
-.nx-seo-pattern{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nx-border);border-radius:7px;padding:4px 8px;background:var(--nx-background);color:var(--nx-foreground);cursor:pointer;font-family:var(--seo-mono);font-size:12px;max-width:100%;text-align:left;overflow-wrap:anywhere}
+.nx-seo-pattern{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nx-border);border-radius:7px;padding:4px 8px;background:var(--nx-background);color:var(--nx-foreground);cursor:pointer;font-family:var(--seo-mono);font-size:12px;max-width:100%;text-align:left;overflow-wrap:break-word}
 .nx-seo-pattern:hover{border-color:var(--nx-muted-foreground)}
 .nx-seo-pattern[aria-expanded="true"]{border-color:var(--nx-foreground)}
-.nx-seo-pattern small{font-family:inherit;font-size:12px;color:var(--nx-muted-foreground)}
+.nx-seo-pattern small{font-family:inherit;font-size:12px;color:var(--nx-muted-foreground);white-space:nowrap}
 .nx-seo-editrow td{background:var(--nx-muted)}
+.nx-seo-switchcell{width:56px}
+.nx-seo-select{appearance:none;-webkit-appearance:none;height:var(--nx-control-height-md);width:100%;max-width:170px;border:1px solid var(--nx-input);border-radius:6px;padding:0 30px 0 10px;background-color:var(--nx-background);background-image:linear-gradient(45deg,transparent 50%,var(--nx-muted-foreground) 50%),linear-gradient(135deg,var(--nx-muted-foreground) 50%,transparent 50%);background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;background-size:5px 5px;background-repeat:no-repeat;color:var(--nx-foreground);font:inherit;font-size:14px;cursor:pointer;transition:border-color .15s}
+.nx-seo-select:hover,.nx-seo-select:focus,.nx-seo-select:focus-visible{border-color:var(--nx-primary);outline:none}
+.nx-seo-select[aria-invalid="true"]{border-color:var(--nx-warning-border)}
+.nx-seo-select-fit{width:auto}
+.nx-seo-sdstate{margin-top:4px;font-size:12px;max-width:200px}
+.nx-seo-sdstate .nx-seo-linkbtn,.nx-seo-sdstate .nx-seo-help,.nx-seo-sdstate .nx-seo-warnc{font-size:12px}
+.nx-seo-mapfor{align-items:center;gap:8px}
+.nx-seo-mapgrid{display:grid;gap:6px}
+.nx-seo-mapline{display:grid;grid-template-columns:150px minmax(0,240px) 1fr;gap:6px 10px;align-items:center}
+.nx-seo-mapline .nx-seo-select{max-width:none}
+.nx-seo-notpublic svg{flex:none}
+.nx-seo-typescroll{overflow-x:auto}
+.nx-seo-typescroll .nx-seo-types{min-width:860px}
+.nx-seo-types .nx-seo-code{white-space:nowrap}
 .nx-seo-pedit{display:grid;gap:10px;max-width:760px}
 .nx-seo-vars{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .nx-seo-var{border:1px solid var(--nx-border);background:var(--nx-card);color:var(--nx-foreground);border-radius:6px;padding:3px 8px;font-family:var(--seo-mono);font-size:12px;cursor:pointer}
@@ -155,6 +175,8 @@ const CSS = `
 .nx-seo-alert{margin:12px 16px 0}
 .nx-seo-form2{grid-template-columns:minmax(0,1fr)}
 .nx-seo-rgroup.two{grid-template-columns:minmax(0,1fr)}
+.nx-seo-typescroll .nx-seo-types{min-width:0}
+.nx-seo-types .nx-seo-code{white-space:normal}
 .nx-seo-types thead{display:none}
 .nx-seo-types tr{display:grid;gap:6px;padding:12px;border-bottom:1px solid var(--nx-border-subtle)}
 .nx-seo-types tr:last-child{border-bottom:0}
@@ -163,6 +185,10 @@ const CSS = `
 .nx-seo-profile{grid-template-columns:minmax(0,1fr) auto}
 .nx-seo-profile .nx-seo-net{grid-column:1/-1}
 .nx-seo-dialog{width:calc(100% - 32px)!important}
+.nx-seo-types .nx-seo-switchcell{display:none}
+.nx-seo-mapline{grid-template-columns:minmax(0,1fr)}
+.nx-seo-select{max-width:none}
+.nx-seo-sdstate{max-width:none}
 }
 `;
 

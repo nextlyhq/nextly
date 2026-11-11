@@ -58,6 +58,7 @@ import {
 } from "./settings/contract";
 import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
+import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
 import {
   resolveBaseOrigin,
@@ -73,6 +74,7 @@ import { shareImageRoute } from "./social/route";
 import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
 import {
+  checkedTypeRules,
   rulesFromOptions,
   type StructuredDataOptions,
 } from "./structured-data/rules";
@@ -197,9 +199,10 @@ export interface SeoPluginOptions {
    */
   structuredData?: StructuredDataOptions;
   /**
-   * @experimental What every page's social card states beyond the page,
-   * until the SEO settings hold it: the site's name, and the language of a
-   * page the route read in no particular language, as a language tag.
+   * @experimental What every page's social card states beyond the page:
+   * the site's name, until one is saved in the SEO settings, and the
+   * language of a page the route read in no particular language, as a
+   * language tag.
    *
    * ```ts
    * seoPlugin({
@@ -209,8 +212,9 @@ export interface SeoPluginOptions {
    * });
    * ```
    *
-   * A share image stored with a path from the root is stated on `baseUrl`,
-   * since a network reading the card needs its full address.
+   * A share image stored with a path from the root is stated on the site's
+   * production address, else on `baseUrl`, since a network reading the card
+   * needs its full address.
    */
   socialCard?: SocialCardOptions;
 }
@@ -400,9 +404,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.baseUrl,
     options.structuredData
   );
-  const readSocialCardRules = socialCardRulesFromOptions(
-    options.baseUrl,
-    options.socialCard
+  const readSocialCardRules = socialCardFromSettings(
+    socialCardRulesFromOptions(options.baseUrl, options.socialCard)
   );
 
   // The SEO tab on each page the group is added to, and the route it reads
@@ -483,11 +486,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
-    // robots.txt asks AI tools until the site chooses: not a secret, it is
-    // what the site's own robots.txt says.
+    // the plugin's options answer until the site chooses: what robots.txt
+    // asks AI tools and which types are hidden, which the site's own
+    // robots.txt and pages already say.
     admin: {
       ...tab.admin,
-      clientConfig: { aiCrawlers: options.aiCrawlers ?? "all" },
+      clientConfig: {
+        aiCrawlers: options.aiCrawlers ?? "all",
+        hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
+        // Each type's structured data choice the options make, which the
+        // screen shows until the site chooses its own.
+        structuredData: checkedTypeRules(options.structuredData?.types),
+      },
       menu: [
         // Shown to everyone in the admin: the list answers each person with
         // the pages of the types they may read, and says so where none.
