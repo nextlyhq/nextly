@@ -31,6 +31,7 @@ import type {
 import { eq, type SQL } from "drizzle-orm";
 
 import { loadedDialect } from "../../database/dialect-tables";
+import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import { runReadsAndWritesInTransaction } from "../../shared/lib/read-transaction-scope";
 import { clearRegistryRowCache } from "../dynamic-collections/services/collection-row-cache";
 
@@ -386,7 +387,7 @@ export async function writeRegistryRows<T>(
   }
   const dialect = adapter.getCapabilities().dialect;
   try {
-    return await adapter.transaction(async tx => {
+    const written = await adapter.transaction(async tx => {
       const own: RegistryWrite = { tx, wrote: false, live: true };
       try {
         const result = await registryWrite.run(own, () =>
@@ -402,6 +403,11 @@ export async function writeRegistryRows<T>(
         own.live = false;
       }
     });
+    // Committed: this process's next request reads the stored version at
+    // once, so it serves the change and says so, rather than after the
+    // interval another copy's change waits.
+    bumpSchemaVersion();
+    return written;
   } finally {
     // A row read and cached inside the transaction may describe a write that
     // rolled back, or one that has since committed.

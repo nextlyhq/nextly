@@ -94,6 +94,7 @@ import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // hand-rolled `{ data: <payload> }` envelope.
 import {
   SKIP_DATE_FORMATTING_HEADER,
+  applySessionCacheHeaders,
   withSessionCacheHeaders,
   respondData,
   respondMutation,
@@ -217,9 +218,10 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
+import { holdsCurrentTag, metadataEtag } from "./route-handler/metadata-etag";
 import {
   bumpSchemaVersion,
-  getSchemaVersionHeader,
+  servedSchemaVersion,
 } from "./route-handler/schema-version";
 import { handleStartupRequest } from "./route-handler/startup-request";
 import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
@@ -243,8 +245,8 @@ import {
 // Schema Version Header
 // ============================================================================
 
-// The schema version counter lives in `route-handler/schema-version`, so the
-// collection dispatcher bumps it after a schema apply without loading this
+// The schema version this copy serves lives in `route-handler/schema-version`,
+// so the collection dispatcher marks a schema apply without loading this
 // module. Re-exported here for `nextly/runtime`.
 export { bumpSchemaVersion };
 
@@ -266,6 +268,34 @@ export { bumpSchemaVersion };
  * whereas a path can be matched by a plugin route that happens to end in the
  * same segment and should keep its ordinary formatting.
  */
+
+/**
+ * The response marked private to its caller where the request was signed in
+ * (it carried a session cookie or an `Authorization` header) or the response
+ * signs one in (it sets a cookie): `private, no-store` and `Vary` on the
+ * credentials, through the one definition every private answer uses.
+ *
+ * At the boundary every verb passes, rather than per route, so a route added
+ * later, a plugin's route asking for `public` caching, or a refusal, cannot
+ * reach a signed-in caller as something a shared cache may keep and replay
+ * to the next person. A request with no credential is left as its route
+ * answered it: a visitor's public read may be cached.
+ *
+ * Rebuilt over copied headers, since a handler may return a response whose
+ * headers cannot be changed.
+ */
+function privateToSignedIn(req: Request, response: Response): Response {
+  if (carriesNoCredential(req) && !response.headers.has("set-cookie")) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  applySessionCacheHeaders(headers);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 /**
  * The response without the control headers a handler used to talk to this
@@ -1818,6 +1848,20 @@ async function serveServiceRequest(
     request: req, // Pass request for accessing headers (IP, user-agent, etc.)
   };
 
+  // The admin's metadata reads answer "unchanged" from the versions they
+  // depend on, decided here, after the gate above and before any of the read
+  // runs: a caller already holding the current answer is not sent it again.
+  const etag = await metadataEtag(req, {
+    service,
+    method,
+    caller: authorizedUser,
+    schemaVersion: await servedSchemaVersion(),
+    config: getHandlerConfig(),
+  });
+  if (etag !== undefined && holdsCurrentTag(req, etag)) {
+    return new Response(null, { status: 304, headers: { ETag: etag } });
+  }
+
   const dispatcher = await getDispatcher();
   // The key's own scope is pinned for the whole dispatch rather than serialized
   // into route params beside it. The params carry strings, so the scope written
@@ -1847,7 +1891,9 @@ async function serveServiceRequest(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  const schemaVersion = getSchemaVersionHeader();
+  // Asked after the dispatch, so a schema apply this request made is the
+  // version its response carries.
+  const schemaVersion = await servedSchemaVersion();
   if (schemaVersion !== undefined) {
     headers["X-Nextly-Schema-Version"] = String(schemaVersion);
   }
@@ -1939,6 +1985,10 @@ async function serveServiceRequest(
     if (schemaVersion !== undefined) {
       response.headers.set("X-Nextly-Schema-Version", String(schemaVersion));
     }
+    // The tag a metadata read was answered under, for the caller to send back.
+    if (etag !== undefined && response.status === 200) {
+      response.headers.set("ETag", etag);
+    }
     return response;
   }
 
@@ -1950,6 +2000,8 @@ async function serveServiceRequest(
   if (result.meta !== undefined) {
     successBody.meta = result.meta;
   }
+  // As on the migrated path above: the tag a metadata read was answered under.
+  if (etag !== undefined && result.status === 200) headers.ETag = etag;
   return new Response(JSON.stringify(successBody), {
     status: result.status,
     headers,
@@ -2896,7 +2948,10 @@ export function createDynamicHandlers(options?: {
       identifiedResponse,
       req
     );
-    const corsResponse = cors.applyHeaders(req, formattedResponse);
+    const corsResponse = cors.applyHeaders(
+      req,
+      privateToSignedIn(req, formattedResponse)
+    );
     return applySecurityHeaders(corsResponse);
   }
 
