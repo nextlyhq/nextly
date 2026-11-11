@@ -351,11 +351,10 @@ describe("a new card's defaults, before its reader touches a setting", () => {
     "core/continue",
     "core/team-activity",
     "core/upcoming-releases",
-  ])("folds %s's Density under Advanced", id => {
+  ])("draws %s's Row spacing under Display, by that name", id => {
     expect(
       published(id).settings?.find(setting => setting.name === "density")
-        ?.section
-    ).toBe("advanced");
+    ).toMatchObject({ label: "Row spacing", section: "display" });
   });
 
   it("draws Continue's Tab with the card's data, since it narrows whose work the card reads", () => {
