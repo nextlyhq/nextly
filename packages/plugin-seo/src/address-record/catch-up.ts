@@ -87,13 +87,25 @@ export function startCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
 
 /** How many catch-ups are under way. */
 let running = 0;
+/** Whether the last catch-up to finish failed, leaving the record behind. */
+let failed = false;
 
 /**
- * Whether a catch-up is under way, so the record may not yet say what each
- * page holds: an output that lists addresses from it answers as not ready.
+ * Whether the record says what each page holds: no catch-up is under way,
+ * and the last one to finish succeeded. An output that lists addresses from
+ * the record answers as not ready otherwise.
  */
-export function catchingUp(): boolean {
-  return running > 0;
+export function addressRecordReady(): boolean {
+  return running === 0 && !failed;
+}
+
+/**
+ * Start the catch-up again, not awaited, where the last one failed and none
+ * is under way: a failure from a passing cause is not left in place until
+ * the next start.
+ */
+export function retryFailedCatchUp(): void {
+  if (failed && running === 0 && started !== undefined) void catchUp();
 }
 
 /** The last catch-up started, to wait for. */
@@ -137,8 +149,11 @@ async function caughtUp(
 ): Promise<CatchUpReport> {
   running += 1;
   try {
-    return await runCatchUp(ctx, options);
+    const report = await runCatchUp(ctx, options);
+    failed = false;
+    return report;
   } catch (error) {
+    failed = true;
     ctx.logger.error("The SEO address record could not be brought up to date", {
       error,
     });

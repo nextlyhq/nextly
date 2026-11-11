@@ -7,7 +7,10 @@
  */
 import type { PluginRoute, PluginRouteContext } from "@nextlyhq/plugin-sdk";
 
-import { catchingUp } from "../address-record/catch-up";
+import {
+  addressRecordReady,
+  retryFailedCatchUp,
+} from "../address-record/catch-up";
 import type { ReadRules } from "../resolver/provider";
 
 import { listPages } from "./listing";
@@ -61,10 +64,12 @@ export async function sitemapResponse(
   const url = new URL(req.url);
   const asked = url.searchParams.get("page");
   if (asked !== null && !/^[1-9][0-9]{0,8}$/.test(asked)) return notFound();
-  // While the address record catches up, a page may not hold its address
-  // yet, and a sitemap read now would leave it out: crawlers are asked to
-  // come back, and nothing in between keeps the answer.
-  if (catchingUp()) {
+  // While the address record catches up, or after a catch-up that failed, a
+  // page may not hold its address yet, and a sitemap read now would leave it
+  // out: crawlers are asked to come back, nothing in between keeps the
+  // answer, and a failed catch-up is tried again.
+  if (!addressRecordReady()) {
+    retryFailedCatchUp();
     return new Response("The sitemap is being brought up to date.", {
       status: 503,
       headers: { "cache-control": "no-store", "retry-after": "120" },

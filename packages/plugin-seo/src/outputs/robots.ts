@@ -9,7 +9,7 @@
  */
 // The admin and the API, kept out by the one list every robots.txt of a
 // Nextly site reads, `nextlyRobots` among them.
-import { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
+import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 
 /**
  * What AI crawlers are asked: `all` lets every one read the site, `search`

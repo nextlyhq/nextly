@@ -560,6 +560,17 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * The paths every robots.txt of a Nextly site keeps crawlers out of: the
+ * admin and the API, on a path boundary. A plugin that serves robots.txt
+ * reads them here, as `nextlyRobots` does in core, so a correction reaches
+ * every such file. Intended to become stable once the SEO plugin's robots.txt
+ * has shipped on it.
+ *
+ * @experimental
+ */
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
+
+/**
  * Where a page kept in one language is opened: `languageAddressOf(path,
  * locale)` forms the address a path kept in `locale` is served at, under the
  * language's prefix or on its own domain, as the site declares

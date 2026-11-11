@@ -526,6 +526,29 @@ describe.each(getConfiguredTestDialects())(
       expect(await listed()).toEqual([`${SITE}/blog/hello`]);
     });
 
+    it("stays not ready after a catch-up fails, and tries the catch-up again", async () => {
+      const { t } = await boot(dialect);
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      await forgetFingerprint(t);
+      // A catch-up that fails part-way, as a dropped connection would.
+      await catchUp({
+        afterListing: () => Promise.reject(new Error("connection reset")),
+      });
+
+      const failed = await rootFile("sitemap.xml");
+      expect(failed.status).toBe(503);
+      expect(failed.cacheControl).toBe("no-store");
+
+      // The request started the catch-up again; once it succeeds, the
+      // sitemap is served.
+      await lastCatchUp();
+      expect(await listed()).toEqual([`${SITE}/blog/hello`]);
+    });
+
     it("names its own files in the index it serves at the plugin's own address", async () => {
       await boot(dialect, { sitemap: { maxUrlsPerFile: 2 } });
       const t = current as TestNextly;

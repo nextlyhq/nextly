@@ -3,7 +3,7 @@
  * allowed, the admin kept out, the AI crawlers each choice names asked to stay
  * away, and the sitemap named by its absolute address.
  */
-import { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
+import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 import { nextlyRobots } from "nextly/runtime";
 import { describe, expect, it } from "vitest";
 
