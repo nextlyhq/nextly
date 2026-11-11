@@ -64,7 +64,10 @@ describe.each(getConfiguredTestDialects())(
      * is handed, taken from a second plugin's `init` so the readers are
      * called exactly as the resolver calls them.
      */
-    async function boot(languages?: string[]) {
+    async function boot(
+      languages?: string[],
+      domains?: Record<string, string>
+    ) {
       let context: PluginContext | undefined;
       current = await createTestNextly({
         dialect,
@@ -73,6 +76,9 @@ describe.each(getConfiguredTestDialects())(
           : {
               localization: { locales: languages, defaultLocale: languages[0] },
             }),
+        ...(domains === undefined
+          ? {}
+          : { languageAddresses: { by: "domain" as const, domains } }),
         collections: [
           defineCollection({
             slug: "seot_posts",
@@ -236,6 +242,27 @@ describe.each(getConfiguredTestDialects())(
           },
         })
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("gives structured data each language's own production address", async () => {
+      const { t, ctx } = await boot(["en", "de"], {
+        en: "https://example.com",
+        de: "https://example.de",
+      });
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          productionAddresses: ["https://example.com", "https://example.de"],
+        },
+      });
+
+      expect((await readStructuredDataSettings(ctx, "en")).origin).toBe(
+        "https://example.com"
+      );
+      expect((await readStructuredDataSettings(ctx, "de")).origin).toBe(
+        "https://example.de"
+      );
     });
 
     it("boots on a translated site and answers the same settings in every language", async () => {

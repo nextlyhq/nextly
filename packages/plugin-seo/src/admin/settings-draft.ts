@@ -170,28 +170,36 @@ export function patternOf(
     : { pattern: own, own: true };
 }
 
-/** The title a type's newest page would have under `pattern`. */
-export function previewTitle(
+/**
+ * The title a type's newest page would have under `pattern`, and whether the
+ * pattern gave way to the page's own title, as the head does where the page
+ * leaves a variable empty. A type with no page yet is shown with each
+ * variable's own name.
+ */
+export function previewOf(
   pattern: string,
   type: SeoContentType,
   siteName: string
-): string {
+): { title: string; gaveWay: boolean } {
   const example = type.example;
-  // Without a page to show, each variable shows its own name.
   const values: Record<string, string | number> = {};
   for (const field of type.fields) {
-    values[field.name] = example?.values[field.name] ?? field.token;
+    const value =
+      example === undefined ? field.token : example.values[field.name];
+    if (value !== undefined) values[field.name] = value;
   }
-  return (
-    fillPattern(
-      pattern,
-      {
-        title: example?.title ?? "Page title",
-        ...(siteName.trim() === "" ? {} : { siteName: siteName.trim() }),
-      },
-      values
-    ) ?? ""
+  const title = example?.title ?? "Page title";
+  const filled = fillPattern(
+    pattern,
+    {
+      title,
+      ...(siteName.trim() === "" ? {} : { siteName: siteName.trim() }),
+    },
+    values
   );
+  return filled === undefined
+    ? { title, gaveWay: true }
+    : { title: filled, gaveWay: false };
 }
 
 /** Why `pattern` cannot be used for `type`, in one sentence; null when it can. */

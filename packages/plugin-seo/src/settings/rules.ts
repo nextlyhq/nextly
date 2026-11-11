@@ -11,10 +11,12 @@
  */
 import {
   getCachedNextly,
+  languageAddressOf,
   type PageMetadataImage,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { productionAddressesOf } from "../canonical";
 import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
 import type { StructuredDataTypeRule } from "../structured-data/rules";
@@ -238,7 +240,7 @@ export async function readBrandFacts(
 
 /** What the SEO settings hold for structured data. */
 export interface StructuredDataSettings {
-  /** The first production address. */
+  /** The production address the language is served from. */
   origin?: string;
   siteName?: string;
   brand: Omit<BrandFacts, "siteKind">;
@@ -247,8 +249,31 @@ export interface StructuredDataSettings {
 }
 
 /**
+ * The production address `locale` is served from: where the site gives a
+ * language its own domain and that domain is one of the addresses, that one;
+ * else the first, the site's main address.
+ */
+async function originIn(
+  addresses: readonly string[],
+  locale: string | undefined
+): Promise<string | undefined> {
+  if (addresses.length > 1 && locale !== undefined) {
+    const home = await languageAddressOf("/", locale);
+    if (
+      home.status === "resolved" &&
+      home.origin !== undefined &&
+      addresses.includes(home.origin)
+    ) {
+      return home.origin;
+    }
+  }
+  return addresses[0];
+}
+
+/**
  * What the SEO settings hold for structured data in `locale`, from one read:
- * the first production address, the site's name, the brand facts with the
+ * the production address the language is served from (the environment's
+ * addresses winning, as for every output), the site's name, the brand facts with the
  * logo read from the media library, and each content type's choices.
  */
 export async function readStructuredDataSettings(
@@ -260,10 +285,15 @@ export async function readStructuredDataSettings(
     document,
     mediaImages(ctx)
   );
-  const origin = checked<string[]>(
-    document.productionAddresses,
-    productionAddressesProblem
-  )?.[0];
+  const origin = await originIn(
+    productionAddressesOf(
+      checked<string[]>(
+        document.productionAddresses,
+        productionAddressesProblem
+      )
+    ),
+    locale
+  );
   const siteName = trimmed(document.siteName);
   return {
     ...(origin === undefined ? {} : { origin }),

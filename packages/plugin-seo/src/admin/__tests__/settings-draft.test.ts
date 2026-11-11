@@ -8,7 +8,7 @@ import {
   networkOf,
   patternOf,
   patternProblem,
-  previewTitle,
+  previewOf,
   withSeparator,
   type SettingsDraft,
 } from "../settings-draft";
@@ -137,26 +137,44 @@ describe("a content type's title pattern", () => {
 
   it("previews with the type's newest page, as the head will show it", () => {
     expect(
-      previewTitle("{Title} · {Category} | {Site name}", posts, "Rext AI")
-    ).toBe("Surfer SEO vs Rext AI · Comparisons | Rext AI");
+      previewOf("{Title} · {Category} | {Site name}", posts, "Rext AI")
+    ).toEqual({
+      title: "Surfer SEO vs Rext AI · Comparisons | Rext AI",
+      gaveWay: false,
+    });
     // The brand is not added twice, by the same function the head uses.
     expect(
-      previewTitle(
+      previewOf(
         "{Title} | {Site name}",
         { ...posts, example: { title: "Pricing | Rext AI", values: {} } },
         "Rext AI"
       )
-    ).toBe("Pricing | Rext AI");
+    ).toEqual({ title: "Pricing | Rext AI", gaveWay: false });
+  });
+
+  it("shows the page's own title where the page leaves a variable empty, as the head does", () => {
+    expect(
+      previewOf(
+        "{Title} | {Category}",
+        { ...posts, example: { title: "Hello", values: {} } },
+        "Rext AI"
+      )
+    ).toEqual({ title: "Hello", gaveWay: true });
+    // With no site name saved yet, `{Site name}` gives way the same.
+    expect(previewOf("{Title} | {Site name}", posts, "")).toEqual({
+      title: "Surfer SEO vs Rext AI",
+      gaveWay: true,
+    });
   });
 
   it("previews a type with no page yet with its variables' own names", () => {
     expect(
-      previewTitle(
+      previewOf(
         "{Title} · {Category} | {Site name}",
         { ...posts, example: undefined },
         "Rext AI"
       )
-    ).toBe("Page title · Category | Rext AI");
+    ).toEqual({ title: "Page title · Category | Rext AI", gaveWay: false });
   });
 
   it("names a variable the type has no field for", () => {

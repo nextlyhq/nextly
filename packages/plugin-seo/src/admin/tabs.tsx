@@ -30,7 +30,7 @@ import {
   networkOf,
   patternOf,
   patternProblem,
-  previewTitle,
+  previewOf,
   withSeparator,
   type SettingsDraft,
 } from "./settings-draft";
@@ -276,7 +276,7 @@ function PatternEditor({
   const id = useId();
   const { pattern, own } = patternOf(draft, type.key);
   const problem = patternProblem(pattern, type);
-  const example = previewTitle(pattern, type, draft.siteName);
+  const preview = previewOf(pattern, type, draft.siteName);
   const siteName = draft.siteName.trim() || "your site's name";
   const setPattern = (title: string) =>
     change(current => ({
@@ -346,9 +346,15 @@ function PatternEditor({
       </div>
       <div className="nx-seo-ex" id={`${id}-example`} aria-live="polite">
         <span>Example:</span>
-        <b>{example}</b>
-        <TitleCount length={example.length} />
+        <b>{preview.title}</b>
+        <TitleCount length={preview.title.length} />
       </div>
+      {preview.gaveWay ? (
+        <p className="nx-seo-help">
+          This page leaves a variable empty, so it keeps its own title, as it
+          will on the site.
+        </p>
+      ) : null}
       <p className="nx-seo-error" id={`${id}-problem`} role="alert">
         {problem}
       </p>
