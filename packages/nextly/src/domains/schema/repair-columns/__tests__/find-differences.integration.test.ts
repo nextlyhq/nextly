@@ -300,7 +300,6 @@ describe.each(getConfiguredTestDialects())(
         [`${ARTICLES}.links`]: "legacy:structured-as-text",
         [`${ARTICLES}.hero`]: "legacy:structured-as-text",
         [`${ARTICLES}.price`]: "legacy:float-as-decimal",
-        [`${ARTICLES}.author`]: "current-generator",
         [`${ARTICLES}.ratings`]: "current-generator",
         [`${CARDS}.related`]: "legacy:component-list-in-scalar",
       },
@@ -311,14 +310,12 @@ describe.each(getConfiguredTestDialects())(
         [`${ARTICLES}.category`]: "legacy:mysql-text-fallback",
         [`${ARTICLES}.tone`]: "legacy:mysql-text-fallback",
         [`${ARTICLES}.cover`]: "legacy:mysql-text-fallback",
-        [`${ARTICLES}.author`]: "current-generator",
         [`${ARTICLES}.ratings`]: "current-generator",
         [`${CARDS}.related`]: "legacy:component-list-in-scalar",
         [`${CARDS}.caption`]: "legacy:mysql-text-fallback",
       },
       // SQLite keeps JSON as text, so a repeater, group or component list holds no other type.
       sqlite: {
-        [`${ARTICLES}.author`]: "current-generator",
         [`${ARTICLES}.ratings`]: "current-generator",
       },
     };
@@ -478,15 +475,16 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("reports a legacy shape under a pending field as two differences", async () => {
-      const applied = [
+      // A NOT NULL column under a relationship that is now optional.
+      const author = (required: boolean) =>
         f({
           name: "author",
           type: "relationship",
           relationTo: "users",
-          required: true,
-        }),
-      ];
-      await createBuilderTable("dc_rc_pending", applied);
+          required,
+        });
+      const applied = [author(false)];
+      await createBuilderTable("dc_rc_pending", [author(true)]);
       const findings = await find([
         {
           ...entity(
@@ -684,7 +682,6 @@ describe.each(getConfiguredTestDialects())(
       expect(
         Object.fromEntries(differs(findings).map(x => [at(x), causeLabel(x)]))
       ).toEqual({
-        "dc_rc_pending.author": "current-generator",
         "dc_rc_pending.ratings": "current-generator",
       });
       // Code-first bounds an unbounded MySQL text field where the Builder does not, so on MySQL the
@@ -757,8 +754,8 @@ describe.each(getConfiguredTestDialects())(
         articles(ARTICLE_FIELDS, { plugin: "seo-kit" }),
       ]);
       // A shape each dialect holds: a float in decimal(10,2) where the legacy map gave one, else
-      // the required relationship's NOT NULL.
-      const column = `${ARTICLES}.${dialect === "sqlite" ? "author" : "price"}`;
+      // a number list's column.
+      const column = `${ARTICLES}.${dialect === "sqlite" ? "ratings" : "price"}`;
       const finding = findings.find(x => at(x) === column);
       expect(finding?.kind).toBe("differs");
       expect(finding?.plugin).toBe("seo-kit");
