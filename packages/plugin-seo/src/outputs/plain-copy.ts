@@ -221,7 +221,13 @@ const BLOCK_WRITERS: Readonly<Record<string, (node: Node) => string>> = {
   code: codeBlock,
   horizontalrule: () => "---",
   image,
-  gallery: node => itemsOf(node.images, image, "\n"),
+  gallery: node => {
+    const images = itemsOf(node.images, image, "\n");
+    const caption = textOf(node.caption);
+    return caption === undefined
+      ? images
+      : [images, escapeText(caption)].filter(part => part !== "").join("\n");
+  },
   "button-link": button,
   "button-group": node => itemsOf(node.buttons, button, " "),
   table,
@@ -293,10 +299,12 @@ const deeper = (at: Collecting): Collecting => ({
   depth: at.depth + 1,
 });
 
-/** Text or long text: its words, as written. */
+/** Text or long text: its words, as written; each of them, where it holds several. */
 const wordsField: FieldReader = (_field, value, at) => {
-  const words = textOf(value);
-  if (words !== undefined) at.parts.push(escapeText(words.trim()));
+  for (const each of Array.isArray(value) ? value : [value]) {
+    const words = textOf(each);
+    if (words !== undefined) at.parts.push(escapeText(words.trim()));
+  }
 };
 
 /** Rich text: its blocks, as Markdown. */

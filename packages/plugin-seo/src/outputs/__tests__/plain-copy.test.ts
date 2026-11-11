@@ -165,6 +165,20 @@ describe("rich text as Markdown", () => {
     expect(markdownOfRichText(value)).toBe("````md\n```js\nx\n```\n````");
   });
 
+  it("writes a gallery's caption beneath its images", () => {
+    const value = rich({
+      type: "gallery",
+      caption: "Our team, 2026",
+      images: [
+        { src: "/a.png", alt: "Ana" },
+        { src: "/b.png", alt: "Ben" },
+      ],
+    });
+    expect(markdownOfRichText(value)).toBe(
+      "![Ana](/a.png)\n![Ben](/b.png)\nOur team, 2026"
+    );
+  });
+
   it("answers nothing for a value that is not rich text", () => {
     expect(markdownOfRichText("plain words")).toBe("");
     expect(markdownOfRichText({ root: "no" })).toBe("");
@@ -238,6 +252,24 @@ describe("a page's plain-text copy", () => {
       },
     });
     expect(copy).toBe("# T\n");
+  });
+
+  it("writes each value of a text field that holds several, in order", () => {
+    const copy = plainCopyOf({
+      title: "T",
+      fields: [
+        text({ name: "steps", hasMany: true }),
+        group({
+          name: "more",
+          fields: [text({ name: "tips", hasMany: true })],
+        }),
+      ],
+      document: {
+        steps: ["Mix", "Bake"],
+        more: { tips: ["Let it cool"] },
+      },
+    });
+    expect(copy).toBe("# T\n\nMix\n\nBake\n\nLet it cool\n");
   });
 
   it("leaves out only the field the heading was taken from", () => {
