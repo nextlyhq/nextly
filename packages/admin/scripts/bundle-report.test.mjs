@@ -548,15 +548,17 @@ describe("bundle-report", () => {
         // Invariant 2c: the widget preview board is test code. It ships only
         // behind the test entry (`testing.mjs`), and nothing the admin's own
         // entry loads, eagerly or lazily, holds it. The board's own words are
-        // its fingerprint; finding them in a test-entry chunk first is the
-        // control, so a board renamed out from under the check fails it
-        // rather than passing on words found nowhere.
+        // its fingerprint; finding them in the dist first is the control, so a
+        // board renamed out from under the check fails it rather than passing
+        // on words found nowhere.
         const BOARD_WORDS = ["Check accessibility", "data-preview-section"];
         const holdsBoard = rel => {
           const code = readFileSync(join(distDir, rel), "utf8");
           return BOARD_WORDS.some(words => code.includes(words));
         };
-        expect(otherEntryFiles.filter(holdsBoard)).not.toEqual([]);
+        expect(report.chunks.map(c => c.file).filter(holdsBoard)).not.toEqual(
+          []
+        );
         const adminFiles = [
           ...firstScreenFiles,
           ...report.categories.routeLater.chunks.map(c => c.rel),
