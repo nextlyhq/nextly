@@ -41,7 +41,7 @@ function targetProblem(to: unknown, action: unknown): string | undefined {
  * Why a person's-menu item cannot be drawn, or `undefined` when it can. Read
  * as plain JavaScript hands it over, since a config may not be type-checked.
  */
-export function userMenuItemProblem(item: unknown): string | undefined {
+function userMenuItemProblem(item: unknown): string | undefined {
   if (typeof item !== "object" || item === null) return "it declares no item";
   const { label, icon, to, action } = item as Record<string, unknown>;
   if (!isText(label)) return "its item has no label";
@@ -62,7 +62,7 @@ export function validUserMenuItem(
  * One line per enabled plugin whose person's-menu item is left out, naming the
  * plugin and why.
  */
-export function userMenuItemProblems(
+function userMenuItemProblems(
   plugins: readonly PluginDefinition[]
 ): string[] {
   return plugins.flatMap(plugin => {
