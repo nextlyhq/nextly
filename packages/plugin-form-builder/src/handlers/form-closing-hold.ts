@@ -326,14 +326,9 @@ async function holdKeyWrite(
   write: InTransactionContext,
   slugs: FormLimitSlugs
 ): Promise<void> {
-  if (write.operation !== "update") return;
-  const key = (write.data as { responseKey?: unknown } | undefined)
-    ?.responseKey;
-  const before = (write.originalData as { responseKey?: unknown } | undefined)
-    ?.responseKey;
-  if (typeof key !== "string" || key === before) return;
-  const formId = formIdOf((write.data as { form?: unknown }).form);
-  if (formId === undefined) return;
+  const changed = changedKeyOf(write);
+  if (changed === undefined) return;
+  const { key, formId } = changed;
   const { settings } = await formOf(deps.own, write, slugs, formId, "update");
   if (keyVersionOf(key) !== (settings.oneResponseVersion ?? 0)) {
     throw changedRefusal(formId);
@@ -347,6 +342,22 @@ async function holdKeyWrite(
   // where no other submission holds it (`responseKeyAfterUpdate`).
   if (sameValue(write)) return;
   await refuseEarlierResponse(deps, write, slugs, formId, settings);
+}
+
+/**
+ * The key an update gave a stored submission, and its form, when the update
+ * changed the key to one: undefined for a create, a key cleared or kept.
+ */
+function changedKeyOf(
+  write: InTransactionContext
+): { key: string; formId: string } | undefined {
+  if (write.operation !== "update") return undefined;
+  const after = write.data as { responseKey?: unknown; form?: unknown };
+  const before = write.originalData as { responseKey?: unknown } | undefined;
+  const key = after?.responseKey;
+  if (typeof key !== "string" || key === before?.responseKey) return undefined;
+  const formId = formIdOf(after.form);
+  return formId === undefined ? undefined : { key, formId };
 }
 
 /** Whether an update left a submission's answers and address as they were. */

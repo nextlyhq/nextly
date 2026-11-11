@@ -336,21 +336,44 @@ async function keyRow(
   settings: FormSettings,
   row: Row
 ): Promise<"unchanged" | "written" | "retry" | "stale-form"> {
+  const target = await targetKeyOf(deps, formId, settings, row);
+  if (target === "holder") return "unchanged";
+  if ((row.responseKey ?? null) === target) return "unchanged";
+  return writeKey(deps, row, target);
+}
+
+/**
+ * The key a row should hold: its own value's, or none where another
+ * submission holds that value; `holder` when it holds its own already.
+ */
+async function targetKeyOf(
+  deps: RebuildDeps,
+  formId: string,
+  settings: FormSettings,
+  row: Row
+): Promise<string | null | "holder"> {
   const own = await responseKeyOf(deps.digests, settings, row);
+  if (own === null) return null;
   // Holding its own value's key already: the holder, with nothing to ask.
   // Most rows of a sweep that resumes are these, so they cost no query.
-  if (own !== null && row.responseKey === own) return "unchanged";
-  const target =
-    own !== null && (await heldByAnother(deps, formId, row, own)) ? null : own;
-  if ((row.responseKey ?? null) === target) return "unchanged";
+  if (row.responseKey === own) return "holder";
+  return (await heldByAnother(deps, formId, row, own)) ? null : own;
+}
+
+/** Write `key` to a row as the plugin's own key write. */
+async function writeKey(
+  deps: RebuildDeps,
+  row: Row,
+  key: string | null
+): Promise<"written" | "retry" | "stale-form"> {
   try {
     await deps.collections.updateEntry(
       deps.submissionsSlug,
       String(row.id),
       asPluginSubmission(
         // The revision read: a submission edited since keeps its own key.
-        { responseKey: target, _rev: row._rev },
-        { keepAsEvidence: false, setKey: target }
+        { responseKey: key, _rev: row._rev },
+        { keepAsEvidence: false, setKey: key }
       ),
       { as: "system" }
     );
@@ -358,9 +381,8 @@ async function keyRow(
     if (heldRefusal(error) === "changed") return "stale-form";
     // Edited since it was read, or its value taken a moment ago: another
     // pass reads it again.
-    if (codeOf(error) === "STALE_VERSION" || codeOf(error) === "DUPLICATE") {
-      return "retry";
-    }
+    const code = codeOf(error);
+    if (code === "STALE_VERSION" || code === "DUPLICATE") return "retry";
     throw error;
   }
   return "written";
