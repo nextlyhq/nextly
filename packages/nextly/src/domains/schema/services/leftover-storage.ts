@@ -61,13 +61,11 @@ export interface ClearLeftoverStorageArgs {
    */
   dropFamily: () => Promise<void>;
   /**
-   * The junction tables this create generates by the junction naming rule
-   * (`junctionTableNameBetween`), from its own fields: the only names a table of the leftover's
-   * family can carry and be known to be one. A field group generates none (a component row keeps
-   * a many-to-many as a list of its own), so for it every table referencing the leftover belongs
-   * to something else, as does any table under another name, however it is named or keyed.
+   * Whether this kind's create makes junction tables, which reference its main table. A field
+   * group makes none (a component row keeps a many-to-many as a list of its own), so for it every
+   * table referencing the leftover belongs to something else.
    */
-  generatedJunctions?: readonly string[];
+  makesJunctionTables: boolean;
   /**
    * The junction tables this create is about to build, by the names its own fields give them,
    * a name `options.junctionTable` gives included. A
@@ -99,25 +97,63 @@ const KIND_NAMES: Record<ClearLeftoverStorageArgs["kind"], string> = {
 };
 
 /**
- * Whether `candidate` is a junction table of the leftover's own: one of the exact names this
- * create generates for its own fields, holding the column a junction keys its source by. Anything
- * else referencing a leftover table, or standing where a junction goes, is someone else's (a
- * schema extension may reference a `comp_` table, a host table may carry the leftover's name in
- * its own), and is never dropped.
+ * Whether `candidate` is a junction table a create of this kind made for the leftover: named as
+ * `junctionTableNameBetween` names one (the leftover's table and another, sorted, then the field),
+ * where that other table stands, and keying both by their `_id` columns, as a junction does. A
+ * name and one column are not enough: a host table may carry the leftover's name in its own and
+ * key it. Anything that is not such a junction is someone else's, and is never dropped.
  */
 async function isGeneratedJunctionOf(
+  args: ClearLeftoverStorageArgs,
   db: unknown,
   dialect: SupportedDialect,
-  tableName: string,
-  candidate: string,
-  generated: readonly string[]
+  candidate: string
 ): Promise<boolean> {
-  if (!generated.includes(candidate)) return false;
-  const sourceColumn = `${tableName.replace(/^dc_/, "")}_id`;
-  const columns =
-    (await introspectLiveColumns(db, dialect, [candidate])).tables[0]
-      ?.columns ?? [];
-  return columns.some(column => column.name === sourceColumn);
+  if (!args.makesJunctionTables) return false;
+  const columns = new Set(
+    (
+      (await introspectLiveColumns(db, dialect, [candidate])).tables[0]
+        ?.columns ?? []
+    ).map(column => column.name)
+  );
+  if (!columns.has(idColumnOf(args.tableName))) return false;
+  for (const other of otherTablesNamedIn(args.tableName, candidate)) {
+    if (
+      columns.has(idColumnOf(other)) &&
+      (await args.adapter.tableExists(other))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The column a junction keys a table by: its slug, without the collection prefix, then `_id`. */
+function idColumnOf(table: string): string {
+  return `${table.replace(/^dc_/, "")}_id`;
+}
+
+/**
+ * Each table `candidate` could join to `tableName` under the junction naming rule, which writes
+ * both tables sorted and then the field: `<tableName>_<other>_<field>` for a table sorting after
+ * it, `<other>_<tableName>_<field>` for one sorting before. The other is always a collection's
+ * (`dc_<target>`). A table name may itself hold underscores, so every split is a candidate.
+ */
+function otherTablesNamedIn(tableName: string, candidate: string): string[] {
+  const others: string[] = [];
+  if (candidate.startsWith(`${tableName}_`)) {
+    const rest = candidate.slice(tableName.length + 1);
+    for (let at = rest.indexOf("_"); at > 0; at = rest.indexOf("_", at + 1)) {
+      const other = rest.slice(0, at);
+      if (other > tableName && other.startsWith("dc_")) others.push(other);
+    }
+  }
+  const at = candidate.indexOf(`_${tableName}_`);
+  if (at > 0) {
+    const other = candidate.slice(0, at);
+    if (other < tableName && other.startsWith("dc_")) others.push(other);
+  }
+  return others;
 }
 
 /** The rows each table of `tables` holds, for those holding any. */
@@ -157,7 +193,13 @@ export async function clearLeftoverStorage(
     adapter,
     args.plannedJunctions ?? []
   );
-  if (!mainStands && !companionStands && plannedStanding.length === 0) return;
+  // Rows naming the leftover from tables outside its family outlive its tables: a create with
+  // none standing would take them over as its own, so they refuse it either way.
+  const elsewhere = (await args.ownedElsewhere?.()) ?? [];
+  if (!mainStands && !companionStands && plannedStanding.length === 0) {
+    if (elsewhere.length > 0) throw occupiedRefusal(args, elsewhere);
+    return;
+  }
 
   const db = adapter.getDrizzle();
   const dialect = adapter.getCapabilities().dialect;
@@ -190,7 +232,7 @@ export async function clearLeftoverStorage(
   ];
   const occupied = [
     ...(await occupiedAmong(db, dialect, family)),
-    ...((await args.ownedElsewhere?.()) ?? []),
+    ...elsewhere,
   ];
   if (occupied.length > 0) throw occupiedRefusal(args, occupied);
   // A view reading one of these tables would go with it, unasked, under PostgreSQL's CASCADE.
@@ -228,13 +270,7 @@ async function sortReferencing(
   const junctions: string[] = [];
   const others: string[] = [];
   for (const table of referencing) {
-    const own = await isGeneratedJunctionOf(
-      db,
-      dialect,
-      args.tableName,
-      table,
-      args.generatedJunctions ?? []
-    );
+    const own = await isGeneratedJunctionOf(args, db, dialect, table);
     (own ? junctions : others).push(table);
   }
   return { junctions, others };

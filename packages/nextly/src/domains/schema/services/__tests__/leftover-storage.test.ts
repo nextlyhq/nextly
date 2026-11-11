@@ -61,22 +61,18 @@ const adapter = {
   }),
 };
 
-/**
- * Clear `tableName`'s leftover. `plannedJunctions` are the junctions the create will build, and
- * `generatedJunctions` those of them the naming rule generates: all of them unless a test says.
- */
+/** Clear `tableName`'s leftover; `plannedJunctions` are the junctions the create will build. */
 function clear(
   kind: "fieldGroup" | "single",
   tableName: string,
-  plannedJunctions: string[] = [],
-  generatedJunctions: string[] = plannedJunctions
+  plannedJunctions: string[] = []
 ) {
   return clearLeftoverStorage({
     adapter,
     kind,
     slug: "card",
     tableName,
-    generatedJunctions,
+    makesJunctionTables: kind === "single",
     plannedJunctions,
     ownedElsewhere: async () => live.elsewhere,
     logger: { info: () => {} },
@@ -132,7 +128,7 @@ describe("clearLeftoverStorage", () => {
   });
 
   it("drops a Single's empty junction table first, then its family", async () => {
-    live.tables = new Set(["single_home"]);
+    live.tables = new Set(["single_home", "dc_posts"]);
     live.referencing = ["dc_posts_single_home_picks"];
     live.columns.set("dc_posts_single_home_picks", [
       "id",
@@ -160,9 +156,13 @@ describe("clearLeftoverStorage", () => {
   });
 
   it("probes every table before dropping any", async () => {
-    live.tables = new Set(["single_home"]);
+    live.tables = new Set(["single_home", "dc_posts"]);
     live.referencing = ["dc_posts_single_home_picks"];
-    live.columns.set("dc_posts_single_home_picks", ["id", "single_home_id"]);
+    live.columns.set("dc_posts_single_home_picks", [
+      "id",
+      "single_home_id",
+      "posts_id",
+    ]);
     live.rows.set("dc_posts_single_home_picks", 1);
 
     await expect(
@@ -178,8 +178,12 @@ describe("clearLeftoverStorage", () => {
   // PostgreSQL's CASCADE drops a main table's dependants' foreign keys, not the junction tables
   // themselves: one can stand with nothing referencing anything, where the create will build it.
   it("drops an empty junction the create will build when its main table is gone", async () => {
-    live.tables = new Set(["dc_posts_single_home_picks"]);
-    live.columns.set("dc_posts_single_home_picks", ["id", "single_home_id"]);
+    live.tables = new Set(["dc_posts_single_home_picks", "dc_posts"]);
+    live.columns.set("dc_posts_single_home_picks", [
+      "id",
+      "single_home_id",
+      "posts_id",
+    ]);
 
     await clear("single", "single_home", ["dc_posts_single_home_picks"]);
 
@@ -190,8 +194,12 @@ describe("clearLeftoverStorage", () => {
   });
 
   it("refuses over a junction the create will build that holds rows, its main table gone", async () => {
-    live.tables = new Set(["dc_posts_single_home_picks"]);
-    live.columns.set("dc_posts_single_home_picks", ["id", "single_home_id"]);
+    live.tables = new Set(["dc_posts_single_home_picks", "dc_posts"]);
+    live.columns.set("dc_posts_single_home_picks", [
+      "id",
+      "single_home_id",
+      "posts_id",
+    ]);
     live.rows.set("dc_posts_single_home_picks", 4);
 
     await expect(
@@ -214,13 +222,52 @@ describe("clearLeftoverStorage", () => {
     expect(dropped).toEqual([]);
   });
 
+  it("refuses a table under a junction's name that does not key the table it names", async () => {
+    live.tables = new Set(["single_home", "dc_posts"]);
+    live.referencing = ["dc_posts_single_home_picks"];
+    live.columns.set("dc_posts_single_home_picks", ["id", "single_home_id"]);
+
+    await expect(clear("single", "single_home")).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        '"dc_posts_single_home_picks" references'
+      ),
+    });
+    expect(dropped).toEqual([]);
+  });
+
+  it("drops an empty junction an earlier attempt built under a field this create lacks", async () => {
+    live.tables = new Set(["single_home", "dc_tags"]);
+    live.referencing = ["dc_tags_single_home_labels"];
+    live.columns.set("dc_tags_single_home_labels", [
+      "id",
+      "single_home_id",
+      "tags_id",
+    ]);
+
+    await clear("single", "single_home", ["dc_posts_single_home_picks"]);
+
+    expect(dropped).toEqual([
+      "dc_tags_single_home_labels",
+      "family:single_home",
+    ]);
+  });
+
+  it("refuses, dropping nothing, rows naming the leftover when none of its tables stands", async () => {
+    live.elsewhere = [{ table: "comp_chip", rows: 1 }];
+
+    await expect(clear("single", "single_home")).rejects.toMatchObject({
+      publicMessage: expect.stringContaining('"comp_chip" (1 row)'),
+    });
+    expect(dropped).toEqual([]);
+  });
+
   it("refuses an empty table standing where the create would build a junction it names itself", async () => {
     // `options.junctionTable` names it: nothing says it is this Single's.
     live.tables = new Set(["home_links"]);
     live.columns.set("home_links", ["id", "post_id"]);
 
     await expect(
-      clear("single", "single_home", ["home_links"], [])
+      clear("single", "single_home", ["home_links"])
     ).rejects.toMatchObject({
       publicMessage: expect.stringContaining('"home_links" stands'),
     });
@@ -237,10 +284,10 @@ describe("clearLeftoverStorage", () => {
     expect(dropped).toEqual([]);
   });
 
-  // A host table may carry the leftover's name in its own and key it the way a junction would: it is
-  // not one of the names this create generates, so it is someone else's.
+  // A host table may carry the leftover's name in its own and key it the way a junction would: it
+  // joins no table that stands, so it is no junction of the leftover's, and someone else's.
   it("refuses, dropping nothing, a host table named and keyed like a junction it does not generate", async () => {
-    live.tables = new Set(["single_home"]);
+    live.tables = new Set(["single_home", "dc_posts"]);
     live.referencing = ["audit_single_home_events"];
     live.columns.set("audit_single_home_events", ["id", "single_home_id"]);
 

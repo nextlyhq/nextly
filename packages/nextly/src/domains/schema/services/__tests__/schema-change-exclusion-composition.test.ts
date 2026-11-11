@@ -88,6 +88,9 @@ function makeAdapter(options: MigrationLockSurfaceOptions = {}) {
         return name.includes("_locales") ? false : created;
       }),
       selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+      // Read before any DDL to find field-group rows a removed Single of this name left behind:
+      // a fresh database has no tables to scan.
+      listTables: vi.fn(async (): Promise<string[]> => []),
       // The slug guard also lists the addresses already used, to refuse one with the same
       // snake_case form; none are.
       select: vi.fn(

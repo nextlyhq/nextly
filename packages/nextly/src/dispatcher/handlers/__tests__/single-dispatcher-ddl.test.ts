@@ -67,6 +67,14 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
         !name.includes("_locales") &&
         executed.some(sql => sql.includes("CREATE TABLE") && sql.includes(name))
     ),
+    // Read before any DDL to find field-group rows a removed Single of this name left behind: a
+    // fresh database has no tables to scan.
+    listTables: vi.fn(async (): Promise<string[]> => []),
+    // The same read asks a MySQL server how it compares table names, through Drizzle's `sql`
+    // template; answered in the mysql2 `[rows, fields]` shape, as a case-sensitive server would.
+    getDrizzle: () => ({
+      execute: vi.fn(async () => [[{ lower_case_table_names: 0 }], []]),
+    }),
     // Read by the slug guard the create runs before any DDL, to find whether another resource
     // already owns this slug. `null` is "nobody does", which is the state a successful create
     // starts from. The return type names the owner case too, so the conflict test can replace this

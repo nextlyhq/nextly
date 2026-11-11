@@ -257,7 +257,8 @@ export class FieldGroupMetadataService {
         slug: input.slug,
         tableName: input.tableName,
         // A component row keeps a many-to-many as a list of its own, so a field group's create
-        // generates no junction table: anything referencing its leftover belongs to something else.
+        // makes no junction table: anything referencing its leftover belongs to something else.
+        makesJunctionTables: false,
         logger: this.logger,
         // The translations table references the main one, so it goes first. No CASCADE: anything
         // else depending on these tables has already refused the create rather than go with them.
