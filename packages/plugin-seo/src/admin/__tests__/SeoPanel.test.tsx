@@ -58,6 +58,7 @@ const CONTEXT: SeoTabContext = {
     "socialDescription",
     "ogImage",
     "canonical",
+    "canonicalElsewhere",
     "noindex",
     "structuredDataType",
   ],
@@ -319,11 +320,35 @@ describe("Advanced", () => {
     expect(screen.getByRole("checkbox")).toBeChecked();
   });
 
-  it("reads a stored address elsewhere as confirmed, where the group keeps no mark", async () => {
+  it("reads a stored address elsewhere as unconfirmed where it is marked so", async () => {
     const user = userEvent.setup();
-    render(<Harness initial={{ canonical: "https://medium.com/p/2" }} />);
+    render(
+      <Harness
+        initial={{
+          canonical: "https://medium.com/p/2",
+          canonicalElsewhere: false,
+        }}
+      />
+    );
     await user.click(screen.getByRole("button", { name: /Advanced/ }));
-    expect(screen.getByRole("checkbox")).toBeChecked();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+  });
+
+  it("offers no official address where the group keeps no mark to confirm one with", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        context={{
+          ...CONTEXT,
+          fields: CONTEXT.fields.filter(name => name !== "canonicalElsewhere"),
+        }}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    expect(screen.queryByTestId("seo-official-address")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use another address" })
+    ).toBeNull();
   });
 
   it("edits the shared description beside the shared title", async () => {

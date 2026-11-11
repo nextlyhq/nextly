@@ -153,6 +153,9 @@ The tab shows, in order:
 The official address is the page's own public address. **Use another address** takes an
 address on the same site as typed; one on another site is used only once the person
 confirms the page first appeared there. Until then the page's own address stays in use.
+"The same site" means one of its production addresses, scheme and port included. The row
+is drawn only where the `seo` group has both `canonical` and `canonicalElsewhere`, since
+an address on another site is used only once marked confirmed.
 
 The count beside the tab's label is the number of problems the page's answer shows: a
 title longer than Google shows, a description that is too long, a title or a
@@ -161,7 +164,7 @@ lacks.
 
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
-only someone who may create or update entries of that collection, or update that Single.
+anyone who may read that collection or Single, a reader shown the page read-only too.
 What a page's route sets in its own code is not known to the admin, so the tab does not
 show it.
 

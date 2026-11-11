@@ -129,13 +129,16 @@ function advancedRows(props: AdvancedProps): AdvancedRow[] {
   const has = (...names: string[]) =>
     props.context === undefined ||
     names.some(name => props.context?.fields.includes(name));
+  const hasAll = (...names: string[]) => names.every(name => has(name));
   const rows: (AdvancedRow | false)[] = [
     has("noindex") && {
       key: "hide",
       summary: "hiding from search",
       Row: HideRow,
     },
-    has("canonical") && {
+    // An address on another site is used only once marked confirmed, so the
+    // row needs the mark as well as the address.
+    hasAll("canonical", "canonicalElsewhere") && {
       key: "address",
       summary: "official address",
       Row: OfficialAddressRow,
@@ -316,19 +319,9 @@ function useOutsideChange(
 const keyOf = (...stored: unknown[]): string =>
   JSON.stringify(stored.map(value => value ?? null));
 
-/**
- * Whether the stored address was confirmed to be on another site: marked so,
- * or, where the group keeps no mark, an address elsewhere at all, since one
- * is stored only once confirmed.
- */
-function confirmedElsewhere(
-  values: SeoPanelValues,
-  origins: readonly string[]
-): boolean {
-  if (values.canonicalElsewhere === true) return true;
-  return (
-    checkCanonical(typedText(values.canonical), origins).kind === "elsewhere"
-  );
+/** Whether the stored address was confirmed to be on another site. */
+function confirmedElsewhere(values: SeoPanelValues): boolean {
+  return values.canonicalElsewhere === true;
 }
 
 function HideRow({
@@ -383,9 +376,7 @@ function OfficialAddressRow({
   const origins = context?.levels.site.productionAddresses ?? [];
   const [editing, setEditing] = useState(typed !== "");
   const [text, setText] = useState(typed);
-  const [confirmed, setConfirmed] = useState(() =>
-    confirmedElsewhere(values, origins)
-  );
+  const [confirmed, setConfirmed] = useState(() => confirmedElsewhere(values));
   const id = useId();
   const wrote = useOutsideChange(
     keyOf(values.canonical, values.canonicalElsewhere),
@@ -393,7 +384,7 @@ function OfficialAddressRow({
       const held = typedText(values.canonical);
       setText(held);
       setEditing(held !== "");
-      setConfirmed(confirmedElsewhere(values, origins));
+      setConfirmed(confirmedElsewhere(values));
     }
   );
   const write = (next: string, elsewhere: boolean) => {
