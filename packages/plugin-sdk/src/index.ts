@@ -551,6 +551,28 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * Keeping every public address to one page. A plugin that keeps a record of
+ * who holds each address takes part through `ctx.publicAddresses.participate`
+ * with a `PublicAddressParticipant`: core asks every participant, inside each
+ * save, whether another page holds an address the saved document now holds,
+ * refuses the save where one does, and otherwise tells every participant what
+ * the document holds. Core keeps no record of its own.
+ *
+ * Intended to become stable: experimental until the SEO plugin and Page
+ * Builder both ship on it, then changed only with a major version.
+ *
+ * @experimental
+ */
+export type {
+  AddressHolder,
+  HeldAddress,
+  HeldAddressUpdate,
+  PluginPublicAddresses,
+  PublicAddressParticipant,
+  RefusedAddressUpdate,
+} from "nextly";
+
+/**
  * Declaring a field of a type the plugin itself contributes. The built-in
  * factories cover only the built-in types, so a contributed type has no factory
  * to build its field with; `pluginField` brands one so the authoring surfaces
