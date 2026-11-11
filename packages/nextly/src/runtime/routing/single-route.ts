@@ -41,6 +41,8 @@ import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageStructuredDataFor,
+  type PageMetadataRequest,
 } from "../seo/page-metadata";
 import type { PageMetadataValues } from "../seo/page-metadata-contract";
 
@@ -166,6 +168,16 @@ export interface SingleContext {
    * the translated documents that need it.
    */
   locale?: string;
+  /**
+   * The page's structured data, as JSON-LD text written so that no value can
+   * end its element: place it as the body of a JSON-LD script element, as a
+   * content route's `context.structuredData` is placed. Read from the same
+   * answer as the page's head; given to `render` only, and only where a
+   * plugin provides page metadata and its answer has some.
+   *
+   * @experimental Settles with the page-metadata contract.
+   */
+  structuredData?: string;
 }
 
 /** Config for {@link createSingleRoute} and {@link createPublicSingleRoute}. */
@@ -502,30 +514,34 @@ function buildSingleRoute<TNode>(
     });
   }
 
-  async function generateMetadata(args?: SingleRouteArgs): Promise<Metadata> {
-    const buildMetadata = config.buildMetadata;
-    // Nothing of its own to serve and no provider to ask: the document is not
-    // read for its head at all, as before providers existed.
-    if (!buildMetadata && knownNoPageMetadataProvider()) return {};
-    // One memo of access lookups for the resolution and the callback, so a
-    // preview's draft gate, the read it grants and any read the callback makes
-    // look the person up once.
-    const { context, language } = await contextFor(args);
-    return runWithAccessMemo(async () => {
-      const document = await documentFor(context, language);
-      if (!document) return {};
-      const code = buildMetadata
-        ? await buildMetadata(document, context)
-        : undefined;
-      // Worked out only where a provider may be asked: with none known, the
-      // route's own metadata is served and the content is not walked for it.
-      const derived =
-        config.derivedMetadata && !knownNoPageMetadataProvider()
-          ? await config.derivedMetadata(document, context)
-          : undefined;
+  /**
+   * What the page-metadata provider is asked about the Single, with the
+   * route's own metadata; null for a process known to have no provider. The
+   * head and the page's structured data are both asked with this, so they
+   * read one answer.
+   */
+  async function pageRequest(
+    document: SingleDocument,
+    context: SingleContext
+  ): Promise<{
+    code: Metadata | undefined;
+    request: PageMetadataRequest | null;
+  }> {
+    const code = config.buildMetadata
+      ? await config.buildMetadata(document, context)
+      : undefined;
+    // Worked out only where a provider may be asked: with none known, the
+    // route's own metadata is served and the content is not walked for it.
+    if (knownNoPageMetadataProvider()) return { code, request: null };
+    const derived = config.derivedMetadata
+      ? await config.derivedMetadata(document, context)
+      : undefined;
+    return {
+      code,
       // A Single route is mounted by the app and never told where, so the
-      // provider is asked without a path and finds the Single's address itself.
-      return pageMetadataFor({
+      // provider is asked without a path and finds the Single's address
+      // itself.
+      request: {
         ...(context.locale === undefined ? {} : { locale: context.locale }),
         source: { kind: "single", slug: config.slug, document },
         code,
@@ -536,7 +552,23 @@ function buildSingleRoute<TNode>(
         ...(config.revalidate === undefined
           ? {}
           : { revalidate: config.revalidate }),
-      });
+      },
+    };
+  }
+
+  async function generateMetadata(args?: SingleRouteArgs): Promise<Metadata> {
+    // Nothing of its own to serve and no provider to ask: the document is not
+    // read for its head at all, as before providers existed.
+    if (!config.buildMetadata && knownNoPageMetadataProvider()) return {};
+    // One memo of access lookups for the resolution and the callback, so a
+    // preview's draft gate, the read it grants and any read the callback makes
+    // look the person up once.
+    const { context, language } = await contextFor(args);
+    return runWithAccessMemo(async () => {
+      const document = await documentFor(context, language);
+      if (!document) return {};
+      const { code, request } = await pageRequest(document, context);
+      return request === null ? (code ?? {}) : pageMetadataFor(request);
     });
   }
 
@@ -547,7 +579,17 @@ function buildSingleRoute<TNode>(
     return runWithAccessMemo(async () => {
       const document = await documentFor(context, language);
       if (!document) triggerNotFound();
-      return config.render(document, context);
+      // Asked only where a provider may answer: a site with none renders as
+      // it always has, and works nothing out for it.
+      const request = knownNoPageMetadataProvider()
+        ? null
+        : (await pageRequest(document, context)).request;
+      const structuredData =
+        request === null ? undefined : await pageStructuredDataFor(request);
+      return config.render(
+        document,
+        structuredData === undefined ? context : { ...context, structuredData }
+      );
     });
   }
 

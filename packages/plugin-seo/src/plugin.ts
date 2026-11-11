@@ -31,6 +31,11 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { withStructuredData } from "./structured-data/provider";
+import {
+  rulesFromOptions,
+  type StructuredDataOptions,
+} from "./structured-data/rules";
 import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
@@ -103,6 +108,31 @@ export interface SeoPluginOptions {
    * narrowing this list or disabling the route.
    */
   sitemap?: boolean | { collections?: string[] };
+  /**
+   * @experimental Each content type's structured data type, the fields that
+   * hold each detail it needs, and the brand facts every page names, until the
+   * SEO settings hold them. Keyed by collection slug, or `single:<slug>`:
+   *
+   * ```ts
+   * seoPlugin({
+   *   collections: ["posts"],
+   *   baseUrl: "https://example.com",
+   *   structuredData: {
+   *     brand: { name: "Example", profiles: [{ url: "https://x.com/example" }] },
+   *     types: {
+   *       posts: {
+   *         type: "blogPosting",
+   *         details: { blogPosting: { author: "writer", datePublished: "date" } },
+   *       },
+   *     },
+   *   },
+   * });
+   * ```
+   *
+   * Structured data is written with absolute addresses, so `baseUrl` is
+   * needed for any to be served.
+   */
+  structuredData?: StructuredDataOptions;
 }
 
 /**
@@ -164,13 +194,23 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     );
   }
 
+  // Checked here, so a misspelled type or detail fails when the site starts.
+  const readStructuredDataRules = rulesFromOptions(
+    options.baseUrl,
+    options.structuredData
+  );
+
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
     // The record that keeps each public address to one page.
     collections: [addressRecordCollection()],
-    // Every page's head, worked out by the one order of who wins.
-    services: { pageMetadata: ctx => seoPageMetadata(ctx) },
+    // Every page's head, worked out by the one order of who wins, and its
+    // structured data, worked out from that same answer.
+    services: {
+      pageMetadata: ctx =>
+        withStructuredData(ctx, seoPageMetadata(ctx), readStructuredDataRules),
+    },
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
