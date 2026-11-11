@@ -37,6 +37,10 @@ const runtime = vi.hoisted(() => ({
   events: [] as string[],
   // The address each page's head was asked for, as the runtime was told it.
   metadataPaths: [] as string[],
+  // The address each page's structured data was asked for, and what the
+  // runtime answers when set.
+  structuredPaths: [] as string[],
+  structuredData: undefined as string | undefined,
 }));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
@@ -69,6 +73,14 @@ vi.mock("nextly/runtime", async importOriginal => {
     ) => {
       runtime.metadataPaths.push(args[3]);
       return actual.contentPageMetadata(...args);
+    },
+    contentPageStructuredData: async (
+      ...args: Parameters<typeof actual.contentPageStructuredData>
+    ) => {
+      runtime.structuredPaths.push(args[3]);
+      return (
+        runtime.structuredData ?? actual.contentPageStructuredData(...args)
+      );
     },
     readPublicSiteSettings: async () => {
       throw new Error("no site settings");
@@ -265,6 +277,8 @@ beforeEach(() => {
   runtime.keys = [];
   runtime.designCache = null;
   runtime.metadataPaths = [];
+  runtime.structuredPaths = [];
+  runtime.structuredData = undefined;
 });
 
 afterEach(() => {
@@ -1002,6 +1016,41 @@ describe("under a [locale] segment", () => {
       })
     ).rejects.toMatchObject(NOT_FOUND);
     expect(options.lookups).toEqual([]);
+  });
+
+  it("links to an entry at its address in the language the segment names, read in it", async () => {
+    const asked: [string, string | undefined][] = [];
+    const route = createContentPage(
+      config({
+        entryPath: async (collection, id, locale) => {
+          asked.push([id, locale]);
+          return collection === "posts" ? `/blog/${id}` : null;
+        },
+      })
+    );
+    const element = await throughBoundary<PageRendererProps>(
+      route.ContentPage({ params: { locale: "de", slug: ["blog", "hello"] } })
+    );
+    expect(
+      await element.props.context?.resolveEntryPath("posts", "other")
+    ).toBe("/de/blog/other");
+    expect(asked).toEqual([["other", "de"]]);
+  });
+
+  it("places an entry's structured data in its HTML, asked at its address in the language", async () => {
+    runtime.structuredData = '{"@type":"BlogPosting","headline":"Hello world"}';
+    const element = await throughBoundary(
+      createContentPage(config()).ContentPage({
+        params: { locale: "de", slug: ["blog", "hello"] },
+      })
+    );
+    const html = await renderToHtml(element);
+
+    expect(runtime.structuredPaths).toEqual(["/de/blog/hello"]);
+    expect(html).toContain(
+      '<script type="application/ld+json">{"@type":"BlogPosting","headline":"Hello world"}</script>'
+    );
+    expect(html).toContain("Hello world");
   });
 
   it("asks for an entry's head at its address in the language", async () => {

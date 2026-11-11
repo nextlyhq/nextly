@@ -21,6 +21,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
 }));
 
 import {
+  usePluginClientConfig,
   usePluginRoute,
   useSingleDocument,
   useUpdateSingleDocument,
@@ -43,12 +44,21 @@ const POSTS: SeoContentType = {
     values: { category: "Comparisons" },
     address: "/blog/surfer-seo-vs-rext-ai",
   },
+  count: 19,
+  mappableFields: [
+    { name: "byline", label: "Byline" },
+    { name: "publishedAt", label: "Published at" },
+    { name: "price", label: "Price" },
+    // Two fields labelled alike are told apart by their names.
+    { name: "credit", label: "Byline" },
+  ],
   public: true,
 };
 const CASES: SeoContentType = {
   key: "cases",
   label: "Case studies",
   fields: [],
+  mappableFields: [],
   public: false,
 };
 
@@ -87,7 +97,20 @@ function serving(
       ({
         data: request.path.endsWith("/document")
           ? { single }
-          : { items: [POSTS, CASES] },
+          : {
+              items: [
+                POSTS,
+                CASES,
+                {
+                  key: "testimonials",
+                  label: "Testimonials",
+                  count: 40,
+                  public: false,
+                  seo: false,
+                },
+                { key: "events", label: "Events", public: true, seo: false },
+              ],
+            },
         pending: false,
         error: null,
         refetch: () => {},
@@ -179,7 +202,8 @@ describe("first-time setup", () => {
         .getByRole("tab", { name: /Content types/ })
         .getAttribute("aria-selected")
     ).toBe("true");
-    expect(window.location.search).toBe("?tab=types");
+    // The address is left alone: the admin mounts the page again on a change.
+    expect(window.location.search).toBe("");
     // Finished: no banner offers setup again.
     expect(screen.queryByText("Finish setting up SEO.")).toBeNull();
   });
@@ -497,6 +521,286 @@ describe("saving", () => {
     expect(sent).toEqual([
       { siteName: "Acme Ltd", _rev: "1" },
       { description: "Things.", _rev: "2" },
+    ]);
+  });
+});
+
+describe("switching tabs", () => {
+  it("leaves the address alone, which the admin answers by mounting the page again", async () => {
+    serving({ _rev: "5", siteName: "Rext AI", setupStep: 3 });
+    const replace = vi.spyOn(window.history, "replaceState");
+    const push = vi.spyOn(window.history, "pushState");
+    try {
+      render(<SeoSettingsPage />);
+      fireEvent.click(screen.getByRole("tab", { name: "General" }));
+      fireEvent.change(
+        screen.getAllByLabelText("Site name")[0] as HTMLElement,
+        {
+          target: { value: "Acme" },
+        }
+      );
+      fireEvent.click(screen.getByRole("tab", { name: /Content types/ }));
+      fireEvent.click(screen.getByRole("tab", { name: "General" }));
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(push).not.toHaveBeenCalled();
+      expect(
+        (screen.getAllByLabelText("Site name")[0] as HTMLInputElement).value
+      ).toBe("Acme");
+    } finally {
+      replace.mockRestore();
+      push.mockRestore();
+    }
+  });
+});
+
+describe("the content types table", () => {
+  const SET_UP = { _rev: "5", siteName: "Rext AI", setupStep: 3 };
+
+  it("shows each type's SEO as set in code, and hides a whole type from search", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    expect(screen.getByText("19 entries")).toBeTruthy();
+    // One entry's address is an example of where the type's pages live.
+    expect(screen.getAllByText("e.g.")).toHaveLength(1);
+    expect(screen.getByText("/blog/surfer-seo-vs-rext-ai")).toBeTruthy();
+
+    const seo = screen.getByRole("switch", { name: "SEO for Blog posts" });
+    expect(seo.getAttribute("aria-checked")).toBe("true");
+    expect(seo).toHaveProperty("disabled", true);
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Hide all Blog posts from search" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([{ hiddenTypes: ["posts"], _rev: "5" }]);
+  });
+
+  it("lists a type with SEO switched off in code, greyed and with nothing to set", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+
+    const seo = screen.getByRole("switch", { name: "SEO for Testimonials" });
+    expect(seo.getAttribute("aria-checked")).toBe("false");
+    expect(seo).toHaveProperty("disabled", true);
+    expect(
+      screen.getByText("40 entries · SEO switched off in code")
+    ).toBeTruthy();
+    expect(screen.getByText("No public pages")).toBeTruthy();
+    // A type served at its own address without SEO says so.
+    expect(screen.getByText("Public, without SEO")).toBeTruthy();
+    expect(
+      screen.queryByRole("switch", {
+        name: "Hide all Testimonials from search",
+      })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Structured data for Testimonials",
+      })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Edit the title pattern for Testimonials",
+      })
+    ).toBeNull();
+  });
+
+  it("keeps the types the plugin hides hidden when the site hides another", async () => {
+    serving(SET_UP);
+    vi.mocked(usePluginClientConfig).mockReturnValue({
+      hiddenTypes: ["cases"],
+    });
+    try {
+      render(<SeoSettingsPage />);
+      expect(
+        screen
+          .getByRole("switch", { name: "Hide all Case studies from search" })
+          .getAttribute("aria-checked")
+      ).toBe("true");
+
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Hide all Blog posts from search" })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await settle();
+
+      expect(sent).toEqual([{ hiddenTypes: ["cases", "posts"], _rev: "5" }]);
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
+  it("shows the plugin's structured data choice and mapping until the site chooses", async () => {
+    serving(SET_UP);
+    vi.mocked(usePluginClientConfig).mockReturnValue({
+      structuredData: {
+        posts: {
+          type: "article",
+          details: { article: { author: { value: "The Rext team" } } },
+        },
+      },
+    });
+    try {
+      render(<SeoSettingsPage />);
+      const select = screen.getByRole("combobox", {
+        name: "Structured data for Blog posts",
+      }) as HTMLSelectElement;
+      expect(select.value).toBe("article");
+      expect(screen.getByText("· all set")).toBeTruthy();
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Save changes",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+
+      // A value the site's code fixes is shown as that value.
+      fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+      const author = screen.getByRole("combobox", {
+        name: "Field that holds author",
+      }) as HTMLSelectElement;
+      expect(author.selectedOptions[0]?.textContent).toBe(
+        'Always "The Rext team"'
+      );
+      expect(screen.getByText("set in the site's code")).toBeTruthy();
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
+  it("offers the details a type may use as well as those it needs, counting only the needed as missing", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" }),
+      { target: { value: "product" } }
+    );
+    // The price is found by its name; nothing holds the availability.
+    expect(screen.getByText("· 1 missing")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(
+      screen.getByRole("combobox", { name: "Field that holds currency" })
+    ).toBeTruthy();
+    expect(screen.getByText("Optional for Product")).toBeTruthy();
+    expect(screen.getByText("Google needs this for Product")).toBeTruthy();
+  });
+
+  it("shows the field the markup reads first by its name, and keeps another chosen over it", async () => {
+    serving(SET_UP);
+    // `writer` is declared first, but the markup looks for `author` first.
+    vi.mocked(usePluginRoute).mockImplementation(
+      request =>
+        ({
+          data: request.path.endsWith("/document")
+            ? { single: "seo-settings" }
+            : {
+                items: [
+                  {
+                    ...POSTS,
+                    mappableFields: [
+                      { name: "writer", label: "Writer" },
+                      { name: "author", label: "Author" },
+                    ],
+                  },
+                ],
+              },
+          pending: false,
+          error: null,
+          refetch: () => {},
+          fetching: false,
+        }) as ReturnType<typeof usePluginRoute>
+    );
+    render(<SeoSettingsPage />);
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" }),
+      { target: { value: "article" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    const author = screen.getByRole("combobox", {
+      name: "Field that holds author",
+    }) as HTMLSelectElement;
+    expect(author.selectedOptions[0]?.textContent).toBe("Author");
+
+    fireEvent.change(author, { target: { value: "writer" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        structuredData: {
+          posts: {
+            type: "article",
+            details: { article: { author: "writer" } },
+          },
+        },
+        _rev: "5",
+      },
+    ]);
+
+    // Choosing no field returns the author to being found by its name.
+    const again = screen.getByRole("combobox", {
+      name: "Field that holds author",
+    }) as HTMLSelectElement;
+    fireEvent.change(again, { target: { value: "" } });
+    expect(again.selectedOptions[0]?.textContent).toBe("Author");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect(sent[1]).toEqual({
+      structuredData: { posts: { type: "article" } },
+      _rev: "6",
+    });
+  });
+
+  it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" }),
+      { target: { value: "article" } }
+    );
+    // The date is found by its field's name, and the image is the page's
+    // share image; nothing holds the author.
+    expect(screen.getByText("· 1 missing")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(
+      screen.getByText("on Blog posts (this type's default)")
+    ).toBeTruthy();
+    // A field found by its name is shown as that field.
+    const date = screen.getByRole("combobox", {
+      name: "Field that holds date published",
+    }) as HTMLSelectElement;
+    expect(date.selectedOptions[0]?.textContent).toBe("Published at");
+    expect(
+      [...date.options].map(option => option.textContent).filter(Boolean)
+    ).toContain("Byline (credit)");
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Field that holds author" }),
+      { target: { value: "byline" } }
+    );
+    expect(screen.getByText("from each entry's Byline")).toBeTruthy();
+    expect(screen.getByText("from each page's share image")).toBeTruthy();
+    expect(screen.getByText("· all set")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        structuredData: {
+          posts: {
+            type: "article",
+            details: { article: { author: "byline" } },
+          },
+        },
+        _rev: "5",
+      },
     ]);
   });
 });

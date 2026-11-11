@@ -133,8 +133,8 @@
       "compiled": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "samples": 12,
-      "compiled": 10
+      "samples": 15,
+      "compiled": 12
     },
     "docs/jobs/index.mdx": {
       "samples": 5,
@@ -253,8 +253,8 @@
       "compiled": 3
     },
     "docs/plugins/seo.mdx": {
-      "samples": 5,
-      "compiled": 4
+      "samples": 14,
+      "compiled": 9
     },
     "docs/plugins/services.mdx": {
       "samples": 14,
@@ -350,7 +350,7 @@
     },
     "packages/plugin-seo/README.md": {
       "samples": 7,
-      "compiled": 4
+      "compiled": 7
     },
     "packages/storage-s3/README.md": {
       "samples": 4,
@@ -379,13 +379,11 @@
   },
   "pages": {
     "docs/getting-started/build-a-blog.mdx": 1,
-    "docs/guides/routing-and-seo.mdx": 3,
     "docs/plugins/auth.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
     "docs/plugins/lifecycle.mdx": 2,
     "packages/blocks-react/README.md": 1,
     "packages/builder/README.md": 1,
-    "packages/plugin-seo/README.md": 2,
     "docs/database/mysql.mdx": 3,
     "docs/guides/isr-caching.mdx": 1,
     "docs/plugins/services.mdx": 4
@@ -403,14 +401,12 @@
       "reader-file #4 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/guides/routing-and-seo.mdx": {
-      "#8 error TS2304: Cannot find name 'getPostBySlug'.": 1,
-      "#9 error TS2304: Cannot find name 'services'.": 1,
-      "#9 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1,
-      "implicit-any #5 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
       "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
       "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
-      "reader-name #6 error TS2552: Cannot find name 'Page'. Did you mean 'page'?": 1,
-      "reader-name #7 error TS2304: Cannot find name 'Page'.": 1
+      "implicit-any #7 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
+      "reader-name #6 error TS2304: Cannot find name 'Page'.": 1,
+      "reader-name #8 error TS2552: Cannot find name 'Page'. Did you mean 'page'?": 1,
+      "reader-name #9 error TS2304: Cannot find name 'Page'.": 1
     },
     "docs/plugins/auth.mdx": {
       "#3 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
@@ -434,10 +430,6 @@
       "reader-name #0 error TS2304: Cannot find name 'MyTopBar'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'MyBreadcrumb'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'MyCanvas'.": 1
-    },
-    "packages/plugin-seo/README.md": {
-      "#2 error TS7031: Binding element 'params' implicitly has an 'any' type.": 1,
-      "#2 error TS2304: Cannot find name 'getPostBySlug'.": 1
     },
     "docs/database/mysql.mdx": {
       "#6 error TS2304: Cannot find name 'orderData'.": 1,
@@ -613,6 +605,9 @@
       "reader-name #18 error TS2304: Cannot find name 'Posts'.": 1,
       "reader-name #18 error TS2304: Cannot find name 'Users'.": 1,
       "reader-name #18 error TS2304: Cannot find name 'Media'.": 1
+    },
+    "docs/plugins/seo.mdx": {
+      "reader-file #9 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     }
   }
 }

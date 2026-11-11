@@ -219,6 +219,21 @@ describe("a form's Settings", () => {
     }
   );
 
+  it("saves one response per browser, saying how it is counted", async () => {
+    const { user, fetchMock } = view({ status: "published" });
+    const browser = screen.getByRole("radio", { name: "One per browser" });
+    expect(browser).toHaveAccessibleDescription(
+      /Counted from when you choose it/
+    );
+    await user.click(browser);
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({
+      settings: { oneResponse: "browser" },
+    });
+  });
+
   it("shows a stored way to limit responses that is not offered yet", () => {
     // Written through the API: shown chosen, and not choosable here.
     view({ settings: { oneResponse: "email" } });

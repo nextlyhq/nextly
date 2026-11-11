@@ -104,4 +104,20 @@ export async function checkSetupTokenRequired(): Promise<boolean> {
  */
 export function resetSetupStatusCache(): void {
   setupStatusCache = null;
+  for (const listener of resetListeners) listener();
+}
+
+/** Who is told the answer was dropped, to ask again. */
+const resetListeners = new Set<() => void>();
+
+/**
+ * Calls `listener` whenever the shared answer is dropped (a retry abandoning
+ * a request the server holds, or a sign-out), so a reader still waiting on the
+ * dropped request can ask again. Returns the unsubscribe.
+ */
+export function onSetupStatusReset(listener: () => void): () => void {
+  resetListeners.add(listener);
+  return () => {
+    resetListeners.delete(listener);
+  };
 }

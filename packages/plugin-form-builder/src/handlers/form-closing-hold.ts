@@ -46,7 +46,7 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { closedMessageOf, pastClosingTime } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
-import { type KeyedSubmission, responseKeyOf } from "./one-response";
+import { holdsKeyFor, type KeyedSubmission } from "./one-response";
 
 /** The mark on a refusal for a closed form, for the caller to recognise it. */
 const FORM_CLOSED = "form-builder:form-closed";
@@ -206,14 +206,15 @@ async function holdResponseKey(
   formId: string,
   settings: Awaited<ReturnType<typeof formOf>>["settings"]
 ): Promise<void> {
-  const expected = await responseKeyOf(
-    () => digests,
-    settings,
-    write.data as KeyedSubmission
-  );
-  const stored =
-    (write.data as { responseKey?: unknown } | undefined)?.responseKey ?? null;
-  if (expected === stored) return;
+  if (
+    await holdsKeyFor(
+      () => digests,
+      settings,
+      write.data as KeyedSubmission & { responseKey?: unknown }
+    )
+  ) {
+    return;
+  }
   throw NextlyError.conflict({
     reason: "state",
     message: SETTINGS_CHANGED,

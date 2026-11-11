@@ -87,6 +87,9 @@ definePlugin({
 - **`optionalDependsOn`.** An **absent** optional dependency is fine; a **present but
   out-of-range** one fails fast (`reason: "optional-version-incompatible"`). Use
   `ctx.nextlyVersion` or feature checks to branch on whether an optional dep is active.
+  An [admin contribution](/docs/plugins/api-reference#admin-places) to one of its places is
+  drawn while it runs, and left out, without stopping the app, while it is absent or
+  disabled.
 
 If your plugin **extends or relates to another plugin's entity**, you must declare a
 `dependsOn` on it — otherwise you get `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`.

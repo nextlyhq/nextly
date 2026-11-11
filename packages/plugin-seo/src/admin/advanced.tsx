@@ -72,29 +72,61 @@ export function AdvancedSection(props: AdvancedProps): ReactNode {
   useEffect(() => {
     if (refused) setOpen(true);
   }, [refused]);
-  const id = useId();
   const rows = advancedRows(props);
   // Nothing to put under it where the group declares only the two fields.
   if (rows.length === 0) return null;
+  return (
+    <AdvancedFrame
+      summary={summaryOf(rows.map(row => row.summary))}
+      problemCount={props.problemCount}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      {rows.map(({ key, Row: Drawn }) => (
+        <Drawn key={key} {...props} />
+      ))}
+    </AdvancedFrame>
+  );
+}
+
+/**
+ * The Advanced section's frame: its name, a summary of the rows inside, a
+ * count of the problems they hold, and the rows, shown while open. Every
+ * surface that edits a page's SEO draws its Advanced section in it.
+ */
+export function AdvancedFrame({
+  summary,
+  problemCount = 0,
+  open,
+  onOpenChange,
+  children,
+}: {
+  summary: string;
+  problemCount?: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: ReactNode;
+}): ReactNode {
+  const id = useId();
   return (
     <section className="rounded-lg border border-border bg-card">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={`${id}-body`}
-        onClick={() => setOpen(was => !was)}
+        onClick={() => onOpenChange(!open)}
         className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg border-0 bg-transparent px-3.5 py-3 text-left hover:bg-accent"
       >
         <b className="text-sm font-semibold text-foreground">Advanced</b>
         <span className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">
-          {summaryOf(rows.map(row => row.summary))}
+          {summary}
         </span>
-        {props.problemCount > 0 ? (
+        {problemCount > 0 ? (
           <span
-            title={thingsToFix(props.problemCount)}
+            title={thingsToFix(problemCount)}
             className="inline-grid h-[18px] min-w-[18px] place-items-center rounded-full border border-warning-border bg-warning-surface px-[5px] text-[11px] leading-none font-semibold text-warning-text"
           >
-            {props.problemCount}
+            {problemCount}
           </span>
         ) : null}
         <ChevronDown
@@ -106,9 +138,7 @@ export function AdvancedSection(props: AdvancedProps): ReactNode {
         />
       </button>
       <div id={`${id}-body`} hidden={!open}>
-        {rows.map(({ key, Row: Drawn }) => (
-          <Drawn key={key} {...props} />
-        ))}
+        {children}
       </div>
     </section>
   );
