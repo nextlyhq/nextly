@@ -115,4 +115,20 @@ describe("a user field in the panel and back", () => {
       ).defaultValue
     ).toBe("");
   });
+
+  it.each([
+    ["number", "about ten"],
+    ["checkbox", "yes"],
+  ])(
+    "keeps a stored %s default the panel cannot show through another edit",
+    (type, stored) => {
+      const values = { ...base, type, defaultValue: stored };
+      const panel = valuesToPanelField(values);
+      // Nothing the panel's editor could show, and nothing lost by a relabel.
+      expect(panel.defaultValue).toBeUndefined();
+      expect(
+        panelFieldToValues({ ...panel, label: "Renamed" }, values).defaultValue
+      ).toBe(stored);
+    }
+  );
 });

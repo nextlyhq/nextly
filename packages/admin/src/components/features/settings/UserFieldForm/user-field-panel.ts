@@ -28,13 +28,27 @@ function boundText(value: number | undefined): string {
   return value === undefined ? "" : String(value);
 }
 
-/** The panel's default for the stored text, in the shape its editor takes. */
+/**
+ * A stored default the panel's editor cannot show (text in a number field,
+ * "yes" for a checkbox), kept aside unchanged so that editing another setting
+ * saves it as it was. A symbol, which the panel's copies of the field keep.
+ */
+const UNSHOWN_DEFAULT: unique symbol = Symbol("user field: unshown default");
+
+type PanelField = FieldSettingsField & { [UNSHOWN_DEFAULT]?: string };
+
+/**
+ * The panel's default for the stored text, in the shape its editor takes, or
+ * undefined when the editor has no shape for it.
+ */
 function panelDefault(
   type: string,
   text: string
 ): FieldSettingsField["defaultValue"] {
   if (text === "") return undefined;
-  if (type === "checkbox") return text === "true";
+  if (type === "checkbox") {
+    return text === "true" ? true : text === "false" ? false : undefined;
+  }
   if (type === "number") {
     const value = Number(text);
     return Number.isFinite(value) ? value : undefined;
@@ -49,7 +63,9 @@ function panelDefault(
  */
 function storedDefault(field: FieldSettingsField): string {
   const value = field.defaultValue;
-  if (value === undefined || value === null) return "";
+  if (value === undefined || value === null) {
+    return (field as PanelField)[UNSHOWN_DEFAULT] ?? "";
+  }
   if (typeof value !== "string") return String(value);
   return field.type === "date" && /^\d{4}-\d{2}-\d{2}T/.test(value)
     ? value.slice(0, 10)
@@ -94,6 +110,9 @@ export function valuesToPanelField(
   if (values.options.length > 0) field.options = values.options;
   const defaultValue = panelDefault(values.type, values.defaultValue);
   if (defaultValue !== undefined) field.defaultValue = defaultValue;
+  else if (values.defaultValue !== "") {
+    (field as PanelField)[UNSHOWN_DEFAULT] = values.defaultValue;
+  }
   return field;
 }
 
