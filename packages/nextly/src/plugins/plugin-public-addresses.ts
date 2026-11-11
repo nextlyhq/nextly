@@ -33,8 +33,21 @@ import type { HookOwner } from "../hooks/types";
 import type { PluginTransaction } from "./database/plugin-database";
 import {
   transactionOf,
+  withWriteTransactionToken,
   type PluginCollectionTransaction,
 } from "./service-opts";
+
+/**
+ * @experimental What a participant is handed to reach the save's transaction:
+ * `db`, the plugin's tables bound to it, and `transaction`, the token
+ * `ctx.services.collections`' in-transaction methods take, so a record kept
+ * in the plugin's own collection is written with the save. Both refuse once
+ * the call has settled.
+ */
+export interface ParticipantTransaction {
+  db: PluginTransaction;
+  transaction: PluginCollectionTransaction;
+}
 
 /**
  * @experimental A plugin's record of who holds each public address, as core
@@ -52,7 +65,7 @@ export interface PublicAddressParticipant {
     address: HeldAddress,
     asker: AddressHolder,
     batch: readonly HeldAddressUpdate[],
-    tx: { db: PluginTransaction }
+    tx: ParticipantTransaction
   ): Promise<AddressHolder | null>;
   /**
    * Replace what each holder in `batch` holds with its `holds`, keeping the
@@ -61,7 +74,7 @@ export interface PublicAddressParticipant {
    */
   record(
     batch: readonly HeldAddressUpdate[],
-    tx: { db: PluginTransaction }
+    tx: ParticipantTransaction
   ): Promise<void>;
 }
 
@@ -119,6 +132,21 @@ export interface PublicAddressesDeps {
   onTeardown: (undo: () => void) => void;
 }
 
+/** Run `work` with this plugin's handles on the save's transaction `tx`. */
+function withParticipantTransaction<T>(
+  deps: PublicAddressesDeps,
+  tx: TransactionContext,
+  work: (handles: ParticipantTransaction) => Promise<T>
+): Promise<T> {
+  return deps.bindTo(tx, db =>
+    withWriteTransactionToken(
+      tx,
+      transaction => work({ db, transaction }),
+      "ctx.publicAddresses"
+    )
+  );
+}
+
 /** Build `ctx.publicAddresses` for one plugin. */
 export function pluginPublicAddresses(
   deps: PublicAddressesDeps
@@ -130,11 +158,13 @@ export function pluginPublicAddresses(
     if (known) return known;
     const runner: ParticipantRunner = {
       holderOf: (address, asker, batch, tx) =>
-        deps.bindTo(tx, db =>
-          participant.holderOf(address, asker, batch, { db })
+        withParticipantTransaction(deps, tx, handles =>
+          participant.holderOf(address, asker, batch, handles)
         ),
       record: (batch, tx) =>
-        deps.bindTo(tx, db => participant.record(batch, { db })),
+        withParticipantTransaction(deps, tx, handles =>
+          participant.record(batch, handles)
+        ),
     };
     runners.set(participant, runner);
     return runner;
