@@ -99,20 +99,18 @@ describe("a form's Settings", () => {
   it("is one page in sections, in order", () => {
     view();
     // Each section is a region named by its label.
-    const names = screen
-      .getAllByRole("region")
-      .map(
-        region =>
-          document.getElementById(region.getAttribute("aria-labelledby") ?? "")
-            ?.textContent
-      );
-    expect(names).toEqual([
+    const sections = screen.getAllByRole("region");
+    const names = [
       "Form",
       "After someone submits",
       "Availability",
       "One response per person",
       "Spam protection",
-    ]);
+    ];
+    expect(sections).toHaveLength(names.length);
+    sections.forEach((section, index) =>
+      expect(section).toHaveAccessibleName(names[index])
+    );
   });
 
   it("saves each of today's settings, and the new ones", async () => {
