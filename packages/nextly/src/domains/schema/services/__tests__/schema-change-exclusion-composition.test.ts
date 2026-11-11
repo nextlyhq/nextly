@@ -317,6 +317,8 @@ describe("a field-group create contends for the same row", () => {
     const registry = {
       // Answers "no field group owns that table" so the create reaches the DDL path.
       getAllComponents: vi.fn().mockResolvedValue([]),
+      // No field group stored, so the create's cycle check finds nothing to close a cycle with.
+      getAllFieldLists: vi.fn().mockResolvedValue([]),
       registerComponent: vi.fn(async (row: unknown) => row),
     };
     const service = new FieldGroupMetadataService(

@@ -1321,27 +1321,30 @@ export function expectStoredValue(
  * is recorded, and {@link refuseUnlessWhole} refuses the write for it once
  * every hook has run, even where a later hook put the value back. Every other
  * write runs the pass alone, exactly as before.
+ *
+ * The pass's own answer, if it gives one (the stored provenance a write's
+ * later gates read), comes back out to the caller unchanged.
  */
-export async function fieldAccessPass(
+export async function fieldAccessPass<T>(
   context: Record<string, unknown> | undefined,
   document: ExpectedDocument,
   data: Record<string, unknown>,
-  pass: () => Promise<void>
-): Promise<void> {
+  pass: () => Promise<T>
+): Promise<T> {
   const whole = wholeWriteFor(context, document);
   if (whole === undefined) {
-    await pass();
-    return;
+    return await pass();
   }
   const before = new Map(
     Object.entries(data).map(([name, value]) => [name, JSON.stringify(value)])
   );
-  await pass();
+  const kept = await pass();
   for (const [name, value] of before) {
     if (!(name in data) || JSON.stringify(data[name]) !== value) {
       whole.cut.push(name);
     }
   }
+  return kept;
 }
 
 /**

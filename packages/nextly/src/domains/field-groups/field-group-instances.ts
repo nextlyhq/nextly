@@ -41,8 +41,12 @@ export function rowsOf(value: unknown): Record<string, unknown>[] {
   return isRecord(value) ? [value] : [];
 }
 
+/**
+ * The fields a container field holds (`fields` on a group or repeater), or undefined for any other.
+ * Takes a stored field read as a plain record as well as a declared one: only `fields` is read.
+ */
 export function subFieldsOf(
-  field: FieldConfig
+  field: FieldConfig | Record<string, unknown>
 ): readonly FieldConfig[] | undefined {
   const fields = (field as { fields?: unknown }).fields;
   return Array.isArray(fields) ? (fields as FieldConfig[]) : undefined;

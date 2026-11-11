@@ -101,6 +101,7 @@ import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
+import { assertConfiguredPublicAddresses } from "../domains/public-addresses/distinct-public-addresses";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
@@ -1552,6 +1553,12 @@ function validateBootContributions(
     transformedPlugins
   );
 
+  // Fail fast on a public address that breaks the template rule, or two
+  // Singles at one address. Asked of the merged configuration, since a
+  // plugin's types reach it without passing through `defineCollection` or
+  // `defineSingle`, and a plugin must not take a page the site declares.
+  assertConfiguredPublicAddresses(transformedConfig);
+
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
   collectRoles(transformedConfig, transformedPlugins);
@@ -2177,6 +2184,9 @@ async function addMissingCompanionColumns(
       },
     });
   }
+  // What the reconcile reports, kept apart from the create's: the create's failure has already been
+  // thrown above, so a check of it here would always read nothing.
+  let reconcileFailure: unknown;
   const inStep = await reconcileCompanionColumns(
     ctx.adapter,
     {
@@ -2188,12 +2198,12 @@ async function addMissingCompanionColumns(
       status: entity.status,
     },
     error => {
-      failure = error;
+      reconcileFailure = error;
     }
   );
   if (inStep) return;
   throw NextlyError.internal({
-    ...(failure instanceof Error ? { cause: failure } : {}),
+    ...(reconcileFailure instanceof Error ? { cause: reconcileFailure } : {}),
     logContext: {
       reason: "builder-companion-columns-failed",
       slug: entity.slug,

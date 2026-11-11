@@ -51,5 +51,13 @@ export function FolderBreadcrumbs({
     });
   });
 
-  return <Breadcrumbs items={items} className={cn("mb-0", className)} />;
+  // A path through the folders on screen, not the page's place: drawn here,
+  // in the library or the picker, rather than in the top bar.
+  return (
+    <Breadcrumbs
+      items={items}
+      className={cn("mb-0", className)}
+      placement="inline"
+    />
+  );
 }

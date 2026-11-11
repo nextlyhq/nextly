@@ -21,7 +21,9 @@ const baseField = (overrides: Partial<BuilderField> = {}): BuilderField => ({
 
 describe("DisplayTab", () => {
   it("draws neither Width nor conditions, which live in other tabs", () => {
-    render(<DisplayTab field={baseField()} onChange={vi.fn()} />);
+    render(
+      <DisplayTab surface="entries" field={baseField()} onChange={vi.fn()} />
+    );
     expect(screen.queryByText(/^Width$/)).toBeNull();
     expect(screen.queryByText(/conditional visibility/i)).toBeNull();
   });
@@ -29,7 +31,9 @@ describe("DisplayTab", () => {
   it("offers a placeholder for a text field and writes it to admin.placeholder", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<DisplayTab field={baseField()} onChange={onChange} />);
+    render(
+      <DisplayTab surface="entries" field={baseField()} onChange={onChange} />
+    );
     await user.type(screen.getByLabelText("Placeholder"), "x");
     const last = onChange.mock.lastCall?.[0] as BuilderField;
     expect(last.admin?.placeholder).toBe("x");
@@ -37,19 +41,27 @@ describe("DisplayTab", () => {
 
   it("offers no placeholder for a type without a text box", () => {
     render(
-      <DisplayTab field={baseField({ type: "date" })} onChange={vi.fn()} />
+      <DisplayTab
+        surface="entries"
+        field={baseField({ type: "date" })}
+        onChange={vi.fn()}
+      />
     );
     expect(screen.queryByLabelText("Placeholder")).toBeNull();
   });
 
   it("does NOT render the Position field (removed in PR E1)", () => {
-    render(<DisplayTab field={baseField()} onChange={vi.fn()} />);
+    render(
+      <DisplayTab surface="entries" field={baseField()} onChange={vi.fn()} />
+    );
     expect(screen.queryByText(/^Position$/)).toBeNull();
     expect(screen.queryByText(/^Sidebar$/)).toBeNull();
   });
 
   it("renders Read-only and Hidden switches with their helper taglines", () => {
-    render(<DisplayTab field={baseField()} onChange={vi.fn()} />);
+    render(
+      <DisplayTab surface="entries" field={baseField()} onChange={vi.fn()} />
+    );
     expect(screen.getByLabelText("Read only")).toBeInTheDocument();
     expect(screen.getByLabelText("Hidden")).toBeInTheDocument();
     // Helper text on each.
@@ -64,7 +76,9 @@ describe("DisplayTab", () => {
   it("toggles readOnly via the switch", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<DisplayTab field={baseField()} onChange={onChange} />);
+    render(
+      <DisplayTab surface="entries" field={baseField()} onChange={onChange} />
+    );
     await user.click(screen.getByLabelText("Read only"));
     const last = onChange.mock.lastCall?.[0] as BuilderField;
     expect(last.admin?.readOnly).toBe(true);
@@ -72,7 +86,9 @@ describe("DisplayTab", () => {
 
   describe("rows", () => {
     it("renders Read-only and Hidden as separate rows (not in a 50/50 grid)", () => {
-      render(<DisplayTab field={baseField()} onChange={vi.fn()} />);
+      render(
+        <DisplayTab surface="entries" field={baseField()} onChange={vi.fn()} />
+      );
       // Both still render with their switches and helpers.
       expect(screen.getByLabelText("Read only")).toBeInTheDocument();
       expect(screen.getByLabelText("Hidden")).toBeInTheDocument();

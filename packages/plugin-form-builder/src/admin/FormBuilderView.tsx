@@ -12,7 +12,10 @@
 
 "use client";
 
-import type { DocumentLockGates } from "@nextlyhq/plugin-sdk/admin";
+import type {
+  DocumentLockGates,
+  FieldPickerChoice,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   Card,
@@ -35,7 +38,7 @@ import type { FormFieldCatalogType } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
 import { type JSX, useCallback, useEffect, useRef, useState } from "react";
 
-import type { FormField, FormFieldTypeId } from "../types";
+import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import {
@@ -50,9 +53,10 @@ import {
 import { notificationsBlockingSave } from "./components/builder/notification-addresses";
 import {
   FormBuilderProvider,
-  useFormBuilder,
   createFieldFromType,
   createNotification,
+  generateFieldName,
+  useFieldBookkeeping,
   type FormNotification,
 } from "./context/FormBuilderContext";
 
@@ -112,7 +116,12 @@ export interface FormBuilderViewProps {
      */
     _rev?: string;
   };
-  onSave?: (data: unknown) => void;
+  /**
+   * Saves the form in the host's own way, in place of the builder's request.
+   * The builder counts the form saved once this returns, or once the promise
+   * it may return settles without failing.
+   */
+  onSave?: (data: unknown) => void | Promise<void>;
   onSuccess?: (entry?: Record<string, unknown>) => void;
   onCancel?: () => void;
   /**
@@ -182,7 +191,9 @@ function FormBuilderViewInner({
     seedNotifications,
     updateFormData,
     markAsSaved,
-  } = useFormBuilder();
+    beginSave,
+    markFieldsSaved,
+  } = useFieldBookkeeping();
 
   const queryClient = useQueryClient();
 
@@ -298,10 +309,12 @@ function FormBuilderViewInner({
     ]);
   }, [isCreating, notificationDefaults, seedNotifications]);
 
+  // A field from the picker, added and opened (`fieldFromChoice`).
   const handleAddField = useCallback(
-    (type: FormFieldTypeId) => {
-      const newField = createFieldFromType(
+    (type: FormFieldTypeId, choice?: FieldPickerChoice) => {
+      const newField = fieldFromChoice(
         type,
+        choice,
         fields.map(f => f.name)
       );
       addField(newField);
@@ -312,6 +325,12 @@ function FormBuilderViewInner({
 
   // ── Save / Cancel ─────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
+    // A failed save, said in the page and as a toast.
+    const showSaveError = (message: string) => {
+      setSaveError(message);
+      toast.error(message);
+    };
+
     // The commit is where the refusal lives, following the rule the entry
     // editor sets: a write passes one gate rather than each control being
     // disabled separately. The button below reads the same fact, so the
@@ -347,8 +366,20 @@ function FormBuilderViewInner({
       notifications,
     };
 
+    beginSave();
     if (onSave) {
-      onSave(saveData);
+      // The host's save. A field it stored is stored like one the builder
+      // saved itself, so its type is fixed; the form's unsaved state is the
+      // host's to clear, as before.
+      // Pending like the builder's own request, so Save cannot start a second
+      // host save while one is still under way.
+      setIsSaving(true);
+      setSaveError(null);
+      await saveThroughHost(onSave, saveData, {
+        saved: markFieldsSaved,
+        failed: showSaveError,
+      });
+      setIsSaving(false);
       return;
     }
 
@@ -391,15 +422,14 @@ function FormBuilderViewInner({
         });
       }
       markAsSaved();
+      // What the stored form now holds, whatever was edited meanwhile.
+      markFieldsSaved(namesOf(saveData.fields));
       toast.success(
         isCreating ? "Form created successfully" : "Form updated successfully"
       );
       if (onSuccess) onSuccess(savedEntry);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to save form";
-      setSaveError(message);
-      toast.error(message);
+      showSaveError(saveFailureMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -415,6 +445,8 @@ function FormBuilderViewInner({
     entryId,
     queryClient,
     markAsSaved,
+    beginSave,
+    markFieldsSaved,
     // Read inside, so it belongs here. Without it the callback closes over the
     // claim as it stood when the form mounted, and a colleague taking the
     // document over mid-session would leave this still committing.
@@ -769,6 +801,58 @@ export function saveErrorMessage(body: unknown, statusText: string): string {
     error?.message ||
     `Failed to save form: ${statusText}`
   );
+}
+
+/**
+ * A new field from the picker: the type's defaults, the label the person
+ * typed, and the name it gives, made unique among `names` (a second "Email"
+ * becomes `email_2`). Without a choice, or a label that gives no name, the
+ * type's own label and name.
+ */
+function fieldFromChoice(
+  type: FormFieldTypeId,
+  choice: FieldPickerChoice | undefined,
+  names: readonly string[]
+): AnyFormField {
+  const fromType = createFieldFromType(type, names);
+  const label = choice?.label.trim();
+  return {
+    ...fromType,
+    label: label || fromType.label,
+    name: choice?.name ? generateFieldName(choice.name, names) : fromType.name,
+  };
+}
+
+/** What a failed save tells the person. */
+function saveFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Failed to save form";
+}
+
+/** The names fields are stored under. */
+function namesOf(fields: readonly AnyFormField[]): string[] {
+  return fields.map(field => field.name);
+}
+
+/**
+ * Saves through the host's own callback, waiting for the promise it may
+ * return, then reports which way it went: on success, the names of the fields
+ * it was handed, which the stored form now holds whatever was edited meanwhile.
+ */
+async function saveThroughHost(
+  onSave: (data: unknown) => void | Promise<void>,
+  data: { fields: readonly AnyFormField[] },
+  report: {
+    saved: (names: readonly string[]) => void;
+    failed: (message: string) => void;
+  }
+): Promise<void> {
+  try {
+    await onSave(data);
+  } catch (error) {
+    report.failed(saveFailureMessage(error));
+    return;
+  }
+  report.saved(namesOf(data.fields));
 }
 
 export function FormBuilderView({

@@ -3,9 +3,10 @@
 /**
  * Field Cards
  *
- * The form builder's field list: one collapsible card per field, edited
- * inline. This is the whole field-editing surface — there is no separate
- * palette or properties sidebar.
+ * The form builder's field list: one card per field. A field is added through
+ * the shared field picker and edited in the shared settings panel, configured
+ * for forms (`forms-field-surface`): docked beside the list where the window
+ * is wide enough, and opened inside the selected card where it is not.
  *
  * Reordering is triple-redundant on purpose: drag handles (pointer), the
  * same handle with Space + arrow keys (dnd-kit keyboard sensor), and
@@ -32,7 +33,14 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { usePluginFieldTypeEntries } from "@nextlyhq/plugin-sdk/admin";
+import {
+  describeFieldTypes,
+  FieldPicker,
+  FieldSettingsPanel,
+  type FieldPickerChoice,
+  type FieldPickerConfig,
+  type FieldSettingsField,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   DropdownMenu,
@@ -50,14 +58,26 @@ import type {
   FormFieldCatalogType,
 } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { type JSX, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type JSX,
+  type ReactNode,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
-import { useFormBuilder } from "../../context/FormBuilderContext";
+import {
+  generateFieldName,
+  useFieldBookkeeping,
+  useFormBuilder,
+} from "../../context/FormBuilderContext";
 
-import { AddFieldDialog } from "./AddFieldDialog";
-import { FieldEditor } from "./FieldEditor";
+import { FORMS_FIELD_SURFACE, formFieldName } from "./forms-field-surface";
+import { fromPanelField, toPanelField } from "./panel-field";
 
 // ---------------------------------------------------------------------------
 // Catalog helpers
@@ -91,9 +111,9 @@ interface FieldCardProps {
   total: number;
   expanded: boolean;
   onToggle: () => void;
-  allFields: AnyFormField[];
+  /** The settings panel, when it opens inside this card. */
+  settings: ReactNode;
   deleteBlockers: string[];
-  onUpdate: (updates: Partial<AnyFormField>) => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onMove: (direction: -1 | 1) => void;
@@ -105,9 +125,8 @@ function FieldCard({
   total,
   expanded,
   onToggle,
-  allFields,
+  settings,
   deleteBlockers,
-  onUpdate,
   onDuplicate,
   onDelete,
   onMove,
@@ -156,7 +175,7 @@ function FieldCard({
           type="button"
           onClick={onToggle}
           aria-expanded={expanded}
-          aria-controls={bodyId}
+          aria-controls={expanded && settings ? bodyId : undefined}
           id={headerId}
           className="flex min-w-0 flex-1 items-center gap-3 rounded-none py-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
@@ -255,22 +274,52 @@ function FieldCard({
         </DropdownMenu>
       </div>
 
-      {/* Inline properties: the card IS the properties panel. */}
-      {expanded && (
+      {/* The settings panel, where the window is too narrow to dock it. */}
+      {expanded && settings && (
         <div
           id={bodyId}
           role="region"
           aria-labelledby={headerId}
           className="border-t border-border"
         >
-          <FieldEditor
-            field={field}
-            allFields={allFields}
-            onUpdate={onUpdate}
-          />
+          {settings}
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Where the settings panel goes
+// ---------------------------------------------------------------------------
+
+/**
+ * The width from which the settings panel docks beside the list. Wider than
+ * the Schema Builder's, because the form editor still shows the Forms panel
+ * beside the page: at 1024px a docked panel left the list too narrow to read
+ * a field's label.
+ */
+const DOCKED = "(min-width: 1280px)";
+
+function subscribeDocked(onChange: () => void): () => void {
+  if (typeof window.matchMedia !== "function") return () => undefined;
+  const query = window.matchMedia(DOCKED);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+/**
+ * Whether the window is wide enough to dock the panel. A window without
+ * `matchMedia` (a server render, a test) opens it inside the card, which works
+ * at any width.
+ */
+function useDocked(): boolean {
+  return useSyncExternalStore(
+    subscribeDocked,
+    () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia(DOCKED).matches,
+    () => false
   );
 }
 
@@ -282,9 +331,8 @@ export interface FieldCardsProps {
   /**
    * Form-surface types the host has NOT excluded (the plugin's field
    * enable/disable option). `null` while the host configuration is still
-   * loading — the Add dialog waits rather than flashing the unfiltered set.
-   * Types outside this set stay renderable on existing fields but cannot be
-   * added.
+   * loading: Add field waits rather than offering the unfiltered set. Types
+   * outside this set stay editable on existing fields but cannot be added.
    */
   enabledTypes: readonly FormFieldCatalogType[] | null;
   /**
@@ -293,8 +341,13 @@ export interface FieldCardsProps {
    * contributed types.
    */
   disabledFieldTypes?: ReadonlySet<string>;
-  /** Creates a field of the given type and returns it (context helper). */
-  onAddField: (type: FormFieldTypeId) => void;
+  /**
+   * Creates and selects a field of the chosen type. The picker's whole choice
+   * comes second (the label the person typed and the name it gives), so a host
+   * written for the type alone keeps working and one that wants the label
+   * reads it there.
+   */
+  onAddField: (type: FormFieldTypeId, choice?: FieldPickerChoice) => void;
 }
 
 export function FieldCards({
@@ -307,47 +360,73 @@ export function FieldCards({
     notifications,
     selectedFieldId,
     selectField,
-    updateField,
     deleteField,
     duplicateField,
     moveField,
   } = useFormBuilder();
+  // A colleague's claim makes every setting read-only, as the provider holds it.
+  const { savedFieldNames, replaceField, readOnly } = useFieldBookkeeping();
 
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const docked = useDocked();
 
-  // A card's React key cannot be the field's name: the name is the one
-  // property the Field Name input rewrites on every keystroke, and a list
-  // keyed by it unmounts the renamed card mid-word, destroying the input and
-  // the focus in it. Keys are minted per card here and follow the field
-  // through a rename (handleUpdate below), so editing a name never remounts
-  // the card.
+  // A card's React key, and the id the settings panel tells fields apart by,
+  // cannot be the field's name: the name is the one property the Name input
+  // rewrites on every keystroke, and a list keyed by it unmounts the renamed
+  // card mid-word, destroying the input and the focus in it. Keys are minted
+  // per card here and follow the field through a rename (handleChange below),
+  // so editing a name never remounts the card. Forms store no field ids, so
+  // these are also the ids the panel is given.
   const cardKeysRef = useRef(new Map<string, string>());
   const nextCardKeyRef = useRef(0);
 
-  const cardKeyFor = (name: string): string => {
+  const cardKeyFor = useCallback((name: string): string => {
     let key = cardKeysRef.current.get(name);
     if (key === undefined) {
       key = `card-${++nextCardKeyRef.current}`;
       cardKeysRef.current.set(name, key);
     }
     return key;
-  };
+  }, []);
 
-  const handleUpdate = useCallback(
-    (field: AnyFormField, updates: Partial<AnyFormField>) => {
-      // Move the card's key to the field's incoming name before the state
-      // update re-renders the list, so the renamed field keeps its mounted
-      // card.
-      if (updates.name !== undefined && updates.name !== field.name) {
-        const key = cardKeysRef.current.get(field.name);
-        if (key !== undefined) {
-          cardKeysRef.current.delete(field.name);
-          cardKeysRef.current.set(updates.name, key);
+  // The name a card's field had before its Name was cleared: a rename that
+  // clears the input first passes through the empty name, and the references
+  // to the field still use the name it had, so they move from that one.
+  const clearedFromRef = useRef(new Map<string, string>());
+
+  const handleChange = useCallback(
+    (field: AnyFormField, next: FieldSettingsField) => {
+      let updated = fromPanelField(next);
+      const key = cardKeyFor(field.name);
+      if (updated.name !== field.name) {
+        // A name is the key its answers are stored under, so two fields never
+        // share one: a rename onto another field's name, typed or following a
+        // label, is made unique the way the picker makes a new name unique.
+        const others = fields.filter(f => f !== field).map(f => f.name);
+        if (updated.name !== "" && others.includes(updated.name)) {
+          updated = {
+            ...updated,
+            name: generateFieldName(updated.name, others),
+          };
         }
+        // Move the card's key to the field's incoming name before the state
+        // update re-renders the list, so the renamed field keeps its card.
+        cardKeysRef.current.delete(field.name);
+        cardKeysRef.current.set(updated.name, key);
       }
-      updateField(field.name, updates);
+      // The name the rest of the form refers to the field by.
+      const referencedAs =
+        field.name !== "" ? field.name : clearedFromRef.current.get(key);
+      if (updated.name === "") {
+        if (referencedAs !== undefined) {
+          clearedFromRef.current.set(key, referencedAs);
+        }
+      } else {
+        clearedFromRef.current.delete(key);
+      }
+      replaceField(field.name, updated, referencedAs);
     },
-    [updateField]
+    [fields, cardKeyFor, replaceField]
   );
 
   const sensors = useSensors(
@@ -355,33 +434,53 @@ export function FieldCards({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Plugin field types that opted into the forms surface, offered alongside the
-  // enabled built-ins. A plugin reusing a built-in id never shadows it.
-  const pluginEntries = usePluginFieldTypeEntries("forms");
-
-  const entries = useMemo(() => {
+  // The picker offers the enabled built-ins, then the plugin types that opted
+  // into the forms surface; a plugin reusing a built-in's id never shadows it,
+  // and a type the host disabled is left out whoever declared it.
+  const pickerConfig = useMemo<FieldPickerConfig | null>(() => {
     if (enabledTypes === null) return null;
     const allowed = new Set<string>(enabledTypes);
-    const builtinTypes = new Set<string>(
-      FORM_FIELD_TYPE_CATALOG.map(entry => entry.type)
-    );
-    const builtins: FieldTypeCatalogEntry<FormFieldTypeId>[] =
-      FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
-    return [
-      ...builtins,
-      // A plugin type a built-in shadows, or one the host disabled, is excluded.
-      ...pluginEntries.filter(
-        entry =>
-          !builtinTypes.has(entry.type) && !disabledFieldTypes?.has(entry.type)
+    return {
+      surface: "forms",
+      types: describeFieldTypes(
+        FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type))
       ),
-    ];
-  }, [enabledTypes, pluginEntries, disabledFieldTypes]);
+      exclude: [
+        ...FORM_FIELD_TYPE_CATALOG.filter(
+          entry => !allowed.has(entry.type)
+        ).map(entry => entry.type),
+        ...(disabledFieldTypes ?? []),
+      ],
+      deriveName: formFieldName,
+    };
+  }, [enabledTypes, disabledFieldTypes]);
 
   // One O(N^2) pass per fields/notifications change; each card then looks
   // its blockers up in O(1) instead of re-walking everything per render.
   const referenceMap = useMemo(
     () => buildFieldReferenceMap(fields, notifications),
     [fields, notifications]
+  );
+
+  // Every field as the panel sees it, so a condition can name any of them.
+  const panelFields = useMemo(
+    () => fields.map(field => toPanelField(field, cardKeyFor(field.name))),
+    [fields, cardKeyFor]
+  );
+
+  const selectedIndex = fields.findIndex(f => f.name === selectedFieldId);
+  const selected = selectedIndex === -1 ? undefined : fields[selectedIndex];
+  const settingsPanel = selected && (
+    <FieldSettingsPanel
+      surface={FORMS_FIELD_SURFACE}
+      field={panelFields[selectedIndex]}
+      ancestors={[]}
+      siblings={panelFields}
+      saved={savedFieldNames.has(selected.name)}
+      readOnly={readOnly}
+      onChange={next => handleChange(selected, next)}
+      onClose={docked ? () => selectField(null) : undefined}
+    />
   );
 
   const handleDragEnd = useCallback(
@@ -395,81 +494,117 @@ export function FieldCards({
     [fields, moveField]
   );
 
-  return (
-    <div className="space-y-3">
-      {fields.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 border border-dashed border-border bg-card px-6 py-14 text-center">
-          <span className="flex h-10 w-10 items-center justify-center bg-primary/10 text-primary">
-            <Lucide.ListPlus className="h-5 w-5" aria-hidden="true" />
-          </span>
-          <div>
-            <p className="text-sm font-medium text-foreground">No fields yet</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Add the first field to start building this form.
-            </p>
-          </div>
-          <Button type="button" size="sm" onClick={() => setIsAddOpen(true)}>
-            Add field
-          </Button>
-        </div>
-      ) : (
-        <>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext
-              items={fields.map(f => f.name)}
-              strategy={verticalListSortingStrategy}
-            >
-              <ul className="space-y-2" aria-label="Form fields">
-                {fields.map((field, index) => (
-                  <li key={cardKeyFor(field.name)}>
-                    <FieldCard
-                      field={field}
-                      index={index}
-                      total={fields.length}
-                      expanded={selectedFieldId === field.name}
-                      onToggle={() =>
-                        selectField(
-                          selectedFieldId === field.name ? null : field.name
-                        )
-                      }
-                      allFields={fields}
-                      deleteBlockers={(referenceMap.get(field.name) ?? []).map(
-                        ref => ref.label
-                      )}
-                      onUpdate={updates => handleUpdate(field, updates)}
-                      onDuplicate={() => duplicateField(field.name)}
-                      onDelete={() => deleteField(field.name)}
-                      onMove={direction => moveField(index, index + direction)}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </SortableContext>
-          </DndContext>
+  const addButton = (label: string, className?: string) => (
+    <Button
+      type="button"
+      variant={fields.length === 0 ? "default" : "outline"}
+      size="sm"
+      disabled={pickerConfig === null || readOnly}
+      onClick={() => setIsAddOpen(true)}
+      className={className}
+    >
+      {fields.length > 0 && (
+        <Lucide.Plus className="h-4 w-4" aria-hidden="true" />
+      )}
+      {pickerConfig === null ? "Loading field types…" : label}
+    </Button>
+  );
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setIsAddOpen(true)}
-            className="w-full border-dashed"
-          >
-            <Lucide.Plus className="h-4 w-4" aria-hidden="true" />
-            Add field
-          </Button>
-        </>
+  return (
+    <div
+      className={
+        docked && settingsPanel
+          ? "grid grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)] items-start gap-4"
+          : undefined
+      }
+    >
+      <div className="space-y-3">
+        {fields.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 border border-dashed border-border bg-card px-6 py-14 text-center">
+            <span className="flex h-10 w-10 items-center justify-center bg-primary/10 text-primary">
+              <Lucide.ListPlus className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                No fields yet
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Add the first field to start building this form.
+              </p>
+            </div>
+            {addButton("Add field")}
+          </div>
+        ) : (
+          <>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={fields.map(f => f.name)}
+                strategy={verticalListSortingStrategy}
+              >
+                <ul className="space-y-2" aria-label="Form fields">
+                  {fields.map((field, index) => (
+                    <li key={cardKeyFor(field.name)}>
+                      <FieldCard
+                        field={field}
+                        index={index}
+                        total={fields.length}
+                        expanded={selectedFieldId === field.name}
+                        onToggle={() =>
+                          selectField(
+                            selectedFieldId === field.name ? null : field.name
+                          )
+                        }
+                        settings={
+                          !docked && selectedFieldId === field.name
+                            ? settingsPanel
+                            : null
+                        }
+                        deleteBlockers={(
+                          referenceMap.get(field.name) ?? []
+                        ).map(ref => ref.label)}
+                        onDuplicate={() => duplicateField(field.name)}
+                        onDelete={() => deleteField(field.name)}
+                        onMove={direction =>
+                          moveField(index, index + direction)
+                        }
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </SortableContext>
+            </DndContext>
+
+            {addButton("Add field", "w-full border-dashed")}
+          </>
+        )}
+      </div>
+
+      {docked && settingsPanel && (
+        <aside
+          aria-label="Field settings"
+          // A column the panel fills, so its own body scrolls; short enough to
+          // stay clear of the save bar along the bottom of the page.
+          className="sticky top-4 flex max-h-[calc(100vh-8rem)] flex-col overflow-hidden border border-border bg-card"
+        >
+          {settingsPanel}
+        </aside>
       )}
 
-      <AddFieldDialog
-        open={isAddOpen}
-        onOpenChange={setIsAddOpen}
-        entries={entries}
-        onAdd={onAddField}
-      />
+      {pickerConfig && (
+        <FieldPicker
+          open={isAddOpen}
+          config={pickerConfig}
+          onCancel={() => setIsAddOpen(false)}
+          onAdd={(choice, how) => {
+            onAddField(choice.type, choice);
+            if (!how.addAnother) setIsAddOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
