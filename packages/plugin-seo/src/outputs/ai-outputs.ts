@@ -138,13 +138,11 @@ export async function llmsTxtOf(
   // the public may not read is listed by its address alone, as the sitemap
   // lists it.
   const readable = await publicDocuments(pages);
+  const heads = await publicHeads(ctx, pages, readable, readRules);
   const entries: LlmsEntry[] = [];
   for (const [at, page] of pages.entries()) {
     const document = readable.get(readingKey(page));
-    const head =
-      document === undefined
-        ? {}
-        : await publicHead(ctx, page, document, readRules);
+    const head = heads.get(at) ?? {};
     entries.push({
       section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
       title: head.title ?? page.path,
@@ -280,6 +278,38 @@ async function publicDocuments(
     }
   }
   return found;
+}
+
+/**
+ * The head of each of `pages` the public may read, by its place in `pages`:
+ * worked out language by language, inside one read of who holds every
+ * page's address, as the listing works them out.
+ */
+async function publicHeads(
+  ctx: PluginContext,
+  pages: readonly ListedPage[],
+  readable: ReadonlyMap<string, Record<string, unknown>>,
+  readRules: ReadRules
+): Promise<Map<number, { title?: string; description?: string }>> {
+  const heads = new Map<number, { title?: string; description?: string }>();
+  const byLanguage = new Map<string, number[]>();
+  for (const [at, page] of pages.entries()) {
+    const list = byLanguage.get(page.language) ?? [];
+    list.push(at);
+    byLanguage.set(page.language, list);
+  }
+  for (const [language, places] of byLanguage) {
+    const paths = places.flatMap(at => pages[at]?.path ?? []);
+    await withAddressHolders(ctx, language, paths, async () => {
+      for (const at of places) {
+        const page = pages[at];
+        const document = page && readable.get(readingKey(page));
+        if (page === undefined || document === undefined) continue;
+        heads.set(at, await publicHead(ctx, page, document, readRules));
+      }
+    });
+  }
+  return heads;
 }
 
 /** The type a listed page is of. */

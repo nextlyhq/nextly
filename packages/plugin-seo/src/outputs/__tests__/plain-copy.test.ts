@@ -165,6 +165,16 @@ describe("rich text as Markdown", () => {
     expect(markdownOfRichText(value)).toBe("````md\n```js\nx\n```\n````");
   });
 
+  it("writes a video's caption, the words it shows", () => {
+    const value = rich({
+      type: "video",
+      provider: "youtube",
+      videoId: "abc",
+      caption: "Launch day *highlights*",
+    });
+    expect(markdownOfRichText(value)).toBe("Launch day \\*highlights\\*");
+  });
+
   it("writes a gallery's caption beneath its images", () => {
     const value = rich({
       type: "gallery",

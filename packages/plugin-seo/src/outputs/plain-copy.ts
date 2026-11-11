@@ -228,6 +228,11 @@ const BLOCK_WRITERS: Readonly<Record<string, (node: Node) => string>> = {
       ? images
       : [images, escapeText(caption)].filter(part => part !== "").join("\n");
   },
+  // A video shows its caption beneath it; the video itself has no words.
+  video: node => {
+    const caption = textOf(node.caption);
+    return caption === undefined ? "" : escapeText(caption);
+  },
   "button-link": button,
   "button-group": node => itemsOf(node.buttons, button, " "),
   table,
