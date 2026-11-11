@@ -40,6 +40,17 @@ const PEOPLE = "ntf_people";
 const POSTS = "ntf_posts";
 const TITLE = { name: "title", type: "text" };
 
+/** A short text `summary`, shared or translated, with a length bound when given. */
+const summary = (at: { localized: boolean; maxLength?: number }) => ({
+  name: "summary",
+  type: "text",
+  localized: at.localized,
+  options: { variant: "short" },
+  ...(at.maxLength === undefined
+    ? {}
+    : { validation: { maxLength: at.maxLength } }),
+});
+
 /** A translated relationship to a person, as the Builder's editor sends it; one-to-one is marked unique. */
 const author = (oneToOne: boolean) => ({
   name: "author",
@@ -258,6 +269,70 @@ describeEachDialect(
       expect(await titleIn(t, before, "en")).toBe("Before");
     }, 120_000);
 
+    /** A short text `summary`, shared, saved beside the title, then an entry holding one. */
+    async function withSharedSummary(
+      t: TestNextly,
+      maxLength?: number
+    ): Promise<string> {
+      await seed(t);
+      expect(
+        await apply(t, [TITLE, summary({ localized: false, maxLength })])
+      ).toBe("accepted");
+      const post = await t.nextly.create({
+        collection: POSTS,
+        data: { title: "Before", summary: "Kept" },
+        locale: "en",
+      });
+      return (post.item as { id: string }).id;
+    }
+
+    async function summaryIn(t: TestNextly, id: string): Promise<unknown> {
+      const found = (await t.nextly.findByID({
+        collection: POSTS,
+        id,
+        locale: "en",
+        depth: 0,
+      })) as Record<string, unknown> | null;
+      return found?.summary;
+    }
+
+    // Short text into long text holds every value, through the Builder as through the push.
+    it("applies the schema dialog making a shared short text translated as long text", async () => {
+      const t = current as TestNextly;
+      const id = await withSharedSummary(t);
+
+      expect(
+        await apply(t, [
+          TITLE,
+          { name: "summary", type: "text", localized: true },
+        ])
+      ).toBe("accepted");
+
+      expect(await summaryIn(t, id)).toBe("Kept");
+    }, 120_000);
+
+    // SQLite keeps no length on a text column, so a shorter bound cuts nothing there.
+    it.skipIf(dialect === "sqlite")(
+      "still refuses the schema dialog narrowing a short text as it becomes translated",
+      async () => {
+        const t = current as TestNextly;
+        const id = await withSharedSummary(t, 100);
+
+        const answer = await apply(t, [
+          TITLE,
+          summary({ localized: true, maxLength: 10 }),
+        ]);
+
+        expect(answer).toEqual([
+          expect.objectContaining({
+            code: "RESHAPED_FIELD_JOINS_TRANSLATION",
+          }),
+        ]);
+        expect(await summaryIn(t, id)).toBe("Kept");
+      },
+      120_000
+    );
+
     // A number made translated as text in one save: its values would be copied as they are into a
     // column of another kind, which no widening covers. Still refused, and nothing changes.
     it("still refuses a field whose kind changes as it becomes translated", async () => {
@@ -277,6 +352,33 @@ describeEachDialect(
         expect.objectContaining({
           code: "RESHAPED_FIELD_JOINS_TRANSLATION",
           path: "fields.views",
+        }),
+      ]);
+      expect(await titleIn(t, before, "en")).toBe("Before");
+    }, 120_000);
+
+    // A checkbox (a boolean) made a number changes what the field is, though SQLite keeps both as integers and
+    // would copy every value: still refused, on every dialect.
+    it("still refuses a field moving to another kind's family as it becomes translated", async () => {
+      const t = current as TestNextly;
+      await seed(t);
+      expect(
+        await apply(t, [
+          TITLE,
+          { name: "featured", type: "checkbox", localized: false },
+        ])
+      ).toBe("accepted");
+      const before = await anEntry(t);
+
+      const answer = await apply(t, [
+        TITLE,
+        { name: "featured", type: "number", localized: true },
+      ]);
+
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "RESHAPED_FIELD_JOINS_TRANSLATION",
+          path: "fields.featured",
         }),
       ]);
       expect(await titleIn(t, before, "en")).toBe("Before");

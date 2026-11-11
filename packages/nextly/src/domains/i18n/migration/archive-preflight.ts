@@ -16,6 +16,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { copiesEveryValue } from "../../schema/pipeline/classifier/type-widening";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
@@ -34,6 +35,7 @@ import {
   isUniqueField,
   type UniqueTranslatedColumn,
 } from "./companion-unique-indexes";
+import { ddlType } from "./ddl-types";
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
@@ -63,6 +65,7 @@ import {
   refuseUnindexableTranslatedUnique,
   type TranslatedDuplicate,
 } from "./translated-unique-preconditions";
+import type { LocalizedColumnKind, LocalizedColumnSpec } from "./types";
 
 /**
  * Creates the archive table when it is missing, then runs the given archive writes.
@@ -927,6 +930,32 @@ function narrowedJoiningFields(
   });
 }
 
+/** The kinds a field may move between as it joins translation, each family's: text, or number. */
+const STORAGE_FAMILY: Partial<Record<LocalizedColumnKind, string>> = {
+  text: "text",
+  shortText: "text",
+  longText: "text",
+  integer: "number",
+  double: "number",
+  decimal: "number",
+};
+
+/**
+ * Whether two descriptions of a field's column are one kind, or kinds of one family. A field
+ * changing kind across families (a number made text, a boolean made a number) changes what it
+ * is, whatever the database would keep of its values, so it is a reshape however the copy goes.
+ */
+function sameStorageFamily(
+  from: LocalizedColumnSpec,
+  to: LocalizedColumnSpec
+): boolean {
+  const family = STORAGE_FAMILY[from.kind];
+  return (
+    from.kind === to.kind ||
+    (family !== undefined && family === STORAGE_FAMILY[to.kind])
+  );
+}
+
 function reshapedJoiningFields(
   joining: readonly string[],
   args: {
@@ -942,14 +971,21 @@ function reshapedJoiningFields(
       : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
   const after = new Map(args.newFields.map(f => [f.name, f]));
-  // Reshaped only where the new storage cannot hold every value the old one holds
-  // (`storageHolds`, as the leaving side judges it): a widening copies each value as it is.
+  // Reshaped where the field changes kind outside its family (`sameStorageFamily`), or where the
+  // column it gets cannot hold every value the one it has holds, asked of the two columns' types
+  // (`copiesEveryValue`) as the push and `migrate:create` ask it: a widening within a family
+  // copies each value as it is, short text into long text included.
   return joining.filter(name => {
     const from = columnOf(before.get(name));
     const to = columnOf(after.get(name));
     return (
       storageDiffers(from, to) &&
-      !(from != null && to != null && storageHolds(to, from))
+      !(
+        from != null &&
+        to != null &&
+        sameStorageFamily(from, to) &&
+        copiesEveryValue(ddlType(from, dialect), ddlType(to, dialect), dialect)
+      )
     );
   });
 }
