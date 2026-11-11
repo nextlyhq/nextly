@@ -77,6 +77,54 @@ describe("contentFacts", () => {
     ]);
   });
 
+  it("reads Page Builder's image and button blocks, and its decorative mark", () => {
+    const facts = contentFacts({
+      id: "7",
+      layout: {
+        root: {
+          type: "core/container",
+          children: [
+            { type: "core/image", props: { src: "/uploads/hero.png" } },
+            {
+              type: "core/image",
+              props: { src: "/uploads/rule.png", alt: "" },
+            },
+            {
+              type: "core/image",
+              props: { src: "/uploads/dots.png", decorative: true },
+            },
+            {
+              type: "core/image",
+              props: { src: "/uploads/map.png", alt: "Map" },
+            },
+            // Its alt text falls back to the media library item's own.
+            { type: "core/image", props: { mediaId: "m9" } },
+            { type: "core/button", props: { label: "Go", href: "/blog/gone" } },
+          ],
+        },
+      },
+    });
+    expect(facts.images).toEqual([
+      { field: "layout", name: "hero.png", media: false, alt: undefined },
+      {
+        field: "layout",
+        name: "rule.png",
+        media: false,
+        alt: "",
+        decorative: true,
+      },
+      {
+        field: "layout",
+        name: "dots.png",
+        media: false,
+        alt: undefined,
+        decorative: true,
+      },
+      { field: "layout", name: "map.png", media: false, alt: "Map" },
+    ]);
+    expect(facts.links).toEqual([{ field: "layout", url: "/blog/gone" }]);
+  });
+
   it("finds nothing in a page with no images or links", () => {
     expect(contentFacts({ id: "1", title: "Plain", count: 3 })).toEqual({
       images: [],

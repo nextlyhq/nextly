@@ -2,7 +2,8 @@
  * Where the problem list keeps what its checks found, so the list opens
  * without checking anything and serving a page never runs a check.
  *
- * One row per checked page (`page`), holding its own problems and the title
+ * One row per checked page in each language it is published in (`page`),
+ * holding its own problems and the title
  * and description it was checked with, which the list compares across pages
  * when it opens; and one row for the whole site (`meta`): when it was last
  * checked in full, how many pages that read, and whether a change since can
@@ -47,7 +48,10 @@ export function problemsCollection(): CollectionConfig {
         label: "Holder collection",
         index: true,
       }),
-      text({ name: "holderId", label: "Holder id" }),
+      // Indexed with the collection, since a page's every language is read
+      // together.
+      text({ name: "holderId", label: "Holder id", index: true }),
+      text({ name: "locale", label: "Language" }),
       // Long text: a title or address of any length fits on every dialect.
       textarea({ name: "label", label: "Label" }),
       textarea({ name: "path", label: "Path" }),
@@ -86,9 +90,9 @@ function problemsSlug(ctx: PluginContext): string {
 const sha256 = (text: string) =>
   createHash("sha256").update(text, "utf8").digest("hex");
 
-/** The key of a page's row. */
-export const pageKey = (type: string, id: string): string =>
-  sha256(`page:${type}:${id}`);
+/** The key of a page's row in one language. */
+export const pageKey = (type: string, id: string, locale: string): string =>
+  sha256(`page:${type}:${id}:${locale}`);
 
 /** The key of the site's own row. */
 const META_KEY = sha256("meta:site-check");
@@ -96,9 +100,11 @@ const META_KEY = sha256("meta:site-check");
 /** How many rows one read takes. */
 const READ_PAGE = 100;
 
-/** A page as its last check left it. */
+/** A page in one language, as its last check left it. */
 export interface PageRow {
   subject: ProblemSubject & { type: string; id: string };
+  /** The language this version of the page is in. */
+  locale: string;
   title?: string;
   description?: string;
   problems: Problem[];
@@ -152,6 +158,7 @@ function pageRowOf(row: Record<string, unknown>): PageRow | undefined {
       label: textOf(row.label) ?? id,
       ...(path === undefined ? {} : { detail: path }),
     },
+    locale: textOf(row.locale) ?? "",
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
     problems: problemsOf(row.problems),
@@ -212,10 +219,11 @@ export async function savePage(
   row: PageRow
 ): Promise<void> {
   const { subject } = row;
-  await writeRow(ctx, pageKey(subject.type, subject.id), {
+  await writeRow(ctx, pageKey(subject.type, subject.id, row.locale), {
     kind: "page",
     holderCollection: subject.type,
     holderId: subject.id,
+    locale: row.locale,
     label: subject.label,
     path: subject.detail ?? null,
     title: row.title ?? null,
@@ -225,34 +233,50 @@ export async function savePage(
   });
 }
 
-/** Forget a page: it is gone, or no longer a public page. */
+/** Forget a page in one language: it is gone, or no longer public there. */
 export async function removePage(
   ctx: PluginContext,
-  type: string,
-  id: string
-): Promise<boolean> {
-  const row = await rowAt(ctx, pageKey(type, id));
-  if (row === undefined) return false;
+  row: Pick<PageRow, "subject" | "locale">
+): Promise<void> {
+  const found = await rowAt(
+    ctx,
+    pageKey(row.subject.type, row.subject.id, row.locale)
+  );
+  if (found === undefined) return;
   try {
     await ctx.services.collections.deleteEntry(
       problemsSlug(ctx),
-      String(row.id)
+      String(found.id)
     );
   } catch (error) {
     // Another check removed it first.
     if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
   }
-  return true;
 }
 
-/** The row of the page `id` of `type`, as its last check left it. */
-export async function readPage(
+/** The rows of the page `id` of `type`, one for each language it was checked in. */
+export async function readVersions(
   ctx: PluginContext,
   type: string,
   id: string
-): Promise<PageRow | undefined> {
-  const row = await rowAt(ctx, pageKey(type, id));
-  return row === undefined ? undefined : pageRowOf(row);
+): Promise<PageRow[]> {
+  const { data } = await ctx.services.ownCollections.listEntries(
+    problemsSlug(ctx),
+    {
+      where: {
+        and: [
+          { kind: { equals: "page" } },
+          { holderCollection: { equals: type } },
+          { holderId: { equals: id } },
+        ],
+      },
+      pagination: { limit: READ_PAGE, page: 1 },
+      depth: 0,
+    }
+  );
+  return (data as unknown[]).flatMap(item =>
+    isRecord(item) ? (pageRowOf(item) ?? []) : []
+  );
 }
 
 /** Every page row, in pages of {@link READ_PAGE}. */

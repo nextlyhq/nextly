@@ -686,8 +686,8 @@ shared, grouped by kind, each with a button that goes straight to its fix: the p
 its content, the SEO settings, the media library, or a note to copy for a developer where the fix
 is in code. There is no score, and nothing on the list stops anyone publishing.
 
-Each public page of the collections the plugin extends is checked, as its head would be served,
-for:
+Each public page of the collections the plugin extends is checked, in every language it is
+published in and at its address there, as its head would be served, for:
 
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
@@ -696,7 +696,8 @@ for:
 - a canonical typed for the page that names another address;
 - a link in its content to an address of a content type that no page holds;
 - no share image, or one networks crop or shrink;
-- an image in its content with no alt text, unless it is marked decorative;
+- an image in its content (rich text, a media field or a Page Builder image block) with no alt
+  text, unless it is marked decorative;
 - structured data missing a detail its type needs;
 - a language the site's language links leave out, because search engines don't accept its code.
 
@@ -718,6 +719,11 @@ holds its address.
 The list answers each person with the pages of the collections they may read. It is served at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems`, and a full check at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
+
+The check reads the values the plugin keeps: the page's own, its content type's pattern, its
+content and the site's defaults. A title, description or share image that only the route's code
+or a Page Builder design sets is not seen, so such a page is listed as missing it; typing the value
+on the page's SEO tab settles it either way.
 
 Not checked yet: whether a response is small enough for every value to fall within its first
 2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page

@@ -101,8 +101,42 @@ const buttonGroupNode: NodeReader = (node, field, facts) => {
   }
 };
 
-/** What each kind of rich text node the list reads is read by. */
+/**
+ * A Page Builder image block: its own alt text, where it says one. An
+ * explicit empty alt, like the decorative mark, says the image needs none,
+ * as the block draws it. One that says nothing about its alt and names a
+ * media library item shows that item's own alt text, which is not read
+ * here, so it is not judged.
+ */
+const blockImage: NodeReader = (node, field, facts) => {
+  const props = isRecord(node.props) ? node.props : {};
+  const src = textOf(props.src);
+  const said = typeof props.alt === "string";
+  if (src === undefined || (!said && textOf(props.mediaId) !== undefined)) {
+    return;
+  }
+  facts.images.push({
+    field,
+    name: fileName(src),
+    media: false,
+    alt: props.alt,
+    ...(props.decorative === true || props.alt === ""
+      ? { decorative: true }
+      : {}),
+  });
+};
+
+/** A Page Builder button block: the address it leads to. */
+const blockButton: NodeReader = (node, field, facts) => {
+  const props = isRecord(node.props) ? node.props : {};
+  const href = textOf(props.href);
+  if (href !== undefined) facts.links.push({ field, url: href });
+};
+
+/** What each kind of rich text node and design block the list reads is read by. */
 const NODE_READERS: Readonly<Record<string, NodeReader>> = {
+  "core/image": blockImage,
+  "core/button": blockButton,
   image: imageNode,
   gallery: galleryNode,
   link: linkNode,

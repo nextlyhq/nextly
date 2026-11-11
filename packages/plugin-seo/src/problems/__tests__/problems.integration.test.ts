@@ -20,6 +20,7 @@ import { createPublicContentRoute, type ContentEntry } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
+import { lastCatchUp } from "../../address-record/catch-up";
 import { putRedirect } from "../../redirects/store";
 import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
@@ -67,8 +68,11 @@ const CHECKS: ProblemChecks = {
  * The SEO plugin, handing over the context it starts with: its own, which
  * alone may read the rows its checks keep.
  */
-function seoWithContext(seen: { ctx?: PluginContext }): PluginDefinition {
-  const plugin = seoPlugin({ collections: ["posts", "notes"] });
+function seoWithContext(
+  seen: { ctx?: PluginContext },
+  collections: string[] = ["posts", "notes"]
+): PluginDefinition {
+  const plugin = seoPlugin({ collections });
   return {
     ...plugin,
     init(ctx) {
@@ -430,6 +434,66 @@ describe.each(getConfiguredTestDialects())(
       // posts before this page was published.
       await checkSite(ctx, { ...CHECKS, targets: ["notes"] });
       expect((await rows(t)).some(row => row.holderId === id)).toBe(true);
+    });
+
+    it("checks each language a page is published in", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: { by: "prefix" },
+        plugins: [seoWithContext(seen, ["posts"])],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            localized: true,
+            status: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title", localized: true }),
+              text({ name: "slug", localized: true }),
+              text({ name: "excerpt", localized: true }),
+            ],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      // With no description in English, and one in German.
+      const both = await t.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Harbour", slug: "harbour", status: "published" },
+      });
+      const id = String(both.item.id);
+      await t.nextly.update({
+        collection: "posts",
+        id,
+        locale: "de",
+        data: {
+          title: "Hafen",
+          slug: "hafen",
+          excerpt: "Ein Spaziergang am Hafen.",
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      await lastCatchUp();
+
+      await checkSite(ctx, { ...CHECKS, targets: ["posts"] });
+      const list = await problemList(ctx, CHECKS, everything);
+      // Each language checked on its own, at its own address.
+      const versions = list.problems
+        .filter(p => p.subject.id === id && p.kind === "shareImage")
+        .map(p => p.subject.detail)
+        .sort();
+      expect(versions).toEqual(["/blog/harbour", "/de/blog/hafen"]);
+      const missing = list.problems
+        .filter(p => p.kind === "noDescription")
+        .map(p => [p.subject.id, p.subject.detail]);
+      expect(missing).toEqual([[id, "/blog/harbour"]]);
     });
   }
 );

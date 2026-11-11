@@ -12,6 +12,7 @@
  */
 import {
   addressOfRequest,
+  publicAddressOf,
   typesWithoutAddress,
   type PageMetadataInput,
   type PluginContext,
@@ -20,6 +21,7 @@ import {
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { pageLanguageLinks } from "../languages/head";
+import { heldLanguages, type HeldLanguages } from "../languages/versions";
 import { listPages } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
@@ -54,8 +56,8 @@ import {
 import {
   markOutOfDate,
   pageKey,
-  readPage,
   readPages,
+  readVersions,
   readSiteCheck,
   removePage,
   savePage,
@@ -89,60 +91,76 @@ function labelOf(entry: Readonly<Record<string, unknown>>, id: string): string {
 }
 
 /**
- * The entry `id` of `type`, as a route reads it: one level of links
- * expanded, so a media field reads as the media library's item. Nothing
- * where it does not exist.
+ * The entry `id` of `type` in `locale` (the default language where none),
+ * as a route reads it: one level of links expanded, so a media field reads
+ * as the media library's item. Nothing where it does not exist.
  */
 async function readEntry(
   ctx: PluginContext,
   type: string,
-  id: string
+  id: string,
+  locale: string | undefined
 ): Promise<Readonly<Record<string, unknown>> | undefined> {
-  const { data } = await ctx.services.collections.listEntries(type, {
-    where: { id: { equals: id } },
-    pagination: { limit: 1, page: 1 },
-    depth: 1,
-  });
+  const { data } = await ctx.services.collections.listEntries(
+    type,
+    {
+      where: { id: { equals: id } },
+      pagination: { limit: 1, page: 1 },
+      depth: 1,
+    },
+    { as: "system", ...(locale === undefined ? {} : { locale }) }
+  );
   const [entry] = data as unknown[];
   return isRecord(entry) ? entry : undefined;
 }
 
-/**
- * The public address the page holds, read from the site's record: its
- * type's address, held by this page. None for a draft, which holds no
- * address, for a page that lost its address to another, and for a type
- * with no address.
- */
-async function heldAddress(
-  ctx: PluginContext,
-  type: string,
-  entry: Readonly<Record<string, unknown>>,
-  id: string
-): Promise<string | undefined> {
-  const address = await addressOf(
-    ctx,
-    { type: { kind: "collection", slug: type }, key: type },
-    entry,
-    undefined,
-    undefined
-  );
-  if (address === undefined) return undefined;
-  const holders = await addressHolders(ctx, address, undefined);
-  return holders.some(holder => holder.collection === type && holder.id === id)
-    ? address
-    : undefined;
+/** One language of a page, and the paths the record says it holds there. */
+interface Version {
+  type: string;
+  id: string;
+  /** The language, as the record keeps it. */
+  language: string;
+  /** Read in no particular language: the site's default one. */
+  locale: string | undefined;
+  held: ReadonlySet<string>;
 }
 
-/** What a page's check found, before it is kept. */
+/**
+ * The address the version is served at, where it holds its own address in
+ * its language: none for a draft there, which holds no address, for one
+ * that lost its address to another page, and for a type with no address.
+ */
+async function servedAddress(
+  ctx: PluginContext,
+  version: Version,
+  entry: Readonly<Record<string, unknown>>
+): Promise<string | undefined> {
+  const type = { kind: "collection" as const, slug: version.type };
+  const own = await publicAddressOf(type, entry, version.locale);
+  if (own.status !== "resolved" || !version.held.has(own.path)) {
+    return undefined;
+  }
+  return (
+    (await addressOf(
+      ctx,
+      { type, key: version.type },
+      entry,
+      version.locale,
+      undefined
+    )) ?? own.path
+  );
+}
+
+/** What the check of one language of a page found, before it is kept. */
 async function examine(
   ctx: PluginContext,
   checks: ProblemChecks,
-  type: string,
-  id: string
+  version: Version
 ): Promise<PageRow | undefined> {
-  const entry = await readEntry(ctx, type, id);
+  const { type, id, locale } = version;
+  const entry = await readEntry(ctx, type, id, locale);
   if (entry === undefined) return undefined;
-  const ownAddress = await heldAddress(ctx, type, entry, id);
+  const ownAddress = await servedAddress(ctx, version, entry);
   if (ownAddress === undefined) return undefined;
 
   const { readers } = checks;
@@ -150,9 +168,10 @@ async function examine(
     source: { kind: "entry", collection: type, entry },
     code: {},
     derived: {},
+    ...(locale === undefined ? {} : { locale }),
   };
   const answer = await resolveSeo(ctx, input, readers.readRules);
-  const rules = await readers.readRules(ctx, undefined);
+  const rules = await readers.readRules(ctx, locale);
   const productionAddresses = productionAddressesOf(rules.productionAddresses);
   const content = contentFacts(entry);
   const subject = { type, id, label: labelOf(entry, id), detail: ownAddress };
@@ -186,6 +205,7 @@ async function examine(
   const listed = answer.robots.value.index;
   return {
     subject,
+    locale: version.language,
     ...(answer.title === undefined || !listed
       ? {}
       : { title: answer.title.value }),
@@ -210,28 +230,60 @@ function altersOthers(before: PageRow | undefined, row: PageRow): boolean {
   );
 }
 
+/** The languages the page `id` of `type` holds an address in, with the paths. */
+async function versionsOf(
+  ctx: PluginContext,
+  type: string,
+  id: string
+): Promise<{ defaultLanguage: string; held: HeldLanguages }> {
+  return {
+    defaultLanguage: await ctx.publicAddresses.defaultLanguage(),
+    held: (await heldLanguages(ctx, type, [id])).get(id) ?? new Map(),
+  };
+}
+
 /**
- * Check one page and keep what was found, or forget it where it is not a
- * public page (gone, a draft, or of a type with no address). Where the
- * change can alter another page's result, the full check is marked out of
- * date first, so whoever reads the page's new row also reads the mark.
+ * Check a page in every language it holds an address in, or was checked
+ * in before, keep what was found, and forget a language it is no longer
+ * public in. Where a change can alter another page's result, the full
+ * check is marked out of date first, so whoever reads the new rows also
+ * reads the mark. Answers the keys of the rows it kept.
  */
 async function checkPage(
   ctx: PluginContext,
   checks: ProblemChecks,
   type: string,
   id: string
-): Promise<void> {
-  const before = await readPage(ctx, type, id);
-  const row = await examine(ctx, checks, type, id);
-  if (row === undefined) {
-    if (before === undefined) return;
-    await markOutOfDate(ctx);
-    await removePage(ctx, type, id);
-    return;
+): Promise<string[]> {
+  const before = await readVersions(ctx, type, id);
+  const { defaultLanguage, held } = await versionsOf(ctx, type, id);
+  const languages = new Set([...held.keys(), ...before.map(row => row.locale)]);
+  const found: { previous: PageRow | undefined; row: PageRow | undefined }[] =
+    [];
+  for (const language of languages) {
+    const row = await examine(ctx, checks, {
+      type,
+      id,
+      language,
+      locale: language === defaultLanguage ? undefined : language,
+      held: held.get(language) ?? new Set(),
+    });
+    found.push({ previous: before.find(row => row.locale === language), row });
   }
-  if (altersOthers(before, row)) await markOutOfDate(ctx);
-  await savePage(ctx, row);
+  const changed = found.some(({ previous, row }) =>
+    row === undefined ? previous !== undefined : altersOthers(previous, row)
+  );
+  if (changed) await markOutOfDate(ctx);
+  const kept: string[] = [];
+  for (const { previous, row } of found) {
+    if (row !== undefined) {
+      await savePage(ctx, row);
+      kept.push(pageKey(type, id, row.locale));
+    } else if (previous !== undefined) {
+      await removePage(ctx, previous);
+    }
+  }
+  return kept;
 }
 
 /** Pages read per step of a full check. */
@@ -257,10 +309,19 @@ async function checkType(
     for (const document of page.items) {
       if (document.holds.length === 0) continue;
       const { id } = document.holder;
-      const row = await examine(ctx, checks, slug, id);
-      if (row === undefined) continue;
-      await savePage(ctx, row);
-      seen.add(pageKey(slug, id));
+      // In the page's turn, so a check of a save made meanwhile and this one
+      // never write over each other.
+      await inTurn(
+        ctx,
+        slug,
+        id,
+        "The SEO plugin could not check a page",
+        async () => {
+          for (const key of await checkPage(ctx, checks, slug, id)) {
+            seen.add(key);
+          }
+        }
+      );
     }
     after = page.next;
   } while (after !== undefined);
@@ -289,13 +350,22 @@ async function runSiteCheck(
   // where it is not.
   for (const row of await readPages(ctx)) {
     const { type, id } = row.subject;
-    if (seen.has(pageKey(type, id))) continue;
-    await inTurn(ctx, type, id, "The SEO plugin could not check a page", () =>
-      checkPage(ctx, checks, type, id)
+    if (seen.has(pageKey(type, id, row.locale))) continue;
+    await inTurn(
+      ctx,
+      type,
+      id,
+      "The SEO plugin could not check a page",
+      async () => {
+        for (const key of await checkPage(ctx, checks, type, id)) {
+          seen.add(key);
+        }
+      }
     );
   }
   await saveSiteCheck(ctx, {
     checkedAt: new Date().toISOString(),
+    // Each language of a page is a page to a search engine.
     pagesChecked: seen.size,
     problems: [
       ...(await leftOutOfListing(ctx, checks)),
@@ -426,7 +496,7 @@ function inTurn(
   failed: string,
   work: () => Promise<void>
 ): Promise<void> {
-  const key = pageKey(type, id);
+  const key = `${type}\u0000${id}`;
   const run = async () => {
     try {
       await work();
@@ -454,7 +524,9 @@ export function recheckSaved(
     type,
     id,
     "The SEO plugin could not check a saved page",
-    () => checkPage(ctx, checks, type, id)
+    async () => {
+      await checkPage(ctx, checks, type, id);
+    }
   );
 }
 
@@ -474,7 +546,9 @@ export function forgetDeleted(
     "The SEO plugin could not forget a deleted page",
     async () => {
       await markOutOfDate(ctx);
-      await removePage(ctx, type, id);
+      for (const row of await readVersions(ctx, type, id)) {
+        await removePage(ctx, row);
+      }
     }
   );
 }

@@ -8,13 +8,18 @@ import { describe, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => ({
   calls: [] as string[],
+  versionsRead: 0,
 }));
 
 vi.mock("../store", async importOriginal => ({
   ...(await importOriginal<typeof import("../store")>()),
-  readPage: async () => {
-    store.calls.push("readPage");
-    return undefined;
+  // No row before the check; one, by the time the deletion reads.
+  readVersions: async () => {
+    store.calls.push("readVersions");
+    store.versionsRead += 1;
+    return store.versionsRead === 1
+      ? []
+      : [{ subject: { type: "posts", id: "7", label: "7" }, locale: "en" }];
   },
   savePage: async () => {
     store.calls.push("savePage");
@@ -40,9 +45,12 @@ describe("a page's checks and its deletion", () => {
     let finishRead: (value: { data: unknown[] }) => void = () => undefined;
     const ctx = {
       logger: { error: vi.fn() },
+      self: { collections: {} },
+      publicAddresses: { defaultLanguage: async () => "en" },
       services: {
-        collections: {
-          // The check's read of the page, held until the test lets it go.
+        ownCollections: {
+          // The check's read of the languages the page holds, held until the
+          // test lets it go.
           listEntries: () =>
             new Promise<{ data: unknown[] }>(resolve => {
               finishRead = resolve;
@@ -53,14 +61,19 @@ describe("a page's checks and its deletion", () => {
 
     recheckSaved(ctx, CHECKS, "posts", "7");
     forgetDeleted(ctx, "posts", "7");
-    await vi.waitFor(() => expect(store.calls).toEqual(["readPage"]));
+    await vi.waitFor(() => expect(store.calls).toEqual(["readVersions"]));
     await new Promise(resolve => setTimeout(resolve, 20));
     // The cleanup has not run while the check is still reading.
-    expect(store.calls).toEqual(["readPage"]);
+    expect(store.calls).toEqual(["readVersions"]);
 
     finishRead({ data: [] });
     await vi.waitFor(() =>
-      expect(store.calls).toEqual(["readPage", "markOutOfDate", "removePage"])
+      expect(store.calls).toEqual([
+        "readVersions",
+        "markOutOfDate",
+        "readVersions",
+        "removePage",
+      ])
     );
     expect(ctx.logger.error).not.toHaveBeenCalled();
   });

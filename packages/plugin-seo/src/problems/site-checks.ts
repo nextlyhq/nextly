@@ -13,6 +13,8 @@ import { WHOLE_SITE, type Problem, type ProblemSubject } from "./contract";
 /** A page as the last check left it: what it is, and its title and description. */
 export interface CheckedPage {
   subject: ProblemSubject;
+  /** The language the page is in: pages are compared within one language. */
+  locale?: string;
   title?: string;
   description?: string;
 }
@@ -44,9 +46,10 @@ function groupedBy(
   for (const page of pages) {
     const value = page[key];
     if (value === undefined || value.trim() === "") continue;
-    const group = groups.get(compared(value)) ?? [];
+    const slot = `${page.locale ?? ""}\u0000${compared(value)}`;
+    const group = groups.get(slot) ?? [];
     group.push(page);
-    groups.set(compared(value), group);
+    groups.set(slot, group);
   }
   return [...groups.values()];
 }
