@@ -557,6 +557,11 @@ export type {
  */
 export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
 export { useFoldedPanel } from "./components/layout/PanelFold";
+export { TopBarPlace } from "./components/layout/header/TopBarPlaces";
+export type {
+  TopBarPlaceName,
+  TopBarPlaceProps,
+} from "./components/layout/header/TopBarPlaces";
 /**
  * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
  * plugin's own page draws the contributions sent to a place it declared with

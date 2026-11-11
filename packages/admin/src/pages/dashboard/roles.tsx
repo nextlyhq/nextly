@@ -49,7 +49,7 @@ const RolesPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         {/* Breadcrumb navigation */}
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <Breadcrumbs
             items={[
               { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },

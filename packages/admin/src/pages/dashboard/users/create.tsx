@@ -298,7 +298,7 @@ export default function CreateUserPage(): ReactElement {
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <PageContainer type="form">
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="create" />
           </div>
           <InviteLinkPanel
@@ -320,7 +320,7 @@ export default function CreateUserPage(): ReactElement {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer type="form">
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <UserBreadcrumbs currentPage="create" />
         </div>
 

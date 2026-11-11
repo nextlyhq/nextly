@@ -103,7 +103,7 @@ export function SubSidebarPanel({
         track's edge. What arrives in the track fades in, under motion-safe, so
         it reads as the panel opening in place rather than appearing.
       */}
-      <div className="h-16 px-6 flex items-center  border-b border-border">
+      <div className="h-(--admin-bar-height) shrink-0 px-6 flex items-center border-b border-border">
         {hasSubSidebar ? (
           <span className="font-bold text-base tracking-tight capitalize text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
             {panelTitle(selectedMain, standaloneLabel)}

@@ -55,7 +55,7 @@ export default function CreateUserFieldPage(): JSX.Element {
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <PageContainer type="form">
           <div>
-            <div className="mb-6">
+            <div className="mb-6 empty:hidden">
               <UserBreadcrumbs currentPage="fields-create" />
             </div>
 
