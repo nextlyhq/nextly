@@ -89,15 +89,25 @@ function wideningsOf(operations: readonly Operation[]): Widening[] {
   for (const op of operations) {
     const change =
       op.type === "change_column_type"
-        ? { table: op.tableName, column: op.columnName, recorded: undefined }
+        ? {
+            table: op.tableName,
+            column: op.columnName,
+            recorded: undefined,
+            fromType: op.fromType,
+            toType: op.toType,
+          }
         : op.type === "rename_column"
           ? {
               table: op.tableName,
               column: op.toColumn,
               recorded: op.fromColumn,
+              fromType: op.fromType,
+              toType: op.toType,
             }
           : undefined;
-    if (change === undefined || !widens(op.fromType, op.toType)) continue;
+    if (change === undefined || !widens(change.fromType, change.toType)) {
+      continue;
+    }
     out.push({
       table: change.table,
       column: change.column,
@@ -106,8 +116,8 @@ function wideningsOf(operations: readonly Operation[]): Widening[] {
         change.recorded ??
         columnBefore.get(`${change.table}.${change.column}`) ??
         change.column,
-      fromType: op.fromType,
-      toType: op.toType,
+      fromType: change.fromType,
+      toType: change.toType,
     });
   }
   return out;
