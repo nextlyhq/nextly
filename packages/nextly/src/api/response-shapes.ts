@@ -38,6 +38,14 @@ export type PaginationMeta = {
   hasNext: boolean;
   hasPrev: boolean;
   /**
+   * True when the list counted no further than a cap because more entries
+   * match: `total` is then the cap, a lower bound ("1000+"), and `hasNext`,
+   * `hasPrev` and `totalPages` come from the rows counted, so paging past the
+   * cap still works. Sent only by a list asked for a capped count
+   * (`count=capped`), and omitted when the total is exact.
+   */
+  totalCapped?: true;
+  /**
    * Sources this read did not consult, named rather than dropped.
    *
    * Optional, and omitted by every read that consults everything — which is
