@@ -660,13 +660,15 @@ export function mergeContributions(
  * A contribution the database holds, as the live table says it holds it.
  *
  * The compiled stream says what the app contributes NOW, and a config edited
- * since the last push names elements the database has never received. An
- * adoption that recorded such an element as present would tell the next
- * generation the work was already done — a column no migration ever brought —
- * so each element survives only when the live table carries its name, and the
- * copy is the compiled spec with the absent ones taken out: the owner's own
+ * since the last push names elements the database has never received — or has
+ * received under a different definition. An adoption that recorded the
+ * compiled shape as present would tell the next generation the work was done:
+ * a column no migration ever brought, or a type change no migration ever
+ * applied. So an element survives only when the live table carries its name,
+ * and a survivor is recorded as the DATABASE defines it — the owner's own
  * shape comes from the compile either way, so the owner's drift is never
- * mixed into what this decides.
+ * mixed into what this decides, and the app's own pending changes stay
+ * pending, as they do for every table adopted from the database.
  */
 export function standingContribution(input: {
   /** The table as compiled, owner's declaration plus the app's elements. */
@@ -688,35 +690,40 @@ export function standingContribution(input: {
     foreignKeys: carries(input.elements.foreignKeys, "foreignKeys"),
     checks: carries(input.elements.checks, "checks"),
   };
-  // The copy keeps what the live table keeps. An element the compile adds
-  // that the database lacks is dropped here and stays pending: the next
-  // migration is what brings it, to this database and to fresh ones alike.
-  // A dimension the spec leaves untracked stays untracked.
-  const survived = <T extends { name: string }>(
+  // The copy keeps what the live table keeps, as the live table has it. An
+  // element the compile adds that the database lacks is dropped and stays
+  // pending; one the database holds under an older definition is recorded
+  // under that definition, so the difference is what the next migration
+  // emits. A dimension the spec leaves untracked stays untracked.
+  const asHeld = <T extends { name: string }>(
     own: readonly T[] | undefined,
+    held: readonly T[] | undefined,
     contributed: readonly string[],
     standing: readonly string[]
   ): T[] | undefined =>
     own === undefined
       ? undefined
-      : own.filter(
-          element =>
-            !contributed.includes(element.name) ||
-            standing.includes(element.name)
-        );
+      : own.flatMap(element => {
+          if (!contributed.includes(element.name)) return [element];
+          if (!standing.includes(element.name)) return [];
+          const live = (held ?? []).find(one => one.name === element.name);
+          return live === undefined ? [] : [live];
+        });
   return {
     spec: {
       ...input.spec,
       columns:
-        survived(
+        asHeld(
           input.spec.columns,
+          input.live.columns,
           input.elements.columns,
           elements.columns
         ) ?? [],
       ...(input.spec.indexes !== undefined
         ? {
-            indexes: survived(
+            indexes: asHeld(
               input.spec.indexes,
+              input.live.indexes,
               input.elements.indexes,
               elements.indexes
             ),
@@ -724,8 +731,9 @@ export function standingContribution(input: {
         : {}),
       ...(input.spec.foreignKeys !== undefined
         ? {
-            foreignKeys: survived(
+            foreignKeys: asHeld(
               input.spec.foreignKeys,
+              input.live.foreignKeys,
               input.elements.foreignKeys,
               elements.foreignKeys
             ),
@@ -733,8 +741,9 @@ export function standingContribution(input: {
         : {}),
       ...(input.spec.checks !== undefined
         ? {
-            checks: survived(
+            checks: asHeld(
               input.spec.checks,
+              input.live.checks,
               input.elements.checks,
               elements.checks
             ),
@@ -743,4 +752,69 @@ export function standingContribution(input: {
     },
     elements,
   };
+}
+
+/**
+ * Elements standing on an owner's table that no declaration explains.
+ *
+ * Compared against the owner's bare declaration and everything contributed
+ * now, an element neither names is one an app hook contributed and the config
+ * has since withdrawn — the one fact nothing records, because an attribution
+ * only exists while the contribution does. Left alone, an adoption would
+ * keep the orphan on this database while fresh environments never receive
+ * it, so the caller refuses and names them instead.
+ */
+export function unexplainedElements(input: {
+  /** The owner's declaration, bare of every contribution. */
+  bare: TableSpec;
+  /** What is contributed to the table now, by element name. */
+  elements: ContributedElements;
+  /** The table as the database holds it. */
+  live: TableSpec;
+  /** The core tables' names: a bare declaration the dialect bundle wrote. */
+  core: ReadonlySet<string>;
+}): string[] {
+  const unexplained: string[] = [];
+  // Columns are always declared, and their names are stable across dialects:
+  // judged by name.
+  const columnNames = new Set(
+    [
+      ...input.bare.columns.map(column => column.name),
+      ...input.elements.columns,
+    ].values()
+  );
+  for (const column of input.live.columns) {
+    if (!columnNames.has(column.name)) unexplained.push(column.name);
+  }
+  // Indexes are judged by the COLUMNS they cover, not by name, and only on a
+  // table whose bare side the extension compile wrote — a plugin's. The core
+  // tables' dialect bundles declare uniques as column attributes, which
+  // introspection renders back as differently named `*_key` indexes, so no
+  // name or shape comparison agrees on a database that is perfectly in
+  // sync; a stranded index on a core table rides the column it was
+  // withdrawn with. Foreign keys and checks are not judged at all, for the
+  // same reason on every table.
+  if (
+    !input.core.has(input.bare.name) &&
+    input.bare.indexes !== undefined &&
+    input.live.indexes !== undefined
+  ) {
+    const contributed = new Set(input.elements.indexes);
+    const declaredShapes = new Set(
+      input.bare.indexes.map(index => [...index.columns].sort().join("\u0000"))
+    );
+    for (const index of input.live.indexes) {
+      if (contributed.has(index.name)) continue;
+      if (declaredShapes.has([...index.columns].sort().join("\u0000"))) {
+        continue;
+      }
+      unexplained.push(index.name);
+    }
+  }
+  return [...new Set(unexplained)].sort();
+}
+
+/** The core tables' names, as the dialect's own declaration writes them. */
+export function coreTableNames(dialect: SupportedDialect): Set<string> {
+  return new Set(coreTableSpecs(dialect).keys());
 }

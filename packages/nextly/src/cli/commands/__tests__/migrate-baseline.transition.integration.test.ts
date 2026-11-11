@@ -158,10 +158,9 @@ const extensionConfig = defineConfig({
 /**
  * The drift-recovery shape: `db:sync` ran before the app contributed
  * anything, and the config has gained the contribution since — so the
- * database and the compiled stream disagree about it. The collection is
- * what makes the project one a baseline adopts at all: without it there is
- * nothing managed to adopt, and the first migration is the flow's starting
- * point instead.
+ * database and the compiled stream disagree about it. No collection and no
+ * table of the app's own: the project's entire extension schema is the one
+ * contribution, which is itself the case that has to reach a baseline.
  */
 const contributesToPlugin: SchemaHook = ({ schema }) => {
   schema.extendTable("fx__notes", {
@@ -169,16 +168,10 @@ const contributesToPlugin: SchemaHook = ({ schema }) => {
     indexes: [{ columns: ["app_ref"], name: "idx_fx_notes_app_ref" }],
   });
 };
-const PENDING_SLUG = `baseline_pend_${RUN_ID}`;
 const pendingConfig = (extend: SchemaHook[]) =>
   defineConfig({
     plugins: [notesPlugin],
-    collections: [
-      defineCollection({
-        slug: PENDING_SLUG,
-        fields: [text({ name: "title" })],
-      }),
-    ],
+    collections: [],
     ...(extend.length > 0 ? { db: { schema: { extend } } } : {}),
   });
 
@@ -702,6 +695,35 @@ function runSuite(dialect: SupportedDialect): void {
     expect(
       pendingUp.filter(s => /^ALTER TABLE/i.test(s) && s.includes("app_ref"))
     ).not.toEqual([]);
+  });
+
+  it("refuses to adopt a contribution the config has withdrawn", async () => {
+    // The reverse drift: the last push carried the contribution, and the
+    // config has dropped it since. Nothing records whose a contribution was
+    // once it is withdrawn, so a baseline could neither carry the leftover
+    // to a fresh environment nor schedule its removal — this database would
+    // keep it while every other missed it. Refused and named, as a companion
+    // holding an undescribed column is.
+    await runDbSync(h, pendingConfig([contributesToPlugin]));
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(adopted.kind).toBe("contribution-mismatch");
+    if (adopted.kind !== "contribution-mismatch")
+      throw new Error("expected a refusal");
+    expect(adopted.mismatches).toEqual([
+      { table: "fx__notes", elements: ["app_ref", "idx_fx_notes_app_ref"] },
+    ]);
   });
 
   it("carries a localized companion into the baseline SQL, but not the snapshot", async () => {

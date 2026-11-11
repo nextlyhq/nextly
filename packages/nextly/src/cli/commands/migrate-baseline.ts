@@ -55,7 +55,10 @@ import {
 } from "../../domains/schema/migrate/resolved-schema";
 import {
   compileAppStreamTables,
+  coreTableNames,
+  NO_ELEMENTS,
   standingContribution,
+  unexplainedElements,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
 import { withCyclicForeignKeysSplit } from "../../domains/schema/migrate-create/cyclic-foreign-keys";
@@ -447,11 +450,22 @@ export interface CompanionMismatch {
   columns: string[];
 }
 
+/**
+ * An owner's table holding elements no declaration explains: what a
+ * contribution left behind when the config withdrew it, whose orphan no
+ * later migration can be derived for.
+ */
+export interface ContributionMismatch {
+  table: string;
+  elements: string[];
+}
+
 export type BaselineCoreResult =
   | { kind: "already-baselined"; snapshotName: string }
   | { kind: "history-not-empty"; filename: string }
   | { kind: "empty-database" }
   | { kind: "companion-mismatch"; mismatches: CompanionMismatch[] }
+  | { kind: "contribution-mismatch"; mismatches: ContributionMismatch[] }
   | {
       kind: "baselined";
       sqlPath: string;
@@ -706,9 +720,27 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   const junctionTables = junctionTablesAmong(managed, declared, known);
   const snapshotTables = snapshotComparableTables(managed, declared, known);
 
+  // The owners' tables standing in the database — every table the compiled
+  // stream knows another owner declares, core and plugin alike. Two questions
+  // need them: whether a standing element nobody explains is an orphan a
+  // withdrawn hook left (`unexplainedElements`), and what the app's own
+  // contributions look like as the database holds them
+  // (`withAppStreamTables`). Standing names only: introspecting a table that
+  // is not there is an error, not an answer.
+  const ownerTables = [...(deps.appStream?.baselines.keys() ?? [])].filter(
+    name => names.includes(name)
+  );
+  const ownerLive = new Map(
+    ownerTables.length > 0
+      ? (await introspectLiveSnapshot(db, dialect, ownerTables)).tables.map(
+          table => [table.name, table] as const
+        )
+      : []
+  );
+
   const live = await introspectLiveSnapshot(db, dialect, snapshotTables);
 
-  const plan = planBaseline({
+  let plan = planBaseline({
     live,
     latestSnapshotName: latest?.filename,
     existingMigrationFile: existingMigrations[0],
@@ -718,8 +750,43 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
       declared: deps.declared,
     }),
   });
+  // A project whose extension schema is all CONTRIBUTIONS owns no managed
+  // table of its own, so the plan reads an empty database — but the owners'
+  // tables standing beside those contributions are reason enough to adopt:
+  // the fold below records what the app has added to them, and the empty
+  // plan simply rebuilds nothing of the app's own.
+  if (plan.kind === "empty-database" && ownerTables.length > 0) {
+    plan = { kind: "baseline", operations: [], snapshot: EMPTY_SNAPSHOT };
+  }
 
   if (plan.kind !== "baseline") return notAdopting(plan);
+
+  // An element standing on an owner's table that neither the owner's
+  // declaration nor any current contribution explains is one a withdrawn
+  // hook left behind. Nothing records whose it was — the attribution dies
+  // with the contribution — so adopting could neither carry it to a fresh
+  // environment nor schedule its removal, and this database would keep it
+  // while every other missed it. Refused and named, like the companion
+  // mismatch: dropping content-bearing columns is the operator's decision.
+  const orphans = deps.appStream
+    ? [...ownerLive.entries()].flatMap(([name, table]) => {
+        const bare = deps.appStream?.baselines.get(name);
+        if (bare === undefined) return [];
+        const unexplained = unexplainedElements({
+          bare,
+          elements:
+            deps.appStream?.contributed.get(name)?.elements ?? NO_ELEMENTS,
+          live: table,
+          core: coreTableNames(dialect),
+        });
+        return unexplained.length === 0
+          ? []
+          : [{ table: name, elements: unexplained }];
+      })
+    : [];
+  if (orphans.length > 0) {
+    return { kind: "contribution-mismatch", mismatches: orphans };
+  }
 
   const name = slugify(deps.name ?? DEFAULT_BASELINE_NAME);
   const now = deps.now ?? new Date();
@@ -764,26 +831,10 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
 
   // The app's extension tables and contributed elements, recorded so the
   // first `migrate:create` after adoption owes nothing for what the database
-  // already has (`withAppStreamTables`). The contributed tables are read as
-  // the database holds them, so an element the config declares but the last
+  // already has (`withAppStreamTables`). The owners' tables read above say
+  // what the database holds, so an element the config declares but the last
   // push never brought stays pending rather than recorded as present.
-  // Standing names only: introspecting a table that is not there is an
-  // error, not an answer.
-  const contributedNames = [
-    ...(deps.appStream?.contributed.keys() ?? []),
-  ].filter(name => names.includes(name));
-  const contributedLive = new Map(
-    contributedNames.length > 0
-      ? (
-          await introspectLiveSnapshot(db, dialect, contributedNames)
-        ).tables.map(table => [table.name, table] as const)
-      : []
-  );
-  const folded = withAppStreamTables(
-    plan.snapshot,
-    deps.appStream,
-    contributedLive
-  );
+  const folded = withAppStreamTables(plan.snapshot, deps.appStream, ownerLive);
 
   // Companions carry a foreign key to their main table, so every main
   // table has to exist before any of them runs.
@@ -1166,7 +1217,13 @@ function baselineChanges(
 function refusalLines(
   result: Extract<
     BaselineCoreResult,
-    { kind: "already-baselined" | "history-not-empty" | "companion-mismatch" }
+    {
+      kind:
+        | "already-baselined"
+        | "history-not-empty"
+        | "companion-mismatch"
+        | "contribution-mismatch";
+    }
   >
 ): string[] {
   if (result.kind === "history-not-empty") {
@@ -1175,6 +1232,21 @@ function refusalLines(
       "Adopting now would put the baseline after them, and a fresh database would",
       "replay them against tables it has not created yet. Move them aside, baseline,",
       "then re-apply what they did as a new migration.",
+    ];
+  }
+  if (result.kind === "contribution-mismatch") {
+    return [
+      "Some tables hold elements no declaration explains — most likely a",
+      "db.schema.extend contribution the config has since withdrawn.",
+      "",
+      ...result.mismatches.map(m => `  ${m.table}: ${m.elements.join(", ")}`),
+      "",
+      "Nothing records whose a contribution was once it is withdrawn, so a",
+      "baseline can neither carry these to a fresh environment nor schedule",
+      "their removal. Adopting anyway would leave them here and nowhere else.",
+      "",
+      "Either restore the contribution to your config before baselining, or",
+      "drop the elements from the database if they are no longer needed.",
     ];
   }
   if (result.kind === "companion-mismatch") {
