@@ -86,7 +86,8 @@ type CheckState =
 /** The check of one address, and a way to run it again. */
 function useCheck(): {
   check: CheckState;
-  run: (address: string) => void;
+  /** Checks `address`; the function it answers stops that check. */
+  run: (address: string) => () => void;
 } {
   const [check, setCheck] = useState<CheckState>({ state: "idle" });
   const controller = useRef<AbortController | null>(null);
@@ -122,6 +123,9 @@ function useCheck(): {
         setCheck({ state: "failed", address, message: apiErrorMessage(error) });
       }
     );
+    return () => {
+      if (controller.current === asking) asking.abort();
+    };
   }, []);
   useEffect(() => () => controller.current?.abort(), []);
   return { check, run };
@@ -146,19 +150,20 @@ export function SeoReceivedPage(): JSX.Element {
   });
   const origins = pages.data?.origins ?? [];
   const { check, run } = useCheck();
-  const [typed, setTyped] = useState(() => addressInAddress() ?? "");
-  const started = useRef(false);
+  // The page the screen's address named as it opened, read once: a check
+  // asked for later changes the address, and is not the opening one.
+  const [opened] = useState(addressInAddress);
+  const [typed, setTyped] = useState(() => opened ?? "");
+  const first = opened ?? pages.data?.pages[0];
 
   // Checked as the screen opens: the page its address names, else the first
-  // of the site's pages once they are read.
+  // of the site's pages once they are read. Stopped if the screen goes, and
+  // asked again if React sets the screen up a second time.
   useEffect(() => {
-    if (started.current) return;
-    const first = addressInAddress() ?? pages.data?.pages[0];
-    if (first === undefined) return;
-    started.current = true;
+    if (first === undefined) return undefined;
     setTyped(first);
-    run(first);
-  }, [pages.data, run]);
+    return run(first);
+  }, [first, run]);
 
   const submit = (address: string) => {
     const asked = address.trim();

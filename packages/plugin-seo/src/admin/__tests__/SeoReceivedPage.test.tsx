@@ -8,6 +8,7 @@
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
@@ -184,6 +185,23 @@ describe("what search engines received", () => {
       "Search listingListed in search SameNot usedNot usedNot used"
     );
     expect(screen.queryByText("Differences, explained")).toBeNull();
+  });
+
+  it("finishes the first check when React runs its effects twice", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `?address=${encodeURIComponent(PAGE)}`
+    );
+    render(
+      <StrictMode>
+        <SeoReceivedPage />
+      </StrictMode>
+    );
+    expect(
+      await screen.findByText("Every crawler received what Nextly holds.")
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Fetch again" })).toBeEnabled();
   });
 
   it("numbers each difference in the table and explains it below", async () => {

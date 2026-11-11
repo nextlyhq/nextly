@@ -209,7 +209,10 @@ function decoded(text: string): string {
           : entity;
       }
       // Names are case-sensitive: `&Eacute;` and `&eacute;` differ.
-      const code = NAMED_CODES[body];
+      // Its own names only: `&constructor;` is no character.
+      const code = Object.hasOwn(NAMED_CODES, body)
+        ? NAMED_CODES[body]
+        : undefined;
       return code === undefined ? entity : String.fromCodePoint(code);
     }
   );

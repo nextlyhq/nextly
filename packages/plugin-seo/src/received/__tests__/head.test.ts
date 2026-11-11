@@ -108,6 +108,15 @@ describe("reading a page's head", () => {
     });
   });
 
+  it("keeps a name that only an object's own methods share as written", () => {
+    const head = readHead(
+      `<title>The &constructor; and &toString; &hasOwnProperty; names</title>`
+    );
+    expect(head.title).toBe(
+      "The &constructor; and &toString; &hasOwnProperty; names"
+    );
+  });
+
   it("reads a quoted value with a > in it whole", () => {
     const head = readHead(
       `<meta name="description" content="Surfer > Rext? A -> B">
