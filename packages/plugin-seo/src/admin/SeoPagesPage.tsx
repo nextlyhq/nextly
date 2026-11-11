@@ -131,137 +131,137 @@ function AddressesScreen({ items }: { items: SiteAddress[] }): JSX.Element {
 
   return (
     <>
-      <div className="nx-seo-head">
-        <div>
-          <h1>Pages and addresses</h1>
-          <p>
-            Every public address on {host}: from entries, from pages built in
-            code, and from addresses a dynamic route declares. Pages with no
-            entry get their SEO here.
-          </p>
+      <div className={editing === undefined ? undefined : "nx-seo-shifted"}>
+        <div className="nx-seo-head">
+          <div>
+            <h1>Pages and addresses</h1>
+            <p>
+              Every public address on {host}: from entries, from pages built in
+              code, and from addresses a dynamic route declares. Pages with no
+              entry get their SEO here.
+            </p>
+          </div>
         </div>
-      </div>
-      <div
-        className={
-          editing === undefined ? "nx-seo-body" : "nx-seo-body nx-seo-shifted"
-        }
-      >
-        <div className="nx-seo-sum">
-          <span>
-            <b>{counts.all}</b> addresses
-          </span>
-          <span>
-            <b>{counts.entries}</b> from entries
-          </span>
-          <span>
-            <b>{counts.built}</b> built routes
-          </span>
-          <span>
-            <b>{counts.dynamic}</b> declared by dynamic routes
-          </span>
-          {counts.notConnected > 0 ? (
-            <span className="warn">
-              <b>{counts.notConnected}</b> not connected
+        <div className="nx-seo-body">
+          <div className="nx-seo-sum">
+            <span>
+              <b>{counts.all}</b> addresses
             </span>
-          ) : null}
-        </div>
-        <div className="nx-seo-find">
-          <input
-            type="search"
-            placeholder="Find an address"
-            aria-label="Find an address"
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-          />
-          <div className="nx-seo-seg" role="group" aria-label="Show">
-            {FILTERS.map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                aria-pressed={filter === key}
-                onClick={() => setFilter(key)}
-              >
-                {label}
-              </button>
-            ))}
+            <span>
+              <b>{counts.entries}</b> from entries
+            </span>
+            <span>
+              <b>{counts.built}</b> built routes
+            </span>
+            <span>
+              <b>{counts.dynamic}</b> declared by dynamic routes
+            </span>
+            {counts.notConnected > 0 ? (
+              <span className="warn">
+                <b>{counts.notConnected}</b> not connected
+              </span>
+            ) : null}
           </div>
-        </div>
-        {shown.length === 0 ? (
-          <div className="nx-seo-tbox nx-seo-empty">
-            <b>No addresses match.</b>
-            <p className="nx-seo-help">Try part of the address, like /blog.</p>
+          <div className="nx-seo-find">
+            <input
+              type="search"
+              placeholder="Find an address"
+              aria-label="Find an address"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+            />
+            <div className="nx-seo-seg" role="group" aria-label="Show">
+              {FILTERS.map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={filter === key}
+                  onClick={() => setFilter(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-        ) : (
-          <div className="nx-seo-tbox nx-seo-tscroll">
-            <table className="nx-seo-tbl nx-seo-atbl">
-              <thead>
-                <tr>
-                  <th className="w-addr">Address</th>
-                  <th>Title on Google</th>
-                  <th className="w-src">Source</th>
-                  <th className="w-search">Search</th>
-                  <th className="w-act">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map(item => (
-                  <tr
-                    key={item.path}
-                    className={open === item.path ? "on" : ""}
-                  >
-                    <td className="nx-seo-addr-cell">
-                      <b>{item.path}</b>
-                      <span>{item.name}</span>
-                    </td>
-                    <td className="nx-seo-title">{item.title ?? "—"}</td>
-                    <td className="nx-seo-srcl">
-                      {SOURCE_LABELS[item.source]}
-                      <span>{item.from}</span>
-                    </td>
-                    <td>
-                      <Standing item={item} />
-                    </td>
-                    <td className="nx-seo-act">
-                      {item.entry !== undefined ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            if (item.entry) navigateTo(entryHref(item.entry));
-                          }}
-                        >
-                          Open entry
-                        </Button>
-                      ) : (
-                        <Button
-                          ref={element => {
-                            if (element) {
-                              editButtons.current.set(item.path, element);
-                            } else {
-                              editButtons.current.delete(item.path);
-                            }
-                          }}
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          aria-expanded={open === item.path}
-                          onClick={() =>
-                            setOpen(open === item.path ? null : item.path)
-                          }
-                        >
-                          Edit SEO
-                        </Button>
-                      )}
-                    </td>
+          {shown.length === 0 ? (
+            <div className="nx-seo-tbox nx-seo-empty">
+              <b>No addresses match.</b>
+              <p className="nx-seo-help">
+                Try part of the address, like /blog.
+              </p>
+            </div>
+          ) : (
+            <div className="nx-seo-tbox nx-seo-tscroll">
+              <table className="nx-seo-tbl nx-seo-atbl">
+                <thead>
+                  <tr>
+                    <th className="w-addr">Address</th>
+                    <th>Title on Google</th>
+                    <th className="w-src">Source</th>
+                    <th className="w-search">Search</th>
+                    <th className="w-act">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                </thead>
+                <tbody>
+                  {shown.map(item => (
+                    <tr
+                      key={item.path}
+                      className={open === item.path ? "on" : ""}
+                    >
+                      <td className="nx-seo-addr-cell">
+                        <b>{item.path}</b>
+                        <span>{item.name}</span>
+                      </td>
+                      <td className="nx-seo-title">{item.title ?? "—"}</td>
+                      <td className="nx-seo-srcl">
+                        {SOURCE_LABELS[item.source]}
+                        <span>{item.from}</span>
+                      </td>
+                      <td>
+                        <Standing item={item} />
+                      </td>
+                      <td className="nx-seo-act">
+                        {item.entry !== undefined ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              if (item.entry) navigateTo(entryHref(item.entry));
+                            }}
+                          >
+                            Open entry
+                          </Button>
+                        ) : (
+                          <Button
+                            ref={element => {
+                              if (element) {
+                                editButtons.current.set(item.path, element);
+                              } else {
+                                editButtons.current.delete(item.path);
+                              }
+                            }}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            aria-expanded={open === item.path}
+                            onClick={() =>
+                              setOpen(open === item.path ? null : item.path)
+                            }
+                          >
+                            Edit SEO
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
       {editing?.seo !== undefined ? (
         <CodePagePanel

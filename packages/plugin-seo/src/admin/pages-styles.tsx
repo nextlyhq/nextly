@@ -37,6 +37,8 @@ const CSS = `
 .nx-seo-empty{padding:28px;text-align:center}
 .nx-seo-empty b{font-weight:600}
 .nx-seo-shifted{padding-right:480px}
+.nx-seo-shifted .nx-seo-atbl{min-width:720px}
+.nx-seo-seg button[aria-selected="true"]{background:var(--nx-card);color:var(--nx-foreground);font-weight:600;box-shadow:0 1px 2px var(--nx-shadow-color)}
 .nx-seo-drawer{position:fixed;top:var(--nx-seo-drawer-top,48px);right:0;bottom:0;width:480px;max-width:100vw;background:var(--nx-background);border-left:1px solid var(--nx-border);box-shadow:0 8px 24px var(--nx-shadow-color);overflow:auto;z-index:40;display:flex;flex-direction:column}
 .nx-seo-dh{position:sticky;top:0;background:var(--nx-background);padding:14px 18px;border-bottom:1px solid var(--nx-border);display:flex;justify-content:space-between;align-items:flex-start;gap:10px;z-index:2}
 .nx-seo-dh h2{margin:0;font-size:15px;font-weight:650;overflow-wrap:anywhere}

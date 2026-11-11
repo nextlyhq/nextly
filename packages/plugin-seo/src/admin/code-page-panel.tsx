@@ -14,7 +14,15 @@ import {
   useMediaItem,
   usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useRef, useState, type JSX, type Ref } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type JSX,
+  type Ref,
+} from "react";
 
 import {
   ADDRESSES_ROUTE_PATH,
@@ -274,7 +282,6 @@ function Preview({ shown }: { shown: Shown }): JSX.Element {
       type="button"
       role="tab"
       aria-selected={view === name}
-      aria-pressed={view === name}
       onClick={() => setView(name)}
     >
       {label}
@@ -597,6 +604,13 @@ function useCodePageDraft(
   };
 }
 
+/** The style placing the panel `top` pixels down the window. */
+function drawerTop(
+  top: number
+): CSSProperties & Record<"--nx-seo-drawer-top", string> {
+  return { "--nx-seo-drawer-top": `${top}px` };
+}
+
 /** The panel that sets the SEO of one page built in code. */
 export function CodePagePanel({
   item,
@@ -610,11 +624,21 @@ export function CodePagePanel({
   const { draft, change, automatic, shown, address, save, submit } =
     useCodePageDraft(item, host, onClose);
   const titleField = useRef<HTMLInputElement>(null);
+  const panel = useRef<HTMLElement>(null);
+  // The panel opens below the admin's top bar: from where the page's main
+  // region starts, which the admin's layout decides.
+  const [top, setTop] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const main = panel.current?.closest("main");
+    if (main) setTop(Math.max(0, main.getBoundingClientRect().top));
+  }, []);
   useEffect(() => {
     titleField.current?.focus();
   }, []);
   return (
     <aside
+      ref={panel}
+      style={top === undefined ? undefined : drawerTop(top)}
       className="nx-seo-drawer"
       role="dialog"
       aria-modal="false"
