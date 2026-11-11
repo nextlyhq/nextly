@@ -18,6 +18,7 @@ import {
 import type { FieldDefinition } from "@admin/types/collection";
 
 import {
+  nestedFixtureBlockCatalogs,
   nestedFixtureFieldGroups,
   nestedFixtureFields,
 } from "../../__fixtures__/nested-fixture";
@@ -236,6 +237,50 @@ describe("the outline of the nested fixture", () => {
       await screen.findByRole("menuitem", { name: "Open the field group SEO" })
     );
     expect(on.openFieldGroup).toHaveBeenCalledWith("seo");
+  });
+
+  it("draws each accepted block and its props beneath a blocks field, read-only", async () => {
+    const { on } = renderOutline({
+      nodes: buildOutline(nestedFixtureFields(), {
+        entityReadOnly: false,
+        fieldGroups: nestedFixtureFieldGroups(),
+        blockCatalogs: nestedFixtureBlockCatalogs(),
+      }),
+    });
+    const heading = row("body/#core/heading") as HTMLElement;
+    expect(heading).toHaveTextContent("Heading");
+    expect(heading).toHaveTextContent("Block");
+    expect(heading).toHaveTextContent(
+      "Defined by @nextlyhq/plugin-page-builder"
+    );
+    expect(row("body/#core/heading/#level")).toHaveTextContent("Level");
+    expect(row("body/#core/heading/#level")).toHaveTextContent("select");
+    // The entry no registered block answers is said, not dropped.
+    expect(row("body")).toHaveTextContent(
+      "no registered block matches acme/hero"
+    );
+    // A block is no field: nothing to open, and no settings in its menu.
+    await userEvent.click(heading);
+    expect(on.select).not.toHaveBeenCalled();
+    heading.focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    expect(screen.queryByRole("menuitem", { name: /settings/ })).toBeNull();
+  });
+
+  it("says why a blocks field's blocks are not shown, when they are not", () => {
+    renderOutline({
+      nodes: buildOutline(nestedFixtureFields(), {
+        entityReadOnly: false,
+        fieldGroups: nestedFixtureFieldGroups(),
+        blockCatalogs: new Map([
+          ['["core/heading","acme/hero"]', { state: "unavailable" as const }],
+        ]),
+      }),
+    });
+    expect(row("body")).toHaveTextContent(
+      "block details need the Page Builder plugin"
+    );
+    expect(row("body/#core/heading")).toBeNull();
   });
 
   it("shows a blocks field with the blocks it accepts", () => {
