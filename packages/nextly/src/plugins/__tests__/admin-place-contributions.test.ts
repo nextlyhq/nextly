@@ -43,6 +43,16 @@ const SECTION = {
   collections: ["tickets"],
 };
 
+/** A tab on a collection entry's edit page. */
+const EDIT_TAB = {
+  id: "acme-support.sla-tab",
+  kind: "tab",
+  place: "collection.edit",
+  label: "SLA",
+  component: "@acme/support/admin#SlaTab",
+  collections: ["tickets"],
+};
+
 const EACH_KIND: unknown[] = [
   {
     id: "acme-support.totals",
@@ -173,8 +183,71 @@ describe("contributedAdminContributions", () => {
     ]);
   });
 
+  it("accepts a tab that edits fields of the document, on either edit page", () => {
+    const { contributions } = contributedAdminContributions([
+      plugin("@acme/support", [
+        { ...EDIT_TAB, fields: ["sla", "escalation"] },
+        {
+          id: "acme-support.single-sla",
+          kind: "tab",
+          place: "single.edit",
+          label: "SLA",
+          component: "@acme/support/admin#SlaTab",
+          singles: ["support-settings"],
+          fields: ["sla"],
+        },
+      ]),
+    ]);
+    expect(contributions).toMatchObject([
+      { id: "acme-support.sla-tab", fields: ["sla", "escalation"] },
+      {
+        id: "acme-support.single-sla",
+        singles: ["support-settings"],
+        fields: ["sla"],
+      },
+    ]);
+  });
+
   it.each<[string, unknown]>([
     ["a declaration that is not an object", "acme-support.sla"],
+    ["fields on a kind that is not a tab", { ...SECTION, fields: ["sla"] }],
+    [
+      "fields on a tab of a page with no document",
+      {
+        id: "acme-support.t",
+        kind: "tab",
+        place: "settings",
+        label: "T",
+        component: "x#Y",
+        fields: ["sla"],
+      },
+    ],
+    ["fields that are not a list", { ...EDIT_TAB, fields: "sla" }],
+    ["an empty list of fields", { ...EDIT_TAB, fields: [] }],
+    [
+      "fields naming the title the page draws itself",
+      { ...EDIT_TAB, fields: ["seo", "title"] },
+    ],
+    ["fields naming the slug", { ...EDIT_TAB, fields: ["slug"] }],
+    [
+      "a field that is not a top-level name",
+      { ...EDIT_TAB, fields: ["sla.hours"] },
+    ],
+    [
+      "singles where no Single is shown",
+      { ...EDIT_TAB, singles: ["support-settings"] },
+    ],
+    [
+      "a Single slug no Single can have",
+      {
+        id: "acme-support.t",
+        kind: "tab",
+        place: "single.edit",
+        label: "T",
+        component: "x#Y",
+        singles: ["Support Settings"],
+      },
+    ],
     ["an id that is not a name", { ...SECTION, id: "acme-support.SLA" }],
     ["an unknown kind", { ...SECTION, kind: "panel" }],
     ["a key its kind does not take", { ...SECTION, field: "status" }],

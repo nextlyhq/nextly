@@ -26,7 +26,15 @@
 import { formBuilder } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
-import { defineCollection, defineConfig, text } from "nextly/config";
+import {
+  defineCollection,
+  defineConfig,
+  date,
+  defineSingle,
+  text,
+  textarea,
+  upload,
+} from "nextly/config";
 
 import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
 import { Authors } from "./src/collections/authors";
@@ -82,14 +90,43 @@ const playgroundPlugins = new Set(
 const seoPluginEnabled = playgroundPlugins.has("seo");
 
 /**
- * The one collection the SEO plugin extends here, registered with it. Its own
- * collection rather than Posts, so the `seo` group the plugin adds reaches no
- * entry form, list or count another spec reads.
+ * The collection and the Single the SEO plugin extends here, registered with
+ * it. Their own rather than Posts or a Single another spec edits, so the `seo`
+ * group and the SEO tab the plugin adds reach no entry form, list or count
+ * another spec reads. Each page has an address and an excerpt, so its tab has
+ * automatic values to show.
  */
 const SeoPages = defineCollection({
   slug: "seo-pages",
   labels: { singular: "SEO page", plural: "SEO pages" },
-  fields: [text({ name: "title", label: "Title", required: true })],
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    text({ name: "slug", label: "Slug" }),
+    textarea({ name: "excerpt", label: "Excerpt" }),
+    text({ name: "author", label: "Author" }),
+    date({ name: "publishedAt", label: "Published at" }),
+    upload({ name: "coverImage", label: "Cover image", relationTo: "media" }),
+  ],
+  publicAddress: "/seo/{slug}",
+});
+/** A kind of listing page hidden from search as a whole, as tag pages often are. */
+const SeoTags = defineCollection({
+  slug: "seo-tags",
+  labels: { singular: "Tag", plural: "Tags" },
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    text({ name: "slug", label: "Slug" }),
+    textarea({ name: "description", label: "Description" }),
+  ],
+  publicAddress: "/seo/tag/{slug}",
+});
+const SeoHome = defineSingle({
+  slug: "seo-home",
+  label: { singular: "SEO home" },
+  fields: [
+    text({ name: "title", label: "Title" }),
+    textarea({ name: "summary", label: "Summary" }),
+  ],
 });
 
 /**
@@ -257,7 +294,7 @@ export default defineConfig({
       ? JOURNAL_COLLECTIONS
       : []),
     // The collection the SEO plugin extends, by the plugin's own switch.
-    ...(seoPluginEnabled ? [SeoPages] : []),
+    ...(seoPluginEnabled ? [SeoPages, SeoTags] : []),
     // The admin speed check's extra collections; none unless it asks.
     ...speedExtraCollections,
   ],
@@ -276,6 +313,8 @@ export default defineConfig({
     // A Single with a field the public may not read, for the browser test of
     // the editor marking a bound value a visitor will not see.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ContactDetails] : []),
+    // The Single the SEO plugin extends, by the plugin's own switch.
+    ...(seoPluginEnabled ? [SeoHome] : []),
   ],
   fieldGroups: [
     Seo,
@@ -341,7 +380,22 @@ export default defineConfig({
     // and its Needs attention line, by the switch above. No sitemap: a public
     // route is not what that test is about.
     ...(seoPluginEnabled
-      ? [seoPlugin({ collections: [SeoPages.slug], sitemap: false })]
+      ? [
+          seoPlugin({
+            collections: [SeoPages.slug, SeoTags.slug],
+            singles: [SeoHome.slug],
+            sitemap: false,
+            // Its pages are articles, which name their author; its tags are
+            // hidden from search whole.
+            structuredData: { types: { [SeoPages.slug]: { type: "article" } } },
+            hiddenTypes: [SeoTags.slug],
+            // Where a production build is served, so share images and
+            // structured data name whole addresses; unset in development.
+            ...(process.env.NEXT_PUBLIC_APP_URL
+              ? { baseUrl: process.env.NEXT_PUBLIC_APP_URL }
+              : {}),
+          }),
+        ]
       : []),
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.

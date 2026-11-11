@@ -324,6 +324,51 @@ its file returns it is never run again and is checked against its recorded check
 migration whose file is gone with no removal recorded shows as `applied (file missing)`. The
 `--json` output carries the same value in `status`.
 
+### The schema version a production start checks
+
+The database stores one schema version: the newest app migration whose registry rows
+(`dynamic_collections`, `dynamic_singles` and the field-group registry) `nextly migrate` has
+written. `nextly migrate` and `migrate:down` set it in the same transaction as those rows, so a run
+stopped part-way leaves it where it was. Schema Builder saves and plugin installs and uninstalls
+move a count stored beside it, also in the same transaction as what they write.
+
+`withNextly` reads the newest migration in your migrations folder when Next.js loads
+`next.config` and sets `NEXTLY_BUILD_SCHEMA_VERSION` in the build's `env`. Next.js inlines it
+into your `instrumentation.ts`, which hands it to Nextly:
+
+```ts
+// src/instrumentation.ts, inside register()
+await createRegister(config, {
+  cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+  buildSchemaVersion: process.env.NEXTLY_BUILD_SCHEMA_VERSION,
+})();
+```
+
+If you set `db.migrationsDir` to something other than `./src/db/migrations`, pass the same
+folder to `withNextly`:
+
+```ts
+// next.config.ts
+import { withNextly } from "nextly/next";
+
+export default withNextly({}, { migrationsDir: "./db/migrations" });
+```
+
+A production start reads the stored version once and compares the two. It never repairs
+anything and always keeps serving:
+
+- **The database is behind the build** (it lacks a migration the build ships): one warning naming
+  both versions. Run `nextly migrate`.
+- **The database records no version** (it was migrated before this check existed): one warning
+  saying so. Run `nextly migrate`, which records it.
+- **The database is ahead of the build** (an older build is still serving, or a deploy was rolled
+  back): one line at info level.
+
+With no migrations folder, or no migration in it, the start compares nothing and says nothing.
+An `instrumentation.ts` that does not pass `buildSchemaVersion` still gets the comparison under
+`next start`, which loads `next.config` as the server starts; on Vercel or with
+`output: "standalone"` it needs the line above.
+
 ## Where the registry and the tables disagree
 
 The registry (`dynamic_collections`, `dynamic_singles` and the field-group registry) is what a

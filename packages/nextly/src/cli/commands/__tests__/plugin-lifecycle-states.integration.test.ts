@@ -35,6 +35,10 @@ import {
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
+import {
+  readSchemaVersion,
+  storeSchemaVersion,
+} from "../../../domains/schema/schema-version";
 import type {
   Operation,
   TableSpec,
@@ -355,6 +359,53 @@ describe.each(getConfiguredTestDialects())(
       )) as Array<{ id: string }>;
       return rows.map(row => row.id);
     }
+
+    /*
+     * The install's lifecycle record and the stored schema version share one
+     * transaction: with `nextly_meta` taken away for the install, the
+     * version's write fails at the end of it, and the record is not written.
+     * The modules ran before it, which their tables show, so the install
+     * reached its record. Committed, the install and then the uninstall each
+     * move the version's count and leave its migration alone.
+     */
+    it("records an install and an uninstall in the transaction that stores the schema version", async () => {
+      const seed = "20250101_000000_000_seed";
+      await storeSchemaVersion(db(), dialect, { wrote: true, migration: seed });
+      const version = async () => {
+        const stored = await readSchemaVersion(db(), dialect);
+        return stored.present ? stored.version : undefined;
+      };
+      const records = async () =>
+        (
+          await new SchemaEventsRepository(db(), dialect).listPluginLifecycle()
+        ).filter(row => row.scopeSlug === PLUGIN).length;
+      const before = await version();
+
+      await handle.adapter.executeQuery(
+        "ALTER TABLE nextly_meta RENAME TO nextly_meta_away"
+      );
+      try {
+        await expect(install()).rejects.toBeDefined();
+      } finally {
+        await handle.adapter.executeQuery(
+          "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
+        );
+      }
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await records()).toBe(0);
+      expect(await version()).toEqual(before);
+
+      await install();
+      expect(await records()).toBe(1);
+      const installed = await version();
+      expect(installed?.migration).toBe(seed);
+      expect(installed?.seq ?? 0).toBeGreaterThan(before?.seq ?? 0);
+
+      await uninstall(false);
+      const uninstalled = await version();
+      expect(uninstalled?.migration).toBe(seed);
+      expect(uninstalled?.seq ?? 0).toBeGreaterThan(installed?.seq ?? 0);
+    });
 
     it("is refused at a production boot until the install command has run", async () => {
       await expect(boot()).rejects.toMatchObject({
