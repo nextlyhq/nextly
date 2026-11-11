@@ -221,7 +221,7 @@ describe("the form's ID", () => {
     await user.type(screen.getByRole("textbox", { name: "Name" }), "Meetup");
     const id = screen.getByRole("textbox", { name: "Form ID" });
     expect(id).toHaveValue("meetup");
-    expect(id).not.toHaveAttribute("readonly");
+    expect(id).toBeEnabled();
   });
 
   it.each(["published", "closed"])(
@@ -229,7 +229,7 @@ describe("the form's ID", () => {
     async status => {
       const { user } = view({ status });
       const id = screen.getByRole("textbox", { name: "Form ID" });
-      expect(id).toHaveAttribute("readonly");
+      expect(id).toBeDisabled();
       expect(id).toHaveAccessibleDescription(FIXED_FORM_ID_REASON);
 
       // Renaming the form no longer moves its ID either.
@@ -246,10 +246,10 @@ describe("the form's ID", () => {
     );
     const id = screen.getByRole("textbox", { name: "Form ID" });
     // Live only once stored: the site has not read it by this ID yet.
-    expect(id).not.toHaveAttribute("readonly");
+    expect(id).toBeEnabled();
 
     await user.click(save());
     await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
-    await waitFor(() => expect(id).toHaveAttribute("readonly"));
+    await waitFor(() => expect(id).toBeDisabled());
   });
 });

@@ -92,9 +92,9 @@ export function FormIdentitySection(): JSX.Element {
           className="w-full font-mono sm:w-72"
           aria-describedby={descriptionIdOf("form-slug")}
           value={formData.slug}
-          // Read-only rather than disabled: the ID stays selectable and is
-          // still announced, with the reason it cannot change.
-          readOnly={idFixed}
+          // Disabled as the field panel draws a fixed name, with the reason
+          // it cannot change as its description.
+          disabled={idFixed}
           onChange={event => updateFormData({ slug: event.target.value })}
           placeholder="e.g., contact-form"
         />
