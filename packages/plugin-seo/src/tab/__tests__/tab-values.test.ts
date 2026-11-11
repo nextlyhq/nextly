@@ -162,6 +162,9 @@ describe("a typed official address", () => {
     ["https://", "That isn't a complete web address"],
     ["https://acme/blog", "The address is missing the site's name"],
     ["https://me:secret@acme.com/post", "Remove the sign-in details"],
+    // A browser reads a backslash as a slash: this names elsewhere.example.
+    ["/\\elsewhere.example/original", "An address can't contain a backslash."],
+    ["https://acme.com\\post", "An address can't contain a backslash."],
   ])("refuses %j, saying why", (typed, reason) => {
     const check = checkCanonical(typed, SITE);
     expect(check.kind).toBe("bad");

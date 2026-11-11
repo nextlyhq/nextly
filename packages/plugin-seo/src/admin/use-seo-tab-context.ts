@@ -43,6 +43,9 @@ export function useSeoTabContext(
   // What was last answered or is being asked, so an unchanged request is not
   // sent again.
   const asked = useRef<string | null>(null);
+  // Whether the first read has been sent: every later one waits for the
+  // document to settle, a read cut short included.
+  const started = useRef(false);
   const kind = target?.kind;
   const slug = target?.slug;
   const locale = target?.locale ?? null;
@@ -56,6 +59,7 @@ export function useSeoTabContext(
     let settled = false;
     const timer = setTimeout(
       () => {
+        started.current = true;
         asked.current = key;
         writePluginRoute<SeoTabContext>({
           plugin: SEO_PLUGIN_NAME,
@@ -76,7 +80,7 @@ export function useSeoTabContext(
           }
         );
       },
-      asked.current === null ? 0 : SETTLE_MS
+      started.current ? SETTLE_MS : 0
     );
     return () => {
       clearTimeout(timer);

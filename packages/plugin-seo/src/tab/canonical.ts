@@ -85,6 +85,9 @@ export function checkCanonical(
 ): CanonicalCheck {
   const typed = raw.trim();
   if (typed === "") return { kind: "empty" };
+  // A browser reads a backslash as a slash, so `/\other.example` names
+  // another site while it reads as a path on this one.
+  if (typed.includes("\\")) return bad("An address can't contain a backslash.");
   // A path from the site's root is on the site by construction.
   if (typed.startsWith("/") && !typed.startsWith("//") && !/\s/.test(typed)) {
     return usableCanonical(typed) === undefined
