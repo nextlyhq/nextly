@@ -717,6 +717,10 @@ crawler receives:
 }
 ```
 
+Page Builder routes (`createBlocksPage`, `createSinglePage`, `createContentPage` and their public
+forms) place it themselves, before the page's blocks, so a page built in the Page Builder needs
+nothing more.
+
 ## Redirects
 
 A published page whose address changes leaves a permanent redirect from its old address to its new one, with no question asked: rename a post's slug from `hello` to `hello-world` and `/hello` goes on sending people, and search engines, to `/hello-world`. A deploy that changes an address template does the same, at the next start.
