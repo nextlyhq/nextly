@@ -7,6 +7,7 @@
  *
  * @module cli/commands/plugins-add/installed-package
  */
+import { statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -66,21 +67,47 @@ function exportTarget(target: unknown): string | undefined {
   return undefined;
 }
 
-/** The file an `import` of the package's name loads. */
+/** The files Node tries for a package's `main`, in its order, then the package's own index. */
+const LEGACY_MAIN = (main: string): string[] => [
+  main,
+  `${main}.js`,
+  `${main}.json`,
+  `${main}.node`,
+  join(main, "index.js"),
+  join(main, "index.json"),
+  join(main, "index.node"),
+];
+
+/** Whether `path` is a file (not a folder). */
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The file an `import` of the package's name loads: from `exports` when the
+ * package has them, by the conditions an import matches; otherwise its `main`
+ * as Node resolves one, trying the extensions and an index in it, and then
+ * `index.js`. `module` is a bundler's field, which Node does not read.
+ */
 export function entryFileOf(dir: string, manifest: PackageManifest): string {
   const { exports } = manifest;
-  const root =
-    typeof exports === "object" &&
-    exports !== null &&
-    !Array.isArray(exports) &&
-    Object.keys(exports).some(key => key.startsWith("."))
-      ? (exports as Record<string, unknown>)["."]
-      : exports;
-  const fromExports = exports === undefined ? undefined : exportTarget(root);
-  const fallback = [manifest.module, manifest.main].find(
-    (each): each is string => typeof each === "string"
-  );
-  return join(dir, fromExports ?? fallback ?? "index.js");
+  if (exports !== undefined) {
+    const root =
+      typeof exports === "object" &&
+      exports !== null &&
+      !Array.isArray(exports) &&
+      Object.keys(exports).some(key => key.startsWith("."))
+        ? (exports as Record<string, unknown>)["."]
+        : exports;
+    return join(dir, exportTarget(root) ?? "index.js");
+  }
+  const main = typeof manifest.main === "string" ? manifest.main : undefined;
+  const tried = main === undefined ? [] : LEGACY_MAIN(join(dir, main));
+  return tried.find(isFile) ?? join(dir, "index.js");
 }
 
 /** The package's entry, imported, as a record of its exports. */

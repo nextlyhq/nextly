@@ -44,6 +44,7 @@ import pc from "picocolors";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { reportDryRun, projectPath, type DryRunChange } from "../dry-run";
+import { environmentFolder } from "../environment";
 import { exitWithError } from "../errors";
 import { packageInstallFailed } from "../errors/areas/commands";
 import {
@@ -316,6 +317,17 @@ async function applySchema(
   options: ResolvedAddOptions,
   context: CommandContext
 ): Promise<void> {
+  // The database is the one the environment files name, and those are read
+  // from the folder the command started in. Run with `--cwd` for another
+  // project, they could name a different project's database.
+  const environment = environmentFolder();
+  const project = resolve(options.cwd ?? process.cwd());
+  if (environment !== undefined && resolve(environment) !== project) {
+    context.logger.warn(
+      `The environment files were read from ${environment}, not from ${project}, so the schema of ${pluginName} was not applied to a database they name. Your build applies it; to apply it now, run "nextly plugins install ${pluginName}" from ${project}.`
+    );
+    return;
+  }
   const { isDatabaseNotMigrated, runPluginInstall } = await import(
     "./plugin-lifecycle-runner"
   );

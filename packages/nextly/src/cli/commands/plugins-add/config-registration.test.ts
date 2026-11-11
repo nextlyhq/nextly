@@ -157,7 +157,23 @@ export default defineConfig({ plugins: [seoPlugin({ siteUrl: "https://a.test" })
 import seo from "@acme/seo";
 export default defineConfig({ plugins: [seo] });
 `;
-    expect(edit(asValue)).toEqual({ kind: "listed", local: "seo" });
+    expect(
+      edit(asValue, {
+        exportName: "default",
+        localName: "seo",
+        entry: local => local,
+      })
+    ).toEqual({ kind: "listed", local: "seo" });
+  });
+
+  it("does not take another plugin from the same package for this one", () => {
+    const text = `import { defineConfig } from "nextly/config";
+import { authPlugin } from "@acme/seo";
+export default defineConfig({ plugins: [authPlugin] });
+`;
+    expect(edited(text)).toContain(
+      `plugins: [authPlugin, seoPlugin({ siteUrl: "https://example.com" })]`
+    );
   });
 
   it("does not count a type-only import or an option as the plugin listed", () => {

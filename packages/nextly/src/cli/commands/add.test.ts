@@ -29,6 +29,13 @@ const install = vi.hoisted(() => ({
   // Whether someone is at the terminal, and what each prompt asked.
   terminal: false,
   asked: [] as string[],
+  // The folder the run's environment files were read from, if any.
+  environment: undefined as string | undefined,
+}));
+
+vi.mock("../environment", async () => ({
+  ...(await vi.importActual<typeof import("../environment")>("../environment")),
+  environmentFolder: () => install.environment,
 }));
 
 vi.mock("../../domains/schema/migrate/can-prompt", async () => ({
@@ -190,6 +197,7 @@ describe("nextly plugins add", () => {
     install.notMigrated = false;
     install.terminal = false;
     install.asked = [];
+    install.environment = undefined;
     output = [];
     const record = (...parts: unknown[]) => {
       output.push(parts.map(String).join(" "));
@@ -379,6 +387,22 @@ describe("nextly plugins add", () => {
     expect(await add({ skipInstall: true })).toBeUndefined();
     expect(output.join("\n")).toMatch(/has not been migrated yet/);
     expect(await build()).toContain("nextly plugins install @acme/p");
+  });
+
+  it("applies the schema only with the environment of the project it adds to", async () => {
+    await installed(PLAIN);
+    install.environment = join(project, "elsewhere");
+    expect(await add({ skipInstall: true })).toBeUndefined();
+    expect(install.steps).toEqual(["generate:types"]);
+    expect(output.join("\n")).toMatch(/environment files were read from/);
+
+    install.environment = project;
+    install.steps = [];
+    expect(await add({ skipInstall: true })).toBeUndefined();
+    expect(install.steps).toEqual([
+      "generate:types",
+      "plugins install @acme/p",
+    ]);
   });
 
   describe("--dry-run", () => {

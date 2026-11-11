@@ -82,11 +82,21 @@ describe("the installed package", () => {
     expect(entryFileOf(dir, { exports: "./e.js" })).toBe(join(dir, "e.js"));
   });
 
-  it("falls back to module, then main, then index.js", () => {
-    expect(entryFileOf("/p", { module: "./m.js", main: "./c.js" })).toBe(
-      join("/p", "m.js")
+  it("without exports, loads main as Node does, trying its extensions, and never module", async () => {
+    const dir = join(project, "legacy");
+    await mkdir(join(dir, "dist", "lib"), { recursive: true });
+    await writeFile(join(dir, "dist", "index.js"), "");
+    await writeFile(join(dir, "dist", "lib", "index.js"), "");
+    await writeFile(join(dir, "index.js"), "");
+    expect(entryFileOf(dir, { main: "./dist/index" })).toBe(
+      join(dir, "dist", "index.js")
     );
-    expect(entryFileOf("/p", { main: "./c.js" })).toBe(join("/p", "c.js"));
-    expect(entryFileOf("/p", {})).toBe(join("/p", "index.js"));
+    expect(entryFileOf(dir, { main: "./dist/lib" })).toBe(
+      join(dir, "dist", "lib", "index.js")
+    );
+    expect(
+      entryFileOf(dir, { module: "./dist/index.js", main: "./nowhere" })
+    ).toBe(join(dir, "index.js"));
+    expect(entryFileOf(dir, {})).toBe(join(dir, "index.js"));
   });
 });

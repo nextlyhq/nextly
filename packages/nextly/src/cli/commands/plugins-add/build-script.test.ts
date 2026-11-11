@@ -57,6 +57,18 @@ describe("the build step for a new plugin", () => {
     );
   });
 
+  it("installs against the configuration the build migrates with", () => {
+    expect(built("nextly migrate --config config/cms.ts && next build")).toBe(
+      "nextly migrate --config config/cms.ts && nextly plugins install @acme/seo --config config/cms.ts && next build"
+    );
+    expect(built("nextly migrate -c cms.config.ts && next build")).toBe(
+      "nextly migrate -c cms.config.ts && nextly plugins install @acme/seo --config cms.config.ts && next build"
+    );
+    expect(built("nextly migrate --config=cms.config.ts && next build")).toBe(
+      "nextly migrate --config=cms.config.ts && nextly plugins install @acme/seo --config cms.config.ts && next build"
+    );
+  });
+
   it("keeps the rest of package.json as it was", () => {
     const answer = buildScriptEdit(
       manifest("nextly migrate && next build"),

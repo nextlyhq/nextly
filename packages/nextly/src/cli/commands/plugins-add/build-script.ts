@@ -26,6 +26,9 @@ export type BuildScriptEdit =
 const NEXTLY_STEP =
   /^((?:npx|pnpm(?:\s+exec)?|yarn|bunx)\s+)?nextly\s+(migrate|plugins\s+install)(?:\s+(.*))?$/;
 
+/** The configuration a step names with `-c` or `--config`, either spelling. */
+const CONFIG_FLAG = /(?:^|\s)(?:-c|--config)(?:=|\s+)(\S+)/;
+
 /** A plugin name a shell reads as one word, with nothing it would act on. */
 const SHELL_SAFE_NAME = /^[A-Za-z0-9@/._-]+$/;
 
@@ -103,7 +106,11 @@ export function buildScriptEdit(
     );
   }
   const runner = last.match?.[1] ?? "";
-  const script = `${build.slice(0, last.end)} && ${runner}${step}${build.slice(last.end)}`;
+  // The install reads the configuration the step before it read, so it finds
+  // the plugin where the migration found the rest.
+  const config = CONFIG_FLAG.exec(last.match?.[3] ?? "")?.[1];
+  const flag = config === undefined ? "" : ` --config ${config}`;
+  const script = `${build.slice(0, last.end)} && ${runner}${step}${flag}${build.slice(last.end)}`;
   const edited = {
     ...(manifest as object),
     scripts: { ...(scripts as object), build: script },

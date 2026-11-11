@@ -11,9 +11,10 @@
  * file byte for byte as it was, and the lines to add are returned for the
  * person to place.
  *
- * A plugin is listed once: a config with an entry that is a binding imported
- * from the package, as a value (`seo`) or a call (`seo({ ... })`), is left
- * as it is, whatever options it gives.
+ * A plugin is listed once: a config with an entry that is the plugin's export
+ * imported from the package, under its own name or an alias, as a value
+ * (`seo`) or a call (`seo({ ... })`), is left as it is, whatever options it
+ * gives.
  *
  * @module cli/commands/plugins-add/config-registration
  */
@@ -72,42 +73,27 @@ function packageImports(
   );
 }
 
-/** The local names the file binds to `packageName`'s exports as values. */
-function valueBindings(imports: readonly ImportDeclaration[]): Set<string> {
-  const names = new Set<string>();
+/**
+ * Every local name the file binds `exportName` to as a value, aliases
+ * included. Another export of the same package is another plugin, or not one.
+ */
+function bindingsOf(
+  imports: readonly ImportDeclaration[],
+  exportName: string
+): string[] {
+  const names: string[] = [];
   for (const declaration of imports) {
     for (const binding of declaration.specifiers) {
-      const typeOnly =
-        binding.type === "ImportSpecifier" && binding.importKind === "type";
-      if (!typeOnly) names.add(binding.local.name);
+      const bindsIt =
+        exportName === "default"
+          ? binding.type === "ImportDefaultSpecifier"
+          : binding.type === "ImportSpecifier" &&
+            binding.importKind !== "type" &&
+            nameOf(binding.imported) === exportName;
+      if (bindsIt) names.push(binding.local.name);
     }
   }
   return names;
-}
-
-/** The local name `exportName` is already imported under, as a value. */
-function importedAs(
-  imports: readonly ImportDeclaration[],
-  exportName: string
-): string | undefined {
-  for (const declaration of imports) {
-    for (const binding of declaration.specifiers) {
-      if (exportName === "default") {
-        if (binding.type === "ImportDefaultSpecifier") {
-          return binding.local.name;
-        }
-        continue;
-      }
-      if (
-        binding.type === "ImportSpecifier" &&
-        binding.importKind !== "type" &&
-        nameOf(binding.imported) === exportName
-      ) {
-        return binding.local.name;
-      }
-    }
-  }
-  return undefined;
 }
 
 /** Whether the file binds `name` in any way: a declaration or any import. */
@@ -219,14 +205,16 @@ export function pluginRegistrationEdit(
     );
   }
 
-  const imports = packageImports(program, input.packageName);
-  const bound = valueBindings(imports);
+  const bound = bindingsOf(
+    packageImports(program, input.packageName),
+    input.exportName
+  );
   const listed = (list?.elements ?? [])
     .map(entryBinding)
-    .find((name): name is string => name !== null && bound.has(name));
+    .find((name): name is string => name !== null && bound.includes(name));
   if (listed !== undefined) return { kind: "listed", local: listed };
 
-  const existing = importedAs(imports, input.exportName);
+  const existing = bound[0];
   if (existing === undefined && bindsName(program, input.localName)) {
     return manual(
       `${input.file} already uses the name ${input.localName} for something else`
