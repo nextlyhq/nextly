@@ -148,7 +148,7 @@ function SaveableChoices({
         onClick={onDiscard}
         disabled={saving}
         // The dialog's confirm fades on hover; this outline keeps its own hover.
-        className="order-2 border-destructive bg-background text-destructive hover:bg-destructive/10 hover:opacity-100 sm:order-1 sm:mr-auto"
+        className="order-2 border-destructive bg-background text-destructive hover:bg-danger-surface hover:opacity-100 sm:order-1 sm:mr-auto"
       >
         Discard Changes
       </AlertDialogAction>

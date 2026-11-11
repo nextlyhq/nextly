@@ -268,7 +268,7 @@ export function ShowJSONDialog({
               className="gap-2"
             >
               {copied ? (
-                <Check className="h-4 w-4 text-success-500" />
+                <Check className="h-4 w-4 text-success-solid" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}

@@ -44,9 +44,9 @@ const PLAIN_LINE = { row: "", sign: " " } as const;
 
 /** Row tint and gutter sign for a line's status. */
 const LINE_STYLE: Record<string, { row: string; sign: string }> = {
-  added: { row: "bg-success-50 dark:bg-success-950", sign: "+" },
-  removed: { row: "bg-destructive-50 dark:bg-destructive-950", sign: "-" },
-  changed: { row: "bg-warning-50 dark:bg-warning-950", sign: "~" },
+  added: { row: "bg-success-surface", sign: "+" },
+  removed: { row: "bg-danger-surface", sign: "-" },
+  changed: { row: "bg-warning-surface", sign: "~" },
   unchanged: { row: "", sign: " " },
   unsupported: { row: "", sign: "?" },
 };
@@ -182,7 +182,7 @@ function LineRuns({
           return (
             <del
               key={index}
-              className="rounded-sm bg-destructive-100 dark:bg-destructive-900/70"
+              className="rounded-sm bg-danger-border"
             >
               <Painted text={segment.text} spans={before} column={column} />
             </del>
@@ -194,7 +194,7 @@ function LineRuns({
           return (
             <ins
               key={index}
-              className="rounded-sm no-underline bg-success-100 dark:bg-success-900/70"
+              className="rounded-sm no-underline bg-success-border"
             >
               <Painted text={segment.text} spans={after} column={column} />
             </ins>

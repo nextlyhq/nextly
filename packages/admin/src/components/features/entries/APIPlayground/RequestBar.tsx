@@ -57,23 +57,23 @@ export const METHOD_SEMANTICS: {
   };
   readonly POST: {
     readonly tone: "text-success";
-    readonly pill: "bg-success/15 text-foreground";
+    readonly pill: "bg-success-surface text-foreground";
   };
   readonly PATCH: {
     readonly tone: "text-warning";
-    readonly pill: "bg-warning/15 text-foreground";
+    readonly pill: "bg-warning-surface text-foreground";
   };
   readonly DELETE: {
     readonly tone: "text-destructive";
-    readonly pill: "bg-destructive/15 text-foreground";
+    readonly pill: "bg-danger-surface text-foreground";
   };
 } = {
   GET: { tone: "text-foreground", pill: "bg-muted text-foreground" },
-  POST: { tone: "text-success", pill: "bg-success/15 text-foreground" },
-  PATCH: { tone: "text-warning", pill: "bg-warning/15 text-foreground" },
+  POST: { tone: "text-success", pill: "bg-success-surface text-foreground" },
+  PATCH: { tone: "text-warning", pill: "bg-warning-surface text-foreground" },
   DELETE: {
     tone: "text-destructive",
-    pill: "bg-destructive/15 text-foreground",
+    pill: "bg-danger-surface text-foreground",
   },
 } as const satisfies Record<HttpMethod, { tone: string; pill: string }>;
 
