@@ -26,6 +26,8 @@
 
 import { z } from "zod";
 
+import { buildErrorResponse } from "../api/error-response";
+import { readOrGenerateRequestId } from "../api/request-id";
 import {
   respondData,
   SKIP_DATE_FORMATTING_HEADER,
@@ -73,16 +75,21 @@ export async function handleStartupRequest(
   const url = new URL(req.url);
   const parsed = startupPaths.safeParse(url.searchParams.getAll("path"));
   if (!parsed.success) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "path",
-          code: "INVALID_VALUE",
-          message: `Name between 1 and ${MAX_STARTUP_PATHS} admin API paths to answer.`,
-        },
-      ],
-      logContext: { route: "startup", issues: parsed.error.issues.length },
-    });
+    // Returned, not thrown: the admin API's GET has no boundary that turns a
+    // throw into a response, so a throw here would reach Next.js as a 500.
+    return buildErrorResponse(
+      NextlyError.validation({
+        errors: [
+          {
+            path: "path",
+            code: "INVALID_VALUE",
+            message: `Name between 1 and ${MAX_STARTUP_PATHS} admin API paths to answer.`,
+          },
+        ],
+        logContext: { route: "startup", issues: parsed.error.issues.length },
+      }),
+      { requestId: readOrGenerateRequestId(req) }
+    );
   }
   // Where the admin API is mounted: this route's own path, less `/startup`.
   const base = `${url.origin}${url.pathname.replace(/\/startup\/?$/, "")}`;

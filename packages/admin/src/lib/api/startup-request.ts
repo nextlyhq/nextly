@@ -96,6 +96,16 @@ export function takeStartupResponse(
 }
 
 /**
+ * Stop handing out the startup request's answers: every part not yet taken is
+ * asked of the server by its own request from now on. For a retry, which must
+ * reach the server rather than wait on a startup request that may never
+ * answer. The request is not sent again on this page.
+ */
+export function abandonStartupRequest(): void {
+  asked = new Set();
+}
+
+/**
  * Forget the startup request, so the next page sends its own. For tests, which
  * load the admin many times in one process.
  *

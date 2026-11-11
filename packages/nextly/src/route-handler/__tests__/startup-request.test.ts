@@ -142,9 +142,13 @@ describe("the startup request", () => {
   ])("refuses %s, sending nothing", async (_case, paths) => {
     const answer = vi.fn();
 
-    await expect(
-      handleStartupRequest(startup(paths), answer)
-    ).rejects.toBeInstanceOf(NextlyError);
+    // Answered with the canonical refusal, not thrown: the route's handler
+    // has no boundary of its own to turn a throw into a response.
+    const response = await handleStartupRequest(startup(paths), answer);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
     expect(answer).not.toHaveBeenCalled();
   });
 });
