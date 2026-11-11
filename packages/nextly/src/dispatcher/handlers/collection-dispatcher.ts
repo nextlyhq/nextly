@@ -62,6 +62,7 @@ import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-s
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
   recordedFieldsOf,
@@ -1081,25 +1082,29 @@ const COLLECTIONS_METHODS: Record<
           const newSchemaVersion = currentVersion + 1;
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_collections",
-              {
-                fields: JSON.stringify(storedFields),
-                schema_version: newSchemaVersion,
-                // Written but not run outside development: `nextly migrate`
-                // applies it on deploy.
-                ...(written !== undefined && !written.applied
-                  ? { migration_status: "pending" }
-                  : {}),
-                // i18n: persist the state this apply actually ran with (mirrors
-                // the singles apply). The DDL above already performed any
-                // false→true transition, so leaving the stored flag behind would
-                // make the settings write that follows read another false→true
-                // transition and reconcile the companion a second time.
-                localized: isLocalized,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+            // The row and the stored schema version in one transaction, so the
+            // version's count moves with the save it records (`writeRegistryRows`).
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_collections",
+                {
+                  fields: JSON.stringify(storedFields),
+                  schema_version: newSchemaVersion,
+                  // Written but not run outside development: `nextly migrate`
+                  // applies it on deploy.
+                  ...(written !== undefined && !written.applied
+                    ? { migration_status: "pending" }
+                    : {}),
+                  // i18n: persist the state this apply actually ran with (mirrors
+                  // the singles apply). The DDL above already performed any
+                  // false→true transition, so leaving the stored flag behind would
+                  // make the settings write that follows read another false→true
+                  // transition and reconcile the companion a second time.
+                  localized: isLocalized,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+              )
             );
             // Written past the registry services, so the cached rows are cleared
             // here: a read during the save may have cached the row from before it.

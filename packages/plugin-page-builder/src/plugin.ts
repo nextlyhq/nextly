@@ -93,6 +93,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { blocksListRoute } from "./blocks-list-route";
 import { registerRemovalWriteReport } from "./breakpoint-removal/after-commit";
 import { breakpointRemovalJob } from "./breakpoint-removal/job";
 import { removalRunStore } from "./breakpoint-removal/run-store";
@@ -3798,6 +3799,10 @@ export const pageBuilder = (
       // plugin route declares one permission, so the tier a role may read
       // without the other has to be reachable without the other's gate.
       routes: [
+        // Which registered blocks a blocks field accepts, with their props,
+        // for the Schema Builder's outline: code-defined metadata only, to
+        // any signed-in caller.
+        blocksListRoute(),
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),

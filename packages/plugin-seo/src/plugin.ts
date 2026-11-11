@@ -25,6 +25,9 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { defaultSeoFields } from "./fields";
+import { withLanguageLinks } from "./languages/head";
+import { notFoundCollection } from "./not-found/collection";
+import { keepSeoContext } from "./not-found/report";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
 import {
@@ -37,6 +40,8 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { redirectsCollection } from "./redirects/collection";
+import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import {
   contentTypesRoute,
@@ -366,6 +371,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     name: "seo",
     label: "SEO",
     fields: seoFields,
+    // Kept per language wherever the content is translated, so each language
+    // has its own title, description and canonical; on a type that is not
+    // translated, one value as before.
+    localized: true,
   });
 
   // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
@@ -393,19 +402,24 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const contributes: PluginContributions = {
     // Add the SEO group to each named collection.
     extend: [{ target: targets, fields: [seoGroup] }],
-    // The record that keeps each public address to one page.
-    collections: [addressRecordCollection()],
-    // Every page's head, worked out by the one order of who wins, its
-    // social card completed, and its structured data, worked out from that
-    // same answer and the settings' brand facts, with the plugin's options
-    // where the settings say nothing.
+    // The record that keeps each public address to one page, the redirects
+    // whose From addresses it holds, and the log of addresses not found.
+    collections: [
+      addressRecordCollection(),
+      redirectsCollection(),
+      notFoundCollection(),
+    ],
+    // Every page's head, worked out by the one order of who wins, with its
+    // links to its other languages, its social card completed, and its
+    // structured data, worked out from that same answer and the settings'
+    // brand facts, with the plugin's options where the settings say nothing.
     services: {
       pageMetadata: ctx =>
         withStructuredData(
           ctx,
           withSocialCard(
             ctx,
-            seoPageMetadata(ctx, readRules),
+            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
             readSocialCardRules
           ),
           structuredDataFromSettings(readStructuredDataRules)
@@ -424,8 +438,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       }),
     },
     routes,
-    // Every host but the site's production addresses is kept out of search.
-    proxy: [stagingGuard(readRules)],
+    // Every host but the site's production addresses is kept out of search,
+    // and redirects answer before the page is served. Only a redirect
+    // answers, so the order changes nothing a visitor gets.
+    proxy: [stagingGuard(readRules), redirectsProxyHandler()],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -529,6 +545,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // Kept for the site's not-found page, which logs through it.
+      keepSeoContext(ctx);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

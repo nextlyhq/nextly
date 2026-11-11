@@ -7,6 +7,7 @@
  *
  * @module outputs/sitemap-files
  */
+import type { LanguageLink } from "../languages/links";
 import { escapeXml } from "../sitemap";
 
 /** One listed page, as its sitemap entry says it. */
@@ -17,6 +18,11 @@ export interface SitemapPage {
   lastModified?: string;
   /** The absolute addresses of the page's main images. */
   images: readonly string[];
+  /**
+   * The page's language links, itself among them, each address absolute;
+   * none on a page with no other language.
+   */
+  alternates?: readonly LanguageLink[];
 }
 
 /** What one file may hold: a number of addresses, and a size in bytes. */
@@ -32,19 +38,26 @@ export const SITEMAP_LIMITS: SitemapLimits = {
 };
 
 const XML_DECLARATION = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-const URLSET_OPEN =
+const URLSET_START =
   `${XML_DECLARATION}<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"` +
-  ` xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n`;
+  ` xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"`;
+const URLSET_OPEN = `${URLSET_START}>\n`;
+// Language links are `xhtml:link` elements, so a sitemap carrying any declares
+// that namespace too; one with none is written as it always was.
+const URLSET_OPEN_LANGUAGES = `${URLSET_START} xmlns:xhtml="http://www.w3.org/1999/xhtml">\n`;
 const URLSET_CLOSE = `</urlset>`;
 
 // The size a file is held to is its UTF-8 bytes, counted with the web-standard
 // encoder so the plugin needs no Node `Buffer`.
 const encoder = new TextEncoder();
 const byteLength = (text: string) => encoder.encode(text).length;
-const WRAPPER_BYTES = byteLength(URLSET_OPEN) + byteLength(URLSET_CLOSE);
 
-/** The size of a sitemap file listing nothing: the least a file may be held to. */
-export const EMPTY_SITEMAP_BYTES: number = WRAPPER_BYTES;
+/**
+ * The size of a sitemap file listing nothing, with language links declared:
+ * the least a file may be held to, since a file of any site fits in it.
+ */
+export const EMPTY_SITEMAP_BYTES: number =
+  byteLength(URLSET_OPEN_LANGUAGES) + byteLength(URLSET_CLOSE);
 
 /** One page's `<url>` line, ending in the newline that follows it. */
 function urlLine(page: SitemapPage): string {
@@ -58,7 +71,13 @@ function urlLine(page: SitemapPage): string {
         `<image:image><image:loc>${escapeXml(image)}</image:loc></image:image>`
     )
     .join("");
-  return `  <url><loc>${escapeXml(page.loc)}</loc>${lastmod}${images}</url>\n`;
+  const links = (page.alternates ?? [])
+    .map(
+      link =>
+        `<xhtml:link rel="alternate" hreflang="${escapeXml(link.hreflang)}" href="${escapeXml(link.href)}"/>`
+    )
+    .join("");
+  return `  <url><loc>${escapeXml(page.loc)}</loc>${lastmod}${images}${links}</url>\n`;
 }
 
 /**
@@ -71,29 +90,33 @@ export function sitemapFiles(
   pages: readonly SitemapPage[],
   limits: SitemapLimits = SITEMAP_LIMITS
 ): string[] {
+  const open = pages.some(page => (page.alternates?.length ?? 0) > 0)
+    ? URLSET_OPEN_LANGUAGES
+    : URLSET_OPEN;
+  const wrapperBytes = byteLength(open) + byteLength(URLSET_CLOSE);
   // Even a file listing nothing is its wrapper, so a smaller size can never
   // be kept to.
-  if (limits.bytes < WRAPPER_BYTES) {
+  if (limits.bytes < wrapperBytes) {
     throw new Error(
-      `sitemap: a file must be allowed at least ${WRAPPER_BYTES} bytes, got: ${limits.bytes}`
+      `sitemap: a file must be allowed at least ${wrapperBytes} bytes, got: ${limits.bytes}`
     );
   }
   const files: string[][] = [[]];
-  let size = WRAPPER_BYTES;
+  let size = wrapperBytes;
   for (const page of pages) {
     const line = urlLine(page);
     const lineSize = byteLength(line);
-    if (WRAPPER_BYTES + lineSize > limits.bytes) continue;
+    if (wrapperBytes + lineSize > limits.bytes) continue;
     let current = files[files.length - 1] ?? [];
     if (current.length >= limits.urls || size + lineSize > limits.bytes) {
       current = [];
       files.push(current);
-      size = WRAPPER_BYTES;
+      size = wrapperBytes;
     }
     current.push(line);
     size += lineSize;
   }
-  return files.map(lines => `${URLSET_OPEN}${lines.join("")}${URLSET_CLOSE}`);
+  return files.map(lines => `${open}${lines.join("")}${URLSET_CLOSE}`);
 }
 
 /** A sitemap index naming each of `locations`. */

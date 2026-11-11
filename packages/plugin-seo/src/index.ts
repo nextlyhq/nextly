@@ -35,6 +35,13 @@ export type {
   ListingProblem,
 } from "./outputs/listing";
 export type { AiCrawlerChoice } from "./outputs/robots";
+// Languages: the code each of the site's languages is named by in language
+// links and why one is left out, and a page's links to its other languages.
+export { hreflangCodes, hreflangOf } from "./languages/hreflang";
+export type { Hreflang, LanguageCodeProblem } from "./languages/hreflang";
+export { pageLanguageLinks } from "./languages/head";
+export type { PageLanguageLinks } from "./languages/head";
+export type { LanguageLink } from "./languages/links";
 export type {
   CollectionReads,
   EntriesPage,
@@ -105,3 +112,8 @@ export type {
 export { shareImageProblems } from "./social/problems";
 export type { ShareImageProblem, ShareImageReaders } from "./social/problems";
 export type { SocialCardOptions } from "./social/card";
+// Logs the address a not-found page was asked for, from the site's
+// not-found page. Redirects themselves reach requests through the site's
+// Proxy, which `seoPlugin` contributes a handler to.
+export { logNotFound } from "./not-found/report";
+export type { HeaderReader } from "./not-found/report";

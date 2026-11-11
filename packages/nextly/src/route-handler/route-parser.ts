@@ -2891,6 +2891,7 @@ const DASHBOARD_ROUTES: Readonly<
     summary: { operation: "list", method: "getDashboardSummary" },
     "new-types": { operation: "list", method: "getDashboardNewTypes" },
     setup: { operation: "list", method: "getDashboardSetup" },
+    diagnostics: { operation: "list", method: "getDashboardDiagnostics" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
@@ -2926,6 +2927,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   POST /api/dashboard/new-types      → postDashboardNewType
  *   GET  /api/dashboard/setup          → getDashboardSetup
  *   PUT  /api/dashboard/setup          → putDashboardSetup
+ *   GET  /api/dashboard/diagnostics    → getDashboardDiagnostics
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.
