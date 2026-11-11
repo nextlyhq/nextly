@@ -23,7 +23,7 @@ const CSS = `
 .nx-seo-gsclist{list-style:none;margin:0;padding:0;display:grid;gap:4px}
 .nx-seo-gsclist li{display:flex;justify-content:space-between;gap:12px;font-size:13px;min-width:0}
 .nx-seo-gsclist li > span:first-child{overflow-wrap:anywhere;min-width:0}
-.nx-seo-gsclist li .nx-seo-help{flex:none}
+.nx-seo-gsclist li .nx-seo-help{flex:none;margin:0}
 .nx-seo-gsc .nx-seo-mono{font-family:var(--seo-mono);font-size:12px}
 `;
 
