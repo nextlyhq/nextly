@@ -70,6 +70,7 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import type { WhereFilter } from "../query/query-operators";
 
@@ -443,6 +444,16 @@ export class CollectionService extends BaseService {
    * service.registerDynamicSchemas(dynamicSchemas);
    * ```
    */
+  /** {@link CollectionMetadataService.companionSchemaOf}. */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  companionSchemaOf(
+    slug: string,
+    executor?: unknown
+  ): Promise<CompanionSchema | null> {
+    return this.metadataService.companionSchemaOf(slug, executor);
+  }
+
   registerDynamicSchemas(schemas: Record<string, unknown>): void {
     this.metadataService.registerDynamicSchemas(schemas);
   }

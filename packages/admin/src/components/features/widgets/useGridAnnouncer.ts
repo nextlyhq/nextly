@@ -38,7 +38,7 @@ export interface GridAnnouncer {
     to: number,
     count: number
   ) => void;
-  /** Say the size a card was just set to, by its name ("6 columns by 4 rows"). */
+  /** Say the size a card was just set to, by its name ("50% wide by 4 rows"). */
   announceSize: (title: string, sizeName: string) => void;
   /**
    * Say that a card was taken off the dashboard.

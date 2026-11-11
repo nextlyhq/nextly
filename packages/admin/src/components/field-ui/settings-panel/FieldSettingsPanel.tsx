@@ -33,6 +33,8 @@ import { ValidationTab } from "./tabs/ValidationTab";
 import type {
   FieldSettingsControlProps,
   FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsSurfaceControlProps,
   FieldSettingsTab,
   FixedFieldSetting,
 } from "./types";
@@ -74,12 +76,14 @@ export function FieldSettingsPanel({
   const [tab, setTab] = useState<FieldSettingsTab>("general");
   const headingId = useId();
   const typeLabel = useFieldTypeLabel(surface.surface)(field.type);
-  const lookup = useFieldTypeSettings(field.type);
+  const lookup = useFieldTypeSettings(field.type, surface);
   const typeSettings = lookup.status === "known" ? lookup.settings : undefined;
   const typeFixedReason = fixedReason(surface.fixed, "type", saved);
 
   const control: FieldSettingsControlProps = { field, readOnly, onChange };
-  const surfaceControl = { ...control, ancestors };
+  // A field is never its own sibling: no condition or setting may name it.
+  const others = siblings.filter(sibling => sibling.id !== field.id);
+  const surfaceControl = { ...control, ancestors, siblings: others };
 
   // What the type and the surface add to one tab, the type's first.
   const additions = (which: FieldSettingsTab): ReactNode[] => {
@@ -109,7 +113,7 @@ export function FieldSettingsPanel({
             {field.label || "Untitled field"}
           </h2>
           <p className="text-xs text-muted-foreground">
-            <span className="opacity-70">Type:</span> {typeLabel}
+            <span>Type:</span> {typeLabel}
           </p>
           {typeFixedReason && (
             <p className="text-xs text-muted-foreground">{typeFixedReason}</p>
@@ -137,7 +141,9 @@ export function FieldSettingsPanel({
         onValueChange={value => setTab(value as FieldSettingsTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="mt-3 w-full justify-start px-4">
+        {/* Scrolls sideways where the panel is too narrow for five tabs (a
+            phone, a card), rather than cutting the last ones off. */}
+        <TabsList scrollable className="mt-3 justify-start px-4">
           {TABS.map(each => (
             <TabsTrigger key={each.value} value={each.value}>
               {each.label}
@@ -159,6 +165,7 @@ export function FieldSettingsPanel({
               deriveName={surface.deriveName}
               nameFixedReason={fixedReason(surface.fixed, "name", saved)}
               apiPath={fieldApiPath(ancestors, field)}
+              width={surface.widthSetting !== false}
               defining={
                 Defining && (
                   <TypeOwnSettings readOnly={readOnly}>
@@ -175,26 +182,31 @@ export function FieldSettingsPanel({
           <TabsContent value="validation">
             <div className="space-y-4">
               <ValidationTab
+                surface={surface.surface}
                 field={field}
                 readOnly={readOnly}
                 onChange={onChange}
+                narrow={surface.validationRules}
               />
               {additions("validation")}
             </div>
           </TabsContent>
           <TabsContent value="display">
-            <DisplayTab field={field} readOnly={readOnly} onChange={onChange}>
+            <DisplayTab
+              surface={surface.surface}
+              field={field}
+              readOnly={readOnly}
+              onChange={onChange}
+              switches={surface.displaySwitches !== false}
+            >
               {additions("display")}
             </DisplayTab>
           </TabsContent>
           <TabsContent value="conditions">
             <div className="space-y-4">
-              <ConditionsTab
-                field={field}
-                siblings={siblings}
+              <ConditionsContent
                 conditions={surface.conditions}
-                readOnly={readOnly}
-                onChange={onChange}
+                control={surfaceControl}
               />
               {additions("conditions")}
             </div>
@@ -211,6 +223,33 @@ export function FieldSettingsPanel({
         </div>
       </Tabs>
     </section>
+  );
+}
+
+/**
+ * The Conditions tab's body. A surface with its own conditions editor draws the
+ * whole tab, so no shared builder or "always shown" line sits beside it; any
+ * other surface gets the shared tab in its mode.
+ */
+function ConditionsContent({
+  conditions,
+  control,
+}: {
+  conditions: FieldSettingsSurface["conditions"];
+  control: FieldSettingsSurfaceControlProps;
+}): JSX.Element {
+  if (typeof conditions === "function") {
+    const SurfaceConditions = conditions;
+    return <SurfaceConditions {...control} />;
+  }
+  return (
+    <ConditionsTab
+      field={control.field}
+      siblings={control.siblings}
+      conditions={conditions}
+      readOnly={control.readOnly}
+      onChange={control.onChange}
+    />
   );
 }
 
@@ -271,6 +310,13 @@ function TypeSettingsNote({
             Retry
           </Button>
         </div>
+      );
+    case "withheld":
+      return (
+        <p className="text-sm text-muted-foreground">
+          {typeLabel}&apos;s own settings cannot be set here; the settings every
+          field has are above and in the other tabs.
+        </p>
       );
     case "known":
       return lookup.settings === undefined ? (

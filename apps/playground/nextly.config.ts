@@ -92,6 +92,31 @@ const SeoPages = defineCollection({
 });
 
 /**
+ * Extra plain collections for the admin speed check's comparison of a start
+ * with few entities and with many (`e2e/admin-speed`): a start's work must not
+ * grow with the number of collections, and this is how that check adds them.
+ * `NEXTLY_SPEED_EXTRA_COLLECTIONS` is a count, unset or 0 everywhere else, so
+ * no other run or contributor sees them.
+ */
+const speedExtraCollections = Array.from(
+  {
+    length: Math.max(
+      0,
+      Number(process.env.NEXTLY_SPEED_EXTRA_COLLECTIONS) || 0
+    ),
+  },
+  (_, index) =>
+    defineCollection({
+      slug: `speed-extra-${index + 1}`,
+      labels: {
+        singular: `Speed extra ${index + 1}`,
+        plural: `Speed extras ${index + 1}`,
+      },
+      fields: [text({ name: "title", label: "Title", required: true })],
+    })
+);
+
+/**
  * The page builder, as one instance, so the site's routes can hand their
  * pages this site's own named queries (`namedQueriesOf`) and never another
  * site's served from the same process.
@@ -232,6 +257,8 @@ export default defineConfig({
       : []),
     // The collection the SEO plugin extends, by the plugin's own switch.
     ...(seoPluginEnabled ? [SeoPages] : []),
+    // The admin speed check's extra collections; none unless it asks.
+    ...speedExtraCollections,
   ],
   // Announcement is the localized single WITH the draft/published lifecycle,
   // registered for the same reason Authors is: so the per-language publish

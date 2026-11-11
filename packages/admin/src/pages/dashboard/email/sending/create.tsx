@@ -677,7 +677,7 @@ export default function CreateEmailProviderPage(): JSX.Element {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         <EmailSubpageLayout
           title="Add a provider"
           description="Choose how this site sends email, connect it, then send a real test. It stays off until the test is accepted."

@@ -37,6 +37,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
   type JSX,
 } from "react";
 
@@ -69,8 +70,10 @@ export interface DraggableWidgetCellProps {
   /** The card just placed (moved, resized, added or put back): ringed so the reader sees it. */
   highlighted?: boolean;
   className?: string;
-  /** The cell's own style: the rows it spans, which no class can carry (`cardRowStyle`). */
+  /** The cell's own style: the height it holds while its card loads (`frame/held-height`). */
   style?: CSSProperties;
+  /** Where the cell's element is kept, for whatever measures it. */
+  cellRef?: RefObject<HTMLDivElement | null>;
   "data-testid"?: string;
   children: ReactNode;
 }
@@ -83,6 +86,7 @@ export function DraggableWidgetCell({
   highlighted = false,
   className,
   style,
+  cellRef,
   "data-testid": testId,
   children,
 }: DraggableWidgetCellProps): JSX.Element {
@@ -100,9 +104,18 @@ export function DraggableWidgetCell({
     [setActivatorNodeRef, handleRef]
   );
 
+  // One element, two registrations: dnd-kit's node, and the cell's own ref for what measures it.
+  const setCell = useCallback(
+    (element: HTMLDivElement | null) => {
+      setNodeRef(element);
+      if (cellRef) cellRef.current = element;
+    },
+    [setNodeRef, cellRef]
+  );
+
   return (
     <div
-      ref={setNodeRef}
+      ref={setCell}
       // A place to land, focusable only programmatically: the header's summary
       // sends focus to the card a part names.
       tabIndex={-1}

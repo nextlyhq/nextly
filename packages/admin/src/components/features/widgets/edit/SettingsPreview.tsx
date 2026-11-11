@@ -6,8 +6,8 @@
  * links and controls are out of reach, since the card they would act on is the one behind the
  * panel.
  *
- * Drawn at the card's REAL width and height, and at the tier that width gives it, then scaled
- * down to the panel's width when wider: a full-width card's preview is laid out as the card is,
+ * Drawn at the card's REAL width, as tall as its content as the card on the dashboard is, and at
+ * the tier that width gives it, then scaled down to the panel's width when wider: a full-width card's preview is laid out as the card is,
  * only smaller. The tier is stated rather than measured, because a scaled box measures its
  * scaled width and would read a tier the card does not have.
  *
@@ -20,13 +20,20 @@
 import { Button } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
-import { useEffect, useRef, useState, type JSX, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type JSX,
+  type RefObject,
+} from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
+import { observeSize } from "../frame/observe-size";
 import { tierForWidth } from "../frame/tier";
-import { cardHeightPx } from "../sizes";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { useSettingsPreview, type ShownAnswer } from "./useSettingsPreview";
@@ -93,12 +100,11 @@ function usePreviewScale(cardWidth: number | undefined) {
   return { roomRef, scale };
 }
 
-/** The card itself, drawn at its real width and height and scaled into the preview's room. */
+/** The card itself, drawn at its real width, as tall as its content, and scaled into the preview's room. */
 function PreviewCard({
   preview,
   tier,
   cardWidth,
-  height,
   scale,
   hidden,
   cardRef,
@@ -106,7 +112,6 @@ function PreviewCard({
   preview: ReturnType<typeof useSettingsPreview>;
   tier: SizeTier | undefined;
   cardWidth: number | undefined;
-  height: number;
   scale: number;
   /** Hidden behind the preview's own notice, still drawn so its state is read. */
   hidden: boolean;
@@ -120,10 +125,11 @@ function PreviewCard({
       aria-hidden={hidden || undefined}
       data-testid="settings-preview"
       data-scale={scale}
-      className={hidden ? "invisible" : undefined}
+      // Still drawn while the notice stands in for it, so its state is read, but out of the
+      // room's flow, which the notice then sizes.
+      className={hidden ? "invisible absolute top-0 left-0" : undefined}
       style={{
         ...(cardWidth === undefined ? {} : { width: cardWidth }),
-        height,
         ...(scale === 1 ? {} : { transform: `scale(${scale})` }),
         transformOrigin: "top left",
       }}
@@ -147,11 +153,20 @@ function PreviewCard({
 /** What the preview says in the card's place while the panel's filters match nothing. */
 function NoMatchNotice({
   onClearFilters,
+  minHeight,
 }: {
   onClearFilters: (() => void) | undefined;
+  /** The scaled card's height, which the notice stands in for: at least that tall. */
+  minHeight: number | undefined;
 }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card p-4 text-center">
+    // In the room's flow, so the room is as tall as the notice's own text and button wherever
+    // the scaled card would be shorter than they are; never clipped by the room.
+    <div
+      data-testid="settings-preview-no-match"
+      className="flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card p-4 text-center"
+      style={minHeight === undefined ? undefined : { minHeight }}
+    >
       <p role="status" className="text-sm text-foreground">
         {NO_FILTER_MATCH}
       </p>
@@ -201,8 +216,9 @@ export function SettingsPreview(props: {
     ...(tier === undefined ? {} : { tier }),
   });
   const { roomRef, scale } = usePreviewScale(cardWidth);
-  const height = cardHeightPx(size.h);
   const cardRef = useRef<HTMLDivElement>(null);
+  // The card's own height, before it is scaled, which the room is as tall as once scaled.
+  const height = useLayoutHeight(cardRef);
   const drawnState = useDrawnState(cardRef);
   const noMatch =
     filtersApplied(props.widget, preview.placement.settings) &&
@@ -217,17 +233,44 @@ export function SettingsPreview(props: {
       <div
         ref={roomRef}
         className="relative w-full overflow-hidden"
-        style={{ height: height * scale }}
+        // The scaled card's height; while the notice stands in for the card, the notice's own,
+        // at least as tall.
+        style={
+          height === undefined || noMatch
+            ? undefined
+            : { height: height * scale }
+        }
         data-testid="settings-preview-room"
       >
         <PreviewCard
-          {...{ preview, tier, cardWidth, height, scale, cardRef }}
+          {...{ preview, tier, cardWidth, scale, cardRef }}
           hidden={noMatch}
         />
         {noMatch ? (
-          <NoMatchNotice onClearFilters={props.onClearFilters} />
+          <NoMatchNotice
+            onClearFilters={props.onClearFilters}
+            minHeight={height === undefined ? undefined : height * scale}
+          />
         ) : null}
       </div>
     </section>
   );
+}
+
+/**
+ * The height of the element at `ref` as laid out, before any transform scales it, as it changes:
+ * the preview card is as tall as its content, which changes as the panel's values do.
+ * `undefined` before it is drawn.
+ */
+function useLayoutHeight(
+  ref: RefObject<HTMLElement | null>
+): number | undefined {
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  // Before the paint, so the room is never drawn at the unscaled height for a frame.
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (element === null) return;
+    return observeSize(element, () => setHeight(element.offsetHeight));
+  }, [ref]);
+  return height;
 }

@@ -1,16 +1,12 @@
 /**
- * A card its body collapsed: the rows its cell spans, and the frame drawn as its header alone, at
- * rest and in customise mode. The cell's half, drawn in the grid, is in `WidgetGrid.test.tsx`.
+ * A card its body collapsed: the frame drawn as its header alone, at rest and in customise
+ * mode. The cell's half, drawn in the grid, is in `WidgetGrid.test.tsx`.
  */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { WidgetCard } from "../../WidgetCard";
-import {
-  CardCollapseContext,
-  collapsedRows,
-  COLLAPSED_ROWS,
-} from "../collapse";
+import { CardCollapseContext } from "../collapse";
 import { CardHeaderContent } from "../header-slot";
 
 function drawn(collapsed: boolean, customizing = false) {
@@ -41,19 +37,13 @@ function focusable(root: HTMLElement): HTMLElement[] {
   ].filter(element => element.tabIndex >= 0 && !element.closest("[inert]"));
 }
 
-describe("collapsedRows", () => {
-  it("is one row while collapsed, and the cell's own rows otherwise", () => {
-    expect(COLLAPSED_ROWS).toBe(1);
-    expect(collapsedRows(4, true)).toBe(1);
-    expect(collapsedRows(4, false)).toBe(4);
-  });
-});
-
 describe("the frame of a collapsed card", () => {
-  it("draws its header as the one line, with no gap or footer, in one row's padding", () => {
+  it("draws its header as the one line, with no gap or footer, in the frame's own padding", () => {
     const card = drawn(true);
     expect(card).toHaveAttribute("data-collapsed");
-    expect(card).toHaveClass("py-[15px]");
+    // As tall as its header: the frame's padding, with nothing trimmed to fit a fixed row.
+    expect(card).toHaveClass("p-4");
+    expect(card.className).not.toMatch(/py-\[/);
     expect(screen.getByTestId("widget-card-header")).not.toHaveClass("sr-only");
     expect(screen.getByTestId("widget-card-body")).toHaveClass("pt-0");
     expect(screen.queryByTestId("widget-card-footer")).toBeNull();

@@ -133,7 +133,7 @@ interface PluginContext {
   fetch?: typeof fetch; // with a non-empty capabilities.net.outbound
   audit?: PluginAuditApi; // with contributes.audit
   hooks: PluginHookRegistry; // in-transaction, modify/abort
-  events: EventBus; // post-commit, observe-only, best-effort
+  events: PluginEvents; // post-commit, observe-only, best-effort
   filters: PluginFilterRegistry; // transform values on typed seams (D63)
   actions: PluginActionRegistry; // ordered side-effects on typed seams (D63)
   self: {
@@ -255,8 +255,34 @@ ctx.hooks.on(type, collectionSlug | "*", handler); // beforeCreate/afterCreate/�
 ctx.hooks.onInTransaction(collectionSlug | `single:${slug}` | "*", handler); // @experimental: inside the write's transaction, with a bound `db`; throwing aborts; may run again on a retry
 ctx.hooks.onCollectionDelete({ impact?, inTransaction? }); // @experimental: what deleting a collection takes with it, for the delete dialog, and its removal in the delete's transaction; throwing refuses the delete
 ctx.events.on(eventName, handler); // observe-only; e.g. `collection.${slug}.created`
-ctx.events.emit(eventName, payload); // your own `<slug>.…` names, declared in contributes.events
+ctx.events.emit(eventName, payload, { tx }?); // your own `<slug>.…` names, declared in contributes.events; delivered once the work commits
 ```
+
+`ctx.events.emit` delivers an event once the work that emitted it commits, and
+never for work that was undone:
+
+- With `{ tx }`, the handle `ctx.db.transaction` passes its callback, the event is
+  delivered once that transaction commits, and dropped if it rolls back, from
+  whichever code emits it. A handle whose transaction has already ended is refused:
+  emit without `tx` once the transaction has returned.
+- Called inside a transaction your code is running in without passing `tx`, such
+  as from an `onInTransaction` hook or a service call inside `ctx.db.transaction`,
+  it waits for the outermost transaction to commit. A savepoint that rolls back
+  drops the events emitted inside it, and an attempt that is retried drops its
+  own, so each is delivered once.
+- Outside any transaction, as from a job, a route or `init`, it is delivered at
+  once, as before.
+
+```ts
+await ctx.db.transaction(async tx => {
+  await tx.insert(orders).values(order);
+  ctx.events.emit("acme-billing.charged", { orderId: order.id }, { tx });
+}); // listeners hear `acme-billing.charged` here, after the commit
+```
+
+Before this release `emit` delivered at once wherever it was called, even inside a
+transaction that later rolled back. A listener now hears an event emitted inside a
+transaction only after that transaction commits.
 
 A hook that learns something true about the state a write leaves behind, rather
 than something that failed, tells the person whose write it is with
@@ -826,6 +852,16 @@ place on one of its pages with `TargetSlot` and `PlaceTabs` from
 
 ```tsx
 import { PlaceTabs, TargetSlot } from "@nextlyhq/plugin-sdk/admin";
+
+// The plugin's own invoice view.
+import { Invoice } from "./Invoice";
+
+// The place's type, as declared above, so its id and context are checked.
+declare module "@nextlyhq/plugin-sdk" {
+  interface AdminPlaces {
+    "acme-billing.invoice": { context: { invoiceId: string } };
+  }
+}
 
 export function InvoicePage({ invoiceId }: { invoiceId: string }) {
   const context = { invoiceId };

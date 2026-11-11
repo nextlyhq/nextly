@@ -1,56 +1,19 @@
 /**
- * How many rows a list card draws: the whole rows its body holds at its density.
+ * A list card's rows: how tightly they are set, and each density's row height.
  *
- * A list shows whole rows and never scrolls, so the number it draws is a fact about its body's
- * height and how tall a row is, not a number a person types. Each density has one row height, so
- * changing density changes how many rows fit without changing the card's size.
- *
- * The body height is the card's own: its height in grid rows less what the frame draws around
- * the body (`cardBodyHeightPx`), so a taller card draws more rows. A card drawn with no height
- * of its own (a preview, a body drawn outside the grid) is counted from its size tier instead: a
- * small body holds three default rows, a medium one five and a large one ten.
- * {@link listBodyHeight} is the one place either turns into pixels.
+ * How MANY rows a list card draws is not decided here: it is its reader's "Number of entries"
+ * (`rowsDrawn` in `frame/tier`, core's `listEntries`), since a card is as tall as its content.
+ * Density decides only how tall each of those rows is drawn.
  *
  * @module components/features/widgets/frame/list-rows
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
-import { cardBodyHeightPx, LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 import { LIST_DENSITIES, type ListDensity } from "nextly/config";
 import { createContext, useContext, type Context } from "react";
 
-// A list row's height at each density, and the whole rows a body of some height holds at one:
-// core's (`nextly/card-geometry`), the formula a widget's server `load` counts its rows by
-// (`rowsThatFit`), so the rows a load reads and the rows drawn here are one count.
-export { LIST_ROW_HEIGHT_PX, rowsInBody } from "nextly/card-geometry";
-
-/** How many default-density rows a card's body holds at each tier. */
-const TIER_BODY_ROWS: Readonly<Record<SizeTier, number>> = Object.freeze({
-  small: 3,
-  medium: 5,
-  large: 10,
-});
-
-/**
- * The height of a list card's body at `tier`, in pixels: the room its tier gives the rows, for a
- * card with no height of its own.
- */
-export function tierBodyHeight(tier: SizeTier): number {
-  return TIER_BODY_ROWS[tier] * LIST_ROW_HEIGHT_PX.default;
-}
-
-/** What a card's rows are counted at: its tier, and its height in grid rows where it has one. */
-export interface RowsSize {
-  tier: SizeTier;
-  h?: number | undefined;
-}
-
-/** The height of a card's body in pixels: from its height where it has one, else its tier. */
-export function listBodyHeight(size: RowsSize): number {
-  return size.h === undefined
-    ? tierBodyHeight(size.tier)
-    : cardBodyHeightPx(size.h);
-}
+// A list row's height at each density: core's (`nextly/card-geometry`), the pixels the row
+// classes draw (`LIST_ROW_HEIGHT_CLASS`).
+export { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
 
 /**
  * The density a card's settings name, or `default` for none or a value no density has: a
