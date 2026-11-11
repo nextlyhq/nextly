@@ -34,9 +34,11 @@ import {
   type ReadPage,
 } from "../bulk/pages";
 import {
+  asStored,
   refusalAbout,
   refuseDroppedValues,
   seoWith,
+  storedPages,
   writablePages,
 } from "../bulk/route";
 import { productionAddressesOf, typedCanonical } from "../canonical";
@@ -930,14 +932,31 @@ async function writeAll(
   plan: ImportPlan,
   as: ServiceOpts
 ): Promise<void> {
+  const stored = new Map<string, Record<string, unknown>>();
+  for (const type of new Set(plan.pages.map(page => page.type))) {
+    const ids = plan.pages
+      .filter(page => page.type === type)
+      .map(page => page.id);
+    const read = await storedPages(
+      ctx,
+      transaction,
+      type,
+      ids,
+      asStored(plan.locale)
+    );
+    for (const [id, entry] of read) stored.set(`${type}|${id}`, entry);
+  }
   for (const page of plan.pages) {
+    // Written over the group as stored, every value the person may not
+    // read kept as it was.
+    const group = stored.get(`${page.type}|${page.id}`)?.[SEO_GROUP];
     try {
       const saved = await ctx.services.collections.updateEntryInTransaction(
         transaction,
         page.type,
         page.id,
         {
-          [SEO_GROUP]: seoWith(page.seo, page.writes),
+          [SEO_GROUP]: seoWith(group, page.writes),
           ...(page.rev === undefined
             ? { _overwrite: true }
             : { _rev: page.rev }),

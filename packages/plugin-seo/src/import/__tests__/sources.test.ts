@@ -231,3 +231,15 @@ describe("a WordPress export whose content holds markup", () => {
     expect(parsed.records[0]?.values).toEqual({ description: "Kept" });
   });
 });
+
+describe("template variables that take arguments", () => {
+  it("leaves out a value naming one, which Nextly can't fill", () => {
+    const values = { title: "Fish", siteName: "Acme", separator: "|" };
+    expect(
+      fillTemplate("%title% %customfield(price)%", "rankMath", values)
+    ).toBe(undefined);
+    expect(
+      fillTemplate("%title% on %currenttime(F jS, Y)%", "rankMath", values)
+    ).toBe(undefined);
+  });
+});

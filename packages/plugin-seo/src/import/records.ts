@@ -126,7 +126,12 @@ export function fillTemplate(
   if (variables === undefined) return text;
   const { open, close } = VARIABLES[variables];
   const escape = (part: string) => part.replace(/[%]/g, "\\%");
-  const pattern = new RegExp(`${escape(open)}([a-z_]+)${escape(close)}`, "gi");
+  // A variable may take arguments, as Rank Math's `%customfield(price)%`
+  // does; none is one Nextly can fill, so it leaves its value out.
+  const pattern = new RegExp(
+    `${escape(open)}([a-z_]+)(\\([^)]*\\))?${escape(close)}`,
+    "gi"
+  );
   const known: Readonly<Record<string, string | undefined>> = {
     title: values.title,
     sitename: values.siteName,
@@ -136,9 +141,10 @@ export function fillTemplate(
     pagenumber: "",
   };
   let missing = false;
-  const filled = text.replace(pattern, (_, name: string) => {
+  const filled = text.replace(pattern, (_, name: string, args?: string) => {
     const key = name.toLowerCase();
-    const value = Object.hasOwn(known, key) ? known[key] : undefined;
+    const value =
+      args === undefined && Object.hasOwn(known, key) ? known[key] : undefined;
     if (value === undefined) missing = true;
     return value ?? "";
   });

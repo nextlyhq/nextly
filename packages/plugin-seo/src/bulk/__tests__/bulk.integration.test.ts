@@ -449,3 +449,91 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "bulk edit where a field of the site's own SEO group can't be read (%s)",
+  dialect => {
+    it("keeps that field's value when another is saved", async () => {
+      const t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        plugins: [
+          seoPlugin({
+            collections: ["posts"],
+            sitemap: false,
+            // The canonical may be changed but never read.
+            fields: [
+              text({ name: "metaTitle" }),
+              text({ name: "canonical", access: { read: () => false } }),
+            ],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      current = t;
+      const owner = await t.nextly.users.create({
+        data: {
+          email: "owner@example.com",
+          password: "Password123!",
+          name: "Owner",
+          isActive: true,
+        },
+      });
+      const seeded = await t.nextly.permissions.find({ limit: 500 });
+      const role = await t.nextly.roles.create({
+        data: {
+          name: "Editor here",
+          slug: "editor-here",
+          permissionIds: ["read-posts", "update-posts"].map(slug => {
+            const found = seeded.items.find(item => item.slug === slug);
+            if (found === undefined) throw new Error(`${slug} is not seeded`);
+            return found.id;
+          }),
+        },
+      });
+      const keys = t.getService("apiKeyService") as unknown as {
+        createApiKey(
+          userId: string,
+          input: {
+            name: string;
+            tokenType: string;
+            roleId: string;
+            expiresIn: string;
+          }
+        ): Promise<{ key: string }>;
+      };
+      const { key } = await keys.createApiKey(String(owner.item.id), {
+        name: "editor key",
+        tokenType: "role-based",
+        roleId: String(role.item.id),
+        expiresIn: "unlimited",
+      });
+      await post(t, {
+        title: "Surfer",
+        slug: "surfer",
+        seo: { canonical: "https://rext.ai/original" },
+      });
+      const read = (await (
+        await call(key, "GET", "/bulk/rows?type=posts")
+      ).json()) as BulkRowsBody;
+      const surfer = read.rows.find(row => row.label === "Surfer");
+      const response = await call(key, "POST", "/bulk/save", {
+        type: "posts",
+        changes: [
+          { id: surfer?.id, rev: surfer?.rev, title: "Surfer, compared" },
+        ],
+      });
+      expect(response.status, await response.clone().text()).toBe(200);
+      expect((await seoBySlug(t)).surfer).toMatchObject({
+        metaTitle: "Surfer, compared",
+        canonical: "https://rext.ai/original",
+      });
+    });
+  }
+);

@@ -294,8 +294,17 @@ export function refusalAbout(error: unknown, label: string): unknown {
   return error;
 }
 
-/** The pages a save names, read on its transaction, by id. */
-async function storedPages(
+/**
+ * How a write reads the groups it writes over: as stored, as the system, so
+ * a value inside the group the person may not read is written back as it
+ * was rather than dropped. The person's own rules still judge the write.
+ */
+export function asStored(locale: string | undefined): ServiceOpts {
+  return { as: "system", ...(locale === undefined ? {} : { locale }) };
+}
+
+/** The pages a write names, read on its transaction, by id. */
+export async function storedPages(
   ctx: PluginContext,
   transaction: Parameters<
     PluginContext["services"]["collections"]["updateEntryInTransaction"]
@@ -358,7 +367,13 @@ async function save(
   await ctx.services.collections.warmLocalizedReadiness(type);
   const revs: Record<string, string> = {};
   await ctx.services.collections.withTransaction(async transaction => {
-    const stored = await storedPages(ctx, transaction, type, ids, as);
+    const stored = await storedPages(
+      ctx,
+      transaction,
+      type,
+      ids,
+      asStored(locale)
+    );
     for (const change of body.changes) {
       const entry = stored.get(change.id);
       if (entry === undefined) {
