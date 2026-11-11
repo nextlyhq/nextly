@@ -109,6 +109,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   isTruthyParam,
+  parseCountParam,
   parseRichTextFormat,
   parseSelectParam,
   parseStatusParam,
@@ -1257,6 +1258,8 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?count=capped` counts the total no further than the list shows.
+        countUpTo: parseCountParam(p.count),
       });
 
       type PaginatedShape = {
@@ -1267,6 +1270,7 @@ const COLLECTIONS_METHODS: Record<
         totalPages: number;
         hasNextPage: boolean;
         hasPrevPage: boolean;
+        totalCapped?: true;
       };
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         collectionName: p.collectionName,
@@ -1758,7 +1762,13 @@ async function writerSaveOf(change: WriterChange): Promise<
   if (!container.has("builderSaveSetup")) return undefined;
   const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
   const adapter = getAdapterFromDI();
-  if (!adapter) throw new Error("Database adapter not initialized");
+  // A writer registered with no adapter is a wiring fault of the app, not the editor's: reported
+  // as an internal error, with what was missing in the log.
+  if (!adapter) {
+    throw NextlyError.internal({
+      logContext: { reason: "database adapter not initialized" },
+    });
+  }
   const logger = getLoggerFromDI() ?? consoleLogger;
   const dynamic = new DynamicCollectionService(adapter, logger);
   const before = change.collection.fields ?? [];
