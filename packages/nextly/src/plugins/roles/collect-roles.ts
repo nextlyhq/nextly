@@ -35,9 +35,12 @@ const RESERVED_ROLE_SLUGS = new Set([SUPER_ADMIN_SLUG, PUBLIC_ROLE_SLUG]);
  *
  * Permission-slug existence is validated later, at seed time (where the DB is) —
  * an unresolvable permission slug is logged and skipped, not a boot error.
+ *
+ * Reads only `roles` of the config, and asks for no more, so `nextly migrate`
+ * folds the roles from the config it loads as a start does from its own.
  */
 export function collectRoles(
-  config: NextlyServiceConfig,
+  config: Pick<NextlyServiceConfig, "roles">,
   plugins: PluginDefinition[]
 ): CollectedRole[] {
   const seen = new Map<string, string>(); // slug -> first owner

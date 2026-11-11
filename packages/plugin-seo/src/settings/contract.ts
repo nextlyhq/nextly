@@ -62,6 +62,12 @@ export interface PatternField {
   token: string;
 }
 
+/** A field a structured data detail may be read from, as the screen names it. */
+export interface MappableField {
+  name: string;
+  label: string;
+}
+
 /** A page of a type a pattern is previewed with: its title and fields. */
 export interface PatternExample {
   /** The page's title, which `{Title}` stands for. */
@@ -81,6 +87,34 @@ export interface SeoContentType {
   fields: PatternField[];
   /** The newest page of the type, where the reader may see one. */
   example?: PatternExample;
+  /** How many entries of the type the reader may read. */
+  count?: number;
+  /** The type's own fields a structured data detail may be read from. */
+  mappableFields: MappableField[];
   /** Whether its pages have a public address yet. */
   public: boolean;
+}
+
+/**
+ * One of the site's own content types the plugin does not add SEO to, which
+ * the screen lists greyed, since the switch is set in the site's code.
+ */
+export interface SwitchedOffType {
+  key: string;
+  label: string;
+  /** How many entries of the type the reader may read. */
+  count?: number;
+  /** Whether its pages have a public address, with SEO or without. */
+  public: boolean;
+  seo: false;
+}
+
+/** What the content types route lists: each type with SEO, then those without. */
+export type ListedContentType = SeoContentType | SwitchedOffType;
+
+/** Whether a listed type is one the plugin does not add SEO to. */
+export function isSwitchedOff(
+  type: ListedContentType
+): type is SwitchedOffType {
+  return "seo" in type && type.seo === false;
 }

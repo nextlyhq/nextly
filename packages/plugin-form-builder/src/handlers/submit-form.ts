@@ -32,7 +32,7 @@ import {
 
 import { botCheckReady, botTokensOf, judgeBotCheck } from "./bot-check";
 import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
-import { ALREADY_RESPONDED } from "./one-response";
+import { ALREADY_RESPONDED, browserTokenOf } from "./one-response";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
 import { checkSpam, type SpamCheckResult } from "./spam-detection";
 
@@ -581,6 +581,7 @@ export async function submitForm(
     // is evidence this handler chose to keep rather than a caller asking for
     // validation to be skipped. The form goes with it so the seam does not read
     // it a second time.
+    const browserToken = browserTokenOf(data);
     let submission: Awaited<ReturnType<typeof collections.createEntry>>;
     try {
       submission = await collections.createEntry(
@@ -593,6 +594,8 @@ export async function submitForm(
           // The bot-check tokens the visitor's form sent, read before the
           // row keeps only the form's fields: the seam verifies them.
           botTokens: botTokensOf(data),
+          // And the browser's token, for one response per browser.
+          ...(browserToken === undefined ? {} : { browserToken }),
           // Counted already on the way here; the seam does not count it again.
           ...(rateCounted ? { rateCounted } : {}),
         }),

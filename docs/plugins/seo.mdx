@@ -154,6 +154,8 @@ The tab shows, in order:
 - **Advanced**, closed until opened: hiding the page from search, its official address
   (the canonical), a different title and description when shared, the share image, and
   the [structured data type](#structured-data), with what the type still lacks.
+- **Check what search engines received**, once the page is saved and has an address: it
+  opens [What search engines received](#what-search-engines-received) for this page.
 
 The official address is the page's own public address. **Use another address** takes an
 address on the same site as typed; one on another site is used only once the person
@@ -420,12 +422,12 @@ address, what kind of site it is and what AI tools may do, and a logo with a def
 Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
 with a line on the page to finish later. Every answer stays editable on the tabs:
 
-| Tab           | What it holds                                                                                                                                                                     |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description |
-| Content types | Each content type with SEO, whether it has a public address yet, and its title pattern                                                                                            |
-| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                             |
-| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                      |
+| Tab           | What it holds                                                                                                                                                                                                                                   |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description                                                               |
+| Content types | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
+| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                                                                                           |
+| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                                                                                    |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
@@ -452,6 +454,26 @@ newest page updates as you type.
   `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays `Pricing | Acme`.
 
 **Reset to default** returns a type to the site's default pattern.
+
+### Hiding a type, and its structured data
+
+The table lists every content type the plugin adds SEO to, with one entry's address as an example
+of where its pages live, and after them, greyed, the site's other types: SEO is switched on or off
+for a type in the site's code, so the switch there can't be changed.
+
+**Hide whole group** keeps every page of a content type out of search, whatever each page says, and
+out of the sitemap. The **Structured data** column chooses what the type's pages are described as;
+**Automatic** describes a page with an author and a date as an Article, and any other as a Web page.
+For a type that needs details, such as an Article's author, **Map details** chooses the field each
+detail is read from, including a field inside a group (`event.startsAt`), and the optional details
+the type can also use. A detail left unchosen is read from a field named like it, the image from the
+page's share image, and a type missing a detail is left out of the page's markup and listed in
+Problems.
+
+Until the site chooses, the table shows what the plugin's `hiddenTypes` and `structuredData` options
+say. Hiding or showing a type saves the whole list, which then takes over from `hiddenTypes`. A
+type's structured data choice takes over from the option for that type only; other types keep
+following the option, and choosing **Automatic** over a type the option names is kept as a choice.
 
 ### Changes reach pages without a redeploy
 
@@ -556,9 +578,11 @@ built from the page's head. The plugin states everything the card reads:
 - the title and description, the social ones where a page has them, else the page's own;
 - the **share image** at its full address, with its width, height and alt text. The media library
   stores an upload with a path from the site's root (`/uploads/cover.jpg`), which a network cannot
-  load, so the plugin states it on `baseUrl`, else the first of the site's production addresses,
-  else the origin of the page's canonical where that is absolute;
-- the **site's name**, from `socialCard.siteName`;
+  load, so the plugin states it on the site's production address (the page's language's own, where
+  it has one on its own domain), else `baseUrl`, else the origin of the page's canonical where that
+  is absolute;
+- the **site's name**, the one saved on the SEO settings' General tab, so the card, the title
+  pattern and structured data name the site the same way; until it is saved, `socialCard.siteName`;
 - the page's **language**: the one the route read it in, or else `socialCard.language`, or else
   the site's default language (English on a site that declares no languages), written as Open
   Graph writes it (`en-US` becomes `en_US`).
@@ -704,6 +728,27 @@ A published page whose address changes leaves a permanent redirect from its old 
 
 A redirect's From address is held like a page's address, so a published page and a redirect never share one. A From address may also be a pattern, `/old/*`, sending `/old/anything` to the same place under a new address with a To address of `/new/*`. Where several redirects match, an exact one answers first, then the pattern with the longest fixed part. A page at an address inside a pattern is served, and the pattern still redirects every other address below it.
 
+### The redirects screen
+
+**SEO › Redirects** in the admin lists every redirect, who added it and when. Add one by typing its From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back.
+
+The form refuses what would break: an address a published page holds, a second redirect from one address, and a redirect that would send visitors round in a loop. Where the To address already redirects onward, the new redirect goes straight to the end in one hop, and the form says so.
+
+The **Not found** tab lists the addresses people and search engines asked for that don't exist, most visited first. **Redirect…** fills the form with the address and the closest live page as a suggestion, for you to check before adding.
+
+### Importing redirects from a file
+
+**Import CSV** reads a file of redirects, one per line: the From address, the To address and, optionally, `temporary`. A first line naming the columns is skipped.
+
+```text
+From,To,Type
+/old-blog/*,/blog/*
+/guides/seo-basics,/resources
+/webinar,/events/spring-webinar,temporary
+```
+
+Nothing changes until you confirm. The dry run shows what each row would do: a new redirect, one that joins a chain or replaces an existing redirect, one already there, or one that can't be imported, such as a loop. A file with any row that can't be imported is not imported at all; fix it and upload it again. A confirmed file is applied in full or not at all.
+
 ### Running redirects
 
 Redirects answer from the site's Proxy, before the page is served, so a page that no longer exists never starts streaming a "not found" first. Wire the Proxy once, as [Proxy handlers](/docs/plugins/proxy) shows:
@@ -731,16 +776,128 @@ Log a request from the site's not-found page, with the request headers the Proxy
 
 ```tsx
 // src/app/not-found.tsx
-import { headers } from "next/headers";
 import { logNotFound } from "@nextlyhq/plugin-seo";
+import { headers } from "next/headers";
+import { connection } from "next/server";
+import { Suspense } from "react";
 
-export default async function NotFound() {
+async function LogThisAddress() {
+  await connection();
   await logNotFound(await headers());
-  return <h1>Page not found</h1>;
+  return null;
+}
+
+export default function NotFound() {
+  return (
+    <main>
+      <h1>Page not found</h1>
+      <Suspense fallback={null}>
+        <LogThisAddress />
+      </Suspense>
+    </main>
+  );
 }
 ```
 
-`logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
+The log is written under a `Suspense` boundary because reading the request's headers makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted.
+
+A request is counted once, however many times Next.js renders its not-found page. `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
+
+## Problems
+
+**SEO › Problems** in the admin lists what affects how the site shows up in search and when
+shared, grouped by kind, each with a button that goes straight to its fix: the page's SEO tab or
+its content, the SEO settings, the media library, or a note to copy for a developer where the fix
+is in code. There is no score, and nothing on the list stops anyone publishing.
+
+Each public page of the collections the plugin extends is checked, in every language it is
+published in and at its address there, as its head would be served, for:
+
+- no title or description from any level (a field left empty is never reported where a pattern,
+  the page's content or the site's defaults supply a value);
+- a title or description another page has too;
+- a title over 60 characters, or a description over 160;
+- a canonical typed for the page that names another address;
+- a link in its content to an address of a content type that no page holds;
+- no share image, or one networks crop or shrink;
+- an image in its content (rich text, a media field or a Page Builder image block) with no alt
+  text, unless it is marked decorative;
+- structured data missing a detail its type needs;
+- a language the site's language links leave out, because search engines don't accept its code.
+
+A page hidden from search on purpose is checked only for broken links and alt text. The site as a
+whole is checked for a missing production address, a collection with no public address, a
+redirect whose To address redirects again, and a page left out of the sitemap because another page
+holds its address.
+
+### When the list is checked
+
+- **A page is checked again when it is saved**, after the save, so a check never slows or undoes
+  it. A save that changes a page's address, title or description, and a deletion, mark the last
+  full check as out of date, since another page's result may have changed.
+- **The whole site is checked when the list opens** and its last full check is over 24 hours old,
+  and whenever someone chooses **Check now**. The list says when it was last checked. No scheduler
+  is needed, so this works the same on a self-hosted server.
+- **Serving a page runs no check.** What each check found is kept, and the list reads it.
+- **A full check waits for the plugin's record of addresses** to be brought up to date after a
+  start; until then the list asks to check again in a minute, as the sitemap asks crawlers.
+
+The list answers each person with the pages they may read, and names a collection only to its
+readers. It is served at
+`/admin/api/plugins/@nextlyhq/plugin-seo/problems`, and a full check at
+`/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
+
+The check reads the values the plugin keeps: the page's own, its content type's pattern, its
+content and the site's defaults. A title, description or share image that only the route's code
+or a Page Builder design sets is not seen, so such a page is listed as missing it; typing the value
+on the page's SEO tab settles it either way.
+
+Not checked yet: whether a response is small enough for every value to fall within its first
+2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page
+fetched as a search engine fetches it. A link is judged only under a collection's own address
+prefix (`/blog/{slug}`): under one served from the root (`/{slug}`), pages built in code share
+every address, so a missing one can't be told from the record alone.
+
+## What search engines received
+
+The **What search engines received** screen, under SEO in the admin, fetches one of the
+site's pages as Googlebot, LinkedIn, X and Slack would, and shows what each received beside
+what Nextly holds for the page: its title, description, share image, official address
+(canonical) and whether it is listed in search. A value that differs is numbered in the
+table and explained below it in plain words, with its likely cause: a copy the host saved
+before the last change, a title template in the site's layout, an `opengraph-image` file
+beside the route, a `noindex` sent in a header, or a firewall that turned a crawler away.
+Where LinkedIn received something different, the explanation links its Post Inspector,
+which refreshes the card LinkedIn keeps for about a week.
+
+Open it from a page's SEO tab, or from the menu, where it checks the site's first listed
+page. Any address on the site can be typed in. What Nextly holds is the head the plugin
+answers for the published page at that address, shown only to someone who may read that
+page's content type; anyone signed in to the admin may run a check.
+
+What Google shows in its results can still differ from what Googlebot received: Google
+sometimes writes its own title, and keeps an older copy until it visits again. The check
+shows what the page serves today.
+
+### Which addresses can be checked
+
+The check makes your server fetch a page, so it fetches only the site's own pages, and
+refuses, before anything is fetched, an address that:
+
+- is not on one of the site's production addresses (`NEXTLY_PRODUCTION_ADDRESSES`, else
+  the production address in the SEO settings) or the plugin's `baseUrl`;
+- uses a port other than 80 or 443, unless it is exactly the port a production address
+  names;
+- carries a user name or password; or
+- resolves to an address inside a private network, on this machine, or link-local
+  (where cloud metadata services answer). A production address set on this machine by
+  number or as `localhost`, such as `http://localhost:3000`, may be checked there, at
+  exactly that address.
+
+Every redirect is held to the same rules before it is followed, and the connection is
+made to the very address that was checked, so a name whose answer changes in between
+reaches nothing new. A fetch stops after 10 seconds, 5 MB or 5 redirects, and says so.
+With no production address set, the screen asks for one and checks nothing.
 
 ## Next steps
 

@@ -9,6 +9,7 @@ import { render, screen } from "@testing-library/react";
 import type React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { LocalizationConfig } from "@admin/lib/localization";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
 interface Answers {
@@ -18,6 +19,21 @@ interface Answers {
 }
 
 let answers: Answers;
+
+/** A localization config naming these locale codes, as admin-meta delivers it. */
+const localesOf = (...codes: string[]): LocalizationConfig => ({
+  defaultLocale: codes[0] ?? "en",
+  fallback: true,
+  locales: codes.map(code => ({
+    code,
+    label: code,
+    rtl: false,
+    fallbackLocale: [],
+  })),
+});
+
+/** The site's locales once the workspace answer is in; two unless a case says otherwise. */
+let siteLocales: LocalizationConfig = localesOf("en", "fr");
 
 const EVERYTHING: Partial<AdminCapabilities> = {
   isSuperAdmin: true,
@@ -69,7 +85,9 @@ vi.mock("@admin/context/providers/MediaProvider", () => ({
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () =>
-    answers.workspacePending ? {} : { plugins: [], showBuilder: false },
+    answers.workspacePending
+      ? {}
+      : { plugins: [], showBuilder: false, locales: siteLocales },
   useBrandingStatus: () => ({
     isPending: answers.workspacePending,
     isUnavailable: false,
@@ -117,6 +135,7 @@ const railLabels = () =>
 
 afterEach(() => {
   vi.clearAllMocks();
+  siteLocales = localesOf("en", "fr");
 });
 
 describe("DualSidebar's rail while its answers arrive", () => {
@@ -221,6 +240,53 @@ describe("DualSidebar's rail while its answers arrive", () => {
     };
     render(<DualSidebar />);
     expect(marker()).toBe("settled");
+  });
+});
+
+describe("the entries DualSidebar's rail offers", () => {
+  const ALL_IN: Answers = {
+    workspacePending: false,
+    permissionsLoading: false,
+    contentLoading: false,
+  };
+
+  it("offers Releases in the main menu, beside Media", () => {
+    answers = ALL_IN;
+    render(<DualSidebar />);
+    const labels = railLabels();
+    expect(labels).toContain("Releases");
+    expect(labels.indexOf("Releases")).toBe(
+      labels.indexOf("Media Library") + 1
+    );
+  });
+
+  it("has no Email entry, which lives in the Settings panel", () => {
+    answers = ALL_IN;
+    render(<DualSidebar />);
+    // The control: the rail is drawn, Settings among it.
+    expect(railLabels()).toContain("Settings");
+    expect(railLabels()).not.toContain("Email");
+  });
+
+  it.each([
+    ["no localization", undefined],
+    ["a single locale", localesOf("en")],
+  ])("hides Translations on a site with %s", (_, locales) => {
+    answers = ALL_IN;
+    siteLocales = locales;
+    render(<DualSidebar />);
+    expect(railLabels()).not.toContain("Translations");
+    // The control: the entries around it are still drawn.
+    expect(railLabels()).toEqual(
+      expect.arrayContaining(["Media Library", "Settings"])
+    );
+  });
+
+  it("shows Translations on a site with two locales", () => {
+    answers = ALL_IN;
+    siteLocales = localesOf("en", "fr");
+    render(<DualSidebar />);
+    expect(railLabels()).toContain("Translations");
   });
 });
 

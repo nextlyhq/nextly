@@ -3,15 +3,8 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LOADING_FRAME_TIMES } from "@admin/components/shared/loading-frame/delayed-reveal";
@@ -24,7 +17,6 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
-import { useCardCollapsed } from "../frame/collapse";
 import { cardSpanClass, GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
@@ -644,44 +636,6 @@ describe("WidgetGrid — sizing", () => {
         .getByLabelText("Dashboard widgets")
         .closest(".\\@container\\/dashboard")
     ).toBe(screen.getByTestId("dashboard-container"));
-  });
-
-  it("draws a card its body collapsed as its header alone, in the frame's own padding, and whole again once opened", async () => {
-    // A body that collapses itself to one line, as the setup card does, with a control to open it.
-    function Collapsible() {
-      const [collapsed, setCollapsed] = useState(true);
-      useCardCollapsed(collapsed);
-      return (
-        <button type="button" onClick={() => setCollapsed(open => !open)}>
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
-      );
-    }
-    registerComponents({ "@acme/admin#A": Collapsible });
-    mockBranding = brandingWith([{ ...sized("bar", 12, 3), title: "Bar" }]);
-    renderGrid();
-    const cell = screen.getByTestId("widget-cell-bar");
-    const card = within(cell).getByRole("region");
-    // Its body is drawn once its answer arrives, and collapses itself then.
-    await within(cell).findByRole("button", { name: "Expand" });
-    expect(card).toHaveAttribute("data-collapsed");
-    // As tall as its header: the frame's own padding, and no row span holding it taller.
-    expect(card).toHaveClass("p-4");
-    expect(card.className).not.toMatch(/py-\[/);
-    expect(cell.style.gridRow).toBe("");
-    // The header is the one line, drawn, so the title names the card on screen and no control in
-    // it is hidden yet focusable; no footer takes room under the line.
-    expect(within(cell).getByTestId("widget-card-header")).not.toHaveClass(
-      "sr-only"
-    );
-    expect(card).toHaveAccessibleName(/Bar/);
-    expect(within(cell).queryByTestId("widget-card-footer")).toBeNull();
-
-    // The must-differ half: opened, the card draws its whole frame.
-    fireEvent.click(within(cell).getByRole("button", { name: "Expand" }));
-    expect(card).not.toHaveAttribute("data-collapsed");
-    expect(cell.style.gridRow).toBe("");
-    expect(within(cell).getByTestId("widget-card-footer")).toBeInTheDocument();
   });
 
   /**

@@ -19,8 +19,8 @@
  * wide -- the worst legitimate ink is 4.58:1 and the best misuse is 1.66:1 --
  * so the numbers draw the line the roles cannot.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -29,6 +29,13 @@ import {
 } from "@nextlyhq/module-specifiers/parse-source";
 import { describe, expect, it } from "vitest";
 
+import {
+  packagesIn,
+  packagesMeasuredBy,
+  rendersUi,
+  repo,
+  trackedFiles,
+} from "../../../__tests__/contrast-scan-coverage";
 import {
   ACCEPTED_REGRESSIONS,
   acceptedFor,
@@ -45,12 +52,16 @@ import {
 import { applyOpacity, resolveColor } from "../resolve";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, "../../../../../..");
 const themeCss = readFileSync(resolve(here, "../../theme.css"), "utf8");
 const { light, dark } = parseThemeTokens(themeCss);
 const scale = parseThemeScale(themeCss);
 
-/** Packages whose components render inside the admin shell. */
+/**
+ * Packages whose components render inside the admin shell. Every package whose
+ * ink this scan would measure has to be here: "covers every package that
+ * paints theme ink" derives that set from the whole repository and fails the
+ * run when one is missing.
+ */
 const SCANNED = [
   "packages/admin/src",
   "packages/ui/src",
@@ -66,6 +77,8 @@ const SCANNED = [
   // The SEO plugin draws its own admin screens and tab with the same ink
   // utilities.
   "packages/plugin-seo/src",
+  // The accounts plugin draws its own admin pages.
+  "packages/plugin-accounts/src",
 ];
 const EXTENSIONS = new Set([".tsx", ".ts", ".jsx", ".js"]);
 
@@ -128,21 +141,20 @@ const INK_PREFIXES = new Set([
  */
 const APPLIES_CLASSES = /className|class=|\bcva\(|\bcn\(/;
 
-function walk(dir: string, found: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry === "dist") continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, found);
-    else if (EXTENSIONS.has(extname(full))) found.push(full);
-  }
-  return found;
+/**
+ * Whether a repository-relative path is a source this scan reads: a script or
+ * component that renders, by the predicate every contrast scan shares.
+ */
+function isScannedSource(path: string): boolean {
+  return EXTENSIONS.has(extname(path)) && rendersUi(path);
 }
 
-const sources = SCANNED.flatMap(root => walk(resolve(repo, root)))
-  .map(path => relative(repo, path))
-  .filter(
-    path => !/(^|\/)__tests__\//.test(path) && !/\.test\.[jt]sx?$/.test(path)
-  );
+/**
+ * The tracked sources under {@link SCANNED}. Tracked rather than walked, so a
+ * fixture another suite writes mid-run, or a build artifact in a source tree,
+ * is not measured as a component somebody wrote.
+ */
+const sources = trackedFiles(SCANNED).filter(isScannedSource);
 
 /**
  * The fills an `-foreground` ink is declared for, derived from what the theme
@@ -484,25 +496,36 @@ function parseUtilities(classString: string): Utility[] {
  * fill pairing exact: the fills a component names for itself are, by
  * construction, the other tokens in the same span.
  */
-function* inkUsages(): Generator<{
+function* inkUsages(): Generator<InkUsage> {
+  for (const path of sources) yield* inkIn(path);
+}
+
+/** One ink utility as written, with the class string around it. */
+interface InkUsage {
   path: string;
   line: number;
   self: Utility;
   utilities: Utility[];
-}> {
-  for (const path of sources) {
-    const { appliesClasses, spans } = classSpans(
-      readFileSync(resolve(repo, path), "utf8"),
-      path
-    );
-    if (!appliesClasses) continue;
-    for (const { text, line } of spans) {
-      const utilities = parseUtilities(text);
-      if (utilities.length === 0) continue;
-      for (const self of utilities) {
-        if (!INK_PREFIXES.has(self.prefix) || self.decorative) continue;
-        yield { path, line, self, utilities };
-      }
+}
+
+/**
+ * The ink utilities one repository-relative file paints, read exactly as the
+ * scan reads them. The scan and its coverage check both ask this, so the
+ * packages the check demands are the ones whose ink the scan would measure.
+ */
+function* inkIn(path: string): Generator<InkUsage> {
+  const source = readFileSync(resolve(repo, path), "utf8");
+  // Without one of these anywhere, comments included, no class is applied,
+  // and the file is passed over before it is parsed.
+  if (!APPLIES_CLASSES.test(source)) return;
+  const { appliesClasses, spans } = classSpans(source, path);
+  if (!appliesClasses) return;
+  for (const { text, line } of spans) {
+    const utilities = parseUtilities(text);
+    if (utilities.length === 0) continue;
+    for (const self of utilities) {
+      if (!INK_PREFIXES.has(self.prefix) || self.decorative) continue;
+      yield { path, line, self, utilities };
     }
   }
 }
@@ -840,6 +863,33 @@ describe("ink utilities are readable on the surfaces they land on", () => {
         `the coverage it implies is not claimed.`
     ).toEqual([]);
   });
+
+  it("covers every package that paints theme ink", () => {
+    // A package left out of SCANNED is measured by nothing, and the scan stays
+    // green over it. The set it must cover is derived rather than listed: every
+    // package whose tracked, rendering source paints an ink utility that
+    // resolves to a theme colour, each file read by the scan's own reader, so
+    // a package is demanded exactly when the scan would measure something in
+    // it.
+    const painted = packagesMeasuredBy(path => {
+      if (!isScannedSource(path)) return false;
+      for (const { self } of inkIn(path)) {
+        if (colorOf(self.role, light) || colorOf(self.role, dark)) return true;
+      }
+      return false;
+    });
+    const scanned = packagesIn(SCANNED);
+    // The derivation has to see the packages already listed, or its silence
+    // about the others means nothing.
+    expect([...scanned].filter(pkg => !painted.has(pkg))).toEqual([]);
+    expect(
+      [...painted].filter(pkg => !scanned.has(pkg)).sort(),
+      `These packages paint theme ink but are not in SCANNED, so nothing ` +
+        `measures it. Add each one's src directory.`
+    ).toEqual([]);
+    // Every tracked source in the repository, so the budget is I/O rather than
+    // work this test controls; stated so a slower neighbour reads as one.
+  }, 60_000);
 
   it("scans the components and resolves tokens on both sides", () => {
     // Every assertion below is vacuously true over an empty scan, so a renamed
