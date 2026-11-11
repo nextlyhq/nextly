@@ -33,6 +33,7 @@ import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
 import { redirectMeeting } from "../redirects/meeting";
 import { redirectOf, type StoredRedirect } from "../redirects/store";
+import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import type { ReadSocialCardRules } from "../social/card";
@@ -247,19 +248,23 @@ async function servedAddress(
 }
 
 /** One language of a page as its head is asked for, from its entry. */
-function inputOf(
+async function inputOf(
+  ctx: PluginContext,
   type: string,
   entry: Readonly<Record<string, unknown>>,
   locale: string | undefined
-): PageMetadataInput {
+): Promise<PageMetadataInput> {
   const pageType = pageTypeOf(type);
+  const source: PageMetadataInput["source"] =
+    pageType.kind === "single"
+      ? { kind: "single", slug: pageType.slug, document: entry }
+      : { kind: "entry", collection: type, entry };
   return {
-    source:
-      pageType.kind === "single"
-        ? { kind: "single", slug: pageType.slug, document: entry }
-        : { kind: "entry", collection: type, entry },
+    source,
     code: {},
-    derived: {},
+    // The design drawing the page, as its route would hand it, so a title
+    // or description only the design sets is not listed as missing.
+    derived: await designLevelOf(ctx, source, locale),
     ...(locale === undefined ? {} : { locale }),
   };
 }
@@ -283,7 +288,7 @@ async function examine(
   if (ownAddress === undefined) return undefined;
 
   const { readers } = checks;
-  const input = inputOf(type, entry, locale);
+  const input = await inputOf(ctx, type, entry, locale);
   const answer = await resolveSeo(ctx, input, readers.readRules);
   const rules = await readers.readRules(ctx, locale);
   const productionAddresses = productionAddressesOf(rules.productionAddresses);

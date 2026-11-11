@@ -11,7 +11,8 @@
  *
  * What a route's code supplies cannot be known here: the admin does not run
  * the page's route. That level is left empty until the address record keeps
- * what each route supplies.
+ * what each route supplies. The design drawing the page is asked of the Page
+ * Builder where it is installed (`designLevelOf`).
  *
  * Answered to anyone who may read the collection or the Single, an editor or
  * a reader shown the page read-only, with whether they may change its SEO. The page's images are looked up only for
@@ -31,6 +32,7 @@ import { z } from "nextly/zod";
 import { productionAddressesOf } from "../canonical";
 import { servedAt } from "../languages/versions";
 import { mayChangePageSeo } from "../permissions";
+import { designLevelOf } from "../resolver/design-level";
 import type { Levels } from "../resolver/order";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
@@ -295,19 +297,22 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
           ? body.document
           : { ...body.document, id: body.id };
       const document = withoutTyped(asTyped);
-      const input: PageMetadataInput = {
-        ...(locale === undefined ? {} : { locale }),
-        source:
-          body.kind === "collection"
-            ? { kind: "entry", collection: body.slug, entry: document }
-            : { kind: "single", slug: body.slug, document },
-        code: {},
-        derived: {},
-      };
+      const source: PageMetadataInput["source"] =
+        body.kind === "collection"
+          ? { kind: "entry", collection: body.slug, entry: document }
+          : { kind: "single", slug: body.slug, document };
       const reading = mediaReadFor(
         ctx,
         (await ctx.caller?.can("read", "media")) === true
       );
+      const input: PageMetadataInput = {
+        ...(locale === undefined ? {} : { locale }),
+        source,
+        code: {},
+        // The design drawing the page, as its route would hand it: the
+        // template level the tab shows a value coming from.
+        derived: await designLevelOf(reading, source, locale),
+      };
       const rules = await readRules(ctx, locale);
       const levels = await levelsOf(reading, input, rules);
       const declaration = declarationOf(ctx, body);
