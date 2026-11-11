@@ -1,7 +1,8 @@
 /**
- * The SEO settings screen's tabs: General, Content types, Brand and
- * Crawlers. Each draws part of one draft and reports changes to it; the page
- * saves them together.
+ * The SEO settings screen's tabs: General, Content types, Brand, Crawlers
+ * and Connections, whose content is its own module (`connections`). Each
+ * draws part of one draft and reports changes to it; the page saves them
+ * together.
  *
  * @module admin/tabs
  */
@@ -589,6 +590,11 @@ export const TABS = [
     id: "crawlers",
     label: "Crawlers",
     lead: "Which automated readers may use your pages.",
+  },
+  {
+    id: "connections",
+    label: "Connections",
+    lead: "Optional services. If one fails, no page is affected.",
   },
 ] as const;
 
