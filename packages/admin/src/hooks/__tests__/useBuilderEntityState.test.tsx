@@ -61,6 +61,14 @@ function makeBuilder() {
     handleFieldUpdate: vi.fn(),
     handleNestedFieldAdd: vi.fn(),
     validateFields: vi.fn(() => ({ valid: true })),
+    resetFields: vi.fn((next: BuilderField[]) => {
+      current = next;
+    }),
+    clearHistory: vi.fn(),
+    canUndo: false,
+    canRedo: false,
+    undo: vi.fn(() => null),
+    redo: vi.fn(() => null),
   };
   return {
     api,

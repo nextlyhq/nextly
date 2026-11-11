@@ -477,6 +477,12 @@ export interface BuilderFieldsApi {
   handleFieldUpdate: (updatedField: BuilderField) => void;
   handleNestedFieldAdd: (parentFieldId: string, newField: BuilderField) => void;
   validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
+  resetFields: (fields: BuilderField[]) => void;
+  clearHistory: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => { from: BuilderField[]; to: BuilderField[] } | null;
+  redo: () => { from: BuilderField[]; to: BuilderField[] } | null;
 }
 
 /**

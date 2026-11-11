@@ -1,6 +1,7 @@
 // The Builder's pending changes, through the hooks a builder page uses: the
 // real field builder, holding the undo history, and the entity state, holding
-// what was saved. Every edit waits as a pending change; undo and redo step
+// what was saved. The fixture avoids "title" and "slug", which are the
+// builder's own system rows and never a change. Every edit waits as a pending change; undo and redo step
 // through states of the fields; Discard all puts back what was saved.
 import { act } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -32,7 +33,7 @@ const entity: Entity = {
   slug: "posts",
   name: "Post",
   fields: [
-    definition("title"),
+    definition("headline"),
     definition("summary"),
     definition("address", {
       type: "group",
@@ -83,7 +84,7 @@ describe("builder pending changes", () => {
 
   it("typing a field's setting is one change and one undo step", () => {
     const { result, field } = setup();
-    const title = field("title");
+    const title = field("headline");
     for (const label of ["H", "He", "Hea", "Head"]) {
       act(() => result.current.builder.handleFieldUpdate({ ...title, label }));
     }
@@ -91,18 +92,21 @@ describe("builder pending changes", () => {
     act(() => {
       result.current.state.pending.undo();
     });
-    expect(field("title").label).toBe("Title");
+    expect(field("headline").label).toBe("Headline");
     expect(result.current.state.unsavedCount).toBe(0);
     act(() => {
       result.current.state.pending.redo();
     });
-    expect(field("title").label).toBe("Head");
+    expect(field("headline").label).toBe("Head");
   });
 
   it("each edit of another field, an add and a delete are steps of their own", () => {
     const { result, field } = setup();
     act(() =>
-      result.current.builder.handleFieldUpdate({ ...field("title"), label: "A" })
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
     );
     act(() =>
       result.current.builder.handleFieldUpdate({
@@ -159,7 +163,10 @@ describe("builder pending changes", () => {
   it("discard all puts back the saved fields and settings, and leaves nothing to undo", () => {
     const { result, field } = setup();
     act(() =>
-      result.current.builder.handleFieldUpdate({ ...field("title"), label: "X" })
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
     );
     act(() => result.current.builder.handleFieldAdd("text"));
     act(() =>
@@ -171,7 +178,7 @@ describe("builder pending changes", () => {
     expect(result.current.state.unsavedCount).toBe(3);
     act(() => result.current.state.pending.discardAll());
     expect(result.current.state.unsavedCount).toBe(0);
-    expect(field("title").label).toBe("Title");
+    expect(field("headline").label).toBe("Headline");
     expect(result.current.state.settings?.singularName).toBe("Post");
     expect(result.current.state.pending.canUndo).toBe(false);
     expect(result.current.builder.fields.some(f => f.isSystem)).toBe(true);
@@ -180,12 +187,15 @@ describe("builder pending changes", () => {
   it("after a save, what was changed is the saved state, with nothing to undo", () => {
     const { result, field } = setup();
     act(() =>
-      result.current.builder.handleFieldUpdate({ ...field("title"), label: "X" })
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
     );
     act(() => result.current.state.pinFields());
     expect(result.current.state.unsavedCount).toBe(0);
     expect(result.current.state.pending.canUndo).toBe(false);
-    expect(field("title").label).toBe("X");
+    expect(field("headline").label).toBe("X");
   });
 
   it("the count is the changes plus one for the settings", () => {

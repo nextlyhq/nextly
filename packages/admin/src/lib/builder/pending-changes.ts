@@ -271,6 +271,43 @@ export function pendingChanges(
   return changes;
 }
 
+/** " and N fields inside", for a container added or deleted with fields. */
+function insideWords(change: PendingChange): string {
+  if (!change.inside) return "";
+  return ` and ${change.inside} ${change.inside === 1 ? "field" : "fields"} inside`;
+}
+
+/** One pending change in plain words, as an announcement reads it. */
+export function describeChange(change: PendingChange): string {
+  switch (change.kind) {
+    case "added":
+      return `added ${change.label}${insideWords(change)}`;
+    case "deleted":
+      return `deleted ${change.label}${insideWords(change)}`;
+    case "moved":
+      return `moved ${change.label}`;
+    case "renamed":
+      return `renamed ${change.previousName ?? ""} to ${change.name}`;
+    case "typeChanged":
+      return `changed the type of ${change.label}`;
+    case "settings":
+      return `changed ${change.label}`;
+  }
+}
+
+/**
+ * What one step from `before` to `after` did, in plain words: the change it
+ * made, or how many when it made several (a move that also renamed, say).
+ */
+export function describeStep(
+  before: readonly BuilderField[],
+  after: readonly BuilderField[]
+): string {
+  const changes = pendingChanges(before, after);
+  if (changes.length === 1 && changes[0]) return describeChange(changes[0]);
+  return `${changes.length} changes`;
+}
+
 /**
  * Each changed field's marks, by id: every field inside an added container
  * is new, and every field inside a deleted one deleted. A field with no
