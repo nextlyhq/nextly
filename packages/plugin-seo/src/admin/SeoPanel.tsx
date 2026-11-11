@@ -18,6 +18,7 @@ import { useId, type ReactNode } from "react";
 import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
 import {
+  characters,
   DESCRIPTION_LIMIT,
   TITLE_LIMIT,
   type SeoProblem,
@@ -318,7 +319,11 @@ function SeoTextField({
         >
           {label}
         </label>
-        <CharacterCount count={used?.value.length ?? 0} limit={limit} />
+        {/* Counted as the problems are, so an emoji counts once. */}
+        <CharacterCount
+          count={used === undefined ? 0 : characters(used.value)}
+          limit={limit}
+        />
       </div>
       <p
         id={`${id}-help`}
