@@ -1107,7 +1107,7 @@ exports[`each code, as a command ends with it > OWNERSHIP_TAKEOVER_REFUSED 1`] =
 exports[`each code, as a command ends with it > PACKAGE_INSTALL_FAILED 1`] = `
 "✗ Install failed (pnpm exited 1).
   Why:  pnpm could not install \`@nextlyhq/plugin-seo\`; its own output above says why.
-  Next: Fix what pnpm reports, then run \`nextly add @nextlyhq/plugin-seo\` again.
+  Next: Fix what pnpm reports, then run \`nextly plugins add @nextlyhq/plugin-seo\` again.
   Docs: https://nextlyhq.com/docs/cli/errors/package-install-failed  (PACKAGE_INSTALL_FAILED)"
 `;
 
@@ -1166,6 +1166,20 @@ exports[`each code, as a command ends with it > PLUGIN_COLUMN_NOT_MIGRATED 1`] =
   Why:  The app's migrations add what a plugin contributes to the app's tables, and this one has not been applied here.
   Next: Apply the app's migration that adds it (\`nextly migrate:create\`, then \`nextly migrate\`).
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-column-not-migrated  (PLUGIN_COLUMN_NOT_MIGRATED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CONFIG_NOT_EDITABLE 1`] = `
+"✗ The plugin was installed, but not added to your configuration.
+  Why:  nextly.config.ts sets \`plugins\` to something other than a list written in place. The file was left as it was.
+  Next: Add \`import { seoPlugin } from "@acme/seo";\` and \`plugins: [seoPlugin({ siteUrl: "https://example.com" })]\` to it, then run \`nextly plugins install @acme/seo\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-config-not-editable  (PLUGIN_CONFIG_NOT_EDITABLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DECLARATION_INVALID 1`] = `
+"✗ The \`nextly.plugin\` declaration of "@acme/seo" cannot be used.
+  Why:  It names the export seoPlugin, which its entry does not have. The package's package.json declares how it is registered, and that is the plugin's to fix.
+  Next: Register it by hand as the package's README shows, then run \`nextly plugins install\` with the plugin's name; and tell the plugin's author.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-declaration-invalid  (PLUGIN_DECLARATION_INVALID)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_DEPENDENCY_NOT_INSTALLED 1`] = `
@@ -1406,6 +1420,34 @@ exports[`each code, as a command ends with it > PLUGIN_NOT_INSTALLED 1`] = `
   Why:  In production a configured plugin starts only once \`nextly plugins install\` has run its \`onInstall\` and recorded it.
   Next: Run "nextly plugins install @acme/seo".
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-not-installed  (PLUGIN_NOT_INSTALLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_OPTION_INVALID 1`] = `
+"✗ An option given for "@acme/seo" cannot be used.
+  Why:  siteUrl must be a full web address, such as https://example.com, and "example.com" is not one. The configuration was not changed.
+  Next: Run the command again with each option as \`--option <name>=<value>\`, named as the plugin asks.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-option-invalid  (PLUGIN_OPTION_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_OPTION_MISSING 1`] = `
+"✗ "@acme/seo" needs siteUrl to be installed.
+  Why:  siteUrl: The site's production address. The configuration was not changed.
+  Next: Run the command again with --option siteUrl=<value>, or in a terminal to be asked.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-option-missing  (PLUGIN_OPTION_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_PACKAGE_NOT_INSTALLED 1`] = `
+"✗ No installed package is named "@acme/seo".
+  Why:  The package is read from the project's node_modules once it is installed, and it is not there. A folder or a git address is installed under the name in its own package.json.
+  Next: Install it, or give the name it is installed under, then run \`nextly plugins add @acme/seo --skip-install\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-package-not-installed  (PLUGIN_PACKAGE_NOT_INSTALLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_REGISTRATION_UNKNOWN 1`] = `
+"✗ Nextly cannot tell how to register "@acme/seo".
+  Why:  It has no \`nextly.plugin\` declaration, and its entry exports no plugin definition as it is; a function that makes one is not called to find out. A package that declares nothing is registered by the one plugin its entry exports.
+  Next: Add it to \`plugins\` in nextly.config.ts as the package's README shows, then run \`nextly plugins install\` with the plugin's name.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-registration-unknown  (PLUGIN_REGISTRATION_UNKNOWN)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_RESOLUTION_ERROR 1`] = `
