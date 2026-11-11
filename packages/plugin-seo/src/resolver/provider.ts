@@ -17,6 +17,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { recordSlug } from "../address-record/participant";
+import { seoSettingsCacheTags } from "../settings/single";
 
 import { resolveOrder, type SeoAnswer } from "./order";
 import { levelsOf, NO_RULES, type SiteRules } from "./page-levels";
@@ -28,7 +29,7 @@ export type ReadRules = (
 ) => Promise<SiteRules>;
 
 /** No settings yet: the site's rules are empty. */
-export const noRules: ReadRules = async () => NO_RULES;
+const noRules: ReadRules = () => Promise.resolve(NO_RULES);
 
 /**
  * The one resolution of a page: its answer, every value with its source,
@@ -81,11 +82,16 @@ export function seoPageMetadata(
   readRules: ReadRules = noRules
 ): PageMetadataResolver {
   return {
-    // A share image is read from the media library, so any write to it
-    // expires the head that shows it, as a write to the page itself does.
-    // The address record too: a page that gains or loses its address to
-    // another changes its canonical without a write to itself.
-    tags: () => [...nextlyTags("media"), ...nextlyTags(recordSlug(ctx))],
+    // A share image is read from the media library, and the site's rules
+    // from the SEO settings, so a write to either expires the head built from
+    // it, as a write to the page itself does. The address record too: a page
+    // that gains or loses its address to another changes its canonical
+    // without a write to itself.
+    tags: () => [
+      ...nextlyTags("media"),
+      ...nextlyTags(recordSlug(ctx)),
+      ...seoSettingsCacheTags(),
+    ],
     // The page's head is derived from the one resolution, never worked out
     // beside it.
     async resolve(input) {

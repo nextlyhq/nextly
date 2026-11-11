@@ -296,6 +296,49 @@ describe("buildSitemapUrls", () => {
     }
   });
 
+  it("reads the production addresses the SEO settings hold, as the head does", async () => {
+    const services = stubServices({
+      posts: [
+        [{ slug: "a", seo: { canonical: "https://x.de/a" } }, { slug: "b" }],
+      ],
+    });
+
+    const urls = await buildSitemapUrls(services, {
+      collections: ["posts"],
+      baseUrl: "https://x.com",
+      productionAddresses: ["https://x.com", "https://x.de"],
+    });
+
+    // The canonical is on another of the site's addresses, so this sitemap
+    // leaves it to that address's.
+    expect(urls.map(u => u.loc)).toEqual(["https://x.com/posts/b"]);
+  });
+
+  it("lets the environment's production addresses win over the settings'", async () => {
+    vi.stubEnv("NEXTLY_PRODUCTION_ADDRESSES", "https://x.com");
+    try {
+      const services = stubServices({
+        posts: [
+          [{ slug: "a", seo: { canonical: "https://x.de/a" } }, { slug: "b" }],
+        ],
+      });
+
+      const urls = await buildSitemapUrls(services, {
+        collections: ["posts"],
+        baseUrl: "https://x.com",
+        productionAddresses: ["https://x.com", "https://x.de"],
+      });
+
+      // Only x.com is the site's, so x.de is off it and the generated URL stays.
+      expect(urls.map(u => u.loc)).toEqual([
+        "https://x.com/posts/a",
+        "https://x.com/posts/b",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("applies basePath per collection, including the site root", async () => {
     const services = stubServices({
       pages: [[{ slug: "about" }, { slug: "" }]],

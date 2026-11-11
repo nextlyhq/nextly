@@ -25,6 +25,11 @@ export interface LoadedFieldGroup {
   slug: string;
   label: string;
   fields: FieldDefinition[];
+  /**
+   * How many fields place it, across every collection, Single and field
+   * group; null or absent when that is not known.
+   */
+  placedBy?: number | null;
   /** Whether the field group is translated, so its fields can be. */
   localized?: boolean;
 }
@@ -144,6 +149,12 @@ export interface OutlineNode {
      */
     unavailable?: "loading" | "failed" | "not-found";
   };
+  /**
+   * For a row standing for one field group (a field using one, or one entry of
+   * a field accepting several): how many fields place that field group; null
+   * when that is not known. Absent on any other row.
+   */
+  usedIn?: number | null;
   /**
    * For a blocks field: the blocks it accepts, as its policy names them (a
    * block's name or a pattern); absent when it accepts any block.
@@ -326,6 +337,7 @@ function fillFieldGroup(
         readOnly: { kind: "field-group", slug, label: group?.label ?? slug },
         own: false,
         translatable: false,
+        usedIn: group?.placedBy ?? null,
       };
       entry.children = record(
         slug,
@@ -333,6 +345,11 @@ function fillFieldGroup(
       );
       return entry;
     });
+  }
+  // A field using one field group stands for it; one accepting several
+  // stands for none of them, and each entry row carries its own count.
+  if (refs.single !== undefined) {
+    node.usedIn = ctx.fieldGroups.get(refs.single)?.placedBy ?? null;
   }
   node.fieldGroup = {
     slugs,

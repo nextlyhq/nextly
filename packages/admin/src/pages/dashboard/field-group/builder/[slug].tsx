@@ -29,6 +29,7 @@ import {
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
+import { FieldGroupUsedBy } from "@admin/components/features/schema-builder/FieldGroupUsedBy";
 import { AlertTriangle, RefreshCw } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import {
@@ -351,6 +352,11 @@ export default function FieldGroupBuilderEditPage({
               </div>
             </Alert>
           ) : null}
+          {/* Who a change here reaches, before any change is made. */}
+          <FieldGroupUsedBy
+            slug={fieldGroup.slug}
+            unsavedCount={unsavedCount}
+          />
         </>
       }
       isSaving={isSaving || confirmation.isApplying}
