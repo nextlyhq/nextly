@@ -35,3 +35,5 @@ A form's Preview runs the form as a visitor meets it.
 - **Show hidden fields** shows hidden fields and fields a condition hides, each saying why it is hidden.
 - **Desktop and Phone** widths, and **Reset**, in the preview's toolbar.
 - Submitting shows what the visitor would see next (the message, or where they would be sent), and saves and sends nothing, as the note under the preview says.
+
+**Fix:** a submission is no longer refused for leaving empty a required field that a condition hides. The field was never on the visitor's page, so such a form could not be sent at all. Only the fields a visitor is shown are checked; what is stored is unchanged. The site and the preview decide which fields a condition hides with one shared function.

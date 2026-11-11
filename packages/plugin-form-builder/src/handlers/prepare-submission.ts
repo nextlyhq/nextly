@@ -23,6 +23,7 @@
 import { stripHtmlTags } from "nextly";
 
 import type { AnyFormField } from "../types";
+import { fieldsHiddenByCondition } from "../utils/condition-visibility";
 import {
   generateZodSchema,
   getValidationErrors,
@@ -223,7 +224,13 @@ export function prepareSubmission({
     return { data: transformed };
   }
 
-  const result = generateZodSchema(fields).safeParse(transformed);
+  // Only the fields the visitor was shown are asked for: a required field a
+  // condition hid could never be answered, and refusing over it would leave
+  // the form impossible to send. What is stored is unchanged.
+  const hidden = fieldsHiddenByCondition(fields, transformed);
+  const result = generateZodSchema(
+    fields.filter(field => !hidden.has(field.name))
+  ).safeParse(transformed);
   if (!result.success) {
     // The transformed payload comes back with the errors rather than nothing,
     // so a caller that wants to store it anyway has the same value the valid

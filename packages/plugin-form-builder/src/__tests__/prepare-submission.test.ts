@@ -817,3 +817,42 @@ describe("the submission count on a form read", () => {
     expect(forms.map(f => f.submissionCount)).toEqual([7, 7]);
   });
 });
+
+// A field a condition hides is not on the visitor's page, so a submission is
+// never refused for leaving it empty: such a form could not be sent at all.
+describe("prepareSubmission with a required field a condition hides", () => {
+  const fields = [
+    { type: "text", name: "company", label: "Company" },
+    {
+      type: "text",
+      name: "role",
+      label: "Your role",
+      required: true,
+      conditionalLogic: {
+        enabled: true,
+        action: "show",
+        operator: "AND",
+        conditions: [{ field: "company", comparison: "isNotEmpty" }],
+      },
+    },
+  ] as AnyFormField[];
+
+  it("accepts the submission while the condition keeps the field hidden", () => {
+    const prepared = prepareSubmission({
+      data: { company: "" },
+      fields,
+      validate: true,
+    });
+    expect(prepared.validationErrors).toBeUndefined();
+  });
+
+  it("asks for the field once its condition shows it", () => {
+    // The control: the field is required as soon as the visitor can see it.
+    const prepared = prepareSubmission({
+      data: { company: "Acme" },
+      fields,
+      validate: true,
+    });
+    expect(prepared.validationErrors).toHaveProperty("role");
+  });
+});

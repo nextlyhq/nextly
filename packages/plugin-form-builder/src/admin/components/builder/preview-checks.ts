@@ -10,7 +10,7 @@
  * @module admin/components/builder/preview-checks
  */
 import { isKnownFormField, type AnyFormField } from "../../../types";
-import { evaluateConditions } from "../../../utils/evaluate-conditions";
+import { fieldsHiddenByCondition } from "../../../utils/condition-visibility";
 import {
   generateZodSchema,
   getValidationIssues,
@@ -38,15 +38,12 @@ export function previewFields(
   fields: readonly AnyFormField[],
   values: Record<string, unknown>
 ): PreviewField[] {
-  const shown: Record<string, unknown> = {};
+  const hiddenByCondition = fieldsHiddenByCondition(fields, values);
   return fields.map(field => {
     if (field.type === "hidden") return { field, hidden: "hidden-field" };
-    const visible =
-      !field.conditionalLogic?.enabled ||
-      evaluateConditions(field.conditionalLogic, shown);
-    if (!visible) return { field, hidden: "condition" };
-    if (field.name in values) shown[field.name] = values[field.name];
-    return { field };
+    return hiddenByCondition.has(field.name)
+      ? { field, hidden: "condition" }
+      : { field };
   });
 }
 
