@@ -145,13 +145,23 @@ export function pluginPublicAddresses(
     async move(updates, transaction) {
       const { tx } = transactionOf(transaction);
       const refused: RefusedAddressUpdate[] = [];
-      const accepted: HeldAddressUpdate[] = [];
-      for (const update of updates) {
-        const clash = await firstHolder(update, updates, tx);
-        if (clash === null) accepted.push(update);
-        else refused.push({ update, ...clash });
+      let standing = [...updates];
+      // Asked again until nothing more is refused: an update judged against a
+      // batch in which another lets an address go must not stand once that
+      // other is refused and keeps it.
+      for (;;) {
+        const refusedNow: RefusedAddressUpdate[] = [];
+        for (const update of standing) {
+          const clash = await firstHolder(update, standing, tx);
+          if (clash !== null) refusedNow.push({ update, ...clash });
+        }
+        if (refusedNow.length === 0) break;
+        refused.push(...refusedNow);
+        standing = standing.filter(
+          update => !refusedNow.some(r => r.update === update)
+        );
       }
-      if (accepted.length > 0) await recordEverywhere(accepted, tx);
+      if (standing.length > 0) await recordEverywhere(standing, tx);
       return { refused };
     },
     held: args => heldPage(args),

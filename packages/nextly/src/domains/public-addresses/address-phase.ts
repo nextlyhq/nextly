@@ -10,6 +10,7 @@
  *
  * @module domains/public-addresses/address-phase
  */
+import { NextlyError } from "../../errors/nextly-error";
 import type { HookRegistry } from "../../hooks/hook-registry";
 import type { InTransactionRunner } from "../../hooks/types";
 
@@ -38,10 +39,12 @@ async function hasAddress(
     return (
       (await declaredFor(type, undefined, undefined, executor)) !== undefined
     );
-  } catch {
+  } catch (error) {
     // A collection no configuration or registry names (a system table's)
-    // is no page of the site.
-    return false;
+    // is no page of the site. Any other failure fails the save: a type whose
+    // address could not be read is never let through unchecked.
+    if (NextlyError.isNotFound(error)) return false;
+    throw error;
   }
 }
 
@@ -68,17 +71,29 @@ const askOnSave: InTransactionRunner = async (tx, write) => {
   await recordEverywhere([update], tx);
 };
 
-/** The registry the handler is in now, if any. */
-let bound: HookRegistry | undefined;
-let listening = false;
+/**
+ * Where the handler is registered, and the one handler instance, kept on
+ * `globalThis` like the participant list: a module evaluated again must remove
+ * the very function an earlier copy registered, and must not listen twice.
+ */
+const phase = globalThis as unknown as {
+  __nextly_addressPhase?: {
+    handler: InTransactionRunner;
+    bound?: HookRegistry;
+    listening: boolean;
+  };
+};
+phase.__nextly_addressPhase ??= { handler: askOnSave, listening: false };
+const state = phase.__nextly_addressPhase;
 
 /** Register the handler in `bound` while anyone takes part, else remove it. */
 function sync(): void {
+  const { bound, handler } = state;
   if (bound === undefined) return;
   // Removed first, so a registry cleared and booted into again, or one that
   // already holds it, ends with exactly one registration.
-  bound.unregisterInTransaction("*", askOnSave, "code");
-  if (hasParticipants()) bound.registerInTransaction("*", askOnSave, "code");
+  bound.unregisterInTransaction("*", handler, "code");
+  if (hasParticipants()) bound.registerInTransaction("*", handler, "code");
 }
 
 /**
@@ -87,12 +102,12 @@ function sync(): void {
  * a registry from an earlier boot loses the handler.
  */
 export function startAddressPhase(registry: HookRegistry): void {
-  if (bound !== undefined && bound !== registry) {
-    bound.unregisterInTransaction("*", askOnSave, "code");
+  if (state.bound !== undefined && state.bound !== registry) {
+    state.bound.unregisterInTransaction("*", state.handler, "code");
   }
-  bound = registry;
-  if (!listening) {
-    listening = true;
+  state.bound = registry;
+  if (!state.listening) {
+    state.listening = true;
     onParticipantsChange(sync);
   }
   sync();

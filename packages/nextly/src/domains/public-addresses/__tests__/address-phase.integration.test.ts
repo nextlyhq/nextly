@@ -316,6 +316,29 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "a translated entry's addresses (%s)",
   dialect => {
+    it("keeps a published language's address while another language is saved as a draft", async () => {
+      const t = await boot(dialect, true);
+      const record = join(memoryParticipant());
+      const article = await create(
+        t,
+        "articles",
+        { title: "Hello", slug: "hello", status: "published" },
+        "en"
+      );
+
+      await update(
+        t,
+        "articles",
+        article,
+        { slug: "bonjour", status: "draft" },
+        { locale: "fr" }
+      );
+
+      expect(record.held()).toEqual({
+        "en|/articles/hello": `articles:${article}`,
+      });
+    });
+
     it("holds an address only in the languages it is published in, by its own slug", async () => {
       const t = await boot(dialect, true);
       const record = join(memoryParticipant());

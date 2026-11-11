@@ -66,8 +66,22 @@ export interface ParticipantRunner {
   ): Promise<void>;
 }
 
-const participants: { runner: ParticipantRunner; owner: HookOwner }[] = [];
-const listeners = new Set<(count: number) => void>();
+/**
+ * The list and its listeners, kept on `globalThis` so a module evaluated more
+ * than once (Next.js and Turbopack can) still shares one list: a participant
+ * added through one copy must be asked by the handler another copy keeps.
+ */
+const shared = globalThis as unknown as {
+  __nextly_addressParticipants?: {
+    participants: { runner: ParticipantRunner; owner: HookOwner }[];
+    listeners: Set<(count: number) => void>;
+  };
+};
+shared.__nextly_addressParticipants ??= {
+  participants: [],
+  listeners: new Set(),
+};
+const { participants, listeners } = shared.__nextly_addressParticipants;
 
 function changed(): void {
   for (const listener of listeners) listener(participants.length);

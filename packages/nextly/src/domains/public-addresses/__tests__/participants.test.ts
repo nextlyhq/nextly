@@ -1,5 +1,5 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   addParticipant,
@@ -146,5 +146,23 @@ describe("the refusal", () => {
     expect(error.publicMessage).toBe(
       "/blog/hello (en) is already the address of the entry 1 in pages. Choose another address for this entry."
     );
+  });
+});
+
+describe("one list per process", () => {
+  it("is the same list however many times the module is evaluated", async () => {
+    vi.resetModules();
+    const first = await import("../participants");
+    vi.resetModules();
+    const second = await import("../participants");
+    const runner = fake().runner;
+
+    first.addParticipant(runner, "plugin:test");
+    try {
+      expect(second.hasParticipants()).toBe(true);
+    } finally {
+      first.removeParticipant(runner);
+    }
+    expect(second.hasParticipants()).toBe(false);
   });
 });

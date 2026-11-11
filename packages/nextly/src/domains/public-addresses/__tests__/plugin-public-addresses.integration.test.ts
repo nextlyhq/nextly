@@ -177,6 +177,43 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("move refuses an update that relied on a refused one letting go", async () => {
+      const { record, participant } = asPluginParticipant();
+      const { ctx } = await boot(dialect, participant);
+      const a = { collection: "pages", id: "a" };
+      const b = { collection: "pages", id: "b" };
+      const c = { collection: "pages", id: "c" };
+      const at = (path: string) => [{ locale: "en", path }];
+      await ctx.services.collections.withTransaction(tx =>
+        ctx.publicAddresses.move(
+          [
+            { holder: a, holds: at("/one") },
+            { holder: b, holds: at("/two") },
+            { holder: c, holds: at("/three") },
+          ],
+          tx
+        )
+      );
+
+      // A wants C's address, so A stays at /one, and B cannot move onto it.
+      const { refused } = await ctx.services.collections.withTransaction(tx =>
+        ctx.publicAddresses.move(
+          [
+            { holder: a, holds: at("/three") },
+            { holder: b, holds: at("/one") },
+          ],
+          tx
+        )
+      );
+
+      expect(refused.map(r => r.update.holder.id).sort()).toEqual(["a", "b"]);
+      expect(record.held()).toEqual({
+        "en|/one": "pages:a",
+        "en|/two": "pages:b",
+        "en|/three": "pages:c",
+      });
+    });
+
     it("held pages through a type oldest first, each once", async () => {
       const { t, ctx } = await boot(dialect);
       const ids = [

@@ -18,6 +18,7 @@ import type { CollectionService } from "../collections/services/collection-servi
 import { readCompanionLocaleStatusAll } from "../i18n/companion-join";
 import { appLocalization } from "../i18n/configured-locales";
 import { cachedCompanionReadiness } from "../i18n/runtime/companion-readiness";
+import { languageIsLive } from "../i18n/runtime/language-lifecycle";
 import type { CompanionSchema } from "../i18n/runtime/companion-io";
 import { readCompanionValuesByLocale } from "../singles/services/single-webhook-doc";
 
@@ -83,6 +84,23 @@ async function translations(
   return byName;
 }
 
+/**
+ * The main row's status, on the transaction. The main table is the one the
+ * translations table is named after (`<table>_locales`).
+ */
+async function mainRowStatus(
+  tx: TransactionContext,
+  companion: CompanionSchema,
+  id: string
+): Promise<unknown> {
+  const mainTable = companion.companionTableName.replace(/_locales$/, "");
+  const row = await tx.selectOne<{ status?: unknown }>(mainTable, {
+    columns: ["status"],
+    where: { and: [{ column: "id", op: "=", value: id }] },
+  });
+  return row?.status;
+}
+
 /** Each language's own status, where the type publishes each on its own. */
 async function statuses(
   tx: TransactionContext,
@@ -101,11 +119,36 @@ async function statuses(
 }
 
 /**
+ * Whether a document is published in `language`: always for a type without
+ * Draft/Published, and otherwise by the rule every read of a language's
+ * liveness uses (`languageIsLive`): the main row must be live, and the
+ * language's own status too where the type publishes per language, the
+ * default language falling back to the main row where it has none.
+ */
+export function publishedIn(
+  language: string,
+  statuses: {
+    lifecycle: boolean;
+    mainStatus: unknown;
+    ownStatus: ReadonlyMap<string, string | null> | undefined;
+  }
+): boolean {
+  if (!statuses.lifecycle) return true;
+  return languageIsLive({
+    mainStatus: statuses.mainStatus,
+    ownStatus: statuses.ownStatus?.get(language) ?? null,
+    locale: language,
+    defaultLocale: appLocalization()?.defaultLocale ?? null,
+    perLanguageStatus: statuses.ownStatus !== undefined,
+  });
+}
+
+/**
  * The document `write` leaves, in each of the site's languages: its values
  * there and whether it is published there. A delete leaves nothing.
  *
- * At most two reads, both on `tx`: the translations, and each language's
- * status where the type publishes per language. A Single's address names no
+ * At most three reads, all on `tx`: the translations, and, where the type
+ * publishes per language, each language's status and the main row's. A Single's address names no
  * field, and is held in every language while the Single is published.
  */
 export async function readEveryLanguage(
@@ -134,13 +177,20 @@ export async function readEveryLanguage(
     companion?.hasStatus === true
       ? await statuses(tx, companion, write.id)
       : undefined;
+  // Where each language has a status of its own, the saved document shows
+  // the saved language's, so the main row's is read for itself.
+  const mainStatus =
+    companion?.hasStatus === true
+      ? await mainRowStatus(tx, companion, write.id)
+      : shared.status;
 
   for (const language of languages) {
-    // Where each language is published on its own, one with no row of its
-    // own was never published there.
-    const status = ownStatus ? ownStatus.get(language) : shared.status;
     versions.set(language, {
-      published: !lifecycle || status === "published",
+      published: publishedIn(language, {
+        lifecycle,
+        mainStatus,
+        ownStatus,
+      }),
       document: { ...shared, ...translated?.get(language) },
     });
   }
