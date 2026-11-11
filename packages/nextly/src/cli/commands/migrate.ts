@@ -1601,8 +1601,22 @@ export async function runPluginPhase(
       readLiveIndexTables(deps.db, deps.dialect, [statements]),
     // The same before-run count an app file gets: a plugin's module reaches the shared runner
     // through this phase, not through `runFileMigrations`.
-    refuseRequiredColumns: (statements, source) =>
-      refuseRequiredColumnsOverNulls(deps.db, deps.dialect, statements, source),
+    // And the same unique-index check: a module making a column unique over repeated values is
+    // refused before its first statement, as an app file is.
+    refuseRequiredColumns: async (statements, source) => {
+      await refuseRequiredColumnsOverNulls(
+        deps.db,
+        deps.dialect,
+        statements,
+        source
+      );
+      await refuseUniqueIndexesOverRepeats(
+        deps.db,
+        deps.dialect,
+        statements,
+        source
+      );
+    },
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single

@@ -32,7 +32,7 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { migrateCore } from "../../../../cli/commands/migrate";
+import { migrateCore, runPluginPhase } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -41,6 +41,8 @@ import { ensureCompanionTable } from "../../../i18n/runtime/companion-io";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
+import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
 import { formatMigrationFile } from "../../migrate-create/format-file";
 import { diffSnapshots } from "../../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
@@ -58,6 +60,14 @@ import { createIndexSql } from "../../pipeline/sql-templates/create-index";
 import { splitStatements } from "../../pipeline/sql-statement-utils";
 import { uniqueIndexNameForColumn } from "../../services/index-name";
 import { NO_CONSENT } from "../data-loss-consent";
+import {
+  migrationChecksum,
+  type MigrationContent,
+} from "../plugin/plugin-migration";
+import {
+  adoptUniqueIndexesAlreadyThere,
+  readRepeatedValues,
+} from "../unique-column-guard";
 
 const logger = createLogger({ quiet: true });
 const NAME = "20261111_000001_unique_column";
@@ -198,19 +208,24 @@ describe.each(LOCK_DIALECTS)(
 
     /** The file as `migrate:create` writes it: the unique index the generators write. */
     function writeUniqueFile(): void {
-      writeFileSync(
-        join(migrationsDir, FILE),
-        formatMigrationFile({
-          name: NAME,
+      writeFileAs(NAME, [
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
           dialect,
-          sqlStatements: [
-            createIndexSql(
-              PROFILES,
-              { name: UNIQUE, columns: ["person"], unique: true },
-              dialect,
-              q
-            ),
-          ],
+          q
+        ),
+      ]);
+    }
+
+    /** A file named `name` holding `statements`, as `migrate:create`'s formatter writes it. */
+    function writeFileAs(name: string, statements: string[]): void {
+      writeFileSync(
+        join(migrationsDir, `${name}.sql`),
+        formatMigrationFile({
+          name,
+          dialect,
+          sqlStatements: statements,
           downSqlStatements: [],
           collections: [],
           singles: [],
@@ -501,6 +516,148 @@ describe.each(LOCK_DIALECTS)(
       await refusal();
 
       expect(diffSnapshots(before, await wholeDatabase())).toEqual([]);
+    }, 120_000);
+
+    it("leaves a one-to-one's uniqueness gone when a file makes it many-to-one and records it so", async () => {
+      await recordOneToOnes("person");
+      await migrate();
+      expect(await isUnique("person")).toBe(true);
+      // As `migrate:create` writes the change: the index dropped, and the registry row the file
+      // carries for the collection whose table it changes.
+      writeFileAs(NAME, [
+        dialect === "mysql"
+          ? `DROP INDEX ${q(UNIQUE)} ON ${q(PROFILES)}`
+          : `DROP INDEX IF EXISTS ${q(UNIQUE)}`,
+        buildCollectionMetadataUpsert(
+          {
+            slug: "profiles",
+            labels: { singular: "profiles", plural: "profiles" },
+            fields: [
+              relationship("person", "manyToOne"),
+              relationship("partner", "manyToOne"),
+            ],
+          } as never,
+          dialect
+        ).replace(/;\s*$/, ""),
+      ]);
+      await run([profile("p1", "ada")]);
+
+      await migrate();
+
+      expect(await isUnique("person")).toBe(false);
+      expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
+    }, 120_000);
+
+    it("refuses a plugin's module making its table's column unique over repeats, before its first statement", async () => {
+      const notes = "plugin_notes_unique";
+      await run([
+        `CREATE TABLE ${q(notes)} (${q("id")} varchar(36) PRIMARY KEY, ${q("code")} varchar(64))`,
+        `INSERT INTO ${q(notes)} (${q("id")}, ${q("code")}) VALUES ('n1', 'x'), ('n2', 'x')`,
+      ]);
+      await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert([
+        {
+          tableName: notes,
+          ownerKind: "plugin",
+          ownerId: "ucx",
+          migratedBy: "plugin:ucx",
+          ownerVersion: "1.0.0",
+          schemaVersion: 1,
+          state: "active",
+        },
+      ]);
+      const up = [
+        `ALTER TABLE ${q(notes)} ADD COLUMN ${q("extra")} varchar(255)`,
+        createIndexSql(
+          notes,
+          { name: "uq_plugin_notes_code", columns: ["code"], unique: true },
+          dialect,
+          q
+        ),
+      ];
+      const none = { tables: [] };
+      const sides = { postgresql: none, mysql: none, sqlite: none };
+      const content: MigrationContent = {
+        name: "20261111_000002_unique_code",
+        schemaVersion: 1,
+        dialects: {
+          postgresql: { up, down: [] },
+          mysql: { up, down: [] },
+          sqlite: { up, down: [] },
+        },
+        snapshot: sides,
+        before: sides,
+      };
+
+      const error = await runPluginPhase({
+        extensionSchema: undefined,
+        dialect,
+        db: adapter.getDrizzle(),
+        adapter: adapter as never,
+        migrationsDir,
+        logger,
+        pluginMigrationSets: [
+          {
+            pluginName: "ucx",
+            pluginVersion: "1.0.0",
+            migrations: [{ ...content, checksum: migrationChecksum(content) }],
+          },
+        ],
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).publicMessage).toContain(
+        `Table '${notes}': column 'code' cannot become unique while 1 value repeats: "x" (2 entries).`
+      );
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        notes,
+      ]);
+      expect(live.tables[0]?.columns.map(c => c.name)).not.toContain("extra");
+    }, 120_000);
+
+    it.skipIf(dialect === "mysql")(
+      "adopts no unique index the database holds over part of the column only",
+      async () => {
+        await run([
+          `CREATE UNIQUE INDEX ${q(UNIQUE)} ON ${q(PROFILES)} (${q("person")}) WHERE ${q("person")} <> 'ada'`,
+        ]);
+        const statement = createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        );
+
+        const adoption = await adoptUniqueIndexesAlreadyThere(
+          adapter.getDrizzle(),
+          dialect,
+          [statement]
+        );
+
+        expect(adoption).toEqual({ statements: [statement], adopted: [] });
+      },
+      120_000
+    );
+
+    it("counts no blank as a repeat where the index leaves blanks out", async () => {
+      const codes = "dc_unique_codes";
+      await run([
+        `CREATE TABLE ${q(codes)} (${q("id")} varchar(36) PRIMARY KEY, ${q("code")} varchar(64), ${q("_locale")} varchar(20))`,
+        `INSERT INTO ${q(codes)} (${q("id")}, ${q("code")}, ${q("_locale")}) VALUES ('c1', '', 'en'), ('c2', '', 'en'), ('c3', 'x', 'en'), ('c4', 'x', 'en')`,
+      ]);
+
+      const asIndexed = await readRepeatedValues(
+        adapter.getDrizzle(),
+        dialect,
+        codes,
+        "code",
+        "_locale",
+        true
+      );
+
+      expect(asIndexed).toEqual([{ value: "x", entries: 2, language: "en" }]);
     }, 120_000);
   }
 );

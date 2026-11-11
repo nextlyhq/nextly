@@ -601,6 +601,25 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 );
 
 describe("uniqueIndexesCreatedBy on postgresql", () => {
+  it("reads an index created concurrently, and one on a parent table only", () => {
+    const read = (sql: string) => uniqueIndexesCreatedBy(sql, "postgresql");
+    const created = {
+      table: "dc_profiles",
+      name: "uq_dc_profiles_person",
+      columns: ["person"],
+    };
+    expect(
+      read(
+        `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "uq_dc_profiles_person" ON "dc_profiles" ("person")`
+      )
+    ).toEqual([created]);
+    expect(
+      read(
+        `CREATE UNIQUE INDEX "uq_dc_profiles_person" ON ONLY "dc_profiles" ("person")`
+      )
+    ).toEqual([created]);
+  });
+
   it("reads past the index method drizzle-kit names", () => {
     expect(
       uniqueIndexesCreatedBy(

@@ -8,9 +8,9 @@
  * for a migration file that creates a unique index (`refuseUniqueIndexesOverRepeats`, before any
  * of its statements) and for the run's own step that makes one-to-ones unique.
  *
- * A table is judged only when the registry names it as a collection's, a Single's or a field
- * group's (`readRequiredColumnOwners`): Nextly's own tables have the core reconcile, and a
- * plugin's are its own. A column is judged only where it is on the table already and no unique
+ * A table the registry names as a collection's, a Single's or a field group's
+ * (`readRequiredColumnOwners`) is named by its entity and field; any other (a plugin's, an
+ * extension's) by its table and column. A column is judged only where it is on the table already and no unique
  * index holds it yet: a column the file adds holds no value to repeat, and one already unique
  * cannot.
  *
@@ -69,15 +69,21 @@ export interface UniqueColumnRepeats {
  *
  * @param language a translations table's language column: a value repeats only within one
  *   language there, as its unique index is per language
+ * @param blankRepeatsNothing a translated text column's: its index leaves a blank (`''`) out, as an
+ *   untranslated value, so blanks never repeat
  */
 export async function readRepeatedValues(
   db: unknown,
   dialect: SupportedDialect,
   table: string,
   column: string,
-  language?: string
+  language?: string,
+  blankRepeatsNothing = false
 ): Promise<RepeatedValue[]> {
   const value = sql.identifier(column);
+  const present = blankRepeatsNothing
+    ? sql`${value} IS NOT NULL AND ${value} <> ''`
+    : sql`${value} IS NOT NULL`;
   const grouped =
     language === undefined
       ? sql`${value}`
@@ -93,7 +99,7 @@ export async function readRepeatedValues(
   }>(
     db,
     dialect,
-    sql`SELECT ${value} AS ${sql.identifier("value")}${languageOut}, COUNT(*) AS ${sql.identifier("entries")} FROM ${sql.identifier(table)} WHERE ${value} IS NOT NULL GROUP BY ${grouped} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC, ${grouped}`
+    sql`SELECT ${value} AS ${sql.identifier("value")}${languageOut}, COUNT(*) AS ${sql.identifier("entries")} FROM ${sql.identifier(table)} WHERE ${present} GROUP BY ${grouped} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC, ${grouped}`
   );
   return rows.map(row => ({
     value: String(row.value),
@@ -122,7 +128,8 @@ function repeatsMessage(column: UniqueColumnRepeats): string {
   const rest =
     more > 0 ? `, and ${more} more (the full list is in the log)` : "";
   const count = column.repeats.length;
-  return `${LABELS[column.entity.kind]} '${column.entity.slug}': field '${column.field}' cannot become unique while ${count} ${count === 1 ? "value repeats" : "values repeat"}: ${listed}${rest}. Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`;
+  const thing = column.entity.kind === "table" ? "column" : "field";
+  return `${LABELS[column.entity.kind]} '${column.entity.slug}': ${thing} '${column.field}' cannot become unique while ${count} ${count === 1 ? "value repeats" : "values repeat"}: ${listed}${rest}. Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`;
 }
 
 /**
@@ -176,23 +183,29 @@ export async function refuseUniqueIndexesOverRepeats(
   for (const target of targets) {
     const owner = owners.owner(target.table);
     const column = target.columns[0];
-    const field = owner?.fieldsByColumn.get(column);
-    if (owner === undefined || field === undefined) continue;
-    const live = await introspectLiveColumns(db, dialect, [owner.table]);
-    const present = live.tables[0]?.columns.some(
+    // A table that is not a collection's, a Single's or a field group's (a plugin's, an
+    // extension's) is judged too, and named by its table and column.
+    const table = owner?.table ?? target.table;
+    const live = await introspectLiveColumns(db, dialect, [table]);
+    const spelled = live.tables[0]?.columns.find(
       c => c.name.toLowerCase() === column
     );
-    if (present !== true) continue;
-    const unique = await readUniqueColumns(db, dialect, owner.table);
+    if (live.tables[0] === undefined || spelled === undefined) continue;
+    const unique = await readUniqueColumns(db, dialect, live.tables[0].name);
     if ([...unique.keys()].some(name => name.toLowerCase() === column)) {
       continue;
     }
-    const repeats = await readRepeatedValues(db, dialect, owner.table, column);
+    const repeats = await readRepeatedValues(
+      db,
+      dialect,
+      live.tables[0].name,
+      spelled.name
+    );
     if (repeats.length > 0) {
       refused.push({
-        entity: owner.entity,
-        field,
-        table: owner.table,
+        entity: owner?.entity ?? { kind: "table", slug: live.tables[0].name },
+        field: owner?.fieldsByColumn.get(column) ?? column,
+        table: live.tables[0].name,
         column,
         repeats,
       });
@@ -262,9 +275,13 @@ export async function adoptUniqueIndexesAlreadyThere(
       continue;
     }
     const live = await introspectLiveSnapshot(db, dialect, [created.table]);
+    // Only an index holding the whole column, as the file's does: one with a predicate or over an
+    // expression leaves values outside it free to repeat.
     const there = live.tables[0]?.indexes?.some(
       index =>
         index.unique &&
+        index.where === undefined &&
+        index.expression === undefined &&
         index.name.toLowerCase() === created.name &&
         index.columns.length === 1 &&
         index.columns[0].toLowerCase() === created.columns[0]

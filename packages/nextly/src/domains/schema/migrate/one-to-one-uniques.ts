@@ -69,6 +69,8 @@ interface MissingUniqueness {
   column: string;
   /** A translations table's language column: the uniqueness holds within each language. */
   language?: string;
+  /** A translated text column, whose index leaves a blank out, so blanks never repeat. */
+  blankRepeatsNothing?: boolean;
   statements: string[];
 }
 
@@ -238,6 +240,7 @@ async function missingOnTranslations(
       table: present,
       column: c.column,
       language: "_locale",
+      blankRepeatsNothing: c.text,
       statements: companionUniqueIndexStatements({
         dialect,
         companionTable,
@@ -291,7 +294,8 @@ export async function makeOneToOnesUnique(
       dialect,
       target.table,
       target.column,
-      target.language
+      target.language,
+      target.blankRepeatsNothing
     );
     if (repeats.length > 0) {
       const { entity, field, table, column } = target;

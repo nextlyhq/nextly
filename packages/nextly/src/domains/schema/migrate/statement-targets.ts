@@ -195,7 +195,7 @@ export interface UniqueIndexCreated {
 
 /**
  * The unique index `statement` creates, as a list of one, or `undefined` for any other statement:
- * `CREATE UNIQUE INDEX [IF NOT EXISTS] name ON table [USING method] (columns)` and
+ * `CREATE UNIQUE INDEX [CONCURRENTLY] [IF NOT EXISTS] name ON [ONLY] table [USING method] (columns)` and
  * `ALTER TABLE table ADD CONSTRAINT name UNIQUE (columns)`. One over an expression, or with
  * anything after its columns (a predicate, an index option), is not read: it is not plain
  * uniqueness of its columns.
@@ -217,13 +217,18 @@ export function uniqueIndexesCreatedBy(
     : undefined;
 }
 
-/** The table and name of `CREATE UNIQUE INDEX`, read after it, up to its key list. */
+/**
+ * The table and name of `CREATE UNIQUE INDEX`, read after it, up to its key list: PostgreSQL's
+ * `CONCURRENTLY` and `ON ONLY` included.
+ */
 function createdUniqueIndex(
   cursor: StatementCursor
 ): { table: string; name: string } | undefined {
+  cursor.accept("CONCURRENTLY");
   cursor.acceptCondition();
   const name = cursor.name();
   if (name === undefined || !cursor.accept("ON")) return undefined;
+  cursor.accept("ONLY");
   const table = cursor.name();
   if (table === undefined) return undefined;
   // PostgreSQL names the index's method before its columns.
