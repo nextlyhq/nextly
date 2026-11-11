@@ -28,6 +28,7 @@ import {
 } from "@admin/lib/builder";
 import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
 import { collectFieldIds } from "@admin/lib/builder/field-placement";
+import type { PendingChange, RowMark } from "@admin/lib/builder/pending-changes";
 import type { FieldDefinition } from "@admin/types/collection";
 
 export interface UseBuilderEntityStateOptions<TEntity> {
@@ -58,7 +59,19 @@ export interface UseBuilderEntityStateOptions<TEntity> {
   identity: (entity: TEntity) => string;
 }
 
+/** The Builder's pending changes, and what a person can do with them. */
+export interface BuilderPendingChanges {
+  changes: readonly PendingChange[];
+  marks: ReadonlyMap<string, ReadonlySet<RowMark>>;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => string | null;
+  redo: () => string | null;
+  discardAll: () => void;
+}
+
 export interface BuilderEntityState {
+  pending: BuilderPendingChanges;
   /** Null until the entity has loaded. */
   settings: BuilderSettingsValues | null;
   setSettings: (next: BuilderSettingsValues) => void;
@@ -161,7 +174,18 @@ export function useBuilderEntityState<TEntity>({
     setOriginalSettings(saved);
   }, []);
 
+  const pending: BuilderPendingChanges = {
+    changes: [],
+    marks: new Map(),
+    canUndo: false,
+    canRedo: false,
+    undo: () => null,
+    redo: () => null,
+    discardAll: () => {},
+  };
+
   return {
+    pending,
     settings,
     setSettings,
     isInitialized,
