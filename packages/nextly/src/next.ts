@@ -20,7 +20,14 @@
  * ```
  */
 
+import { resolve } from "node:path";
+
 import { warnIfCacheComponentsOff } from "./cache-components";
+import {
+  BUILD_SCHEMA_VERSION_ENV,
+  newestMigrationIn,
+} from "./domains/schema/build-schema-version";
+import { DEFAULT_MIGRATIONS_DIR } from "./shared/types/migrations-dir-default";
 
 /**
  * Packages that must be loaded from node_modules at runtime
@@ -180,6 +187,14 @@ export interface WithNextlyOptions {
   apiRoute?: string;
   /** More root files, beyond robots.txt, sitemap.xml and llms.txt, that a plugin answers. */
   rootFiles?: readonly string[];
+  /**
+   * The app's migrations folder, relative to the project root, as
+   * `db.migrationsDir` in the Nextly config sets it. Defaults to
+   * `./src/db/migrations`, that setting's default. Its newest migration is
+   * the build's schema version, which a production start compares with the
+   * database's.
+   */
+  migrationsDir?: string;
 }
 
 type Rewrite = Record<string, unknown>;
@@ -308,8 +323,26 @@ export function withNextly<T extends Record<string, unknown>>(
     { "/**": NEXTLY_FILE_TRACING_INCLUDES }
   );
 
+  // The build's schema version: the newest migration in the app's folder,
+  // named while Next.js loads this config, from the project root it loads it
+  // in. Handed to the server two ways, since Nextly itself is a server
+  // external that Next.js does not inline values into: through `env`, for
+  // the app's own bundled code, and on `process.env`, which Next.js keeps for
+  // the server it starts after loading the config. No migration, no version,
+  // and a production start then compares nothing.
+  const buildVersion = newestMigrationIn(
+    resolve(process.cwd(), options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR)
+  );
+  if (buildVersion !== undefined) {
+    process.env[BUILD_SCHEMA_VERSION_ENV] = buildVersion;
+  }
+  const env = nextConfig.env as Record<string, string> | undefined;
+
   return {
     ...nextConfig,
+    ...(buildVersion === undefined
+      ? {}
+      : { env: { ...env, [BUILD_SCHEMA_VERSION_ENV]: buildVersion } }),
     serverExternalPackages: merged,
     ...(nextConfig.experimental === undefined ? {} : { experimental }),
     outputFileTracingIncludes: includes,
