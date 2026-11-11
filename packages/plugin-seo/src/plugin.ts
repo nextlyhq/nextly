@@ -34,7 +34,7 @@ import {
   SETTINGS_PAGE,
   SETTINGS_PAGE_HREF,
 } from "./settings/contract";
-import { readSeoRules } from "./settings/rules";
+import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
 import {
@@ -358,6 +358,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     provides: ["page-metadata"],
     contributes,
     init(ctx) {
+      // The settings Single's registered name, for readers other plugins call.
+      rememberSettingsSingle(ctx);
       // The site-wide record that keeps each public address to one page:
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));

@@ -23,6 +23,7 @@ import type { StructuredDataTypeRule } from "../structured-data/rules";
 
 import {
   AI_CRAWLER_CHOICES,
+  SEO_PLUGIN_NAME,
   SEO_SETTINGS_SLUG,
   SITE_KINDS,
   type AiCrawlerChoice,
@@ -195,6 +196,27 @@ const mediaImages =
     imageOf(ctx, value);
 
 /**
+ * The settings Single's name as the host registered it, recorded when the
+ * SEO plugin starts. Another plugin's context lists only its own Singles, so
+ * a reader called from one could not resolve a host's rename by itself.
+ */
+let registeredSettingsSingle: string | undefined;
+
+/** Records the settings Single's registered name from the SEO plugin's context. */
+export function rememberSettingsSingle(ctx: Pick<PluginContext, "self">): void {
+  registeredSettingsSingle =
+    ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG;
+}
+
+/** The settings Single's registered name, for a read from any plugin's context. */
+function settingsSingleFor(ctx: Pick<PluginContext, "self">): string {
+  if (ctx.self.name === SEO_PLUGIN_NAME) {
+    return ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG;
+  }
+  return registeredSettingsSingle ?? SEO_SETTINGS_SLUG;
+}
+
+/**
  * The stored SEO settings in `locale`, as the system: the published values,
  * since they decide what the live site serves. Empty before anyone saves.
  */
@@ -204,8 +226,7 @@ async function readSeoSettingsDocument(
 ): Promise<SeoSettingsDocument> {
   const nextly = await getCachedNextly();
   const document: unknown = await nextly.findSingle({
-    // The Single as the host named it, where it renamed it.
-    slug: ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG,
+    slug: settingsSingleFor(ctx),
     overrideAccess: true,
     depth: 0,
     ...(locale === undefined ? {} : { locale }),
