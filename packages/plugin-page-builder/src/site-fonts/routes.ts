@@ -218,7 +218,7 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
       // The stats are asked for beside the list rather than after it, so a
       // read waits for the slower of the two, not both in turn.
       const popularity = readPopularity(ctx);
-      const bytes = await fetchFromCatalogue(
+      const list = fetchFromCatalogue(
         fetchOf(ctx),
         new URL("/v1/fonts?type=google", fonts.api).href,
         rules({
@@ -227,8 +227,11 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
           messages: READ_MESSAGES,
         })
       );
+      // Both settle before the read answers, the stats too when the list
+      // fails, so no request outlives the read that started it.
+      await Promise.allSettled([list, popularity]);
       const parsed = parseCatalogue(
-        JSON.parse(new TextDecoder().decode(bytes))
+        JSON.parse(new TextDecoder().decode(await list))
       );
       if (parsed.unreadable === true) {
         throw NextlyError.serviceUnavailable({
