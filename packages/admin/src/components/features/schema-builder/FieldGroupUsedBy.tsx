@@ -55,7 +55,9 @@ function summary(
   }
   if (!placements) return "Finding where this field group is used…";
   if (placements.length === 0) {
-    return "This field group is not used anywhere yet.";
+    // Only what is known: the answer leaves out what the reader may not
+    // read, so "used nowhere" would claim more than it knows.
+    return "Not used in any collection, Single or field group you can read.";
   }
   const holders = byHolder(placements).length;
   return `Used by ${holders} ${holders === 1 ? "place" : "places"}. A change here reaches all of them.`;

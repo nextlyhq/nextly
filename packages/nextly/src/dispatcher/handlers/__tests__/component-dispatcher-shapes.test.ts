@@ -38,14 +38,14 @@ vi.mock("../../helpers/authenticated-user", async importOriginal => ({
   >()),
   readAuthenticatedUser,
 }));
-const readableSlugAllowlist = vi.hoisted(() => vi.fn());
+const readableSlugsOfKind = vi.hoisted(() => vi.fn());
 vi.mock(
   "../../../services/lib/readable-slug-allowlist",
   async importOriginal => ({
     ...(await importOriginal<
       typeof import("../../../services/lib/readable-slug-allowlist")
     >()),
-    readableSlugAllowlist,
+    readableSlugsOfKind,
   })
 );
 
@@ -342,9 +342,11 @@ describe("dispatchComponents, listComponents use counts", () => {
       },
     ]);
     readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
-    readableSlugAllowlist.mockImplementation(
-      async (_caller: unknown, kind: string) =>
-        kind === "collection" ? ["pages"] : []
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) => ({
+        slugs: kind === "collection" ? ["pages"] : [],
+        reachable: true,
+      })
     );
     try {
       const body = await (
@@ -354,7 +356,36 @@ describe("dispatchComponents, listComponents use counts", () => {
       expect(body.items[0]).toMatchObject({ slug: "card", placedBy: 1 });
     } finally {
       readAuthenticatedUser.mockReset();
-      readableSlugAllowlist.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("shows no count, rather than a smaller one, when the reader's Singles cannot be listed", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "single",
+        entitySlug: "home",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+    ]);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) =>
+        kind === "single"
+          ? { slugs: [], reachable: false }
+          : { slugs: [], reachable: true }
+    );
+    vi.mocked(getLoggerFromDI).mockReturnValue({
+      warn: vi.fn(),
+    } as unknown as ReturnType<typeof getLoggerFromDI>);
+    try {
+      const body = await (
+        (await dispatchComponents("listComponents", {}, undefined)) as Response
+      ).json();
+      expect(body.items[0]).toMatchObject({ slug: "card", placedBy: null });
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
     }
   });
 
@@ -651,9 +682,11 @@ describe("dispatchComponents, where a field group is used (getComponentUsedBy)",
     readFieldOwners.mockResolvedValue(owners);
     readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
     // The reader may read no Single, and of the collections only "posts".
-    readableSlugAllowlist.mockImplementation(
-      async (_caller: unknown, kind: string) =>
-        kind === "collection" ? ["posts"] : []
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) => ({
+        slugs: kind === "collection" ? ["posts"] : [],
+        reachable: true,
+      })
     );
     try {
       const body = await (
@@ -668,17 +701,43 @@ describe("dispatchComponents, where a field group is used (getComponentUsedBy)",
       expect(body.items).toEqual([
         { entityType: "fieldGroup", entitySlug: "card", fieldPath: "meta" },
       ]);
-      expect(readableSlugAllowlist).toHaveBeenCalledWith(
+      expect(readableSlugsOfKind).toHaveBeenCalledWith(
         expect.anything(),
         "collection"
       );
-      expect(readableSlugAllowlist).toHaveBeenCalledWith(
+      expect(readableSlugsOfKind).toHaveBeenCalledWith(
         expect.anything(),
         "single"
       );
     } finally {
       readAuthenticatedUser.mockReset();
-      readableSlugAllowlist.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("refuses, rather than leaving a kind out, when the reader's collections cannot be listed", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockResolvedValue(owners);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) =>
+        kind === "collection"
+          ? { slugs: [], reachable: false }
+          : { slugs: ["home"], reachable: true }
+    );
+    try {
+      // Every collection left out would read as fewer uses, or none.
+      await expect(
+        dispatchComponents("getComponentUsedBy", { slug: "seo" }, undefined)
+      ).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        logContext: { reason: "field-group-placements-unreadable" },
+      });
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
     }
   });
 

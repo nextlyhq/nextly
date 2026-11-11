@@ -63,11 +63,13 @@ describe("FieldGroupUsedBy", () => {
     ).toHaveLength(1);
   });
 
-  it("says it is not used anywhere, when it is not", async () => {
+  it("says it is used in nothing the reader can read, and claims no more", async () => {
     get.mockResolvedValue({ items: [], meta: { total: 0 } });
     render(<FieldGroupUsedBy slug="seo" />);
     expect(
-      await screen.findByText("This field group is not used anywhere yet.")
+      await screen.findByText(
+        "Not used in any collection, Single or field group you can read."
+      )
     ).toBeInTheDocument();
   });
 
@@ -77,7 +79,7 @@ describe("FieldGroupUsedBy", () => {
     expect(
       await screen.findByText(/could not be read, so it is not known/)
     ).toBeInTheDocument();
-    expect(screen.queryByText(/not used anywhere/)).toBeNull();
+    expect(screen.queryByText(/Not used in any/)).toBeNull();
   });
 
   it("says it does not know after a failed refresh, not the answer it had", async () => {
@@ -85,7 +87,9 @@ describe("FieldGroupUsedBy", () => {
     get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
     render(<FieldGroupUsedBy slug="seo" />, { queryClient });
     expect(
-      await screen.findByText("This field group is not used anywhere yet.")
+      await screen.findByText(
+        "Not used in any collection, Single or field group you can read."
+      )
     ).toBeInTheDocument();
 
     // A use is added elsewhere, and the refresh that would have shown it fails.
@@ -94,7 +98,7 @@ describe("FieldGroupUsedBy", () => {
     expect(
       await screen.findByText(/could not be read, so it is not known/)
     ).toBeInTheDocument();
-    expect(screen.queryByText(/not used anywhere/)).toBeNull();
+    expect(screen.queryByText(/Not used in any/)).toBeNull();
   });
 
   it("reads afresh on each visit, never showing the answer from an earlier one", async () => {
@@ -107,7 +111,9 @@ describe("FieldGroupUsedBy", () => {
     get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
     const first = render(<FieldGroupUsedBy slug="seo" />, { queryClient });
     expect(
-      await screen.findByText("This field group is not used anywhere yet.")
+      await screen.findByText(
+        "Not used in any collection, Single or field group you can read."
+      )
     ).toBeInTheDocument();
     first.unmount();
     // Let a dropped answer go before the next visit.
@@ -121,7 +127,7 @@ describe("FieldGroupUsedBy", () => {
       meta: { total: 1 },
     });
     render(<FieldGroupUsedBy slug="seo" />, { queryClient });
-    expect(screen.queryByText(/not used anywhere/)).toBeNull();
+    expect(screen.queryByText(/Not used in any/)).toBeNull();
     expect(
       await screen.findByText(
         "Used by 1 place. A change here reaches all of them."

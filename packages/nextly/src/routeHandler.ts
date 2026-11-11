@@ -807,6 +807,12 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // A document's events run the same document gate, which reads roles.
   "listEntryEvents",
   "listSingleEvents",
+  // Where a field group is used, and the field-group list's use counts, name
+  // only the collections and Singles the reader may read, by the read
+  // decision that reads roles: without them a role-admitted owner is left out
+  // and the field group looks used less, or not at all.
+  "listComponents",
+  "getComponentUsedBy",
 ]);
 
 /**

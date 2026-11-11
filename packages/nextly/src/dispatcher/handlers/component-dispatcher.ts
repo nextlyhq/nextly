@@ -61,7 +61,7 @@ import {
   type FieldGroupMigrationStatus,
 } from "../../schemas/dynamic-field-groups/types";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
-import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
+import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import type { Logger } from "../../shared/types";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -224,11 +224,32 @@ async function readableFieldOwners(
   const reader = readAuthenticatedUser();
   const caller = reader ? readAccessCallerForDispatch(reader) : undefined;
   const [collection, single, owners] = await Promise.all([
-    readableSlugAllowlist(caller, "collection"),
-    readableSlugAllowlist(caller, "single"),
+    readableOwnerSlugs(caller, "collection"),
+    readableOwnerSlugs(caller, "single"),
     readFieldOwners(adapter),
   ]);
   return ownersReadableBy(owners, { collection, single });
+}
+
+/**
+ * The slugs of `kind` the reader may read, or `undefined` for no reader.
+ * A registry that cannot be enumerated rejects rather than answering none:
+ * leaving out a whole kind would claim the field group is used less, or not
+ * at all, when that is not known. The caller turns the rejection into its
+ * own "could not be read".
+ */
+async function readableOwnerSlugs(
+  caller: ReturnType<typeof readAccessCallerForDispatch> | undefined,
+  kind: "collection" | "single"
+): Promise<string[] | undefined> {
+  if (!caller) return undefined;
+  const { slugs, reachable } = await readableSlugsOfKind(caller, kind);
+  if (!reachable) {
+    throw NextlyError.serviceUnavailable({
+      logContext: { reason: "readable-owners-unreachable", kind },
+    });
+  }
+  return slugs;
 }
 
 /** The refusal when a field group's uses cannot be read. */

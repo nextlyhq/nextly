@@ -421,6 +421,18 @@ describe("needsResolvedRoles", () => {
     }
   });
 
+  it("resolves roles for where a field group is used, and the list's counts", () => {
+    // Both name only the collections and Singles the reader may read, by the
+    // read decision a role-based rule needs the resolved slugs for: without
+    // them, an owner a role admits is left out and the field group looks
+    // used less, or not at all.
+    for (const method of ["listComponents", "getComponentUsedBy"]) {
+      expect(_needsResolvedRolesForTest("field-groups", method, "GET")).toBe(
+        true
+      );
+    }
+  });
+
   it("resolves roles for the Single document read", () => {
     // Singles evaluate their stored read rule against the caller too, so a
     // role-based rule needs the resolved slugs the same way entry reads do.
