@@ -46,10 +46,11 @@ fixed.
 - **Below its pin**: the change made it cheaper. Lower the pin with
   `--update-pins` (run on all three dialects) so the gain is kept.
 - **Admin page first byte above its limit**: on the PostgreSQL start with every
-  round trip delayed, the admin page answered more than a second after the
-  server began listening. The page needs no database, so something made it wait
-  for the start: a `register()` that waits for Nextly to start, or the page
-  itself reading the database before it sends its first byte.
+  round trip delayed, the admin page answered more than ten seconds after the
+  server began listening (a start that holds the page takes about a hundred).
+  The page needs no database, so something made it wait for the start: a
+  `register()` that waits for Nextly to start, or the page itself reading the
+  database before it sends its first byte.
 
 Each screen is loaded five times, and its requests are pinned by kind (method
 and path, with ids made generic), each kind counting the fewest times any of

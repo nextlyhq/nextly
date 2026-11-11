@@ -77,9 +77,12 @@ const DELAY_MS = 100;
 /**
  * How soon the admin page's first byte must arrive after the server listens,
  * on the delayed start: the page needs no database, so the start under way
- * must not hold it (about 104 s before the start stopped holding requests).
+ * must not hold it. A start that held it took about 104 s; one that does not
+ * leaves the page's own first render, about 2 s on a cold server with or
+ * without the delay, so this catches the start holding the page without
+ * judging that render. Lowered to a second once the page is prebuilt.
  */
-const FIRST_BYTE_LIMIT_MS = 1000;
+const FIRST_BYTE_LIMIT_MS = 10_000;
 const EXTRA_COLLECTIONS = 45;
 const QUIET_MS = 1500;
 /** How long an open request is waited for once nothing else happens. */
