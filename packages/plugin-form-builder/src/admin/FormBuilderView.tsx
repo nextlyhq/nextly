@@ -132,6 +132,8 @@ export interface FormBuilderViewProps {
     slug?: string;
     description?: string;
     status?: "draft" | "published" | "closed";
+    /** When the form first went live: what fixes its ID. */
+    wentLiveAt?: string | null;
     closedMessage?: string;
     fields?: unknown[];
     settings?: Record<string, unknown>;
@@ -269,6 +271,7 @@ function useFormSave({
     notifications,
     markAsSaved,
     beginSave,
+    saveFailed,
     markFieldsSaved,
   } = useFieldBookkeeping();
   const queryClient = useQueryClient();
@@ -280,6 +283,9 @@ function useFormSave({
     // A refused save keeps every change and says what to fix, and where, in
     // the page and as a toast.
     const refuse = (next: SaveRefusal) => {
+      // Nothing was stored, so a save that would have made the form live
+      // leaves its ID as it was.
+      saveFailed();
       setRefusal(next);
       toast.error(next.message);
     };
@@ -379,6 +385,7 @@ function useFormSave({
     queryClient,
     markAsSaved,
     beginSave,
+    saveFailed,
     markFieldsSaved,
     // Read inside, so it belongs here. Without it the callback closes over the
     // claim as it stood when the form mounted, and a colleague taking the
@@ -577,7 +584,8 @@ function FormEditor({
                   <FormPreview fields={fields} formData={formData} />
                 ),
                 settings: () => (
-                  <div className="flex flex-col gap-10">
+                  // One page in sections, one gap between each of them.
+                  <div className="flex flex-col gap-8">
                     <FormIdentitySection />
                     <FormSettingsTab
                       spamDefaults={config.spamDefaults}
@@ -948,6 +956,7 @@ export function FormBuilderView({
         slug: initialData?.slug,
         description: initialData?.description,
         status: initialData?.status,
+        wentLiveAt: initialData?.wentLiveAt,
         closedMessage: initialData?.closedMessage,
         fields: initialData?.fields as FormField[],
         settings: initialData?.settings as Record<string, unknown>,

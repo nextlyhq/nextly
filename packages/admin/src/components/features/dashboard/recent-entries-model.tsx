@@ -13,7 +13,7 @@ import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 import { asPresentedText } from "../widgets/archetypes/cell-text";
 import { presentedCell } from "../widgets/archetypes/presented-cell";
 import type { ListField, ListModel } from "../widgets/frame/list-card";
-import { LeadingChip, StatusPill } from "../widgets/frame/row-parts";
+import { StatusChip } from "../widgets/frame/row-parts";
 
 /**
  * Where a row links: its entry's edit page in the collection the card reads. `undefined` for a
@@ -37,10 +37,10 @@ function entryHref(
  * the meta line. By default that is when each row was updated and its status; a reader who
  * chose the card's Fields sees those instead, in the order they chose: the table's columns
  * follow it, and the stacked row places each by its role. On a collection with a lifecycle, the
- * status is drawn as a pill: a published entry's in the tone of done, any other's plain. On one
- * without, a field named `status` is the author's own and reads as any other. Each row leads
- * with the initial of its collection's label, as `labelOf` names it, the chip every list of
- * entries leads with.
+ * status is drawn as a quiet chip with a dot: a published entry's in the tone of done, any
+ * other's neutral. On one without, a field named `status` is the author's own and reads as any
+ * other. A row leads with its title, never with a chip: the card reads one collection, which its
+ * title already names.
  */
 export function recentEntriesModel(
   /** The collection the card reads, by its slug. */
@@ -48,20 +48,14 @@ export function recentEntriesModel(
   label: string,
   columns: readonly WidgetResultField[],
   now: number,
-  labelOf: (slug: string) => string,
   /** Whether the collection has a draft and published lifecycle, as its source says. */
   lifecycle: boolean
 ): ListModel<Record<string, unknown>> {
   const title = columns.find(column => column.name === label);
-  const initial =
-    slug === undefined ? undefined : labelOf(slug).charAt(0).toUpperCase();
   return {
     titleLabel: fieldLabel({ name: label, label: title?.label }),
     titleOf: item => asPresentedText(item[label], title) ?? "—",
     hrefOf: item => entryHref(slug, item),
-    ...(initial === undefined
-      ? {}
-      : { leadingOf: () => <LeadingChip>{initial}</LeadingChip> }),
     fields: columns
       .filter(column => column.name !== label)
       .map(
@@ -86,11 +80,11 @@ export function recentEntriesModel(
             const text = asPresentedText(item.status, column);
             if (text === undefined) return undefined;
             return (
-              <StatusPill
+              <StatusChip
                 tone={item.status === "published" ? "good" : "neutral"}
               >
                 {text}
-              </StatusPill>
+              </StatusChip>
             );
           },
         })

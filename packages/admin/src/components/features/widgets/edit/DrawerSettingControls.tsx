@@ -17,7 +17,7 @@ import {
   type AnyWidgetSetting,
   type WidgetSetting,
 } from "nextly/config";
-import { Fragment, useId, type JSX, type ReactNode } from "react";
+import { Fragment, useEffect, useId, type JSX, type ReactNode } from "react";
 import { useController } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
@@ -33,6 +33,7 @@ import {
   type EntriesSetting,
 } from "./drawer-choices";
 import { SegmentedChoice, type SegmentedOption } from "./SegmentedChoice";
+import type { SettingRule } from "./setting-rules";
 
 /** What the drawer says under a setting, its examples in backticks drawn as code. */
 function SettingDescription({
@@ -110,17 +111,38 @@ function SegmentedSettingControl({
   options,
   disabled,
   parse,
+  rule,
 }: {
   setting: AnyWidgetSetting;
   options: readonly SegmentedOption[];
   disabled: boolean;
   /** What the chosen option's value is stored as; the value itself when absent. */
   parse?: (value: string) => unknown;
+  /** Which options cannot be chosen beside the card's other settings now, and why. */
+  rule?: SettingRule | undefined;
 }): JSX.Element {
   const { field } = useController({ name: setting.name });
   const id = useId();
-  const hint = hintOf(setting);
+  const own = hintOf(setting);
+  const hint =
+    rule?.hint === undefined
+      ? own
+      : own === undefined
+        ? rule.hint
+        : `${own} ${rule.hint}`;
   const value: unknown = field.value;
+  const held =
+    typeof value === "string" || typeof value === "number"
+      ? String(value)
+      : undefined;
+  const closed = rule?.disabled ?? [];
+  const { onChange } = field;
+  const fallback = rule?.fallback;
+  // A value the others now rule out gives way to the rule's own, as the card would draw it.
+  const ruledOut = held !== undefined && closed.includes(held);
+  useEffect(() => {
+    if (ruledOut && fallback !== undefined) onChange(fallback);
+  }, [ruledOut, fallback, onChange]);
   return (
     <ChoiceField
       labelId={`${id}-label`}
@@ -132,12 +154,10 @@ function SegmentedSettingControl({
         size="drawer"
         aria-labelledby={`${id}-label`}
         aria-describedby={hint === undefined ? undefined : `${id}-hint`}
-        options={options}
-        value={
-          typeof value === "string" || typeof value === "number"
-            ? String(value)
-            : undefined
-        }
+        options={options.map(option =>
+          closed.includes(option.value) ? { ...option, disabled: true } : option
+        )}
+        value={held}
         disabled={disabled}
         onSelect={next => field.onChange(parse ? parse(next) : next)}
         data-testid={`setting-choice-${setting.name}`}
@@ -360,7 +380,9 @@ export function drawerControlOf(
   setting: AnyWidgetSetting,
   disabled: boolean,
   /** The setting's value as the drawer opened on it, which a Number of entries keeps offered. */
-  opened: unknown
+  opened: unknown,
+  /** What it does beside the card's other settings as the drawer holds them now. */
+  rule?: SettingRule
 ): JSX.Element | undefined {
   if (isEntriesSetting(setting)) {
     return (
@@ -378,6 +400,7 @@ export function drawerControlOf(
         setting={setting}
         options={segmented}
         disabled={disabled}
+        rule={rule}
       />
     );
   }

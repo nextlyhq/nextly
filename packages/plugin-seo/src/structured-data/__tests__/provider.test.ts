@@ -33,9 +33,16 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   getCachedNextly: async () => ({ findSingle: async () => ({}) }),
 }));
 
-/** A context whose content types declare no relationships. */
+/**
+ * A context whose content types declare no relationships, on a site whose
+ * address record holds no page's address yet.
+ */
 const ctx = {
+  self: { collections: {} },
+  config: {},
+  publicAddresses: { defaultLanguage: async () => "en" },
   services: {
+    ownCollections: { listEntries: async () => ({ data: [] }) },
     collections: {
       getCollection: async () => ({ schemaDefinition: { fields: [] } }),
     },

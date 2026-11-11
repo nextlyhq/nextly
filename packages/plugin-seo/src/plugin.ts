@@ -43,6 +43,7 @@ import {
   type SitemapOptions,
   type UrlForEntry,
 } from "./sitemap";
+import { decideStanding, stagingGuard } from "./staging/guard";
 import { withStructuredData } from "./structured-data/provider";
 import {
   rulesFromOptions,
@@ -247,6 +248,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         { ...SETTINGS_PAGE, requiredPermission: `read-${SEO_SETTINGS_SLUG}` },
       ],
     },
+    // Every host but the site's production addresses is kept out of search.
+    proxy: [stagingGuard(readSeoRules)],
   };
 
   // The SEO issues card and its Needs attention lines, one per collection,
@@ -286,6 +289,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           const xml = await generateSitemap(ctx.services, {
             collections: sitemapTargets,
             baseUrl,
+            // The site's addresses as the page's head reads them, so the
+            // sitemap and the head agree on what is on the site.
+            productionAddresses: (await readSeoRules(ctx)).productionAddresses,
             urlFor: options.urlFor,
             // Spread rather than assigned: `basePath` distinguishes absent from
             // `""`, and a present-but-undefined key would read as the declared
@@ -362,6 +368,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // Decided once, the first time the plugin starts on a site: whether a
+      // site with no production address known is kept out of search.
+      void decideStanding(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not record the site's standing",
+          {
+            error,
+          }
+        );
+      });
     },
   });
 }

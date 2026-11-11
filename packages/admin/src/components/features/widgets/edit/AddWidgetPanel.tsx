@@ -67,6 +67,7 @@ import {
   rowsCount,
   searchRows,
   startingCollection,
+  usersOffer,
   type GalleryRead,
   type GalleryRow,
 } from "./add-panel-model";
@@ -499,6 +500,7 @@ function usePanelRows(
   const sources = branding.widgetSources;
   const plugins = branding.plugins;
   const canAsk = useMemo(() => collectionAsker(byId, sources), [byId, sources]);
+  const offersUsers = useMemo(() => usersOffer(byId), [byId]);
   const rows = useMemo(() => {
     if (read === undefined) return [];
     const named = (plugin: string) =>
@@ -507,11 +509,11 @@ function usePanelRows(
         plugins?.find(each => each.name === plugin),
         REGISTRY_ENTRIES
       );
-    return galleryRows(read, placements, byId, canAsk, named);
-  }, [read, placements, byId, canAsk, plugins]);
+    return galleryRows(read, placements, byId, canAsk, named, offersUsers);
+  }, [read, placements, byId, canAsk, plugins, offersUsers]);
   const found = useMemo(() => searchRows(rows, query), [rows, query]);
   const collectionsOf = (widgetId: string) =>
-    collectionsFor(widgetId, read?.collections ?? [], canAsk);
+    collectionsFor(widgetId, read?.collections ?? [], canAsk, offersUsers);
   // The collection a card reads, as it is asked: its declared default where it stores none.
   const collectionOf = (placement: WidgetPlacement, setting: string) => {
     const widget = byId.get(placement.widgetId);

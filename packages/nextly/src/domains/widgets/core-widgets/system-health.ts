@@ -1,7 +1,9 @@
 /**
  * Core's System health card, declared with `defineWidget` as a plugin
- * declares its own: the Nextly version, whether migrations are applied, and
- * whether storage is working, for super-admins only. One module per widget;
+ * declares its own, for super-admins only: the Nextly version and whether it
+ * is the newest in its channel, the environment, the database and whether its
+ * connection is encrypted, migrations, storage, email and background jobs;
+ * with the runtime and plugins for its Details. One module per widget;
  * `core-widgets/index.ts` lists them in their order.
  *
  * ## Only a super-admin is told it exists
@@ -13,8 +15,8 @@
  *
  * ## It is never hidden for being empty
  *
- * Its three lines are always drawn, "up to date" and "working" included: a
- * card that left the dashboard while all was well would read the same as one
+ * Its lines are always drawn, "up to date" and "working" included: a card
+ * that left the dashboard while all was well would read the same as one
  * nobody could load.
  *
  * ## Its read is handed in
@@ -28,6 +30,14 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type {
+  DatabaseHealth,
+  EmailHealth,
+  JobsHealth,
+  LatestVersion,
+  PluginHealth,
+  RuntimeHealth,
+} from "../../health/health-types";
 import {
   defineWidget,
   type WidgetReadServices,
@@ -43,6 +53,15 @@ export type SystemHealthMigrationStatus = "ok" | "pending" | "failed";
 export interface SystemHealthData {
   /** The running Nextly version, such as "0.0.2-alpha.66". */
   version: string;
+  /** The running version against its release channel's newest. */
+  latest: LatestVersion;
+  /**
+   * Whether the server runs in production, and the site's own name for the
+   * deployment (`admin.environment.label`), when it gives one.
+   */
+  environment: { production: boolean; label?: string };
+  /** The database, its round trip, and whether its connection is encrypted. */
+  database: DatabaseHealth;
   migrations: {
     status: SystemHealthMigrationStatus;
     /** Migrations whose last attempt failed or never finished. */
@@ -62,6 +81,8 @@ export interface SystemHealthData {
   };
   storage: {
     status: "ok" | "failed";
+    /** The storage adapter's type: "local", "s3", "vercel-blob"; absent when unread. */
+    type?: string;
     /** When the last write failed, as an ISO 8601 instant. */
     failedAt?: string;
     /** The adapter's type: "local", "s3". */
@@ -69,6 +90,14 @@ export interface SystemHealthData {
     /** One short, non-sensitive sentence saying what went wrong. */
     reason?: string;
   };
+  /** The provider email is sent through; `null` when it could not be read. */
+  email: EmailHealth | null;
+  /** Background jobs by state; `null` when they could not be counted. */
+  jobs: JobsHealth | null;
+  /** Node, Next.js and React, for Details. */
+  runtime: RuntimeHealth;
+  /** Each plugin by name and version, for Details. */
+  plugins: PluginHealth[];
 }
 
 /** The System health read for the caller a card's read services were bound for. */
@@ -95,25 +124,56 @@ export function provideSystemHealth(read: SystemHealthRead): void {
   provided.read = read;
 }
 
+/** The runtime and plugins every preview shows. */
+const PREVIEW_DETAILS = {
+  runtime: { node: "24.11.0", next: "16.0.1", react: "19.2.0" },
+  plugins: [{ name: "@nextlyhq/plugin-seo", version: "0.0.2-alpha.66" }],
+} satisfies Pick<SystemHealthData, "runtime" | "plugins">;
+
 /** A healthy install, for the preview board. */
 const HEALTHY: SystemHealthData = {
   version: "0.0.2-alpha.66",
+  latest: { status: "latest", version: "0.0.2-alpha.66" },
+  environment: { production: true },
+  database: {
+    dialect: "postgresql",
+    serverVersion: "17.2",
+    roundTripMs: 4,
+    encryption: "encrypted",
+    exposed: true,
+  },
   migrations: { status: "ok", failed: 0, pending: 0 },
   schemaChanges: { failed: [], more: 0 },
-  storage: { status: "ok" },
+  storage: { status: "ok", type: "s3" },
+  email: { provider: "Resend" },
+  jobs: { queued: 2, running: 0, failed: 0 },
+  ...PREVIEW_DETAILS,
 };
 
 /** An install with a problem on every line, for the preview board. */
 const WITH_PROBLEMS: SystemHealthData = {
   version: "0.0.2-alpha.66",
+  latest: { status: "unknown" },
+  environment: { production: true },
+  database: {
+    dialect: "postgresql",
+    serverVersion: "17.2",
+    roundTripMs: 4,
+    encryption: "unencrypted",
+    exposed: true,
+  },
   migrations: { status: "failed", failed: 1, pending: 0 },
   schemaChanges: { failed: [{ slug: "posts", label: "Posts" }], more: 0 },
   storage: {
     status: "failed",
+    type: "s3",
     failedAt: "2026-10-30T08:00:00.000Z",
     adapter: "s3",
     reason: "The storage service could not be reached.",
   },
+  email: { provider: null },
+  jobs: { queued: 2, running: 0, failed: 3 },
+  ...PREVIEW_DETAILS,
 };
 
 export const systemHealthWidget = defineWidget({
@@ -122,12 +182,12 @@ export const systemHealthWidget = defineWidget({
   icon: "Shield",
   title: "System health",
   description:
-    "The Nextly version, and whether migrations and storage are working. For super-admins.",
-  // A third of the width by default, three rows tall: one row per line and
-  // room for a problem's link. Two rows at the least, which still hold the
-  // three lines; wider gives the links more room.
+    "Versions, database, migrations, storage, email and jobs. For super-admins.",
+  // Half the width by default: a fact's name, its value and a chip or a
+  // "How to fix" fit on one line. A third at the least, two thirds at the
+  // most. Heights fit the content; `h` is kept for stored layouts.
   size: {
-    default: { w: 4, h: 3 },
+    default: { w: 6, h: 4 },
     min: { w: 4, h: 2 },
     max: { w: 8, h: 4 },
   },
@@ -143,7 +203,7 @@ export const systemHealthWidget = defineWidget({
     return read(services, { signal });
   },
   view: { component: "core#SystemHealth" },
-  // Never empty: its three lines are the answer whatever they say.
+  // Never empty: its lines are the answer whatever they say.
   isEmpty: () => false,
   preview: [
     { name: "Healthy", data: HEALTHY },
