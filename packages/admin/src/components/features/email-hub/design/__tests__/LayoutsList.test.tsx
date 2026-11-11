@@ -51,7 +51,7 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
 
 vi.mock("../../useTemplateActions", () => ({
   editRouteFor: (item: { id: string }) =>
-    `/admin/email/messages/edit/${item.id}`,
+    `/admin/settings/email/messages/edit/${item.id}`,
   useTemplateActions: () => ({
     canOpen: true,
     actionsFor: () => [],
@@ -94,7 +94,7 @@ describe("the layouts list", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(
       screen.getByRole("link", { name: "Welcome" }).getAttribute("href")
-    ).toBe("/admin/email/messages/edit/welcome");
+    ).toBe("/admin/settings/email/messages/edit/welcome");
     expect(
       screen.getByRole("button", { name: /Used by 1 email$/ })
     ).toBeTruthy();
@@ -107,8 +107,8 @@ describe("the layouts list", () => {
       .filter(link => link.textContent === "Open")
       .map(link => link.getAttribute("href"));
     expect(openLinks).toEqual([
-      "/admin/email/messages/edit/default",
-      "/admin/email/messages/edit/plain",
+      "/admin/settings/email/messages/edit/default",
+      "/admin/settings/email/messages/edit/plain",
     ]);
   });
 

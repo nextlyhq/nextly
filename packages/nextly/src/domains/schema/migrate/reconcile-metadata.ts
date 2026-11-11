@@ -53,6 +53,7 @@ import { CollectionRegistryService } from "../../collections/services/collection
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
 import {
   inRegistryStep,
   newestAppliedAppMigration,
@@ -66,7 +67,7 @@ import {
   readPendingEntities,
   type PendingEntities,
 } from "./pending-entities";
-import { readRegistrySource } from "./registry-source";
+import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
 
 /**
@@ -120,6 +121,13 @@ export interface ReconcileMetadataDeps {
   registryRows?: "write" | "insert-missing";
   /** Seam for tests; defaults to the real registry writer. */
   writeRegistryFn?: typeof writeRegistryFromSource;
+  /**
+   * The registry rows the running configuration declares, given only by a
+   * first run that finds no migration carrying registry metadata
+   * (`first-run.ts`): the rows are written from it, by the writer the
+   * registry source uses, in place of any snapshot.
+   */
+  configurationRows?: EntitySettingsRecord;
   /**
    * Asked before each registry row is written; throws once the run can no
    * longer show it holds the schema lock (`RegistryWriteDeps.assertLockHeld`).
@@ -559,8 +567,23 @@ async function registerRows(
       complete: rowsNotWritten.length === 0,
     };
   };
-  if (deps.registryRows === "insert-missing") return insertMissing();
-  const source = await readRegistrySource({ migrationsDir, isApplied });
+  // A first run with no migration carrying the metadata takes its rows from
+  // the configuration, written as a registry source would be, whatever the
+  // mode: the record it commits with them keeps them as the baseline.
+  if (
+    deps.configurationRows === undefined &&
+    deps.registryRows === "insert-missing"
+  ) {
+    return insertMissing();
+  }
+  const source: RegistrySource =
+    deps.configurationRows === undefined
+      ? await readRegistrySource({ migrationsDir, isApplied })
+      : {
+          kind: "snapshot",
+          file: "the configuration",
+          entities: deps.configurationRows,
+        };
   if (source.kind !== "snapshot") {
     // Fail closed: an unreadable newest snapshot may record anything, so no
     // row is written from it, nor from an older one in its place.

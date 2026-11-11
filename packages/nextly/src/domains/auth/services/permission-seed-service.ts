@@ -49,6 +49,16 @@ export interface SeedResult {
 }
 
 /**
+ * The owners a declaration of permissions speaks for, for
+ * `markOrphanedPermissions`: by name (`app` for the app's own, a plugin by its
+ * name), and each owner of a permission whose slug `heldSlugs` names.
+ */
+export interface OrphanMarkScope {
+  owners: ReadonlySet<string>;
+  heldSlugs?: ReadonlySet<string>;
+}
+
+/**
  * What the seed does inside its own transaction: an insert, and a select of
  * the rows it reads back. `withTransaction` hands the transaction over as
  * `unknown`, since its concrete type differs per dialect, and every dialect's
@@ -1023,29 +1033,6 @@ export class PermissionSeedService extends BaseService {
   }
 
   /**
-   * Mark permissions whose declaring package has stopped declaring them, and
-   * unmark any that are declared again.
-   *
-   * `ensurePermission` writes `owner` only for a permission that is declared,
-   * so once a declaration goes the attribution freezes at whatever was last
-   * true. That was cosmetic until presets began reading `owner` to decide
-   * whether a permission is a plugin's; a stale attribution now silently
-   * changes what a preset grants.
-   *
-   * Marked, not deleted, and grants are left alone. Absence from config is not
-   * an uninstall: a plugin can be disabled and still declare its permissions,
-   * a config can be edited by mistake, and there is no uninstall event to tell
-   * the difference. Deleting on that evidence would revoke access as a side
-   * effect of a config change. `cleanupOrphanedPermissions` retires them later,
-   * on purpose.
-   *
-   * Only permissions with an `owner` are considered: a collection's CRUD seeds
-   * have no declaring package, and their lifecycle follows the collection.
-   *
-   * @param declared - Every custom permission currently declared, from every
-   *   plugin, including disabled ones.
-   */
-  /**
    * Retire the caches, when a pass actually wrote something.
    *
    * Four passes here end with the same question, and asking it four times is
@@ -1085,14 +1072,43 @@ export class PermissionSeedService extends BaseService {
     }
   }
 
+  /**
+   * Mark orphaned each live permission an owner `scope` speaks for no longer
+   * declares, and clear the mark of each marked one `declared` names again.
+   *
+   * `nextly migrate` calls this as each recorded migration applies, with the
+   * permissions its snapshot declares and the owners it speaks for
+   * (`domains/schema/migrate/permission-orphans.ts`). No start calls it: a
+   * permission leaves through a recorded change, never through the
+   * configuration a build happens to start with.
+   *
+   * Marked, not deleted, and grants are left alone (`logOrphanMarkChange`
+   * says so, naming them). `cleanupOrphanedPermissions` retires a marked
+   * permission later, on purpose.
+   *
+   * Only permissions with an `owner` are considered: core's own and an
+   * entity's built-in ones have none, and their lifecycle follows the release
+   * and the entity. A permission whose owner `scope` does not speak for keeps
+   * its state, as one a plugin's install added that no snapshot has recorded
+   * yet does.
+   *
+   * @param declared - Every permission the declaration names, whoever owns it.
+   * @param scope - The owners it speaks for: by name, and each owner of a
+   *   permission whose slug `heldSlugs` names (the point before it, where that
+   *   is a list of live permissions rather than a declaration by owner).
+   */
   async markOrphanedPermissions(
-    declared: CollectedPermission[]
+    declared: readonly { action: string; resource: string }[],
+    scope: OrphanMarkScope
   ): Promise<SeedResult> {
-    return inPermissionSweep(() => this.markOrphanedPermissionsRows(declared));
+    return inPermissionSweep(() =>
+      this.markOrphanedPermissionsRows(declared, scope)
+    );
   }
 
   private async markOrphanedPermissionsRows(
-    declared: CollectedPermission[]
+    declared: readonly { action: string; resource: string }[],
+    scope: OrphanMarkScope
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
     const { permissions } = this.tables;
@@ -1105,6 +1121,7 @@ export class PermissionSeedService extends BaseService {
       const rows = (await this.db
         .select({
           id: permissions.id,
+          slug: permissions.slug,
           action: permissions.action,
           resource: permissions.resource,
           owner: permissions.owner,
@@ -1112,11 +1129,21 @@ export class PermissionSeedService extends BaseService {
         })
         .from(permissions)) as Array<{
         id: string;
+        slug: string;
         action: string;
         resource: string;
         owner: string | null;
         orphanedAt: Date | null;
       }>;
+
+      // The owners spoken for: those named, and each owner of a permission
+      // the point before held, read from the same rows the pass walks.
+      const spokenFor = new Set(scope.owners);
+      for (const row of rows) {
+        if (row.owner && scope.heldSlugs?.has(String(row.slug))) {
+          spokenFor.add(row.owner);
+        }
+      }
 
       for (const row of rows) {
         if (!row.owner) continue;
@@ -1128,6 +1155,10 @@ export class PermissionSeedService extends BaseService {
         const isMarked = row.orphanedAt !== null;
 
         if (isDeclared === !isMarked) continue;
+        // A mark is set only for an owner the declaration speaks for; one it
+        // does not speak for may have added the permission outside it. A
+        // permission it declares is live whoever is recorded as its owner.
+        if (!isDeclared && !spokenFor.has(row.owner)) continue;
 
         result.total++;
         await writingPermissions(permissions, table =>

@@ -29,7 +29,8 @@ const CSS = `
 .nx-seo-tab{flex:none;border:0;background:transparent;padding:9px 12px;font:inherit;font-size:13px;font-weight:500;color:var(--nx-muted-foreground);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .nx-seo-tab:hover{color:var(--nx-foreground)}
 .nx-seo-tab[aria-selected="true"]{color:var(--nx-foreground);border-bottom-color:var(--nx-foreground);font-weight:600}
-.nx-seo-cnt{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--nx-warning-surface);color:var(--nx-warning-text);border:1px solid var(--nx-warning-border);font-size:12px;font-weight:600;display:inline-grid;place-items:center;line-height:1}
+/* The border in longhands, so the neutral .n count changes its colour alone. */
+.nx-seo-cnt{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--nx-warning-surface);color:var(--nx-warning-text);border-width:1px;border-style:solid;border-color:var(--nx-warning-border);font-size:12px;font-weight:600;display:inline-grid;place-items:center;line-height:1}
 .nx-seo-body{padding:20px 24px 32px}
 .nx-seo-lead{margin:0 0 16px;color:var(--nx-muted-foreground);font-size:13px}
 .nx-seo-form2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 20px;max-width:880px}
@@ -39,7 +40,8 @@ const CSS = `
 .nx-seo-help{margin:0;font-size:13px;color:var(--nx-muted-foreground);line-height:1.45}
 .nx-seo-help b{color:var(--nx-foreground);font-weight:600}
 .nx-seo-error{margin:0;font-size:13px;color:var(--nx-danger-text);font-weight:500}
-.nx-seo-mono{font-family:var(--seo-mono)!important;font-size:13px!important}
+/* Under the root, so the face and size win over a table cell's or a control's own. */
+.nx-seo .nx-seo-mono{font-family:var(--seo-mono);font-size:13px}
 .nx-seo-seg{display:inline-flex;flex-wrap:wrap;padding:3px;border-radius:9px;background:var(--nx-muted);gap:2px;width:max-content}
 .nx-seo-seg button{border:0;background:transparent;min-width:36px;padding:5px 10px;border-radius:7px;font:inherit;font-size:14px;font-weight:500;color:var(--nx-muted-foreground);cursor:pointer}
 .nx-seo-seg button[aria-pressed="true"]{background:var(--nx-card);color:var(--nx-foreground);font-weight:600;box-shadow:0 1px 2px var(--nx-shadow-color)}
@@ -64,14 +66,34 @@ const CSS = `
 .nx-seo-tbl td{padding:10px 12px;border-bottom:1px solid var(--nx-border-subtle);vertical-align:top;font-size:13px}
 .nx-seo-tbl tr:last-child td{border-bottom:0}
 .nx-seo-tname b{font-weight:600;display:block}
-.nx-seo-tname small{display:block;color:var(--nx-muted-foreground);font-size:12px}
+.nx-seo-off .nx-seo-switchcell{opacity:.6}
+.nx-seo-off .nx-seo-tname b{color:var(--nx-muted-foreground);font-weight:500}
+.nx-seo-off .nx-seo-tname small{white-space:normal;max-width:150px}
+.nx-seo-types .nx-seo-select{min-width:150px}
+.nx-seo-eg{color:var(--nx-muted-foreground);font-size:12px}
+.nx-seo-tname small{display:block;color:var(--nx-muted-foreground);font-size:12px;white-space:nowrap}
 .nx-seo-code{font-family:var(--seo-mono);font-size:12px;background:var(--nx-muted);padding:2px 6px;border-radius:4px;overflow-wrap:anywhere}
 .nx-seo-notpublic{color:var(--nx-warning-text);font-weight:600;display:inline-flex;gap:6px;align-items:center}
-.nx-seo-pattern{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nx-border);border-radius:7px;padding:4px 8px;background:var(--nx-background);color:var(--nx-foreground);cursor:pointer;font-family:var(--seo-mono);font-size:12px;max-width:100%;text-align:left;overflow-wrap:anywhere}
+.nx-seo-pattern{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nx-border);border-radius:7px;padding:4px 8px;background:var(--nx-background);color:var(--nx-foreground);cursor:pointer;font-family:var(--seo-mono);font-size:12px;max-width:100%;text-align:left;overflow-wrap:break-word}
 .nx-seo-pattern:hover{border-color:var(--nx-muted-foreground)}
 .nx-seo-pattern[aria-expanded="true"]{border-color:var(--nx-foreground)}
-.nx-seo-pattern small{font-family:inherit;font-size:12px;color:var(--nx-muted-foreground)}
+.nx-seo-pattern small{font-family:inherit;font-size:12px;color:var(--nx-muted-foreground);white-space:nowrap}
 .nx-seo-editrow td{background:var(--nx-muted)}
+.nx-seo-switchcell{width:56px}
+.nx-seo-select{appearance:none;-webkit-appearance:none;height:var(--nx-control-height-md);width:100%;max-width:170px;border:1px solid var(--nx-input);border-radius:6px;padding:0 30px 0 10px;background-color:var(--nx-background);background-image:linear-gradient(45deg,transparent 50%,var(--nx-muted-foreground) 50%),linear-gradient(135deg,var(--nx-muted-foreground) 50%,transparent 50%);background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;background-size:5px 5px;background-repeat:no-repeat;color:var(--nx-foreground);font:inherit;font-size:14px;cursor:pointer;transition:border-color .15s}
+.nx-seo-select:hover,.nx-seo-select:focus,.nx-seo-select:focus-visible{border-color:var(--nx-primary);outline:none}
+.nx-seo-select[aria-invalid="true"]{border-color:var(--nx-warning-border)}
+.nx-seo-select-fit{width:auto}
+.nx-seo-sdstate{margin-top:4px;font-size:12px;max-width:200px}
+.nx-seo-sdstate .nx-seo-linkbtn,.nx-seo-sdstate .nx-seo-help,.nx-seo-sdstate .nx-seo-warnc{font-size:12px}
+.nx-seo-mapfor{align-items:center;gap:8px}
+.nx-seo-mapgrid{display:grid;gap:6px}
+.nx-seo-mapline{display:grid;grid-template-columns:150px minmax(0,240px) 1fr;gap:6px 10px;align-items:center}
+.nx-seo-mapline .nx-seo-select{max-width:none}
+.nx-seo-notpublic svg{flex:none}
+.nx-seo-typescroll{overflow-x:auto}
+.nx-seo-typescroll .nx-seo-types{min-width:860px}
+.nx-seo-types .nx-seo-code{white-space:nowrap}
 .nx-seo-pedit{display:grid;gap:10px;max-width:760px}
 .nx-seo-vars{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .nx-seo-var{border:1px solid var(--nx-border);background:var(--nx-card);color:var(--nx-foreground);border-radius:6px;padding:3px 8px;font-family:var(--seo-mono);font-size:12px;cursor:pointer}
@@ -103,7 +125,8 @@ const CSS = `
 .nx-seo-banner b{font-weight:600}
 .nx-seo-alert{margin:12px 24px 0;padding:10px 12px;border-radius:8px;border:1px solid var(--nx-danger-border);background:var(--nx-danger-surface);color:var(--nx-danger-text);font-size:13px}
 .nx-seo-state{padding:40px 24px;color:var(--nx-muted-foreground);font-size:13px}
-.nx-seo-dialog{gap:0!important;padding:0!important;overflow:hidden;display:flex!important;flex-direction:column;max-height:calc(100dvh - 32px)}
+/* The dialog carries the root class itself; both together outrank its own layout. */
+.nx-seo.nx-seo-dialog{gap:0;padding:0;overflow:hidden;display:flex;flex-direction:column;max-height:calc(100dvh - 32px)}
 .nx-seo-dlg-head{padding:18px 48px 0 20px}
 .nx-seo-dlg-head h2{margin:0;font-size:18px;font-weight:700;letter-spacing:-.01em}
 .nx-seo-dlg-head p{margin:4px 0 0;color:var(--nx-muted-foreground);font-size:13px}
@@ -136,7 +159,7 @@ const CSS = `
 .nx-seo-prow:first-child{border-top:0}
 .nx-seo-where{min-width:0}
 .nx-seo-where b{font-weight:600;display:block;overflow-wrap:anywhere}
-.nx-seo-where .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:12px!important;overflow-wrap:anywhere}
+.nx-seo .nx-seo-where .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:12px;overflow-wrap:anywhere}
 .nx-seo-what{line-height:1.45;overflow-wrap:anywhere}
 .nx-seo-fixes{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
 @media (max-width:1100px){
@@ -155,6 +178,8 @@ const CSS = `
 .nx-seo-alert{margin:12px 16px 0}
 .nx-seo-form2{grid-template-columns:minmax(0,1fr)}
 .nx-seo-rgroup.two{grid-template-columns:minmax(0,1fr)}
+.nx-seo-typescroll .nx-seo-types{min-width:0}
+.nx-seo-types .nx-seo-code{white-space:normal}
 .nx-seo-types thead{display:none}
 .nx-seo-types tr{display:grid;gap:6px;padding:12px;border-bottom:1px solid var(--nx-border-subtle)}
 .nx-seo-types tr:last-child{border-bottom:0}
@@ -162,7 +187,11 @@ const CSS = `
 .nx-seo-types td[data-label]::before{content:attr(data-label);display:block;font-size:12px;font-weight:600;color:var(--nx-muted-foreground);margin-bottom:2px}
 .nx-seo-profile{grid-template-columns:minmax(0,1fr) auto}
 .nx-seo-profile .nx-seo-net{grid-column:1/-1}
-.nx-seo-dialog{width:calc(100% - 32px)!important}
+.nx-seo.nx-seo-dialog{width:calc(100% - 32px)}
+.nx-seo-types .nx-seo-switchcell{display:none}
+.nx-seo-mapline{grid-template-columns:minmax(0,1fr)}
+.nx-seo-select{max-width:none}
+.nx-seo-sdstate{max-width:none}
 }
 `;
 
@@ -185,6 +214,8 @@ export type IconName =
   | "lock"
   | "check"
   | "arrow"
+  | "upload"
+  | "pen"
   | "refresh";
 
 const PATHS: Record<IconName, JSX.Element> = {
@@ -217,6 +248,13 @@ const PATHS: Record<IconName, JSX.Element> = {
   ),
   check: <path d="M20 6 9 17l-5-5" />,
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  upload: (
+    <>
+      <path d="M12 15V3M7 8l5-5 5 5" />
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    </>
+  ),
+  pen: <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />,
   refresh: (
     <>
       <path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />

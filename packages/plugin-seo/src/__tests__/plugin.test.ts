@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 
+import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
 import { select, text } from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
@@ -82,16 +83,50 @@ describe("seoPlugin", () => {
     ).toEqual([
       ["GET", "/sitemap.xml", "root", true],
       ["GET", "/robots.txt", "root", true],
+      // Registered always; it answers once switched on in the settings.
+      ["GET", "/llms.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
+      // The redirects screen's routes, for those the redirects' permissions allow.
+      ["GET", "/redirects", undefined, undefined],
+      ["POST", "/redirects", undefined, undefined],
+      ["PATCH", "/redirects/:id", undefined, undefined],
+      ["DELETE", "/redirects/:id", undefined, undefined],
+      ["POST", "/redirects/import", undefined, undefined],
+      ["GET", "/not-found", undefined, undefined],
+      // What search engines received: the pages it offers, and the check,
+      // for anyone signed in.
+      ["GET", "/received/pages", undefined, undefined],
+      ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
+      // The Pages and addresses screen's list, and its save.
+      ["GET", "/pages", undefined, undefined],
+      ["POST", "/pages/seo", undefined, undefined],
     ]);
+  });
+
+  it("lists the site's addresses and saves a page's SEO only for those who manage the site's SEO", () => {
+    const routes = seoPlugin({ collections: ["pages"] }).contributes?.routes;
+    const permissionOf = (method: string, path: string) => {
+      const found = routes?.find(
+        route => route.method === method && route.path === path
+      )?.requiredPermission;
+      // The names a host that renamed nothing gives the plugin's own.
+      const scope: PluginRoutePermissionScope = {
+        plugin: "@nextlyhq/plugin-seo",
+        collection: (slug, action) => `${action}-${slug}`,
+        single: (slug, action) => `${action}-${slug}`,
+      };
+      return typeof found === "function" ? found(scope) : found;
+    };
+    expect(permissionOf("GET", "/pages")).toBe("manage-seo");
+    expect(permissionOf("POST", "/pages/seo")).toBe("manage-seo");
   });
 
   it("offers making a share image to a person who may add to the media library", () => {
@@ -106,16 +141,50 @@ describe("seoPlugin", () => {
     expect(route?.public).toBeUndefined();
   });
 
+  it("asks site-wide SEO for the redirects' and not-found log's routes, whatever an installation names those stores", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+
+    const asked = (plugin.contributes?.routes ?? [])
+      .filter(
+        ({ path }) => path.startsWith("/redirects") || path === "/not-found"
+      )
+      .map(({ method, path, requiredPermission }) => [
+        method,
+        path,
+        requiredPermission,
+      ]);
+
+    expect(asked).toEqual([
+      ["GET", "/redirects", "manage-seo"],
+      ["POST", "/redirects", "manage-seo"],
+      ["PATCH", "/redirects/:id", "manage-seo"],
+      ["DELETE", "/redirects/:id", "manage-seo"],
+      ["POST", "/redirects/import", "manage-seo"],
+      ["GET", "/not-found", "manage-seo"],
+    ]);
+  });
+
   it("omits the sitemap routes when sitemap is disabled, and keeps robots.txt", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
       "/robots.txt",
+      "/llms.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
+      "/received/pages",
+      "/received",
       "/resolve",
       "/problems",
       "/problems/check",
+      "/pages",
+      "/pages/seo",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -128,12 +197,24 @@ describe("seoPlugin", () => {
       robots: false,
     });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      // Switched on and off in the settings, not by these options.
+      "/llms.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/document",
+      "/redirects",
+      "/redirects",
+      "/redirects/:id",
+      "/redirects/:id",
+      "/redirects/import",
+      "/not-found",
+      "/received/pages",
+      "/received",
       "/resolve",
       "/problems",
       "/problems/check",
+      "/pages",
+      "/pages/seo",
     ]);
   });
 
@@ -203,7 +284,7 @@ describe("seoPlugin", () => {
 });
 
 describe("the dashboard card the plugin contributes", () => {
-  it("declares seo/issues and its Needs attention lines through contributes.dashboard", () => {
+  it("declares seo/issues and its Needs attention line through contributes.dashboard", () => {
     const plugin = seoPlugin({
       collections: ["pages", "posts"],
       sitemap: false,
@@ -213,14 +294,13 @@ describe("the dashboard card the plugin contributes", () => {
     expect(dashboard?.widgets?.map(widget => widget.id)).toEqual([
       "seo/issues",
     ]);
-    // A line per collection it extends, which carry the `seo` group.
+    // One line counting the problem list, shown to a reader of any
+    // collection SEO is added to.
     expect(dashboard?.attention?.map(item => item.id)).toEqual([
-      "seo/issues-pages",
-      "seo/issues-posts",
+      "seo/problems",
     ]);
     expect(dashboard?.attention?.map(item => item.collections)).toEqual([
-      ["pages"],
-      ["posts"],
+      ["pages", "posts"],
     ]);
   });
 
@@ -242,10 +322,10 @@ describe("the dashboard card the plugin contributes", () => {
   });
 
   it("is withheld when no collection carries the fields", () => {
-    // 🔴 A plugin registered with no collections extends nothing, so the scan
-    // has nothing to read and every count answers zero. A card there would
-    // report a clean site for a plugin that is doing nothing at all -- which is
-    // worse than no card, because it is an answer rather than an absence.
+    // 🔴 A plugin registered with no collections checks no page of one, so
+    // every count answers zero. A card there would report a clean site for a
+    // plugin that is doing nothing at all -- which is worse than no card,
+    // because it is an answer rather than an absence.
     const plugin = seoPlugin({ collections: [], sitemap: false });
 
     expect(plugin.contributes?.dashboard).toBeUndefined();

@@ -449,6 +449,19 @@ card, and `robots` from `noindex`). Blank `seo` fields fall back to the values
 you pass; caller `openGraph` / `twitter` extras win.
 
 ```ts
+import { buildMetadata, type MetadataEntry } from "nextly/runtime";
+
+// Your own read of one post by its slug, with the fields used below.
+declare function getPostBySlug(slug: string): Promise<
+  | (MetadataEntry & {
+      title: string;
+      excerpt?: string;
+      featuredImage?: { url: string };
+      publishedAt?: string;
+    })
+  | null
+>;
+
 export async function generateMetadata({
   params,
 }: {
@@ -546,7 +559,11 @@ reads uncached (and marks the render dynamic) so it never freezes stale.
 ```ts
 // app/sitemap.ts
 import { nextlySitemap, nextlyTags } from "nextly/runtime";
-import { buildSitemapUrls } from "@nextlyhq/plugin-seo";
+import { buildSitemapUrls, type SitemapServices } from "@nextlyhq/plugin-seo";
+
+// The services your app reads its collections through, and its address.
+declare const services: SitemapServices;
+const baseUrl = "https://example.com";
 
 export default nextlySitemap({
   tags: nextlyTags("posts"),

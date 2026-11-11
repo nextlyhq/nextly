@@ -41,6 +41,8 @@ vi.mock("@nextlyhq/ui", () => ({
     <>{children}</>
   ),
   TooltipContent: () => null,
+  // The rail's neutral shapes for entries not decided yet.
+  Skeleton: () => <span data-testid="skeleton" />,
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => null,

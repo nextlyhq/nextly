@@ -10,6 +10,7 @@ import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { isRecord } from "../plain-values";
 
 import { forgetDeleted, recheckSaved, type ProblemChecks } from "./check";
+import { singleKey } from "./page-types";
 
 /** The id of the document a hook was handed, as text. */
 function idOf(context: { data?: unknown }): string | undefined {
@@ -20,8 +21,8 @@ function idOf(context: { data?: unknown }): string | undefined {
 }
 
 /**
- * Check each page of the types SEO is added to after it is saved, and
- * forget it after it is deleted. After the save, so a failed check can
+ * Check each page of the types SEO is added to after it is saved, a
+ * Single's included, and forget it after it is deleted. After the save, so a failed check can
  * never undo the save, and the check reads the address the save recorded.
  */
 export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
@@ -35,6 +36,15 @@ export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
     ctx.hooks.on("afterDelete", slug, (context: { data?: unknown }) => {
       const id = idOf(context);
       if (id !== undefined) forgetDeleted(ctx, slug, id);
+    });
+  }
+  // A Single is never created or deleted by a person: its save is an
+  // update, its hooks named by its key.
+  for (const slug of checks.singles) {
+    const key = singleKey(slug);
+    ctx.hooks.on("afterUpdate", key, (context: { data?: unknown }) => {
+      const id = idOf(context);
+      if (id !== undefined) recheckSaved(ctx, checks, key, id);
     });
   }
 }

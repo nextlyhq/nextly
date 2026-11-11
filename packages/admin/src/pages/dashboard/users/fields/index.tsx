@@ -96,6 +96,7 @@ import type {
   UserFieldDefinitionRecord,
   UserFieldType,
 } from "@admin/services/userFieldsApi";
+import { UserFieldsGuard } from "./user-fields-guard";
 
 // ============================================================
 // Field Type Badge Config
@@ -900,4 +901,13 @@ const UserFieldsPage: React.FC = () => {
   );
 };
 
-export default UserFieldsPage;
+/** The page, opened only to a reader who may also see users (`UserFieldsGuard`). */
+function GuardedUserFieldsPage(): React.JSX.Element {
+  return (
+    <UserFieldsGuard>
+      <UserFieldsPage />
+    </UserFieldsGuard>
+  );
+}
+
+export default GuardedUserFieldsPage;

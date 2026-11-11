@@ -145,7 +145,11 @@ import {
 } from "./collections/components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
-import { PAGES_SLUG, pagesCollection } from "./collections/pages";
+import {
+  PAGES_CONTENT_FIELD,
+  PAGES_SLUG,
+  pagesCollection,
+} from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
@@ -193,6 +197,7 @@ import {
 } from "./default-layout/settings-single";
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
+import { DESIGN_SEO_SERVICE, designSeoService } from "./design-seo";
 import { entriesRoute, titleFieldIn } from "./entries-route";
 import type { BindingJudging } from "./fields/binding-judgement";
 import type {
@@ -243,6 +248,7 @@ import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pageActionsRoute } from "./page-actions-route";
+import type { PageBuilderContentDirectApi } from "./page-content";
 import { pageAddressRoute, pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -3639,6 +3645,41 @@ export const pageBuilder = (
         // collection's entry under its template address. Read as committed,
         // through the store every save's collision check writes.
         [CONTENT_ADDRESS_SERVICE]: () => requireContentAddresses(),
+        // What the design drawing a page says about it (its title,
+        // description and share image), for a plugin that asks about a page
+        // outside a request: worked out by the route's own derivation, over
+        // the design the route would draw, so it answers what the published
+        // page is answered with.
+        [DESIGN_SEO_SERVICE]: ctx =>
+          designSeoService({
+            nextly: async () => {
+              const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+              return (await getCachedNextly()) as unknown as PageBuilderContentDirectApi;
+            },
+            pages: {
+              collection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+              field: PAGES_CONTENT_FIELD,
+            },
+            templatesCollection:
+              ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
+            // Loaded when first asked: the renderer's Next-coupled entry is
+            // needed only once a page is asked about.
+            derive: async args => {
+              const { designMetadataFor } = await import(
+                "@nextlyhq/blocks-react/next"
+              );
+              return designMetadataFor({
+                ...args,
+                config: {
+                  // The booted Direct API the provider read through, which
+                  // the route's reads take as their reader.
+                  nextly: args.config.nextly as NonNullable<
+                    Parameters<typeof designMetadataFor>[0]["config"]["nextly"]
+                  >,
+                },
+              });
+            },
+          }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(

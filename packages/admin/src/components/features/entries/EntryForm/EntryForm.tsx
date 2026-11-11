@@ -819,9 +819,24 @@ export function EntryForm({
    * warning the meta strip it covers would have shown. And after the lock,
    * whose read-only answer it shares with every other field.
    */
+  // The edit page's place: plugins' blocks around the bar and the editor,
+  // their tabs over the field column and their sections in the panel.
+  const documentPlace = useDocumentPlace(
+    {
+      kind: "collection",
+      collection: collectionSlug,
+      entryId: entry?.id ?? null,
+    },
+    entry ?? undefined
+  );
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  // The fields a surface draws beside a takeover field leave out those a
+  // plugin's tab takes over, by the same rule as the page's own content:
+  // they are drawn, and edited, in their tab.
+  const besideFields = useContentFields(documentPlace, fieldNames, allFields);
   const renderEntryFields = useCallback(
     (excludePath: string, presentation?: EntryFieldsPresentation) =>
-      fieldsBesidePanel(allFields, excludePath, {
+      fieldsBesidePanel(besideFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
@@ -830,7 +845,7 @@ export function EntryForm({
         ...(presentation === undefined ? {} : { presentation }),
       }),
     [
-      allFields,
+      besideFields,
       savePending,
       lock.readOnly,
       mode,
@@ -1108,19 +1123,8 @@ export function EntryForm({
   // Where the docked column is on screen, it carries the id and the language
   // panel, so the field column's own copies of them step aside.
   const panelDocked = mode === "edit" && panel.docked;
-  // The edit page's place: plugins' blocks around the bar and the editor,
-  // their tabs over the field column and their sections in the panel.
-  const documentPlace = useDocumentPlace(
-    {
-      kind: "collection",
-      collection: collectionSlug,
-      entryId: entry?.id ?? null,
-    },
-    entry ?? undefined
-  );
   // The fields a plugin's tab edits are drawn in that tab, not here; every
   // field keeps its value in the form, so Save still stores them.
-  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
   const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
 
   /*

@@ -15,7 +15,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, richText, text } from "nextly";
+import { defineCollection, defineSingle, richText, text } from "nextly";
 import { createPublicContentRoute, type ContentEntry } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -57,6 +57,7 @@ function only(
   return {
     pages: async pages => new Set(pages.filter(allowed).map(pageRefKey)),
     readsType: types,
+    seesRedirects: true,
     count: async type => {
       if (!seoContext) throw new Error("no SEO plugin context");
       return seoContext.services.collections.count(type, {});
@@ -70,6 +71,7 @@ const everything: Reader = only(() => true);
 /** The checks as the plugin runs them for `posts`, with nothing set. */
 const CHECKS: ProblemChecks = {
   targets: ["posts", "notes"],
+  singles: [],
   readers: {
     readRules: readSeoRules,
     readStructuredDataRules: structuredDataFromSettings(
@@ -612,6 +614,85 @@ describe.each(getConfiguredTestDialects())(
 
       const list = await problemList(ctx, CHECKS, everything);
       expect(list.outOfDate).toBe(true);
+    });
+
+    it("checks a Single SEO is added to, on its save and in a full check", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const plugin = seoPlugin({ collections: ["posts"], singles: ["home"] });
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          {
+            ...plugin,
+            init(ctx) {
+              seen.ctx = ctx;
+              return plugin.init?.(ctx);
+            },
+          },
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            access: { read: () => true },
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            fields: [text({ name: "title" })],
+            publicAddress: "/",
+          }),
+        ],
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      seoContext = ctx;
+      await lastCatchUp();
+      const checks = { ...CHECKS, targets: ["posts"], singles: ["home"] };
+      const homeRow = (found: Record<string, unknown>[]) =>
+        found.find(row => row.holderCollection === "single:home");
+
+      // Saved with a title longer than Google shows: its save checks it.
+      await t.nextly.updateSingle({
+        slug: "home",
+        data: { title: "t".repeat(70), _overwrite: true },
+      });
+      const [saved] = await until(t, found => homeRow(found) !== undefined);
+      expect(saved).toBeDefined();
+      let list = await problemList(ctx, checks, everything);
+      const home = list.problems.filter(p => p.subject.type === "single:home");
+      expect(home.map(p => p.kind)).toContain("longTitle");
+      expect(home.find(p => p.kind === "longTitle")).toMatchObject({
+        subject: { type: "single:home", detail: "/" },
+        fix: { place: "page", tab: "seo", field: "metaTitle" },
+      });
+
+      // A full check reads it again, and forgets nothing of it.
+      await t.nextly.delete({
+        collection: PROBLEMS_SLUG,
+        id: String(homeRow(await rows(t))?.id),
+        overrideAccess: true,
+      });
+      await checkSite(ctx, checks);
+      list = await problemList(ctx, checks, everything);
+      expect(list.pagesChecked).toBe(1);
+      expect(
+        list.problems
+          .filter(p => p.subject.type === "single:home")
+          .map(p => p.kind)
+      ).toContain("longTitle");
+      // Shown only to a reader who may read it.
+      const hidden = await problemList(
+        ctx,
+        checks,
+        only(page => page.type !== "single:home")
+      );
+      expect(hidden.problems.some(p => p.subject.type === "single:home")).toBe(
+        false
+      );
     });
   }
 );

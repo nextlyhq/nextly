@@ -42,17 +42,29 @@ import type { Logger } from "../../services/shared";
  * a test that booted an instance) keeps its own: `restore` lends only a name
  * not already registered, `withdraw` takes out only what it lent, and a ledger
  * already published is left as it is.
+ *
+ * With `queue: false` no jobs queue is lent, for a write whose content expiry
+ * is recorded in the same transaction as the change itself (a first
+ * `nextly migrate` run's one commit): there is no gap between the change and
+ * its expiry for a job queued ahead to cover, and none is queued.
  */
 export async function withCommandServicesLent<T>(
   adapter: DrizzleAdapter,
   logger: Logger,
-  run: () => Promise<T>
+  run: () => Promise<T>,
+  options: { queue?: boolean } = {}
 ): Promise<T> {
+  const lending = new Container();
+  // Singletons, so each lookup during the write finds the one instance.
+  if (options.queue !== false) {
+    lending.registerSingleton(
+      "jobsRepository",
+      () => new JobsRepository(adapter)
+    );
+  }
   const lent = container.restore(
-    new Container()
+    lending
       .register("adapter", () => adapter)
-      // Singletons, so each lookup during the write finds the one instance.
-      .registerSingleton("jobsRepository", () => new JobsRepository(adapter))
       .registerSingleton("cacheRevalidator", () => createDefaultRevalidator())
       .registerSingleton(
         "collectionRegistryService",
