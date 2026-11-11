@@ -168,6 +168,15 @@ vi.mock("../commands/migrate", async importOriginal => ({
   assertAppHistoryHolds: () => Promise.resolve(),
 }));
 
+// plugins uninstall: no release has recorded the preset roles' grants on this double's
+// database, so the command is not refused for the release it runs from.
+vi.mock("../../domains/meta/preset-grants-release", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../domains/meta/preset-grants-release")
+  >()),
+  readPresetGrantsRelease: () => Promise.resolve(undefined),
+}));
+
 // plugins uninstall: what the command hands its judgement is recorded, and
 // the uninstall stops there.
 vi.mock("../commands/plugin-lifecycle", async importOriginal => ({

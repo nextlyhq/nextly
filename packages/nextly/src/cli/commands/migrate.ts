@@ -36,7 +36,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
-import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
 import { container } from "../../di/container";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
@@ -52,7 +51,6 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
-import { withPresetGrantsRecorded } from "../../domains/meta/preset-grants-release";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import {
@@ -71,6 +69,7 @@ import {
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
@@ -211,15 +210,8 @@ import {
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
-import {
-  buildWorkflowRegistry,
-  publishWorkflows,
-} from "../../domains/workflows/registry";
 import { NextlyError, describeError } from "../../errors";
-import { seedPermissionsRolesAndPresets } from "../../init/seed-permissions";
-import { getCoreVersion } from "../../plugins/core-version";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
-import { adapterForReads } from "../../shared/lib/read-transaction-scope";
 import type { UserConfig } from "../../users/config/types";
 import { CliError, exitWithError } from "../errors";
 import type { CommandContext } from "../program";
@@ -787,107 +779,6 @@ export async function runMigrate(
   } finally {
     await adapter.disconnect();
   }
-}
-
-/**
- * Phase 4 of `nextly migrate`: the permissions, declared roles and preset grants
- * (`seedPermissionsRolesAndPresets`), on the command's own connection, lent to
- * the services a grants change goes through (`withCommandServicesLent`), so the
- * cached permission answers and content reads of every running instance are
- * retired when it changes a grant.
- *
- * The configuration's attached workflows are judged and published first, as a
- * start publishes them before it seeds: the permissions a workflow's steps add
- * are seeded with their collection's, and the presets leave them out, so a
- * declared role bundling one is made with it. A configuration whose workflows
- * cannot attach is refused by every start; here it is said, its workflows'
- * permissions are left to a later run, and a role bundling one is not made yet.
- * The workflows published before are put back after.
- *
- * The preset grants are set with a record of this Nextly release, in one
- * transaction, and a release older than the one recorded leaves them as they
- * are and says so (`withPresetGrantsRecorded`); the rest of the phase runs
- * either way.
- */
-async function seedAccessOnCommandConnection(
-  pooled: DrizzleAdapter,
-  configResult: { config: SanitizedNextlyConfig; configPath?: string | null },
-  logger: Logger
-): Promise<void> {
-  // Inside a first run's commit (`writeRegistryRows`), the adapter that reads and writes on its
-  // transaction, so everything this phase writes, the grants' cache retirement and the content
-  // expiry they owe included, commits or rolls back with the registry rows and the record, and
-  // nothing waits on a second connection behind the transaction's locks.
-  // Anywhere else, the adapter itself, and each write commits as it always has.
-  const adapter = adapterForReads(pooled);
-  // Each seeder's progress is detail here; its warnings and errors are the operator's.
-  const seedLogger = {
-    debug: (message: string) => logger.debug(message),
-    info: (message: string) => logger.debug(message),
-    warn: (message: string) => logger.warn(message),
-    error: (message: string) => logger.error(message),
-  };
-  const { config } = configResult;
-  // Inside a first run's commit no job is queued ahead of a grants change, since its content
-  // expiry is recorded on the commit's transaction: an expiry that cannot be recorded there then
-  // fails the commit (`withGrantsExpiryRequired`), so the grants never commit without it.
-  const inCommit = adapter !== pooled;
-  const { withGrantsExpiryRequired } = await import(
-    "../../domains/flush-content-change"
-  );
-  const seeding = inCommit
-    ? withGrantsExpiryRequired
-    : <T>(write: () => Promise<T>): Promise<T> => write();
-  await withCommandServicesLent(
-    adapter,
-    seedLogger,
-    async () => {
-      let previous: ReturnType<typeof publishWorkflows> | undefined;
-      try {
-        // Judged as a configuration reload judges them: the configuration's own
-        // components as written, any other from the registry Phase 3 just wrote.
-        previous = publishWorkflows(
-          await buildWorkflowRegistry(config, configResult.configPath ?? null, {
-            components: config.fieldGroups ?? [],
-          })
-        );
-      } catch (error) {
-        logger.warn(
-          `The configuration's workflows could not be attached, so their permissions were not added: ${describeError(error)}`
-        );
-      }
-      try {
-        // The preset grants are set with the record of this release, in one
-        // transaction, and left as they are where a newer release set them.
-        // Inside a first run's commit that transaction joins the commit's, as
-        // a savepoint on its connection (the adapter's `transaction()` joins
-        // the one the flow is in), and the grants it changes are announced on
-        // it too, so they, the release record and the announcements commit
-        // with the registry record or not at all.
-        const release = getCoreVersion();
-        const { leftTo } = await seeding(() =>
-          withPresetGrantsRecorded(release, () =>
-            seedPermissionsRolesAndPresets({
-              adapter,
-              config,
-              logger: seedLogger,
-            })
-          )
-        );
-        if (leftTo !== undefined) {
-          logger.info(
-            `The preset roles' grants were set by Nextly ${leftTo}, newer than this release (${release}), so they were left as they were. Run \`nextly migrate\` from ${leftTo} or newer to set them again.`
-          );
-        }
-      } finally {
-        if (previous !== undefined) publishWorkflows(previous);
-      }
-    },
-    // Inside a first run's commit the content expiry a grants change owes is
-    // recorded on the transaction with the change, so no job is queued ahead
-    // of it; anywhere else the queue is lent as it always was.
-    { queue: !inCommit }
-  );
 }
 
 /**
