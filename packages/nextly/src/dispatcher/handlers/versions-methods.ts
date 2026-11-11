@@ -545,7 +545,7 @@ export function assertLabelRequestValid(
   readLabelFromBody(body);
 }
 
-function normalizeLabel(value: unknown, path: string): string | null {
+export function normalizeLabel(value: unknown, path: string): string | null {
   if (value === null) return null;
 
   if (typeof value !== "string") {
