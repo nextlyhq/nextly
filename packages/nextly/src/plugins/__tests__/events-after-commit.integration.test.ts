@@ -7,6 +7,8 @@
  *
  * @module plugins/__tests__/events-after-commit.integration.test
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -154,12 +156,27 @@ describe.each(getConfiguredTestDialects())(
         await released;
       });
       await isOpen;
-      // From this flow, which holds no transaction, with the open one's handle.
-      ctx.events.emit(PAID, { order: "o-6" }, { tx: handle! });
-      expect(heard).toEqual([]);
-      release();
-      await running;
+      // From this flow, which holds no transaction, with the open one's
+      // handle, under a context of its own the listener must still see:
+      // held by that transaction, delivered in the emitter's context.
+      const emitter = new AsyncLocalStorage<string>();
+      const seen: Array<string | undefined> = [];
+      const watch = () => {
+        seen.push(emitter.getStore());
+      };
+      getEventBus().on(PAID, watch);
+      try {
+        emitter.run("the emitting request", () =>
+          ctx.events.emit(PAID, { order: "o-6" }, { tx: handle! })
+        );
+        expect(heard).toEqual([]);
+        release();
+        await running;
+      } finally {
+        getEventBus().off(PAID, watch);
+      }
       expect(heard).toEqual([{ order: "o-6" }]);
+      expect(seen).toEqual(["the emitting request"]);
     });
 
     it("a retried attempt's event is delivered once", async () => {
