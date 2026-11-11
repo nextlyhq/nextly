@@ -368,15 +368,28 @@ async function refuseUniqueOverRepeats(args: {
   newFields: FieldDefinition[];
   wasLocalized: boolean;
   isLocalized: boolean;
+  /** The renames the admin accepted: a renamed field's values are checked under its old column. */
+  renames: readonly {
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: string;
+  }[];
+  /** The one value an added Required field gives every existing entry. */
+  fills: readonly { field: string; value: unknown }[];
 }): Promise<void> {
   const { adapter, tableName } = args;
   // A table still to be made holds no entries, so nothing can repeat yet.
   if (!(await adapter.tableExists(tableName))) return;
-  const [{ refusalsForCollectionSave }, { introspectLiveSnapshot }] =
-    await Promise.all([
-      import("../../dynamic-collections/services/save-preconditions"),
-      import("../pipeline/diff/introspect-live"),
-    ]);
+  const [
+    { refusalsForCollectionSave },
+    { introspectLiveSnapshot },
+    { readUniqueColumns },
+  ] = await Promise.all([
+    import("../../dynamic-collections/services/save-preconditions"),
+    import("../pipeline/diff/introspect-live"),
+    import("../pipeline/live-table-facts"),
+  ]);
   const onMain = (fields: FieldDefinition[], localized: boolean) => {
     const translated = new Set(resolveLocalizedFieldNames(fields, localized));
     return fields.filter(field => !translated.has(field.name));
@@ -386,16 +399,45 @@ async function refuseUniqueOverRepeats(args: {
     adapter.dialect,
     [tableName]
   );
+  const oldFields = onMain(args.oldFields, args.wasLocalized);
+  const newFields = onMain(args.newFields, args.isLocalized);
+  const byColumn = (fields: FieldDefinition[], column: string) =>
+    fields.find(field => toSnakeCase(field.name) === column);
   const refusals = await refusalsForCollectionSave({
     adapter,
     dialect: adapter.dialect,
     tableName,
-    oldFields: onMain(args.oldFields, args.wasLocalized),
-    newFields: onMain(args.newFields, args.isLocalized),
-    // A column this apply adds takes NULL in every existing entry, and NULL never repeats.
-    addedColumnBackfill: () => null,
+    oldFields,
+    newFields,
+    // Each rename the admin accepted on this table, as the fields it pairs.
+    renames: args.renames.flatMap(rename => {
+      if (rename.tableName !== tableName || rename.choice !== "rename") {
+        return [];
+      }
+      const from = byColumn(oldFields, rename.fromColumn);
+      const to = byColumn(newFields, rename.toColumn);
+      return from && to ? [{ from, to }] : [];
+    }),
+    // A column this apply adds takes NULL in every existing entry, which never repeats, unless
+    // the change fills it with one value, which every entry then shares.
+    addedColumnBackfill: field => {
+      const fill = args.fills.find(each => each.field === field.name);
+      return fill === undefined || fill.value === null
+        ? null
+        : JSON.stringify(fill.value);
+    },
     presentColumns: new Set(
       live.tables[0]?.columns.map(column => column.name) ?? []
+    ),
+    // Unique as the live table holds it, not as the previous definition says.
+    liveUniqueColumns: new Set(
+      (
+        await readUniqueColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          tableName
+        )
+      ).keys()
     ),
     only: "uniqueness",
   });
@@ -723,6 +765,8 @@ async function applyHoldingSchemaLock(
     newFields: fields,
     wasLocalized,
     isLocalized,
+    renames: change.renameResolutions,
+    fills: change.fills ?? [],
   });
   // A Required or Unique field leaving translation is pushed without its setting first, and the
   // setting is pushed once the companion transition has copied its values in, before its companion

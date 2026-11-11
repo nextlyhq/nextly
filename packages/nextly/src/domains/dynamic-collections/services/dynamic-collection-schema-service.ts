@@ -634,10 +634,13 @@ export class DynamicCollectionSchemaService {
         options?.uniqueColumns?.get(before) ??
         undefined;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
-      // index of its own to drop.
+      // index of its own to drop. Where the live table was read, it decides: a one-to-one an
+      // earlier release added by an edit was given no unique index at all, and SQLite's inline
+      // one has no name a statement can drop, so a generated name would drop what is not there.
       if (
         live === undefined &&
-        this.plannedUniqueIndexName(tableName, previous) === null
+        (options?.uniqueColumns !== undefined ||
+          this.plannedUniqueIndexName(tableName, previous) === null)
       )
         continue;
       const present = live ?? uniqueIndexNameForColumn(tableName, before);

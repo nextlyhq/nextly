@@ -82,6 +82,8 @@ export async function refusalsForCollectionSave(args: {
   newFields: readonly FieldDefinition[];
   /** A renamed field, which keeps its column and its values. */
   rename?: { from: FieldDefinition; to: FieldDefinition } | null;
+  /** Further renamed fields, where a save carries several the admin accepted. */
+  renames?: readonly { from: FieldDefinition; to: FieldDefinition }[];
   addedColumnBackfill: (field: FieldDefinition) => string | null;
   /**
    * The columns the live table has. Outside development a save writes its migration without
@@ -97,14 +99,25 @@ export async function refusalsForCollectionSave(args: {
    * one question here so both roads answer it alike.
    */
   only?: "uniqueness";
+  /**
+   * The columns the live table already keeps unique, where the caller read them. A column is made
+   * unique by this save when its field asks for it and the table does not already hold it: a
+   * one-to-one an earlier release added by an edit was recorded as one-to-one but given no unique
+   * index, so its definition alone does not say the table enforces it. Without this, the field's
+   * previous definition decides.
+   */
+  liveUniqueColumns?: ReadonlySet<string>;
 }): Promise<SaveRefusal[]> {
   const { adapter, dialect } = args;
   const table = quote(dialect, args.tableName);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
+  const renamed = [
+    ...(args.rename ? [args.rename] : []),
+    ...(args.renames ?? []),
+  ];
   const previousOf = (field: FieldDefinition) =>
-    args.rename?.to.name === field.name
-      ? args.rename.from
-      : before.get(field.name);
+    renamed.find(rename => rename.to.name === field.name)?.from ??
+    before.get(field.name);
   let rowCount: number | undefined;
   const rows = async () => {
     rowCount ??= Number(
@@ -157,8 +170,7 @@ export async function refusalsForCollectionSave(args: {
     // cardinality: one rule, so a relationship becoming one-to-one is asked as a field marked
     // unique is.
     const unique =
-      builderColumnIsUnique(field) &&
-      !(previous !== undefined && builderColumnIsUnique(previous))
+      builderColumnIsUnique(field) && !alreadyUnique(previous)
         ? await uniqueRefusal({ field, previous, col })
         : undefined;
     const length =
@@ -173,6 +185,16 @@ export async function refusalsForCollectionSave(args: {
     return [unique, length].filter(
       (refusal): refusal is SaveRefusal => refusal !== undefined
     );
+  }
+
+  /** Whether the column is unique before this save: as the live table holds it, where read. */
+  function alreadyUnique(previous: FieldDefinition | undefined): boolean {
+    if (previous === undefined) return false;
+    const held = heldColumn(previous, dialect);
+    if (args.liveUniqueColumns !== undefined && held !== undefined) {
+      return args.liveUniqueColumns.has(held);
+    }
+    return builderColumnIsUnique(previous);
   }
 
   async function uniqueRefusal(at: {

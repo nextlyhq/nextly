@@ -678,13 +678,17 @@ const COLLECTIONS_METHODS: Record<
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
       refuseChangeDefinedInCode(collection, "collection", p.collectionName);
-      const { fields } = body as { fields: unknown[] };
-      if (!fields) throw new Error("fields is required in request body");
+      const { fields: sentFields } = body as { fields: unknown[] };
+      if (!sentFields) throw new Error("fields is required in request body");
       const previewLocalized = readRequestLocalized(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { kind: "collection" });
+      assertValidFieldsPayload(sentFields, { kind: "collection" });
+      // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
+      const fields = (
+        await import("../../domains/schema/services/editor-relationship-fields")
+      ).withStoredRelationshipOptions(sentFields, collection.fields ?? []);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -778,7 +782,7 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("Collection registry not initialized");
       }
       const {
-        fields,
+        fields: sentFields,
         confirmed,
         schemaVersion,
         resolutions,
@@ -818,11 +822,11 @@ const COLLECTIONS_METHODS: Record<
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
       }
-      if (!fields) throw new Error("fields is required in request body");
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { kind: "collection" });
+      assertValidFieldsPayload(sentFields, { kind: "collection" });
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -858,6 +862,13 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // An earlier-shaped relationship the editor read is written back in its stored shape,
+          // against the row this save is checked and written against.
+          const fields = (
+            await import(
+              "../../domains/schema/services/editor-relationship-fields"
+            )
+          ).withStoredRelationshipOptions(sentFields, collection.fields ?? []);
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.

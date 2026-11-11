@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   withEditorRelationshipFields,
   withEditorRelationshipShape,
+  withStoredRelationshipOptions,
 } from "../editor-relationship-fields";
 
 const stored = (relationType?: string, target: unknown = "people") => ({
@@ -89,5 +90,126 @@ describe("withEditorRelationshipShape", () => {
         other: 1,
       },
     });
+  });
+});
+
+describe("withStoredRelationshipOptions", () => {
+  const legacy = (
+    relationType?: string,
+    extra: Record<string, unknown> = {}
+  ) => ({
+    name: "person",
+    type: "relationship",
+    options: {
+      target: "people",
+      onDelete: "cascade",
+      ...(relationType ? { relationType } : {}),
+    },
+    ...extra,
+  });
+  /** What the editor sends back for a stored field: what it read, without the options. */
+  const sentFrom = (field: Record<string, unknown>, changes = {}) => {
+    const [read] = withEditorRelationshipFields([field]);
+    const { options: _options, ...sent } = read as Record<string, unknown>;
+    return { ...sent, ...changes };
+  };
+
+  it("writes an unchanged relationship back exactly as it was stored", () => {
+    for (const relationType of [
+      undefined,
+      "oneToOne",
+      "manyToOne",
+      "oneToMany",
+    ]) {
+      const field = legacy(relationType);
+      expect(withStoredRelationshipOptions([sentFrom(field)], [field])).toEqual(
+        [field]
+      );
+    }
+  });
+
+  it("changes only the cardinality when Unique is turned off or on", () => {
+    expect(
+      withStoredRelationshipOptions(
+        [sentFrom(legacy("oneToOne"), { unique: false })],
+        [legacy("oneToOne")]
+      )
+    ).toEqual([legacy("manyToOne")]);
+    expect(
+      withStoredRelationshipOptions(
+        [sentFrom(legacy("manyToOne"), { unique: true })],
+        [legacy("manyToOne")]
+      )
+    ).toEqual([legacy("oneToOne")]);
+    expect(
+      withStoredRelationshipOptions(
+        [sentFrom(legacy(), { unique: true })],
+        [legacy()]
+      )
+    ).toEqual([legacy("oneToOne")]);
+  });
+
+  it("keeps a stored field's own Unique mark as the save sent it", () => {
+    const field = legacy("manyToOne", { unique: true });
+    expect(
+      withStoredRelationshipOptions(
+        [sentFrom(field, { unique: false })],
+        [field]
+      )
+    ).toEqual([legacy("manyToOne", { unique: false })]);
+  });
+
+  it("takes the save's other changes", () => {
+    expect(
+      withStoredRelationshipOptions(
+        [sentFrom(legacy("oneToOne"), { label: "Owner", required: true })],
+        [legacy("oneToOne")]
+      )
+    ).toEqual([legacy("oneToOne", { label: "Owner", required: true })]);
+  });
+
+  it("saves as sent a relationship pointed at another target or made to hold many", () => {
+    const retargeted = sentFrom(legacy("oneToOne"), { relationTo: "teams" });
+    const many = sentFrom(legacy("oneToOne"), { hasMany: true });
+    expect(
+      withStoredRelationshipOptions([retargeted, many], [legacy("oneToOne")])
+    ).toEqual([retargeted, many]);
+  });
+
+  it("leaves a relationship stored in the editor's shape as the save sent it", () => {
+    const current = {
+      name: "person",
+      type: "relationship",
+      relationTo: "people",
+    };
+    const sent = { ...current, unique: true };
+    expect(withStoredRelationshipOptions([sent], [current])).toEqual([sent]);
+  });
+
+  it("writes back a relationship inside a group or repeater at its own place", () => {
+    for (const type of ["group", "repeater"]) {
+      const stored = { name: "about", type, fields: [legacy("oneToOne")] };
+      const sent = {
+        name: "about",
+        type,
+        fields: [sentFrom(legacy("oneToOne"))],
+      };
+      expect(withStoredRelationshipOptions([sent], [stored])).toEqual([stored]);
+    }
+  });
+
+  it("matches by name, not by position", () => {
+    const other = {
+      name: "person",
+      type: "relationship",
+      relationTo: "people",
+    };
+    expect(
+      withStoredRelationshipOptions(
+        [{ name: "title", type: "text" }, sentFrom(legacy("oneToOne"))],
+        [legacy("oneToOne"), { name: "title", type: "text" }]
+      )
+    ).toEqual([{ name: "title", type: "text" }, legacy("oneToOne")]);
+    expect(withStoredRelationshipOptions([other], [])).toEqual([other]);
   });
 });

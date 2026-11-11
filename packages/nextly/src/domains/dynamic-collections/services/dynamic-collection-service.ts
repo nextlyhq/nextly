@@ -1631,6 +1631,10 @@ export class DynamicCollectionService extends BaseService {
             rename: this.schemaService.detectFieldRename(mainBefore, mainAfter),
             addedColumnBackfill: field =>
               this.schemaService.addedColumnBackfill(field),
+            // Unique as the live table holds it, not as the previous definition says.
+            liveUniqueColumns: new Set(
+              (await liveTable()).uniqueColumns.keys()
+            ),
             // Counts the rows a field made required would break, naming the collection.
             requiredColumns: {
               db: this.adapter.getDrizzle(),

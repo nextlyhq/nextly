@@ -1101,9 +1101,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (b.fields !== undefined) {
         // Same rules as the ui-schema.json mirror (see api/fields-payload).
         assertValidFieldsPayload(b.fields);
-        updateData.fields = b.fields;
-        updateData.schemaHash = calculateSchemaHash(b.fields);
-        schemaFields = b.fields as unknown as FieldDefinition[];
+        // An earlier-shaped relationship the editor read is written back in its stored shape.
+        const fields = (
+          await import(
+            "../../domains/schema/services/editor-relationship-fields"
+          )
+        ).withStoredRelationshipOptions(b.fields, existing.fields ?? []);
+        updateData.fields = fields;
+        updateData.schemaHash = calculateSchemaHash(fields);
+        schemaFields = fields as unknown as FieldDefinition[];
       }
 
       // The schema change and the registry row are written by one service call, because a lock has
@@ -1152,12 +1158,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!single) throw new Error("Single not found");
       refuseChangeDefinedInCode(single, "Single", slug);
 
-      const { fields } = body as { fields: unknown[] };
-      if (!fields) throw new Error("fields is required in request body");
+      const { fields: sentFields } = body as { fields: unknown[] };
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields);
+      assertValidFieldsPayload(sentFields);
+      // Planned as the save will write them: an earlier-shaped relationship in its stored shape.
+      const fields = (
+        await import("../../domains/schema/services/editor-relationship-fields")
+      ).withStoredRelationshipOptions(sentFields, single.fields ?? []);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(

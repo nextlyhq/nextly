@@ -75,12 +75,13 @@ const person = (relationType: "oneToOne" | "manyToOne", localized = false) => ({
  */
 const storedPerson = (
   relationType: "oneToOne" | "manyToOne",
-  localized = false
+  localized = false,
+  onDelete = "set null"
 ) => ({
   name: "person",
   type: "relationship",
   ...(localized ? { localized: true } : {}),
-  options: { target: PEOPLE, relationType, onDelete: "set null" },
+  options: { target: PEOPLE, relationType, onDelete },
 });
 
 const profileFields = (
@@ -140,7 +141,7 @@ async function builder(
 async function boot(
   dialect: TestDialect,
   relationType: "oneToOne" | "manyToOne",
-  options: { localized?: boolean; legacy?: boolean } = {}
+  options: { localized?: boolean; legacy?: boolean; onDelete?: string } = {}
 ): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
@@ -164,7 +165,7 @@ async function boot(
       fields: [
         { name: "title", type: "text" },
         ...(options.legacy
-          ? [storedPerson(relationType, options.localized)]
+          ? [storedPerson(relationType, options.localized, options.onDelete)]
           : []),
       ],
     }
@@ -378,6 +379,36 @@ describeEachDialect(
       expect(await refusedAsRepeat(aProfile(t, ada))).toBe(true);
     }, 120_000);
 
+    // Not yet true on any dialect: the inline UNIQUE an older release created stays, because the
+    // diff plans no removal of it (on SQLite introspection does not report it at all, its index
+    // being an internal `sqlite_autoindex_*`), so the column keeps refusing repeats after the edit,
+    // as it did before this change. Only the uniqueness this change installs (`uq_`) goes.
+    it.skip("lets a one-to-one made before this change take a repeat once it is edited into a many-to-one", async () => {
+      const t = await boot(dialect, "oneToOne", { legacy: true });
+      // The profiles' table as the Builder created it before, its one-to-one unique by an inline
+      // constraint.
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await t.adapter.executeQuery(`DROP TABLE ${q(PROFILES_TABLE)}`);
+      for (const statement of beforeThisChange.statements[dialect].filter(s =>
+        s.includes(PROFILES_TABLE)
+      )) {
+        await t.adapter.executeQuery(statement);
+      }
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada);
+      expect(await refusedAsRepeat(aProfile(t, ada))).toBe(true);
+
+      const said = await previewText(await preview(profileFields("manyToOne")));
+      expect(said).toContain(
+        `\\"person\\" is no longer one-to-one: its column will no longer be unique`
+      );
+      await apply(t, profileFields("manyToOne"));
+
+      expect(await refusedAsRepeat(aProfile(t, ada))).toBe(false);
+      expect(await personUniques(t)).toEqual([]);
+    }, 120_000);
+
     it("plans nothing for a unique email field an inline constraint enforces, and keeps it unique", async () => {
       const t = await boot(dialect, "oneToOne");
       const HANDLES = "o2o_handles";
@@ -488,6 +519,122 @@ describeEachDialect(
 
       expect(await personUniques(t)).toEqual(before);
       expect(await refusedAsRepeat(aProfile(t, ada))).toBe(true);
+    }, 120_000);
+
+    /** The profiles' `person` as the registry stores it. */
+    async function storedPersonField(
+      t: TestNextly
+    ): Promise<Record<string, unknown> | undefined> {
+      const q = (name: string) =>
+        t.adapter.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const [row] = await t.adapter.executeQuery<{ fields: unknown }>(
+        `SELECT ${q("fields")} AS ${q("fields")} FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${PROFILES}'`
+      );
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as Record<string, unknown>[];
+      return fields.find(field => field.name === "person");
+    }
+
+    /** The profiles' key on `person`, as introspection reads the live table. */
+    async function personKey(t: TestNextly) {
+      const live = await introspectLiveSnapshot(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect,
+        [PROFILES_TABLE]
+      );
+      const key = (live.tables[0]?.foreignKeys ?? []).find(
+        fk => fk.columns.join() === "person"
+      );
+      return (
+        key && {
+          referencesTable: key.referencesTable,
+          onDelete: key.onDelete,
+        }
+      );
+    }
+
+    /** The profiles' `person` as the editor reads it, sent back with `changes`. */
+    async function asTheEditorSendsIt(changes: Record<string, unknown> = {}) {
+      const read = (await (
+        (await builder(
+          "getCollection",
+          { collectionName: PROFILES },
+          undefined
+        )) as Response
+      ).json()) as { fields: Record<string, unknown>[] };
+      const opened = read.fields.find(field => field.name === "person");
+      return [
+        { name: "title", type: "text" },
+        {
+          name: "person",
+          type: "relationship",
+          relationTo: opened?.relationTo,
+          unique: opened?.unique,
+          ...changes,
+        },
+      ];
+    }
+
+    it("keeps a stored relationship's key and its delete action through an unchanged save", async () => {
+      const t = await boot(dialect, "oneToOne", {
+        legacy: true,
+        onDelete: "cascade",
+      });
+      const key = await personKey(t);
+      expect(key).toEqual({
+        referencesTable: `dc_${PEOPLE}`,
+        onDelete: "cascade",
+      });
+      const stored = await storedPersonField(t);
+
+      await apply(t, await asTheEditorSendsIt());
+
+      expect(await personKey(t)).toEqual(key);
+      expect(await storedPersonField(t)).toEqual(stored);
+    }, 120_000);
+
+    it("changes only a stored relationship's cardinality when Unique is turned off", async () => {
+      const t = await boot(dialect, "oneToOne", {
+        legacy: true,
+        onDelete: "cascade",
+      });
+      const key = await personKey(t);
+      const stored = await storedPersonField(t);
+
+      await apply(t, await asTheEditorSendsIt({ unique: false }));
+
+      expect(await personKey(t)).toEqual(key);
+      expect(await storedPersonField(t)).toEqual({
+        ...stored,
+        options: {
+          ...(stored?.options as Record<string, unknown>),
+          relationType: "manyToOne",
+        },
+      });
+      expect(await personUniques(t)).toEqual([]);
+    }, 120_000);
+
+    it("leaves a stored relationship's options behind when it is pointed at another collection", async () => {
+      const t = await boot(dialect, "oneToOne", {
+        legacy: true,
+        onDelete: "cascade",
+      });
+      await builder(
+        "createCollection",
+        {},
+        {
+          name: "o2o_teams",
+          label: "Teams",
+          fields: [{ name: "name", type: "text" }],
+        }
+      );
+
+      await apply(t, await asTheEditorSendsIt({ relationTo: "o2o_teams" }));
+
+      const stored = await storedPersonField(t);
+      expect(stored).toMatchObject({ relationTo: "o2o_teams" });
+      expect(JSON.stringify(stored)).not.toContain("cascade");
     }, 120_000);
 
     it("opens a many-to-many the earlier Builder stored exactly as it was stored", async () => {

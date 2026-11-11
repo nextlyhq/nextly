@@ -16,6 +16,10 @@
  * references rather than ids; read as either, an unchanged save would plan moving every value.
  * Both are left as they are stored.
  *
+ * A save is given back what the read added: a relationship still pointed at its stored target is
+ * written in its stored shape, its options kept and its cardinality following Unique
+ * (`withStoredRelationshipOptions`), so opening and saving it changes nothing it records.
+ *
  * @module domains/schema/services/editor-relationship-fields
  */
 
@@ -73,6 +77,139 @@ export function withEditorRelationshipFields<F>(fields: readonly F[]): F[] {
       ? (forEditor(field as StoredField) as F)
       : field
   );
+}
+
+/**
+ * The Unique mark the editor read off a stored field (`forEditor`): its own, or a one-to-one's.
+ */
+function uniqueAsRead(stored: StoredField, relationType: unknown): boolean {
+  return stored.unique === undefined
+    ? relationType === "oneToOne"
+    : stored.unique === true;
+}
+
+/**
+ * The stored options of the earlier-shaped relationship a saved field was read from, or
+ * `undefined` when it was not read from one: the stored field has no `relationTo` of its own and
+ * keeps a one-entry `options.target`, and the saved field still points at that one target, for
+ * one entry.
+ */
+function storedOptionsReadInto(
+  sent: StoredField,
+  stored: StoredField
+): Record<string, unknown> | undefined {
+  const relationships =
+    sent.type === "relationship" && stored.type === "relationship";
+  if (!relationships || stored.relationTo !== undefined) return undefined;
+  if (sent.hasMany === true) return undefined;
+  const options = stored.options;
+  if (typeof options !== "object" || options === null) return undefined;
+  const { target, relationType } = options as {
+    target?: unknown;
+    relationType?: unknown;
+  };
+  const sameTarget = typeof target === "string" && target === sent.relationTo;
+  return sameTarget && ONE_ENTRY_RELATION_TYPES.has(relationType)
+    ? (options as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * The cardinality a restored relationship is saved with. It follows the Unique mark only where the
+ * save changed it, so an unchanged save writes back exactly what was stored: a one-to-one is
+ * unique, and one no longer unique is many-to-one.
+ */
+function relationTypeAfter(
+  sent: StoredField,
+  stored: StoredField,
+  relationType: unknown
+): unknown {
+  const unique = sent.unique === true;
+  if (unique === uniqueAsRead(stored, relationType)) return relationType;
+  if (unique) return "oneToOne";
+  return relationType === "oneToOne" ? "manyToOne" : relationType;
+}
+
+/**
+ * A saved field given back the options of the earlier-shaped relationship it was read from
+ * (`storedOptionsReadInto`), or `undefined` when it was not read from one.
+ */
+function restoredRelationship(
+  sent: StoredField,
+  stored: StoredField
+): StoredField | undefined {
+  const options = storedOptionsReadInto(sent, stored);
+  if (options === undefined) return undefined;
+  const nextRelationType = relationTypeAfter(
+    sent,
+    stored,
+    options.relationType
+  );
+  const { relationTo: _target, unique: sentUnique, ...rest } = sent;
+  const sentOptions =
+    typeof sent.options === "object" && sent.options !== null
+      ? (sent.options as Record<string, unknown>)
+      : {};
+  return {
+    ...rest,
+    // A stored field with a Unique mark of its own keeps the one the save sent.
+    ...(stored.unique === undefined ? {} : { unique: sentUnique }),
+    options: {
+      ...sentOptions,
+      ...options,
+      ...(nextRelationType === undefined
+        ? {}
+        : { relationType: nextRelationType }),
+    },
+  };
+}
+
+/**
+ * The fields a save sends, each relationship the editor read from an earlier-shaped one
+ * (`withEditorRelationshipFields`) written back the way it was stored, at any depth inside groups
+ * and repeaters. Read the other way, its stored `options` would be replaced by the editor's
+ * `relationTo` and Unique mark, losing what only they record, such as its delete action. A field
+ * is matched to the stored field of the same name at the same place; one pointed at another
+ * target, or made to hold many, is saved as sent. Any other field is returned as it is.
+ *
+ * @param sent the field list a save sends
+ * @param stored the entity's stored field list the editor read
+ */
+export function withStoredRelationshipOptions<F>(
+  sent: readonly F[],
+  stored: readonly unknown[]
+): F[] {
+  const storedByName = new Map<unknown, StoredField>();
+  for (const field of stored) {
+    if (typeof field === "object" && field !== null) {
+      const named = field as StoredField;
+      if (typeof named.name === "string") storedByName.set(named.name, named);
+    }
+  }
+  return sent.map(field => {
+    if (typeof field !== "object" || field === null) return field;
+    const sentField = field as StoredField;
+    const storedField = storedByName.get(sentField.name);
+    if (storedField === undefined) return field;
+    const restored = restoredRelationship(sentField, storedField);
+    if (restored !== undefined) return restored as F;
+    if (
+      typeof sentField.type === "string" &&
+      typeHasNestedFields(sentField.type) &&
+      sentField.type === storedField.type &&
+      Array.isArray(sentField.fields) &&
+      Array.isArray(storedField.fields)
+    ) {
+      return {
+        ...sentField,
+        fields: withStoredRelationshipOptions(
+          sentField.fields,
+          storedField.fields
+        ),
+      } as F;
+    }
+    return field;
+  });
 }
 
 /**
