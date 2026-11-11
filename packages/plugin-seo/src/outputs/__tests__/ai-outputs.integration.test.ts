@@ -49,8 +49,14 @@ const body = (...children: unknown[]) => ({
 async function boot(dialect: TestDialect) {
   current = await createTestNextly({
     dialect,
+    // The Public role a real boot makes, which judges every visitor's read.
+    seedPublic: true,
     plugins: [
-      seoPlugin({ collections: ["posts"], singles: ["home"], baseUrl: SITE }),
+      seoPlugin({
+        collections: ["posts", "members"],
+        singles: ["home"],
+        baseUrl: SITE,
+      }),
     ],
     collections: [
       defineCollection({
@@ -63,15 +69,33 @@ async function boot(dialect: TestDialect) {
           text({ name: "slug" }),
           textarea({ name: "excerpt" }),
           richText({ name: "body" }),
+          // Kept from the public, and so from every copy.
+          textarea({ name: "internal", access: { read: () => false } }),
         ],
         publicAddress: "/blog/{slug}",
+      }),
+      // Pages the public may not read at all, though they have an address.
+      defineCollection({
+        slug: "members",
+        status: true,
+        access: { read: () => false },
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+        publicAddress: "/members/{slug}",
       }),
     ],
     singles: [
       defineSingle({
         slug: "home",
+        access: open,
         fields: [text({ name: "title" }), richText({ name: "intro" })],
         publicAddress: "/",
+      }),
+      // A page whose own address is the one `/blog/hello`'s copy would have.
+      defineSingle({
+        slug: "hello-notes",
+        access: open,
+        fields: [text({ name: "title" })],
+        publicAddress: "/blog/hello.md",
       }),
     ],
   });
@@ -302,6 +326,42 @@ describe.each(getConfiguredTestDialects())(
 
       await switches(t, { plainTextCopies: false });
       expect((await ask("/blog/hello.md")).body).toBe("the page");
+    });
+
+    it("holds only what the public may read: no field or page it may not", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published", {
+        excerpt: "Public words.",
+        internal: "Staff only.",
+      });
+      await t.nextly.create({
+        collection: "members",
+        data: { title: "Members", slug: "club", status: "published" },
+      });
+      await switches(t, { plainTextCopies: true });
+
+      const copy = await ask("/blog/hello.md");
+      expect(copy.body).toContain("Public words.");
+      expect(copy.body).not.toContain("Staff only.");
+      expect((await ask("/members/club.md")).body).toBe("the page");
+    });
+
+    it("leaves a page whose own address is a copy's to the site, and links the page instead", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published");
+      await t.nextly.updateSingle({
+        slug: "hello-notes",
+        data: { _overwrite: true, title: "Notes" },
+      });
+      await switches(t, { plainTextCopies: true, llmsTxt: true });
+
+      expect((await ask("/blog/hello.md")).body).toBe("the page");
+      // `/blog/hello` links the page, its copy's address being another
+      // page's; that page links its own copy.
+      const links = await llmsLinks();
+      expect(links).toContain(`${SITE}/blog/hello`);
+      expect(links).toContain(`${SITE}/blog/hello.md.md`);
+      expect(links).not.toContain(`${SITE}/blog/hello.md`);
     });
   }
 );

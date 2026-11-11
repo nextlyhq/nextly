@@ -30,6 +30,16 @@ export interface LlmsFile {
 /** `text` on one line, its line breaks and runs of space made one space. */
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 
+/**
+ * A link's address, its parentheses and spaces percent-encoded, so a page
+ * whose address holds one is linked whole rather than cut short.
+ */
+const linkAddress = (url: string): string =>
+  url.replace(
+    /[()\s]/g,
+    char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
+  );
+
 /** A link's words, with the brackets that would end it escaped. */
 const linkText = (text: string): string =>
   oneLine(text).replace(/[[\]\\]/g, match => `\\${match}`);
@@ -45,7 +55,7 @@ export function llmsTxt(file: LlmsFile): string {
   for (const entry of file.entries) {
     const description =
       entry.description === undefined ? "" : oneLine(entry.description);
-    const link = `- [${linkText(entry.title)}](${entry.url})`;
+    const link = `- [${linkText(entry.title)}](${linkAddress(entry.url)})`;
     const list = sections.get(entry.section) ?? [];
     list.push(description === "" ? link : `${link}: ${description}`);
     sections.set(entry.section, list);

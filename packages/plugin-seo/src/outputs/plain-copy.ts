@@ -19,21 +19,23 @@
  * @module outputs/plain-copy
  */
 import { isRecord, textOf } from "../plain-values";
-import { TITLE_FIELDS } from "../settings/patterns";
 
 /** A field as the type declares it, as far as a copy needs it. */
 export interface CopyField {
   name?: string;
   type: string;
   fields?: readonly CopyField[];
-  blocks?: readonly { slug: string; fields?: readonly CopyField[] }[];
-  tabs?: readonly { name?: string; fields?: readonly CopyField[] }[];
 }
 
 /** What a copy is made from. */
 export interface CopySource {
   /** The page's title, the copy's heading. */
   title?: string;
+  /**
+   * The field the title was read from, left out below the heading so it is
+   * said once; none where the title is not one of the page's fields.
+   */
+  titleField?: string;
   /** The published page, as a visitor is served it. */
   document: Readonly<Record<string, unknown>>;
   /** The fields its type declares; where unknown, only its rich text is read. */
@@ -50,9 +52,6 @@ const NOT_CONTENT: ReadonlySet<string> = new Set([
   "updatedAt",
   "_status",
 ]);
-
-/** The field names that are a page's title, which the heading already says. */
-const TITLE_NAMES: ReadonlySet<string> = new Set(TITLE_FIELDS);
 
 /** How deep into nested content a copy goes before it stops. */
 const MAX_DEPTH = 32;
@@ -224,18 +223,16 @@ function isOtherDocument(value: Record<string, unknown>): boolean {
   );
 }
 
-/** Where a field's words are collected, and how deep it is. */
+/** Where a field's words are collected, how deep it is, and what to skip. */
 interface Collecting {
   parts: string[];
   depth: number;
+  /** The top-level field the heading was taken from, said once already. */
+  titleField?: string;
 }
 
 /** Collects the words of a value held by one kind of field. */
 type FieldReader = (field: CopyField, value: unknown, at: Collecting) => void;
-
-/** A field one level below `at`, or at its level where it has no name. */
-const below = (name: string | undefined, at: Collecting): Collecting =>
-  name === undefined ? at : deeper(at);
 
 /** The next level down from `at`. */
 const deeper = (at: Collecting): Collecting => ({
@@ -255,61 +252,39 @@ const richTextField: FieldReader = (_field, value, at) => {
   if (markdown !== "") at.parts.push(markdown);
 };
 
-/**
- * A group, a row or a collapsible. A named group is handed its own values;
- * an unnamed one is handed its holder's and stays at its level, so a title
- * laid out in a row is still the heading's and not repeated.
- */
-const containerField: FieldReader = (field, value, at) => {
-  if (isRecord(value)) {
-    fieldsWords(field.fields ?? [], value, below(field.name, at));
-  }
+/** A group: its own fields, from the values nested under its name. */
+const groupField: FieldReader = (field, value, at) => {
+  if (isRecord(value)) fieldsWords(field.fields ?? [], value, deeper(at));
 };
 
-/** Tabs: each tab's fields, under the tab's name where it has one. */
-const tabsField: FieldReader = (field, value, at) => {
-  if (!isRecord(value)) return;
-  for (const tab of field.tabs ?? []) {
-    const held = tab.name === undefined ? value : value[tab.name];
-    if (isRecord(held)) {
-      fieldsWords(tab.fields ?? [], held, below(tab.name, at));
-    }
-  }
-};
-
-/** A list of items: each item's fields, in order. */
-const arrayField: FieldReader = (field, value, at) => {
+/** A repeater: each row's fields, in order. */
+const repeaterField: FieldReader = (field, value, at) => {
   for (const item of Array.isArray(value) ? value : []) {
     if (isRecord(item)) fieldsWords(field.fields ?? [], item, deeper(at));
   }
 };
 
-/** Blocks: each block's fields, by the shape its `blockType` names. */
-const blocksField: FieldReader = (field, value, at) => {
-  for (const item of Array.isArray(value) ? value : []) {
-    if (!isRecord(item)) continue;
-    const shape = field.blocks?.find(each => each.slug === item.blockType);
-    if (shape !== undefined) {
-      fieldsWords(shape.fields ?? [], item, deeper(at));
-    }
-  }
+/**
+ * A field group (formerly a component), whose fields are declared with the
+ * group rather than on the type: its rich text, wherever it holds some.
+ */
+const fieldGroupField: FieldReader = (_field, value, at) => {
+  richTextWords(value, at.parts, at.depth + 1);
 };
 
 /**
  * The field types whose value a visitor reads, and how each is read. Every
- * other type (a choice, a number, a date, a relation, a file) shows no words
- * of its own and is left out.
+ * other type (a choice, a number, a date, a relation, a file, JSON) shows no
+ * words of its own and is left out.
  */
 const FIELD_READERS: Readonly<Record<string, FieldReader>> = {
   text: wordsField,
   textarea: wordsField,
   richText: richTextField,
-  group: containerField,
-  row: containerField,
-  collapsible: containerField,
-  tabs: tabsField,
-  array: arrayField,
-  blocks: blocksField,
+  group: groupField,
+  repeater: repeaterField,
+  fieldGroup: fieldGroupField,
+  component: fieldGroupField,
 };
 
 /** The words of each of `fields` in `document`, in their order. */
@@ -321,15 +296,9 @@ function fieldsWords(
   if (at.depth > MAX_DEPTH) return;
   for (const field of fields) {
     const read = FIELD_READERS[field.type];
-    if (read === undefined) continue;
-    // A field with no name (a row, a collapsible, unnamed tabs) lays its
-    // fields out at this level, so it is handed this level's values.
-    if (field.name === undefined) {
-      read(field, document, at);
-      continue;
-    }
+    if (read === undefined || field.name === undefined) continue;
     if (NOT_CONTENT.has(field.name)) continue;
-    if (at.depth === 0 && TITLE_NAMES.has(field.name)) continue;
+    if (at.depth === 0 && field.name === at.titleField) continue;
     read(field, document[field.name], at);
   }
 }
@@ -363,7 +332,13 @@ export function plainCopyOf(source: CopySource): string {
       if (!NOT_CONTENT.has(name)) richTextWords(value, parts, 0);
     }
   } else {
-    fieldsWords(source.fields, source.document, { parts, depth: 0 });
+    fieldsWords(source.fields, source.document, {
+      parts,
+      depth: 0,
+      ...(source.titleField === undefined
+        ? {}
+        : { titleField: source.titleField }),
+    });
   }
   return `${parts.join("\n\n")}\n`;
 }

@@ -74,6 +74,22 @@ describe("llms.txt", () => {
     );
   });
 
+  it("links an address holding parentheses or spaces whole", () => {
+    const file = llmsTxt({
+      name: "Acme",
+      entries: [
+        {
+          section: "Pages",
+          title: "FAQ",
+          url: "https://acme.example/docs/faq)(x) y",
+        },
+      ],
+    });
+    expect(file).toContain(
+      "- [FAQ](https://acme.example/docs/faq%29%28x%29%20y)"
+    );
+  });
+
   it("is the heading alone where nothing is listed", () => {
     expect(llmsTxt({ name: "Acme", entries: [] })).toBe("# Acme\n");
   });

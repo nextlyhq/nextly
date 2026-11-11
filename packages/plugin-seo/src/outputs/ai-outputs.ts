@@ -12,12 +12,20 @@
  */
 import {
   addressOfRequest,
+  getCachedNextly,
+  NextlyError,
   type PluginContext,
   type PluginProxyHandler,
 } from "@nextlyhq/plugin-sdk";
 
-import { addressRecordReady } from "../address-record/catch-up";
-import { documentsIn, singleIn } from "../languages/versions";
+import {
+  addressRecordReady,
+  retryFailedCatchUp,
+} from "../address-record/catch-up";
+import {
+  addressHolders,
+  withAddressHolders,
+} from "../address-record/participant";
 import { isRecord, textOf } from "../plain-values";
 import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
@@ -99,10 +107,19 @@ export async function llmsTxtOf(
       : { collections: config.collections }),
   });
   const sections = await sectionsOf(ctx, pages);
-  const entries: LlmsEntry[] = pages.map(page => ({
+  // Each page's copy, where copies are on and no page holds its address.
+  const copies =
+    rules.plainTextCopies === true
+      ? pages.map(page => copyAddressOf(page.loc))
+      : [];
+  const taken = await copiesTaken(ctx, copies);
+  const entries: LlmsEntry[] = pages.map((page, at) => ({
     section: sections.get(page.holder.collection) ?? SINGLES_SECTION,
     title: page.title ?? page.path,
-    url: rules.plainTextCopies === true ? copyAddressOf(page.loc) : page.loc,
+    url:
+      copies[at] !== undefined && !taken.has(copies[at])
+        ? copies[at]
+        : page.loc,
     ...(page.description === undefined
       ? {}
       : { description: page.description }),
@@ -136,27 +153,51 @@ async function fieldsOf(
     : undefined;
 }
 
-/** The published page a listed page is, as a visitor is served it. */
+/**
+ * The published page a listed page is, read as a visitor with no session
+ * reads it: the type's and each field's read access decide what is in it,
+ * so a copy never holds more than the public may read. None where the
+ * public may not read the page at all.
+ */
 async function documentOf(
-  ctx: PluginContext,
   page: ListedPage
 ): Promise<Record<string, unknown> | undefined> {
   const { collection, id } = page.holder;
-  if (collection.startsWith("single:")) {
-    const document = await singleIn(
-      collection.slice("single:".length),
-      page.language
-    );
-    return document ?? undefined;
+  try {
+    const nextly = await getCachedNextly();
+    if (collection.startsWith("single:")) {
+      const document: unknown = await nextly.findSingle({
+        slug: collection.slice("single:".length),
+        createIfMissing: false,
+        overrideAccess: false,
+        status: "published",
+        depth: 1,
+        locale: page.language,
+      });
+      return isRecord(document) ? document : undefined;
+    }
+    const result = await nextly.find({
+      collection,
+      where: { id: { equals: id } },
+      overrideAccess: false,
+      status: "published",
+      depth: 1,
+      limit: 1,
+      locale: page.language,
+    });
+    const [document] = (result.items as unknown[]).filter(isRecord);
+    return document;
+  } catch (error) {
+    // A page the public may not read, or no longer finds, has no copy.
+    if (
+      NextlyError.isCode(error, "FORBIDDEN") ||
+      NextlyError.isCode(error, "AUTH_REQUIRED") ||
+      NextlyError.isCode(error, "NOT_FOUND")
+    ) {
+      return undefined;
+    }
+    throw error;
   }
-  return (
-    await documentsIn(
-      ctx,
-      { kind: "collection", slug: collection },
-      [id],
-      page.language
-    )
-  ).get(id);
 }
 
 /**
@@ -186,19 +227,53 @@ async function copyOf(
   ctx: PluginContext,
   page: ListedPage
 ): Promise<string | null> {
-  const document = await documentOf(ctx, page);
+  const document = await documentOf(page);
   if (document === undefined) return null;
-  // The page's own title, as the page shows it; its head's where it has none.
+  // The page's own title, as the page shows it, and the field it is in;
+  // its head's where it has none.
+  const titleField = TITLE_FIELDS.find(
+    name => textOf(document[name]) !== undefined
+  );
   const title =
-    TITLE_FIELDS.map(name => textOf(document[name])).find(
-      value => value !== undefined
-    ) ?? page.title;
+    titleField === undefined ? page.title : textOf(document[titleField]);
   const fields = await fieldsOf(ctx, page.holder.collection);
   return plainCopyOf({
     ...(title === undefined ? {} : { title }),
+    ...(titleField === undefined ? {} : { titleField }),
     document,
     ...(fields === undefined ? {} : { fields }),
   });
+}
+
+/**
+ * Which of `copies`, copy addresses, a page of the site holds itself, such
+ * as a page whose address is `/guide.md`: that page is served there, so no
+ * copy is, and none is linked. One read of the record per language.
+ */
+async function copiesTaken(
+  ctx: PluginContext,
+  copies: readonly string[]
+): Promise<Set<string>> {
+  const byLanguage = new Map<string, { copy: string; path: string }[]>();
+  for (const copy of copies) {
+    const address = await addressOfRequest(new URL(copy));
+    if (address === undefined) continue;
+    const list = byLanguage.get(address.locale) ?? [];
+    list.push({ copy, path: address.path });
+    byLanguage.set(address.locale, list);
+  }
+  const taken = new Set<string>();
+  for (const [language, asked] of byLanguage) {
+    const paths = asked.map(each => each.path);
+    await withAddressHolders(ctx, language, paths, async () => {
+      for (const { copy, path } of asked) {
+        if ((await addressHolders(ctx, path, language)).length > 0) {
+          taken.add(copy);
+        }
+      }
+    });
+  }
+  return taken;
 }
 
 /**
@@ -225,10 +300,12 @@ async function plainCopyAt(
       ? {}
       : { collections: config.collections }),
   });
-  // One address per copy: the one the page's own address gives.
+  // One address per copy: the one the page's own address gives, and only
+  // where no page of the site's holds that address itself.
   if (
     page === null ||
-    new URL(copyAddressOf(page.loc)).pathname !== url.pathname
+    new URL(copyAddressOf(page.loc)).pathname !== url.pathname ||
+    (await copiesTaken(ctx, [url.href])).size > 0
   ) {
     return null;
   }
@@ -252,8 +329,12 @@ export function plainCopyProxyHandler(
       const url = new URL(request.url);
       if (!url.pathname.endsWith(".md")) return;
       // While the address record catches up, a page may not hold its address
-      // yet: the request passes to the site as if no copy were served.
-      if (!addressRecordReady()) return;
+      // yet: the request passes to the site as if no copy were served, and a
+      // catch-up that failed is tried again.
+      if (!addressRecordReady()) {
+        retryFailedCatchUp();
+        return;
+      }
       const copy = await plainCopyAt(ctx, url, config);
       if (copy === null) return;
       return {

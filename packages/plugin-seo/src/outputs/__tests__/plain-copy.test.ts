@@ -4,6 +4,17 @@
  * reads: not the page's SEO, its address, its bookkeeping, or the fields that
  * hold choices, numbers or other documents.
  */
+import {
+  fieldGroup,
+  group,
+  number,
+  relationship,
+  repeater,
+  richText,
+  select,
+  text,
+  textarea,
+} from "nextly";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,7 +24,7 @@ import {
   plainCopyOf,
 } from "../plain-copy";
 
-const text = (value: string) => ({ type: "text", text: value, format: 0 });
+const text_ = (value: string) => ({ type: "text", text: value, format: 0 });
 const paragraph = (...children: unknown[]) => ({ type: "paragraph", children });
 const rich = (...children: unknown[]) => ({
   root: { type: "root", children },
@@ -22,32 +33,32 @@ const rich = (...children: unknown[]) => ({
 describe("rich text as Markdown", () => {
   it("writes each kind of block as Markdown, in order", () => {
     const value = rich(
-      { type: "heading", tag: "h2", children: [text("Why it works")] },
+      { type: "heading", tag: "h2", children: [text_("Why it works")] },
       paragraph(
-        text("Read "),
+        text_("Read "),
         {
           type: "link",
           url: "https://example.com/guide",
-          children: [text("the guide")],
+          children: [text_("the guide")],
         },
-        text(" first.")
+        text_(" first.")
       ),
       {
         type: "list",
         listType: "bullet",
         children: [
-          { type: "listitem", children: [text("One")] },
+          { type: "listitem", children: [text_("One")] },
           {
             type: "listitem",
             children: [
-              text("Two"),
+              text_("Two"),
               {
                 type: "list",
                 listType: "number",
                 start: 3,
                 children: [
-                  { type: "listitem", children: [text("Two a")] },
-                  { type: "listitem", children: [text("Two b")] },
+                  { type: "listitem", children: [text_("Two a")] },
+                  { type: "listitem", children: [text_("Two b")] },
                 ],
               },
             ],
@@ -56,9 +67,13 @@ describe("rich text as Markdown", () => {
       },
       {
         type: "quote",
-        children: [text("Said once"), { type: "linebreak" }, text("and again")],
+        children: [
+          text_("Said once"),
+          { type: "linebreak" },
+          text_("and again"),
+        ],
       },
-      { type: "code", language: "ts", children: [text("const a = 1;")] },
+      { type: "code", language: "ts", children: [text_("const a = 1;")] },
       { type: "horizontalrule" },
       {
         type: "image",
@@ -84,7 +99,7 @@ describe("rich text as Markdown", () => {
   it("writes a table's rows, the first as its header", () => {
     const cell = (value: string) => ({
       type: "tablecell",
-      children: [paragraph(text(value))],
+      children: [paragraph(text_(value))],
     });
     const value = rich({
       type: "table",
@@ -122,44 +137,27 @@ describe("rich text as Markdown", () => {
 });
 
 describe("a page's plain-text copy", () => {
+  // The fields as a site declares them, through Nextly's own factories.
   const fields = [
-    { name: "title", type: "text" },
-    { name: "slug", type: "text" },
-    { name: "excerpt", type: "textarea" },
-    { name: "category", type: "select" },
-    { name: "views", type: "number" },
-    { name: "author", type: "relationship" },
-    { name: "body", type: "richText" },
-    {
+    text({ name: "title" }),
+    text({ name: "slug" }),
+    textarea({ name: "excerpt" }),
+    select({ name: "category", options: [{ label: "News", value: "news" }] }),
+    number({ name: "views" }),
+    relationship({ name: "author", relationTo: "users" }),
+    richText({ name: "body" }),
+    repeater({
       name: "faq",
-      type: "array",
-      fields: [
-        { name: "question", type: "text" },
-        { name: "answer", type: "richText" },
-      ],
-    },
-    {
-      name: "hero",
-      type: "group",
-      fields: [{ name: "tagline", type: "text" }],
-    },
-    {
-      name: "sections",
-      type: "blocks",
-      blocks: [
-        { slug: "callout", fields: [{ name: "note", type: "textarea" }] },
-      ],
-    },
-    {
-      name: "seo",
-      type: "group",
-      fields: [{ name: "metaTitle", type: "text" }],
-    },
+      fields: [text({ name: "question" }), richText({ name: "answer" })],
+    }),
+    group({ name: "hero", fields: [text({ name: "tagline" })] }),
+    group({ name: "seo", fields: [text({ name: "metaTitle" })] }),
   ];
 
   it("is the title as a heading, then each field's words in the order the type declares them", () => {
     const copy = plainCopyOf({
       title: "Hello world",
+      titleField: "title",
       fields,
       document: {
         id: "7",
@@ -169,10 +167,9 @@ describe("a page's plain-text copy", () => {
         category: "news",
         views: 42,
         author: { id: "1", name: "Sam", createdAt: "2026-01-01" },
-        body: rich(paragraph(text("The body."))),
-        faq: [{ question: "Why?", answer: rich(paragraph(text("Because."))) }],
+        body: rich(paragraph(text_("The body."))),
+        faq: [{ question: "Why?", answer: rich(paragraph(text_("Because."))) }],
         hero: { tagline: "Say hello" },
-        sections: [{ blockType: "callout", note: "Mind the gap." }],
         seo: { metaTitle: "Hello | Acme" },
         createdAt: "2026-01-01",
         updatedAt: "2026-01-02",
@@ -186,7 +183,6 @@ describe("a page's plain-text copy", () => {
         "Why?",
         "Because.",
         "Say hello",
-        "Mind the gap.",
       ].join("\n\n") + "\n"
     );
   });
@@ -194,6 +190,7 @@ describe("a page's plain-text copy", () => {
   it("leaves out the address, the SEO group, choices, numbers and other documents", () => {
     const copy = plainCopyOf({
       title: "T",
+      titleField: "title",
       fields,
       document: {
         title: "T",
@@ -207,27 +204,29 @@ describe("a page's plain-text copy", () => {
     expect(copy).toBe("# T\n");
   });
 
-  it("says the title once where a row lays it out, and reads a named tab's fields", () => {
+  it("leaves out only the field the heading was taken from", () => {
+    const copy = plainCopyOf({
+      title: "Rockets",
+      titleField: "title",
+      fields: [
+        text({ name: "title" }),
+        text({ name: "heading" }),
+        text({ name: "name" }),
+      ],
+      document: { title: "Rockets", heading: "Up we go", name: "Model 3" },
+    });
+    expect(copy).toBe("# Rockets\n\nUp we go\n\nModel 3\n");
+  });
+
+  it("reads the rich text of a field group, whose fields are declared elsewhere", () => {
     const copy = plainCopyOf({
       title: "T",
-      fields: [
-        {
-          type: "row",
-          fields: [
-            { name: "title", type: "text" },
-            { name: "kicker", type: "text" },
-          ],
-        },
-        {
-          type: "tabs",
-          tabs: [
-            { name: "intro", fields: [{ name: "lead", type: "textarea" }] },
-          ],
-        },
-      ],
-      document: { title: "T", kicker: "New", intro: { lead: "Lead words." } },
+      fields: [fieldGroup({ name: "cta", fieldGroup: "call-to-action" })],
+      document: {
+        cta: { label: "x", body: rich(paragraph(text_("Act now."))) },
+      },
     });
-    expect(copy).toBe("# T\n\nNew\n\nLead words.\n");
+    expect(copy).toBe("# T\n\nAct now.\n");
   });
 
   it("reads rich text wherever it is when the type's fields are not known", () => {
@@ -236,8 +235,8 @@ describe("a page's plain-text copy", () => {
       document: {
         title: "T",
         slug: "kept-out",
-        body: rich(paragraph(text("Found."))),
-        seo: { description: rich(paragraph(text("Not content."))) },
+        body: rich(paragraph(text_("Found."))),
+        seo: { description: rich(paragraph(text_("Not content."))) },
       },
     });
     expect(copy).toBe("# T\n\nFound.\n");

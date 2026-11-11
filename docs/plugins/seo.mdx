@@ -392,12 +392,19 @@ Settings > Connections**. Few tools read them today, so neither is on by default
 - **Plain-text copies** add a text version of each page the sitemap lists, at the page's
   address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.html.md` for
   the home page. The copy is the page's title as a heading, then the words of its text,
-  long text and rich text fields, in the order its type declares them, with rich text's
-  headings, lists, links, quotes, code, tables and images written as Markdown. A page's SEO
+  long text and rich text fields, in the order its type declares them, those inside its
+  groups and repeaters included, with rich text's headings, lists, links, quotes, code,
+  tables and images written as Markdown. A field group's rich text is read too. A page's SEO
   fields, its address, fields holding a choice, a number or a date, and other documents
   read with it, such as an author, are left out. Each copy is served as
   `text/markdown; charset=utf-8` and names its page as canonical in a `Link` header, so
   search engines keep listing the page. With copies on, `/llms.txt` links each page's copy.
+
+A copy is read as a visitor with no session reads the page: the Public role's grants, the
+type's read rule and each field's read rule decide what is in it, so a field kept from the
+public is never in a copy, and a page the public may not read has none. Where a page of the
+site already has a copy's address, such as a page at `/guide.md`, that page is served there
+and no copy is, and `/llms.txt` links the page itself.
 
 Every reader gets the same answer: neither output looks at who is asking. Neither changes a
 page either: llms.txt is its own file, and a copy is answered only at a copy's address. A
