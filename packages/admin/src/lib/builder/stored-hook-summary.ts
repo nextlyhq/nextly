@@ -114,35 +114,46 @@ function named(value: unknown): string {
     : NOT_SET_IN_SENTENCE;
 }
 
+type HookConfig = Record<string, unknown>;
+
 /**
- * What each kind does to a write, from its stored settings. Worded from the
- * server's behaviour for that kind, which runs with the stored values as they
- * are: no default is assumed for a setting that is missing.
+ * What each kind does to a write, from its stored settings, one sentence per
+ * kind. Worded from the server's behaviour for that kind, which runs with the
+ * stored values as they are: no default is assumed for a setting that is
+ * missing.
  */
-function describeKnown(
-  hookId: string,
-  config: Record<string, unknown>
-): string {
-  switch (hookId) {
-    case "auto-slug": {
-      const target = named(config.targetField);
-      const source = named(config.sourceField);
-      return config.overwriteExisting === true
-        ? `Fills ${target} from ${source}, replacing any value already there.`
-        : `Fills ${target} from ${source}, unless ${target} already has a value.`;
-    }
-    case "audit-fields":
-      return `Records who created an entry in ${named(config.createdByField)}, and who last changed it in ${named(config.updatedByField)}.`;
-    case "unique-validation": {
-      const ignoringCase =
-        config.caseInsensitive === true ? ", ignoring case" : "";
-      const message =
-        typeof config.errorMessage === "string" && config.errorMessage !== ""
-          ? `, saying "${config.errorMessage}"`
-          : "";
-      return `Refuses an entry whose ${named(config.field)} another entry already uses${ignoringCase}${message}.`;
-    }
-    default:
-      return getPrebuiltHook(hookId)?.description ?? "";
-  }
+const DESCRIBE_KIND: Record<string, (config: HookConfig) => string> = {
+  "auto-slug": config => {
+    const target = named(config.targetField);
+    const source = named(config.sourceField);
+    return config.overwriteExisting === true
+      ? `Fills ${target} from ${source}, replacing any value already there.`
+      : `Fills ${target} from ${source}, unless ${target} already has a value.`;
+  },
+  "audit-fields": config =>
+    `Records who created an entry in ${named(config.createdByField)}, and who last changed it in ${named(config.updatedByField)}.`,
+  "unique-validation": config =>
+    `Refuses an entry whose ${named(config.field)} another entry already uses${ignoringCase(config)}${refusalMessage(config)}.`,
+};
+
+function ignoringCase(config: HookConfig): string {
+  return config.caseInsensitive === true ? ", ignoring case" : "";
+}
+
+function refusalMessage(config: HookConfig): string {
+  const message = config.errorMessage;
+  return typeof message === "string" && message !== ""
+    ? `, saying "${message}"`
+    : "";
+}
+
+/**
+ * A kind this admin provides but has no sentence for falls back to the kind's
+ * own description, so a kind added to the registry still reads as something.
+ */
+function describeKnown(hookId: string, config: HookConfig): string {
+  // Own keys only: an id such as "constructor" must not reach Object's.
+  return Object.hasOwn(DESCRIBE_KIND, hookId)
+    ? DESCRIBE_KIND[hookId](config)
+    : (getPrebuiltHook(hookId)?.description ?? "");
 }

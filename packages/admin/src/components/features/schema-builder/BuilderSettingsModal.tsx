@@ -171,6 +171,34 @@ function computeInitialValues(
   };
 }
 
+/**
+ * What the dialog says in each mode: creating names the kind, editing names the
+ * entity by its singular name, and a code-first entity is said to be read-only.
+ */
+function dialogWording(
+  mode: "create" | "edit",
+  readOnly: boolean,
+  kindLabel: string,
+  singularName: string | undefined
+): { title: string; description: string; primaryLabel: string } {
+  if (mode === "create") {
+    return {
+      title: `New ${kindLabel}`,
+      description: readOnly
+        ? `This ${kindLabel} is defined in code and shown read-only.`
+        : `Set up a new ${kindLabel}`,
+      primaryLabel: "Continue",
+    };
+  }
+  return {
+    title: `${singularName || "Untitled"} settings`,
+    description: readOnly
+      ? `This ${kindLabel} is defined in code and shown read-only.`
+      : `Update settings for this ${kindLabel}`,
+    primaryLabel: "Save",
+  };
+}
+
 export function BuilderSettingsModal({
   open,
   mode,
@@ -187,17 +215,12 @@ export function BuilderSettingsModal({
   const [tab, setTab] = useState<"basics" | "advanced" | "hooks">("basics");
   const hookCount = storedHooks?.length ?? 0;
 
-  const kindLabel = BUILDER_KIND_NOUN[config.kind];
-  const title =
-    mode === "create"
-      ? `New ${kindLabel}`
-      : `${values.singularName || "Untitled"} settings`;
-  const description = readOnly
-    ? `This ${kindLabel} is defined in code and shown read-only.`
-    : mode === "create"
-      ? `Set up a new ${kindLabel}`
-      : `Update settings for this ${kindLabel}`;
-  const primaryLabel = mode === "create" ? "Continue" : "Save";
+  const { title, description, primaryLabel } = dialogWording(
+    mode,
+    readOnly,
+    BUILDER_KIND_NOUN[config.kind],
+    values.singularName
+  );
 
   return (
     <Dialog open={open} onOpenChange={next => !next && onCancel()}>
