@@ -61,17 +61,22 @@ const adapter = {
   }),
 };
 
+/**
+ * Clear `tableName`'s leftover. `plannedJunctions` are the junctions the create will build, and
+ * `generatedJunctions` those of them the naming rule generates: all of them unless a test says.
+ */
 function clear(
   kind: "fieldGroup" | "single",
   tableName: string,
-  plannedJunctions: string[] = []
+  plannedJunctions: string[] = [],
+  generatedJunctions: string[] = plannedJunctions
 ) {
   return clearLeftoverStorage({
     adapter,
     kind,
     slug: "card",
     tableName,
-    makesJunctionTables: kind === "single",
+    generatedJunctions,
     plannedJunctions,
     ownedElsewhere: async () => live.elsewhere,
     logger: { info: () => {} },
@@ -135,7 +140,7 @@ describe("clearLeftoverStorage", () => {
       "posts_id",
     ]);
 
-    await clear("single", "single_home");
+    await clear("single", "single_home", ["dc_posts_single_home_picks"]);
 
     expect(dropped).toEqual([
       "dc_posts_single_home_picks",
@@ -160,7 +165,9 @@ describe("clearLeftoverStorage", () => {
     live.columns.set("dc_posts_single_home_picks", ["id", "single_home_id"]);
     live.rows.set("dc_posts_single_home_picks", 1);
 
-    await expect(clear("single", "single_home")).rejects.toMatchObject({
+    await expect(
+      clear("single", "single_home", ["dc_posts_single_home_picks"])
+    ).rejects.toMatchObject({
       publicMessage: expect.stringContaining(
         '"dc_posts_single_home_picks" (1 row)'
       ),
@@ -213,7 +220,7 @@ describe("clearLeftoverStorage", () => {
     live.columns.set("home_links", ["id", "post_id"]);
 
     await expect(
-      clear("single", "single_home", ["home_links"])
+      clear("single", "single_home", ["home_links"], [])
     ).rejects.toMatchObject({
       publicMessage: expect.stringContaining('"home_links" stands'),
     });
@@ -226,6 +233,23 @@ describe("clearLeftoverStorage", () => {
 
     await expect(clear("fieldGroup", "comp_card")).rejects.toMatchObject({
       publicMessage: expect.stringContaining('"card_report"'),
+    });
+    expect(dropped).toEqual([]);
+  });
+
+  // A host table may carry the leftover's name in its own and key it the way a junction would: it is
+  // not one of the names this create generates, so it is someone else's.
+  it("refuses, dropping nothing, a host table named and keyed like a junction it does not generate", async () => {
+    live.tables = new Set(["single_home"]);
+    live.referencing = ["audit_single_home_events"];
+    live.columns.set("audit_single_home_events", ["id", "single_home_id"]);
+
+    await expect(
+      clear("single", "single_home", ["dc_posts_single_home_picks"])
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        '"audit_single_home_events" references'
+      ),
     });
     expect(dropped).toEqual([]);
   });

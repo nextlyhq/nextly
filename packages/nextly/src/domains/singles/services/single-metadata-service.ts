@@ -114,6 +114,14 @@ import type { SingleRegistryService } from "./single-registry-service";
  */
 export type CreateSingleInput = Omit<DynamicSingleInsert, "migrationStatus">;
 
+/** Whether a field names its own junction table (`options.junctionTable`) rather than leave it to the rule. */
+function namesItsJunction(field: object): boolean {
+  const options = "options" in field ? field.options : undefined;
+  if (typeof options !== "object" || options === null) return false;
+  const named = "junctionTable" in options ? options.junctionTable : undefined;
+  return typeof named === "string" && named !== "";
+}
+
 /** What the caller gets back: the row, and how far the schema change actually got. */
 export interface CreateSingleResult {
   record: DynamicSingleRecord;
@@ -520,8 +528,12 @@ export class SingleMetadataService {
       slug: input.slug,
       tableName: input.tableName,
       // A Single's many-to-many fields keep their links in junction tables of its own, by the names
-      // this request's fields give them.
-      makesJunctionTables: true,
+      // this request's fields give them; only those the naming rule generates are known to be its
+      // own, a name `options.junctionTable` gives may be anyone's.
+      generatedJunctions: junctionTablesOf(
+        input.tableName,
+        (input.fields ?? []).filter(field => !namesItsJunction(field))
+      ),
       plannedJunctions: junctionTablesOf(input.tableName, input.fields ?? []),
       // Its field-group rows live in the shared field-group tables, naming its table as their
       // parent, and `dropSingleStorage` deletes them: they count as the leftover's content.

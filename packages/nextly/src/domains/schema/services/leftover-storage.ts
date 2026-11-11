@@ -61,13 +61,16 @@ export interface ClearLeftoverStorageArgs {
    */
   dropFamily: () => Promise<void>;
   /**
-   * Whether this kind's create makes junction tables, which reference its main table. A field
-   * group makes none (a component row keeps a many-to-many as a list of its own), so every table
-   * referencing a field group's leftover belongs to something else.
+   * The junction tables this create generates by the junction naming rule
+   * (`junctionTableNameBetween`), from its own fields: the only names a table of the leftover's
+   * family can carry and be known to be one. A field group generates none (a component row keeps
+   * a many-to-many as a list of its own), so for it every table referencing the leftover belongs
+   * to something else, as does any table under another name, however it is named or keyed.
    */
-  makesJunctionTables: boolean;
+  generatedJunctions?: readonly string[];
   /**
-   * The junction tables this create is about to build, by the names its own fields give them. A
+   * The junction tables this create is about to build, by the names its own fields give them,
+   * a name `options.junctionTable` gives included. A
    * leftover junction can outlive its main table (PostgreSQL's CASCADE strips the junction's
    * foreign key and leaves the table), where nothing references the main table any more, so the
    * names the create will build are looked at directly.
@@ -96,21 +99,20 @@ const KIND_NAMES: Record<ClearLeftoverStorageArgs["kind"], string> = {
 };
 
 /**
- * Whether `candidate`, a table referencing `tableName`, is a junction table a create generated for
- * it: named as `junctionTableNameBetween` names one, from both tables sorted and the field, and
- * holding the column a junction keys its source by. Anything else referencing a leftover table is
- * someone else's (a schema extension may reference a `comp_` table), and is never dropped.
+ * Whether `candidate` is a junction table of the leftover's own: one of the exact names this
+ * create generates for its own fields, holding the column a junction keys its source by. Anything
+ * else referencing a leftover table, or standing where a junction goes, is someone else's (a
+ * schema extension may reference a `comp_` table, a host table may carry the leftover's name in
+ * its own), and is never dropped.
  */
 async function isGeneratedJunctionOf(
   db: unknown,
   dialect: SupportedDialect,
   tableName: string,
-  candidate: string
+  candidate: string,
+  generated: readonly string[]
 ): Promise<boolean> {
-  const named =
-    candidate.startsWith(`${tableName}_`) ||
-    candidate.includes(`_${tableName}_`);
-  if (!named) return false;
+  if (!generated.includes(candidate)) return false;
   const sourceColumn = `${tableName.replace(/^dc_/, "")}_id`;
   const columns =
     (await introspectLiveColumns(db, dialect, [candidate])).tables[0]
@@ -226,9 +228,13 @@ async function sortReferencing(
   const junctions: string[] = [];
   const others: string[] = [];
   for (const table of referencing) {
-    const own =
-      args.makesJunctionTables &&
-      (await isGeneratedJunctionOf(db, dialect, args.tableName, table));
+    const own = await isGeneratedJunctionOf(
+      db,
+      dialect,
+      args.tableName,
+      table,
+      args.generatedJunctions ?? []
+    );
     (own ? junctions : others).push(table);
   }
   return { junctions, others };
