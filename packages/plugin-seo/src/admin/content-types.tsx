@@ -145,13 +145,21 @@ function StructuredDataCell({
   );
 }
 
-/** The field the page's markup reads `detail` from when none is chosen. */
+/**
+ * The field the page's markup reads `detail` from when none is chosen: the
+ * first of its guesses, in the order the markup tries them, the type has.
+ */
 function guessedField(
   type: SeoContentType,
   detail: StructuredDataDetail
 ): MappableField | undefined {
-  const guesses = new Set(DETAIL_GUESSES[detail].map(tokenKey));
-  return type.mappableFields.find(field => guesses.has(tokenKey(field.name)));
+  for (const guess of DETAIL_GUESSES[detail]) {
+    const found = type.mappableFields.find(
+      field => tokenKey(field.name) === tokenKey(guess)
+    );
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /** Each field's label in a choice, with its name where two share a label. */
@@ -195,7 +203,7 @@ function detailHelp(
 /** What a detail's choice shows: the value chosen and the options round it. */
 interface DetailChoice {
   value: string;
-  /** The field found by its name, which choosing again leaves found so. */
+  /** The field found by its name, shown as chosen until another is. */
   guess?: MappableField;
   fixed?: string;
   /** A field chosen once that the type no longer has. */
@@ -276,7 +284,7 @@ function DetailLine({
   choose: (field: string) => void;
 }): JSX.Element {
   // Until one is chosen, the field the markup finds by its name is shown as
-  // chosen; choosing it again leaves it found by its name.
+  // chosen. A field chosen is saved as chosen, even that one.
   const choice = detailChoice(type, detail, source);
   const shown = type.mappableFields.find(field => field.name === choice.value);
   const needed = required
@@ -292,7 +300,7 @@ function DetailLine({
         value={choice.value}
         onChange={event => {
           const next = event.target.value;
-          if (next !== FIXED) choose(next === choice.guess?.name ? "" : next);
+          if (next !== FIXED) choose(next);
         }}
       >
         <DetailOptions type={type} detail={detail} choice={choice} />

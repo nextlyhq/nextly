@@ -656,6 +656,59 @@ describe("the content types table", () => {
     expect(screen.getByText("Google needs this for Product")).toBeTruthy();
   });
 
+  it("shows the field the markup reads first by its name, and keeps another chosen over it", async () => {
+    serving(SET_UP);
+    // `writer` is declared first, but the markup looks for `author` first.
+    vi.mocked(usePluginRoute).mockImplementation(
+      request =>
+        ({
+          data: request.path.endsWith("/document")
+            ? { single: "seo-settings" }
+            : {
+                items: [
+                  {
+                    ...POSTS,
+                    mappableFields: [
+                      { name: "writer", label: "Writer" },
+                      { name: "author", label: "Author" },
+                    ],
+                  },
+                ],
+              },
+          pending: false,
+          error: null,
+          refetch: () => {},
+          fetching: false,
+        }) as ReturnType<typeof usePluginRoute>
+    );
+    render(<SeoSettingsPage />);
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" }),
+      { target: { value: "article" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    const author = screen.getByRole("combobox", {
+      name: "Field that holds author",
+    }) as HTMLSelectElement;
+    expect(author.selectedOptions[0]?.textContent).toBe("Author");
+
+    fireEvent.change(author, { target: { value: "writer" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        structuredData: {
+          posts: {
+            type: "article",
+            details: { article: { author: "writer" } },
+          },
+        },
+        _rev: "5",
+      },
+    ]);
+  });
+
   it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
