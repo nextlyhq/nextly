@@ -149,7 +149,7 @@ function TrendLine({ values }: { values: readonly number[] }) {
 /** One part of the split: its colour in the bar and its dot in the legend. */
 const SPLIT_TONE = {
   published: "bg-success-solid",
-  draft: "bg-muted-foreground/60",
+  draft: "bg-muted-foreground",
   scheduled: "bg-info-solid",
 } as const;
 
