@@ -17,7 +17,7 @@ import {
   ICON_ID_MAX_LENGTH,
   ICON_ID_PATTERN,
 } from "../../../../collections/fields/types/icon";
-import { MYSQL_STORED_DATE } from "../../utils/backfill-default";
+import { isMysqlStoredDate } from "../../utils/backfill-default";
 
 interface MinimalFieldDef {
   name: string;
@@ -65,7 +65,7 @@ function schemaForType(type: string, dialect: SupportedDialect): z.ZodTypeAny {
       ? z.union([
           z.string().datetime(),
           z.date(),
-          z.string().regex(MYSQL_STORED_DATE),
+          z.string().refine(isMysqlStoredDate),
         ])
       : z.union([z.string().datetime(), z.date()]);
   }

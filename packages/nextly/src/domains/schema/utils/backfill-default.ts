@@ -137,8 +137,21 @@ export function backfillDefaultForType(args: BackfillDefaultArgs): string {
  * `YYYY-MM-DD HH:MM:SS` with up to six digits of fraction: what a check of a
  * date fill accepts on MySQL beside the ISO form and a `Date`.
  */
-export const MYSQL_STORED_DATE =
-  /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?$/;
+const MYSQL_STORED_DATE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?$/;
+
+/**
+ * Whether `value` is a date in MySQL's stored form (`MYSQL_STORED_DATE`) that
+ * exists: read as UTC, it comes back as written, so a month, day, hour or
+ * minute out of range, which `Date` would roll into the next one, is refused.
+ */
+export function isMysqlStoredDate(value: string): boolean {
+  if (!MYSQL_STORED_DATE.test(value)) return false;
+  const at = new Date(`${value.replace(" ", "T")}Z`);
+  return (
+    !Number.isNaN(at.getTime()) &&
+    at.toISOString().slice(0, 19) === value.slice(0, 19).replace(" ", "T")
+  );
+}
 
 export function storedDateValue(
   date: Date,
