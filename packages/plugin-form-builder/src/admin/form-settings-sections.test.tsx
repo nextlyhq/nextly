@@ -37,13 +37,23 @@ const answer = (status: number, body: unknown) =>
   );
 
 /** Answers the builder's settings read, and every save as stored. */
-function server() {
+/** The plugin's spam options as Settings is told them, unless a test says. */
+const SPAM = {
+  honeypot: true,
+  recaptchaEnabled: false,
+  botCheckDefault: null,
+  botChecks: {
+    recaptcha: { secret: true, siteKey: true },
+    turnstile: { secret: false, siteKey: false },
+  },
+  rateLimit: { maxSubmissions: 10, windowMs: 60_000 },
+};
+
+function server(spamProtection: Record<string, unknown> = SPAM) {
   const fetchMock = vi.fn((_url: string, init?: RequestInit) =>
     init?.method === "PATCH"
       ? answer(200, { message: "Updated", item: { id: "form-1" } })
-      : answer(200, {
-          spamProtection: { honeypot: true, recaptchaEnabled: false },
-        })
+      : answer(200, { spamProtection })
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -63,8 +73,11 @@ const saves = (fetchMock: ReturnType<typeof server>) =>
         }
     );
 
-function view(initialData: Record<string, unknown> = {}) {
-  const fetchMock = server();
+function view(
+  initialData: Record<string, unknown> = {},
+  spamProtection?: Record<string, unknown>
+) {
+  const fetchMock = server(spamProtection);
   render(
     <QueryClientProvider client={new QueryClient()}>
       <FormBuilderView
@@ -262,6 +275,81 @@ describe("closing by itself", () => {
     const { settings } = saves(fetchMock)[0]!;
     expect(settings).not.toHaveProperty("closesAt");
     expect(settings).not.toHaveProperty("submissionLimit");
+  });
+});
+
+describe("spam protection", () => {
+  it("describes reCAPTCHA as a background score, not a puzzle", async () => {
+    view({ settings: { botCheck: "recaptcha" } });
+    expect(
+      await screen.findByText(/scores each visitor in the background/i)
+    ).toBeVisible();
+  });
+
+  it("refuses to newly choose a check whose keys are missing", async () => {
+    const { user } = view();
+    await user.click(screen.getByRole("combobox", { name: "Bot check" }));
+    const turnstile = await screen.findByRole("option", {
+      name: "Turnstile (needs keys)",
+    });
+    expect(turnstile).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("option", { name: "reCAPTCHA" })
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("refuses a check with a secret but no site key a visitor's widget could use", async () => {
+    const { user } = view(
+      {},
+      {
+        ...SPAM,
+        botChecks: {
+          recaptcha: { secret: true, siteKey: false },
+          turnstile: { secret: true, siteKey: true },
+        },
+      }
+    );
+    await user.click(screen.getByRole("combobox", { name: "Bot check" }));
+    expect(
+      await screen.findByRole("option", { name: "reCAPTCHA (needs keys)" })
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("option", { name: "Turnstile" })
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("says a form's check without a secret accepts submissions unchecked, naming the option", async () => {
+    view({ settings: { botCheck: "turnstile" } });
+    expect(
+      await screen.findByText(/submissions are accepted unchecked/i)
+    ).toBeVisible();
+    expect(
+      screen.getByText("spamProtection.turnstile.secretKey")
+    ).toBeVisible();
+    expect(screen.getByText("spamProtection.turnstile.siteKey")).toBeVisible();
+  });
+
+  it("asks to move a form's own reCAPTCHA site key into the plugin's options", async () => {
+    view(
+      { settings: { captchaEnabled: true, captchaSiteKey: "legacy" } },
+      {
+        ...SPAM,
+        botChecks: {
+          recaptcha: { secret: true, siteKey: false },
+          turnstile: { secret: false, siteKey: false },
+        },
+      }
+    );
+    expect(
+      await screen.findByText(/keeps its own reCAPTCHA site key/i)
+    ).toBeVisible();
+    expect(screen.getByText("spamProtection.recaptcha.siteKey")).toBeVisible();
+  });
+
+  it("shows the plugin's rate limit, read-only", async () => {
+    view();
+    expect(await screen.findByText("10 a minute")).toBeVisible();
+    expect(screen.getByText(/spamProtection\.rateLimit/)).toBeVisible();
   });
 });
 

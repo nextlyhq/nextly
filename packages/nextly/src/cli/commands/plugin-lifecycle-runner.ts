@@ -34,6 +34,7 @@ import {
   type PluginLifecycleRecord,
 } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
@@ -792,14 +793,19 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         dialect
       ).read()
     );
+  // The record and the stored schema version in one transaction: an install
+  // or an uninstall changes the schema the app serves, so the version's count
+  // moves with the record that says it happened (`writeRegistryRows`).
   const recordLifecycle = (
     plugin: LifecyclePlugin,
     record: PluginLifecycleRecord
   ): Promise<void> =>
-    recordPluginLifecycle(
-      new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect),
-      plugin.name,
-      record
+    writeRegistryRows(drizzleAdapter, tx =>
+      recordPluginLifecycle(
+        new SchemaEventsRepository(tx.getDrizzle(), dialect),
+        plugin.name,
+        record
+      )
     );
 
   return {

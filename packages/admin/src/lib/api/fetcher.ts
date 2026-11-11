@@ -1,3 +1,4 @@
+import { takeStartupResponse } from "./startup-request";
 import { parseApiError } from "./parseApiError";
 import { authFetch } from "./refreshInterceptor";
 
@@ -112,9 +113,17 @@ export async function fetcher<T = unknown>(
     },
   };
 
-  const res = isProtected
-    ? await authFetch(fullUrl, fetchOptions)
-    : await fetch(fullUrl, fetchOptions);
+  // A GET the startup request already answered takes that answer, once, as the
+  // response its own request would have had; anything else goes to the server.
+  const fromStartup =
+    (fetchOptions.method ?? "GET").toUpperCase() === "GET"
+      ? await takeStartupResponse(path)
+      : undefined;
+  const res =
+    fromStartup ??
+    (isProtected
+      ? await authFetch(fullUrl, fetchOptions)
+      : await fetch(fullUrl, fetchOptions));
 
   noteSchemaVersion(res);
 

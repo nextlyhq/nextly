@@ -20,13 +20,17 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { isRecord, textOf } from "../plain-values";
+import type { AiCrawlerChoice } from "../settings/contract";
+import { fillPattern } from "../settings/patterns";
+import { typedPageLevel } from "../tab/typed";
 
 import type { Levels } from "./order";
 
 /**
- * The site's own SEO rules: its name and defaults, and each content type's
- * pattern, keyed by the collection slug or `single:<slug>`. Read from the
- * SEO settings; empty where none are set.
+ * The site's own SEO rules: its name and defaults, the patterns a type uses
+ * where it has none of its own, and each content type's pattern, keyed by the
+ * collection slug or `single:<slug>`. Read from the SEO settings.
  */
 export interface SiteRules {
   siteName?: string;
@@ -34,7 +38,16 @@ export interface SiteRules {
   productionAddresses?: readonly string[];
   description?: string;
   image?: PageMetadataImage;
+  /** The patterns a type uses where it has none of its own. */
+  defaultPatterns?: { title?: string; description?: string };
   patterns: Record<string, { title?: string; description?: string }>;
+  /**
+   * The content types hidden from search as a whole, keyed as `patterns`
+   * are: every page of one is served `noindex` and left out of the sitemap.
+   */
+  hiddenTypes?: readonly string[];
+  /** What robots.txt asks AI crawlers to do, where the site has chosen. */
+  aiCrawlers?: AiCrawlerChoice;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -50,12 +63,6 @@ const CONTENT_FIELDS = {
   image: ["coverImage", "cover", "featuredImage", "heroImage", "image"],
 } as const;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const textOf = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() !== "" ? value : undefined;
-
 /** `values` without the keys whose value is undefined. */
 function defined<T extends Record<string, unknown>>(values: T): Partial<T> {
   return Object.fromEntries(
@@ -64,7 +71,7 @@ function defined<T extends Record<string, unknown>>(values: T): Partial<T> {
 }
 
 /** The type a page belongs to, and its key in the SEO settings. */
-function typeOf(input: PageMetadataInput): {
+export function typeOf(input: PageMetadataInput): {
   type: PublicAddressType;
   key: string;
   document: Readonly<Record<string, unknown>>;
@@ -121,40 +128,6 @@ export async function imageOf(
   return asImage(await mediaOf(ctx, value));
 }
 
-/** A token's name as matched: letters and digits only, any case. */
-const tokenKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-/**
- * `pattern` filled in from the page: `{Title}` and `{Site name}`, and any of
- * the page's own text fields by name. Nothing where a token has no value, so
- * the next level supplies the value rather than a pattern with a hole in it.
- */
-export function fillPattern(
-  pattern: string,
-  values: { title?: string; siteName?: string },
-  document: Readonly<Record<string, unknown>>
-): string | undefined {
-  const fields = new Map(
-    Object.entries(document).map(([name, value]) => [tokenKey(name), value])
-  );
-  let missing = false;
-  const filled = pattern.replace(/\{([^{}]+)\}/g, (_, name: string) => {
-    const key = tokenKey(name);
-    const value =
-      key === "title"
-        ? values.title
-        : key === "sitename"
-          ? values.siteName
-          : (textOf(fields.get(key)) ??
-            (typeof fields.get(key) === "number"
-              ? String(fields.get(key))
-              : undefined));
-    if (value === undefined) missing = true;
-    return value ?? "";
-  });
-  return missing ? undefined : textOf(filled.trim());
-}
-
 /** The first of `names` the document has a value for, and which. */
 function firstField(
   document: Readonly<Record<string, unknown>>,
@@ -197,6 +170,15 @@ export async function addressOf(
   return `${origin}${laterListPage(path, served) ?? path}`;
 }
 
+/**
+ * A document's id as the address record keys its holder: its text, or empty
+ * where it has none a record could name.
+ */
+export function idOf(document: Readonly<Record<string, unknown>>): string {
+  const { id } = document;
+  return typeof id === "string" || typeof id === "number" ? String(id) : "";
+}
+
 /** Whether the record says a page other than this one holds `path`. */
 async function heldByAnother(
   ctx: PluginContext,
@@ -206,7 +188,7 @@ async function heldByAnother(
   locale: string | undefined
 ): Promise<boolean> {
   const holders = await addressHolders(ctx, path, locale);
-  const id = String(document.id ?? "");
+  const id = idOf(document);
   return (
     holders.length > 0 &&
     !holders.some(holder => holder.collection === key && holder.id === id)
@@ -233,21 +215,16 @@ function laterListPage(
     : undefined;
 }
 
-/** What a person typed in the page's `seo` group. */
+/**
+ * What a person typed in the page's `seo` group, read by the same function
+ * the SEO tab reads it with, so the tab's preview and the page's head take
+ * the group alike; only the share image, stored as an id, is looked up here.
+ */
 async function pageLevel(
   ctx: PluginContext,
   seo: Readonly<Record<string, unknown>>
 ): Promise<Levels["page"]> {
-  return defined({
-    title: textOf(seo.metaTitle),
-    description: textOf(seo.metaDescription),
-    socialTitle: textOf(seo.socialTitle),
-    socialDescription: textOf(seo.socialDescription),
-    image: await imageOf(ctx, seo.ogImage),
-    canonical: textOf(seo.canonical),
-    canonicalElsewhere: seo.canonicalElsewhere === true ? true : undefined,
-    hidden: seo.noindex === true ? true : undefined,
-  });
+  return typedPageLevel(seo, await imageOf(ctx, seo.ogImage));
 }
 
 /** A text value from the first of `names` the page has one in. */
@@ -344,7 +321,8 @@ export async function levelsOf(
     code: input.code,
     template: input.derived,
     pattern: patternLevel(
-      rules.patterns[key] ?? {},
+      // The type's own patterns, else the site's default for that part.
+      { ...rules.defaultPatterns, ...rules.patterns[key] },
       defined({ title: content.title?.value, siteName: rules.siteName }),
       document
     ),
@@ -358,5 +336,6 @@ export async function levelsOf(
       productionAddresses: productionAddressesOf(rules.productionAddresses),
     }),
     ...(address === undefined ? {} : { address }),
+    ...(rules.hiddenTypes?.includes(key) === true ? { typeHidden: true } : {}),
   };
 }

@@ -107,6 +107,7 @@ import {
 } from "../pipeline/kept-scope-fields";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { builtByFor } from "../pipeline/registered-collections";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
@@ -117,6 +118,7 @@ import {
   type ColumnResolution,
 } from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
+import { schemaVersionStoreSql } from "../schema-version";
 import {
   columnsDeclaredBy,
   type ColumnOrigin,
@@ -1027,7 +1029,8 @@ export async function generateMigration(
   const rows = registryRowsFor(
     touched,
     tablesOfSettingsChanges(changedSettings, args),
-    args
+    args,
+    args.dialect
   );
   sqlStatements.push(...rows.up);
   downSqlStatements.push(...rows.down);
@@ -1589,15 +1592,31 @@ async function writeMigrationPair(
 function registryRowsFor(
   touched: ReadonlySet<string>,
   settingsTables: ReadonlySet<string>,
-  args: Pick<GenerateArgs, "metadataUpserts" | "previousMetadataUpserts">
+  args: Pick<GenerateArgs, "metadataUpserts" | "previousMetadataUpserts">,
+  dialect: SupportedDialect
 ): { up: string[]; down: string[] } {
+  // A direction that writes registry rows moves the stored schema version
+  // right after them, in the file's transaction: on MySQL, where the schema
+  // statements before have committed, beside the rows rather than the DDL.
+  const withVersion = (statements: string[]): string[] =>
+    statements.length === 0
+      ? statements
+      : [...statements, schemaVersionStoreSql(dialect)];
   return {
-    up: (args.metadataUpserts ?? [])
-      .filter(m => touched.has(m.tableName) || settingsTables.has(m.tableName))
-      .map(m => m.sql),
-    down: (args.previousMetadataUpserts ?? [])
-      .filter(m => settingsTables.has(m.tableName) && !touched.has(m.tableName))
-      .map(m => m.sql),
+    up: withVersion(
+      (args.metadataUpserts ?? [])
+        .filter(
+          m => touched.has(m.tableName) || settingsTables.has(m.tableName)
+        )
+        .map(m => m.sql)
+    ),
+    down: withVersion(
+      (args.previousMetadataUpserts ?? [])
+        .filter(
+          m => settingsTables.has(m.tableName) && !touched.has(m.tableName)
+        )
+        .map(m => m.sql)
+    ),
   };
 }
 
@@ -2843,9 +2862,9 @@ function columnOriginOf(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind
 ): ColumnOrigin {
-  return kind === "collection" && entity.settings?.source === "builder"
-    ? "collection"
-    : "codeFirst";
+  // The rule the push applies (`builtByFor`), so a Builder Single's or field group's table is
+  // described as its Builder creator made it, here too, and no file plans narrowing its columns.
+  return builtByFor(kind, entity.settings?.source === "builder");
 }
 
 /**

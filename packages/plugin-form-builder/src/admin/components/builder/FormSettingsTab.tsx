@@ -27,14 +27,16 @@ import {
 import type React from "react";
 
 import { DEFAULT_FORM_SETTINGS } from "../../../config/defaults";
-import type {
-  BotCheckMode,
-  FormSettings,
-  OneResponseMode,
-} from "../../../types";
+import type { FormSettings, OneResponseMode } from "../../../types";
 import { parseRedirectReference } from "../../../utils/redirect-reference";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
+import {
+  type BotCheckSiteDefaults,
+  BotCheckNotices,
+  BotCheckRow,
+  RateLimitRow,
+} from "./BotCheckRows";
 import { ClosingTimeRow, SubmissionLimitRow } from "./ClosingRows";
 import { RedirectPagePicker } from "./RedirectPagePicker";
 import {
@@ -91,7 +93,7 @@ function InheritToggle({
 // Component
 // ---------------------------------------------------------------------------
 
-export interface SpamDefaults {
+export interface SpamDefaults extends BotCheckSiteDefaults {
   honeypot?: boolean;
   recaptchaEnabled?: boolean;
 }
@@ -428,12 +430,6 @@ function OneResponseSection(): React.JSX.Element {
   );
 }
 
-/** What "Site default" means for the bot check, as the plugin is set. */
-function botCheckDefaultLabel(recaptchaEnabled: boolean | undefined): string {
-  if (recaptchaEnabled === undefined) return "Site default";
-  return `Site default (${recaptchaEnabled ? "reCAPTCHA" : "off"})`;
-}
-
 function SpamSection({
   spamDefaults,
 }: Pick<FormSettingsTabProps, "spamDefaults">): React.JSX.Element {
@@ -452,51 +448,12 @@ function SpamSection({
           onChange={honeypotEnabled => updateSettings({ honeypotEnabled })}
         />
       </SettingRow>
-      <SettingRow
-        label="Bot check"
-        htmlFor="settings-bot-check"
-        description="Scores each visitor in the background; there is no puzzle to solve. Keys are set in the plugin's options."
-      >
-        <Select
-          value={settings.botCheck ?? DEFAULT_FORM_SETTINGS.botCheck}
-          onValueChange={value => {
-            const botCheck = BOT_CHECK_CHOICES.find(mode => mode === value);
-            if (botCheck) updateSettings({ botCheck });
-          }}
-        >
-          <SelectTrigger
-            id="settings-bot-check"
-            aria-describedby={descriptionIdOf("settings-bot-check")}
-            className="w-48 bg-transparent border-input dark:bg-muted/50"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="default">
-              {botCheckDefaultLabel(spamDefaults?.recaptchaEnabled)}
-            </SelectItem>
-            <SelectItem value="off">Off</SelectItem>
-            <SelectItem value="recaptcha">reCAPTCHA</SelectItem>
-            {/* Shown only when stored (through the API), for the reason
-                `oneResponseChoices` gives. */}
-            {settings.botCheck === "turnstile" ? (
-              <SelectItem value="turnstile" disabled>
-                Turnstile (not yet applied)
-              </SelectItem>
-            ) : null}
-          </SelectContent>
-        </Select>
-      </SettingRow>
+      <BotCheckRow defaults={spamDefaults} />
+      <BotCheckNotices defaults={spamDefaults} />
+      <RateLimitRow defaults={spamDefaults} />
     </FormSection>
   );
 }
-
-/** The bot checks offered: the ones the submit handler runs today. */
-const BOT_CHECK_CHOICES: readonly BotCheckMode[] = [
-  "default",
-  "off",
-  "recaptcha",
-];
 
 export function FormSettingsTab({
   spamDefaults,

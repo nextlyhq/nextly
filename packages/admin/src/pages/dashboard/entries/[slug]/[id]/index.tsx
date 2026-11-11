@@ -227,6 +227,9 @@ export default function EditEntryPage({
     // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
     translationStatus: asksTranslationStatus,
+    // Once the schema says whether the collection keeps drafts: asked before,
+    // the entry is read as published and then again as its draft.
+    enabled: collection !== undefined,
   });
   // The same document as stored, read in the same language and view. The
   // populated read above leaves out a related item the editor may not read,
@@ -239,6 +242,8 @@ export default function EditEntryPage({
     draft: collection?.draftsEnabled === true,
     locale,
     fallbackLocale: localizationEnabled ? "none" : undefined,
+    // Held for the schema, as the populated read above is.
+    enabled: collection !== undefined,
   });
   const {
     document: entry,

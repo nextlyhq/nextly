@@ -112,9 +112,15 @@ export async function seedRolePresets(
         continue;
       }
 
+      // The presets resolve against the declared permissions only, so an
+      // orphaned one is in no preset's set. Set by difference alone, that
+      // took a preset's grant of it away at the start that orphaned it; an
+      // orphan mark takes nothing away, so its grants are left as they are,
+      // and are there as they were when it is declared again.
       await rolePermissionService.setRolePermissions(
         String(existing.id),
-        permissionIds
+        permissionIds,
+        { leaveOrphanedGrants: true }
       );
     } catch (error) {
       // One bad preset must not stop the rest, and must never stop boot.
