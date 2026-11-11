@@ -21,8 +21,10 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DETAIL_GUESSES,
   STRUCTURED_DATA_TYPE_KEYS,
   structuredDataTypesFor,
+  type StructuredDataDetail,
   type StructuredDataTypeKey,
 } from "../catalog";
 import { buildStructuredData, type StructuredDataNode } from "../graph";
@@ -458,6 +460,11 @@ describe("a page's structured data", () => {
 /** One type, a mapping its content type gives, and the page's fields. */
 interface TypeCase {
   type: StructuredDataTypeKey;
+  /**
+   * The details the type cannot be described without, stated here rather
+   * than read from the catalog, so a requirement dropped there fails below.
+   */
+  needs: StructuredDataDetail[];
   mapping: DetailMapping;
   fields: Record<string, unknown>;
   expected: StructuredDataNode;
@@ -466,6 +473,7 @@ interface TypeCase {
 const TYPE_CASES: TypeCase[] = [
   {
     type: "product",
+    needs: ["price", "availability"],
     mapping: {
       price: "cost",
       availability: "inStock",
@@ -486,6 +494,7 @@ const TYPE_CASES: TypeCase[] = [
   },
   {
     type: "softwareApplication",
+    needs: ["operatingSystem", "price", "rating", "ratingCount"],
     mapping: { operatingSystem: "platform", price: "price" },
     fields: { platform: "Web", price: 0, rating: 4.6, ratingCount: "120" },
     expected: {
@@ -501,6 +510,7 @@ const TYPE_CASES: TypeCase[] = [
   },
   {
     type: "videoObject",
+    needs: ["videoFile", "uploadDate", "image"],
     mapping: { videoFile: "clip" },
     fields: { clip: { url: "/media/demo.mp4" }, uploadDate: "2026-10-01" },
     expected: {
@@ -512,6 +522,7 @@ const TYPE_CASES: TypeCase[] = [
   },
   {
     type: "event",
+    needs: ["startDate", "location"],
     mapping: { location: "venue" },
     fields: {
       startDate: "2026-12-01T18:00:00Z",
@@ -536,6 +547,7 @@ const TYPE_CASES: TypeCase[] = [
   },
   {
     type: "localBusiness",
+    needs: ["streetAddress", "openingHours"],
     mapping: {},
     fields: { address: "1 Main St", openingHours: ["Mo-Fr 09:00-17:00"] },
     expected: {
@@ -547,6 +559,7 @@ const TYPE_CASES: TypeCase[] = [
   },
   {
     type: "review",
+    needs: ["author", "itemReviewed", "itemType", "rating"],
     mapping: { itemType: { value: "software application" } },
     fields: { writer: "Sara Khan", item: "Surfer SEO", rating: "4" },
     expected: {
@@ -675,6 +688,53 @@ describe("each type a content type can be mapped to", () => {
       worstRating: 1,
     });
   });
+
+  /** A complete case with one required detail taken away. */
+  function without(
+    { mapping, fields }: TypeCase,
+    detail: StructuredDataDetail
+  ): {
+    mapping: DetailMapping;
+    fields: Record<string, unknown>;
+    answer: PageMetadataAnswer;
+  } {
+    // The page's share image is the image a type reads unless one is mapped.
+    if (detail === "image") {
+      return {
+        mapping,
+        fields,
+        answer: { ...ANSWER, social: { siteName: "Rext AI" } },
+      };
+    }
+    const source = mapping[detail];
+    if (typeof source === "object") {
+      const { [detail]: _fixed, ...rest } = mapping;
+      return { mapping: rest, fields, answer: ANSWER };
+    }
+    const field =
+      source ??
+      Object.keys(fields).find(name => DETAIL_GUESSES[detail].includes(name));
+    const { [field ?? ""]: _taken, ...rest } = fields;
+    return { mapping, fields: rest, answer: ANSWER };
+  }
+
+  it.each(
+    TYPE_CASES.flatMap(each => each.needs.map(detail => ({ ...each, detail })))
+  )(
+    "leaves $type out when only its $detail is missing, naming it",
+    async ({ detail, ...each }) => {
+      const { mapping, fields, answer } = without(each, detail);
+      const { nodes, problems } = await buildStructuredData(
+        context(),
+        postInput({ id: "p1", ...fields }),
+        answer,
+        rules({ posts: { type: each.type, details: { [each.type]: mapping } } })
+      );
+
+      expect(nodeOf(nodes, each.expected["@type"] as string)).toBeUndefined();
+      expect(problems.map(problem => problem.detail)).toEqual([detail]);
+    }
+  );
 
   it("describes a profile page as the person it is about", async () => {
     const { nodes, problems } = await buildStructuredData(
