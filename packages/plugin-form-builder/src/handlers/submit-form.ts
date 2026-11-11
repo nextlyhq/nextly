@@ -30,6 +30,7 @@ import {
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
 
+import { botTokensOf } from "./bot-check";
 import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
 import { ALREADY_RESPONDED } from "./one-response";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
@@ -453,6 +454,9 @@ export async function submitForm(
           // Its settings too: the seam makes the row's one-response key from
           // them.
           form: { id: form.id, fields: form.fields, settings: form.settings },
+          // The bot-check tokens the visitor's form sent, read before the
+          // row keeps only the form's fields: the seam verifies them.
+          botTokens: botTokensOf(data),
         }),
         // Public form submission — create as system. No ambient user; an
         // empty context already resolves to system, but be explicit.

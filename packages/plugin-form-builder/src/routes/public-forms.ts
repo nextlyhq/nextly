@@ -40,6 +40,7 @@ import {
   type PluginRouteContext,
 } from "nextly";
 
+import { publicBotCheck } from "../handlers/bot-check";
 import { submitForm } from "../handlers/submit-form";
 import type { ResolvedFormBuilderConfig } from "../types";
 import { formAvailabilityNow } from "../utils/form-closing";
@@ -245,7 +246,13 @@ async function readFormBySlug(
     });
   }
 
-  return respondDoc(doc as unknown as Record<string, unknown>);
+  // What the visitor's form needs to render its bot check: the provider and
+  // the site key its widget runs with. The secret never leaves the server.
+  const botCheck = publicBotCheck(doc?.settings, config.spamProtection);
+  return respondDoc({
+    ...(doc as unknown as Record<string, unknown>),
+    ...(botCheck ? { botCheck } : {}),
+  });
 }
 
 /**

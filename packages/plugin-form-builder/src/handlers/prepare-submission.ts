@@ -32,6 +32,8 @@ import {
   transformFormData,
 } from "../utils/generate-schema";
 
+import type { BotTokens } from "./bot-check";
+
 /**
  * Form field types that accept free-text string input from end users.
  * These fields can contain HTML injection vectors and must be sanitized.
@@ -116,6 +118,12 @@ export interface SubmissionOriginMarks {
    * the one the row names.
    */
   form?: Record<string, unknown>;
+  /**
+   * The bot-check tokens the submission brought. The handler keeps only the
+   * form's own fields in the row, so the tokens travel here to the seam,
+   * which verifies them once: a token is spent when it is verified.
+   */
+  botTokens?: BotTokens;
 }
 
 /** Mark `row` as this plugin's own write, and hand it back. */
