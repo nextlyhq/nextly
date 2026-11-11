@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
+import { NextlyError } from "../../../errors";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -314,6 +315,85 @@ describe.each(getConfiguredTestDialects())(
         expect(await typeOfScore()).toBe("real");
       }
     );
+
+    it("refuses a value longer than its field's column holds as a validation error", async () => {
+      const { id } = (
+        await direct.users.create({
+          email: "website@example.com",
+          password: "Password123!",
+          data: { name: "Website", isActive: true },
+        })
+      ).item;
+      // A URL with no length of its own: PostgreSQL and MySQL store it in a
+      // VARCHAR(255), SQLite in TEXT, which holds any length.
+      const longUrl = `https://example.com/${"p".repeat(250)}`;
+      const written = direct.users.update({ id, data: { website: longUrl } });
+      if (dialect === "sqlite") {
+        await written;
+        expect((await direct.users.findByID({ id })).website).toBe(longUrl);
+        return;
+      }
+      const error = await written.catch((e: unknown) => e);
+      // Refused before the database, naming the field: not a driver error.
+      expect(NextlyError.isValidation(error)).toBe(true);
+      expect(JSON.stringify((error as NextlyError).publicData)).toContain(
+        "website"
+      );
+    });
+
+    it("fails a create whose custom write reaches a missing table other than its own", async () => {
+      // A trigger on the user fields' table that writes to a table that is
+      // not there: the write fails naming that table, and user_ext is there.
+      const statements: Record<TestDialect, string[]> = {
+        sqlite: [
+          "CREATE TRIGGER ext_audit AFTER INSERT ON user_ext BEGIN INSERT INTO absent_audit VALUES (NEW.user_id); END",
+        ],
+        postgresql: [
+          "CREATE FUNCTION ext_audit() RETURNS trigger AS $$ BEGIN INSERT INTO absent_audit VALUES (NEW.user_id); RETURN NEW; END $$ LANGUAGE plpgsql",
+          'CREATE TRIGGER ext_audit AFTER INSERT ON "user_ext" FOR EACH ROW EXECUTE FUNCTION ext_audit()',
+        ],
+        mysql: [
+          "CREATE TRIGGER ext_audit AFTER INSERT ON `user_ext` FOR EACH ROW INSERT INTO absent_audit VALUES (NEW.user_id)",
+        ],
+      };
+      for (const statement of statements[dialect]) {
+        await t.adapter.executeQuery(statement);
+      }
+      try {
+        await expect(
+          direct.users.create({
+            email: "audited@example.com",
+            password: "Password123!",
+            data: { name: "Audited", isActive: true, nickname: "kept" },
+          })
+        ).rejects.toThrow();
+        const q = dialect === "mysql" ? "`" : '"';
+        const [account] = await t.adapter.executeQuery<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM ${q}users${q} WHERE ${q}email${q} = 'audited@example.com'`
+        );
+        expect(Number(account?.n)).toBe(0);
+      } finally {
+        await t.adapter.executeQuery(
+          dialect === "mysql"
+            ? "DROP TRIGGER ext_audit"
+            : dialect === "postgresql"
+              ? 'DROP TRIGGER ext_audit ON "user_ext"'
+              : "DROP TRIGGER ext_audit"
+        );
+        if (dialect === "postgresql") {
+          await t.adapter.executeQuery("DROP FUNCTION ext_audit()");
+        }
+      }
+      // Custom fields were not turned off: the next create still writes them.
+      const { id } = (
+        await direct.users.create({
+          email: "after@example.com",
+          password: "Password123!",
+          data: { name: "After", isActive: true, nickname: "stored" },
+        })
+      ).item;
+      expect((await direct.users.findByID({ id })).nickname).toBe("stored");
+    });
 
     // Last in this file: it drops a column the other cases read and write.
     it("refuses a write its custom fields cannot be stored by, and stores nothing of it", async () => {

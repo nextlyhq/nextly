@@ -1356,6 +1356,15 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
    * table being absent.
    */
   textColumnLength(field: UserFieldConfig): number | null {
+    // Read from the column the field is stored in, so the check and the
+    // column are one answer: a URL, email, select or radio is a VARCHAR as
+    // much as a text with a length is.
+    if (this.dialect !== "sqlite") {
+      const column = this.columnFor(field);
+      return column?.kind === "varchar" ? column.length : null;
+    }
+    // SQLite stores every one of these as TEXT, which holds any length; a
+    // text field is still held to its own length there.
     const { maxLength, unique } = field as {
       maxLength?: number;
       unique?: unknown;

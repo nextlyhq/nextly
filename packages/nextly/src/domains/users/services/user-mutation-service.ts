@@ -43,7 +43,10 @@ import type {
 // NextlyError throws. Methods now return data directly or throw.
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
-import { missingSchemaObject } from "../../../database/missing-column";
+import {
+  firstIdentifierNamed,
+  missingSchemaObject,
+} from "../../../database/missing-column";
 import { NextlyError } from "../../../errors";
 import { safeEmit } from "../../../events/domain-events";
 import {
@@ -349,6 +352,21 @@ export interface InviteArtifact {
  * admin needs the link back to deliver it however they choose.
  */
 export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
+
+/**
+ * Whether `error` says the user fields' own table does not exist: the one
+ * failure of a custom-field write that the create and update paths step around
+ * (a fresh database before the table is made). A missing table it names must
+ * be `user_ext` itself, so a trigger or key on it that reaches another missing
+ * table fails the write instead of being read as no custom fields at all.
+ */
+function userExtTableMissing(error: unknown): boolean {
+  const missing = missingSchemaObject(error);
+  return (
+    missing?.object === "table" &&
+    firstIdentifierNamed(missing.text, ["user_ext"]) === "user_ext"
+  );
+}
 
 /**
  * A user-field value shaped for the `user_ext` column its field maps to.
@@ -1704,11 +1722,7 @@ export class UserMutationService extends BaseService {
         // Any other failure of that insert, a missing column or a value its
         // column refuses, fails the create: retrying without it would create
         // the user with every custom field dropped, in silence.
-        if (
-          userExtInsertFailed &&
-          userExtTable &&
-          missingSchemaObject(txErr)?.object === "table"
-        ) {
+        if (userExtInsertFailed && userExtTable && userExtTableMissing(txErr)) {
           const cause = txErr instanceof Error ? txErr.message : String(txErr);
           this.logger.warn(
             `user_ext insert failed during createLocalUser; disabling user_ext for this process: ${cause}`
@@ -2274,7 +2288,7 @@ export class UserMutationService extends BaseService {
           // is a user_ext write that failed with its table there: skipping it
           // would drop the custom changes and turn custom fields off.
           if (!userExtWriteFailed) throw txErr;
-          if (missingSchemaObject(txErr)?.object !== "table") throw txErr;
+          if (!userExtTableMissing(txErr)) throw txErr;
           // The user_ext table does not exist yet: disable it for this
           // process and write the rest of the update without it.
           const cause = txErr instanceof Error ? txErr.message : String(txErr);
