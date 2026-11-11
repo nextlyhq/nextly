@@ -25,7 +25,18 @@ test("keeps Save draft and Publish inside the bar while the preview narrows the 
     page.getByRole("textbox", { name: "Title", exact: true })
   ).toHaveValue("Narrow editor", { timeout: 30_000 });
 
-  await page.getByRole("button", { name: "Show preview", exact: true }).click();
+  // Where the bar's right part is too narrow for every control on one row,
+  // the preview's controls are rows of the document's menu instead.
+  const showPreview = page.getByRole("button", {
+    name: "Show preview",
+    exact: true,
+  });
+  if (await showPreview.isVisible()) {
+    await showPreview.click();
+  } else {
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: /^Show preview/ }).click();
+  }
   const divider = page.getByRole("separator", { name: /^Resize the editor/ });
   await divider.focus();
   // The editor at the narrowest the divider allows.
