@@ -5169,12 +5169,10 @@ function buildContentRoute(
       holder.id,
       undefined,
       language.locale
-    ).catch(
-      (error: unknown) => {
-        if (isReadRefusal(error)) return null;
-        throw error;
-      }
-    );
+    ).catch((error: unknown) => {
+      if (isReadRefusal(error)) return null;
+      throw error;
+    });
     if (entry === null) return null;
     const route = entryRouteOf(holder.collection);
     const drawn = { ...entry, [TEMPLATE_DOCUMENT_KEY]: template.document };
@@ -5339,11 +5337,7 @@ function buildContentRoute(
       pages.nextly === undefined ? undefined : async () => pages.nextly
     );
     if (language === null) return own;
-    const held = await config.addresses(
-      language.locale,
-      limit,
-      mountSegments
-    );
+    const held = await config.addresses(language.locale, limit, mountSegments);
     // Then the entries' addresses under this route's mount, as the route
     // serves them, each listed once.
     const listed = new Set(own.map(param => param.slug.join("/")));

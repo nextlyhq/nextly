@@ -26,9 +26,7 @@ export interface RequestLanguage {
 async function startedNextly(): Promise<unknown> {
   // Loaded when first asked: the start imports the routing modules, so a
   // static import here would be a cycle.
-  const { requireNextlyOnceStarted } = await import(
-    "../../direct-api/nextly"
-  );
+  const { requireNextlyOnceStarted } = await import("../../direct-api/nextly");
   return requireNextlyOnceStarted();
 }
 

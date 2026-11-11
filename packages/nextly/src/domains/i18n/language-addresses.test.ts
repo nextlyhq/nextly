@@ -49,12 +49,14 @@ describe("a language's address, by prefix", () => {
       status: "resolved",
       path: "/about",
     });
-    expect(languageAddressFrom(undefined, undefined, "/about", "en")).toEqual(
-      { status: "resolved", path: "/about" }
-    );
-    expect(
-      languageAddressFrom({ by: "prefix" }, one, "/about", "en")
-    ).toEqual({ status: "resolved", path: "/en/about" });
+    expect(languageAddressFrom(undefined, undefined, "/about", "en")).toEqual({
+      status: "resolved",
+      path: "/about",
+    });
+    expect(languageAddressFrom({ by: "prefix" }, one, "/about", "en")).toEqual({
+      status: "resolved",
+      path: "/en/about",
+    });
   });
 
   it("has no address in a language the site does not have", () => {

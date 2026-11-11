@@ -99,7 +99,12 @@ export async function languageAddressOf(
   path: string,
   locale: string
 ): Promise<LanguageAddress> {
-  return languageAddressFrom(declaredRule(), await languagesNow(), path, locale);
+  return languageAddressFrom(
+    declaredRule(),
+    await languagesNow(),
+    path,
+    locale
+  );
 }
 
 /**

@@ -89,9 +89,7 @@ vi.mock("nextly/runtime", async importOriginal => {
         ? { locale: segment, fromSegment: true }
         : null;
     },
-    servedAddress: async (
-      ...args: Parameters<typeof actual.servedAddress>
-    ) => {
+    servedAddress: async (...args: Parameters<typeof actual.servedAddress>) => {
       const [path, language] = args;
       if (!language.fromSegment) return actual.servedAddress(...args);
       return `/${String(language.locale)}${path === "/" ? "" : path}`;
