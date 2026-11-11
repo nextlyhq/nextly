@@ -37,8 +37,11 @@ describe("a card's tier before it is drawn", () => {
     ]);
   });
 
-  it("in a 358 px phone column every card is medium", () => {
-    for (const w of WIDTHS) expect(predictedTier(w, 358)).toBe("medium");
+  it("in a 358 px phone column every card is medium but a quarter one, small at half the row", () => {
+    // A quarter-width card pairs with another at half the row below 640 px, about 171 px wide.
+    for (const w of WIDTHS) {
+      expect(predictedTier(w, 358)).toBe(w <= 3 ? "small" : "medium");
+    }
   });
 
   it("crosses from small to medium where the drawn card does: 6 columns on 680 and 720 px", () => {

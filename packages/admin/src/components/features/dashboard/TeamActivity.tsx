@@ -206,9 +206,8 @@ const EmptyState: React.FC = () => (
  * The dashboard's Team activity card, drawn from the rows its `load` read from
  * `system:activity`: framed, so the heading and the size are the card's.
  *
- * It draws the rows its body holds, at most the "Number of items" its reader
- * chose, through the one list card core's lists use, each row leading to the
- * entry or Single it is about. Its `load` asks one row more than the card
+ * It draws the "Number of entries" its reader chose, through the one list card
+ * core's lists use, each row leading to the entry or Single it is about. Its `load` asks one row more than the card
  * draws, and that row is not drawn: the feed has no list to open, so the card
  * has no footer, and a footer only ever draws a link. A run of one person's
  * saves is one row.

@@ -38,14 +38,18 @@ const answer = (items: CoreListWidgetData["items"]): CoreListWidgetData => ({
   items,
 });
 
-function draw(data: CoreListWidgetData, tier: SizeTier = "medium") {
+function draw(
+  data: CoreListWidgetData,
+  tier: SizeTier = "medium",
+  settings: Record<string, unknown> = {}
+) {
   return render(
     <CardTierContext.Provider value={tier}>
       {inFrame(
         <UpcomingReleasesCard
           widgetId="core/upcoming-releases"
           placementId="card-1"
-          settings={{}}
+          settings={settings}
           size={{ w: 4, h: 4, tier }}
           data={data}
           refreshing={false}
@@ -93,16 +97,15 @@ describe("the releases that need attention", () => {
 
 describe("the upcoming rows", () => {
   it("say there are more from the release rows alone, never the attention rows", () => {
-    // Five releases and two attention counts at medium: the attention line takes a row's room,
-    // so four releases are drawn, and the footer counts releases alone, at least five, never
-    // the seven rows the answer holds.
+    // Six releases and two attention counts at medium: five releases are drawn, and the footer
+    // counts releases alone, at least six, never the eight rows the answer holds.
     draw(
-      answer([...ATTENTION, ...[1, 2, 3, 4, 5].map(n => release(n))]),
+      answer([...ATTENTION, ...[1, 2, 3, 4, 5, 6].map(n => release(n))]),
       "medium"
     );
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(4);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
     expect(screen.getByTestId("list-card-footer")).toHaveTextContent(
-      "View all (5+)"
+      "View all (6+)"
     );
   });
 
@@ -116,20 +119,20 @@ describe("the upcoming rows", () => {
     expect(footer).toHaveAttribute("href", "/admin/releases");
   });
 
-  it("leave the attention line its room, so no row is drawn past the card's edge", () => {
-    // 🔴 Four rows tall, the body holds four rows, and none to spare: counted without the line
-    // above them, the fourth row would be cut off at the card's foot.
-    const releases = [1, 2, 3, 4, 5, 6].map(n => release(n));
-    const drawAt = (items: CoreListWidgetData["items"]) =>
+  it("draw the card's Number of entries, the attention line above them or not, whatever its height", () => {
+    // 🔴 A card that still kept the attention line's room drew one release fewer under it, and
+    // one counted by its height drew fewer on a shorter card.
+    const releases = Array.from({ length: 11 }, (_, i) => release(i + 1));
+    const drawAt = (items: CoreListWidgetData["items"], h: number) =>
       render(
-        <CardHeightContext.Provider value={4}>
+        <CardHeightContext.Provider value={h}>
           <CardTierContext.Provider value="medium">
             {inFrame(
               <UpcomingReleasesCard
                 widgetId="core/upcoming-releases"
                 placementId="card-1"
-                settings={{}}
-                size={{ w: 4, h: 4, tier: "medium" }}
+                settings={{ limit: 10 }}
+                size={{ w: 4, h, tier: "medium" }}
                 data={answer(items)}
                 refreshing={false}
                 retry={() => undefined}
@@ -138,12 +141,26 @@ describe("the upcoming rows", () => {
           </CardTierContext.Provider>
         </CardHeightContext.Provider>
       );
-    const { unmount } = drawAt(releases);
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(4);
-    unmount();
-    drawAt([...ATTENTION, ...releases]);
-    expect(screen.getByTestId("release-attention")).toBeInTheDocument();
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
+    for (const h of [2, 4, 8]) {
+      for (const items of [releases, [...ATTENTION, ...releases]]) {
+        const { unmount } = drawAt(items, h);
+        expect(screen.getAllByTestId("entity-row"), `h ${h}`).toHaveLength(10);
+        expect(screen.getByTestId("list-card-footer")).toHaveTextContent(
+          "View all (11+)"
+        );
+        unmount();
+      }
+    }
+  });
+
+  it("draw every release when there are fewer than its number, and View all with no count", () => {
+    draw(answer([...ATTENTION, release(1), release(2)]), "medium", {
+      limit: 20,
+    });
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(2);
+    const footer = screen.getByTestId("list-card-footer");
+    expect(footer).toHaveTextContent(/^View all/);
+    expect(footer.textContent).not.toMatch(/\(\d/);
   });
 
   it("draw each release as a date chip, its name, its entries and its status", () => {

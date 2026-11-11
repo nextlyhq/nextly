@@ -11,7 +11,7 @@ import type { RecentEntriesWidgetData } from "nextly/core-widget-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import { render, screen, within } from "@admin/__tests__/utils";
+import { cleanup, render, screen, within } from "@admin/__tests__/utils";
 
 import { MAX_META_FIELDS } from "../widgets/frame/entity-row";
 import { CardTierContext } from "../widgets/frame/tier";
@@ -51,11 +51,11 @@ const COLUMNS: RecentEntriesWidgetData["columns"] = [
   { name: "updatedAt", label: "Updated", type: "date" },
 ];
 
-/** The card's data: four entries, and the read's own count of them when it gave one. */
-function answered(total?: number): RecentEntriesWidgetData {
+/** The card's data: `count` entries, four unless said, and the read's own count when it gave one. */
+function answered(total?: number, count = 4): RecentEntriesWidgetData {
   return {
     title: "headline",
-    rows: [1, 2, 3, 4].map(n => ({
+    rows: Array.from({ length: count }, (_, i) => i + 1).map(n => ({
       id: `e${n}`,
       headline: `Story ${n}`,
       status: "published",
@@ -79,7 +79,12 @@ function listed(
   return { title: "headline", rows, columns };
 }
 
-function drawAt(tier: SizeTier, data: RecentEntriesWidgetData = DATA) {
+function drawAt(
+  tier: SizeTier,
+  data: RecentEntriesWidgetData = DATA,
+  /** The card's "Number of entries", where its reader set one. */
+  limit?: number
+) {
   render(
     <CardTierContext.Provider value={tier}>
       {inFrame(
@@ -90,6 +95,7 @@ function drawAt(tier: SizeTier, data: RecentEntriesWidgetData = DATA) {
             collection: "posts",
             filter: FILTER,
             sort: "-updatedAt",
+            ...(limit === undefined ? {} : { limit }),
           }}
           size={{ w: 6, h: 4, tier }}
           data={data}
@@ -100,6 +106,68 @@ function drawAt(tier: SizeTier, data: RecentEntriesWidgetData = DATA) {
     </CardTierContext.Provider>
   );
 }
+
+/** The rows the card draws, as list rows below large and table rows at it. */
+const drawnRows = () => [
+  ...screen.queryAllByTestId("entity-row"),
+  ...screen.queryAllByTestId("list-card-table-row"),
+];
+
+/** The footer's View all link: its shown count, if any, and its address read whole. */
+function viewAll() {
+  const link = screen.getByRole("link", { name: /^View all/ });
+  const url = new URL(link.getAttribute("href") ?? "", "http://admin.test");
+  return {
+    count: /^View all \(([^)]*)\)/.exec(link.textContent ?? "")?.[1] ?? null,
+    path: url.pathname,
+    where: JSON.parse(url.searchParams.get("where") ?? "null") as unknown,
+    sort: url.searchParams.get("sort"),
+  };
+}
+
+describe("the Recent entries card's Number of entries", () => {
+  it.each([10, 20])(
+    "draws %i entries of the one more its load read, and View all (N) to the whole list",
+    limit => {
+      // The load asked its number and one more; the read counted 42 in all.
+      for (const tier of ["small", "medium", "large"] as const) {
+        drawAt(tier, answered(42, limit + 1), limit);
+        expect(drawnRows(), tier).toHaveLength(limit);
+        expect(screen.queryByText(`Story ${limit + 1}`)).toBeNull();
+        expect(viewAll()).toEqual({
+          count: "42",
+          path: "/admin/collections/posts",
+          where: FILTER,
+          sort: "-updatedAt",
+        });
+        cleanup();
+      }
+    }
+  );
+
+  it("says at least the rows it read when the read counted none, from the one more", () => {
+    drawAt("medium", answered(undefined, 11), 10);
+    expect(drawnRows()).toHaveLength(10);
+    expect(viewAll().count).toBe("11+");
+  });
+
+  it("draws every entry when there are fewer than its number, with View all and no count", () => {
+    drawAt("medium", answered(4, 4), 10);
+    expect(drawnRows()).toHaveLength(4);
+    expect(viewAll()).toEqual({
+      count: null,
+      path: "/admin/collections/posts",
+      where: FILTER,
+      sort: "-updatedAt",
+    });
+  });
+
+  it("draws five until its reader sets a number", () => {
+    drawAt("large", answered(undefined, 6));
+    expect(drawnRows()).toHaveLength(5);
+    expect(viewAll().count).toBe("6+");
+  });
+});
 
 describe("the Recent entries card", () => {
   it.each(["small", "medium", "large"] as const)(
@@ -131,8 +199,8 @@ describe("the Recent entries card", () => {
   );
 
   it("counts View all as a floor from the extra row when the read gave no total", () => {
-    // Four entries asked as six: a small card draws three, and the fourth says at least four.
-    drawAt("small");
+    // Four entries asked as four: a card of three draws three, and the fourth says at least four.
+    drawAt("small", DATA, 3);
     expect(screen.getByRole("link", { name: /^View all/ })).toHaveTextContent(
       "View all (4+)"
     );
@@ -150,18 +218,19 @@ describe("the Recent entries card", () => {
     }
   );
 
-  it("lists three entries when small", () => {
+  it("lists every entry it was answered when small, as many as when medium", () => {
+    // 🔴 Counted by its width, a small card drew three of these four.
     drawAt("small");
     const list = screen.getByTestId("list-card-rows");
-    expect(within(list).getAllByTestId("entity-row")).toHaveLength(3);
+    expect(within(list).getAllByTestId("entity-row")).toHaveLength(4);
   });
 
-  it("keeps each row's status when small, in its three rows", () => {
-    // Below large a row's slots stack the same way at every width: small draws fewer rows,
-    // each saying what a medium one says.
+  it("keeps each row's status when small", () => {
+    // Below large a row's slots stack the same way at every width: a small row says what a
+    // medium one says.
     drawAt("small");
     const rows = screen.getAllByTestId("entity-row");
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     expect(
       within(rows[0]).getByTestId("entity-row-trailing")
     ).toHaveTextContent("Published");

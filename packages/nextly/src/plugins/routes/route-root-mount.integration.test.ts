@@ -34,6 +34,14 @@ const rootPlugin = definePlugin({
         handler: () => Response.json({ servedBy: "plugin" }),
       },
       {
+        // A site root file, which `withNextly` rewrites to this handler.
+        method: "GET",
+        path: "/robots.txt",
+        mount: "root",
+        public: true,
+        handler: () => new Response("User-agent: *\nAllow: /\n"),
+      },
+      {
         method: "GET",
         path: "/collections",
         mount: "root",
@@ -62,6 +70,13 @@ describe("a root-mounted plugin route", () => {
     handle = await createTestNextly({ plugins: [rootPlugin] });
     const res = await get(["newsletter-signup"]);
     expect(await res.json()).toEqual({ servedBy: "plugin" });
+  });
+
+  it("answers a site root file, the address withNextly rewrites it to", async () => {
+    handle = await createTestNextly({ plugins: [rootPlugin] });
+    const res = await get(["robots.txt"]);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("User-agent: *\nAllow: /\n");
   });
 
   it("does NOT answer a path core serves", async () => {

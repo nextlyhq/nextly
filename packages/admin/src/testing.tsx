@@ -21,7 +21,8 @@ import type { RegisteredWidgetMeta } from "./types/branding";
 
 /**
  * A card's grid size, `w` columns by `h` rows, and the tier the dashboard's
- * width draws it at, medium when left out.
+ * width draws it at, medium when left out. The card is drawn at that tier; its
+ * height is its content's, whatever `h` says.
  */
 interface CardSize {
   w: number;
@@ -57,7 +58,6 @@ export function widgetCardElement(
   if (widget === undefined) {
     throw new Error(`widgetCardElement: ${definition.id} could not be drawn`);
   }
-  const size = options.size ?? definition.size?.default;
   return (
     <div
       className={`nextly-admin${options.theme === "dark" ? " dark" : ""}`}
@@ -66,10 +66,9 @@ export function widgetCardElement(
       <WidgetRenderer
         definition={widget}
         slot={options.slot}
-        answerSize={{
-          tier: options.size?.tier ?? "medium",
-          ...(size === undefined ? {} : { h: size.h }),
-        }}
+        // The tier the card's size is drawn at, medium when left out; its rows are its
+        // "Number of entries", whatever its size, as a card is as tall as its content.
+        tier={options.size?.tier ?? "medium"}
       />
     </div>
   );
