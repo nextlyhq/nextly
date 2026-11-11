@@ -171,12 +171,8 @@ export async function orphanOwnedPermissionsOnCommandConnection(
   owner: string,
   logger: Logger
 ): Promise<void> {
-  const serviceLogger: ServiceLogger = {
-    debug: message => logger.debug(message),
-    info: message => logger.info(message),
-    warn: message => logger.warn(message),
-    error: message => logger.error(message),
-  };
+  // The command's own logger, each level as it is: a mark set is the operator's to hear.
+  const serviceLogger: ServiceLogger = logger;
   const result = await onCommandConnection(pooled, serviceLogger, adapter =>
     new PermissionSeedService(adapter, serviceLogger).markOrphanedPermissions(
       [],
