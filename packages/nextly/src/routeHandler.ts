@@ -1966,6 +1966,7 @@ const NO_WIDGETS: WidgetAudience = {
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
   readableCollections: new Set(),
+  readsUsers: false,
 };
 
 /**
@@ -2203,7 +2204,11 @@ async function buildAdminMeta(
   const widgets = publishableWidgets()
     .filter(widget => audience.declared.has(widget.id))
     .map(widget =>
-      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+      collectionDefaultForReader(
+        actionsForAudience(widget, audience),
+        readable,
+        audience.readsUsers
+      )
     );
   if (widgets.length > 0) {
     workspace.widgets = widgets;
