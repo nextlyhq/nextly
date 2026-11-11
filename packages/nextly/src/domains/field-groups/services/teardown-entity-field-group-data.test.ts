@@ -466,10 +466,11 @@ describe("teardownEntityComponentData case-distinct catalogs", () => {
   });
 });
 
-describe("teardownEntityComponentData follows a deep chain without rescanning every table", () => {
-  it("reads below the entity only the tables its definitions place, however deep the chain", async () => {
-    // Six field groups, each placing the next directly, beside ten that place nothing and that
-    // nothing places. One row per level belongs to the entity.
+describe("teardownEntityComponentData follows a deep chain", () => {
+  it("deletes every level, whatever the definitions place now, probing each table once", async () => {
+    // Six field groups, each with a row parented to the previous level's, beside ten tables that
+    // hold nothing of the entity's. No definition places any of them: every one has since stopped,
+    // which leaves the rows stored where they were written.
     const chain = ["l1", "l2", "l3", "l4", "l5", "l6"];
     const others = Array.from({ length: 10 }, (_, i) => `x${i}`);
     const parentOf = new Map(
@@ -478,8 +479,22 @@ describe("teardownEntityComponentData follows a deep chain without rescanning ev
         i === 0 ? "dc_posts" : `comp_${chain[i - 1]}`,
       ])
     );
+    const probes = new Map<string, number>();
     const reads = new Map<string, number>();
     const deleted: string[] = [];
+    type Condition = { column: string; op?: string; value?: unknown };
+    // The resolvability probe matches nothing by asking for a row with no id.
+    const isProbe = (conditions: Condition[]) =>
+      conditions.some(c => c.column === "id" && c.op === "IS NULL");
+    const childRowsOf = (table: string, conditions: Condition[]) => {
+      const parent = conditions.find(c => c.column === "_parent_table")?.value;
+      return parentOf.get(table) === parent ? [{ id: `${table}-1` }] : [];
+    };
+    const registryRows = [...chain, ...others].map(slug => ({
+      slug,
+      table_name: `comp_${slug}`,
+      fields: [],
+    }));
     const adapter = {
       dialect: "postgresql" as const,
       listTables: vi
@@ -496,40 +511,13 @@ describe("teardownEntityComponentData follows a deep chain without rescanning ev
       }),
       executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
       select: vi.fn(
-        async (
-          table: string,
-          options?: { where?: { and?: { column: string; value: unknown }[] } }
-        ) => {
-          if (table === "dynamic_components") {
-            return [
-              ...chain.map((slug, i) => ({
-                slug,
-                table_name: `comp_${slug}`,
-                fields:
-                  i + 1 < chain.length
-                    ? [
-                        {
-                          name: chain[i + 1],
-                          type: "component",
-                          component: chain[i + 1],
-                        },
-                      ]
-                    : [],
-              })),
-              ...others.map(slug => ({
-                slug,
-                table_name: `comp_${slug}`,
-                fields: [],
-              })),
-            ];
-          }
-          reads.set(table, (reads.get(table) ?? 0) + 1);
-          const parent = options?.where?.and?.find(
-            condition => condition.column === "_parent_table"
-          )?.value;
-          return parent !== undefined && parentOf.get(table) === parent
-            ? [{ id: `${table}-1` }]
-            : [];
+        async (table: string, options?: { where?: { and?: Condition[] } }) => {
+          if (table === "dynamic_components") return registryRows;
+          const conditions = options?.where?.and ?? [];
+          const probe = isProbe(conditions);
+          const tally = probe ? probes : reads;
+          tally.set(table, (tally.get(table) ?? 0) + 1);
+          return probe ? [] : childRowsOf(table, conditions);
         }
       ),
     };
@@ -539,14 +527,15 @@ describe("teardownEntityComponentData follows a deep chain without rescanning ev
       parentTable: "dc_posts",
     });
 
-    // Every level of the chain went.
+    // Every level of the chain went, though no definition places it.
     expect(new Set(deleted)).toEqual(
       new Set(chain.map(slug => `comp_${slug}`))
     );
-    // A table nothing places is read for the entity's own level and its probe, never again: a
-    // sweep that read every table at every level would read each once per level of the chain.
-    for (const slug of others) {
-      expect(reads.get(`comp_${slug}`) ?? 0).toBeLessThanOrEqual(2);
+    for (const slug of [...chain, ...others]) {
+      // Resolvability is the table's, so it is asked once, not once per level.
+      expect(probes.get(`comp_${slug}`)).toBe(1);
+      // Each level reads every table: the entity's, then each of the six chain levels.
+      expect(reads.get(`comp_${slug}`)).toBe(chain.length + 1);
     }
   });
 });

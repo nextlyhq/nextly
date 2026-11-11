@@ -51,6 +51,7 @@ import {
   reachesPasswordField,
   storedPasswordValues,
 } from "../../../shared/lib/password-fields";
+import { isPlainObject } from "../../../shared/lib/plain-copy";
 import {
   assignRepeaterRowIds,
   reachesRepeaterField,
@@ -82,7 +83,10 @@ import {
   containedComponentResolver,
   type ComponentFieldResolver,
 } from "../../versions/tag-component-types";
-import { applyInlineFieldGroupWriteAccess } from "../field-group-write-access";
+import {
+  applyInlineFieldGroupWriteAccess,
+  directFieldGroupFields,
+} from "../field-group-write-access";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
@@ -399,6 +403,48 @@ function resolveZoneInstances(
 ): ComponentInstanceData[] {
   const raw = field.repeatable ? value : [value];
   return Array.isArray(raw) ? (raw as ComponentInstanceData[]) : [];
+}
+
+/**
+ * The field groups a field's present value writes, each with the instance it writes when that is
+ * an object: what the preflight judges, read as `saveComponentData` dispatches it.
+ *
+ * Its precedence is mirrored exactly: a field carrying both `components` and `component` is
+ * written as a dynamic zone, so deciding `component` first here would judge a type the write never
+ * touches. For a zone the type travels per instance, so the PAYLOAD decides what is written, not
+ * the field's list of permitted types; walking that list instead would refuse a good save whenever
+ * some other permitted type happened to be missing its companion. Each type is read through the
+ * same reader the write uses: an instance the write recognises but this did not would skip the
+ * check and fail later, inside the transaction or at the driver. A single field group is judged
+ * whatever its value's shape, as before; only an object holds field groups of its own.
+ */
+function instancesWrittenBy(
+  field: FieldGroupFieldConfig,
+  value: unknown
+): { slug: string; instance: Record<string, unknown> | undefined }[] {
+  const written: {
+    slug: string;
+    instance: Record<string, unknown> | undefined;
+  }[] = [];
+  const objectOrNone = (item: unknown) =>
+    isPlainObject(item) ? item : undefined;
+  if (field.components && field.components.length > 0) {
+    for (const instance of resolveZoneInstances(field, value)) {
+      const type = readFieldGroupType(instance);
+      if (type !== undefined && field.components.includes(type)) {
+        written.push({ slug: type, instance: objectOrNone(instance) });
+      }
+    }
+  } else if (field.component) {
+    const instances = resolveZoneInstances(field, value);
+    if (instances.length === 0) {
+      written.push({ slug: field.component, instance: undefined });
+    }
+    for (const instance of instances) {
+      written.push({ slug: field.component, instance: objectOrNone(instance) });
+    }
+  }
+  return written;
 }
 
 /**
@@ -803,69 +849,91 @@ export class FieldGroupMutationService extends BaseService {
     params: Pick<SaveComponentDataParams, "fields" | "data" | "locale">
   ): Promise<void> {
     if (!this.localization) return;
-    const resolved = new Set<string>();
-    for (const field of params.fields) {
-      if (!isFieldGroupField(field)) continue;
-      // Nothing is written for a virtual field-group field (see
-      // `eachFieldGroupWrite`), so it has no companion to be ready.
-      if (isVirtualField(field)) continue;
+    await this.preflightLocalizedLevel(params.fields, params.data, {
+      locale: params.locale,
+      warmed: new Set(),
+      judged: new Set(),
+    });
+  }
 
-      // Same boundary resolution the write performs, so the references this
-      // check warms and judges are the ones the write will read.
-      const f = withResolvedFieldGroupReferences(field);
-
+  /**
+   * One level of {@link assertLocalizedFieldGroupsWritable}: an entry's field groups or, a level
+   * down, those placed directly in an instance the payload writes. The write reaches those inside
+   * its transaction the same way, where a readiness verdict can only be read, so each level's is
+   * resolved here, before it opens.
+   */
+  private async preflightLocalizedLevel(
+    fields: readonly FieldConfig[],
+    data: Record<string, unknown>,
+    seen: {
+      locale: string | undefined;
+      /** Field groups whose readiness, and that of all beneath them, is resolved. */
+      warmed: Set<string>;
+      /** Field groups the payload writes, judged once each. */
+      judged: Set<string>;
+    }
+  ): Promise<void> {
+    // The same fields the write walks, references resolved the same way, virtual ones left out:
+    // nothing is written for those, so they have no companion to be ready.
+    for (const f of this.storedFieldGroupFields(fields)) {
       // Warming comes FIRST, before the payload is consulted at all. A snapshot reads every
-      // component the entity holds, not the ones this save happens to mention, and it reads them
-      // through the caller's transaction where readiness can only be read and never resolved. A
-      // field omitted from the payload entirely is the commonest way to reach that state, so
-      // skipping it here would leave its components with no verdict and their translated values
-      // missing from the durable record.
+      // component the entity holds, at every depth, not the ones this save happens to mention,
+      // and it reads them through the caller's transaction where readiness can only be read and
+      // never resolved. A field omitted from the payload entirely is the commonest way to reach
+      // that state, so skipping it here would leave its components with no verdict and their
+      // translated values missing from the durable record.
       //
       // Warming is not refusing. The refusal below still walks only what the payload writes,
       // because a permitted type whose companion is missing must not fail a save that never
       // mentions it.
       for (const permitted of f.components ?? [f.component]) {
         if (typeof permitted !== "string") continue;
-        await this.resolveComponentReadiness(permitted);
+        await this.warmReadinessBeneath(permitted, seen.warmed);
       }
 
-      const value = params.data[field.name];
+      const value = data[f.name];
       if (value === undefined || value === null) continue;
-      // Mirror `saveComponentData`'s dispatch exactly, including its precedence: a field
-      // carrying both `components` and `component` is written as a dynamic zone, so
-      // deciding `component` first here would check a type the write never touches.
-      //
-      // For a dynamic zone the type travels per instance, so the PAYLOAD decides what is
-      // written, not the field's list of permitted types. Walking the permitted list
-      // instead would probe types absent from this write — and would refuse a perfectly
-      // good save whenever some other permitted type happened to be missing its
-      // companion. Deduplicated, because a zone commonly repeats one type.
-      const slugs = new Set<string>();
-      if (f.components && f.components.length > 0) {
-        for (const instance of resolveZoneInstances(field, value)) {
-          // Asked through the same reader the WRITE uses. This preflight exists to raise a
-          // conflict before the transaction opens, so it has to judge exactly the instances the
-          // write will accept — an instance the write recognises but this does not skips the
-          // check entirely and fails later, inside the transaction or at the driver.
-          const type = readFieldGroupType(instance);
-          if (type !== undefined && f.components.includes(type)) {
-            slugs.add(type);
+      for (const { slug, instance } of instancesWrittenBy(f, value)) {
+        const meta = await this.registryService.getComponentBySlug(slug);
+        if (!meta) continue;
+        if (!seen.judged.has(slug)) {
+          seen.judged.add(slug);
+          // Reuse the same split the write performs: it raises the 409 when the companion is
+          // missing and the fallback is unavailable, which is exactly the decision needed here —
+          // and on the pooled adapter, outside any transaction. Resolving it here is also what
+          // the write inside the transaction reads back, so it never has to ask a question that
+          // would abort the transaction to answer.
+          if (storesPerLanguage(meta)) {
+            await this.splitLocalizedComponent(meta, {}, seen.locale);
           }
         }
-      } else if (f.component) {
-        slugs.add(f.component);
+        // The field groups placed directly in this instance are written a level down, inside the
+        // same transaction: judged the same way, from what this instance holds.
+        if (instance !== undefined) {
+          await this.preflightLocalizedLevel(meta.fields, instance, seen);
+        }
       }
-      for (const slug of slugs) {
-        if (resolved.has(slug)) continue;
-        resolved.add(slug);
-        const meta = await this.registryService.getComponentBySlug(slug);
-        if (!meta || !storesPerLanguage(meta)) continue;
-        // Reuse the same split the write performs: it raises the 409 when the
-        // companion is missing and the fallback is unavailable, which is exactly the
-        // decision needed here — and on the pooled adapter, outside any transaction.
-        // Resolving it here is also what the write inside the transaction reads back,
-        // so it never has to ask a question that would abort the transaction to answer.
-        await this.splitLocalizedComponent(meta, {}, params.locale);
+    }
+  }
+
+  /**
+   * Resolve `slug`'s companion readiness and that of every field group placed directly beneath it,
+   * at any depth, without judging any. Each is resolved once; a cycle among stored definitions
+   * ends at one already resolved.
+   */
+  private async warmReadinessBeneath(
+    slug: string,
+    warmed: Set<string>
+  ): Promise<void> {
+    if (warmed.has(slug)) return;
+    warmed.add(slug);
+    await this.resolveComponentReadiness(slug);
+    const meta = await this.registryService.getComponentBySlug(slug);
+    if (!meta) return;
+    for (const f of this.storedFieldGroupFields(meta.fields)) {
+      for (const permitted of f.components ?? [f.component]) {
+        if (typeof permitted !== "string") continue;
+        await this.warmReadinessBeneath(permitted, warmed);
       }
     }
   }
@@ -1023,15 +1091,10 @@ export class FieldGroupMutationService extends BaseService {
   async deleteComponentData(params: DeleteComponentDataParams): Promise<void> {
     const { parentId, parentTable, fields } = params;
 
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
-
-      // Same boundary resolution as the save paths: the row cleanup finds the
-      // tables through the field's slugs, which a migrated definition carries
-      // under fieldGroup / fieldGroups — unresolved, every nested row the
-      // entry owns would be orphaned here.
-      const f = withResolvedFieldGroupReferences(field);
-
+    // Resolved as the save paths resolve them: the row cleanup finds the tables through the
+    // field's slugs, which a migrated definition carries under fieldGroup / fieldGroups —
+    // unresolved, every nested row the entry owns would be orphaned here.
+    for (const f of this.storedFieldGroupFields(fields)) {
       await this.deleteFieldComponentData(parentId, parentTable, f.name, f);
     }
   }
@@ -1042,12 +1105,8 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     const { parentId, parentTable, fields } = params;
 
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
-
-      // Same boundary resolution as the pooled delete path above.
-      const f = withResolvedFieldGroupReferences(field);
-
+    // Same fields, resolved the same way, as the pooled delete path above.
+    for (const f of this.storedFieldGroupFields(fields)) {
       await this.deleteFieldComponentDataInTx(
         tx,
         parentId,
@@ -2830,16 +2889,17 @@ export class FieldGroupMutationService extends BaseService {
 
   /**
    * The field-group fields among `fields` whose instances are rows of their own, with their
-   * references resolved onto the keys the save paths read. A virtual one stores nothing: its value
-   * is computed on read, and a document that carries it back must not become instance rows. Every
-   * field-group write, at an entry or a level down in an instance, and the delete that follows rows
-   * down from an instance, ask this, so they agree on which fields hold rows beneath one.
+   * references resolved onto the keys the save paths read: those at the top of `fields` and those
+   * in a group with no name, which only lays them out and stores them where it sits. A virtual one
+   * stores nothing: its value is computed on read, and a document that carries it back must not
+   * become instance rows. Every field-group write, at an entry or a level down in an instance, its
+   * preflight, and every delete, ask this, so they agree on which fields hold rows beneath one.
    */
   private storedFieldGroupFields(
     fields: readonly FieldConfig[]
   ): FieldGroupFieldConfig[] {
     const found: FieldGroupFieldConfig[] = [];
-    for (const field of fields) {
+    for (const field of directFieldGroupFields(fields)) {
       if (!isFieldGroupField(field) || isVirtualField(field)) continue;
       found.push(withResolvedFieldGroupReferences(field));
     }

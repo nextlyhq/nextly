@@ -41,7 +41,6 @@ import {
   resolveCatalogName,
 } from "../../schema/utils/resolve-catalog-name";
 import { MIGRATION_TARGET } from "../migration/manifest";
-import { fieldGroupPlacements } from "../storage/field-group-placements";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
 /**
@@ -213,19 +212,10 @@ function chunk<T>(items: T[], size: number): T[][] {
  * registry table is absent (a database that predates it, or a teardown running
  * before system tables exist), leaving prefix discovery as the only source.
  */
-/**
- * The registered component tables, and, for each, the tables of the components its definition
- * places directly in it: the only tables that can hold a row whose parent is one of its rows.
- */
-interface RegisteredComponentTables {
-  tables: string[];
-  childTablesOf: Map<string, string[]>;
-}
-
 async function listRegisteredComponentTables(
   adapter: TeardownComponentDataAdapter,
   discovered: string[]
-): Promise<RegisteredComponentTables> {
+): Promise<string[]> {
   // Exact-first, then case-insensitive only where the server folds. Deleting
   // rows from a table resolved by folding a name the server treats as distinct
   // would delete another table's rows, so the comparison rules come from the
@@ -247,11 +237,7 @@ async function listRegisteredComponentTables(
   // catalog reports. That spelling is what the metadata exclusion below needs.
   const declared = await registryTableName(adapter);
   const registryTable = resolveCatalogName(catalog, declared);
-  const none: RegisteredComponentTables = {
-    tables: [],
-    childTablesOf: new Map(),
-  };
-  if (registryTable === undefined) return none;
+  if (registryTable === undefined) return [];
 
   // *How to address the registry through the ORM* is a different question with a
   // different answer: the schema registry keys static schemas by the name the
@@ -267,103 +253,27 @@ async function listRegisteredComponentTables(
   // stays complete for everything such an executor can reach. Probing rather
   // than catching keeps genuine read failures propagating instead of being
   // mistaken for "nothing registered".
-  if (!(await isResolvable(adapter, declared))) return none;
+  if (!(await isResolvable(adapter, declared))) return [];
 
   const rows = await adapter.select<Record<string, unknown>>(declared, {});
 
-  const tableOf = registeredTablesOf(rows, catalog, registryTable);
-  return {
-    tables: [...new Set(tableOf.values())],
-    childTablesOf: childTablesOfRows(rows, tableOf),
-  };
-}
-
-/**
- * Each registry row's table, keyed by its slug, as the catalog spells it; a row whose table does
- * not resolve is left out.
- */
-function registeredTablesOf(
-  rows: readonly Record<string, unknown>[],
-  catalog: ReturnType<typeof indexCatalog>,
-  registryTable: string
-): Map<string, string> {
-  const tableOf = new Map<string, string>();
-  for (const row of rows) {
-    const named = row.table_name ?? row.tableName;
-    if (typeof named !== "string" || named === "") continue;
-    // A registry row can name a table that was never created — a component
-    // whose migration is pending or failed. Probing one raises a missing-table
-    // error, and because this sweep precedes every entity delete, a single
-    // unmaterialized component would block all of them.
-    const table = resolveCatalogName(catalog, named);
-    // The registry is metadata, never component storage. A malformed row
-    // pointing back at it resolves to whatever spelling the catalog reports,
-    // so excluding it here — where that spelling is known — is what keeps it
-    // out; a caller comparing against the constant alone would miss a
-    // case-different spelling and probe the registry as an instance table.
-    if (table === undefined || table === registryTable) continue;
-    tableOf.set(typeof row.slug === "string" ? row.slug : table, table);
-  }
-  return tableOf;
-}
-
-/**
- * For each registered component table, the tables of the components its fields place directly in
- * it, read from the same rows: a component's rows are parents only to those, which are stored as
- * rows of their own. A row whose fields cannot be read is left out, so the sweep reads every
- * table beneath it.
- */
-function childTablesOfRows(
-  rows: readonly Record<string, unknown>[],
-  tableOf: ReadonlyMap<string, string>
-): Map<string, string[]> {
-  const childTablesOf = new Map<string, string[]>();
-  for (const row of rows) {
-    const own =
-      typeof row.slug === "string" ? tableOf.get(row.slug) : undefined;
-    const fields = parseFields(row.fields);
-    if (own === undefined || fields === undefined) continue;
-    const placed = fieldGroupPlacements(fields)
-      .filter(placement => placement.direct)
-      .flatMap(placement => placement.slugs);
-    childTablesOf.set(own, [
-      ...new Set(placed.flatMap(slug => tableOf.get(slug) ?? [])),
-    ]);
-  }
-  return childTablesOf;
-}
-
-/**
- * The tables a level can hold rows in: every component table beneath the entity itself; below
- * that, those of the components its frontier's tables place directly in them, and every table no
- * definition describes. A frontier table with no definition known reads every table.
- */
-function tablesBeneath(
-  level: readonly Frontier[],
-  known: {
-    componentTables: readonly string[];
-    childTablesOf: ReadonlyMap<string, readonly string[]>;
-    undescribed: readonly string[];
-  }
-): readonly string[] {
-  if (level.some(entry => entry.ids === null)) return known.componentTables;
-  const tables = new Set(known.undescribed);
-  for (const entry of level) {
-    const children = known.childTablesOf.get(entry.table);
-    if (children === undefined) return known.componentTables;
-    for (const child of children) tables.add(child);
-  }
-  return known.componentTables.filter(table => tables.has(table));
-}
-
-/** A registry row's fields, parsed when stored as JSON text; undefined when unreadable. */
-function parseFields(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  return (
+    rows
+      .map(row => row.table_name ?? row.tableName)
+      .filter((name): name is string => typeof name === "string" && name !== "")
+      // A registry row can name a table that was never created — a component
+      // whose migration is pending or failed. Probing one raises a missing-table
+      // error, and because this sweep precedes every entity delete, a single
+      // unmaterialized component would block all of them.
+      .map(name => resolveCatalogName(catalog, name))
+      .filter((name): name is string => name !== undefined)
+      // The registry is metadata, never component storage. A malformed row
+      // pointing back at it resolves to whatever spelling the catalog reports,
+      // so excluding it here — where that spelling is known — is what keeps it
+      // out; a caller comparing against the constant alone would miss a
+      // case-different spelling and probe the registry as an instance table.
+      .filter(name => name !== registryTable)
+  );
 }
 
 /**
@@ -399,7 +309,7 @@ export async function teardownEntityComponentData(
           name.startsWith(STORAGE_FORMAT.tablePrefix) ||
           name.startsWith(MIGRATION_TARGET.tablePrefix)
       ),
-      ...registered.tables,
+      ...registered,
     ]),
     // The registry itself is metadata, never component storage. A row pointing
     // at it would otherwise be probed as an instance table, where a missing
@@ -417,10 +327,6 @@ export async function teardownEntityComponentData(
   // unresolvable table is SAFE to skip depends on the frontier and is re-checked at every level.
   const unresolvable = new Set<string>();
   const resolvable = new Set<string>();
-  // A table no registry row describes may hold a row of any parent, so every level reads it.
-  const undescribed = componentTables.filter(
-    table => !registered.childTablesOf.has(table)
-  );
   let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
@@ -432,11 +338,11 @@ export async function teardownEntityComponentData(
   while (frontier.length > 0) {
     const nextFrontier: Frontier[] = [];
 
-    for (const componentTable of tablesBeneath(frontier, {
-      componentTables,
-      childTablesOf: registered.childTablesOf,
-      undescribed,
-    })) {
+    // Every component table, at every level: a row's parent is where it was written, which a
+    // definition as it stands now cannot vouch for — one that has since stopped placing a field
+    // group leaves that field group's rows stored beneath its own. Each read is a lookup on the
+    // parent index.
+    for (const componentTable of componentTables) {
       if (
         !resolvable.has(componentTable) &&
         (unresolvable.has(componentTable) ||

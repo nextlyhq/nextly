@@ -842,8 +842,14 @@ export function reachesFieldGroup(fields: readonly FieldConfig[]): boolean {
   return found;
 }
 
-/** The field-group fields directly on a document, through its layout containers. */
-function directFieldGroupFields(fields: readonly FieldConfig[]): FieldConfig[] {
+/**
+ * The field-group fields directly on a document, through its layout containers. A field group's
+ * own fields are such a document too, so every walk over the field groups stored as rows beneath
+ * an instance (its write, read and delete) asks this as well.
+ */
+export function directFieldGroupFields(
+  fields: readonly FieldConfig[]
+): FieldConfig[] {
   const found: FieldConfig[] = [];
   walkFieldsOnce(fields, field => {
     if (nameOf(field) === undefined) return subFieldsOf(field);

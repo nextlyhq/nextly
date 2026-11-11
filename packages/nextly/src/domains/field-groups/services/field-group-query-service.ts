@@ -45,6 +45,7 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { directFieldGroupFields } from "../field-group-write-access";
 import { passwordReachOf } from "../password-reach";
 import {
   isFieldGroupFieldType,
@@ -311,6 +312,17 @@ function instancesIn(values: readonly unknown[]): Record<string, unknown>[] {
 // import into collections just for a type predicate.
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return isFieldGroupFieldType(field.type);
+}
+
+/**
+ * The field-group fields whose instances are rows read at this level: those at the top of
+ * `fields`, and those in a group with no name, which only lays them out and stores them where it
+ * sits. The same fields the write stores rows for, from the same walk.
+ */
+function fieldGroupFieldsAt(
+  fields: readonly FieldConfig[]
+): FieldGroupFieldConfig[] {
+  return directFieldGroupFields(fields).filter(isFieldGroupField);
 }
 
 /**
@@ -847,8 +859,7 @@ export class FieldGroupQueryService extends BaseService {
 
     const results = languages.map(() => ({ ...entry }));
 
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
+    for (const field of fieldGroupFieldsAt(fields)) {
       const fieldName = field.name;
 
       if (!this.shouldPopulateField(fieldName, select)) {
@@ -950,7 +961,7 @@ export class FieldGroupQueryService extends BaseService {
     if (instances.length === 0) return;
     for (const [slug, group] of instancesBySlug(instances, field)) {
       const meta = await this.registryService.getComponent(slug, read.executor);
-      if (!meta.fields.some(isFieldGroupField)) continue;
+      if (fieldGroupFieldsAt(meta.fields).length === 0) continue;
       const filled = await this.populateComponentDataMany({
         entries: group,
         parentTable: meta.tableName,
@@ -1014,17 +1025,15 @@ export class FieldGroupQueryService extends BaseService {
     if (entryIds.length === 0) return entries;
 
     const componentFields: FieldGroupFieldConfig[] = [];
-    for (const field of fields) {
-      if (isFieldGroupField(field)) {
-        if (!this.shouldPopulateField(field.name, select)) {
-          continue;
-        }
-        // Resolved once, at collection: every reader below — the dispatch,
-        // the slug reads, and the populate default for a failed or absent
-        // entry — sees the references on the keys it opens, whichever
-        // spelling the stored definition carries.
-        componentFields.push(withResolvedFieldGroupReferences(field));
+    for (const field of fieldGroupFieldsAt(fields)) {
+      if (!this.shouldPopulateField(field.name, select)) {
+        continue;
       }
+      // Resolved once, at collection: every reader below — the dispatch,
+      // the slug reads, and the populate default for a failed or absent
+      // entry — sees the references on the keys it opens, whichever
+      // spelling the stored definition carries.
+      componentFields.push(withResolvedFieldGroupReferences(field));
     }
     if (componentFields.length === 0) return entries;
 
