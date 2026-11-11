@@ -72,6 +72,29 @@ describe("resolvePluginLanding", () => {
     ).toEqual({ kind: "resolved", href: "/admin/collections/data-exports" });
   });
 
+  it("follows the declared slug when renames chain onto another's name", () => {
+    // `reports` is registered as `exports`, and the declared `exports` as
+    // `data-exports`: the plugin's `exports` is the latter, whichever of its
+    // collections it declares first.
+    const renameMap = { reports: "exports", exports: "data-exports" };
+    for (const collections of [
+      ["reports", "exports"],
+      ["exports", "reports"],
+    ]) {
+      const chained = {
+        ...reportsPlugin({
+          landing: "/admin/collections/exports",
+          collections,
+        }),
+        renameMap,
+      };
+      expect(resolvePluginLanding(chained, undefined)).toEqual({
+        kind: "resolved",
+        href: "/admin/collections/data-exports",
+      });
+    }
+  });
+
   it("refuses a page the plugin does not register, or another plugin's", () => {
     for (const landing of [
       "/admin/plugins/acme-reports/missing",

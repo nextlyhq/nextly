@@ -95,12 +95,16 @@ function ownedDestination(
   if (path.startsWith(COLLECTIONS_PREFIX)) {
     const [named = ""] = path.slice(COLLECTIONS_PREFIX.length).split("/", 1);
     const renameMap = plugin.renameMap ?? {};
-    for (const slug of pluginCollectionSlugs(plugin)) {
-      const registered = renamedSlug(renameMap, slug);
-      if (named === slug) return retargetedTo(declared, slug, registered);
-      if (named === registered) return declared;
+    const slugs = pluginCollectionSlugs(plugin);
+    // A declared slug wins over a registered one across the whole set: renames
+    // may chain (`reports` to `exports`, `exports` to `data-exports`), and the
+    // plugin's author writes the slug they declared.
+    if (slugs.includes(named)) {
+      return retargetedTo(declared, named, renamedSlug(renameMap, named));
     }
-    return undefined;
+    return slugs.some(slug => renamedSlug(renameMap, slug) === named)
+      ? declared
+      : undefined;
   }
 
   // One of the plugin's pages, matched as a menu item linking to one is.
