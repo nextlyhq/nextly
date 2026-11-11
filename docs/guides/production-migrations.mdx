@@ -297,7 +297,7 @@ Specific examples:
 1. Connects to the database via `DATABASE_URL`.
 2. Reads the `nextly_schema_events` ledger to see which `.sql` files have been applied (a `file_apply` event per file).
 3. Checks the app's history against the folder before it changes anything, core tables included. **An applied migration the folder lacks = abort with `MIGRATION_MISSING` (exit 3)**: a newer build migrated this database, or a file was removed (see [A build older than the database](#a-build-older-than-the-database)). An unresolved attempt stops it as [Recovering from a failed migration](#recovering-from-a-failed-migration) says. **A hash mismatch on an applied file = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs. `migrate:down`, `migrate:baseline` and `nextly upgrade --reconcile-core` run the same checks first, with the same exit codes.
-4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
+4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp). A pending file whose snapshot an earlier release's `migrate:create` wrote, without the registry metadata, is refused before anything applies when it comes after a migration that carries the metadata, or once the database has its registry record; see [The first `nextly migrate` on this release](#the-first-nextly-migrate-on-this-release).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
 7. Adds the permissions and roles the database lacks, and sets the preset roles' grants, under the same lock and after the registry rows are written. It adds Nextly's own permissions, each registered collection's and Single's (with the ones an attached workflow's steps add), the ones your config declares and each plugin's, and the roles your plugins declare. A declared role that bundles a permission which does not exist yet is not created until it does, and the run says so. Then it brings each preset role (Admin, Editor, Author, Viewer) to the permissions its preset grants, adding and removing only what differs, so a database set up by `nextly migrate` alone has an Admin role that holds them before the first start. When it changes a grant, it records every collection's and Single's cache tags as expired in the database, so running instances stop serving cached content that the change no longer allows. A run that finds nothing to add or change writes nothing to these tables. It never marks a permission as no longer declared, and it keeps every grant of one already marked. If a permission can't be written, the run fails after its migrations have applied; run `nextly migrate` again to finish.
@@ -324,6 +324,38 @@ its file returns it is never run again and is checked against its recorded check
 `nextly migrate:status` lists it as `applied (file removed)`, as information, where an applied
 migration whose file is gone with no removal recorded shows as `applied (file missing)`. The
 `--json` output carries the same value in `status`.
+
+### The first `nextly migrate` on this release
+
+The registry rows of your collections, Singles and field groups come from the migrations: each
+snapshot `nextly migrate:create` writes records every entity's declaration. A snapshot written by
+an earlier release does not, and a database migrated by one has no record of where the
+migrations took over. So the first `nextly migrate` on this release, on an existing site or a
+new one, writes a **registry record** once, naming the newest applied app migration (or the point
+before any). Which first run it is depends only on what the database and the migrations folder
+hold, so a run that stopped part-way is finished by the next one:
+
+- **No migration carries the registry metadata** (every snapshot predates it, or there is no app
+  migration yet): the run applies the pending migrations, then writes the registry rows from the
+  configuration it runs with, adds the permissions and sets the preset grants, and writes the
+  record with those rows and the live permissions kept as the **registry baseline**, all in one
+  transaction. It says how many rows it wrote from the configuration. Run this first migrate from
+  your production build: the configuration it runs with becomes the baseline.
+- **A pending migration carries it, and none applied does**: the run applies the migrations
+  ordered before it, then, just before it applies, records the registry and the live permissions
+  as they stand as the baseline. Then it applies the rest, and the rows come from the newest
+  applied snapshot.
+- **An applied migration already carries it**: before anything applies, the run writes the rows
+  from the newest applied snapshot, adds the permissions and sets the preset grants, and writes
+  the record at that migration, in one transaction. That point has its snapshot, so no baseline is
+  kept.
+
+Once the record exists, the registry rows only ever come from the migrations, never again from
+the configuration: change a declaration, then run `nextly migrate:create` and `nextly migrate`.
+A pending migration written by an earlier release's `migrate:create` is refused, naming the file,
+when it comes after one that carries the metadata or after the record, since nothing would
+record the registry after it. Replace it with one written by this release's
+`nextly migrate:create`.
 
 ### The schema version a production start checks
 
