@@ -21,6 +21,8 @@ const table = (keyed: string[]): TableSpec => ({
     columns: [column],
     referencesTable: "dc_authors",
     referencesColumns: ["id"],
+    onDelete: "set null",
+    onUpdate: "no action",
   })),
 });
 
@@ -57,7 +59,8 @@ describe("reachesRelationStorage", () => {
     expect(
       await reachesRelationStorage({
         before: [title, one],
-        after: [{ ...title, label: "Headline" }, one],
+        // The title becomes a textarea: a change, to no relation.
+        after: [{ ...title, type: "textarea" }, one],
         liveTable,
       })
     ).toBe(false);
