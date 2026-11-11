@@ -21,7 +21,11 @@ import {
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { pageLanguageLinks } from "../languages/head";
-import { heldLanguages, type HeldLanguages } from "../languages/versions";
+import {
+  heldLanguages,
+  singleIn,
+  type HeldLanguages,
+} from "../languages/versions";
 import { originOf } from "../origin";
 import { listPages } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
@@ -29,6 +33,7 @@ import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
 import { redirectMeeting } from "../redirects/meeting";
 import { redirectOf, type StoredRedirect } from "../redirects/store";
+import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import type { ReadSocialCardRules } from "../social/card";
@@ -46,6 +51,7 @@ import {
 } from "./contract";
 import { addressShapes, brokenLinks } from "./links";
 import { canonicalIsOwn, pageProblems } from "./page-checks";
+import { pageTypeOf, singleKey } from "./page-types";
 import {
   listingProblems,
   noAddressProblems,
@@ -76,26 +82,52 @@ export interface CheckReaders {
 
 /** What the checks run over: the types SEO is added to, and the rules. */
 export interface ProblemChecks {
+  /** The collections SEO is added to. */
   targets: readonly string[];
+  /** The Singles SEO is added to. */
+  singles: readonly string[];
   readers: CheckReaders;
+}
+
+/** Every type the checks read pages of, by its kept key. */
+function checkedKeys(checks: ProblemChecks): string[] {
+  return [...checks.targets, ...checks.singles.map(singleKey)];
 }
 
 /** The fields a page is named by in the list, in the order they are tried. */
 const LABEL_FIELDS = ["title", "name", "heading", "slug"] as const;
 
-/** A page as the list names it: its title, or else its id. */
-function labelOf(entry: Readonly<Record<string, unknown>>, id: string): string {
+/**
+ * A page as the list names it: its title, or else what names it otherwise,
+ * its id or a Single's own name.
+ */
+function labelOf(
+  entry: Readonly<Record<string, unknown>>,
+  otherwise: string
+): string {
   for (const field of LABEL_FIELDS) {
     const value = textOf(entry[field]);
     if (value !== undefined) return value;
   }
-  return id;
+  return otherwise;
+}
+
+/** A Single's name as code declares it, else its slug. */
+function singleLabel(ctx: PluginContext, slug: string): string {
+  for (const single of ctx.config.singles ?? []) {
+    if (!isRecord(single) || single.slug !== slug) continue;
+    const named = single.label;
+    const label = isRecord(named) ? textOf(named.singular) : textOf(named);
+    if (label !== undefined) return label;
+  }
+  return slug;
 }
 
 /**
  * The entries `ids` of `type` in `locale` (the default language where none),
  * read together as a route reads one: one level of links expanded, so a
- * media field reads as the media library's item. One missing is absent.
+ * media field reads as the media library's item. One missing is absent. A
+ * Single's one document is read as it is published.
  */
 async function readEntries(
   ctx: PluginContext,
@@ -103,6 +135,14 @@ async function readEntries(
   ids: readonly string[],
   locale: string | undefined
 ): Promise<Map<string, Readonly<Record<string, unknown>>>> {
+  const pageType = pageTypeOf(type);
+  if (pageType.kind === "single") {
+    const document = await singleIn(pageType.slug, locale);
+    const id = document === null ? undefined : String(document.id);
+    return id !== undefined && document !== null && ids.includes(id)
+      ? new Map([[id, document]])
+      : new Map();
+  }
   const { data } = await ctx.services.collections.listEntries(
     type,
     {
@@ -191,7 +231,7 @@ async function servedAddress(
   version: Version,
   entry: Readonly<Record<string, unknown>>
 ): Promise<string | undefined> {
-  const type = { kind: "collection" as const, slug: version.type };
+  const type = pageTypeOf(version.type);
   const own = await publicAddressOf(type, entry, version.locale);
   if (own.status !== "resolved" || !version.held.has(own.path)) {
     return undefined;
@@ -207,6 +247,34 @@ async function servedAddress(
   );
 }
 
+/** One language of a page as its head is asked for, from its entry. */
+async function inputOf(
+  ctx: PluginContext,
+  type: string,
+  entry: Readonly<Record<string, unknown>>,
+  locale: string | undefined
+): Promise<PageMetadataInput> {
+  const pageType = pageTypeOf(type);
+  const source: PageMetadataInput["source"] =
+    pageType.kind === "single"
+      ? { kind: "single", slug: pageType.slug, document: entry }
+      : { kind: "entry", collection: type, entry };
+  return {
+    source,
+    code: {},
+    // The design drawing the page, as its route would hand it, so a title
+    // or description only the design sets is not listed as missing.
+    derived: await designLevelOf(ctx, source, locale),
+    ...(locale === undefined ? {} : { locale }),
+  };
+}
+
+/** What names a page with no title: a Single's own name, else its id. */
+function nameOf(ctx: PluginContext, type: string, id: string): string {
+  const pageType = pageTypeOf(type);
+  return pageType.kind === "single" ? singleLabel(ctx, pageType.slug) : id;
+}
+
 /** What the check of one language of a page found, before it is kept. */
 async function examine(
   ctx: PluginContext,
@@ -220,12 +288,7 @@ async function examine(
   if (ownAddress === undefined) return undefined;
 
   const { readers } = checks;
-  const input: PageMetadataInput = {
-    source: { kind: "entry", collection: type, entry },
-    code: {},
-    derived: {},
-    ...(locale === undefined ? {} : { locale }),
-  };
+  const input = await inputOf(ctx, type, entry, locale);
   const answer = await resolveSeo(ctx, input, readers.readRules);
   const rules = await readers.readRules(ctx, locale);
   const productionAddresses = productionAddressesOf(rules.productionAddresses);
@@ -233,7 +296,7 @@ async function examine(
   const subject = {
     type,
     id,
-    label: labelOf(entry, id),
+    label: labelOf(entry, nameOf(ctx, type, id)),
     detail: ownAddress,
     ...(locale === undefined ? {} : { locale }),
   };
@@ -385,8 +448,8 @@ function readOnceEach(readers: CheckReaders): CheckReaders {
 const HELD_PAGE = 100;
 
 /**
- * Check every page of `slug` holding an address, keep each result, and add
- * each page's key to `seen`.
+ * Check every page of the type kept as `slug` holding an address, keep each
+ * result, and add each page's key to `seen`.
  */
 async function checkType(
   ctx: PluginContext,
@@ -397,7 +460,7 @@ async function checkType(
   let after: string | undefined;
   do {
     const page = await ctx.publicAddresses.held({
-      type: { kind: "collection", slug },
+      type: pageTypeOf(slug),
       after,
       limit: HELD_PAGE,
     });
@@ -442,19 +505,21 @@ async function runSiteCheck(
   // The site's rules, read once for each language for the whole scan.
   const checks = { ...siteChecks, readers: readOnceEach(siteChecks.readers) };
   const seen = new Set<string>();
+  // The site's types, by the key their pages are kept under.
   const siteTypes = new Set(
-    (await ctx.publicAddresses.types())
-      .filter(type => type.kind === "collection")
-      .map(type => type.slug)
+    (await ctx.publicAddresses.types()).map(type =>
+      type.kind === "single" ? singleKey(type.slug) : type.slug
+    )
   );
-  for (const slug of checks.targets) {
-    if (siteTypes.has(slug)) await checkType(ctx, checks, slug, seen);
+  const keys = checkedKeys(checks);
+  for (const key of keys) {
+    if (siteTypes.has(key)) await checkType(ctx, checks, key, seen);
   }
   // A page the walk did not reach may have been published after its type
   // was walked, its row written by its save's own check: it is checked
   // again in its turn, which keeps it while it is public and forgets it
   // where it is not.
-  const checked = new Set(checks.targets.filter(slug => siteTypes.has(slug)));
+  const checked = new Set(keys.filter(key => siteTypes.has(key)));
   for (const row of await readPages(ctx)) {
     const { type, id } = row.subject;
     if (seen.has(pageKey(type, id, row.locale))) continue;

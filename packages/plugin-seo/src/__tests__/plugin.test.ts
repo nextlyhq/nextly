@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 
+import type { PluginRoutePermissionScope } from "@nextlyhq/plugin-sdk";
 import { select, text } from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
@@ -82,6 +83,8 @@ describe("seoPlugin", () => {
     ).toEqual([
       ["GET", "/sitemap.xml", "root", true],
       ["GET", "/robots.txt", "root", true],
+      // Registered always; it answers once switched on in the settings.
+      ["GET", "/llms.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
@@ -102,15 +105,36 @@ describe("seoPlugin", () => {
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
+      // The Pages and addresses screen's list, and its save.
+      ["GET", "/pages", undefined, undefined],
+      ["POST", "/pages/seo", undefined, undefined],
       // The bulk edit table, for a signed-in reader of each type.
       ["GET", "/bulk/types", undefined, undefined],
       ["GET", "/bulk/rows", undefined, undefined],
       ["POST", "/bulk/save", undefined, undefined],
-      // The import, for whoever may change the SEO settings.
+      // The import, for whoever holds site-wide SEO.
       ["GET", "/import/groups", undefined, undefined],
       ["POST", "/import/dry-run", undefined, undefined],
       ["POST", "/import/apply", undefined, undefined],
     ]);
+  });
+
+  it("lists the site's addresses and saves a page's SEO only for those who manage the site's SEO", () => {
+    const routes = seoPlugin({ collections: ["pages"] }).contributes?.routes;
+    const permissionOf = (method: string, path: string) => {
+      const found = routes?.find(
+        route => route.method === method && route.path === path
+      )?.requiredPermission;
+      // The names a host that renamed nothing gives the plugin's own.
+      const scope: PluginRoutePermissionScope = {
+        plugin: "@nextlyhq/plugin-seo",
+        collection: (slug, action) => `${action}-${slug}`,
+        single: (slug, action) => `${action}-${slug}`,
+      };
+      return typeof found === "function" ? found(scope) : found;
+    };
+    expect(permissionOf("GET", "/pages")).toBe("manage-seo");
+    expect(permissionOf("POST", "/pages/seo")).toBe("manage-seo");
   });
 
   it("offers making a share image to a person who may add to the media library", () => {
@@ -152,6 +176,7 @@ describe("seoPlugin", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
       "/robots.txt",
+      "/llms.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/document",
@@ -166,6 +191,8 @@ describe("seoPlugin", () => {
       "/resolve",
       "/problems",
       "/problems/check",
+      "/pages",
+      "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
       "/bulk/save",
@@ -184,6 +211,8 @@ describe("seoPlugin", () => {
       robots: false,
     });
     expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      // Switched on and off in the settings, not by these options.
+      "/llms.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/document",
@@ -198,6 +227,8 @@ describe("seoPlugin", () => {
       "/resolve",
       "/problems",
       "/problems/check",
+      "/pages",
+      "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
       "/bulk/save",
@@ -273,7 +304,7 @@ describe("seoPlugin", () => {
 });
 
 describe("the dashboard card the plugin contributes", () => {
-  it("declares seo/issues and its Needs attention lines through contributes.dashboard", () => {
+  it("declares seo/issues and its Needs attention line through contributes.dashboard", () => {
     const plugin = seoPlugin({
       collections: ["pages", "posts"],
       sitemap: false,
@@ -283,14 +314,13 @@ describe("the dashboard card the plugin contributes", () => {
     expect(dashboard?.widgets?.map(widget => widget.id)).toEqual([
       "seo/issues",
     ]);
-    // A line per collection it extends, which carry the `seo` group.
+    // One line counting the problem list, shown to a reader of any
+    // collection SEO is added to.
     expect(dashboard?.attention?.map(item => item.id)).toEqual([
-      "seo/issues-pages",
-      "seo/issues-posts",
+      "seo/problems",
     ]);
     expect(dashboard?.attention?.map(item => item.collections)).toEqual([
-      ["pages"],
-      ["posts"],
+      ["pages", "posts"],
     ]);
   });
 
@@ -312,10 +342,10 @@ describe("the dashboard card the plugin contributes", () => {
   });
 
   it("is withheld when no collection carries the fields", () => {
-    // 🔴 A plugin registered with no collections extends nothing, so the scan
-    // has nothing to read and every count answers zero. A card there would
-    // report a clean site for a plugin that is doing nothing at all -- which is
-    // worse than no card, because it is an answer rather than an absence.
+    // 🔴 A plugin registered with no collections checks no page of one, so
+    // every count answers zero. A card there would report a clean site for a
+    // plugin that is doing nothing at all -- which is worse than no card,
+    // because it is an answer rather than an absence.
     const plugin = seoPlugin({ collections: [], sitemap: false });
 
     expect(plugin.contributes?.dashboard).toBeUndefined();

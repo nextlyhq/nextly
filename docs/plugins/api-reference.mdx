@@ -896,6 +896,12 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
+A contribution to another plugin's place names that plugin in `dependsOn`, or in
+`optionalDependsOn` where the contributor works without it: while the owner is absent or
+disabled, a contribution to one of its places is left out and the app starts. A place the
+running owner does not declare is still refused (`admin-place-unknown`), as is one of a plugin
+the contributor names in neither.
+
 Every core place draws what is sent to it: settings, a user's detail page, the
 account page, the entry form, the login page, both edit pages, the dashboard
 and the entry list. A plugin draws its own

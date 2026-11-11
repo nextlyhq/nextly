@@ -27,11 +27,20 @@ import {
   releaseOnCollectionDelete,
 } from "./address-record/participant";
 import { bulkRoutes } from "./bulk/route";
+import { codePagesCollection } from "./code-pages/collection";
+import {
+  keepCodeRoutes,
+  withCodePageConnections,
+} from "./code-pages/connections";
+import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
+import { codePageRoutes } from "./code-pages/route";
+import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
 import { keepSeoContext } from "./not-found/report";
+import { plainCopyProxyHandler } from "./outputs/ai-outputs";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
 import {
@@ -50,6 +59,7 @@ import {
   MANAGE_SEO_PERMISSION,
   seoPermissionDeclarations,
 } from "./permissions";
+import { problemsForCard } from "./problems/card-source";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
 import { problemRoutes } from "./problems/route";
@@ -93,7 +103,7 @@ import {
   type StructuredDataOptions,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
-import { seoIssuesAttentionItems, seoIssuesWidget } from "./widget-card";
+import { seoIssuesWidget, seoProblemsAttentionItem } from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -247,6 +257,13 @@ export interface SeoPluginOptions {
    * of its own that holds it. Admin and Super Admin hold every one.
    */
   pagePermissions?: boolean;
+  /**
+   * @experimental Where `next build` writes, relative to the app's
+   * directory: `.next` unless the app's `next.config` sets `distDir`. The
+   * pages the site's routes render from their own code are read from it,
+   * for the Pages and addresses screen and the sitemap.
+   */
+  nextBuildDir?: string;
 }
 
 /**
@@ -344,6 +361,20 @@ function sitemapConfig(
 }
 
 /**
+ * The configured origin, `{ origin }`, where the sitemap is served and a
+ * baseUrl is set; nothing otherwise, so a baseUrl is checked only where the
+ * sitemap, which robots.txt names by it, is served.
+ */
+function configuredOrigin(
+  options: SeoPluginOptions,
+  sitemap: RootFilesConfig["sitemap"]
+): { origin?: string } {
+  return sitemap !== undefined && options.baseUrl !== undefined
+    ? { origin: resolveBaseOrigin(options.baseUrl) }
+    : {};
+}
+
+/**
  * What the site's root files are served with. A configured baseUrl must be an
  * absolute http(s) origin, or every listed address is invalid: checked at
  * construction so a typo fails at boot, and only where the sitemap, which
@@ -352,16 +383,14 @@ function sitemapConfig(
 function rootFilesConfig(
   options: SeoPluginOptions,
   readRules: ReadRules,
-  collections: readonly string[] | undefined
+  collections: readonly string[] | undefined,
+  codeRoutes: () => readonly CodeRoute[]
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
-  const origin =
-    sitemap !== undefined && options.baseUrl !== undefined
-      ? resolveBaseOrigin(options.baseUrl)
-      : undefined;
   return {
-    ...(origin === undefined ? {} : { origin }),
+    ...configuredOrigin(options, sitemap),
     readRules,
+    codeRoutes,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
       ? {}
@@ -377,9 +406,10 @@ function rootFilesConfig(
 function siteFileRoutes(
   options: SeoPluginOptions,
   readRules: ReadRules,
-  collections: readonly string[] | undefined
+  collections: readonly string[] | undefined,
+  codeRoutes: () => readonly CodeRoute[]
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readRules, collections);
+  const config = rootFilesConfig(options, readRules, collections, codeRoutes);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -435,6 +465,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
+  // The pages the site's routes render from their own code, read from the
+  // build each time they are asked for, so a new deploy is read as it is.
+  const codeRoutes = () =>
+    readCodeRoutes(
+      options.nextBuildDir === undefined
+        ? {}
+        : { buildDir: options.nextBuildDir }
+    );
 
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
@@ -479,6 +517,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // worked out by, so the list and the page never disagree.
   const problemChecks = {
     targets,
+    singles: singleTargets,
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -511,10 +550,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       redirectsCollection(),
       notFoundCollection(),
       problemsCollection(),
+      // The SEO of each page a route renders from its own code, by address.
+      codePagesCollection(),
     ],
-    // Every page's head, as worked out above.
+    // Every page's head, as worked out above, each page built in code
+    // recorded as connected as its route asks for its head.
     services: {
-      pageMetadata,
+      pageMetadata: ctx => withCodePageConnections(ctx, pageMetadata(ctx)),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({
@@ -522,6 +564,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           listPages(ctx, {
             origin,
             readRules,
+            codeRoutes,
             ...(sitemapSubset === undefined
               ? {}
               : { collections: sitemapSubset }),
@@ -532,7 +575,17 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Every host but the site's production addresses is kept out of search,
     // and redirects answer before the page is served. Only a redirect
     // answers, so the order changes nothing a visitor gets.
-    proxy: [stagingGuard(readRules), redirectsProxyHandler()],
+    // A page's plain-text copy, once switched on, is answered here too, at
+    // the copy's own address only.
+    proxy: [
+      stagingGuard(readRules),
+      redirectsProxyHandler(),
+      plainCopyProxyHandler({
+        readRules,
+        ...configuredOrigin(options, sitemapConfig(options, sitemapSubset)),
+        ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
+      }),
+    ],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -557,6 +610,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // own read, which an entry can't ask beside this one: someone
         // holding `manage-seo` without it opens the screen and is refused
         // its contents by the routes.
+        {
+          label: "Pages and addresses",
+          to: PAGES_PAGE_HREF,
+          icon: "FileText",
+          requiredPermission: MANAGE_SEO_PERMISSION,
+        },
         {
           label: "Redirects",
           to: REDIRECTS_PAGE_HREF,
@@ -584,27 +643,30 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...RECEIVED_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
+        { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
       ],
     },
   };
 
-  // The SEO issues card and its Needs attention lines, one per collection,
-  // all counting the issues in those same collections. Bound to `targets`
-  // rather than to every collection: a collection this plugin never extended
-  // has no `seo` group, so every one of its documents would report the full
-  // set of missing fields and drown the real answer. Each is withheld where it
-  // would have nothing to say (see `widget-card`).
-  const issuesCard = seoIssuesWidget(targets, seoFields);
-  const issuesItems = seoIssuesAttentionItems(targets, seoFields);
-  if (issuesCard || issuesItems.length > 0) {
+  // The SEO issues card and its Needs attention line, counting what the
+  // problem list finds as each person may read it, so the dashboard and the
+  // list never disagree. Withheld where no collection carries SEO (see
+  // `widget-card`).
+  const issues = {
+    collections: targets,
+    problemsFor: problemsForCard(problemChecks),
+  };
+  const issuesCard = seoIssuesWidget(issues);
+  const issuesItem = seoProblemsAttentionItem(issues);
+  if (issuesCard || issuesItem) {
     contributes.dashboard = {
       ...(issuesCard ? { widgets: [issuesCard] } : {}),
-      ...(issuesItems.length > 0 ? { attention: issuesItems } : {}),
+      ...(issuesItem ? { attention: [issuesItem] } : {}),
     };
   }
 
   routes.push(
-    ...siteFileRoutes(options, readRules, sitemapSubset),
+    ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
@@ -622,6 +684,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     }),
     ...tab.routes,
     ...problemRoutes(problemChecks),
+    // The Pages and addresses screen's list, and its save of a page with no
+    // entry's SEO.
+    ...codePageRoutes({
+      readRules,
+      routes: codeRoutes,
+      origin: () =>
+        options.baseUrl === undefined
+          ? undefined
+          : resolveBaseOrigin(options.baseUrl),
+    }),
     // The bulk edit table, and the import beside it.
     ...bulkRoutes({
       targets,
@@ -691,10 +763,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
-      // Kept for the site's not-found page, which logs through it.
+      // Kept for the site's not-found page, which logs through it, and for
+      // the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
+      keepCodeRoutes(codeRoutes);
     },
     onReady(ctx) {
       // Started, not awaited: it waits for the boot to finish, and brings the

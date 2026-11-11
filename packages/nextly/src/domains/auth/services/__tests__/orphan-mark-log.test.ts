@@ -1,14 +1,16 @@
 /**
- * The line a start logs when a permission's orphan mark changes says what
- * happened to the permission and to its grants, and what it says is what the
- * database holds.
+ * The line logged when a permission's orphan mark changes says what happened
+ * to the permission and to its grants, and what it says is what the database
+ * holds.
  *
- * Each change is made by a start's own seeding, on in-memory SQLite: a start
- * without the plugin that declares the permission marks it orphaned, and a
- * start with the plugin back clears the mark. The roles the line names are
- * compared with the roles holding the permission just before the start and
- * once the start has finished, preset roles set again included, so a line
- * claiming grants that the same start then took away fails here.
+ * On in-memory SQLite: the permission is marked orphaned as `nextly migrate`
+ * marks it when a migration that speaks for its plugin no longer declares it
+ * (`markOrphanedPermissions`), and the start that follows, without the plugin,
+ * sets the preset roles again; a start with the plugin back clears the mark.
+ * The roles the line names are compared with the roles holding the permission
+ * just before and once that start has finished, preset roles set again
+ * included, so a line claiming grants that the start then took away fails
+ * here.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -98,6 +100,19 @@ async function start(): Promise<void> {
   await seedPermissionsAndRolePresets();
 }
 
+/**
+ * The plugin's permission marked orphaned, as a migration that speaks for the
+ * plugin and no longer declares it marks it, then a start without the plugin,
+ * with the lines of both captured.
+ */
+async function orphanThenStart(nextly: TestNextly): Promise<void> {
+  infoLines = [];
+  await nextly
+    .getService("permissionSeedService")
+    .markOrphanedPermissions([], { owners: new Set([formsPlugin.name]) });
+  await seedPermissionsAndRolePresets();
+}
+
 describe("the line logged when a permission's orphan mark changes", () => {
   it("names the grants kept when the permission is orphaned, as the database holds them", async () => {
     handle = await createTestNextly({ logger, plugins: [formsPlugin] });
@@ -117,7 +132,7 @@ describe("the line logged when a permission's orphan mark changes", () => {
     expect(before).toEqual(["admin", "exporter"]);
 
     setInstalled(handle, false);
-    await start();
+    await orphanThenStart(handle);
     const orphaned = markLine();
     expect(orphaned.line).toContain("no longer declared by @test/forms");
     expect(orphaned.line).toContain("marked orphaned");
@@ -151,7 +166,7 @@ describe("the line logged when a permission's orphan mark changes", () => {
     expect(await holders(handle)).toEqual([]);
 
     setInstalled(handle, false);
-    await start();
+    await orphanThenStart(handle);
     const orphaned = markLine();
     expect(orphaned.line).toContain("(no role holds it).");
     expect(orphaned.roles).toEqual([]);

@@ -70,6 +70,10 @@ export interface SeoRules {
    * are, once the settings name any.
    */
   hiddenTypes?: string[];
+  /** Whether `/llms.txt` is served: only once switched on. */
+  llmsTxt?: boolean;
+  /** Whether each listed page has a plain-text copy: only once switched on. */
+  plainTextCopies?: boolean;
 }
 
 /** One of the brand's official accounts. */
@@ -184,6 +188,12 @@ async function rulesOf(
     defaultPatterns: { title: defaultTitlePattern(separatorOf(document)) },
     ...withDefined("aiCrawlers", aiCrawlersOf(document)),
     ...withDefined("hiddenTypes", hiddenTypesOf(document)),
+    // Off unless stored as switched on: a value that is not `true` is off.
+    ...withDefined("llmsTxt", document.llmsTxt === true ? true : undefined),
+    ...withDefined(
+      "plainTextCopies",
+      document.plainTextCopies === true ? true : undefined
+    ),
     patterns: patternsOf(document),
   };
 }

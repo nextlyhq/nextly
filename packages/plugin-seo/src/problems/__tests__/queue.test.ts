@@ -59,6 +59,7 @@ import {
 
 const CHECKS = {
   targets: ["posts"],
+  singles: [],
   readers: {},
 } as unknown as ProblemChecks;
 

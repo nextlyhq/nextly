@@ -8,6 +8,8 @@
  *   Single's own read or update permission beside it, which core asks of
  *   every Single, and redirects, their imports and addresses not found with
  *   nothing else, since the plugin keeps those itself.
+ * - The Pages and addresses screen, its list and its save of a page with
+ *   no entry's SEO, needs `manage-seo` alone: the plugin keeps that SEO.
  * - The check of what search engines received needs `check-seo`.
  * - Where page SEO has its own permission, a person who may edit a page but
  *   not its SEO saves the page with its SEO left as it was, and the SEO tab
@@ -31,7 +33,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, ServiceContainer, text } from "nextly";
+import { defineCollection, defineSingle, ServiceContainer, text } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -381,6 +383,41 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("pages and addresses need manage-seo", () => {
+      it("lists the site's addresses to someone holding it", async () => {
+        const answered = await route("GET", "/pages", people.manageOnly!);
+        expect(answered.status).toBe(200);
+        expect(Array.isArray(answered.body.items)).toBe(true);
+      });
+
+      it("refuses the list to someone without it, whatever else they hold, with no data", async () => {
+        for (const who of ["storesOnly", "reader", "checker"]) {
+          const refused = await route("GET", "/pages", people[who]!);
+          expect([who, refused.status]).toEqual([who, 403]);
+          expect(refused.body.items).toBeUndefined();
+        }
+        expect((await route("GET", "/pages", null)).status).toBe(401);
+      });
+
+      it("takes a save only from someone holding it", async () => {
+        const save = {
+          path: "/pricing",
+          title: "Plans",
+          description: "",
+          hidden: false,
+        };
+        for (const who of ["storesOnly", "reader", "checker"]) {
+          const refused = await route("POST", "/pages/seo", people[who]!, save);
+          expect([who, refused.status]).toEqual([who, 403]);
+        }
+        // Past the permission: refused only because this site's build has
+        // no page at /pricing, which is the save's own check.
+        expect(
+          (await route("POST", "/pages/seo", people.manageOnly!, save)).status
+        ).toBe(400);
+      });
+    });
+
     describe("the check of what search engines received needs check-seo", () => {
       it("answers the pages it offers, and takes a check, from someone holding it", async () => {
         expect(
@@ -664,6 +701,7 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(gates).toEqual({
         Problems: undefined,
+        "Pages and addresses": "manage-seo",
         Redirects: "manage-seo",
         "What search engines received": "check-seo",
         Settings: "manage-seo",
@@ -710,6 +748,90 @@ describe.each(getConfiguredTestDialects())(
             slug.startsWith("edit-seo-")
         );
       expect(slugs.sort()).toEqual(["check-seo", "manage-seo"]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "SEO permissions, the problem list of a Single (%s)",
+  dialect => {
+    let t: TestNextly;
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        dialect,
+        plugins: [
+          seoPlugin({
+            collections: ["posts"],
+            singles: ["home"],
+            baseUrl: "https://acme.example",
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            fields: [text({ name: "title" })],
+            publicAddress: "/",
+          }),
+        ],
+        seedPublic: true,
+      });
+      await t.nextly.users.create({
+        email: "owner@example.com",
+        password: "Password123!",
+        data: { name: "Owner", isActive: true },
+      });
+      await lastCatchUp();
+    }, 60_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("answers someone who may read the Single alone, with its page, and refuses someone who may read neither", async () => {
+      await t.nextly.updateSingle({
+        slug: "home",
+        data: { title: "t".repeat(70), _overwrite: true },
+      });
+      const homeReader = await holding(t, ["read-home"]);
+      const pagesOf = async (cookie: string) => {
+        for (let tries = 0; tries < 100; tries++) {
+          const list = await route("GET", "/problems", cookie);
+          expect(list.status).toBe(200);
+          const problems = itemOf(list.body).problems as {
+            subject: { type?: string };
+          }[];
+          const types = problems.map(problem => problem.subject.type);
+          if (types.includes("single:home")) return types;
+          // The save's check runs after the save: given a moment.
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        throw new Error("the Single's check never finished");
+      };
+      expect(await pagesOf(homeReader)).toContain("single:home");
+      // A reader of posts alone is not shown the Single's page.
+      const postsReader = await holding(t, ["read-posts"]);
+      const posts = await route("GET", "/problems", postsReader);
+      expect(posts.status).toBe(200);
+      expect(
+        (itemOf(posts.body).problems as { subject: { type?: string } }[]).some(
+          problem => problem.subject.type === "single:home"
+        )
+      ).toBe(false);
+      const refused = await route(
+        "GET",
+        "/problems",
+        await holding(t, ["check-seo"])
+      );
+      expect(refused.status).toBe(403);
+      expect(refused.body.problems).toBeUndefined();
     });
   }
 );

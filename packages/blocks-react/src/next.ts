@@ -5580,6 +5580,50 @@ export function createPublicContentPage(
 }
 
 /**
+ * What one entry's page says about itself through its blocks: the title,
+ * description and image a Page Builder route hands a page-metadata provider
+ * as the page's design level, asked outside a route.
+ *
+ * Worked out by the route's own derivation, so an admin screen or a check
+ * that asks reads the same values the published page is answered with:
+ * `field` names the entry's own blocks field a page draws, or `document` is
+ * the design drawing the entry (its collection's template, or its own
+ * design), as `createContentPage` draws one. The page is read as an
+ * access-enforced route reads it, through `config.nextly`.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function designMetadataFor(args: {
+  readonly config: Omit<BlocksPageConfig, "collections" | "field">;
+  readonly collection: string;
+  readonly entry: ContentEntry;
+  readonly locale?: string;
+  readonly field?: string;
+  readonly document?: unknown;
+}): Promise<PageMetadataValues> {
+  const drawsDesign = args.document !== undefined;
+  const field = drawsDesign ? TEMPLATE_DOCUMENT_KEY : args.field;
+  if (field === undefined) return {};
+  const route = blocksRouteConfig(
+    { ...args.config, collections: [args.collection], field },
+    false
+  );
+  // The design handed to the shared derivation under the key no field can
+  // take, as the content route hands an entry's design to its render.
+  const entry = drawsDesign
+    ? { ...args.entry, [TEMPLATE_DOCUMENT_KEY]: args.document }
+    : args.entry;
+  const slug = args.entry.slug;
+  return (
+    (await route.derivedMetadata?.(entry, {
+      collection: args.collection,
+      slug: typeof slug === "string" ? slug : "",
+      ...(args.locale === undefined ? {} : { locale: args.locale }),
+    })) ?? {}
+  );
+}
+
+/**
  * `BlockSeoContribution` and `BlockSeoImage` are NOT re-exported here even
  * though `DerivedPageSeo` extends the first and this entry's SEO derivation is
  * their only consumer.

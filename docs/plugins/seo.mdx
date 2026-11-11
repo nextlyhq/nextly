@@ -167,7 +167,9 @@ an address on another site is used only once marked confirmed.
 The count beside the tab's label is the number of problems the page's answer shows: a
 title longer than Google shows, a description that is too long, a title or a
 description that no level supplies, and each detail the page's structured data type
-lacks.
+lacks. The title and description are checked by the same rule the
+[problem list](#problems) uses, lengths counted in characters, so the tab and the list
+always agree; a page hidden from search has no title or description problem in either.
 
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
@@ -187,21 +189,22 @@ instead, where each one can still be edited, and no tab is drawn.
 
 ## Configuration
 
-| Option            | Type                                                             | Default            | What it does                                                                             |
-| ----------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
-| `collections`     | `string[]`                                                       | required           | The collections that get the `seo` group                                                 |
-| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                 |
-| `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                       |
-| `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name          |
-| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                   |
-| `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                   |
-| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                          |
-| `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some            |
-| `structuredData`  | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields |
-| `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                |
-| `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type      |
-| `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                |
-| `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                  |
+| Option            | Type                                                             | Default            | What it does                                                                                                     |
+| ----------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `collections`     | `string[]`                                                       | required           | The collections that get the `seo` group                                                                         |
+| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                                         |
+| `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                                               |
+| `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                  |
+| `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                                           |
+| `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                                           |
+| `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
+| `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
+| `structuredData`  | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
+| `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
+| `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
+| `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
+| `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
+| `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
 
 ## The sitemap and robots.txt
 
@@ -228,6 +231,10 @@ never disagree. A page is listed when all of these hold:
   site or off it, is that page's to list;
 - the page holds its address. Where a deploy leaves two pages declaring one address, the
   page that held it keeps it, and the other is left out until it is given another.
+
+A [page built in code](#pages-built-in-code) is listed too, once its route calls
+`seoMetadata` and unless it is hidden from search: its head and its sitemap entry are then
+built from the same answer.
 
 A content type that declares no public address has no page in the sitemap, and nothing is
 guessed for it. Declare one with `publicAddress` on the collection or Single:
@@ -378,6 +385,47 @@ instead.
 builds a sitemap from its own route. They are deprecated, and list pages by the old rules:
 they do not read each page's answer.
 
+## llms.txt and plain-text copies
+
+Two optional outputs for AI tools, both off until someone switches them on in **SEO >
+Settings > Connections**. Few tools read them today, so neither is on by default.
+
+- **`/llms.txt`** is a plain list of the site's pages, in the format the
+  [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
+  default description beneath it, and each page as a link under its content type, with the
+  title and description its head carries, worked out from what the public may read of the
+  page; a page the public may not read is listed by its address alone. It lists exactly the pages the sitemap lists, by
+  the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
+  never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
+  answers `503` while the address record catches up at start.
+- **Plain-text copies** add a text version of each page the sitemap lists, at the page's
+  address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.html.md` for
+  the home page. The copy is the page's title as a heading, then the words of its text,
+  long text and rich text fields, in the order its type declares them, those inside its
+  groups and repeaters included, with rich text's headings, lists, links, quotes, code,
+  tables and images written as Markdown. A field group's rich text is read too. A page's SEO
+  fields, its address, fields holding a choice, a number or a date, and other documents
+  read with it, such as an author, are left out. Each copy is served as
+  `text/markdown; charset=utf-8` and names its page as canonical in a `Link` header, so
+  search engines keep listing the page. With copies on, `/llms.txt` links each page's copy.
+
+A copy is read as a visitor with no session reads the page: the Public role's grants, the
+type's read rule and each field's read rule decide what is in it, so a field kept from the
+public is never in a copy, and a page the public may not read has none. Where a page of the
+site already has a copy's address, such as a page at `/guide.md`, that page is served there
+and no copy is, and `/llms.txt` links the page itself. A page at `/index.html` keeps
+`/index.html.md`, and the home page is then linked as itself. A copy's words are escaped
+where Markdown would read them as markup, so it says what the page shows.
+
+Every reader gets the same answer: neither output looks at who is asking. Neither changes a
+page either: llms.txt is its own file, and a copy is answered only at a copy's address. A
+copy is answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its
+`proxy.ts`, as [redirects](#redirects) do; a site that ships its own `public/llms.txt` or
+`app/llms.txt/route.ts` keeps serving it.
+
+A copy is made from the page as it is stored, the fields the site renders, not from the
+rendered page: the words of a Page Builder layout are not in it.
+
 ## Languages
 
 On a site with [several languages](/docs/localization), each page's head links to the page in
@@ -429,6 +477,7 @@ with a line on the page to finish later. Every answer stays editable on the tabs
 | Content types | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
 | Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                                                                                           |
 | Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                                                                                    |
+| Connections   | Optional outputs for AI tools, each off until switched on: [llms.txt and plain-text copies of pages](#llmstxt-and-plain-text-copies)                                                                                                            |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
@@ -532,6 +581,11 @@ the first of these that has one:
 | 4     | The content type's pattern, such as `{Title} \| {Site name}`                   | title, description                          |
 | 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image             |
 | 6     | The site's defaults                                                            | title, description, share image             |
+
+Level 3 is what the design drawing the page sets: a page's own blocks, or the template or own
+design an entry is drawn with, its SEO settings first. A route hands it as it serves the page; the
+SEO tab, the problem list and the check of what search engines received ask the Page Builder for
+it, where it is installed, so they show the value the page is served with.
 
 A level with nothing for a value, or only blank text, gives way to the next, so a page is never
 served an empty title. A pattern whose tokens have no value gives way too, rather than leaving a
@@ -819,8 +873,8 @@ shared, grouped by kind, each with a button that goes straight to its fix: the p
 its content, the SEO settings, the media library, or a note to copy for a developer where the fix
 is in code. There is no score, and nothing on the list stops anyone publishing.
 
-Each public page of the collections the plugin extends is checked, in every language it is
-published in and at its address there, as its head would be served, for:
+Each public page of the collections and Singles the plugin extends is checked, in every language
+it is published in and at its address there, as its head would be served, for:
 
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
@@ -839,9 +893,18 @@ whole is checked for a missing production address, a collection with no public a
 redirect whose To address redirects again, and a page left out of the sitemap because another page
 holds its address.
 
-The list is for anyone who may read one of the content types the plugin extends, and shows each
-person the problems of the pages they may read. A redirect that takes more than one hop is listed
-only for someone holding `manage-seo`, who may see the redirects.
+The list is for anyone who may read one of the content types the plugin extends, a Single among
+them, and shows each person the problems of the pages they may read. A redirect that takes more
+than one hop is listed only for someone holding `manage-seo`, who may see the redirects.
+
+### On the dashboard
+
+The **SEO issues** card draws the list by kind, one bar for each kind of problem, and the
+**Needs attention** card has one **SEO problems** line counting the whole list, linked to it. Both
+read the list the person looking may read, from the same kept results, so their numbers are the
+list's. The card is offered to someone who may read every collection the plugin extends, the line
+to someone who may read one of them. A dashboard card can't ask for `manage-seo`, so neither counts
+a redirect that takes more than one hop: those are on the list itself.
 
 ### When the list is checked
 
@@ -861,9 +924,10 @@ readers. It is served at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
 
 The check reads the values the plugin keeps: the page's own, its content type's pattern, its
-content and the site's defaults. A title, description or share image that only the route's code
-or a Page Builder design sets is not seen, so such a page is listed as missing it; typing the value
-on the page's SEO tab settles it either way.
+content and the site's defaults, and, where the Page Builder is installed, what the design drawing
+the page sets, worked out as the page's route works it out. A title, description or share image
+that only the route's code sets is not seen, so such a page is listed as missing it; typing the
+value on the page's SEO tab settles it either way.
 
 Not checked yet: whether a response is small enough for every value to fall within its first
 2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page
@@ -883,8 +947,9 @@ beside the route, a `noindex` sent in a header, or a firewall that turned a craw
 Where LinkedIn received something different, the explanation links its Post Inspector,
 which refreshes the card LinkedIn keeps for about a week.
 
-Open it from a page's SEO tab, or from the menu, where it checks the site's first listed
-page. Any address on the site can be typed in. What Nextly holds is the head the plugin
+Open it from a page's SEO tab, which names the page at the address its language serves it at
+(with the language in it, on a site that puts the language in every address), or from the menu,
+where it checks the site's first listed page. Any address on the site can be typed in. What Nextly holds is the head the plugin
 answers for the published page at that address, shown only to someone who may read that
 page's content type. Running a check, and the screen itself, need `check-seo`, since a check has
 the server fetch the site's pages.
@@ -917,14 +982,14 @@ With no production address set, the screen asks for one and checks nothing.
 
 The plugin declares its own permissions, which the role screen files under **SEO**:
 
-| Permission        | What it allows                                                                                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, and the addresses not found |
-| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                      |
-| `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                 |
+| Permission        | What it allows                                                                                                                                                                                                                                |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, the addresses not found, and the SEO of [pages built in code](#pages-built-in-code) |
+| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                                                                              |
+| `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                                                                         |
 
 Each is asked by the server on every request, whatever the admin shows: someone without it is
-refused and given nothing of what it guards. The admin hides the Settings, Redirects and What search
+refused and given nothing of what it guards. The admin hides the Pages and addresses, Settings, Redirects and What search
 engines received entries from someone without the screen's permission.
 
 A page's SEO is part of the page. By default whoever may edit a page changes its SEO, and an SEO
@@ -955,6 +1020,83 @@ is a change to the media library, asked as `create-media` and `read-media`.
 An admin menu entry or screen can ask one permission. The settings screen asks `manage-seo`, so
 someone holding it without `read-seo-settings` sees the entry, and the screen is refused its
 contents.
+
+## Pages built in code
+
+A page a route renders from its own code, such as `/pricing` in `app/pricing/page.tsx`, has
+no entry to hold its SEO. Its SEO is set by address instead, on the **Pages and addresses**
+screen, under SEO in the admin. The screen lists every public address the site knows of:
+each entry's, each route with no variable part (`/pricing`), and each address a route with
+one declares through `generateStaticParams` (`/integrations/wordpress`). Choose **Edit SEO**
+on a page built in code to set its title, description, visibility and share image. The
+screen and its saves ask `manage-seo`.
+
+What is set there reaches the page once its route adds one line, calling `seoMetadata` with
+its address:
+
+```tsx
+// src/app/pricing/page.tsx
+import { seoMetadata } from "@nextlyhq/plugin-seo";
+
+export const generateMetadata = () =>
+  seoMetadata("/pricing", {
+    metadata: { title: "Pricing", description: "Plans for every team." },
+  });
+
+export default function PricingPage() {
+  return <h1>Pricing</h1>;
+}
+```
+
+A route with a variable part calls it for the address it is serving:
+
+```tsx
+// src/app/integrations/[name]/page.tsx
+import { seoMetadata } from "@nextlyhq/plugin-seo";
+
+export const generateStaticParams = () => [
+  { name: "wordpress" },
+  { name: "webflow" },
+];
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ name: string }>;
+}) {
+  const { name } = await params;
+  return seoMetadata(`/integrations/${name}`);
+}
+
+export default function IntegrationPage() {
+  return <h1>Integration</h1>;
+}
+```
+
+The page is answered by the same order of who wins as every page with an entry:
+
+- what a person set on the screen wins;
+- the route's own title, description and social values come next. Anything else the route
+  sets, such as keywords, is kept as it is;
+- then the site's [title pattern](#title-patterns) with the page's name, taken from its
+  address (`/thank-you` is "Thank you") or given as `name`, and the site's defaults.
+
+Visibility and the canonical come only from the answer, never from the route: the canonical
+is the page's own address, and a page is hidden only from the screen. A save on the screen
+reaches the page from its next visit, a page built ahead of time included.
+
+The screen marks **Not connected** each route that has not called `seoMetadata`. What is set
+for its address is kept, and reaches the page once the line is in. A route records that it is
+connected when it renders: while `next build` renders the site, or later for an address the
+site knows of. A request for any other address records nothing.
+
+<Callout type="info">
+**The list of routes comes from the build.** The plugin reads the routes and the addresses
+they declared from what `next build` wrote, so the full list is that of a production build.
+Under `next dev`, it holds only the routes compiled so far. If `next.config` sets `distDir`,
+pass the same directory as `nextBuildDir`.
+
+</Callout>
 
 ## Next steps
 

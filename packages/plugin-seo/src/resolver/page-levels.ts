@@ -20,6 +20,7 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { codePagesSlug } from "../code-pages/collection";
 import { isRecord, textOf } from "../plain-values";
 import type { AiCrawlerChoice } from "../settings/contract";
 import { fillPattern } from "../settings/patterns";
@@ -48,6 +49,10 @@ export interface SiteRules {
   hiddenTypes?: readonly string[];
   /** What robots.txt asks AI crawlers to do, where the site has chosen. */
   aiCrawlers?: AiCrawlerChoice;
+  /** Whether `/llms.txt` is served: only once switched on. */
+  llmsTxt?: boolean;
+  /** Whether each listed page has a plain-text copy: only once switched on. */
+  plainTextCopies?: boolean;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -152,6 +157,11 @@ export async function addressOf(
   locale: string | undefined,
   served: string | undefined
 ): Promise<string | undefined> {
+  if (page.key === codePagesSlug(ctx)) {
+    // A page built in code has no entry and no type declaring its address:
+    // its address is the one its route serves it at, in its language.
+    return textOf(document.path);
+  }
   const address = await publicAddressOf(page.type, document, locale);
   if (address.status !== "resolved") return undefined;
   // An address another page holds is that page's: this one lost it in a

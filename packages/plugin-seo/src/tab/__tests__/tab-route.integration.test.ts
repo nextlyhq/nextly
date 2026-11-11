@@ -338,3 +338,91 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects())(
+  "the SEO tab's route on a site with the language in every address (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let editor = "";
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: { by: "prefix", defaultLanguage: "prefixed" },
+        plugins: [seoPlugin({ collections: ["posts"], sitemap: false })],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            localized: true,
+            fields: [
+              text({ name: "title", localized: true }),
+              text({ name: "slug", localized: true }),
+            ],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      const direct = t.nextly as unknown as Direct;
+      const owner = await direct.users.create({
+        data: {
+          email: "owner@example.com",
+          password: "Password123!",
+          name: "Owner",
+          isActive: true,
+        },
+      });
+      const seeded = await direct.permissions.find({ limit: 500 });
+      const ids = ["read-posts", "update-posts"].map(slug => {
+        const found = seeded.items.find(item => item.slug === slug);
+        if (found === undefined) throw new Error(`${slug} is not seeded`);
+        return found.id;
+      });
+      const role = await direct.roles.create({
+        data: { name: "Post editor", slug: "post-editor", permissionIds: ids },
+      });
+      const keys = t.getService("apiKeyService") as unknown as ApiKeys;
+      editor = (
+        await keys.createApiKey(owner.item.id, {
+          name: "post editor",
+          tokenType: "role-based",
+          roleId: role.item.id,
+          expiresIn: "unlimited",
+        })
+      ).key;
+    }, 180_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("answers the address each language serves the page at, its language in it", async () => {
+      const saved = await t.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Harbour", slug: "harbour" },
+      });
+      const id = String((saved as { item?: { id: unknown } }).item?.id ?? "");
+      await t.nextly.update({
+        collection: "posts",
+        id,
+        locale: "de",
+        data: { title: "Hafen", slug: "hafen", _overwrite: true },
+      });
+      const ask = async (locale: string | null, slug: string) =>
+        (await (
+          await resolve(editor, {
+            kind: "collection",
+            slug: "posts",
+            locale,
+            id,
+            document: { title: "Harbour", slug },
+          })
+        ).json()) as SeoTabContext;
+
+      // The site's default language, which the editor names no language for.
+      expect((await ask(null, "harbour")).served).toBe("/en/blog/harbour");
+      expect((await ask("de", "hafen")).served).toBe("/de/blog/hafen");
+    });
+  }
+);

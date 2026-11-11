@@ -27,6 +27,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly";
 import { createDynamicHandlers } from "nextly/runtime";
+import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
@@ -111,6 +112,41 @@ interface SiteState {
 
 const site: SiteState = { asked: [], blockLinkedIn: false };
 
+/** What the design drawing the post `designed` says about it. */
+const DESIGNED = {
+  title: "Designed post | Acme",
+  description: "Written by the post's design.",
+};
+
+/**
+ * The Page Builder, stood in for by a plugin of its name offering only its
+ * design service, which draws the post `designed`.
+ */
+const pageBuilder: PluginDefinition = {
+  name: "@nextlyhq/plugin-page-builder",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    services: {
+      designSeo: () => ({
+        valuesFor: async ({ entry }: { entry: Record<string, unknown> }) =>
+          entry.slug === "designed" ? DESIGNED : undefined,
+      }),
+    },
+  },
+};
+
+/** The designed post as its route serves it: its head from its design. */
+function designedHtml(origin: string): string {
+  return [
+    "<!DOCTYPE html><html><head>",
+    `<title>${DESIGNED.title}</title>`,
+    `<meta name="description" content="${DESIGNED.description}"/>`,
+    `<link rel="canonical" href="${origin}/blog/designed"/>`,
+    "</head><body><h1>Designed</h1></body></html>",
+  ].join("");
+}
+
 /** The page as the site serves it, its head built from the post's values. */
 function pageHtml(origin: string, agent: string): string {
   const title = agent.includes("Googlebot")
@@ -156,7 +192,11 @@ describe.each(getConfiguredTestDialects())(
         }
         res
           .writeHead(200, { "content-type": "text/html; charset=utf-8" })
-          .end(pageHtml(origin, agent));
+          .end(
+            path === "/blog/designed"
+              ? designedHtml(origin)
+              : pageHtml(origin, agent)
+          );
       });
       await new Promise<void>(resolve =>
         server.listen(0, "127.0.0.1", resolve)
@@ -166,7 +206,10 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         // The site is configured on this machine, so the check may reach it.
-        plugins: [seoPlugin({ collections: ["posts"], baseUrl: origin })],
+        plugins: [
+          pageBuilder,
+          seoPlugin({ collections: ["posts"], baseUrl: origin }),
+        ],
         // The boot's seeding, so the plugin's own `check-seo` exists to grant.
         seedPublic: true,
         collections: [
@@ -205,6 +248,16 @@ describe.each(getConfiguredTestDialects())(
           team: "closed",
           status: "published",
           seo: { metaTitle: "Closed plans | Rext AI" },
+        },
+      });
+      // A post the design draws, with no description of its own.
+      await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "Designed",
+          slug: "designed",
+          team: "open",
+          status: "published",
         },
       });
       await lastCatchUp();
@@ -315,6 +368,20 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("holds what a page's design sets, and finds the page holds it too", async () => {
+      const answer = await check(reader, `${origin}/blog/designed`);
+      expect(answer).toMatchObject({
+        kind: "checked",
+        stored: {
+          title: DESIGNED.title,
+          description: DESIGNED.description,
+        },
+      });
+      if (answer.kind !== "checked") return;
+      expect(answer.rows.title.googlebot).toEqual({ kind: "same" });
+      expect(answer.rows.description.googlebot).toEqual({ kind: "same" });
+    });
+
     it("holds nothing to compare for a page the caller may not read", async () => {
       // The reader may read posts, but not this one: its row is filtered out.
       const answer = await check(reader, `${origin}/blog/closed-plans`);
@@ -366,6 +433,7 @@ describe.each(getConfiguredTestDialects())(
       // The site's sitemap, which lists every published page, in id order.
       expect([...body.pages].sort()).toEqual([
         `${origin}/blog/closed-plans`,
+        `${origin}/blog/designed`,
         `${origin}/blog/surfer-vs-rext`,
       ]);
       const anonymous = await call(undefined, "POST", BASE, {
