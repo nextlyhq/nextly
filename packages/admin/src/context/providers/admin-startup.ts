@@ -18,7 +18,7 @@ import { collectionsListPath } from "@admin/services/collectionApi";
 import { singlesListPath } from "@admin/services/singleApi";
 
 /** The paths the startup request names, as the screens ask for them. */
-export function adminStartupPaths(): string[] {
+function adminStartupPaths(): string[] {
   return [
     "/auth/setup-status",
     "/auth/session",
