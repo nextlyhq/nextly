@@ -31,6 +31,7 @@ import {
   TopBarPlaceTarget,
 } from "@admin/components/layout/header/TopBarPlaces";
 
+import { GreetingActionProvider } from "../../../dashboard/GreetingAction";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
 import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
@@ -226,7 +227,9 @@ function renderDashboard({ inBar = false }: { inBar?: boolean } = {}) {
           <TopBarPlaceTarget name="start" />
           <TopBarPlaceTarget name="end" />
         </header>
-        <main>{page}</main>
+        <main>
+          <GreetingActionProvider>{page}</GreetingActionProvider>
+        </main>
       </TopBarPlacesProvider>
     ) : (
       page
@@ -648,14 +651,17 @@ describe("in the admin's top bar", () => {
     return screen.getByTestId("top-bar");
   }
 
-  it("holds the breadcrumb and the cog at rest, and nothing of either in the page", async () => {
+  it("holds the breadcrumb at rest, and the cog at the greeting row's end rather than in the bar", async () => {
     renderDashboard({ inBar: true });
     const cog = await screen.findByTestId("dashboard-edit-begin");
-    expect(topBar()).toContainElement(cog);
+    const row = screen.getByTestId("dashboard-greeting-row");
+    expect(row).toContainElement(cog);
+    // After the greeting, so it reads and tabs after the heading it sits beside.
+    expect(row.lastElementChild).toContainElement(cog);
+    expect(topBar()).not.toContainElement(cog);
     expect(
       within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
     ).toHaveTextContent(/^Dashboard$/);
-    expect(screen.getByRole("main")).not.toContainElement(cog);
   });
 
   it("the cog is named and tooltipped Customize dashboard", async () => {
@@ -685,11 +691,14 @@ describe("in the admin's top bar", () => {
     }
   );
 
-  it("puts the mode's controls in the bar in place of the cog, and the breadcrumb says Customizing", async () => {
+  it("puts the mode's controls in the bar, the cog leaves the greeting row, and the breadcrumb says Customizing", async () => {
     renderDashboard({ inBar: true });
     await beginEditing();
     expect(topBar()).toContainElement(bar());
     expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    expect(screen.getByTestId("dashboard-greeting-row")).not.toContainElement(
+      bar()
+    );
     const crumb = within(topBar()).getByRole("navigation", {
       name: "Breadcrumb",
     });
