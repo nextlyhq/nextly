@@ -10,6 +10,7 @@ import { widthChoices } from "../../../sizes";
 import {
   columnsReached,
   nearestWidth,
+  PAST_GRID_EDGE_PX,
   reflowTargetAt,
   reorderAround,
   type LaidOutCard,
@@ -133,6 +134,23 @@ describe("the width a dragged edge reaches", () => {
       4,
       5
     );
+  });
+
+  it("reaches every column once the pointer passes the grid's right edge by more than the edge's strip", () => {
+    // A card in the row's last column, from the gap after the sixth column.
+    const left = gapAfter(6) + 8;
+    // Just past the grid's edge, where the edge's own strip still stands: the columns it spans.
+    expect(columnsReached(left, WIDTH + PAST_GRID_EDGE_PX, WIDTH)).toBeLessThan(
+      7
+    );
+    // Further: all twelve, so the card snaps to its widest width.
+    expect(columnsReached(left, WIDTH + PAST_GRID_EDGE_PX + 1, WIDTH)).toBe(12);
+    expect(
+      nearestWidth(
+        [4, 6, 8],
+        columnsReached(left, WIDTH + PAST_GRID_EDGE_PX + 1, WIDTH)
+      )
+    ).toBe(8);
   });
 
   it("snaps to the nearest of the card's width choices, the narrower on a tie", () => {
