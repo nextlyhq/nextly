@@ -1164,6 +1164,8 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
       });
 
       type PaginatedShape = {
@@ -1299,6 +1301,8 @@ const COLLECTIONS_METHODS: Record<
         wholeDocumentFallback: parseFallbackParam(p.fallback),
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

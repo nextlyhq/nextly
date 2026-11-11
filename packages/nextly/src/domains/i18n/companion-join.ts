@@ -67,12 +67,27 @@ export function resolveLocalizedValue(
   perLocale: Record<string, unknown>,
   chain: string[]
 ): unknown {
+  return resolveLocalizedSource(perLocale, chain).value;
+}
+
+/**
+ * {@link resolveLocalizedValue}, with the language the value came from: the
+ * first language of `chain` holding a non-blank value, or `null` where none
+ * does. The one walk both answer from.
+ */
+export function resolveLocalizedSource(
+  perLocale: Record<string, unknown>,
+  chain: readonly string[]
+): { value: unknown; locale: string | null } {
   for (const code of chain) {
     const value = perLocale[code];
-    if (!isBlank(value)) return value;
+    if (!isBlank(value)) return { value, locale: code };
   }
-  return null;
+  return { value: null, locale: null };
 }
+
+/** The key a read's per-field source languages are attached under (`sources`). */
+export const SOURCE_LOCALES_KEY = "_sources";
 
 /** A minimal Drizzle-select surface so this helper stays adapter/dialect agnostic. */
 interface SelectableDb {
@@ -113,6 +128,12 @@ export interface PopulateCompanionArgs {
    * would silently treat every row in the other states as non-matching.
    */
   statusValues?: readonly string[];
+  /**
+   * Also attach, on each row, the language each translatable value came from
+   * (`_sources`, {@link SOURCE_LOCALES_KEY}): `null` for a value no language
+   * holds.
+   */
+  sources?: boolean;
   /**
    * Also take each translation row's version counter, for a read whose version comes out of this
    * statement rather than one of its own: the translation table's runtime model does not declare
@@ -210,6 +231,7 @@ export async function populateCompanionFieldsByLanguage(
       rows: language.rows,
       localeChain: language.localeChain,
       companionRows,
+      sources: args.sources,
     });
   }
   return companionRows;
@@ -452,6 +474,8 @@ export function fillCompanionFields(args: {
   localeChain: string[];
   statusValues?: readonly string[];
   idKey?: string;
+  /** Also attach each value's source language (`PopulateCompanionArgs.sources`). */
+  sources?: boolean;
 }): void {
   const idKey = args.idKey ?? "id";
   const byParent = indexCompanionRowsByParent(
@@ -463,14 +487,18 @@ export function fillCompanionFields(args: {
   const ownLanguage = args.localeChain.slice(0, 1);
   for (const row of args.rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    const found: Record<string, string | null> = {};
     for (const field of args.localizedFields) {
       const chain = field.unique === true ? ownLanguage : args.localeChain;
       const perLocaleValue: Record<string, unknown> = {};
       for (const code of chain) {
         perLocaleValue[code] = perLocaleRows[code]?.[field.column];
       }
-      row[field.name] = resolveLocalizedValue(perLocaleValue, chain);
+      const picked = resolveLocalizedSource(perLocaleValue, chain);
+      row[field.name] = picked.value;
+      if (args.sources) found[field.name] = picked.locale;
     }
+    if (args.sources) row[SOURCE_LOCALES_KEY] = found;
   }
 }
 

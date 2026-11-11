@@ -41,6 +41,14 @@ import type {
 export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   extends DirectAPIConfig,
     RunAsPrincipal {
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -227,6 +235,14 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
    * @default false
    */
   wholeDocumentFallback?: boolean;
+
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
 
   /**
    * Specific fields to include/exclude.

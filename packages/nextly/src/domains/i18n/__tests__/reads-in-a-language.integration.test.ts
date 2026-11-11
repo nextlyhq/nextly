@@ -335,5 +335,38 @@ describe.each(getConfiguredTestDialects())(
       })) as Record<string, unknown>;
       expect(direct).toMatchObject({ title: "Site in English", _locale: "en" });
     }, 90_000);
+
+    // Asked for, a read says for each translatable field which language its
+    // value came from: the requested one, a fallback language, or none.
+    it("says which language each translatable value came from, on request", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInEnglish(t, {
+        title: "A in English",
+        body: "English body",
+        slug: "a",
+      });
+      // Spanish has its own title and slug, and no body of its own.
+      await publishIn(t, id, "es", { title: "A en español", slug: "a-es" });
+
+      const read = (await t.nextly.findByID({
+        collection: DOCS,
+        id,
+        locale: "es",
+        status: "published",
+        sourceLocales: true,
+      })) as Record<string, unknown>;
+      expect(read._sources).toEqual({ title: "es", body: "en", slug: "es" });
+
+      // Not asked for, a read carries no sources.
+      expect((await readAs(t, id, "es"))._sources).toBeUndefined();
+
+      const rest = await restRead(id, "?locale=es&source-locales=1");
+      expect(rest.status, JSON.stringify(rest.json)).toBe(200);
+      expect(rest.json._sources).toEqual({
+        title: "es",
+        body: "en",
+        slug: "es",
+      });
+    }, 90_000);
   }
 );

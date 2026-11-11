@@ -1721,7 +1721,9 @@ export class CollectionQueryService extends BaseService {
      * Also take each translation's version counter in the same statement, and answer the rows
      * read, for a read whose version comes from them (`PopulateCompanionArgs.withRevisions`).
      */
-    withRevisions = false
+    withRevisions = false,
+    /** Also attach each value's source language (`_sources`). */
+    sources = false
   ): Promise<Record<string, unknown>[] | undefined> {
     if (!localeChain || rows.length === 0) return undefined;
     const companion =
@@ -1739,6 +1741,7 @@ export class CollectionQueryService extends BaseService {
           ? statusFilterValues
           : undefined,
       withRevisions,
+      sources,
     });
   }
 
@@ -3416,6 +3419,8 @@ export class CollectionQueryService extends BaseService {
      * row for the admin translation-status overview. No-op for non-localized collections.
      */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -3865,7 +3870,8 @@ export class CollectionQueryService extends BaseService {
             localeChain,
             companion,
             statusFilter?.values ?? null, // the per-locale published filter
-            countersWithContent
+            countersWithContent,
+            params.sourceLocales === true
           )
       );
       const joinedRevisions =
@@ -4995,6 +5001,8 @@ export class CollectionQueryService extends BaseService {
      * entry for the admin translation-status pills. No-op for non-localized collections.
      */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -5256,6 +5264,7 @@ export class CollectionQueryService extends BaseService {
               companion.hasStatus && statusFilter?.values
                 ? statusFilter.values
                 : undefined,
+            sources: params.sourceLocales === true,
           });
         }
       } else {
@@ -5298,7 +5307,9 @@ export class CollectionQueryService extends BaseService {
               [read],
               localeChain,
               companion,
-              statusFilter?.values ?? null // the per-locale published filter
+              statusFilter?.values ?? null, // the per-locale published filter
+              false,
+              params.sourceLocales === true
             )
         );
       }

@@ -821,6 +821,8 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to each row. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -942,6 +944,8 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to the entry. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */

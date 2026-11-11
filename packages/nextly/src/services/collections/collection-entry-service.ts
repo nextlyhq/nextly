@@ -497,6 +497,8 @@ export class CollectionEntryService extends BaseService {
      * it, and say which (`_locale`).
      */
     wholeDocumentFallback?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
   }) {
     const read = (locale: string | undefined) => {
       const inLanguage = { ...params, locale };
