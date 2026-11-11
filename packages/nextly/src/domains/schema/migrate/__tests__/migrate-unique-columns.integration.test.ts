@@ -33,6 +33,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { migrateCore, runPluginPhase } from "../../../../cli/commands/migrate";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+} from "../../../../cli/commands/migrate-down";
 import { createLogger } from "../../../../cli/utils/logger";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -43,6 +47,7 @@ import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
 import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
+import { withMigrateLock } from "../../pipeline/locks";
 import { formatMigrationFile } from "../../migrate-create/format-file";
 import { diffSnapshots } from "../../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
@@ -59,7 +64,7 @@ import {
 import { createIndexSql } from "../../pipeline/sql-templates/create-index";
 import { splitStatements } from "../../pipeline/sql-statement-utils";
 import { uniqueIndexNameForColumn } from "../../services/index-name";
-import { NO_CONSENT } from "../data-loss-consent";
+import { NO_CONSENT, resolveDataLossConsent } from "../data-loss-consent";
 import {
   migrationChecksum,
   type MigrationContent,
@@ -114,8 +119,8 @@ describe.each(LOCK_DIALECTS)(
       await world.dispose();
     }, 60_000);
 
-    /** `nextly migrate`, with `--step` when given. */
-    function migrate(step?: number) {
+    /** `nextly migrate`, with `--step` when given, and with `--accept-data-loss` when asked. */
+    function migrate(step?: number, acceptDataLoss = false) {
       return migrateCore({
         ...(step === undefined ? {} : { step }),
         extensionSchema: undefined,
@@ -127,7 +132,9 @@ describe.each(LOCK_DIALECTS)(
         lockMode: "wait",
         lockWaitMs: 30_000,
         ensureLedger: () => ensureSchemaEventsTable(adapter),
-        consent: NO_CONSENT,
+        consent: acceptDataLoss
+          ? resolveDataLossConsent({ flag: true, env: {} })
+          : NO_CONSENT,
       });
     }
 
@@ -817,6 +824,93 @@ describe.each(LOCK_DIALECTS)(
       await migrate(0);
 
       expect(await isUnique("person")).toBe(true);
+    }, 120_000);
+
+    it("applies a file whose earlier WITH statement clears the repeats its unique index would meet", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        // A writer whose reach is not read: it counts as writing every table.
+        `WITH ${q("gone")} AS (SELECT 1 AS ${q("x")}) DELETE FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      // A writer whose reach is not read may delete rows, so the run asks consent for it.
+      await migrate(undefined, true);
+
+      expect(await personIsUnique()).toBe(true);
+    }, 120_000);
+
+    it("refuses a DOWN that recreates a unique index over values that repeat since its UP, before it runs", async () => {
+      await run([
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+      // An UP that lets the column repeat, whose DOWN makes it unique again.
+      const up =
+        dialect === "mysql"
+          ? `DROP INDEX ${q(UNIQUE)} ON ${q(PROFILES)}`
+          : `DROP INDEX IF EXISTS ${q(UNIQUE)}`;
+      writeFileSync(
+        join(migrationsDir, FILE),
+        formatMigrationFile({
+          name: NAME,
+          dialect,
+          sqlStatements: [up],
+          downSqlStatements: [
+            createIndexSql(
+              PROFILES,
+              { name: UNIQUE, columns: ["person"], unique: true },
+              dialect,
+              q
+            ),
+          ],
+          collections: [],
+          singles: [],
+          components: [],
+          hasUserExt: false,
+        }),
+        "utf8"
+      );
+      await migrate();
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+
+      const error = await migrateDownCore({
+        ...(await downDatabaseDeps({ adapter, dialect })),
+        nodeEnv: "test",
+        logger,
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+        fileExists: () => Promise.resolve(true),
+        readDownSql: () =>
+          Promise.resolve({
+            sql: `${createIndexSql(
+              PROFILES,
+              { name: UNIQUE, columns: ["person"], unique: true },
+              dialect,
+              q
+            )};`,
+            transaction: true,
+          }),
+        withLock: withMigrateLock,
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+      );
+      expect(await personIsUnique()).toBe(false);
+      expect(await ledger()).toEqual(["applied"]);
     }, 120_000);
   }
 );

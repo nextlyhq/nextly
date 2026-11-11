@@ -80,6 +80,7 @@ import {
   splitSqlStatements,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import { refuseUniqueIndexesOverRepeats } from "../../domains/schema/migrate/unique-column-guard";
 import {
   assertNoForeignDrops,
   columnsAfter,
@@ -1191,8 +1192,12 @@ export async function downDatabaseDeps(args: {
         row => row.filename === null || !ignoredRows.has(row.filename)
       );
     },
-    refuseRequiredColumns: (statements, source) =>
-      refuseRequiredColumnsOverNulls(db, dialect, statements, source),
+    // And the unique-index check `nextly migrate` makes of an UP: a DOWN that recreates a unique
+    // index over values that repeat since its UP ran is refused before its first statement.
+    refuseRequiredColumns: async (statements, source) => {
+      await refuseRequiredColumnsOverNulls(db, dialect, statements, source);
+      await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
+    },
     execDown: (statements, unit, after) =>
       runMigrationStatements(adapter, statements, unit, handle =>
         after(handle)

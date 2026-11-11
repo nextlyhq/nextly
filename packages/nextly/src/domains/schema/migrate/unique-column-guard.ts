@@ -40,6 +40,7 @@ import { requiredColumnRegistries } from "../required-column-registries";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 
 import type { MigrationUnit } from "./migration-transaction";
+import { rowWriteOf } from "./not-null-statements";
 import { readRequiredColumnOwners } from "./required-column-guard";
 import {
   indexesDroppedBy,
@@ -266,10 +267,11 @@ function uniqueTargets(
 }
 
 /**
- * Whether a statement before `at` writes rows of `table` (INSERT, UPDATE, DELETE, MySQL's
- * REPLACE): the values a unique index made at `at` must hold are then the ones those leave. One
- * whose table is not read here (an alias, several tables) counts as writing it: an unknown target
- * is no proof the values were left alone.
+ * Whether a statement before `at` may write rows of `table`, as the runner's row-write reading
+ * classifies statements (`rowWriteOf`): the values a unique index made at `at` must hold are then
+ * the ones those leave. A writer whose reach is not read (`WITH`, `DO`, `CALL`, …), and a named
+ * writer whose table is not read here (an alias, several tables, `MERGE`, `TRUNCATE`, `COPY`),
+ * counts as writing it: an unknown target is no proof the values were left alone.
  */
 function writtenBefore(
   statements: readonly string[],
@@ -277,13 +279,14 @@ function writtenBefore(
   table: string,
   at: number
 ): boolean {
-  return statements
-    .slice(0, at)
-    .some(
-      statement =>
-        /^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(statement) &&
-        (tablesChangedIn(statement, dialect)?.includes(table) ?? true)
+  return statements.slice(0, at).some(statement => {
+    const writes = rowWriteOf(statement, dialect);
+    if (writes === "unread") return true;
+    return (
+      writes === "named" &&
+      (tablesChangedIn(statement, dialect)?.includes(table) ?? true)
     );
+  });
 }
 
 /**

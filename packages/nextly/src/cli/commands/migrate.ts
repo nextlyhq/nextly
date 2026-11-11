@@ -1905,6 +1905,28 @@ function appStepAfter(
 }
 
 /**
+ * Each one-to-one an earlier release left without its uniqueness gets it, judged on the
+ * definitions the run's files just left, and refused, creating nothing, while any repeats a value
+ * (`makeOneToOnesUnique`). A run `--step` stops short leaves it to one that runs every file; a
+ * step of zero or less limits nothing, as the planners read it (`appStepAfter`).
+ */
+async function makeOneToOnesUniqueAfterFiles(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  if (appStepAfter(deps.step, 0) !== undefined) return;
+  const { makeOneToOnesUnique } = await import(
+    "../../domains/schema/migrate/one-to-one-uniques"
+  );
+  await makeOneToOnesUnique({
+    db: deps.db,
+    dialect: deps.dialect,
+    executeQuery: statement =>
+      (deps.adapter as unknown as DrizzleAdapter).executeQuery(statement),
+    logger: deps.logger,
+  });
+}
+
+/**
  * Phases 1.5 and 2: the plugins' modules, then the app's files, under one
  * `--step` budget (`appStepAfter`).
  */
@@ -2160,22 +2182,9 @@ export async function migrateCore(
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
 
-      // Each one-to-one an earlier release left without its uniqueness gets it, judged on the
-      // definitions the files just left, and refused, creating nothing, while any repeats a value.
-      // A run `--step` stops short leaves it to one that runs every file; a step of zero or less
-      // limits nothing, as the planners read it (`appStepAfter`).
-      if (appStepAfter(deps.step, 0) === undefined) {
-        const { makeOneToOnesUnique } = await import(
-          "../../domains/schema/migrate/one-to-one-uniques"
-        );
-        await makeOneToOnesUnique({
-          db: deps.db,
-          dialect: deps.dialect,
-          executeQuery: statement =>
-            (deps.adapter as unknown as DrizzleAdapter).executeQuery(statement),
-          logger: deps.logger,
-        });
-      }
+      // Each one-to-one an earlier release left without its uniqueness gets it
+      // (`makeOneToOnesUniqueAfterFiles`).
+      await makeOneToOnesUniqueAfterFiles(deps);
 
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();
