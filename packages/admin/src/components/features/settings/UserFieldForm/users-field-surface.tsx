@@ -28,6 +28,7 @@ import {
   type FieldSettingsSurface,
   type FieldSettingsSurfaceControlProps,
 } from "@admin/components/field-ui";
+import { drawsDefaultFor } from "@admin/components/field-ui/settings-panel/tabs/DefaultValueField";
 
 import {
   generateFieldName,
@@ -53,18 +54,6 @@ const FIXED_IDENTITY_REASON =
 /** Why a saved dropdown's "several choices" cannot change. */
 const FIXED_SEVERAL_REASON =
   "Fixed once the field exists, since it decides how the values are stored.";
-
-/** The types whose default the panel's own default editor draws. */
-const PANEL_DEFAULT_TYPES = new Set([
-  "text",
-  "textarea",
-  "email",
-  "number",
-  "date",
-  "checkbox",
-  "select",
-  "radio",
-]);
 
 type KitOption = FieldOptionsEditorProps["options"][number];
 
@@ -159,7 +148,9 @@ function TextDefault(
 ): JSX.Element | null {
   const { field, readOnly, onChange } = props;
   const id = useId();
-  if (PANEL_DEFAULT_TYPES.has(field.type)) return <UnshownDefault {...props} />;
+  // Asked of the panel's default editor itself, so the two never disagree on
+  // which types it draws.
+  if (drawsDefaultFor(field.type)) return <UnshownDefault {...props} />;
   const value =
     typeof field.defaultValue === "string" ? field.defaultValue : "";
   return (

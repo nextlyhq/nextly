@@ -41,6 +41,14 @@ const SUPPORTED_TYPES = new Set([
   "chips",
 ]);
 
+/**
+ * Whether this editor draws a default for the type: the one answer a surface
+ * asks before adding a default control of its own for a type it skips.
+ */
+export function drawsDefaultFor(type: string): boolean {
+  return SUPPORTED_TYPES.has(type);
+}
+
 type Value = string | number | boolean | null;
 
 type Props = {
