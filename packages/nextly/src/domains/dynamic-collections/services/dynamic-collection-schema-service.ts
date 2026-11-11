@@ -1831,10 +1831,11 @@ ${allColumnDefs.join(",\n")}
           }
 
           // A field marked unique and a one-to-one alike, under the name the desired schema
-          // declares for both, so the next diff finds it and plans nothing.
+          // declares for both (`uniqueIndexNameForColumn`, kept within the identifier limit), so
+          // the next diff finds it and plans nothing.
           if (this.columnIsUnique(field)) {
             statements.push(
-              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} UNIQUE (${this.quoteIdentifier(addColName)});`
+              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(uniqueIndexNameForColumn(tableName, addColName))} UNIQUE (${this.quoteIdentifier(addColName)});`
             );
           }
         } else {
@@ -1842,7 +1843,7 @@ ${allColumnDefs.join(",\n")}
           // field marked unique and a one-to-one alike.
           if (this.columnIsUnique(field)) {
             statements.push(
-              `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
+              `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(uniqueIndexNameForColumn(tableName, addColName))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
             );
           }
         }
