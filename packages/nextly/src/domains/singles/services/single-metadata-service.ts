@@ -1137,6 +1137,15 @@ export class SingleMetadataService {
       schemaService
     );
 
+    // A junction carried to a name the database already holds would meet that table at apply,
+    // after earlier statements ran. Asked on the full lists, the ones the junctions are planned on.
+    await schemaService.refuseJunctionMovesOntoLiveTables(
+      tableName,
+      startingFields,
+      fields,
+      table => adapter.tableExists(table)
+    );
+
     // Detected from the FULL field lists: a renamed LOCALIZED field-group
     // field sits in neither side of alterInput (the localized filter removes
     // both spellings), and its association migration must not be excluded

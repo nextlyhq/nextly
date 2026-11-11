@@ -23,7 +23,7 @@ import {
 import type { SingleEntryService } from "../services/single-entry-service";
 
 const TAGS = defineCollection({
-  slug: "tags",
+  slug: "srf_tags",
   fields: [text({ name: "name" })],
 });
 
@@ -44,7 +44,7 @@ describeEachDialect(
     /** A save leaving the required relationship empty is refused, naming it, and one filling it is not. */
     async function expectRequiredOnSave(): Promise<void> {
       const empty = await singles().update(
-        "banner",
+        "srf_banner",
         { headline: "No tag", tag: null, _overwrite: true },
         { overrideAccess: true }
       );
@@ -52,11 +52,11 @@ describeEachDialect(
       expect(JSON.stringify(empty)).toMatch(/tag/);
 
       const tags = await current!.nextly.create({
-        collection: "tags",
+        collection: "srf_tags",
         data: { name: "News" },
       });
       const filled = await singles().update(
-        "banner",
+        "srf_banner",
         { headline: "Tagged", tag: tags.item.id, _overwrite: true },
         { overrideAccess: true }
       );
@@ -69,16 +69,20 @@ describeEachDialect(
         collections: [TAGS],
         singles: [
           defineSingle({
-            slug: "banner",
+            slug: "srf_banner",
             fields: [
               text({ name: "headline" }),
-              relationship({ name: "tag", relationTo: "tags", required: true }),
+              relationship({
+                name: "tag",
+                relationTo: "srf_tags",
+                required: true,
+              }),
             ],
           }),
         ],
       });
 
-      const read = await singles().get("banner", { overrideAccess: true });
+      const read = await singles().get("srf_banner", { overrideAccess: true });
 
       expect(read.success, JSON.stringify(read)).toBe(true);
       await expectRequiredOnSave();
@@ -92,7 +96,7 @@ describeEachDialect(
         "createSingle",
         {},
         {
-          slug: "banner",
+          slug: "srf_banner",
           label: "Banner",
           fields: [
             { name: "headline", type: "text" },
@@ -100,13 +104,13 @@ describeEachDialect(
               name: "tag",
               type: "relationship",
               required: true,
-              options: { relationType: "manyToOne", target: "tags" },
+              options: { relationType: "manyToOne", target: "srf_tags" },
             },
           ],
         }
       );
 
-      const read = await singles().get("banner", { overrideAccess: true });
+      const read = await singles().get("srf_banner", { overrideAccess: true });
 
       expect(read.success, JSON.stringify(read)).toBe(true);
       await expectRequiredOnSave();

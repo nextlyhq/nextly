@@ -3390,6 +3390,37 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     );
   }
 
+  /**
+   * Refuse a junction move whose destination name the database already holds, before anything is
+   * generated: a collection's save and a Single's both ask it, since only the save can ask the
+   * database (`junctionMoves`).
+   *
+   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`) naming the table
+   */
+  async refuseJunctionMovesOntoLiveTables(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    tableExists: (table: string) => Promise<boolean>
+  ): Promise<void> {
+    for (const move of this.junctionMoves(tableName, oldFields, newFields)) {
+      if (!(await tableExists(move.to.table))) continue;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "JUNCTION_TABLE_IN_USE",
+            message:
+              `Junction table "${move.from.table}" cannot move to ` +
+              `"${move.to.table}": a table of that name already exists in the ` +
+              `database. Choose another name, or drop that table first.`,
+          },
+        ],
+        logContext: { from: move.from.table, to: move.to.table },
+      });
+    }
+  }
+
   /** Every junction table a field list names, by name. */
   private junctionTables(
     tableName: string,

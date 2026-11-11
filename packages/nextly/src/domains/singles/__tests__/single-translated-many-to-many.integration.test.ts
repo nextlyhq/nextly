@@ -17,7 +17,11 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
-const TABLE = "single_hero";
+// Slugs prefixed for this file (`stm_`), so the tables it owns are its own.
+const HERO = "stm_hero";
+const TAGS = "stm_tags";
+const TOPICS = "stm_topics";
+const TABLE = `single_${HERO}`;
 const TITLE = { name: "title", type: "text" };
 const tagsTo = (target: string) => ({
   name: "tags",
@@ -26,8 +30,8 @@ const tagsTo = (target: string) => ({
   options: { relationType: "manyToMany", target },
 });
 // The generator's convention: source and target table names sorted, then the field name.
-const TO_TAGS = `dc_tags_${TABLE}_tags`;
-const TO_TOPICS = `dc_topics_${TABLE}_tags`;
+const TO_TAGS = `dc_${TAGS}_${TABLE}_tags`;
+const TO_TOPICS = `dc_${TOPICS}_${TABLE}_tags`;
 
 describeEachDialect(
   "a translated Single's translated many-to-many",
@@ -40,9 +44,9 @@ describeEachDialect(
       current = await createTestNextly({
         dialect,
         collections: [
-          defineCollection({ slug: "tags", fields: [text({ name: "name" })] }),
+          defineCollection({ slug: TAGS, fields: [text({ name: "name" })] }),
           defineCollection({
-            slug: "topics",
+            slug: TOPICS,
             fields: [text({ name: "name" })],
           }),
         ],
@@ -61,16 +65,16 @@ describeEachDialect(
       await dispatchSingles(
         "createSingle",
         {},
-        { slug: "hero", label: "Hero", localized: true, fields }
+        { slug: HERO, label: "Hero", localized: true, fields }
       );
     }
 
     async function save(fields: unknown[]): Promise<void> {
-      await dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields });
+      await dispatchSingles("updateSingleSchema", { slug: HERO }, { fields });
     }
 
     it("is created with the Single", async () => {
-      await createHero([TITLE, tagsTo("tags")]);
+      await createHero([TITLE, tagsTo(TAGS)]);
 
       expect(await exists(TO_TAGS)).toBe(true);
     });
@@ -79,30 +83,75 @@ describeEachDialect(
       await createHero([TITLE]);
       expect(await exists(TO_TAGS)).toBe(false);
 
-      await save([TITLE, tagsTo("tags")]);
+      await save([TITLE, tagsTo(TAGS)]);
 
       expect(await exists(TO_TAGS)).toBe(true);
     });
 
     it("keeps its join table through a save that leaves it alone", async () => {
-      await createHero([TITLE, tagsTo("tags")]);
+      await createHero([TITLE, tagsTo(TAGS)]);
 
-      await save([TITLE, { name: "body", type: "text" }, tagsTo("tags")]);
+      await save([TITLE, { name: "body", type: "text" }, tagsTo(TAGS)]);
 
       expect(await exists(TO_TAGS)).toBe(true);
     });
 
     it("moves to a new join table when a save points it at another collection", async () => {
-      await createHero([TITLE, tagsTo("tags")]);
+      await createHero([TITLE, tagsTo(TAGS)]);
 
-      await save([TITLE, tagsTo("topics")]);
+      await save([TITLE, tagsTo(TOPICS)]);
 
       expect(await exists(TO_TOPICS)).toBe(true);
       expect(await exists(TO_TAGS)).toBe(false);
     });
 
+    // A junction carried to a name the database already holds is refused before anything runs, as
+    // a collection's is: met at apply, the rename would fail after the save's earlier statements.
+    it.each([
+      ["translated", true],
+      ["not translated", false],
+    ])(
+      "refuses moving a %s many-to-many's join table onto a table that exists, changing nothing",
+      async (_label, localized) => {
+        const field = (junctionTable?: string) => ({
+          ...tagsTo(TAGS),
+          localized,
+          options: {
+            relationType: "manyToMany",
+            target: TAGS,
+            ...(junctionTable ? { junctionTable } : {}),
+          },
+        });
+        await createHero([TITLE, field()]);
+        expect(await exists(TO_TAGS)).toBe(true);
+        const taken = "stm_hero_tag_links";
+        const q = (name: string) =>
+          dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+        await (
+          current.adapter as unknown as {
+            executeQuery(sql: string): Promise<unknown>;
+          }
+        ).executeQuery(`CREATE TABLE ${q(taken)} (${q("id")} varchar(36))`);
+
+        const refused = await save([TITLE, field(taken)]).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(refused).toMatchObject({
+          publicData: {
+            errors: [
+              expect.objectContaining({ code: "JUNCTION_TABLE_IN_USE" }),
+            ],
+          },
+        });
+        expect(await exists(TO_TAGS)).toBe(true);
+        expect(await exists(taken)).toBe(true);
+      }
+    );
+
     it("takes its join table with it when a save removes it", async () => {
-      await createHero([TITLE, tagsTo("tags")]);
+      await createHero([TITLE, tagsTo(TAGS)]);
       // Positive control: there is a table to remove.
       expect(await exists(TO_TAGS)).toBe(true);
 

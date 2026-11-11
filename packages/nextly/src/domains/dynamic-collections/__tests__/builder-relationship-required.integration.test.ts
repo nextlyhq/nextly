@@ -42,7 +42,7 @@ const author = (required: boolean) => ({
   type: "relationship",
   options: {
     relationType: "manyToOne",
-    target: "writers",
+    target: "brr_writers",
     onDelete: "restrict",
   },
   ...(required ? { required: true } : {}),
@@ -54,10 +54,10 @@ async function authorIsNotNull(
 ): Promise<boolean> {
   const query =
     dialect === "sqlite"
-      ? `SELECT "notnull" AS required FROM pragma_table_info('dc_notes') WHERE name = 'author'`
+      ? `SELECT "notnull" AS required FROM pragma_table_info('dc_brr_notes') WHERE name = 'author'`
       : dialect === "mysql"
-        ? `SELECT IF(IS_NULLABLE = 'NO', 1, 0) AS required FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_notes' AND COLUMN_NAME = 'author'`
-        : `SELECT CASE WHEN is_nullable = 'NO' THEN 1 ELSE 0 END AS required FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'dc_notes' AND column_name = 'author'`;
+        ? `SELECT IF(IS_NULLABLE = 'NO', 1, 0) AS required FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_brr_notes' AND COLUMN_NAME = 'author'`
+        : `SELECT CASE WHEN is_nullable = 'NO' THEN 1 ELSE 0 END AS required FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'dc_brr_notes' AND column_name = 'author'`;
   const [row] = await (
     current.adapter as unknown as {
       executeQuery<R>(sql: string): Promise<R[]>;
@@ -76,7 +76,7 @@ describeEachDialect(
       vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({ dialect, collections: [] });
       const writers = await handler().createCollection({
-        name: "writers",
+        name: "brr_writers",
         label: "Writer",
         fields: [{ name: "name", type: "text" }],
       });
@@ -93,7 +93,7 @@ describeEachDialect(
 
     async function createNotes(required: boolean): Promise<void> {
       const created = await handler().createCollection({
-        name: "notes",
+        name: "brr_notes",
         label: "Note",
         fields: [HEADING, author(required)],
       });
@@ -102,7 +102,7 @@ describeEachDialect(
 
     function save(required: boolean) {
       return handler().updateCollection(
-        { collectionName: "notes" },
+        { collectionName: "brr_notes" },
         { fields: [HEADING, author(required)] }
       );
     }
@@ -125,7 +125,7 @@ describeEachDialect(
       const entry = await handler()
         .getEntryService()
         .createEntry(
-          { collectionName: "notes", overrideAccess: true },
+          { collectionName: "brr_notes", overrideAccess: true },
           { heading: "No author" }
         );
       expect(entry.success, JSON.stringify(entry)).toBe(true);
