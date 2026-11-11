@@ -65,12 +65,9 @@ import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-hre
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
-import {
-  railAnswersIn,
-  railAnswersPending,
-  settledRailItems,
-} from "./lib/settled-rail";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
+import { RailAccount } from "./RailAccount";
+import { RailNewMenu } from "./RailNewMenu";
 import type {
   MainMenuCategory,
   MainMenuItem,
@@ -78,6 +75,7 @@ import type {
 } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
+import { useShownRail } from "./use-shown-rail";
 
 /**
  * Where keyboard focus is on the rail: a ring, drawn on `:focus-visible`
@@ -345,33 +343,18 @@ export function DualSidebar({
     [filteredMenuItems, isMenuItemShown]
   );
 
-  // What the rail draws: the entries shown, up to the first one whose answer
-  // has not arrived. An entry arriving later then lands below every entry
-  // already drawn instead of pushing them down. And whether every answer is
-  // in, which the rail marks for a reader of the page.
-  const rail = useMemo(() => {
-    const pending = railAnswersPending({
-      workspacePending: isWorkspacePending,
-      hydrated: isHydrated,
-      permissionsLoading: isPermissionsLoading,
-      contentAnswerPending,
-      collectionsLoading: isCollectionsLoading,
-      singlesLoading: isSinglesLoading,
-    });
-    return {
-      items: settledRailItems(filteredMenuItems, isMenuItemShown, pending),
-      settled: railAnswersIn(pending),
-    };
-  }, [
-    filteredMenuItems,
-    isMenuItemShown,
-    isWorkspacePending,
-    isHydrated,
-    isPermissionsLoading,
+  // What the rail draws, behind the answers (and "+ New"'s) that decide it.
+  const { rail, newMenu } = useShownRail({
+    items: filteredMenuItems,
+    isShown: isMenuItemShown,
+    workspacePending: isWorkspacePending,
+    hydrated: isHydrated,
+    permissionsLoading: isPermissionsLoading,
     contentAnswerPending,
-    isCollectionsLoading,
-    isSinglesLoading,
-  ]);
+    collectionsLoading: isCollectionsLoading,
+    singlesLoading: isSinglesLoading,
+    onPhone: isMobile,
+  });
 
   const activeCategory = useMemo(
     () =>
@@ -508,7 +491,10 @@ export function DualSidebar({
       {/* 1. Icon Sidebar (Main Menu) */}
       <aside
         className={cn(
-          "flex flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
+          // `min-h-0`, so on a short window the rail is as tall as the window
+          // and its navigation scrolls, rather than the rail growing past the
+          // window and pushing its foot out of sight.
+          "flex min-h-0 flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
           "w-[72px] shrink-0"
         )}
         // Whether every answer the rail draws from is in, so a reader of the
@@ -519,7 +505,7 @@ export function DualSidebar({
         <Link
           href={ROUTES.DASHBOARD}
           className={cn(
-            "mb-8 flex items-center justify-center h-10 w-10 rounded-md group",
+            "mb-8 flex shrink-0 items-center justify-center h-10 w-10 rounded-md group",
             RAIL_FOCUS_RING
           )}
         >
@@ -531,7 +517,14 @@ export function DualSidebar({
         </Link>
 
         {/* Main Icons */}
-        <nav className="flex-1 flex flex-col gap-4 w-full px-3">
+        {/* The one part of the rail that gives way on a short window: it
+            scrolls, so the logo above and the account foot below stay in
+            view. Padded vertically so a focus ring at either end is not cut
+            off by the scroll edge. */}
+        <nav className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto px-3 py-1 [scrollbar-width:none]">
+          {/* "+ New" heads the entries, inside their column rather than
+              above it, so the column's own box never moves as it arrives. */}
+          <RailNewMenu onPhone={isMobile} state={newMenu} />
           {rail.items.map(item => {
             const Icon = item.icon;
             const isSelected = railItemOf(shownMain) === item.id;
@@ -550,7 +543,7 @@ export function DualSidebar({
 
             // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
             const className = cn(
-              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
+              "flex shrink-0 items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
               RAIL_FOCUS_RING,
               isSelected
                 ? // `sidebar-accent` rather than `muted`: it is the surface
@@ -609,6 +602,10 @@ export function DualSidebar({
             );
           })}
         </nav>
+
+        {/* The rail's foot: the reader's Inbox and account menu, the same on
+            every page. */}
+        <RailAccount className="mt-4 shrink-0" />
       </aside>
 
       {/* 2. Sub Sidebar (Detail Menu) */}

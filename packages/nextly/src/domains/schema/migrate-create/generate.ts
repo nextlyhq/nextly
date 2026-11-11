@@ -96,6 +96,11 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
+import {
+  columnsByTable,
+  keptScopeFields,
+  withKeptScopeFields,
+} from "../pipeline/kept-scope-fields";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
@@ -108,7 +113,10 @@ import {
   type ColumnResolution,
 } from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
-import type { ColumnOrigin } from "../services/field-column-descriptor";
+import {
+  columnsDeclaredBy,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
 
 import {
   appStreamSnapshots,
@@ -226,6 +234,12 @@ export interface MinimalConfigEntity {
 export interface GenerateArgs {
   /** Slug-cased migration name (CLI's --name=<value>). */
   name: string;
+  /**
+   * Keep nothing a plugin's scope holds back from a type switched off: the
+   * migration drops the columns those fields kept. Set by `nextly prune` on a
+   * site that keeps migration files, once the data-loss consent agrees.
+   */
+  releaseHeldBack?: boolean;
   dialect: SupportedDialect;
   /** Absolute path to the `migrations/` directory. */
   migrationsDir: string;
@@ -405,6 +419,52 @@ function operationTableName(op: Operation): string {
     default:
       return op.tableName;
   }
+}
+
+/**
+ * `declared` with the fields a plugin's scope holds back from a type switched
+ * off, kept while `previous` has their columns. Planned from the declared
+ * fields alone, a companion planner dropped a translated kept field's unique
+ * index when its type was switched off, and added its column again when it
+ * was switched on.
+ */
+function withKeptScopeFieldsOf(
+  declared: GenerateArgs,
+  previous: NextlySchemaSnapshot | undefined
+): GenerateArgs {
+  const kept = columnsByTable(previous ?? EMPTY_SNAPSHOT, declared.dialect);
+  const keep = <T extends MinimalConfigEntity>(
+    kind: "collection" | "single",
+    entity: T
+  ): T => {
+    const fields = keptScopeFields(kind, entity, kept).filter(
+      field =>
+        declared.releaseHeldBack !== true ||
+        storedApartFrom(field, kept.names.get(entity.tableName))
+    );
+    return fields.length === 0
+      ? entity
+      : { ...entity, fields: [...entity.fields, ...fields] };
+  };
+  return {
+    ...declared,
+    collections: declared.collections.map(entity => keep("collection", entity)),
+    singles: declared.singles.map(entity => keep("single", entity)),
+  };
+}
+
+/**
+ * Whether none of `field`'s columns is on the type's own table, as a
+ * translated kept field's is in its translations table. Releasing what is
+ * held back drops only a type's own table's columns, since a migration never
+ * drops a translations table's column: such a field stays kept, or the
+ * snapshot would forget the column the database still holds.
+ */
+function storedApartFrom(
+  field: { name?: unknown; type?: unknown; options?: unknown },
+  main: ReadonlySet<string> | undefined
+): boolean {
+  return ![...columnsDeclaredBy([field])].some(column => main?.has(column));
 }
 
 /**
@@ -626,14 +686,18 @@ export async function generateMigration(
   requested: GenerateArgs
 ): Promise<GenerateResult | null> {
   // Scoped, every planner below sees the scoped entity alone.
-  const args = withScopedEntities(requested);
-  const metaDir = resolve(args.migrationsDir, "meta");
+  const scoped = withScopedEntities(requested);
+  const metaDir = resolve(scoped.migrationsDir, "meta");
   // Single clock for the whole run so the main file and its companions share a
   // deterministic base timestamp (companions get a strictly-later one below).
-  const now = args.now ?? new Date();
+  const now = scoped.now ?? new Date();
 
   // 1. Load previous state.
   const previous = await loadLatestSnapshot(metaDir);
+
+  // Taken once, here, so the table diff and every companion planner below
+  // see the same fields (`withKeptScopeFieldsOf`).
+  const args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
@@ -2846,10 +2910,18 @@ export function buildDesiredSnapshotFromConfig(
   collections: MinimalConfigEntity[],
   singles: MinimalConfigEntity[],
   components: MinimalConfigEntity[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /**
+   * The tables as the last migration left them. A field a plugin's scope
+   * holds back from a type switched off keeps its column while these have it
+   * (`kept-scope-fields.ts`). Omitted, nothing held back is kept.
+   */
+  existing?: NextlySchemaSnapshot
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
-  for (const c of collections) {
+  const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  for (const entity of collections) {
+    const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
     // includes the system status column when enabled. Mirrors the same
     // forwarding pushschema-pipeline.ts already does for the diff path.
@@ -2868,7 +2940,8 @@ export function buildDesiredSnapshotFromConfig(
       )
     );
   }
-  for (const c of singles) {
+  for (const entity of singles) {
+    const c = withKeptScopeFields("single", entity, kept);
     // i18n: singles localize identically to collections — the companion is
     // `single_<slug>_locales` (deriveCompanionSpec derives it from the table name).
     // Omit translatable columns from the main table; the companion (planned below)

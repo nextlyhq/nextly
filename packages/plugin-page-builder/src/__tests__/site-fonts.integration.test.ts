@@ -1211,8 +1211,20 @@ describe.each(getConfiguredTestDialects())(
       catalogue.on("/v1/fonts?type=google", (_req, res) =>
         res.writeHead(503).end()
       );
+      // The stats answer well after the failed list, as a slower host would.
+      let statsAnswered = false;
+      catalogue.on("/v1/stats", (_req, res) => {
+        setTimeout(() => {
+          statsAnswered = true;
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end("{}");
+        }, 200);
+      });
       clock += 25 * 60 * 60 * 1000;
       expect(await families()).toHaveLength(1);
+      // The read settled the stats it asked for beside the list before
+      // answering, so no request is left running behind the last good copy.
+      expect(statsAnswered).toBe(true);
       expect(
         catalogue.asked.filter(path => path.startsWith("/v1/fonts?"))
       ).toHaveLength(3);

@@ -580,7 +580,53 @@ const CHART_MARKS: Pairing[] = [
   ),
 ];
 
+// The status tokens: each status's text on its own surface, on a card and on
+// the page (a chip is neutral, so its words sit on the card), and its solid
+// (the chip's dot, an alert's icon) as a 3:1 graphical object on the page and
+// on a card. Borders on a surface are container edges, not asserted (see the
+// exclusions).
+const STATUS_TOKENS = ["success", "warning", "danger", "info"] as const;
+const STATUS_TOKEN_PAIRS: Pairing[] = STATUS_TOKENS.flatMap((s): Pairing[] => [
+  {
+    fg: `--nx-${s}-text`,
+    bg: `--nx-${s}-surface`,
+    kind: "text",
+    label: `${s} text on its surface`,
+  },
+  {
+    fg: `--nx-${s}-text`,
+    bg: "--nx-card",
+    kind: "text",
+    label: `${s} text on a card`,
+  },
+  {
+    fg: `--nx-${s}-text`,
+    bg: "--nx-background",
+    kind: "text",
+    label: `${s} text on the page`,
+  },
+  {
+    fg: "--nx-foreground",
+    bg: `--nx-${s}-surface`,
+    kind: "text",
+    label: `alert text on the ${s} surface`,
+  },
+  {
+    fg: `--nx-${s}-solid`,
+    bg: "--nx-background",
+    kind: "ui",
+    label: `${s} solid (dot, icon) on the page`,
+  },
+  {
+    fg: `--nx-${s}-solid`,
+    bg: "--nx-card",
+    kind: "ui",
+    label: `${s} solid (dot, icon) on a card`,
+  },
+]);
+
 export const PAIRINGS: Pairing[] = [
+  ...STATUS_TOKEN_PAIRS,
   ...CHART_MARKS,
   ...BASE_TEXT,
   ...CODE_TEXT,
@@ -606,6 +652,11 @@ export interface Exclusion {
  * exact coverage boundary instead of inferring it from silence.
  */
 export const EXCLUSIONS: Exclusion[] = [
+  {
+    token: "--nx-{success,warning,danger,info}-border",
+    reason:
+      "The edge of an alert drawn on its status surface. The alert is identified by its icon and its words, so the edge is a container boundary, which WCAG 1.4.11 leaves out; holding it to 3:1 would make every alert heavier without making one easier to recognise.",
+  },
   {
     token: "--nx-border-subtle",
     reason:

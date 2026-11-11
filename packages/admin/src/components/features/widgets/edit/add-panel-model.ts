@@ -18,7 +18,7 @@ import type {
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
 
-import { widthChoiceName, widthChoices } from "../sizes";
+import { widthChoiceName, widthChoices, widthPercent } from "../sizes";
 import { askableWith } from "../widget-as-asked";
 
 /** The chips past All, as the server names a tile's. */
@@ -396,11 +396,11 @@ export function addWidths(size: WidgetSizeBounds): WidthChoice[] {
   });
 }
 
-/** What a tile says about its widths: its one width, or the narrowest and widest. */
+/** What a tile says about its widths: its one width, or the narrowest and widest ("25% to 100% wide"). */
 export function widthsLabel(size: WidgetSizeBounds): string {
-  const narrowest = widthChoiceName(size.min.w).label;
-  if (size.min.w === size.max.w) return `${narrowest} width`;
-  return `${narrowest} to ${widthChoiceName(size.max.w).label} width`;
+  const narrowest = widthPercent(size.min.w);
+  if (size.min.w === size.max.w) return `${narrowest} wide`;
+  return `${narrowest} to ${widthPercent(size.max.w)} wide`;
 }
 
 /** The settings a new card starts with: the collection chosen, and the period when it has one. */

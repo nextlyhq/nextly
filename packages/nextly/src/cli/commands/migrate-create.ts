@@ -177,6 +177,12 @@ export interface MigrateCreateCommandOptions {
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
+  /**
+   * Drop the columns a plugin's scope keeps on types switched off, rather
+   * than keep them (`GenerateArgs.releaseHeldBack`). Not a flag: `nextly
+   * prune` sets it, after its data-loss consent.
+   */
+  releaseHeldBack?: boolean;
   config?: string;
   verbose?: boolean;
   quiet?: boolean;
@@ -521,6 +527,7 @@ export async function runMigrateCreate(
       recordSnapshot: options.recordSnapshot === true,
       liveCompanionColumns: live.read,
       dryRun: options.dryRun === true,
+      releaseHeldBack: options.releaseHeldBack === true,
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
