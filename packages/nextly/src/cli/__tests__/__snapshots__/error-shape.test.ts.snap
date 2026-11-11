@@ -1169,7 +1169,7 @@ exports[`each code, as a command ends with it > PLUGIN_COLUMN_NOT_MIGRATED 1`] =
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_CONFIG_NOT_EDITABLE 1`] = `
-"✗ The plugin was installed, but not added to your configuration.
+"✗ The plugin was not added to your configuration.
   Why:  nextly.config.ts sets \`plugins\` to something other than a list written in place. The file was left as it was.
   Next: Add \`import { seoPlugin } from "@acme/seo";\` and \`plugins: [seoPlugin({ siteUrl: "https://example.com" })]\` to it, then run \`nextly plugins install @acme/seo\`.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-config-not-editable  (PLUGIN_CONFIG_NOT_EDITABLE)"

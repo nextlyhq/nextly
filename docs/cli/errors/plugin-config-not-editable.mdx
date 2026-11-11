@@ -7,7 +7,7 @@ description: "`nextly plugins add` cannot place a plugin in the configuration fi
 
 `nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.
 
-`nextly plugins add` edits `nextly.config.ts` only where the file's own structure shows the place: one `defineConfig({ ... })` call, given an object that writes `plugins` once, as a list written in place. A list held in a variable or built with a spread, a name the import would collide with, a file that does not parse, or no config file at all, and it leaves the file as it was rather than guess. The package was installed; the build and the schema were not changed.
+`nextly plugins add` edits `nextly.config.ts` only where the file's own structure shows the place: one `defineConfig({ ... })` call, given an object that writes `plugins` once, as a list written in place. A list held in a variable or built with a spread, a name the import would collide with, a file that does not parse, or no config file at all, and it leaves the file as it was rather than guess. The build and the schema were not changed either.
 
 ## Fix
 
@@ -17,7 +17,7 @@ description: "`nextly plugins add` cannot place a plugin in the configuration fi
 ## Example
 
 ```text
-✗ The plugin was installed, but not added to your configuration.
+✗ The plugin was not added to your configuration.
   Why:  nextly.config.ts sets `plugins` to something other than a list written in place. The file was left as it was.
   Next: Add `import { seoPlugin } from "@acme/seo";` and `plugins: [seoPlugin({ siteUrl: "https://example.com" })]` to it, then run `nextly plugins install @acme/seo`.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-config-not-editable  (PLUGIN_CONFIG_NOT_EDITABLE)

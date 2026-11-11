@@ -58,11 +58,18 @@ import {
   type CommandContext,
   type GlobalOptions,
 } from "../program";
-import { clearConfigCache, findNextlyConfig } from "../utils/config-loader";
+import {
+  clearConfigCache,
+  findNextlyConfig,
+  loadConfig,
+} from "../utils/config-loader";
 import { answered } from "../utils/prompt-cancelled";
 
 import { buildScriptEdit } from "./plugins-add/build-script";
-import { pluginRegistrationEdit } from "./plugins-add/config-registration";
+import {
+  manualRegistrationLines,
+  pluginRegistrationEdit,
+} from "./plugins-add/config-registration";
 import {
   findInstalledPackage,
   importEntry,
@@ -222,6 +229,27 @@ function configFileOf(cwd: string, options: ResolvedAddOptions) {
     : resolve(cwd, options.config);
 }
 
+/**
+ * Whether the site's config, loaded as every command loads it, registers a
+ * plugin named `pluginName` already. A config that does not load now says
+ * nothing either way; the steps after the edit load it and report why.
+ */
+async function alreadyConfigured(
+  pluginName: string,
+  cwd: string,
+  options: ResolvedAddOptions
+): Promise<boolean> {
+  try {
+    const { config } = await loadConfig({ configPath: options.config, cwd });
+    return (config.plugins ?? []).some(each => each.name === pluginName);
+  } catch {
+    return false;
+  } finally {
+    // The loader keeps what it read; the steps after the edit read the file anew.
+    clearConfigCache();
+  }
+}
+
 /** Registers the plugin in the config, or names that edit under a dry run. */
 async function register(
   name: string,
@@ -241,10 +269,12 @@ async function register(
   if (file === undefined || text === undefined) {
     throw pluginConfigNotEditable(
       "No nextly.config.ts was found in the project",
-      [
-        `import { ${registration.localName} } from "${name}";`,
-        `plugins: [${entry(registration.localName)}]`,
-      ],
+      manualRegistrationLines({
+        packageName: name,
+        exportName: registration.exportName,
+        localName: registration.localName,
+        entry,
+      }),
       plugin.name
     );
   }
@@ -264,6 +294,15 @@ async function register(
   if (answer.kind === "listed") {
     context.logger.info(
       `${projectPath(cwd, file)} already lists ${answer.local}; it was left as it was.`
+    );
+    return;
+  }
+  // The file can list the plugin in a shape the edit does not read, such as
+  // `const made = factory()` and then `made.plugin`; a second entry would be
+  // a duplicate the config refuses. What the config registers decides it.
+  if (await alreadyConfigured(plugin.name, cwd, options)) {
+    context.logger.info(
+      `${projectPath(cwd, file)} already registers ${plugin.name}; it was left as it was.`
     );
     return;
   }
@@ -460,7 +499,15 @@ export async function runAdd(
   );
   if (planned === undefined) return;
   const pluginName = planned.plugin.name;
-  await register(name, planned, cwd, options, context, changes);
+  try {
+    await register(name, planned, cwd, options, context, changes);
+  } catch (error) {
+    // Under a dry run, a config the real run would not edit is its refusal,
+    // reported in its words.
+    if (!(options.dryRun && error instanceof CliError)) throw error;
+    reportDryRun(context.logger, { changes, refusals: [error.what] });
+    return;
+  }
   await addBuildStep(pluginName, cwd, options, context, changes);
   await finish(pluginName, options, context, changes);
 }

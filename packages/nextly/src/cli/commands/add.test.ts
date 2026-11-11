@@ -31,6 +31,17 @@ const install = vi.hoisted(() => ({
   asked: [] as string[],
   // The folder the run's environment files were read from, if any.
   environment: undefined as string | undefined,
+  // The plugins the site's config registers when it is loaded, by name.
+  configured: [] as string[],
+}));
+
+vi.mock("../utils/config-loader", async () => ({
+  ...(await vi.importActual<typeof import("../utils/config-loader")>(
+    "../utils/config-loader"
+  )),
+  loadConfig: async () => ({
+    config: { plugins: install.configured.map(name => ({ name })) },
+  }),
 }));
 
 vi.mock("../environment", async () => ({
@@ -198,6 +209,7 @@ describe("nextly plugins add", () => {
     install.terminal = false;
     install.asked = [];
     install.environment = undefined;
+    install.configured = [];
     output = [];
     const record = (...parts: unknown[]) => {
       output.push(parts.map(String).join(" "));
@@ -405,6 +417,22 @@ describe("nextly plugins add", () => {
     ]);
   });
 
+  it("leaves a config that registers the plugin some other way as it is", async () => {
+    await installed(PLAIN);
+    const factory = `import { defineConfig } from "nextly/config";
+import { acme } from "@acme/p";
+
+const made = acme();
+
+export default defineConfig({ plugins: [made.plugin] });
+`;
+    await writeFile(join(project, "nextly.config.ts"), factory);
+    install.configured = ["@acme/p"];
+    expect(await add({ skipInstall: true })).toBeUndefined();
+    expect(await config()).toBe(factory);
+    expect(output.join("\n")).toMatch(/already registers @acme\/p/);
+  });
+
   describe("--dry-run", () => {
     it("names every change in order, and makes none", async () => {
       await installed(PLAIN);
@@ -432,6 +460,20 @@ describe("nextly plugins add", () => {
       expect(install.runs).toEqual([]);
       expect(info().at(-3)).toBe("Would run pnpm add -D @acme/p");
       expect(info().at(-2)).toMatch(/once it is installed/);
+    });
+
+    it("reports a config it cannot edit as the real run's refusal, and exits 0", async () => {
+      await installed(PLAIN);
+      const held = `import { defineConfig } from "nextly/config";
+const plugins = [];
+export default defineConfig({ plugins });
+`;
+      await writeFile(join(project, "nextly.config.ts"), held);
+      expect(await add({ skipInstall: true, dryRun: true })).toBeUndefined();
+      expect(info().join("\n")).toMatch(
+        /A real run would refuse: The plugin was not added to your configuration/
+      );
+      expect(await config()).toBe(held);
     });
 
     it("reports the refusal the real run would meet, asking nothing", async () => {

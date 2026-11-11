@@ -69,6 +69,17 @@ describe("the build step for a new plugin", () => {
     );
   });
 
+  it("installs in the mode the build migrates in", () => {
+    expect(built("nextly migrate --mode production && next build")).toBe(
+      "nextly migrate --mode production && nextly plugins install @acme/seo --mode production && next build"
+    );
+    expect(
+      built("nextly migrate --mode=production -c cms.config.ts && next build")
+    ).toBe(
+      "nextly migrate --mode=production -c cms.config.ts && nextly plugins install @acme/seo --config cms.config.ts --mode production && next build"
+    );
+  });
+
   it("keeps the rest of package.json as it was", () => {
     const answer = buildScriptEdit(
       manifest("nextly migrate && next build"),

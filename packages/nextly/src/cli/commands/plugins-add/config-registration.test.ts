@@ -7,6 +7,7 @@ import { parse } from "@babel/parser";
 import { describe, expect, it } from "vitest";
 
 import {
+  manualRegistrationLines,
   pluginRegistrationEdit,
   type PluginRegistrationInput,
 } from "./config-registration";
@@ -189,6 +190,26 @@ import { other } from "other";
 export default defineConfig({ plugins: [other({ fields })] });
 `;
     expect(edit(option).kind).toBe("edit");
+  });
+
+  it("says to import a default export as one", () => {
+    const answer = edit(`export default {};\n`, {
+      exportName: "default",
+      localName: "seo",
+      entry: local => local,
+    });
+    expect(answer).toMatchObject({
+      kind: "manual",
+      lines: [`import seo from "@acme/seo";`, `plugins: [seo]`],
+    });
+    expect(
+      manualRegistrationLines({
+        packageName: "@acme/seo",
+        exportName: "default",
+        localName: "seo",
+        entry: local => local,
+      })
+    ).toEqual([`import seo from "@acme/seo";`, `plugins: [seo]`]);
   });
 
   it.each([

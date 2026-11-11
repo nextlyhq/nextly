@@ -80,6 +80,10 @@ describe("the installed package", () => {
       })
     ).toBe(join(dir, "n.mjs"));
     expect(entryFileOf(dir, { exports: "./e.js" })).toBe(join(dir, "e.js"));
+    // Node matches `node-addons` by default, as it does `node`.
+    expect(
+      entryFileOf(dir, { exports: { ".": { "node-addons": "./native.js" } } })
+    ).toBe(join(dir, "native.js"));
   });
 
   it("without exports, loads main as Node does, trying its extensions, and never module", async () => {

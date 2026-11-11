@@ -45,8 +45,8 @@ export async function findInstalledPackage(
   }
 }
 
-/** The conditions an `import` from Node matches, as Node checks them. */
-const IMPORT_CONDITIONS = new Set(["node", "import", "default"]);
+/** The conditions an `import` from Node matches by default, as Node checks them. */
+const IMPORT_CONDITIONS = new Set(["node-addons", "node", "import", "default"]);
 
 /** The file an exports target names for an import: the first matching condition, in written order. */
 function exportTarget(target: unknown): string | undefined {

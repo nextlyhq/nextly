@@ -34,9 +34,8 @@ npx nextly plugins add @nextlyhq/plugin-form-builder
 It installs the package with your project's package manager, registers the plugin in
 `nextly.config.ts`, adds `nextly plugins install <name>` to your build after
 `nextly migrate` (a production start refuses a plugin that was never installed), runs
-`nextly generate:types`, and applies the plugin's schema to your database. `nextly add
-
-<package>` is the same command.
+`nextly generate:types`, and applies the plugin's schema to your database. The same
+command also runs as `nextly add <package>`.
 
 - **Options the plugin asks for.** A plugin can ask for values at install, such as your
   site's production address. Give each as `--option <name>=<value>`; in a terminal, the

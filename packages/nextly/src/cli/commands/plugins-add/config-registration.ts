@@ -156,8 +156,14 @@ function newListInsertion(
   return { at: root.start + 1, text: `\n${indent}plugins: [${entry}],` };
 }
 
+/** What the lines a person adds by hand are made from. */
+type RegistrationLinesInput = Pick<
+  PluginRegistrationInput,
+  "packageName" | "exportName" | "localName" | "entry"
+>;
+
 /** The import line for the plugin, bound to `local`. */
-function importLine(input: PluginRegistrationInput, local: string): string {
+function importLine(input: RegistrationLinesInput, local: string): string {
   const binding =
     input.exportName === "default"
       ? local
@@ -167,6 +173,16 @@ function importLine(input: PluginRegistrationInput, local: string): string {
   return `import ${binding} from "${input.packageName}";`;
 }
 
+/** The two lines that register the plugin, for a person to add by hand. */
+export function manualRegistrationLines(
+  input: RegistrationLinesInput
+): string[] {
+  return [
+    importLine(input, input.localName),
+    `plugins: [${input.entry(input.localName)}]`,
+  ];
+}
+
 /** The edit that registers the plugin, or why it was not made and what to add. */
 export function pluginRegistrationEdit(
   input: PluginRegistrationInput
@@ -174,10 +190,7 @@ export function pluginRegistrationEdit(
   const manual = (reason: string): PluginRegistrationEdit => ({
     kind: "manual",
     reason,
-    lines: [
-      importLine(input, input.localName),
-      `plugins: [${input.entry(input.localName)}]`,
-    ],
+    lines: manualRegistrationLines(input),
   });
   const program = readProgram(input.text, input.parser);
   if ("unread" in program) {

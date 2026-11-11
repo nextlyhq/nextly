@@ -966,7 +966,7 @@ export function pluginConfigNotEditable(
   pluginName: string
 ): CliError {
   return new CliError("PLUGIN_CONFIG_NOT_EDITABLE", {
-    what: "The plugin was installed, but not added to your configuration.",
+    what: "The plugin was not added to your configuration.",
     why: `${closed(reason)} The file was left as it was.`,
     next: `Add ${lines.map(line => `\`${line}\``).join(" and ")} to it, then run \`nextly plugins install ${pluginName}\`.`,
   });
