@@ -154,6 +154,33 @@ async function listed(): Promise<string[]> {
   );
 }
 
+/** Saves `body` for a page with no entry, as `cookie`. */
+async function save(cookie: string, body: Record<string, unknown>) {
+  const segments = ["plugins", ...PLUGIN.split("/"), "pages", "seo"];
+  const res = await createDynamicHandlers().POST(
+    new Request(`${SITE}/api/${segments.join("/")}`, {
+      method: "POST",
+      headers: {
+        cookie: `${cookie}; nextly_csrf=${CSRF}`,
+        "x-csrf-token": CSRF,
+        origin: SITE,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ params: segments }) }
+  );
+  return res.status;
+}
+
+const typed = (path: string, values: Record<string, unknown> = {}) => ({
+  path,
+  title: "",
+  description: "",
+  hidden: false,
+  ...values,
+});
+
 describe.each(getConfiguredTestDialects())(
   "pages with no entry (%s)",
   (dialect: TestDialect) => {
@@ -187,33 +214,6 @@ describe.each(getConfiguredTestDialects())(
       });
       return current;
     }
-
-    /** Saves `body` for a page with no entry, as `cookie`. */
-    async function save(cookie: string, body: Record<string, unknown>) {
-      const segments = ["plugins", ...PLUGIN.split("/"), "pages", "seo"];
-      const res = await createDynamicHandlers().POST(
-        new Request(`${SITE}/api/${segments.join("/")}`, {
-          method: "POST",
-          headers: {
-            cookie: `${cookie}; nextly_csrf=${CSRF}`,
-            "x-csrf-token": CSRF,
-            origin: SITE,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(body),
-        }),
-        { params: Promise.resolve({ params: segments }) }
-      );
-      return res.status;
-    }
-
-    const typed = (path: string, values: Record<string, unknown> = {}) => ({
-      path,
-      title: "",
-      description: "",
-      hidden: false,
-      ...values,
-    });
 
     it("serves what a person set for the address over the route's code, field by field, at the page's own address", async () => {
       const t = await boot();
@@ -566,6 +566,17 @@ describe.each(getConfiguredTestDialects())(
         },
       ]);
       expect(await listed()).toContain(`${SITE}/pricing`);
+
+      // An English page stored at /pricing is served at /en/pricing: the
+      // root's /pricing is still the page built in code's, and saves.
+      await t.nextly.create({
+        collection: LOCALIZED,
+        locale: "en",
+        data: { slug: "pricing", title: "Prices", status: "published" },
+      });
+      expect(await save(owner, typed("/pricing", { title: "Plans" }))).toBe(
+        200
+      );
     });
   }
 );

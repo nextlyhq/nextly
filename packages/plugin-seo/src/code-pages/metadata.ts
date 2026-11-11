@@ -112,6 +112,16 @@ export async function seoMetadata(
   }
   const own = options.metadata ?? {};
   const runtime = await import("nextly/runtime");
+  // A worker whose cache already holds the row reads nothing that would
+  // start Nextly, and the page's head is asked of the SEO plugin only once
+  // it has started: so a start not made yet is awaited here.
+  if (keptSeoContext() === undefined) {
+    try {
+      await getCachedNextly();
+    } catch {
+      return own;
+    }
+  }
   // The plugin's own tag, which a save on the screen expires.
   const tags = [pluginCacheTag(SEO_PLUGIN_NAME, CODE_PAGES_CACHE_PART)];
   let found: CodePageRead | null;

@@ -14,12 +14,11 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
-import { addressHolders } from "../address-record/participant";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 import type { ReadRules } from "../resolver/provider";
 
 import { siteAddresses } from "./addresses";
-import { codePagesSlug } from "./collection";
+import { heldByDocuments } from "./answers";
 import {
   ADDRESSES_ROUTE_PATH,
   CODE_PAGE_SEO_ROUTE_PATH,
@@ -96,11 +95,12 @@ async function requested(req: Request): Promise<CodePageSeoInput> {
 async function isCodePage(
   ctx: PluginRouteContext,
   path: string,
-  config: CodePageRoutesConfig
+  config: CodePageRoutesConfig,
+  origin: string
 ): Promise<boolean> {
-  const own = codePagesSlug(ctx);
-  const held = await addressHolders(ctx, path, undefined);
-  if (held.some(holder => holder.collection !== own)) return false;
+  // Who holds it is read in the address's own language, as the list reads
+  // it, so the screen offers only what a save takes.
+  if ((await heldByDocuments(ctx, [path], origin)).has(path)) return false;
   if (config.routes().some(route => route.path === path)) return true;
   return (await readCodePage(ctx, path)) !== undefined;
 }
@@ -118,7 +118,10 @@ function saveRoute(config: CodePageRoutesConfig): PluginRoute {
       const path = codeAddressOf(input.path);
       // Checked before anything is written: only a page with no entry that
       // the site knows of has its SEO kept here.
-      if (path === undefined || !(await isCodePage(ctx, path, config))) {
+      if (
+        path === undefined ||
+        !(await isCodePage(ctx, path, config, originFor(req, config)))
+      ) {
         throw NextlyError.invalidInput({
           message:
             "That address is not a page built in code. An entry's SEO is set on the entry.",
