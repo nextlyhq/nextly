@@ -204,7 +204,9 @@ test("leaving by Cancel puts focus on the greeting, and asks first only with uns
 
   await customize(page);
   await bar(page).getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByTestId("dashboard-leave-ask")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("dashboard-leave-ask")
+  ).toHaveCount(0);
   await expect(greeting).toBeFocused();
 
   await customize(page);
