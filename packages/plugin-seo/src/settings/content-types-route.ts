@@ -6,6 +6,7 @@
  * @module settings/content-types-route
  */
 import {
+  addressableFields,
   humanizeFieldName,
   NextlyError,
   publicAddressOf,
@@ -50,8 +51,8 @@ function exampleOf(
 
 /**
  * The type's own fields a structured data detail may be read from: every
- * named field at the top of an entry but its SEO group, labelled as the
- * admin labels it.
+ * field the entry itself holds but its SEO group, labelled as the admin
+ * labels it.
  */
 function mappableFieldsOf(
   declared: readonly Record<string, unknown>[]
@@ -127,9 +128,12 @@ async function contentTypeOf(
 ): Promise<SeoContentType> {
   const meta: unknown = await ctx.services.collections.getCollection(slug, {});
   const record = isRecord(meta) ? meta : {};
-  const declared = Array.isArray(record.fields)
-    ? record.fields.filter(isRecord)
-    : [];
+  // Every field the entry itself holds, through groups with no name that
+  // only lay fields out, as core reads them.
+  const declared: Record<string, unknown>[] = [];
+  for (const field of addressableFields(record.fields)) {
+    if (isRecord(field)) declared.push(field);
+  }
   const fields = patternFields(
     declared.map(field => ({
       name: typeof field.name === "string" ? field.name : undefined,
