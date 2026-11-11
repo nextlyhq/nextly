@@ -57,16 +57,20 @@ const STORED_HOOKS = [
   },
 ];
 
-async function giveHooks(api: APIRequestContext, slug: string): Promise<void> {
+async function giveHooks(
+  api: APIRequestContext,
+  slug: string,
+  hooks: readonly unknown[]
+): Promise<void> {
   await expectOk(
     await api.patch(`${API}/collections/${slug}`, {
-      data: { hooks: STORED_HOOKS },
+      data: { hooks },
     }),
     "storing the hooks"
   );
   // Read back once, so a server that reshaped them on the way in fails here
   // and not as a difference the Builder seems to have made.
-  expect(await storedHooks(api, slug)).toEqual(STORED_HOOKS);
+  expect(await storedHooks(api, slug)).toEqual(hooks);
 }
 
 async function storedHooks(
@@ -79,7 +83,11 @@ async function storedHooks(
   return body.hooks;
 }
 
-async function makeCollection(page: Page, prefix: string): Promise<string> {
+async function makeCollection(
+  page: Page,
+  prefix: string,
+  hooks: readonly unknown[] = STORED_HOOKS
+): Promise<string> {
   const slug = `${prefix}_${Date.now()}`;
   // Stored as a field the Builder made is stored, with its flags written out,
   // so a Builder save finds no schema change that is not the test's own.
@@ -93,15 +101,23 @@ async function makeCollection(page: Page, prefix: string): Promise<string> {
       index: false,
     },
   ]);
-  await giveHooks(page.request, slug);
+  // The collection exists from here, but the caller's `finally` only starts
+  // once this returns: a failure storing the hooks removes it here instead,
+  // so one failure does not leave a collection behind for later specs.
+  try {
+    await giveHooks(page.request, slug, hooks);
+  } catch (error) {
+    await removeRuntimeCollection(page.request, slug);
+    throw error;
+  }
   return slug;
 }
 
-async function openHooksTab(page: Page): Promise<void> {
+async function openHooksTab(page: Page, count: number): Promise<void> {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByRole("dialog")
-    .getByRole("tab", { name: "Hooks (3)" })
+    .getByRole("tab", { name: `Hooks (${count})` })
     .click();
 }
 
@@ -109,11 +125,11 @@ test("a hook given through the API shows in the editor", async ({ page }) => {
   const slug = await makeCollection(page, "stored_hooks_view");
   try {
     await gotoAdmin(page, `/builder/collections/${slug}`);
-    await openHooksTab(page);
+    await openHooksTab(page, STORED_HOOKS.length);
 
     const dialog = page.getByRole("dialog");
     const list = dialog.getByRole("list", {
-      name: "Stored hooks, in the order they run",
+      name: "Stored hooks, by when they run",
     });
     // In run order, which is the stored `order`, not the stored position.
     await expect(list.getByRole("heading")).toHaveText([
@@ -198,6 +214,40 @@ test("a settings change saved, the hooks read back unchanged", async ({
       })
       .toBe("Pages with stored hooks");
     expect(await storedHooks(page.request, slug)).toEqual(STORED_HOOKS);
+  } finally {
+    await removeRuntimeCollection(page.request, slug);
+  }
+});
+
+test("a long list of hooks keeps the dialog's controls on screen", async ({
+  page,
+}) => {
+  // Long setting values on many hooks: unbounded, the list would push the
+  // dialog's tabs and footer past the window's edges.
+  const many = Array.from({ length: 30 }, (_, order) => ({
+    hookId: "unique-validation",
+    hookType: "beforeChange",
+    enabled: true,
+    config: { field: "headline", errorMessage: "Taken. ".repeat(20) },
+    order,
+  }));
+  const slug = await makeCollection(page, "stored_hooks_many", many);
+  try {
+    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await openHooksTab(page, many.length);
+
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("tab", { name: `Hooks (${many.length})` })
+    ).toBeInViewport();
+    await expect(
+      dialog.getByRole("button", { name: "Save", exact: true })
+    ).toBeInViewport();
+    // The list scrolls inside the dialog instead.
+    const region = dialog.getByRole("region", { name: "Stored hooks" });
+    await region.focus();
+    await page.keyboard.press("End");
+    await expect(region.getByRole("listitem").last()).toBeInViewport();
   } finally {
     await removeRuntimeCollection(page.request, slug);
   }

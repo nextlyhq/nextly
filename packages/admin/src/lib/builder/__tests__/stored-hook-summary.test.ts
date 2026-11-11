@@ -175,6 +175,64 @@ describe("summarizeStoredHooks", () => {
     ]);
   });
 
+  it("groups hooks by when they run before ordering them within a phase", () => {
+    // `order` only orders hooks within a phase: an after-create hook with a
+    // lower `order` still runs after a before-create one.
+    const summaries = summarizeStoredHooks([
+      hook({ hookId: "audit-fields", hookType: "afterCreate", order: 0 }),
+      hook({ hookId: "auto-slug", hookType: "beforeCreate", order: 1 }),
+    ]);
+
+    expect(summaries.map(s => s.hookId)).toEqual(["auto-slug", "audit-fields"]);
+  });
+
+  it("says a known hook stored where it cannot act changes nothing", () => {
+    // After the write the server ignores what a hook returns, so a slug hook
+    // there fills nothing and a uniqueness hook there refuses nothing.
+    const [slug, unique] = summarizeStoredHooks([
+      hook({ hookId: "auto-slug", hookType: "afterCreate", order: 0 }),
+      hook({ hookId: "unique-validation", hookType: "afterUpdate", order: 1 }),
+    ]);
+
+    expect(slug.does).toBe(
+      "Runs, but changes nothing: Auto-generate Slug only acts before an entry is created or updated."
+    );
+    expect(unique.does).toBe(
+      "Runs, but changes nothing: Validate Uniqueness only acts before an entry is created or updated."
+    );
+  });
+
+  it("says a hook stored in a phase the server never runs never runs", () => {
+    for (const phase of ["beforeOperation", "beforeRead", "duringLunch"]) {
+      const [summary] = summarizeStoredHooks([
+        hook({ hookId: "auto-slug", hookType: phase as never }),
+      ]);
+      expect(summary.when).toBe(`Never (stored as "${phase}")`);
+      expect(summary.does).toBe(
+        "Never runs: the server does not run stored hooks at this point."
+      );
+    }
+  });
+
+  it("shows a malformed entry as unreadable, after the hooks that run", () => {
+    // The API stores `hooks` as an array of anything, so an entry may be null
+    // or missing its fields; reading one as a hook would throw.
+    const summaries = summarizeStoredHooks([
+      null,
+      { hookId: "audit-fields" },
+      hook({ hookId: "auto-slug" }),
+    ]);
+
+    expect(summaries.map(s => s.name)).toEqual([
+      "Auto-generate Slug",
+      "Unreadable entry",
+      "Unreadable entry",
+    ]);
+    expect(summaries[1].does).toBe(
+      "This stored entry is not in the shape a hook is stored in, so what it does cannot be shown."
+    );
+  });
+
   it("returns nothing for a collection without stored hooks", () => {
     expect(summarizeStoredHooks(undefined)).toEqual([]);
     expect(summarizeStoredHooks([])).toEqual([]);

@@ -135,7 +135,7 @@ describe("a collection's stored hooks, read-only", () => {
     );
 
     const names = within(
-      screen.getByRole("list", { name: "Stored hooks, in the order they run" })
+      screen.getByRole("list", { name: "Stored hooks, by when they run" })
     )
       .getAllByRole("heading")
       .map(h => h.textContent);
@@ -145,6 +145,17 @@ describe("a collection's stored hooks, read-only", () => {
       "Validate Uniqueness",
       "send-sms",
     ]);
+  });
+
+  it("shows a malformed stored entry as unreadable instead of failing", () => {
+    // The API accepts any array for `hooks`, so a null entry can be stored.
+    const { container } = render(<StoredHooksView hooks={[null, slugHook]} />);
+
+    expect(hookItem("Auto-generate Slug")).toBeInTheDocument();
+    expect(hookItem("Unreadable entry")).toHaveTextContent(
+      "This stored entry is not in the shape a hook is stored in, so what it does cannot be shown."
+    );
+    expectNothingEditable(container);
   });
 
   it("says the hooks can only be changed through the API", () => {
