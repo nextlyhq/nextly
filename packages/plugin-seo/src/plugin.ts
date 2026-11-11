@@ -17,6 +17,7 @@ import {
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import { startCatchUp } from "./address-record/catch-up";
 import { addressRecordCollection } from "./address-record/collection";
 import {
   addressRecord,
@@ -269,6 +270,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+    },
+    onReady(ctx) {
+      // Started, not awaited: it waits for the boot to finish, and brings the
+      // record up to date with content saved while the plugin was absent or
+      // addresses a deploy moved.
+      void startCatchUp(ctx);
     },
   });
 }

@@ -43,7 +43,7 @@ test.afterEach(async ({ page }) => {
 });
 
 const bar = (page: Page) =>
-  page.getByRole("group", { name: "Customize your dashboard" });
+  page.getByRole("group", { name: "Customize dashboard" });
 
 /** The dashboard in customise mode, its gallery open, focus in its search. */
 async function openGallery(page: Page, theme: Theme = "light") {

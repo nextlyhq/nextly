@@ -15,7 +15,6 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
 import {
   DASHBOARD_HEADING_ID,
   WelcomeHeader,
@@ -48,12 +47,6 @@ const toast = vi.hoisted(() => ({
   dismiss: vi.fn(),
 }));
 
-// The header's New button reads collections and permissions of its own,
-// which this test does not set up; it is a marker here.
-vi.mock("@admin/components/features/new-menu/NewMenu", () => ({
-  NewMenu: () => <div data-testid="dashboard-new" />,
-}));
-
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
   useAppName: () => "Acme Site",
@@ -65,11 +58,6 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
-}));
-// The page's header beside the grid holds Customize: its own reads stubbed.
-vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
-  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
-  useDashboardSummary: () => ({ data: undefined }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({
@@ -168,10 +156,10 @@ function renderGrid() {
   // The page's header, whose heading a closed notice returns focus to and which holds
   // Customize, beside the grid.
   return render(
-    <DashboardChromeProvider>
+    <>
       <WelcomeHeader />
       <WidgetGrid />
-    </DashboardChromeProvider>,
+    </>,
     { wrapper: Wrapper }
   );
 }
@@ -846,7 +834,7 @@ describe("while the stored dashboard cannot be read", () => {
     const remove = within(menu).getByRole("menuitem", { name: "Remove" });
     expect(remove).toHaveAttribute("aria-disabled", "true");
     expect(remove).toHaveAccessibleDescription(
-      "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize first."
+      "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize dashboard first."
     );
     await user.click(remove);
     // 🔴 The server refuses any single-card write to an unreadable row; the
