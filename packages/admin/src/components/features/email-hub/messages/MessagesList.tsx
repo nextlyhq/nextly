@@ -312,6 +312,30 @@ function ownerOptions(
 }
 
 /**
+ * The owner filter's options and the groups the query keeps, each plugin
+ * named as the admin names it (`branding.plugins`).
+ */
+function useOwnerGroups(
+  messages: EmailTemplateRecord[],
+  query: MessagesQuery
+): { owners: OwnerGroup[]; groups: MessageGroup[] } {
+  const { plugins } = useBranding();
+  const owners = useMemo(
+    () => ownerOptions(messages, plugins),
+    [messages, plugins]
+  );
+  const groups = useMemo(
+    () =>
+      groupByOwner(
+        messages.filter(record => matchesQuery(record, query)),
+        plugins
+      ),
+    [messages, query, plugins]
+  );
+  return { owners, groups };
+}
+
+/**
  * Messages: every email the site sends, grouped by who owns it.
  *
  * Each row names the email, says when it is sent and what state it is in,
@@ -334,21 +358,8 @@ export function MessagesList(): JSX.Element {
     state: "all",
   });
 
-  // A plugin's group is labelled with the name the admin shows for it.
-  const { plugins } = useBranding();
   const messages = useMemo(() => templates.filter(isMessage), [templates]);
-  const owners = useMemo(
-    () => ownerOptions(messages, plugins),
-    [messages, plugins]
-  );
-  const groups = useMemo(
-    () =>
-      groupByOwner(
-        messages.filter(record => matchesQuery(record, query)),
-        plugins
-      ),
-    [messages, query, plugins]
-  );
+  const { owners, groups } = useOwnerGroups(messages, query);
 
   // Shown to a reader who may read deliveries, once the list reports it.
   const showLastSent =
