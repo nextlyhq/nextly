@@ -1,7 +1,8 @@
 /**
  * A role that may only read Posts is offered nothing on the Posts list it
- * could not do: no "New", no row checkboxes, no bulk delete, no row Delete,
- * and the list's keyboard shortcuts for those do nothing.
+ * could not do: no "New", no bulk delete or publish, no row Delete, and the
+ * list's keyboard shortcuts for those do nothing. Its rows can still be
+ * selected, for the playground's plugin bulk action that only reads.
  *
  * Only a browser shows this whole: each control is drawn by a different
  * component, and the shortcuts reach the same actions without any of them.
@@ -73,11 +74,18 @@ test('offers no "New"', async () => {
   await expect(page.getByRole("button", { name: /^new /i })).toHaveCount(0);
 });
 
-test("offers no row checkboxes and no bulk delete", async () => {
+test("offers no bulk action that writes", async () => {
   await openPosts();
-  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  // The contributions fixture declares a bulk action that asks no permission
+  // beyond reading, so rows are selectable here too; with one selected, that
+  // action is offered and none of the list's own actions that write are.
+  await row().getByRole("checkbox", { name: "Select row" }).check();
+  const bulk = page.getByRole("region", { name: "Bulk actions" });
   await expect(
-    page.getByRole("button", { name: /delete selected/i })
+    bulk.getByRole("button", { name: "Fixture: inspect selected" })
+  ).toBeVisible();
+  await expect(
+    bulk.getByRole("button", { name: /delete|publish/i })
   ).toHaveCount(0);
 });
 

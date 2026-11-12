@@ -265,8 +265,15 @@ interface Stop {
   name: string;
   /** Its box against the window. */
   box: { left: number; top: number; right: number; bottom: number };
-  /** Its box in its scroll containers' content, which scrolling does not move. */
-  laidOut: { left: number; top: number; right: number; bottom: number };
+  /**
+   * The stop before it, measured against the window at the same moment, or
+   * `null` for the first stop. Read together because focusing a control can
+   * scroll its container, which moves the one before it: the two boxes are
+   * only comparable when taken in one frame. Adding each container's scroll
+   * offset instead would compare a scrolled list's content with a box
+   * outside it, in two different coordinate spaces.
+   */
+  previousBox: { left: number; top: number; right: number; bottom: number } | null;
   inWindow: boolean;
   /** What draws its focus indicator, or `null` when nothing does. */
   indicator: string | null;
@@ -373,23 +380,6 @@ async function prepareWalk(page: Page): Promise<void> {
       return null;
     };
 
-    // The element's box in its scroll containers' content.
-    const laidOut = (element: Element) => {
-      const box = element.getBoundingClientRect();
-      let x = 0;
-      let y = 0;
-      for (let up = element.parentElement; up; up = up.parentElement) {
-        x += up.scrollLeft;
-        y += up.scrollTop;
-      }
-      return {
-        left: box.left + x,
-        top: box.top + y,
-        right: box.right + x,
-        bottom: box.bottom + y,
-      };
-    };
-
     const tabbable = (element: Element) =>
       element.matches(FOCUSABLE) &&
       !element.matches(":disabled") &&
@@ -398,7 +388,7 @@ async function prepareWalk(page: Page): Promise<void> {
       element.getBoundingClientRect().width > 0;
 
     Object.assign(window, {
-      __shellWalk: { regionOf, indicatorOf, laidOut, tabbable, FOCUSABLE },
+      __shellWalk: { regionOf, indicatorOf, tabbable, FOCUSABLE },
     });
   });
 }
@@ -407,7 +397,6 @@ async function prepareWalk(page: Page): Promise<void> {
 interface WalkReaders {
   regionOf: (element: Element) => Region;
   indicatorOf: (element: Element) => string | null;
-  laidOut: (element: Element) => Stop["laidOut"];
   tabbable: (element: Element) => boolean;
   FOCUSABLE: string;
 }
@@ -429,6 +418,11 @@ async function readStop(page: Page, step: number): Promise<Stop> {
     const focused = document.activeElement ?? document.body;
     // Marked, so the controls the walk never reached can be named at the end.
     focused.setAttribute("data-shell-walk", String(n));
+    const edges = (element: Element | null) => {
+      if (element === null) return null;
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      return { left, top, right, bottom };
+    };
     const box = focused.getBoundingClientRect();
     const root = document.documentElement;
     const name =
@@ -443,7 +437,9 @@ async function readStop(page: Page, step: number): Promise<Stop> {
         right: box.right,
         bottom: box.bottom,
       },
-      laidOut: walk.laidOut(focused),
+      previousBox: edges(
+        document.querySelector(`[data-shell-walk="${n - 1}"]`)
+      ),
       inWindow:
         box.width > 0 &&
         box.height > 0 &&
@@ -458,8 +454,8 @@ async function readStop(page: Page, step: number): Promise<Stop> {
 
 /** Whether `next` comes after `previous` in reading order. */
 function readsAfter(previous: Stop, next: Stop): boolean {
-  const a = previous.laidOut;
-  const b = next.laidOut;
+  const a = next.previousBox ?? previous.box;
+  const b = next.box;
   const sameLine = b.top < a.bottom && b.bottom > a.top;
   return sameLine ? b.left >= a.left - 1 : b.top >= a.bottom - 1;
 }
