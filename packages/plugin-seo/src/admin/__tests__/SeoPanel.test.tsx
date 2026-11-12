@@ -62,6 +62,7 @@ const CONTEXT: SeoTabContext = {
     "noindex",
     "structuredDataType",
   ],
+  mayChange: true,
   structuredData: {
     type: { key: "article", label: "Article" },
     chosen: "type",
@@ -91,7 +92,13 @@ function Harness({
   errors,
   onMakeShareImage,
   onGoToField,
+  receivedHref,
+  writable = true,
 }: {
+  /** Whether the values can be changed, as the tab works it out. */
+  writable?: boolean;
+  /** Where the page's check of what search engines received is. */
+  receivedHref?: string;
   /** Makes a share image; the harness sets the id it answers as the page's. */
   onMakeShareImage?: () => Promise<string | undefined>;
   onGoToField?: (field: string) => void;
@@ -129,7 +136,7 @@ function Harness({
         }
         values={values}
         chosenImage={undefined}
-        writable
+        writable={writable}
         {...(documentKey === undefined ? {} : { documentKey })}
         {...(errors === undefined ? {} : { errors })}
         onMakeShareImage={
@@ -141,6 +148,7 @@ function Harness({
           })
         }
         onGoToField={onGoToField}
+        {...(receivedHref === undefined ? {} : { receivedHref })}
         onSet={(field, next) => {
           onWrite?.(field, next);
           setValues(was => ({ ...was, [field]: next }));
@@ -169,6 +177,24 @@ describe("the SEO panel at rest", () => {
     ).toBeNull();
   });
 
+  it("says when the person may not change the page's SEO, and offers nothing to change", () => {
+    render(
+      <Harness
+        context={{ ...CONTEXT, mayChange: false }}
+        writable={false}
+        initial={{ metaTitle: "Typed before" }}
+      />
+    );
+    expect(screen.getByText("You can't change this page's SEO.")).toBeVisible();
+    expect(titleField()).toBeDisabled();
+    expect(screen.getByLabelText("Description on Google")).toBeDisabled();
+  });
+
+  it("says nothing of it to someone who may change it", () => {
+    render(<Harness />);
+    expect(screen.queryByText("You can't change this page's SEO.")).toBeNull();
+  });
+
   it("shows each automatic value, its count and the level it came from", () => {
     render(<Harness />);
     expect(titleField()).toHaveValue("");
@@ -191,6 +217,28 @@ describe("the SEO panel at rest", () => {
     expect(
       screen.getByText("https://rext.ai › blog › surfer-seo-vs-rext-ai")
     ).toBeVisible();
+  });
+});
+
+describe("what search engines received", () => {
+  it("links the page's check at the foot of the panel", () => {
+    const href =
+      "/admin/plugins/nextlyhq-plugin-seo/received?address=https%3A%2F%2Frext.ai%2Fblog%2Fsurfer-seo-vs-rext-ai";
+    render(<Harness receivedHref={href} />);
+    const link = screen.getByRole("link", {
+      name: "Check what search engines received",
+    });
+    expect(link).toHaveAttribute("href", href);
+    expect(link.parentElement).toHaveTextContent(
+      "Want to see what Google and LinkedIn actually received for this page?"
+    );
+  });
+
+  it("offers no check where the page has no address yet", () => {
+    render(<Harness />);
+    expect(
+      screen.queryByRole("link", { name: "Check what search engines received" })
+    ).toBeNull();
   });
 });
 

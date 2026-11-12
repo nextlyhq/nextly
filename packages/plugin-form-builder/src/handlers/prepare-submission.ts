@@ -129,6 +129,12 @@ export interface SubmissionOriginMarks {
    * to judging its bot check; the seam does not count it again.
    */
   rateCounted?: boolean;
+  /**
+   * The token the visitor's browser sent for one response per browser,
+   * read before the row keeps only the form's fields: the seam makes the
+   * submission's key from it.
+   */
+  browserToken?: string;
 }
 
 /** Mark `row` as this plugin's own write, and hand it back. */

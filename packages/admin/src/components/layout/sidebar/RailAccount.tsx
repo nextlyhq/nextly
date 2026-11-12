@@ -28,6 +28,7 @@ import {
 } from "../header/header-visibility";
 import { shellAnswersMarker } from "../lib/shell-answers";
 
+import { RailFootGhost } from "./RailColumn";
 import { useNextDevOverlay } from "./use-next-dev-overlay";
 import { UserProfileDropdown } from "./UserProfileDropdown";
 
@@ -148,6 +149,9 @@ function RailAccountItems({
       data-testid={testId}
       data-shell-answers={shellAnswersMarker(settled)}
     >
+      {/* In the rail, the Inbox's and the avatar's shapes hold the foot
+          until both can be drawn, so the rail never reads as missing them. */}
+      {!settled && placement === "rail" ? <RailFootGhost /> : null}
       <div hidden={!settled} className={settled ? flow : undefined}>
         {bellOffered && (
           <NotificationBell

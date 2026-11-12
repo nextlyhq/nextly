@@ -15,7 +15,10 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { ContentPanel } from "./ContentPanel";
 import { isContentSection } from "./lib/content-rail";
-import { visibleSettingsNav } from "./lib/settings-nav";
+import {
+  isSettingsNavItemActive,
+  visibleSettingsNav,
+} from "./lib/settings-nav";
 import { MediaSidebarContent } from "./MediaSidebarContent";
 import type { MainMenuCategory } from "./sidebar-types";
 import { SidebarSearch } from "./SidebarSearch";
@@ -214,9 +217,7 @@ export function SubSidebarContent({
             <SidebarMenu>
               {group.items.map(item => {
                 const ItemIcon = item.icon;
-                const active =
-                  isActive(item.href, item.exact) &&
-                  !(item.excludedBy ?? []).some(href => isActive(href));
+                const active = isSettingsNavItemActive(item, isActive);
 
                 return (
                   <SidebarMenuItem key={item.id}>

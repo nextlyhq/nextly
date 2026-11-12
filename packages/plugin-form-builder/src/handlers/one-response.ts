@@ -13,6 +13,7 @@
  * @module handlers/one-response
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { z } from "zod";
 
 import type { FormSettings } from "../types";
 
@@ -21,11 +22,69 @@ export const ALREADY_RESPONDED = "You have already submitted this form.";
 
 type Digests = PluginContext["security"]["digests"];
 
+/**
+ * The answer a visitor's browser sends its token in, for a form that takes
+ * one response per browser. The form's script keeps one random token per
+ * browser and sends it with every submission; the row never stores it.
+ */
+export const BROWSER_TOKEN_FIELD = "nextly-browser-token";
+
+/**
+ * What every browser key starts with. The token is not stored, so a browser
+ * key cannot be made again from the row the way an address's can; the prefix
+ * is what lets the submission's hold tell a key made for one per browser from
+ * one made for another mode, and refuse it once the form's mode has changed.
+ * Digests are hex, so no address or network key can start with it.
+ */
+const BROWSER_KEY_PREFIX = "browser:";
+
+/**
+ * A browser token as the form's script makes one: a random identifier
+ * (`crypto.randomUUID()` is one), letters, digits, `-` and `_`. Anything else
+ * is treated as no token, so a malformed value can neither be stored as a
+ * key nor fill the index with arbitrary text.
+ */
+const BROWSER_TOKEN = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9_-]{16,128}$/);
+
+/** The browser token a submission's answers carry, if a well-formed one. */
+export function browserTokenOf(payload: unknown): string | undefined {
+  const parsed = BROWSER_TOKEN.safeParse(
+    answersOf(payload)?.[BROWSER_TOKEN_FIELD]
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * What a visitor's form needs to take part in one response per browser: the
+ * answer to send its token in. Other modes need nothing from the browser, and
+ * a form that does not compare by browser says nothing.
+ */
+export function publicOneResponse(
+  settings: Pick<FormSettings, "oneResponse">
+): { by: "browser"; field: string } | undefined {
+  return settings.oneResponse === "browser"
+    ? { by: "browser", field: BROWSER_TOKEN_FIELD }
+    : undefined;
+}
+
+/** Whether `key` was made for one response per browser. */
+function isBrowserKey(key: unknown): key is string {
+  return typeof key === "string" && key.startsWith(BROWSER_KEY_PREFIX);
+}
+
 /** The parts of a submission its key is made from. */
 export interface KeyedSubmission {
   status?: unknown;
   ipAddress?: unknown;
   data?: unknown;
+  /**
+   * The browser token the submission came with (`browserTokenOf`). Only a
+   * create has one: the row does not keep it.
+   */
+  browserToken?: string;
 }
 
 /** A non-empty string, trimmed, or undefined. */
@@ -61,8 +120,8 @@ function answerOf(data: unknown, field: string | undefined): unknown {
 /**
  * The submission's key under the form's one-response setting, or null when
  * it has none: the form allows several responses, the submission is spam,
- * or what the mode compares is missing (a submission with no address). A
- * browser's token comes with the submission itself, not from what is stored.
+ * or what the mode compares is missing (a submission with no address, or
+ * none of the browser token, which only a create brings).
  */
 export async function responseKeyOf(
   /** Read only when a key is made: most forms allow several responses. */
@@ -84,9 +143,34 @@ export async function responseKeyOf(
         ? null
         : digests().digest("email", email.toLowerCase());
     }
+    case "browser": {
+      const token = submission.browserToken;
+      return token === undefined
+        ? null
+        : `${BROWSER_KEY_PREFIX}${await digests().digest("browser", token)}`;
+    }
     default:
       return null;
   }
+}
+
+/**
+ * Whether the key a new submission was given is the one `settings` give it.
+ * An address's key is made again from the row and compared. A browser's
+ * cannot be, since its token is not stored: under one per browser a browser
+ * key, or none (a submission sent without a token), is the right one, and a
+ * key made for another mode is not.
+ */
+export async function holdsKeyFor(
+  digests: () => Digests,
+  settings: Pick<FormSettings, "oneResponse" | "oneResponseField">,
+  row: KeyedSubmission & { responseKey?: unknown }
+): Promise<boolean> {
+  const key = row.responseKey ?? null;
+  if (settings.oneResponse === "browser" && row.status !== "spam") {
+    return key === null || isBrowserKey(key);
+  }
+  return key === (await responseKeyOf(digests, settings, row));
 }
 
 /** Whether an update changes what a submission's key is made from. */
@@ -118,6 +202,9 @@ export async function responseKeyAfterUpdate(input: {
   moved: boolean;
 }): Promise<string | null> {
   const { patch, stored } = input;
+  if (input.settings.oneResponse === "browser") {
+    return browserKeyAfterUpdate(patch, stored);
+  }
   // What the update leaves out is as stored; what it clears (null) is gone.
   const after = (field: keyof KeyedSubmission) =>
     patch[field] === undefined ? stored?.[field] : patch[field];
@@ -144,4 +231,23 @@ export async function responseKeyAfterUpdate(input: {
   // restored while its value was taken, none, so a later status change or an
   // edit of another answer never collides.
   return typeof stored?.responseKey === "string" ? stored.responseKey : null;
+}
+
+/**
+ * A submission's browser key after an update. The token is not stored, so
+ * the key cannot be made again: the submission keeps the browser key it
+ * holds until it is marked spam, which gives the browser its place back, and
+ * one restored from spam stays without one. Answers edited or the
+ * submission moved to another form taking one per browser keep it, since it
+ * is the same browser's response; the unique index refuses a move onto a form
+ * where that browser has responded already.
+ */
+function browserKeyAfterUpdate(
+  patch: KeyedSubmission,
+  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined
+): string | null {
+  const status = patch.status === undefined ? stored?.status : patch.status;
+  if (status === "spam") return null;
+  const key = stored?.responseKey;
+  return isBrowserKey(key) ? key : null;
 }
