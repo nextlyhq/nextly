@@ -603,15 +603,16 @@ async function runCoreSchemaChecks(
   logger: LoggerLike
 ): Promise<void> {
   if (process.env.NODE_ENV !== "development") {
-    const [{ introspectLiveSnapshot }, { RETIRED_ACCESS_RULES_TABLES }] =
+    const [{ introspectLiveColumns }, { RETIRED_ACCESS_RULES_TABLES }] =
       await Promise.all([
         import("../domains/schema/pipeline/diff/introspect-live"),
         import("./retired-access-rules"),
       ]);
+    // Their columns alone: the warning asks only whether the column is there.
     await warnOfRetiredAccessRules(
       adapter,
       logger,
-      await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
+      await introspectLiveColumns(adapter.getDrizzle(), adapter.dialect, [
         ...RETIRED_ACCESS_RULES_TABLES,
       ])
     );

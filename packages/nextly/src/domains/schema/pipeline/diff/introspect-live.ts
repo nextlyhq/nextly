@@ -24,10 +24,7 @@ import {
 } from "../pg-visible-relation";
 
 import { sizeFromDeclaration } from "./declared-size";
-import {
-  startCatalogOf,
-  type StartCatalogRelation,
-} from "./start-catalog-scope";
+import { startCatalogOf } from "./start-catalog-scope";
 import type {
   CheckSpec,
   ColumnSpec,
@@ -668,9 +665,7 @@ interface SqliteAll {
 export async function introspectLiveColumns(
   db: unknown,
   dialect: SupportedDialect,
-  tableNames: string[],
-  /** Send MySQL's column and primary-key reads together (see `readLiveSnapshot`). */
-  options: { parallel?: boolean } = {}
+  tableNames: string[]
 ): Promise<NextlySchemaSnapshot> {
   if (tableNames.length === 0) return { tables: [] };
 
@@ -772,8 +767,10 @@ export async function introspectLiveColumns(
             AND TABLE_NAME IN (${tableNamesIn})
             AND INDEX_NAME = 'PRIMARY'`
       ) as Promise<MysqlPrimaryKeyRow[] | [MysqlPrimaryKeyRow[], unknown]>;
+    // Sent together while a production start holds its catalog open, where
+    // the round trips are counted (see `introspectLiveSnapshot`).
     const [result, pkRaw] =
-      options.parallel === true
+      startCatalogOf(db) !== undefined
         ? await Promise.all([readColumns(), readPrimaryKeys()])
         : [await readColumns(), await readPrimaryKeys()];
     const rows: MysqlRow[] =
@@ -1162,146 +1159,20 @@ export async function introspectSqliteRebuildLosses(
 }
 
 /**
- * Every relation of the database a start may ask about, each with the answers
- * `adapter.listTables()` and `adapter.tableExists()` would give for it, read
- * in one query, so a production start's catalog reading can answer both
- * without asking per table.
- *
- * - PostgreSQL: the tables, partitioned tables, views and foreign tables
- *   outside the system schemas. Listed when a base table of `public`, as
- *   `listTables()` lists them; reachable when it is the relation an
- *   unqualified name resolves to, as `tableExists()` resolves it.
- * - MySQL: the current database's tables and views, every one reachable,
- *   the base tables listed.
- * - SQLite: `sqlite_master`'s tables and views. Only a table is reachable,
- *   as `tableExists()` asks of `type = 'table'`; a table is listed unless
- *   SQLite's own.
- */
-export async function introspectRelations(
-  db: unknown,
-  dialect: SupportedDialect
-): Promise<StartCatalogRelation[]> {
-  if (dialect === "postgresql") {
-    const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT c.relname AS name, n.nspname AS schema, c.relkind AS kind,
-                 (c.oid = to_regclass(quote_ident(c.relname))) AS reachable
-          FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE c.relkind IN ('r', 'p', 'v', 'f')
-            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-            AND n.nspname NOT LIKE 'pg_toast%'`
-    )) as {
-      rows: Array<{
-        name: string;
-        schema: string;
-        kind: string;
-        reachable: boolean;
-      }>;
-    };
-    return result.rows.map(row => {
-      const baseTable = row.kind === "r" || row.kind === "p";
-      return {
-        name: row.name,
-        baseTable,
-        listed: baseTable && row.schema === "public",
-        reachable: row.reachable === true,
-      };
-    });
-  }
-  if (dialect === "mysql") {
-    const raw = await (db as PgMysqlExecute).execute(
-      sql`SELECT TABLE_NAME AS name, TABLE_TYPE AS kind
-          FROM information_schema.tables
-          WHERE TABLE_SCHEMA = DATABASE()`
-    );
-    return mysqlResultRows<{ name: string; kind: string }>(raw).map(row => {
-      const baseTable = row.kind === "BASE TABLE";
-      return { name: row.name, baseTable, listed: baseTable, reachable: true };
-    });
-  }
-  const rows = (await Promise.resolve(
-    (db as { all(query: unknown): unknown }).all(
-      sql`SELECT type, name FROM sqlite_master WHERE type IN ('table', 'view')`
-    )
-  )) as Array<{ type: string; name: string }>;
-  return (rows ?? []).map(row => {
-    const baseTable = row.type === "table";
-    return {
-      name: row.name,
-      baseTable,
-      listed: baseTable && !row.name.startsWith("sqlite_"),
-      reachable: baseTable,
-    };
-  });
-}
-
-/**
  * The live tables' columns, indexes and constraints.
  *
- * While a production start holds its reading of the catalog open for `db`
- * (`start-catalog-scope`), the answer is taken from that reading, which
- * describes every table the start can reach, instead of asking the catalog
- * again: a production start changes no table, so the two cannot differ.
+ * While a production start holds its catalog open for `db`
+ * (`start-catalog-scope`), the catalog queries go together rather than one
+ * after another: there the round trips are counted. Otherwise each waits for
+ * the last, as a caller holding a small pool or a lock may need.
  */
 export async function introspectLiveSnapshot(
   db: unknown,
   dialect: SupportedDialect,
   tableNames: string[]
 ): Promise<NextlySchemaSnapshot> {
-  const catalog = startCatalogOf(db);
-  if (catalog !== undefined) {
-    return snapshotOfTables(await catalog.snapshot, dialect, tableNames);
-  }
-  return readLiveSnapshot(db, dialect, tableNames);
-}
-
-/**
- * The tables of `whole` that a read of `tableNames` would have returned, copied so a caller
- * that changes what it is given changes nothing another caller is given. Matched as each
- * dialect's own read matches a name: exactly on PostgreSQL and MySQL (its catalog compares by
- * the same rules the `IN` list did), and without regard to ASCII case on SQLite, where a table
- * keeps the spelling it was asked for.
- */
-function snapshotOfTables(
-  whole: NextlySchemaSnapshot,
-  dialect: SupportedDialect,
-  tableNames: readonly string[]
-): NextlySchemaSnapshot {
-  if (dialect === "sqlite") {
-    const asked = sqliteAskedTables(tableNames);
-    const byLower = new Map(
-      whole.tables.map(table => [asciiLower(table.name), table])
-    );
-    return {
-      tables: asked.names.flatMap(name => {
-        const table = byLower.get(asciiLower(name));
-        return table ? [{ ...structuredClone(table), name }] : [];
-      }),
-    };
-  }
-  const wanted = new Set(tableNames);
-  return {
-    tables: whole.tables
-      .filter(table => wanted.has(table.name))
-      .map(table => structuredClone(table)),
-  };
-}
-
-/**
- * {@link introspectLiveSnapshot}, always asking the catalog. With `parallel`,
- * the catalog queries it needs are sent together rather than one after
- * another: what a production start's one reading of the catalog asks for,
- * where the round trips are counted. Otherwise each waits for the last, as a
- * caller holding a small pool or a lock may need.
- */
-export async function readLiveSnapshot(
-  db: unknown,
-  dialect: SupportedDialect,
-  tableNames: string[],
-  options: { parallel?: boolean } = {}
-): Promise<NextlySchemaSnapshot> {
   if (tableNames.length === 0) return { tables: [] };
-  const parallel = options.parallel === true;
+  const parallel = startCatalogOf(db) !== undefined;
   if (dialect === "postgresql") {
     return readPgLiveSnapshot(db as PgMysqlExecute, tableNames, parallel);
   }
@@ -1429,7 +1300,7 @@ async function readMysqlLiveSnapshot(
           ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`
     );
   const [snapshot, idxRaw, constraints] = await readColumnsIndexesConstraints(
-    () => introspectLiveColumns(db, "mysql", tableNames, { parallel }),
+    () => introspectLiveColumns(db, "mysql", tableNames),
     readIndexes,
     // Asked of the tables found when they are known: MySQL rejects
     // `TABLE_NAME IN ()`, and a fresh database finds none.

@@ -1,12 +1,14 @@
 /**
- * The catalog a production start reads once and asks every structural question of: which tables
- * there are, what their columns, indexes and constraints are, and how the server compares names.
+ * What a production start reads of the catalog once and answers from: which relations there
+ * are, and how the server compares table names.
  *
- * A start asks the catalog the same kinds of question from several places (the retired
- * `access_rules` warning, the field groups' discriminator columns, the per-language layout check,
- * the registry's own name, whether the database is set up at all). Each used to read it again,
- * a few round trips apiece, and on SQLite once per table, so the start's waits grew with the
- * number of field groups. A production start changes no table, so one reading answers them all.
+ * A start asks whether a table exists, and which tables there are, from several places (the
+ * empty-database refusal and the first-run probe, the field groups' registry name, the
+ * per-language layout check, the Schema Builder registries), each a round trip of its own, and
+ * on MySQL reads how the server compares names each time. A production start changes no table,
+ * so one listing answers them all. While the start holds it open, the schema reads it still
+ * makes (a few tables' columns, for the checks a production start keeps) send their catalog
+ * queries together (`introspect-live`).
  *
  * Kept by the Drizzle handle the questions are asked through, and only while a production start
  * holds it open (`di/start-reads`): a question asked through any other handle, or by a
@@ -16,8 +18,6 @@
  * @module domains/schema/pipeline/diff/start-catalog-scope
  */
 import type { IdentifierCaseRules } from "../../utils/resolve-catalog-name";
-
-import type { NextlySchemaSnapshot } from "./types";
 
 /** One relation as the start's catalog lists it. */
 export interface StartCatalogRelation {
@@ -39,8 +39,6 @@ export interface StartCatalogRelation {
 /** What one production start read of the catalog, each part read once and shared. */
 export interface StartCatalog {
   relations: Promise<readonly StartCatalogRelation[]>;
-  /** The columns, indexes and constraints of every reachable relation. */
-  snapshot: Promise<NextlySchemaSnapshot>;
   /** How this server compares table and column names (one read, on MySQL only). */
   caseRules: Promise<IdentifierCaseRules>;
 }

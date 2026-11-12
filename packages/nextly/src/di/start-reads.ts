@@ -1,14 +1,15 @@
 /**
- * What a production start reads once and hands every step that asks: the catalog
- * (`domains/schema/pipeline/diff/start-catalog-scope`) and the three Schema Builder registries.
+ * What a production start reads once and hands every step that asks: the catalog's listing of
+ * relations (`domains/schema/pipeline/diff/start-catalog-scope`) and the three Schema Builder
+ * registries.
  *
  * The start used to read each registry four or five times (to register the runtime tables, for
  * the stored webhook policies, for the per-language layout check, for the Builder entities the
- * plugins extend), one statement after another, and to ask the catalog the same questions from
- * several places. A production start writes no registry row and changes no table, so one reading
- * of each serves them all, and the reads go together: the relations and the collections' and
- * Singles' registries first, then the columns, indexes and constraints and the field groups'
- * registry, whose name the relations decide.
+ * plugins extend), one statement after another, and to ask whether each registry table exists
+ * from several places. A production start writes no registry row and changes no table, so one
+ * reading of each serves them all, and the reads go together: the relations and the
+ * collections' and Singles' registries first, then the field groups' registry, whose name the
+ * relations decide.
  *
  * Only a production start opens them (`isProductionStart`); a development start writes the
  * registry between its reads and keeps reading it as before. They are closed before the
@@ -24,7 +25,6 @@ import {
   closeStartCatalog,
   openStartCatalog,
   tableExistsAtStart,
-  type StartCatalog,
 } from "../domains/schema/pipeline/diff/start-catalog-scope";
 
 /** One registry table as the start read it. */
@@ -32,8 +32,8 @@ export interface RegistryRead {
   /** Whether the table is there, as `adapter.tableExists` would answer. */
   exists: boolean;
   /**
-   * Its columns, as the catalog reports them; undefined when the catalog does not describe it, and
-   * a reader then reads the table itself, as it did before.
+   * Its columns, as its rows carry them; undefined when it has no row to say (or its read
+   * failed), and a reader then reads the table itself, as it did before.
    */
   columns: ReadonlySet<string> | undefined;
   /** Every row, every column (`SELECT *`), read once; rejects as the read did. */
@@ -63,7 +63,7 @@ export function beginStartReads(adapter: DrizzleAdapter): StartRegistry {
   const db = adapter.getDrizzle();
   const catalog = readStartCatalog(db, adapter.getCapabilities().dialect);
   openStartCatalog(db, catalog);
-  const registry = startRegistry(adapter, catalog);
+  const registry = startRegistry(adapter);
   globalForStartReads.__nextly_startReads = { db, registry };
   return registry;
 }
@@ -81,10 +81,7 @@ export function endStartReads(): void {
   closeStartCatalog(open.db);
 }
 
-function startRegistry(
-  adapter: DrizzleAdapter,
-  catalog: StartCatalog
-): StartRegistry {
+function startRegistry(adapter: DrizzleAdapter): StartRegistry {
   const rowsByTable = new Map<string, Promise<Record<string, unknown>[]>>();
   const rowsOf = (table: string): Promise<Record<string, unknown>[]> => {
     let rows = rowsByTable.get(table);
@@ -111,16 +108,15 @@ function startRegistry(
   );
   return {
     async read(table) {
-      const [exists, snapshot] = await Promise.all([
-        tableExistsAtStart(adapter, table),
-        catalog.snapshot,
-      ]);
-      const spec = snapshot.tables.find(entry => entry.name === table);
+      const exists = await tableExistsAtStart(adapter, table);
+      const rows = exists
+        ? await rowsOf(table).catch(() => undefined)
+        : undefined;
       return {
         exists,
-        columns: spec
-          ? new Set(spec.columns.map(column => column.name))
-          : undefined,
+        // Every column of a `SELECT *` row; a registry with no row says nothing of its columns.
+        columns:
+          rows && rows.length > 0 ? new Set(Object.keys(rows[0])) : undefined,
         rows: () => rowsOf(table),
       };
     },
