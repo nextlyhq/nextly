@@ -17,6 +17,7 @@ import {
   AlertDescription,
   AlertTitle,
   apiErrorMessage,
+  Badge,
   Button,
   isApiError,
   Card,
@@ -725,14 +726,19 @@ function ValueCell({
   const value = entry.values[place];
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]">
+      {/* Wraps, at most two lines, so the table fits its card and every
+          result stays in view; the whole value is the line's title. */}
+      <span
+        className="line-clamp-2 min-w-0 whitespace-normal text-muted-foreground [overflow-wrap:anywhere]"
+        title={value ?? undefined}
+      >
         {value ?? ""}
       </span>
       {result === "none" ? null : (
-        <span className="grid shrink-0 justify-items-end text-xs">
-          <b className="font-semibold text-foreground">
+        <span className="grid shrink-0 justify-items-end gap-0.5 text-xs">
+          <Badge variant={result === "set" ? "success" : "default"}>
             {RESULT_WORDS[result].label}
-          </b>
+          </Badge>
           {RESULT_WORDS[result].why === undefined ? null : (
             <span className="text-muted-foreground">
               {RESULT_WORDS[result].why}
