@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A plugin can ask whether a media item is in use: `ctx.services.media.isInUse(mediaId)` (`@experimental`) answers whether a document's field, an avatar or a logo uses it, the same condition the media library's Unused view applies, and answers in use whenever that cannot be known yet. The form builder's nightly retention pass uses it to delete the files of the submissions it deletes, once no remaining submission names them and nothing else uses them.
+A plugin can ask whether a media item is in use: `ctx.services.media.isInUse(mediaId)` (`@experimental`) answers whether a document's field, an avatar or a logo uses it, the same condition the media library's Unused view applies, and answers in use whenever that cannot be known yet (before the usage table exists, while the usage record is not built, or for an id no item has).
