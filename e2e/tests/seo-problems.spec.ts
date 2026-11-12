@@ -61,18 +61,20 @@ test("a long title is listed with its page, and its fix opens the page's SEO tab
     page.getByRole("heading", { level: 1, name: "Problems" })
   ).toBeVisible();
 
-  // Opened, the row names each page, this one among them, with its fix.
+  // Opened, the row names each page, this one among them in each of the
+  // playground's languages, each with its fix; the default language's fix
+  // opens the editor with no language named.
   await row.getByRole("button", { expanded: false }).first().click();
   const pages = page
     .getByRole("table")
     .getByRole("region", { name: /Title longer than Google shows/ });
-  const line = pages.getByRole("listitem").filter({ hasText: title });
-  await expect(line).toBeVisible();
-  const fix = line.getByRole("link", { name: "Shorten the title" });
-  await expect(fix).toHaveAttribute(
-    "href",
-    `/admin/collections/seo-pages/${item.id}?tab=nextlyhq-plugin-seo.tab`
+  await expect(
+    pages.getByRole("listitem").filter({ hasText: title }).first()
+  ).toBeVisible();
+  const fix = pages.locator(
+    `a[href="/admin/collections/seo-pages/${item.id}?tab=nextlyhq-plugin-seo.tab"]`
   );
+  await expect(fix).toHaveText("Shorten the title");
   await fix.click();
   await expect(page).toHaveURL(
     new RegExp(`/admin/collections/seo-pages/${item.id}\\?tab=`)
