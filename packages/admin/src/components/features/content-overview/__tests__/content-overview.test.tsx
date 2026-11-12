@@ -7,8 +7,8 @@
  *
  * The lists go through the real filter and sort the Content panel uses, so a
  * hidden collection, a collection the reader may not read and the group order
- * are the panel's own; the rows' figures come from the mocked list, count and
- * history reads.
+ * are the panel's own; the rows' figures come from the server's one answer,
+ * mocked at the request.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
@@ -100,33 +100,48 @@ vi.mock("@admin/lib/navigation", async importOriginal => ({
   navigateTo: vi.fn(),
   replaceTo: vi.fn(),
 }));
-vi.mock("@admin/services/entryApi", () => ({
-  entryApi: {
-    find: async (slug: string) => {
-      const stats = state.stats[slug];
+const { get } = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: { get } }));
+
+/**
+ * What the server's one answer holds for the fixture: a row per collection
+ * and Single, as `GET /dashboard/content` builds them.
+ */
+function serverRows() {
+  return [
+    ...state.collections.map(collection => {
+      const slug = String(collection.name);
+      const stats = state.stats[slug] ?? { total: 0, drafts: 0 };
       return {
-        items: stats?.newest ? [{ id: "e1", updatedAt: stats.newest }] : [],
-        meta: { total: stats?.total ?? 0 },
+        kind: "collection",
+        slug,
+        label: collection.label,
+        count: stats.total,
+        draft: collection.status === true ? stats.drafts : null,
+        canCreate: false,
+        ...(stats.newest ? { updatedAt: stats.newest } : {}),
       };
-    },
-    count: async (slug: string) => ({
-      totalDocs: state.stats[slug]?.drafts ?? 0,
     }),
-  },
-}));
-vi.mock("@admin/services/versionApi", () => ({
-  versionApi: {
-    events: async ({ slug }: { slug: string }) => {
+    ...state.singles.map(single => {
+      const slug = String(single.slug);
       const event = state.events[slug];
       return {
-        items: event
-          ? [{ id: "ev1", kind: "save", actorKind: "person", ...event }]
-          : [],
-        meta: {},
+        kind: "single",
+        slug,
+        label: single.label,
+        canUpdate: false,
+        ...(event
+          ? {
+              updatedAt: event.occurredAt,
+              userId: `id-${event.actorName}`,
+              userName: event.actorName,
+              actorType: "user",
+            }
+          : {}),
       };
-    },
-  },
-}));
+    }),
+  ];
+}
 
 import { ContentOverview } from "../ContentOverview";
 
@@ -191,6 +206,8 @@ function readsBoth() {
 
 beforeEach(() => {
   vi.mocked(replaceTo).mockClear();
+  get.mockReset();
+  get.mockImplementation(async () => ({ rows: serverRows() }));
   state.loading = false;
   state.content = { isLoading: false, hasAnswer: true, error: null };
   state.permissions = new Set();
@@ -260,6 +277,37 @@ describe("the Content overview", () => {
       within(footer).getByRole("link", { name: "View Footer" })
     ).toHaveAttribute("href", "/admin/singles/footer");
     expect(replaceTo).not.toHaveBeenCalled();
+  });
+
+  it("reads every row's figures in one request, however many collections there are", async () => {
+    state.collections = Array.from({ length: 30 }, (_, i) => ({
+      id: `c${i}`,
+      name: `c${i}`,
+      label: `Collection ${String(i).padStart(2, "0")}`,
+      status: i % 2 === 0,
+    }));
+    state.caps = Object.fromEntries([
+      ...state.collections.map(c => [String(c.name), { canRead: true }]),
+      ["homepage", { canRead: true }],
+      ["footer", { canRead: true }],
+    ]);
+    state.stats = Object.fromEntries(
+      state.collections.map((c, i) => [
+        String(c.name),
+        { total: 100 + i, drafts: i, newest: RECENT },
+      ])
+    );
+    draw("all");
+
+    const last = rowOf("Collections", "Collection 29");
+    expect(await within(last).findByText("129")).toBeInTheDocument();
+    expect(
+      within(table("Singles")).getAllByText("Ayesha").length
+    ).toBeGreaterThan(0);
+    // 🔴 Thirty collections and two Singles, every cell drawn, from ONE
+    // request: a page asking per row would make thirty-two or more.
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("/dashboard/content");
   });
 
   it("draws each kind's default icon, and a set icon where one is set", () => {

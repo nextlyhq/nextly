@@ -10,7 +10,6 @@
 import { Button } from "@nextlyhq/ui";
 import { useId, type JSX } from "react";
 
-import { StoryActorName } from "@admin/components/features/versions/StoryActorName";
 import { Link } from "@admin/components/ui/link";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
@@ -36,7 +35,7 @@ function editHref(single: ApiSingle): string {
   return buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug });
 }
 
-/** Who or what edited it last, as its history names them. */
+/** Who or what edited it last, as the activity feed names them. */
 function EditedByCell({ single }: { single: ApiSingle }): JSX.Element {
   const edit = useSingleLastEdit(single.slug);
   if (edit.isPending) return <Pending />;
@@ -44,7 +43,7 @@ function EditedByCell({ single }: { single: ApiSingle }): JSX.Element {
   return by === undefined ? (
     <NoValue label="Not recorded" />
   ) : (
-    <StoryActorName actor={by} />
+    <span className="font-medium text-foreground">{by}</span>
   );
 }
 
