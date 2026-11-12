@@ -90,7 +90,11 @@ async function insertItem(
   });
 }
 
-/** Startup on an initialized database, with what it warned. */
+/**
+ * A development start on an initialized database, with what it warned. A
+ * production start compares nothing of the core schema with the database, so
+ * it names neither the retired column nor the table; a development start does.
+ */
 async function bootWarnings(fresh: FreshDatabase): Promise<string[]> {
   const logger = {
     debug: vi.fn(),
@@ -98,17 +102,22 @@ async function bootWarnings(fresh: FreshDatabase): Promise<string[]> {
     warn: vi.fn(),
     error: vi.fn(),
   };
-  await ensureFirstRunSetup({
-    adapter: {
-      dialect: fresh.dialect,
-      getDrizzle: () => fresh.db,
-      tableExists: async () => true,
-      executeQuery: async () => undefined,
-    },
-    logger,
-    // The initialized path never reaches the lock.
-    holdSchemaLock: work => work(),
-  });
+  vi.stubEnv("NODE_ENV", "development");
+  try {
+    await ensureFirstRunSetup({
+      adapter: {
+        dialect: fresh.dialect,
+        getDrizzle: () => fresh.db,
+        tableExists: async () => true,
+        executeQuery: async () => undefined,
+      },
+      logger,
+      // The initialized path never reaches the lock.
+      holdSchemaLock: work => work(),
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
   return logger.warn.mock.calls.map(([message]) => String(message));
 }
 

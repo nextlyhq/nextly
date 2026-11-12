@@ -842,16 +842,19 @@ export class FieldGroupMetadataService {
     // Imported when needed, as this service does for its other collaborators. The same default
     // locale the companion reconcile reads (`reconcileComponentCompanion`): the site's languages as
     // the language registry serves them, so a default stored in Settings counts in both steps.
-    const [{ archiveFieldsLeavingTranslation }, { appLocalization }] =
-      await Promise.all([
-        import("../../i18n/migration/archive-preflight"),
-        import("../../i18n/configured-locales"),
-      ]);
+    const [
+      { archiveFieldsLeavingTranslation },
+      { appLanguageOrder, appLocalization },
+    ] = await Promise.all([
+      import("../../i18n/migration/archive-preflight"),
+      import("../../i18n/configured-locales"),
+    ]);
     await archiveFieldsLeavingTranslation({
       // A field group's own table, which decides the column bounds compared.
       builtBy: "fieldGroup",
       tableName: args.existing.tableName,
       defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      languageOrder: appLanguageOrder(),
       adapter,
       entity: args.existing.slug,
       kind: "fieldGroup",

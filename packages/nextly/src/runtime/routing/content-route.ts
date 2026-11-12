@@ -40,7 +40,10 @@ import {
   pageStructuredDataFor,
   type PageMetadataRequest,
 } from "../seo/page-metadata";
-import type { PageMetadataValues } from "../seo/page-metadata-contract";
+import type {
+  PageMetadataValues,
+  PageStructuredDataHints,
+} from "../seo/page-metadata-contract";
 
 import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
 import {
@@ -186,8 +189,9 @@ export interface ContentRouteConfig<TNode> {
    * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
    * answer decides the page's head and this is one of its inputs: the title,
    * description and social values set here are used where nobody set them for
-   * the page, and its `robots` and canonical are not used at all. Without such
-   * a plugin, this is served as returned.
+   * the page; its `robots` may hide the page, never list one the answer hides,
+   * and its other robots directives are kept; its canonical is kept only where
+   * the answer names none. Without such a plugin, this is served as returned.
    */
   buildMetadata?: (
     entry: ContentEntry,
@@ -203,6 +207,20 @@ export interface ContentRouteConfig<TNode> {
     entry: ContentEntry,
     context: RenderContext
   ) => PageMetadataValues | Promise<PageMetadataValues>;
+  /**
+   * @experimental What the route knows about the entry's page for its
+   * structured data and the entry does not hold: what kind of page it is,
+   * its own name, the entries it lists, the questions it answers. Asked only
+   * where a plugin provides page metadata, and only for the structured data,
+   * never the head, so a list read here costs nothing in `generateMetadata`.
+   */
+  structuredDataHints?: (
+    entry: ContentEntry,
+    context: RenderContext
+  ) =>
+    | PageStructuredDataHints
+    | undefined
+    | Promise<PageStructuredDataHints | undefined>;
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
   /**
@@ -1048,7 +1066,11 @@ function buildRoute<TNode>(
 /** The parts of a content route's config a page's answer is asked with. */
 type PageAnswerConfig<TNode> = Pick<
   ContentRouteConfig<TNode>,
-  "buildMetadata" | "derivedMetadata" | "tags" | "revalidate"
+  | "buildMetadata"
+  | "derivedMetadata"
+  | "structuredDataHints"
+  | "tags"
+  | "revalidate"
 >;
 
 /**
@@ -1140,7 +1162,11 @@ export async function contentPageStructuredData<TNode>(
   // Nobody to answer: the route's own metadata is not worked out for nothing.
   if (knownNoPageMetadataProvider()) return undefined;
   const { request } = await contentPageRequest(config, entry, context, path);
-  return request === null ? undefined : pageStructuredDataFor(request);
+  if (request === null) return undefined;
+  const hints = await config.structuredDataHints?.(entry, context);
+  return pageStructuredDataFor(
+    hints === undefined ? request : { ...request, structuredDataHints: hints }
+  );
 }
 
 /**

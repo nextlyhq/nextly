@@ -13,7 +13,11 @@
  * entry: what a person set for the address on the Pages and addresses
  * screen wins, the route's own title, description and social values come
  * next, then the site's title pattern and defaults. Its canonical is its own
- * address, and its visibility is the screen's, never the route's.
+ * address. It is hidden where the screen hides it or its route's own
+ * metadata does; the route can hide it, never list one the screen hides.
+ *
+ * `seoStructuredData` reads the page's structured data from the same answer,
+ * for the page to place in its body.
  *
  * @module code-pages/metadata
  */
@@ -21,6 +25,7 @@ import {
   getCachedNextly,
   NextlyError,
   pluginCacheTag,
+  type PageStructuredDataHints,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 import type { contentPageMetadata } from "nextly/runtime";
@@ -45,9 +50,10 @@ export type RouteMetadata = Awaited<ReturnType<typeof contentPageMetadata>>;
 export interface SeoMetadataOptions {
   /**
    * The route's own metadata. Its title, description and social values are
-   * used where nobody set one for the address; its visibility and canonical
-   * are never used, so the page and the sitemap agree. Anything else it
-   * sets, such as keywords, is kept.
+   * used where nobody set one for the address. Its `noindex` hides the page,
+   * and leaves it out of the sitemap; its canonical is never used, since the
+   * page's own address is. Anything else it sets, such as keywords or
+   * Google's preview limits, is kept.
    */
   metadata?: RouteMetadata;
   /**
@@ -58,6 +64,13 @@ export interface SeoMetadataOptions {
   name?: string;
   /** The language the route serves the page in, where it serves several. */
   locale?: string;
+  /**
+   * What the page shows that structured data cannot read elsewhere: what
+   * kind of page it is (such as `"aboutPage"`), its own name, the entries it
+   * lists and the questions it answers. Read by `seoStructuredData` only;
+   * the head is the same with or without it.
+   */
+  structuredDataHints?: PageStructuredDataHints;
 }
 
 /** The started plugin's context, starting Nextly first where nothing has. */
@@ -89,28 +102,27 @@ async function readRow(address: string): Promise<CodePageRead | null> {
   return { collection: codePagesSlug(ctx), row: row ?? null };
 }
 
+/** The arguments `contentPageMetadata` and `contentPageStructuredData` take. */
+type CodePageAsk = Parameters<typeof contentPageMetadata>;
+
 /**
- * The head of the page built in code at `path`, from the SEO set for its
- * address and the route's own metadata.
- *
- * Where Nextly or the SEO plugin is not running, or the address's SEO cannot
- * be read, it is the route's own metadata unchanged, so the page is served
- * whatever happens to its SEO.
- *
- * @throws NextlyError when `path` is not an address from the site's root.
+ * What the site's page-metadata provider is asked about the page built in
+ * code at `path`, so the head and the structured data are asked alike and
+ * read one answer. Null where Nextly or the SEO plugin is not running, or the
+ * address's SEO cannot be read.
  */
-export async function seoMetadata(
+async function codePageAsk(
   path: string,
-  options: SeoMetadataOptions = {}
-): Promise<RouteMetadata> {
+  options: SeoMetadataOptions,
+  caller: string
+): Promise<CodePageAsk | null> {
   const address = codeAddressOf(path);
   if (address === undefined) {
     throw NextlyError.invalidInput({
-      message: `seoMetadata: "${path}" is not an address from the site's root, such as "/pricing".`,
+      message: `${caller}: "${path}" is not an address from the site's root, such as "/pricing".`,
       logContext: { path },
     });
   }
-  const own = options.metadata ?? {};
   const runtime = await import("nextly/runtime");
   // A worker whose cache already holds the row reads nothing that would
   // start Nextly, and the page's head is asked of the SEO plugin only once
@@ -119,7 +131,7 @@ export async function seoMetadata(
     try {
       await getCachedNextly();
     } catch {
-      return own;
+      return null;
     }
   }
   // The plugin's own tag, which a save on the screen expires.
@@ -140,15 +152,18 @@ export async function seoMetadata(
       "The SEO of a page built in code could not be read",
       { path: address, error }
     );
-    return own;
+    return null;
   }
   // Nextly or the SEO plugin is not running here.
-  if (found === null) return own;
+  if (found === null) return null;
   const row = found.row ?? undefined;
-  const pageMetadata = runtime.contentPageMetadata;
-  return pageMetadata(
+  const own = options.metadata;
+  return [
     {
-      ...(options.metadata === undefined ? {} : { buildMetadata: () => own }),
+      ...(own === undefined ? {} : { buildMetadata: () => own }),
+      ...(options.structuredDataHints === undefined
+        ? {}
+        : { structuredDataHints: () => options.structuredDataHints }),
       // A save on the screen expires these, so the page serves it from its
       // next visit, a page built ahead of time included.
       tags,
@@ -164,6 +179,66 @@ export async function seoMetadata(
       slug: address.slice(1),
       ...(options.locale === undefined ? {} : { locale: options.locale }),
     },
-    address
-  );
+    address,
+  ];
+}
+
+/**
+ * The head of the page built in code at `path`, from the SEO set for its
+ * address and the route's own metadata.
+ *
+ * Where Nextly or the SEO plugin is not running, or the address's SEO cannot
+ * be read, it is the route's own metadata unchanged, so the page is served
+ * whatever happens to its SEO.
+ *
+ * @throws NextlyError when `path` is not an address from the site's root.
+ */
+export async function seoMetadata(
+  path: string,
+  options: SeoMetadataOptions = {}
+): Promise<RouteMetadata> {
+  const ask = await codePageAsk(path, options, "seoMetadata");
+  if (ask === null) return options.metadata ?? {};
+  const { contentPageMetadata } = await import("nextly/runtime");
+  return contentPageMetadata(...ask);
+}
+
+/**
+ * The structured data of the page built in code at `path`, as JSON-LD text
+ * written so that no value can end its script element: read from the same
+ * answer as {@link seoMetadata} when given the same options, so the page's
+ * body describes the page its head does. Place it with `jsonLdScriptProps`
+ * from `nextly/runtime`:
+ *
+ * ```tsx
+ * import { jsonLdScriptProps } from "nextly/runtime";
+ * import { seoStructuredData } from "@nextlyhq/plugin-seo";
+ *
+ * const own = { title: "Pricing" };
+ * export const generateMetadata = () => seoMetadata("/pricing", { metadata: own });
+ *
+ * export default async function PricingPage() {
+ *   const structuredData = await seoStructuredData("/pricing", { metadata: own });
+ *   return (
+ *     <>
+ *       {structuredData && <script {...jsonLdScriptProps(structuredData)} />}
+ *       <h1>Pricing</h1>
+ *     </>
+ *   );
+ * }
+ * ```
+ *
+ * Nothing where Nextly or the SEO plugin is not running, or the answer has
+ * no structured data.
+ *
+ * @throws NextlyError when `path` is not an address from the site's root.
+ */
+export async function seoStructuredData(
+  path: string,
+  options: SeoMetadataOptions = {}
+): Promise<string | undefined> {
+  const ask = await codePageAsk(path, options, "seoStructuredData");
+  if (ask === null) return undefined;
+  const { contentPageStructuredData } = await import("nextly/runtime");
+  return contentPageStructuredData(...ask);
 }

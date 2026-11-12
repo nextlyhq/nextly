@@ -74,9 +74,13 @@ signed-in user needs `read-posts` to read `posts`.
 A caller with **no session** — the Direct API with `overrideAccess: false` and no `user`, or
 a plugin service call made `{ as: "public" }` — is a visitor, judged by the built-in
 **Public** role: it may do what the Public role holds, and where the collection declares a
-rule for the operation, only where that rule answers `true`. At boot the Public role is
-granted `read-media` and the read of each collection and Single whose read rule answers a
-visitor `true`, and no write. Without the grant, a visitor is refused whatever the rule says.
+rule for the operation, only where that rule answers `true`. `nextly migrate` makes the
+Public role and grants it `read-media`, the read of each collection and Single whose read rule
+answers a visitor `true`, and what your plugins declare for it, and no write; a plugin's
+install grants what that plugin declares, and a development start (`next dev`) does the same as
+`nextly migrate`. A production start grants nothing, so run `nextly migrate` before serving.
+Each grant is made once, so one you take away on the **Roles** screen stays away. Without the
+grant, a visitor is refused whatever the rule says.
 A collection that takes anonymous writes on purpose, such as a contact form, says so with a
 rule, and the Public role is granted the write on the **Roles** screen:
 
@@ -112,17 +116,17 @@ and a rule set to `true` admits them as it admits any visitor. See
 ### Upgrading: visitors read only what the Public role holds
 
 Before visitors were judged by the Public role, they could read every collection and Single
-with no `read` rule. Now they read one only where the Public role holds its read, which boot
-grants only where the read rule answers `true`. A collection with no read rule, or with one
+with no `read` rule. Now they read one only where the Public role holds its read, which
+`nextly migrate` grants only where the read rule answers `true`. A collection with no read rule, or with one
 that answers visitors with a filter, is no longer served to them.
 
-On the first start after upgrading, Nextly logs once which collections and Singles visitors
-could read before and can't now. A new install isn't told, and the notice isn't repeated: a
+The first time the Public role is made after upgrading, by `nextly migrate` or a development
+start, Nextly logs once which collections and Singles visitors could read before and can't now. A new install isn't told, and the notice isn't repeated: a
 collection kept private by having no read rule is ordinary. To let visitors read one again,
 either:
 
 - for one with no read rule, declare that anyone may read it, and the Public role is
-  granted its read the next time Nextly starts:
+  granted its read the next time `nextly migrate` runs (or a development start):
 
   ```ts
   defineCollection({
@@ -277,7 +281,7 @@ export const Articles = defineCollection({
 ```
 
 The rule answers a visitor `true` rather than the filter. The Public role is granted a
-collection's read at boot only where its read rule answers a visitor exactly `true`. A rule
+collection's read by `nextly migrate` only where its read rule answers a visitor exactly `true`. A rule
 that answers a visitor a filter leaves Public without `read-articles`, and a visitor is then
 refused before any filter applies.
 
