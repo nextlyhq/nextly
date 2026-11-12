@@ -200,6 +200,28 @@ const NAME_FOLLOWS = new Set([
   "CONSTRAINT",
 ]);
 
+/** Whether the word at `at` is called: a bare word followed by a parenthesis, not a name. */
+function isCall(tokens: readonly StatementToken[], at: number): boolean {
+  const word = tokens[at];
+  if (typeof word !== "string" || !WORD.test(word) || tokens[at + 1] !== "(") {
+    return false;
+  }
+  const before = tokens[at - 1];
+  // A name followed by its column list (`TABLE posts (`, `REFERENCES users (`) is no call.
+  return !(typeof before === "string" && NAME_FOLLOWS.has(before));
+}
+
+/** What a call of `word` makes of a statement; undefined for a keyword, a type or a built-in. */
+function callVerdict(word: string): StatementJudgement | undefined {
+  if (PAREN_KEYWORDS.has(word) || PAREN_TYPES.has(word)) return undefined;
+  if (BUILT_IN_FUNCTIONS.has(word) || SEQUENCE_FUNCTIONS.has(word)) {
+    return undefined;
+  }
+  if (word === "SETVAL") return noRetry("setval");
+  if (OUTSIDE_WRITES.test(word)) return noRetry("outside-write");
+  return noRetry("unknown-code");
+}
+
 /**
  * What the calls in `tokens` make of the statement: no retry for `setval`, a write outside the
  * database or code the system does not know; undefined where every call is a built-in, a sequence
@@ -209,21 +231,9 @@ function callsVerdict(
   tokens: readonly StatementToken[]
 ): StatementJudgement | undefined {
   for (let at = 0; at + 1 < tokens.length; at++) {
-    const word = tokens[at];
-    if (
-      typeof word !== "string" ||
-      !WORD.test(word) ||
-      tokens[at + 1] !== "("
-    ) {
-      continue;
-    }
-    const before = tokens[at - 1];
-    if (typeof before === "string" && NAME_FOLLOWS.has(before)) continue;
-    if (PAREN_KEYWORDS.has(word) || PAREN_TYPES.has(word)) continue;
-    if (BUILT_IN_FUNCTIONS.has(word) || SEQUENCE_FUNCTIONS.has(word)) continue;
-    if (word === "SETVAL") return noRetry("setval");
-    if (OUTSIDE_WRITES.test(word)) return noRetry("outside-write");
-    return noRetry("unknown-code");
+    if (!isCall(tokens, at)) continue;
+    const verdict = callVerdict(tokens[at] as string);
+    if (verdict !== undefined) return verdict;
   }
   return undefined;
 }
@@ -323,6 +333,48 @@ function selectStatement(
   return sequenceOnly ? MAY_RUN_AGAIN : noRetry("unread");
 }
 
+/** How a statement is judged, by its first word; a first word not here is unread. */
+type FirstWordJudge = (
+  tokens: readonly StatementToken[],
+  dialect: SupportedDialect,
+  hasTrigger: (table: string) => boolean
+) => StatementJudgement;
+
+const BY_FIRST_WORD: Readonly<Record<string, FirstWordJudge>> = {
+  CREATE: (tokens, dialect) => createStatement(tokens, dialect),
+  DROP: (tokens, dialect) => dropStatement(tokens, dialect),
+  ALTER: tokens =>
+    startsWith(tokens, "ALTER", "TABLE") || startsWith(tokens, "ALTER", "INDEX")
+      ? schemaStatement(tokens)
+      : noRetry("unread"),
+  RENAME: (tokens, dialect) =>
+    dialect === "mysql" && startsWith(tokens, "RENAME", "TABLE")
+      ? schemaStatement(tokens)
+      : noRetry("unread"),
+  INSERT: (tokens, _, hasTrigger) =>
+    startsWith(tokens, "INSERT", "INTO")
+      ? rowChange(tokens, 2, hasTrigger)
+      : noRetry("unread"),
+  UPDATE: (tokens, _, hasTrigger) => rowChange(tokens, 1, hasTrigger),
+  DELETE: (tokens, _, hasTrigger) =>
+    startsWith(tokens, "DELETE", "FROM")
+      ? rowChange(tokens, 2, hasTrigger)
+      : noRetry("unread"),
+  SELECT: tokens => selectStatement(tokens),
+  // A setting of the connection: undone with a transaction, or still in force for the next try.
+  SET: (tokens, dialect) =>
+    dialect === "sqlite"
+      ? noRetry("unread")
+      : (callsVerdict(tokens) ?? MAY_RUN_AGAIN),
+  // On SQLite only `foreign_keys` sets the connection alone; every other pragma is unread.
+  PRAGMA: (tokens, dialect) =>
+    dialect === "sqlite" && tokens[1] === "FOREIGN_KEYS"
+      ? MAY_RUN_AGAIN
+      : noRetry("unread"),
+  DO: () => noRetry("unknown-code"),
+  CALL: () => noRetry("unknown-code"),
+};
+
 /**
  * How a later try may treat `statement` on `dialect` once a try has ended waiting for a busy
  * table. `hasTrigger` answers, from the live catalog, whether a table has a trigger a row change
@@ -336,47 +388,8 @@ export function judgeStatement(
   const tokens = statementTokens(statement, dialect);
   while (tokens.length > 0 && tokens[tokens.length - 1] === ";") tokens.pop();
   const first = tokens[0];
-  if (typeof first !== "string") return noRetry("unread");
-  switch (first) {
-    case "CREATE":
-      return createStatement(tokens, dialect);
-    case "DROP":
-      return dropStatement(tokens, dialect);
-    case "ALTER":
-      return startsWith(tokens, "ALTER", "TABLE") ||
-        startsWith(tokens, "ALTER", "INDEX")
-        ? schemaStatement(tokens)
-        : noRetry("unread");
-    case "RENAME":
-      return dialect === "mysql" && startsWith(tokens, "RENAME", "TABLE")
-        ? schemaStatement(tokens)
-        : noRetry("unread");
-    case "INSERT":
-      return startsWith(tokens, "INSERT", "INTO")
-        ? rowChange(tokens, 2, hasTrigger)
-        : noRetry("unread");
-    case "UPDATE":
-      return rowChange(tokens, 1, hasTrigger);
-    case "DELETE":
-      return startsWith(tokens, "DELETE", "FROM")
-        ? rowChange(tokens, 2, hasTrigger)
-        : noRetry("unread");
-    case "SELECT":
-      return selectStatement(tokens);
-    case "SET":
-      // A setting of the connection: undone with a transaction, or still in force for the next.
-      return dialect === "sqlite"
-        ? noRetry("unread")
-        : (callsVerdict(tokens) ?? MAY_RUN_AGAIN);
-    case "PRAGMA":
-      // On SQLite only `foreign_keys` sets the connection alone; every other pragma is unread.
-      return dialect === "sqlite" && tokens[1] === "FOREIGN_KEYS"
-        ? MAY_RUN_AGAIN
-        : noRetry("unread");
-    case "DO":
-    case "CALL":
-      return noRetry("unknown-code");
-    default:
-      return noRetry("unread");
-  }
+  const judge = typeof first === "string" ? BY_FIRST_WORD[first] : undefined;
+  return judge === undefined
+    ? noRetry("unread")
+    : judge(tokens, dialect, hasTrigger);
 }

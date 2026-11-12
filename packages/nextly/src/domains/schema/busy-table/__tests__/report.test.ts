@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { describeHolder, tableBusyError, tryNotice } from "../report";
+import { describeTableHolder, tableBusyError, tryNotice } from "../report";
 import type { BusyTableStop, HolderReport, HolderSession } from "../types";
 
 const SESSION: HolderSession = {
@@ -43,9 +43,9 @@ function stopWith(overrides: Partial<BusyTableStop> = {}): BusyTableStop {
   };
 }
 
-describe("describeHolder", () => {
+describe("describeTableHolder", () => {
   it("names a session with every detail the database gave", () => {
-    expect(describeHolder(NAMED)).toBe(
+    expect(describeTableHolder(NAMED)).toBe(
       'session 4242 (user app, from 10.0.0.5, application "worker", transaction open 3 min)'
     );
   });
@@ -71,7 +71,7 @@ describe("describeHolder", () => {
       ],
       unreadable: [],
     };
-    expect(describeHolder(report)).toBe(
+    expect(describeTableHolder(report)).toBe(
       "session 17 (transaction open 45 s), session 18"
     );
   });
@@ -85,7 +85,7 @@ describe("describeHolder", () => {
         "metadata locks, as MySQL's metadata-lock reporting is turned off",
       ],
     };
-    expect(describeHolder(report)).toBe(
+    expect(describeTableHolder(report)).toBe(
       'session 4242 (user app, from 10.0.0.5, application "worker", transaction open 3 min); ' +
         "not read: the client address, as the database user may not see other sessions' details; " +
         "not read: metadata locks, as MySQL's metadata-lock reporting is turned off"
@@ -98,13 +98,13 @@ describe("describeHolder", () => {
       sessions: [],
       unreadable: ["the sessions, as the database user may not see them"],
     };
-    expect(describeHolder(report)).toBe(
+    expect(describeTableHolder(report)).toBe(
       "a session the database did not name; not read: the sessions, as the database user may not see them"
     );
   });
 
   it("gives an unnamed holder's reason", () => {
-    expect(describeHolder(SQLITE)).toBe(
+    expect(describeTableHolder(SQLITE)).toBe(
       "SQLite does not say which connection holds the database"
     );
   });

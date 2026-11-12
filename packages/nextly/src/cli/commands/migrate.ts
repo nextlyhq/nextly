@@ -407,6 +407,28 @@ interface ParsedMigration {
  * @param options - Combined global and command options
  * @param context - Command context with logger
  */
+/** The busy-table bounds a run's options and the environment give (`busyTableBounds`). */
+function busyTableBoundsOf(
+  options: Pick<MigrateCommandOptions, "lockTimeout" | "lockTimeoutTotal">
+): ReturnType<typeof busyTableBounds> {
+  return busyTableBounds({
+    flags: {
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+    },
+    env: process.env,
+  });
+}
+
+/** `read`'s value, or the run ended through `fail` with what it threw. */
+function orFail<T>(read: () => T, fail: (error: unknown) => never): T {
+  try {
+    return read();
+  } catch (error) {
+    return fail(error);
+  }
+}
+
 export async function runMigrate(
   options: ResolvedMigrateOptions,
   context: CommandContext
@@ -429,18 +451,7 @@ export async function runMigrate(
 
   // The busy-table bounds are checked first, so a value outside its range is refused before
   // anything is read or changed.
-  let bounds: ReturnType<typeof busyTableBounds>;
-  try {
-    bounds = busyTableBounds({
-      flags: {
-        lockTimeout: options.lockTimeout,
-        lockTimeoutTotal: options.lockTimeoutTotal,
-      },
-      env: process.env,
-    });
-  } catch (error) {
-    fail(error);
-  }
+  const bounds = orFail(() => busyTableBoundsOf(options), fail);
 
   logger.debug("Validating database environment...");
   let dbValidation: ReturnType<typeof databaseEnvOrThrow>;
@@ -1509,6 +1520,16 @@ export async function maybeForceUnlock(
 ): Promise<void> {
   if (!options.forceUnlock) return;
   await forceUnlock(db, dialect);
+}
+
+/** A run's busy-table bounds, naming `applied` as the files before each one; none without bounds. */
+function withAppliedBefore(
+  busyTable: Omit<BusyTableRun, "appliedBefore"> | undefined,
+  applied: readonly string[]
+): BusyTableRun | undefined {
+  return busyTable === undefined
+    ? undefined
+    : { ...busyTable, appliedBefore: () => [...applied] };
 }
 
 /**
@@ -3956,9 +3977,7 @@ export async function runFileMigrations(args: {
     dz,
     dialect,
     logger,
-    args.busyTable === undefined
-      ? undefined
-      : { ...args.busyTable, appliedBefore: () => [...appliedFiles] }
+    withAppliedBefore(args.busyTable, appliedFiles)
   );
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated

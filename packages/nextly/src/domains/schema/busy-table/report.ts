@@ -62,7 +62,7 @@ function describeSession(session: HolderSession): string {
  * What holds a table, for an operator: each session the database names, then each detail that
  * could not be read, with why; or, where the database names no holder (SQLite), why it cannot.
  */
-export function describeHolder(report: HolderReport): string {
+export function describeTableHolder(report: HolderReport): string {
   if (report.kind === "unnamed") return report.reason;
   const sessions =
     report.sessions.length === 0
@@ -81,8 +81,8 @@ function tableName(table: string | null): string {
 /** "held by session 4242 (…)", or why the holder is not named. */
 function heldBy(holder: HolderReport): string {
   return holder.kind === "named"
-    ? `held by ${describeHolder(holder)}`
-    : `and its holder is not named: ${describeHolder(holder)}`;
+    ? `held by ${describeTableHolder(holder)}`
+    : `and its holder is not named: ${describeTableHolder(holder)}`;
 }
 
 /**
@@ -159,9 +159,9 @@ function waitLine(stop: BusyTableStop): string {
   const tries = stop.tries === 1 ? "1 try" : `${String(stop.tries)} tries`;
   const waited = `It waited for ${tableName(stop.ended.table)} through ${tries} over ${roundedSeconds(stop.elapsedMs)}`;
   return stop.ended.holder.kind === "named"
-    ? sentence(`${waited}, held by ${describeHolder(stop.ended.holder)}`)
+    ? sentence(`${waited}, held by ${describeTableHolder(stop.ended.holder)}`)
     : sentence(
-        `${waited}; its holder is not named: ${describeHolder(stop.ended.holder)}`
+        `${waited}; its holder is not named: ${describeTableHolder(stop.ended.holder)}`
       );
 }
 
