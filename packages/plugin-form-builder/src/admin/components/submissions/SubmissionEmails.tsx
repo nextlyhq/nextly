@@ -157,47 +157,82 @@ function ResendDialog({
 }): JSX.Element {
   const [ticked, setTicked] = useState<string[]>([]);
   const missed = group.addressable.filter(recipient => !recipient.reached);
+  const reached = group.addressable.filter(recipient => recipient.reached);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Send “{group.name}” again</DialogTitle>
           <DialogDescription>
-            It goes to everyone below who has not received it. Tick anyone who
-            has, to send it to them again.
+            It goes to everyone who has not received it. Tick anyone who has, to
+            send it to them again.
           </DialogDescription>
         </DialogHeader>
-        <ul aria-label="Recipients" className="flex flex-col gap-2">
-          {group.addressable.map(recipient => {
-            const id = `resend-${recipient.digest}`;
-            return (
-              <li key={recipient.digest} className="flex items-center gap-2">
-                <Checkbox
-                  id={id}
-                  checked={
-                    !recipient.reached || ticked.includes(recipient.digest)
-                  }
-                  disabled={!recipient.reached}
-                  onCheckedChange={checked =>
-                    setTicked(
-                      checked === true
-                        ? [...ticked, recipient.digest]
-                        : ticked.filter(digest => digest !== recipient.digest)
-                    )
-                  }
-                />
-                <Label htmlFor={id} className="text-sm font-normal">
-                  {recipient.hint}{" "}
+        {/* Who missed it goes regardless, so they are listed, not offered as
+            boxes that could not be unticked; only who received it is a
+            choice. */}
+        {missed.length > 0 ? (
+          <section aria-label="Sends to" className="flex flex-col gap-1.5">
+            <h3 className="text-xs font-medium text-muted-foreground">
+              Sends to
+            </h3>
+            <ul className="flex flex-col gap-1.5">
+              {missed.map(recipient => (
+                <li
+                  key={recipient.digest}
+                  className="flex items-center gap-2 text-sm text-foreground"
+                >
+                  <Send
+                    className="h-3.5 w-3.5 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  {recipient.hint}
                   <span className="text-muted-foreground">
-                    {recipient.reached
-                      ? "· received it"
-                      : "· has not received it"}
+                    · has not received it
                   </span>
-                </Label>
-              </li>
-            );
-          })}
-        </ul>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {reached.length > 0 ? (
+          <section aria-label="Send again to" className="flex flex-col gap-1.5">
+            <h3 className="text-xs font-medium text-muted-foreground">
+              Send again to
+            </h3>
+            <ul className="flex flex-col gap-2">
+              {reached.map(recipient => {
+                const id = `resend-${recipient.digest}`;
+                return (
+                  <li
+                    key={recipient.digest}
+                    className="flex items-center gap-2"
+                  >
+                    <Checkbox
+                      id={id}
+                      checked={ticked.includes(recipient.digest)}
+                      onCheckedChange={checked =>
+                        setTicked(
+                          checked === true
+                            ? [...ticked, recipient.digest]
+                            : ticked.filter(
+                                digest => digest !== recipient.digest
+                              )
+                        )
+                      }
+                    />
+                    <Label htmlFor={id} className="text-sm font-normal">
+                      {recipient.hint}{" "}
+                      <span className="text-muted-foreground">
+                        · received it
+                      </span>
+                    </Label>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
         {error ? (
           <p role="alert" className="text-sm text-destructive">
             {error}
@@ -413,16 +448,27 @@ export function SubmissionEmails({
       </p>
     );
   }
+  // Marking Spam cancels what is waiting, and a resend of a Spam
+  // submission is refused: say so once, and offer no Resend.
+  const spam = status === "spam";
   return (
-    <ol className="divide-y divide-border px-4 sm:px-5">
-      {data.map(group => (
-        <NotificationRow
-          key={group.notification ?? group.sends[0]?.queuedId ?? group.name}
-          submissionId={submissionId}
-          group={group}
-          canResend={canResend}
-        />
-      ))}
-    </ol>
+    <>
+      {spam ? (
+        <p className="border-b border-border px-4 py-2.5 text-xs text-muted-foreground sm:px-5">
+          Marked Spam: its emails are not sent. Mark it Not spam to send them
+          again.
+        </p>
+      ) : null}
+      <ol className="divide-y divide-border px-4 sm:px-5">
+        {data.map(group => (
+          <NotificationRow
+            key={group.notification ?? group.sends[0]?.queuedId ?? group.name}
+            submissionId={submissionId}
+            group={group}
+            canResend={canResend && !spam}
+          />
+        ))}
+      </ol>
+    </>
   );
 }
