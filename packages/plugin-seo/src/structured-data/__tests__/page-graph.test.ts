@@ -120,6 +120,11 @@ function context(): PluginContext {
               { name: "title", type: "text" },
               { name: "author", type: "relationship", relationTo: "authors" },
               { name: "tags", type: "relationship", relationTo: "tags" },
+              {
+                name: "category",
+                type: "relationship",
+                relationTo: "categories",
+              },
             ],
           },
         }),
@@ -331,6 +336,28 @@ describe("the page's own name", () => {
       "Rext AI | AI article writer for SEO"
     );
     // The home page is the trail's start, so it has none of its own.
+    expect(nodeOf(nodes, "BreadcrumbList")).toBeUndefined();
+  });
+});
+
+describe("a language's home page", () => {
+  it("is named by its whole title, and its subject by the brand, as the site's home is", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      {
+        ...singleInput("product", {
+          id: "h1",
+          title: "Startseite",
+          operatingSystem: "Web",
+        }),
+        locale: "de",
+      },
+      answerAt("/de", "Rext AI | KI-Artikel für SEO"),
+      rules({ types: { "single:product": { type: "softwareApplication" } } })
+    );
+
+    expect(nodeOf(nodes, "WebPage")?.name).toBe("Rext AI | KI-Artikel für SEO");
+    expect(nodeOf(nodes, "SoftwareApplication")?.name).toBe("Rext AI");
     expect(nodeOf(nodes, "BreadcrumbList")).toBeUndefined();
   });
 });
@@ -557,6 +584,55 @@ describe("a blog post", () => {
     });
   });
 
+  it("states no keywords or section from relationships the route read as ids", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...POST, tags: ["t1", "t2"], category: "c1" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "blogPosting" } } })
+    );
+
+    const post = nodeOf(nodes, "BlogPosting");
+    expect(post).not.toHaveProperty("keywords");
+    expect(post).not.toHaveProperty("articleSection");
+    expect(JSON.stringify(nodes)).not.toMatch(/"t1"|"c1"/);
+  });
+
+  it("counts words as a reader sees them, a word split by formatting as one", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", {
+        ...POST,
+        content: {
+          root: {
+            children: [
+              {
+                type: "paragraph",
+                children: [
+                  { type: "text", text: "Next" },
+                  { type: "text", text: "ly", format: 1 },
+                  { type: "text", text: " runs" },
+                  { type: "linebreak" },
+                  { type: "link", children: [{ type: "text", text: "here" }] },
+                  { type: "text", text: "." },
+                ],
+              },
+              {
+                type: "paragraph",
+                children: [{ type: "text", text: "Fast." }],
+              },
+            ],
+          },
+        },
+      }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({ types: { posts: { type: "blogPosting" } } })
+    );
+
+    // "Nextly runs here. Fast."
+    expect(nodeOf(nodes, "BlogPosting")?.wordCount).toBe(4);
+  });
+
   it("is credited to the site's default author where it names nobody", async () => {
     const post = { ...POST, author: null };
     const asBrand = await buildStructuredData(
@@ -752,7 +828,16 @@ describe("questions and answers", () => {
             question: "Which CMS?",
             answer: {
               root: {
-                children: [{ children: [{ text: "WordPress today." }] }],
+                children: [
+                  {
+                    type: "paragraph",
+                    children: [
+                      { type: "text", text: "Word" },
+                      { type: "text", text: "Press", format: 1 },
+                      { type: "text", text: " today." },
+                    ],
+                  },
+                ],
               },
             },
           },

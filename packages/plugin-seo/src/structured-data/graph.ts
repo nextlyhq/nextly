@@ -425,10 +425,10 @@ function linkOf(value: unknown): string | undefined {
 }
 
 /** The names a detail lists, as one comma-separated text. */
-function listedNames(value: unknown): string | undefined {
-  const names = namesOf(value);
+const listedNames: DetailReader = async (facts, read) => {
+  const names = await namesOf(facts.ctx, facts.input, read);
   return names.length > 0 ? names.join(", ") : undefined;
-}
+};
 
 /** How each detail is read, as the kind of fact it is. */
 const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
@@ -462,12 +462,13 @@ const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
   itemType: valueRead(itemTypeOf),
   operatingSystem: valueRead(textOf),
   applicationCategory: valueRead(textOf),
-  keywords: valueRead(listedNames),
+  keywords: listedNames,
   // An article is filed under one section: the first the page names.
-  articleSection: valueRead(value => namesOf(value)[0]),
+  articleSection: async (facts, read) =>
+    (await namesOf(facts.ctx, facts.input, read))[0],
   wordCount: wordCountRead,
   codeRepository: valueRead(linkOf),
-  programmingLanguage: valueRead(listedNames),
+  programmingLanguage: listedNames,
   license: valueRead(textOf),
   questions: (facts, read) => questionsValue(facts, read),
 };
@@ -1329,7 +1330,13 @@ async function graphOf(
     answer.canonical === undefined
       ? undefined
       : absolute(answer.canonical, origin);
-  const home = url !== undefined && new URL(url).pathname === "/";
+  // A language's home (`/de`) is a home page too: judged by where the page
+  // is kept, as its trail is.
+  const kept =
+    url === undefined
+      ? undefined
+      : await keptPageOf(new URL(url), origin, input.locale);
+  const home = kept?.path === "/";
   const names = ownNamesOf(
     facts,
     home,

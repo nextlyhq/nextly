@@ -315,47 +315,79 @@ export async function pictureOf(
   return imageOf(ctx, read.value);
 }
 
+/** The name one listed item goes by: text, or an entry or group's name. */
+function itemName(item: unknown, relation: Relation | undefined): string[] {
+  if (isRecord(item)) {
+    // A relationship to several collections holds `{ relationTo, value }`.
+    const inner = isRecord(item.value) ? item.value : item;
+    const name = nameIn(inner);
+    return name === undefined ? [] : [name];
+  }
+  // Text in a relationship field is an entry's id, which is not a name.
+  if (relation !== undefined || typeof item !== "string") return [];
+  const text = textOf(item);
+  return text === undefined ? [] : [text];
+}
+
 /**
  * The names a detail lists, such as a post's tags: text, entries or groups
- * by their name, each once. A relationship read without its entries names
- * nothing, since an id is not a name.
+ * by their name, each once. A relationship the route read without its
+ * entries names nothing, since an id is not a name.
  */
-export function namesOf(value: unknown): string[] {
-  const each = Array.isArray(value) ? value : [value];
-  const names = each.flatMap(item => {
-    if (isRecord(item)) {
-      const inner = isRecord(item.value) ? item.value : item;
-      return nameIn(inner) ?? [];
-    }
-    return typeof item === "string" ? (textOf(item) ?? []) : [];
-  });
-  return [...new Set(names)];
+export async function namesOf(
+  ctx: PluginContext,
+  input: PageMetadataInput,
+  read: DetailRead
+): Promise<string[]> {
+  const items = Array.isArray(read.value) ? read.value : [read.value];
+  const relation = items.some(item => typeof item === "string")
+    ? await relationOf(ctx, input, read.field)
+    : undefined;
+  return [...new Set(items.flatMap(item => itemName(item, relation)))];
+}
+
+/** Rich text's kinds of node that run on inside a line rather than start one. */
+const INLINE_NODES = new Set(["link", "autolink", "hashtag", "mark"]);
+
+/** Whether a node runs on inside its line: text, or an inline element. */
+function inline(node: unknown): boolean {
+  return (
+    isRecord(node) &&
+    (typeof node.text === "string" ||
+      (typeof node.type === "string" && INLINE_NODES.has(node.type)))
+  );
+}
+
+/** The text of a node and everything inside it, as it reads. */
+function textIn(node: unknown, depth: number): string {
+  // Rich text nests a few levels deep; a deeper value is not page text.
+  if (depth > 64) return "";
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) {
+    return node.map(each => textIn(each, depth + 1)).join(" ");
+  }
+  if (!isRecord(node)) return "";
+  if (node.type === "linebreak") return " ";
+  if (typeof node.text === "string") return node.text;
+  if (node.root !== undefined) return textIn(node.root, depth + 1);
+  if (!Array.isArray(node.children)) return "";
+  // Text and inline elements join as stored, so a word split by formatting
+  // stays one word; a block, such as a paragraph, starts a new line.
+  return node.children
+    .map(child => {
+      const text = textIn(child, depth + 1);
+      return inline(child) ? text : ` ${text} `;
+    })
+    .join("");
 }
 
 /**
  * The words of a value as a reader sees them: text as it is, and rich text
- * (a tree of nodes holding `text`) with its words in order. Nothing else.
+ * (a tree of nodes holding `text`) with its words in order, inline text run
+ * together as stored and blocks apart. Nothing else.
  */
 export function plainTextOf(value: unknown): string {
-  const words: string[] = [];
-  const walk = (node: unknown, depth: number): void => {
-    // Rich text nests a few levels deep; a deeper value is not page text.
-    if (depth > 64) return;
-    if (typeof node === "string") {
-      words.push(node);
-      return;
-    }
-    if (Array.isArray(node)) {
-      for (const child of node) walk(child, depth + 1);
-      return;
-    }
-    if (!isRecord(node)) return;
-    if (typeof node.text === "string") words.push(node.text);
-    if (node.root !== undefined) walk(node.root, depth + 1);
-    if (node.children !== undefined) walk(node.children, depth + 1);
-  };
-  walk(value, 0);
-  return words.join(" ").replace(/\s+/g, " ").trim();
+  return textIn(value, 0).replace(/\s+/g, " ").trim();
 }
 
 /** How many words a text has. */
