@@ -68,10 +68,6 @@ import {
   appliedChecksums,
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
-import {
-  addAppliedEntityChanges,
-  noAppliedEntityChanges,
-} from "../../domains/schema/migrate/applied-entity-changes";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   pluginsRecordedNotInstalled,
@@ -2204,9 +2200,6 @@ export async function migrateCore(
     unscopedMigrations: [] as string[],
     unreadable: [] as string[],
   };
-  // The entities the app migrations this run applies change, noted as each
-  // applies, for the rows a development run brings to the snapshot.
-  const appliedChanges = noAppliedEntityChanges();
 
   /**
    * Phase 3: the registry rows the applied migrations record, and the status
@@ -2234,7 +2227,6 @@ export async function migrateCore(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
-    appliedChanges,
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),
@@ -2549,10 +2541,7 @@ export async function migrateCore(
           runFiles,
           judgedFiles,
           firstRun.beforeApply,
-          async appliedMigration => {
-            addAppliedEntityChanges(appliedChanges, appliedMigration);
-            await markOrphans?.(appliedMigration);
-          }
+          markOrphans
         ));
       } catch (error) {
         // A file failed after earlier ones applied: their registry rows are

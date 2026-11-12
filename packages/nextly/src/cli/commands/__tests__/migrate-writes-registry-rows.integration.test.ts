@@ -28,6 +28,7 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
@@ -587,6 +588,35 @@ describe.each(getConfiguredTestDialects())(
       await migrateCreate(withBody, "add_body");
       await inDevelopment(() => migrated(withBody));
 
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).toEqual(expect.arrayContaining(["title", "body"]));
+    });
+
+    // The rows a migration's change owes are owed until they are written, not
+    // only during the run that applied it: the stored schema version names
+    // the newest migration whose rows are written, so a run after a failed
+    // write still writes them.
+    it("writes, on a later run in development, the row a failed write left behind", async () => {
+      await migrateCreate(posts("Posts"), "create_posts");
+      await migrated(posts("Posts"));
+      const withBody = posts("Posts", text({ name: "body" }));
+      await migrateCreate(withBody, "add_body");
+
+      const write = vi
+        .spyOn(CollectionRegistryService.prototype, "writeRecordedCollection")
+        .mockRejectedValueOnce(new Error("the registry write failed"));
+      try {
+        await inDevelopment(() => migrate(withBody));
+      } finally {
+        write.mockRestore();
+      }
+      // The file applied; its row was not written.
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).not.toContain("body");
+
+      await inDevelopment(() => migrated(withBody));
       expect(
         fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
       ).toEqual(expect.arrayContaining(["title", "body"]));

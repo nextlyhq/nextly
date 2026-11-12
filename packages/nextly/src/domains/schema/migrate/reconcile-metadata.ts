@@ -60,10 +60,11 @@ import type {
 import {
   inRegistryStep,
   newestAppliedAppMigration,
+  readSchemaVersion,
   writeRegistryRows,
 } from "../schema-version";
 
-import type { AppliedEntityChanges } from "./applied-entity-changes";
+import { outstandingEntityChanges } from "./applied-entity-changes";
 import { registerFromMigrations } from "./metadata-register";
 import {
   isAwaitingMigration,
@@ -123,13 +124,6 @@ export interface ReconcileMetadataDeps {
    * in step with the code as it is edited.
    */
   registryRows?: "write" | "insert-missing";
-  /**
-   * The entities the migrations this run applied changed
-   * (`applied-entity-changes.ts`). Under `insert-missing`, their rows are
-   * brought to the newest applied snapshot as well as the missing ones added:
-   * the tables a migration just changed are no live sync's to keep.
-   */
-  appliedChanges?: AppliedEntityChanges;
   /** Seam for tests; defaults to the real registry writer. */
   writeRegistryFn?: typeof writeRegistryFromSource;
   /**
@@ -406,8 +400,24 @@ export async function reconcileMigrationMetadata(
       } catch {
         appliedMigration = undefined;
       }
+      /*
+       * The newest migration whose registry rows are written, as the stored
+       * schema version names it: the migrations after it still owe their rows
+       * (`outstandingEntityChanges`). One that cannot be read owes them from
+       * the first migration.
+       */
+      const writtenThrough = async (): Promise<string | null> => {
+        try {
+          const stored = await inRegistryStep(adapter, () =>
+            readSchemaVersion(tx.getDrizzle(), dialect)
+          );
+          return stored.present ? (stored.version?.migration ?? null) : null;
+        } catch {
+          return null;
+        }
+      };
       return {
-        ...(await registerAndSweep(deps, isApplied)),
+        ...(await registerAndSweep(deps, isApplied, writtenThrough)),
         appliedMigration,
       };
     },
@@ -432,10 +442,11 @@ export async function reconcileMigrationMetadata(
  */
 async function registerAndSweep(
   deps: ReconcileMetadataDeps,
-  isApplied: (filename: string) => Promise<boolean>
+  isApplied: (filename: string) => Promise<boolean>,
+  writtenThrough: () => Promise<string | null>
 ): Promise<{ result: ReconcileMetadataResult; complete: boolean }> {
   const { adapter, dialect, migrationsDir, logger } = deps;
-  const registered = await registerRows(deps, isApplied);
+  const registered = await registerRows(deps, isApplied, writtenThrough);
 
   /*
    * Step 1b: which entities an unapplied migration still names.
@@ -543,11 +554,12 @@ async function registerAndSweep(
  * as they always were. A development run (`registryRows: "insert-missing"`),
  * whose start syncs the rows from the code as it is edited, ahead of any
  * migration, adds only the rows the registry lacks, and rewrites only those of
- * the entities its migrations changed (`deps.appliedChanges`).
+ * the entities the applied migrations still owe (`outstandingEntityChanges`).
  */
 async function registerRows(
   deps: ReconcileMetadataDeps,
-  isApplied: (filename: string) => Promise<boolean>
+  isApplied: (filename: string) => Promise<boolean>,
+  writtenThrough: () => Promise<string | null>
 ): Promise<{ rows: RegisteredRows; complete: boolean }> {
   const { adapter, dialect, migrationsDir, logger } = deps;
   const insertMissing = async (): Promise<{
@@ -609,16 +621,18 @@ async function registerRows(
   ) {
     // Where the newest applied snapshot records every entity, the rows it
     // records that the registry lacks are added from it, and the rows of the
-    // entities this run's migrations changed are brought to it; every other
-    // row stays as the live sync left it. A snapshot in the older shape, or
-    // none, leaves the rows its entities list to be added as they always were.
+    // entities the applied migrations still owe are brought to it; every
+    // other row stays as the live sync left it. A snapshot in the older
+    // shape, or none, leaves the rows its entities list to be added as they
+    // always were.
     const source = await readRegistrySource({ migrationsDir, isApplied });
     if (source.kind !== "snapshot") return insertMissing();
-    const changed = deps.appliedChanges;
-    return writeFrom(
-      source,
-      (kind, slug) => changed?.[kind].has(slug) === true
-    );
+    const owed = await outstandingEntityChanges({
+      migrationsDir,
+      isApplied,
+      writtenThrough: await writtenThrough(),
+    });
+    return writeFrom(source, (kind, slug) => owed[kind].has(slug));
   }
   if (deps.configurationRows !== undefined) {
     const fromConfiguration = await writeFrom({
