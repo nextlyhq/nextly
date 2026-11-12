@@ -208,7 +208,12 @@ export function submissionsExportRoute(
       if (form) return csvResponse(items, form, truncated);
       return Response.json(
         { items },
-        { headers: fileHeaders(generateExportFilename("form", "json"), truncated) }
+        {
+          headers: fileHeaders(
+            generateExportFilename("form", "json"),
+            truncated
+          ),
+        }
       );
     },
   };

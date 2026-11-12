@@ -10,6 +10,8 @@ export interface SubmissionRow {
   form: string | { id: string; name?: string };
   data: Record<string, unknown>;
   status: string;
+  /** Who sent it, as the write seam named it (`utils/submission-title`). */
+  title?: string | null;
   spamReason?: string | null;
   notes?: string | null;
   ipAddress?: string | null;
@@ -23,6 +25,23 @@ export interface SubmissionRow {
   /** Its version as read, sent back with a change. */
   _rev?: string;
 }
+
+/** A submission's review status, as stored. */
+export type SubmissionStatus = "new" | "read" | "archived" | "spam";
+
+/**
+ * Each status as the admin shows it: its name, and the colour of the dot its
+ * quiet chip carries (tokens only). New stands out, Spam warns, and Read and
+ * Archived recede.
+ */
+export const STATUS_LOOK: Readonly<
+  Record<SubmissionStatus, { label: string; dot: string }>
+> = {
+  new: { label: "New", dot: "bg-primary" },
+  read: { label: "Read", dot: "bg-muted-foreground" },
+  archived: { label: "Archived", dot: "bg-muted-foreground/50" },
+  spam: { label: "Spam", dot: "bg-destructive" },
+};
 
 /** The form a submission belongs to, by id. */
 export function formIdOf(row: Pick<SubmissionRow, "form">): string {

@@ -15,10 +15,7 @@ import type { JSX, ReactNode } from "react";
 
 import type { AskedField, AskedSnapshot } from "../../../utils/asked-fields";
 import { isConsentAnswer } from "../../../utils/consent";
-import {
-  formatExportValue,
-  optionLabels,
-} from "../../../utils/export-formats";
+import { formatExportValue, optionLabels } from "../../../utils/export-formats";
 
 import { ConsentValue } from "./submission-fields";
 
