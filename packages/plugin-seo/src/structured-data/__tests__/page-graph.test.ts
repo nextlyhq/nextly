@@ -295,6 +295,30 @@ describe("the page's own name", () => {
     );
   });
 
+  it("is a page built in code's own name, or else its route's title over one made from its address", async () => {
+    const codePage = (title: string) =>
+      entryInput(
+        "nx_seo_code_pages",
+        { id: "c1", path: "/pricing", title, seo: {} },
+        { code: { title: "Plans and prices | Rext AI" } }
+      );
+    const fromAddress = await buildStructuredData(
+      context(),
+      codePage("Pricing"),
+      answerAt("/pricing", "Plans and prices | Rext AI"),
+      rules()
+    );
+    const named = await buildStructuredData(
+      context(),
+      codePage("Our plans"),
+      answerAt("/pricing", "Plans and prices | Rext AI"),
+      rules()
+    );
+
+    expect(nodeOf(fromAddress.nodes, "WebPage")?.name).toBe("Plans and prices");
+    expect(nodeOf(named.nodes, "WebPage")?.name).toBe("Our plans");
+  });
+
   it("is the whole title on the home page, which is the site's own", async () => {
     const { nodes } = await buildStructuredData(
       context(),

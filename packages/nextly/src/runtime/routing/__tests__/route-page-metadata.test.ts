@@ -499,6 +499,26 @@ describe("a route that reads its Single itself", () => {
     expect(asked[1]).toEqual(asked[0]);
   });
 
+  it("tells the provider what the route says about the Single, for its structured data only", async () => {
+    const asked = provide(() => ({ structuredData: NODES }));
+    const config = {
+      structuredDataHints: () => ({
+        type: "collectionPage",
+        items: [{ name: "First post", url: "/blog/first" }],
+      }),
+    };
+    const context = { slug: "blog-page" };
+
+    await singlePageMetadata(config, document, context, "/blog");
+    await singlePageStructuredData(config, document, context, "/blog");
+
+    expect(asked[0]).not.toHaveProperty("structuredDataHints");
+    expect(asked[1]?.structuredDataHints).toEqual({
+      type: "collectionPage",
+      items: [{ name: "First post", url: "/blog/first" }],
+    });
+  });
+
   it("serves the route's own metadata exactly, and no structured data, with no provider", async () => {
     recordCapabilityProviders([]);
     const own = { title: "Own" };

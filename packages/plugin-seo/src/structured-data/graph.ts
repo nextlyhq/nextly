@@ -22,6 +22,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { addressHolders } from "../address-record/participant";
+import { codePagesSlug } from "../code-pages/collection";
 import { nameOfAddress, readCodePage } from "../code-pages/store";
 import { originOf } from "../origin";
 import { TITLE_FIELDS } from "../settings/patterns";
@@ -1236,7 +1237,10 @@ interface OwnNames {
  * brand's name, since a home page's title field is usually just "Home".
  */
 function ownNamesOf(
-  facts: Pick<PageFacts, "input" | "answer" | "document" | "hints" | "rules">,
+  facts: Pick<
+    PageFacts,
+    "ctx" | "input" | "answer" | "document" | "hints" | "rules"
+  >,
   home: boolean,
   siteName: string | undefined
 ): OwnNames {
@@ -1253,14 +1257,34 @@ function ownNamesOf(
       textOf(brandNameOf(facts.rules, facts.answer)) ?? title
     );
   }
-  const ownField = TITLE_FIELDS.map(field =>
-    textOf(facts.document[field])
-  ).find(title => title !== undefined);
+  const fromCode = withoutSiteName(facts.input.code.title, siteName);
+  const { source } = facts.input;
+  const codePage =
+    source.kind === "entry" && source.collection === codePagesSlug(facts.ctx);
   const name =
-    ownField ??
-    withoutSiteName(facts.input.code.title, siteName) ??
+    ownTitleOf(facts.document, codePage ? fromCode : undefined) ??
+    fromCode ??
     withoutSiteName(facts.answer.title, siteName);
   return defined(name, name);
+}
+
+/**
+ * The page's own title field, where it has one. A page built in code is
+ * named from its address (`/pricing` is "Pricing") only where its route
+ * gives no name, so there `fromCode`, its route's own title, is the better
+ * name; it is given for a page built in code only.
+ */
+function ownTitleOf(
+  document: Readonly<Record<string, unknown>>,
+  fromCode: string | undefined
+): string | undefined {
+  const own = TITLE_FIELDS.map(field => textOf(document[field])).find(
+    title => title !== undefined
+  );
+  const path = textOf(document.path);
+  const fromAddress =
+    path !== undefined && own === nameOfAddress(path) && fromCode !== undefined;
+  return fromAddress ? undefined : own;
 }
 
 /** `value` without its absent keys. */

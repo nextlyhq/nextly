@@ -968,6 +968,13 @@ item with its `question` and its `answer` (plain or rich text). Give only what t
 Google asks that structured data describe content a visitor can see, and the plugin never makes a
 question, a list or a rating up.
 
+A Single route (`createSingleRoute` and its public form) takes `structuredDataHints` the same way,
+called with the Single's document; so does `singlePageStructuredData` in its config. A page built
+in code passes them as an object in `seoStructuredData`'s options
+(`seoStructuredData("/about", { structuredDataHints: { type: "aboutPage" } })`); `seoMetadata`
+ignores them, so the head is the same either way. A page built in code is named by the `name` its
+route gives, or else by its route's own title without the site's name.
+
 **A type missing a detail it needs is left out**, rather than sending search engines a description
 they would reject; the page and the site are still described. `structuredDataProblems(ctx, input)`
 lists one problem per missing detail, such as `Missing: author.`, saying whether the page's field is
