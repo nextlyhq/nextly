@@ -388,12 +388,13 @@ async function judgeMoveInput(
 }
 
 /**
- * The documents a move to `to` takes, read on `tx`, each with its stranded parts, after `to` is
+ * The documents a move to `to` takes, read on `db`, each with its stranded parts, after `to` is
  * judged a stage of every workflow whose parts move. Each workflow's stranded parts are read
- * before anything is written, so one with nothing stranded has no say in the stage.
+ * before anything is written, so one with nothing stranded has no say in the stage. Only reads,
+ * so the move hands it its transaction and a dry run the adapter itself.
  */
 async function documentsToMove(
-  tx: TransactionContext,
+  db: ReviewStatesDb,
   workflows: readonly RegisteredWorkflow[],
   to: string
 ): Promise<DocumentToMove[]> {
@@ -402,7 +403,7 @@ async function documentsToMove(
     stranded: StrandedReviewState[];
   }> = [];
   for (const registered of workflows) {
-    const stranded = await readStranded(tx, [registered]);
+    const stranded = await readStranded(db, [registered]);
     if (stranded.length > 0) strandedOf.push({ registered, stranded });
   }
   checkTarget(
@@ -466,7 +467,8 @@ export async function moveStrandedReviewStates(
 
 /**
  * The documents `moveStrandedReviewStates` would move for `input`, judged and refused exactly as it
- * judges and refuses, read on a transaction of their own and writing nothing.
+ * judges and refuses, writing nothing. Read straight on the adapter, outside any transaction: a
+ * dry run takes no lock, and a transaction would take SQLite's write lock (`BEGIN IMMEDIATE`).
  *
  * @experimental
  */
@@ -475,10 +477,8 @@ export async function planMoveStrandedReviewStates(
   input: MoveStrandedInput
 ): Promise<MovedStranded[]> {
   const { workflows } = await judgeMoveInput(adapter, input);
-  return adapter.transaction(async tx =>
-    (await documentsToMove(tx, workflows, input.to)).map(each =>
-      movedOf(each.states)
-    )
+  return (await documentsToMove(adapter, workflows, input.to)).map(each =>
+    movedOf(each.states)
   );
 }
 

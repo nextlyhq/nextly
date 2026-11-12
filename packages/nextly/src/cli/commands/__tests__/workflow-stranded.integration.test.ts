@@ -12,7 +12,7 @@
  * `moveStrandedReviewStates` and the dry run's `strandedMoveDryRun`, on the workflows the configuration registers, as the commands hand
  * them, and once through the table resolver the commands install (`installStrandedRunResolver`).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
 import { defineWorkflow } from "../../../domains/workflows/define-workflow";
@@ -101,6 +101,7 @@ const drafts = { status: true, versions: { drafts: true } } as const;
 let t: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await t?.destroy();
   t = undefined;
 });
@@ -444,7 +445,11 @@ describe.each(getConfiguredTestDialects())(
       const byTarget = (a: { target: string }, b: { target: string }) =>
         a.target.localeCompare(b.target);
 
+      // A dry run takes no lock, so it opens no transaction: SQLite's would take the write lock.
+      const transactions = vi.spyOn(app().adapter, "transaction");
       const plan = await dryRun({});
+      expect(transactions).not.toHaveBeenCalled();
+      transactions.mockRestore();
       expect(plan.refusals ?? []).toEqual([]);
       // The part of `one` in `legal`, a stage the workflow has, and the unnamed page are no part of it.
       expect([...plan.changes].sort(byTarget)).toEqual(
