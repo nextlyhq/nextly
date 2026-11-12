@@ -47,8 +47,11 @@ export interface EmailConfig {
  * the `form-builder.beforeEmail` D63 filter seam.
  */
 export interface FormEmailNotification {
-  /** Resolved recipient address. */
-  to: string;
+  /**
+   * Resolved recipient address, or the addresses of a team notification
+   * that has several. A notification with one recipient keeps a string.
+   */
+  to: string | string[];
   /** Email template slug to render. */
   templateSlug: string;
   /** Template variables (submitted data + form metadata). */
@@ -68,6 +71,12 @@ export interface FormEmailNotification {
   bcc?: string[];
   /** Source notification id; undefined for filter-injected emails. */
   notificationId?: string;
+  /**
+   * The files that go with this email, by media id: the notification's own
+   * choice of file fields. Absent on a filter-injected email, which takes the
+   * files of the fields marked to attach to notification emails.
+   */
+  attachments?: Array<{ mediaId: string }>;
 }
 
 /** @experimental Context passed to the `form-builder.beforeEmail` filter seam. */
@@ -97,10 +106,25 @@ export interface FormNotification {
    * the template/provider default.
    */
   senderEmail?: string;
+  /**
+   * Which preset the notification started from: one to the team, or a
+   * confirmation to the person who submitted. Absent on rules saved before
+   * presets, which read by their recipient.
+   */
+  kind?: "team" | "visitor";
   /** How the recipient address is determined */
   recipientType: "static" | "field";
-  /** Recipient: static email address or a {{fieldName}} reference */
+  /**
+   * Recipient: static email address or a {{fieldName}} reference. A team
+   * notification with several addresses keeps them in `recipients`; this
+   * then holds the first, for readers that know only one.
+   */
   to: string;
+  /**
+   * A team notification's addresses. Absent on rules saved before several
+   * were allowed, whose single `to` reads as a list of one.
+   */
+  recipients?: string[];
   /** CC email addresses */
   cc: string[];
   /** BCC email addresses */
@@ -117,6 +141,20 @@ export interface FormNotification {
    * multi-condition tree without a migration.
    */
   condition?: ConditionalLogicCondition;
+  /**
+   * Several send conditions: all must hold, or any one. Takes the place of
+   * `condition`, which reads as a list of one under `all` when this is absent.
+   */
+  conditions?: {
+    match: "all" | "any";
+    list: ConditionalLogicCondition[];
+  };
+  /**
+   * The names of the form's file fields whose files go with this email.
+   * Absent on rules saved before it, which attach exactly the file fields
+   * marked to attach to notification emails.
+   */
+  attachFields?: string[];
   /** Slug of the email template to use */
   templateSlug?: string;
 }

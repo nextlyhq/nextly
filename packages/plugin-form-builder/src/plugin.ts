@@ -91,10 +91,17 @@ import type {
   FormEmailNotification,
   ResolvedFormBuilderConfig,
 } from "./types";
-import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
 import { normalizeFormSettings } from "./utils/form-settings";
+import {
+  attachFieldsOf,
+  attachmentsFrom,
+  fieldsMarkedToAttach,
+  conditionsMet,
+  conditionsOf,
+  teamAddressesOf,
+} from "./utils/notification-model";
 import { normalizeRedirectRelationships } from "./utils/redirect-target";
 import {
   SCHEMA_ONLY_CONTEXT,
@@ -856,27 +863,7 @@ export function collectAttachmentInputs(
   fields: Array<Record<string, unknown>>,
   submittedData: Record<string, unknown>
 ): Array<{ mediaId: string }> {
-  const attachments: Array<{ mediaId: string }> = [];
-
-  for (const field of fields) {
-    if (field.type !== "file" || !field.attachToEmail) continue;
-
-    const name = field.name as string;
-    const value = submittedData[name];
-    if (value == null) continue;
-
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        if (typeof item === "string" && item) {
-          attachments.push({ mediaId: item });
-        }
-      }
-    } else if (typeof value === "string" && value) {
-      attachments.push({ mediaId: value });
-    }
-  }
-
-  return attachments;
+  return attachmentsFrom(fieldsMarkedToAttach(fields), submittedData);
 }
 
 // ---------------------------------------------------------------------------
@@ -972,12 +959,10 @@ export function buildNotificationEmails(input: {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // An unmet send condition skips the rule for this submission — an
-    // expected state, never an error.
-    if (
-      notification.condition &&
-      !evaluateSingleCondition(notification.condition, submittedData)
-    ) {
+    // Unmet send conditions skip the rule for this submission — an expected
+    // state, never an error. Read through the notification model, so a rule
+    // saved with one condition and one saved with several both count.
+    if (!conditionsMet(conditionsOf(notification), submittedData)) {
       skipped.push({
         notificationId: notification.id,
         reason: "condition-unmet",
@@ -985,15 +970,9 @@ export function buildNotificationEmails(input: {
       continue;
     }
 
-    // Trim every address on the way out: whitespace-only values must count
-    // as empty, and stray spaces must not reach the provider as headers.
-    const to = (
-      notification.recipientType === "field"
-        ? resolveFieldRef(notification.to, submittedData)
-        : notification.to
-    ).trim();
+    const to = recipientsFor(notification, submittedData);
 
-    if (!to) {
+    if (to === undefined) {
       skipped.push({
         notificationId: notification.id,
         reason: "empty-recipient",
@@ -1034,10 +1013,33 @@ export function buildNotificationEmails(input: {
       cc,
       bcc,
       notificationId: notification.id,
+      attachments: attachmentsFrom(
+        attachFieldsOf(notification, input.fields ?? []),
+        submittedData
+      ),
     });
   }
 
   return { emails, skipped };
+}
+
+/**
+ * Who a notification goes to for these answers: the visitor's address from
+ * the field it names, or the team's addresses, one as a string as before and
+ * several as a list. Every address is trimmed on the way out, so
+ * whitespace-only values count as empty and stray spaces never reach the
+ * provider as headers. Undefined when nobody is left to send to.
+ */
+function recipientsFor(
+  notification: FormNotification,
+  data: Record<string, unknown>
+): string | string[] | undefined {
+  if (notification.recipientType === "field") {
+    return resolveFieldRef(notification.to, data).trim() || undefined;
+  }
+  const addresses = teamAddressesOf(notification);
+  if (addresses.length === 0) return undefined;
+  return addresses.length === 1 ? addresses[0] : addresses;
 }
 
 /**
@@ -1849,6 +1851,9 @@ export async function queueNotificationEmails(input: {
       templateSlug: email.templateSlug,
       notificationId: email.notificationId,
     };
+    // The notification's own files, or for an email a filter added, the
+    // files of the fields marked to attach, as every email had before.
+    const files = email.attachments ?? fileAttachments;
     const sendKey = notificationKey(
       input.submissionId,
       index,
@@ -1866,7 +1871,7 @@ export async function queueNotificationEmails(input: {
           replyTo: email.replyTo,
           cc: email.cc,
           bcc: email.bcc,
-          attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
+          attachments: files.length > 0 ? files : undefined,
           idempotencyKey: sendKey,
         }
       );
@@ -1884,7 +1889,7 @@ export async function queueNotificationEmails(input: {
           ...identity,
           queuedId: queued.id,
           state: queued.state,
-          attachmentCount: fileAttachments.length,
+          attachmentCount: files.length,
         });
       }
     } catch (err) {

@@ -516,10 +516,16 @@ Notifications are configured per form in the admin UI under the **Notifications*
 | `templateSlug`  | Email template to use (from your [email configuration](/docs/guides/email)) |
 | `recipientType` | `"static"` (fixed email) or `"field"` (value from a form field)             |
 | `to`            | Email address, or `{{fieldName}}` reference when using field recipient      |
+| `recipients`    | A team notification's addresses, when it sends to several                   |
+| `replyTo`       | Reply-To: an address, or `{{fieldName}}` for one of the form's Email fields |
+| `conditions`    | `{ match: "all" \| "any", list }`: send only when all, or any, hold         |
+| `attachFields`  | Names of the form's file fields whose files go with this email              |
 | `providerId`    | Email provider to use (optional, falls back to system default)              |
 | `cc` / `bcc`    | Additional recipients                                                       |
 
 Template variables available in your email templates: all submitted field values, plus `formName` and `submissionId`.
+
+A notification saved before `recipients`, `conditions` and `attachFields` existed reads as it always did: its single `to` is a list of one, its single `condition` is a list of one under `all`, and it attaches exactly the file fields whose "attach to notification emails" switch is on. An email with one recipient reaches a `beforeEmail` handler with `to` as a string, as before; one with several, as a list.
 
 ### Delivery and retries
 
