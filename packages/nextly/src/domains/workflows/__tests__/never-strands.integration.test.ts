@@ -400,11 +400,9 @@ async function strandedListed(slug: "posts" | "pages") {
     overrideAccess: true,
   } as never);
   return {
-    // Each listed row's id, narrowed from the untyped row a slug the types do not know returns.
-    ids: listed.items.flatMap(item =>
-      typeof item.id === "string" ? [item.id] : []
-    ),
-    total: counted.total,
+    // Ids come back as stored; the caller compares them as text.
+    ids: listed.items.map(item => String(item.id)),
+    total: (counted as { total: number }).total,
   };
 }
 

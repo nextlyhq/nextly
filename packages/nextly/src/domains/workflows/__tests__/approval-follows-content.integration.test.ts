@@ -141,10 +141,13 @@ async function boot(
   options: {
     postsWorkflow?: ReturnType<typeof defineWorkflow>;
     adapter?: TestNextly["adapter"];
+    /** Keep every translatable field per language, and a held edit's drafts by part. */
+    perLanguageStorage?: boolean;
   } = {}
 ): Promise<TestNextly> {
   t = await createTestNextly({
     ...(options.adapter ? { adapter: options.adapter } : { dialect }),
+    perLanguageStorage: options.perLanguageStorage === true,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
     // A field group whose own field has a read rule, which only the field-group pass of a read
     // applies: the collection's pass does not reach inside a field group.
@@ -518,6 +521,72 @@ describe.each(getConfiguredTestDialects())(
           { stage: "legal", approval: null }
         );
         expect(await withdrawals("posts", post)).toHaveLength(1);
+      });
+    });
+
+    describe("a shared field held as a draft by part", () => {
+      /**
+       * A post published in Spanish and then English, each part approved by bob, under
+       * per-language storage. English is published last, so its approval names its own newest
+       * version, with no other language's shared values laid over it.
+       */
+      async function approvedInBoth(): Promise<string> {
+        await boot(dialect, { perLanguageStorage: true });
+        const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+        const post = await entry(app(), "posts");
+        await save(
+          "posts",
+          post,
+          { title: "Hola", status: "published" },
+          { locale: "es" }
+        );
+        await save("posts", post, { status: "published" }, { locale: "en" });
+        for (const part of ["en", "es"]) {
+          await seedState(app(), partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+          await take("posts", post, part, "clear", bob);
+        }
+        for (const part of ["en", "es"]) {
+          expect(
+            (await stateOf(app(), partOf("posts", post, part)))?.approval,
+            part
+          ).not.toBeNull();
+        }
+        return post;
+      }
+
+      // A held edit to a shared field goes to the document's one shared
+      // draft, which any language's publish puts live: so it withdraws every
+      // language's approval, not only the one it was made in.
+      it("withdraws every language's approval for a held edit to a shared field", async () => {
+        const post = await approvedInBoth();
+
+        // No status: held, in the shared draft, made through Spanish.
+        await save("posts", post, { code: "X-2" }, { locale: "es" });
+
+        for (const part of ["en", "es"]) {
+          expect(
+            await stateOf(app(), partOf("posts", post, part)),
+            part
+          ).toMatchObject({ stage: "legal", approval: null });
+        }
+      });
+
+      // A held edit to one language's own text reaches no other language.
+      it("keeps another language's approval for a held edit to a translation", async () => {
+        const post = await approvedInBoth();
+        const english = await stateOf(app(), partOf("posts", post, "en"));
+
+        await save("posts", post, { title: "Adiós" }, { locale: "es" });
+
+        expect(
+          (await stateOf(app(), partOf("posts", post, "es")))?.approval
+        ).toBeNull();
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toEqual(
+          english
+        );
       });
     });
 

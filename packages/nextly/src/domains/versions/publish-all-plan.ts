@@ -23,6 +23,12 @@ import { resolveLocaleChain } from "../i18n/resolve-locale";
 import type { CompanionSchema } from "../i18n/runtime/companion-io";
 
 import {
+  combinedDraft,
+  draftsKeptByPart,
+  SHARED_DRAFT_SLOT,
+  sharedFieldsJudged,
+} from "./part-drafts";
+import {
   differingFields,
   editedSharedFields,
   outOfDateSharedFields,
@@ -50,7 +56,7 @@ export async function pendingChangesInSaveOrder(
   ref: VersionRef
 ): Promise<PendingChange[]> {
   const repo = new VersionsRepository(db);
-  const drafts = await repo.findAllWorkingDrafts(ref);
+  const drafts = withSharedPart(await repo.findAllWorkingDrafts(ref));
   if (drafts.length < 2) return drafts;
   const newest = await repo.newestVersionNoByLocale(
     ref,
@@ -58,6 +64,57 @@ export async function pendingChangesInSaveOrder(
   );
   const savedAt = (draft: PendingChange) => newest.get(draft.locale) ?? 0;
   return [...drafts].sort((a, b) => savedAt(a) - savedAt(b));
+}
+
+/**
+ * Under per-language storage, each language's change as the document it puts
+ * live: its own values with the shared draft's (`part-drafts`), so every
+ * language publishes the shared changes with it and no language's change
+ * stands for them alone. The shared draft stays a change of its own, first,
+ * so a document whose only changes are shared still puts them live. Without
+ * per-language storage the drafts are returned as stored.
+ */
+function withSharedPart(drafts: PendingChange[]): PendingChange[] {
+  if (!draftsKeptByPart()) return drafts;
+  const shared = drafts.find(draft => draft.locale === SHARED_DRAFT_SLOT);
+  if (!shared) return drafts;
+  const languages = drafts
+    .filter(draft => draft.locale !== SHARED_DRAFT_SLOT)
+    .map(draft => ({
+      ...draft,
+      snapshot: combinedDraft({}, { shared, language: draft }),
+    }));
+  return [shared, ...languages];
+}
+
+/**
+ * The pending changes as each language's validation judges them. Under
+ * per-language storage the shared draft holds no language's values, so judged
+ * alone, as no language, every required translated field would look missing.
+ * So the shared draft is judged through the languages it goes live in: its
+ * values laid under each one's own, including a language going live as it is
+ * stored with nothing pending of its own, so every shared value is judged
+ * under the caller's field rules; and as the default language's change where
+ * no language is judged. Without per-language storage the changes are
+ * returned as they are.
+ */
+export function pendingChangesByLanguage<
+  T extends { readonly locale: string | null; readonly snapshot: unknown },
+>(pending: readonly T[], defaultLocale: string | null): T[] {
+  if (!draftsKeptByPart()) return [...pending];
+  const shared = pending.find(change => change.locale === SHARED_DRAFT_SLOT);
+  const languages = pending.filter(
+    change => change.locale !== SHARED_DRAFT_SLOT
+  );
+  if (languages.length === 0) {
+    return pending.map(change => ({ ...change, locale: defaultLocale }));
+  }
+  if (shared === undefined) return languages;
+  const sharedValues = snapshotRecord(shared.snapshot);
+  return languages.map(change => ({
+    ...change,
+    snapshot: { ...sharedValues, ...snapshotRecord(change.snapshot) },
+  }));
 }
 
 /** How a document carries its languages' statuses. */
@@ -190,11 +247,21 @@ export async function judgeSharedValues(
 ): Promise<SharedVerdict> {
   const { live, shared, views, byHand } = document;
   const outOfDate = new Map<string | null, readonly string[]>();
-  for (const draft of pending) {
+  // Kept by part (`part-drafts`), the shared draft is the shared change
+  // itself, and each language's change carries the shared draft's values
+  // rather than a copy of the live ones it began from, so neither is judged on
+  // them. What a language's draft does keep a copy of is a translated
+  // component's shared parts (`byHand`): those are judged against the base its
+  // draft began from, so a copy another language has since published past is
+  // out of date rather than put back.
+  const kept = draftsKeptByPart();
+  for (const draft of kept
+    ? pending.filter(change => change.locale !== SHARED_DRAFT_SLOT)
+    : pending) {
     const fields = await outOfDateSharedFields(tx, {
       ref,
       locale: draft.locale,
-      shared,
+      shared: sharedFieldsJudged(shared, byHand),
       live,
       pending: snapshotRecord(draft.snapshot),
       views,
@@ -225,10 +292,12 @@ export async function judgeSharedValues(
   // each language's component also holds its own translated values, so it
   // goes live as that language saved it.
   const merged = shared.filter(name => !byHand.has(name));
-  const { state, unordered } = await mergedSharedState(tx, ref, pending, {
-    live,
-    shared: merged,
-  });
+  const { state, unordered } = draftsKeptByPart()
+    ? partDraftsSharedState(pending, live, merged)
+    : await mergedSharedState(tx, ref, pending, {
+        live,
+        shared: merged,
+      });
   return { outOfDate, unmergeable, unordered, merged, state };
 }
 
@@ -670,6 +739,27 @@ function latestEdit(edits: readonly SharedEdit[]): SharedEdit | null {
 }
 
 /** A pending change carrying the one shared state a publish of every language leaves. */
+/**
+ * The one shared state a publish of every language leaves, kept by part
+ * (`part-drafts`): the live shared values with the shared draft's laid over
+ * them. The shared draft is the only change that edits a shared value, so
+ * there is no edit to order against another, and none is unordered.
+ */
+function partDraftsSharedState(
+  pending: readonly PendingChange[],
+  live: Record<string, unknown>,
+  shared: readonly string[]
+): { state: Record<string, unknown>; unordered: string[] } {
+  const sharedDraft = pending.find(draft => draft.locale === SHARED_DRAFT_SLOT);
+  const edited = sharedDraft ? snapshotRecord(sharedDraft.snapshot) : {};
+  return {
+    state: Object.fromEntries(
+      shared.map(name => [name, name in edited ? edited[name] : live[name]])
+    ),
+    unordered: [],
+  };
+}
+
 function withSharedState(
   draft: PendingChange,
   shared: readonly string[],
