@@ -94,7 +94,7 @@ export interface ReconcileLogger {
  * caller whose logger takes no second argument would otherwise see either
  * nothing or a stringified object appended to every line.
  */
-function asServiceLogger(logger: ReconcileLogger): Logger {
+export function asServiceLogger(logger: ReconcileLogger): Logger {
   return {
     debug: message => logger.debug(message),
     info: message => logger.info(message),
@@ -149,6 +149,8 @@ export interface ReconcileMetadataResult {
   fieldGroupsRegistered: number;
   /** Rows the registry source records that could not be written, as `<kind> <slug>`. */
   rowsNotWritten: string[];
+  /** Rows of entities an applied migration dropped, removed this run, as `<kind> <slug>`. */
+  rowsRemoved: string[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -405,6 +407,7 @@ export async function reconcileMigrationMetadata(
         result.collectionsRegistered +
           result.singlesRegistered +
           result.fieldGroupsRegistered +
+          result.rowsRemoved.length +
           result.marked >
         0,
       migration: ({ complete, appliedMigration }) =>
@@ -558,6 +561,7 @@ async function registerRows(
         singlesRegistered: inserted.singlesRegistered,
         fieldGroupsRegistered: 0,
         rowsNotWritten,
+        rowsRemoved: [],
       },
       complete: rowsNotWritten.length === 0,
     };
@@ -593,6 +597,7 @@ async function registerRows(
           singlesRegistered: 0,
           fieldGroupsRegistered: 0,
           rowsNotWritten: [],
+          rowsRemoved: [],
         },
         complete: false,
       };
@@ -615,6 +620,7 @@ async function registerRows(
       singlesRegistered: written.written.single,
       fieldGroupsRegistered: written.written.fieldGroup,
       rowsNotWritten: written.failed,
+      rowsRemoved: written.removed,
     },
     complete: written.failed.length === 0,
   };
@@ -627,6 +633,7 @@ type RegisteredRows = Pick<
   | "singlesRegistered"
   | "fieldGroupsRegistered"
   | "rowsNotWritten"
+  | "rowsRemoved"
 >;
 
 /**

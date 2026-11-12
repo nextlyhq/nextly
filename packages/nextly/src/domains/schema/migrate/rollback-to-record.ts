@@ -53,7 +53,6 @@ import type { OrphanPassRow } from "../../auth/services/permission-seed-service"
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import {
-  deleteEntityRegistryRow,
   mediaUsageTablePresent,
   type DashboardTables,
 } from "../../versions/entity-teardown";
@@ -61,6 +60,7 @@ import { newestMigrationName } from "../build-schema-version";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import { standingsByFilename } from "../events/migration-state";
 import type { SchemaEventRow } from "../events/schema-events-repository";
+import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
 import {
   carriesRegistryMetadata,
   parseSnapshotFile,
@@ -80,6 +80,8 @@ import {
   type AppMigrationStanding,
 } from "./first-run";
 import { permissionsDeclaredBy } from "./permission-orphans";
+import { pluginCollectionSources } from "./plugin/plugin-collection-sources";
+import { addedEntities, clearedSettings } from "./registry-history";
 import {
   readRegistryRecord,
   takeRegistryBaseline,
@@ -87,6 +89,12 @@ import {
   type RegistryBaseline,
   type RegistryRecord,
 } from "./registry-record";
+import { removeRegistryRow, type RemovalScope } from "./registry-row-removal";
+import {
+  typeChangedRowsWriter,
+  writeRegistryFromSource,
+  type RegistryWriteDeps,
+} from "./registry-writer";
 
 /** A snapshot, as much of it as a rollback reads. */
 type SnapshotPart = Pick<SnapshotFile, "entities" | "permissions">;
@@ -313,23 +321,11 @@ async function removeAddedRows(
   view: DrizzleAdapter,
   rows: RegistryRows,
   added: ReadonlySet<string>,
-  teardown: {
-    tx: Parameters<typeof deleteEntityRegistryRow>[0];
-    tables: DashboardTables;
-  }
+  teardown: Omit<RemovalScope, "view">
 ): Promise<string[]> {
   const removed: string[] = [];
   for (const slug of Object.keys(rows.current).filter(s => added.has(s))) {
-    if (rows.kind === "fieldGroup") {
-      await view.delete(rows.table, bySlug(slug));
-    } else {
-      await deleteEntityRegistryRow(
-        teardown.tx,
-        rows.kind,
-        slug,
-        teardown.tables
-      );
-    }
+    await removeRegistryRow({ ...teardown, view }, rows.kind, slug);
     removed.push(`${rows.kind} ${slug}`);
   }
   return removed;
@@ -344,7 +340,7 @@ async function removeAddedRows(
 async function restoreRows(args: {
   adapter: DrizzleAdapter;
   db: unknown;
-  tx: Parameters<typeof deleteEntityRegistryRow>[0];
+  tx: RemovalScope["tx"];
   dialect: SupportedDialect;
   baseline: RegistryBaseline;
   added: Record<RegistryKey, ReadonlySet<string>>;
@@ -425,6 +421,20 @@ export interface RollbackBookkeeping {
    * back, after its statements and before its rollback is recorded.
    */
   restore?: () => Promise<void>;
+  /**
+   * By rolled-back filename: the registry rows written with that DOWN, those
+   * of the entities whose field types it changes back, in its transaction
+   * where it runs in one (`typeChangedRowsWriter`).
+   */
+  perFile?: ReadonlyMap<string, () => Promise<void>>;
+  /**
+   * Where the point it leaves has a snapshot of its own recording the
+   * registry: the rolled-back migrations' own registry changes undone, once
+   * the last DOWN has run, under the same lock. Every row that snapshot
+   * records goes back to it, and the row of an entity a rolled-back
+   * migration added, which it does not record, is removed.
+   */
+  afterAll?: () => Promise<void>;
   /** What a dry run says of it. */
   summary?: string;
 }
@@ -516,9 +526,9 @@ export async function planRollbackBookkeeping(args: {
 }): Promise<RollbackBookkeeping> {
   const { adapter, dialect } = args;
   if (args.rolledBack.length === 0) return {};
-  if (!(await adapter.tableExists("nextly_meta"))) return {};
-  const record = await readRegistryRecord(adapter.getDrizzle(), dialect);
-  if (record === undefined) return {};
+  const record = (await adapter.tableExists("nextly_meta"))
+    ? await readRegistryRecord(adapter.getDrizzle(), dialect)
+    : undefined;
 
   const targets = new Set(args.rolledBack.map(baseNameOf));
   const applied = appliedAppMigrations(args.rows);
@@ -527,8 +537,31 @@ export async function planRollbackBookkeeping(args: {
   const point = newestMigrationName(remaining.map(m => m.name)) ?? null;
   const judged = judgeRollbackPoint({ record, remaining, point });
   if (judged.kind === "refused") return { refusal: judged.refusal };
-  if (judged.kind === "own-source") return {};
+  const writeDeps: RegistryWriteDeps = {
+    adapter,
+    logger: args.logger,
+    collectionSources: pluginCollectionSources(args.config.plugins ?? []),
+  };
+  const perFile = await typeChangedRowsPerDown({
+    metaDir,
+    applied,
+    rolledBack: args.rolledBack,
+    deps: writeDeps,
+  });
+  if (judged.kind === "own-source") {
+    return {
+      perFile,
+      ...(await undoToOwnSource({
+        metaDir,
+        point,
+        remaining: remaining.map(m => m.name),
+        targets,
+        deps: writeDeps,
+      })),
+    };
+  }
   return {
+    perFile,
     summary: `The registry would go back to the baseline the database's registry record keeps at ${pointNamed(point)}.`,
     restore: await baselineRestore({
       ...args,
@@ -536,6 +569,114 @@ export async function planRollbackBookkeeping(args: {
       baseline: judged.baseline,
       ...(await rolledBackMigrations(metaDir, targets, judged.baseline)),
     }),
+  };
+}
+
+/**
+ * For each rolled-back migration whose DOWN changes a field's type back, the
+ * registry rows written with that DOWN: brought from its snapshot to the one
+ * the database stands at once it has run (the newest applied migration
+ * before it that has a snapshot). Keyed by the filename as rolled back.
+ */
+async function typeChangedRowsPerDown(args: {
+  metaDir: string;
+  applied: ReadonlySet<string>;
+  rolledBack: readonly string[];
+  deps: RegistryWriteDeps;
+}): Promise<Map<string, () => Promise<void>>> {
+  const perFile = new Map<string, () => Promise<void>>();
+  const inOrder = [...args.applied].sort(compareMigrationBaseNames);
+  for (const filename of args.rolledBack) {
+    const name = baseNameOf(filename);
+    const at = inOrder.indexOf(name);
+    if (at < 0) continue;
+    const from = await readMigrationSnapshot(args.metaDir, name);
+    let to: SnapshotFile | null = null;
+    for (const earlier of inOrder.slice(0, at).reverse()) {
+      to = await readMigrationSnapshot(args.metaDir, earlier);
+      if (to !== null) break;
+    }
+    const write = typeChangedRowsWriter({
+      from,
+      to,
+      file: filename,
+      deps: args.deps,
+    });
+    if (write !== undefined) perFile.set(filename, write);
+  }
+  return perFile;
+}
+
+/**
+ * What a rollback to `point`, whose own snapshot records the registry, does
+ * with the rows once its last DOWN has run (`RollbackBookkeeping.afterAll`):
+ * nothing where the point's snapshot records nothing (an earlier release's,
+ * or none), so such a point's rows stay as they are.
+ */
+async function undoToOwnSource(args: {
+  metaDir: string;
+  point: string | null;
+  remaining: readonly string[];
+  targets: ReadonlySet<string>;
+  deps: RegistryWriteDeps;
+}): Promise<Pick<RollbackBookkeeping, "afterAll" | "summary">> {
+  if (args.point === null) return {};
+  const at = await readMigrationSnapshot(args.metaDir, args.point);
+  if (at === null || !carriesRegistryMetadata(at)) return {};
+  // The records the database stood at before the rollback: the rolled-back
+  // migrations' and the applied ones' before the point, back to the first
+  // that records nothing.
+  const earlier: EntitySettingsRecord[] = [];
+  for (const name of [...args.remaining].reverse().slice(1)) {
+    const snapshot = await readMigrationSnapshot(args.metaDir, name);
+    if (snapshot === null) continue;
+    if (!carriesRegistryMetadata(snapshot)) break;
+    earlier.push(snapshot.entities);
+  }
+  const undone: EntitySettingsRecord[] = [];
+  for (const name of args.targets) {
+    const snapshot = await readMigrationSnapshot(args.metaDir, name);
+    if (snapshot !== null && carriesRegistryMetadata(snapshot)) {
+      undone.push(snapshot.entities);
+    }
+  }
+  const source = {
+    kind: "snapshot" as const,
+    file: `${args.point}.snapshot.json`,
+    entities: at.entities,
+  };
+  const plan = {
+    remove: addedEntities(undone, at.entities),
+    cleared: clearedSettings(at.entities, [...earlier, ...undone]),
+  };
+  const named = pointNamed(args.point);
+  return {
+    summary: `The registry rows would go back to what ${named} records.`,
+    afterAll: async () => {
+      const outcome = await writeRegistryRows(
+        args.deps.adapter,
+        () => writeRegistryFromSource(source, args.deps, plan),
+        {
+          wrote: written =>
+            written.removed.length > 0 ||
+            Object.values(written.written).some(count => count > 0),
+        }
+      );
+      const rewritten = Object.values(outcome.written).reduce(
+        (sum, count) => sum + count,
+        0
+      );
+      args.deps.logger.info(
+        `The registry rows are back to what ${named} records: ` +
+          `${rewritten} row(s) written back, ${outcome.removed.length} removed.`
+      );
+      if (outcome.failed.length > 0) {
+        args.deps.logger.warn(
+          `${outcome.failed.length} registry row(s) not brought back to ${named}: ${outcome.failed.join(", ")}. ` +
+            "Run `nextly migrate`, which brings them to the newest applied snapshot."
+        );
+      }
+    },
   };
 }
 

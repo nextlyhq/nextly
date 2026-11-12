@@ -2,8 +2,11 @@
  * Brings each collection, Single and field group registry row the registry
  * source records to that record (`registry-source.ts`), writing nothing to a
  * row that already matches. A row of an entity the source does not hold is
- * left as it is: removing one deletes data, which only an applied migration
- * that drops the entity may do.
+ * left as it is, unless an applied migration dropped the entity (its record
+ * held it, the next no longer does, and its table is gone): removing a row
+ * deletes data, which only a migration applied with consent may do. A Builder record leaves the
+ * settings it does not say as they are stored, unless a migration cleared
+ * them (`registry-history.ts`).
  *
  * Each declaration is turned into a row by the projection the start's
  * code-first sync uses for a config entry, or, for a Builder entity, by the
@@ -17,15 +20,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import {
   CollectionRegistryService,
   type CodeFirstCollectionConfig,
+  type UnsaidSetting,
 } from "../../collections/services/collection-registry-service";
 import {
   toCodeFirstCollectionConfig,
   type CodeFirstCollectionSource,
 } from "../../collections/services/collection-sync-service";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   FieldGroupRegistryService,
@@ -39,18 +45,32 @@ import {
   type CodeFirstSingleConfig,
   type CodeFirstSingleSource,
 } from "../../singles/services/single-registry-service";
+import { mediaUsageTablePresent } from "../../versions/entity-teardown";
 import type {
   RecordedEntitySettings,
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
+import {
+  carriesRegistryMetadata,
+  type SnapshotFile,
+} from "../migrate-create/snapshot-io";
 import { assertSchemaLockHeld } from "../pipeline/schema-lock";
-import { inRegistryStep } from "../schema-version";
+import { inRegistryStep, writeRegistryRows } from "../schema-version";
 import {
   collectionRowValues,
   componentRowValues,
   singleRowValues,
 } from "../ui-schema/metadata-sql";
 
+import {
+  anySlugs,
+  clearedSettings,
+  droppedEntities,
+  RECORDED_KINDS,
+  typeChangedEntities,
+  type SlugsByKind,
+} from "./registry-history";
+import { removeRegistryRow } from "./registry-row-removal";
 import type { RegistrySource } from "./registry-source";
 
 export interface RegistryWriteDeps {
@@ -67,8 +87,30 @@ export interface RegistryWriteDeps {
 export interface RegistryWriteResult {
   /** Rows created or rewritten, by kind. */
   written: Record<SettingsEntityKind, number>;
-  /** Entities whose row could not be written, as `<kind> <slug>`. */
+  /** Rows removed, as `<kind> <slug>`. */
+  removed: string[];
+  /** Entities whose row could not be written or removed, as `<kind> <slug>`. */
   failed: string[];
+}
+
+/**
+ * What one pass writes beyond bringing every recorded row to the source.
+ * Each part left out is judged from the source's chain of applied records
+ * (`RegistrySource.chain`), as `nextly migrate` judges it.
+ */
+export interface RegistryWritePlan {
+  /** Write only these entities' rows, and remove none: one file's type change. */
+  only?: SlugsByKind;
+  /** The rows to remove; by default the entities an applied migration dropped. */
+  remove?: SlugsByKind;
+  /** The Builder settings a migration cleared; by default judged along the chain. */
+  cleared?: ReadonlyMap<string, ReadonlySet<UnsaidSetting>>;
+  /**
+   * Fail the pass on the first row that cannot be written, rather than
+   * report it and go on: a row written with a migration's file, which must
+   * commit with the file or not at all.
+   */
+  strict?: boolean;
 }
 
 /** One row the source asks for, and how to bring the registry to it. */
@@ -78,17 +120,31 @@ interface RecordedRow {
   write: () => Promise<"created" | "updated" | "unchanged">;
 }
 
+/** The registry rows read once, by kind and slug; a kind absent where its table could not be read. */
+type StoredRows = Partial<
+  Record<SettingsEntityKind, ReadonlyMap<string, unknown>>
+>;
+
 /** Brings the registry to `source`, row by row, under the caller's lock. */
 export async function writeRegistryFromSource(
   source: Extract<RegistrySource, { kind: "snapshot" }>,
-  deps: RegistryWriteDeps
+  deps: RegistryWriteDeps,
+  plan: RegistryWritePlan = {}
 ): Promise<RegistryWriteResult> {
   const result: RegistryWriteResult = {
     written: { collection: 0, single: 0, fieldGroup: 0 },
+    removed: [],
     failed: [],
   };
+  const chain = source.chain ?? [source.entities];
+  const cleared =
+    plan.cleared ?? clearedSettings(source.entities, chain.slice(0, -1));
   try {
-    for (const row of await recordedRows(source, deps)) {
+    const { rows, stored } = await recordedRows(source, deps, cleared);
+    for (const row of rows) {
+      if (plan.only !== undefined && !plan.only[row.kind].has(row.slug)) {
+        continue;
+      }
       // Outside the per-row guard below: a lost lock stops the pass, it is
       // never one row's failure to report and go on from.
       await assertSchemaLockHeld();
@@ -99,6 +155,7 @@ export async function writeRegistryFromSource(
           result.written[row.kind] += 1;
         }
       } catch (error) {
+        if (plan.strict === true) throw error;
         // One row that cannot be written costs only that row; the rest are
         // still brought to the source, and the run says which one failed.
         result.failed.push(`${row.kind} ${row.slug}`);
@@ -109,6 +166,18 @@ export async function writeRegistryFromSource(
         );
       }
     }
+    if (plan.only === undefined) {
+      await removeRows(
+        plan.remove ?? droppedEntities(chain),
+        stored,
+        deps,
+        result,
+        // A drop judged from the snapshots alone is confirmed by the table:
+        // a migration applied with consent dropped it, so a row whose table
+        // still stands is no drop's and is left with it.
+        plan.remove === undefined
+      );
+    }
   } finally {
     // Every cached read of a row may now describe one that changed.
     clearRegistryRowCache();
@@ -117,13 +186,100 @@ export async function writeRegistryFromSource(
 }
 
 /**
- * Every row the source records, in kind order, reserved slugs left out. Each
- * registry table is read once, here, rather than once per entity.
+ * Remove the stored row of each entity in `remove`, each its own step, on
+ * the registry write the caller opened (or one of its own): a row that
+ * cannot be removed costs only itself, and the run says which. An entity of
+ * a reserved slug, or with no stored row, is passed over; a kind whose rows
+ * could not be read is passed over whole, as its rows were not written.
+ * With `keepWhereTableStands`, so is a row whose table is still there.
+ */
+async function removeRows(
+  remove: SlugsByKind,
+  stored: StoredRows,
+  deps: RegistryWriteDeps,
+  result: RegistryWriteResult,
+  keepWhereTableStands: boolean
+): Promise<void> {
+  const doomed = RECORDED_KINDS.flatMap(([kind]) =>
+    [...remove[kind]]
+      .filter(slug => !isReservedResourceSlug(slug))
+      .filter(slug => stored[kind]?.has(slug) === true)
+      .map(slug => ({ kind, slug }))
+  );
+  if (doomed.length === 0) return;
+  await writeRegistryRows(
+    deps.adapter,
+    async tx => {
+      const view = adapterForReads(deps.adapter);
+      // Asked as steps of their own, so a probe that fails cannot abort the
+      // transaction the rows are removed in.
+      const tables = {
+        dashboardPinsPresent: await inRegistryStep(deps.adapter, () =>
+          dashboardPinsPresent(deps.adapter)
+        ),
+        mediaUsagePresent: await inRegistryStep(deps.adapter, () =>
+          mediaUsageTablePresent(deps.adapter)
+        ),
+      };
+      for (const { kind, slug } of doomed) {
+        await assertSchemaLockHeld();
+        if (
+          keepWhereTableStands &&
+          (await tableStands(deps.adapter, view, stored[kind]?.get(slug)))
+        ) {
+          continue;
+        }
+        try {
+          await inRegistryStep(deps.adapter, () =>
+            removeRegistryRow({ tx, view, tables }, kind, slug)
+          );
+          result.removed.push(`${kind} ${slug}`);
+        } catch (error) {
+          result.failed.push(`${kind} ${slug}`);
+          deps.logger.warn(
+            `Could not remove the registry row of ${kind} "${slug}": ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+      return result.removed.length;
+    },
+    { wrote: removed => removed > 0 }
+  );
+}
+
+/**
+ * Whether the table a stored registry row names is there, asked as a step of
+ * its own; a row naming none, or a table that cannot be asked about, reads
+ * as standing, so its row is kept.
+ */
+async function tableStands(
+  adapter: DrizzleAdapter,
+  view: DrizzleAdapter,
+  row: unknown
+): Promise<boolean> {
+  const tableName =
+    row !== null && typeof row === "object"
+      ? (row as { tableName?: unknown }).tableName
+      : undefined;
+  if (typeof tableName !== "string" || tableName === "") return true;
+  try {
+    return await inRegistryStep(adapter, () => view.tableExists(tableName));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Every row the source records, in kind order, reserved slugs left out, and
+ * the rows the registry holds, read once here rather than once per entity.
  */
 async function recordedRows(
   source: Extract<RegistrySource, { kind: "snapshot" }>,
-  deps: RegistryWriteDeps
-): Promise<RecordedRow[]> {
+  deps: RegistryWriteDeps,
+  cleared: ReadonlyMap<string, ReadonlySet<UnsaidSetting>>
+): Promise<{ rows: RecordedRow[]; stored: StoredRows }> {
   const collections = new CollectionRegistryService(deps.adapter, deps.logger);
   const singles = new SingleRegistryService(deps.adapter, deps.logger);
   const fieldGroups = new FieldGroupRegistryService(deps.adapter, deps.logger);
@@ -141,7 +297,18 @@ async function recordedRows(
       await storedBySlug(deps.adapter, () => singles.getAllSingles()),
       await storedBySlug(deps.adapter, () => fieldGroups.getAllComponents()),
     ];
-  return [
+  const options = <TRecord>(
+    kind: SettingsEntityKind,
+    recorded: RecordedEntitySettings,
+    stored: ReadonlyMap<string, TRecord> | undefined,
+    slug: string
+  ) => ({
+    ...recordedOptions(recorded, stored, slug),
+    ...(cleared.has(`${kind}:${slug}`)
+      ? { cleared: cleared.get(`${kind}:${slug}`) }
+      : {}),
+  });
+  const rows: RecordedRow[] = [
     ...Object.entries(entities.collections)
       .filter(kept)
       .map(([slug, recorded]) => ({
@@ -151,7 +318,7 @@ async function recordedRows(
           collections.writeRecordedCollection(
             recordedCollection(slug, recorded),
             collectionOriginOf(recorded, deps.collectionSources?.get(slug)),
-            recordedOptions(recorded, storedCollections, slug)
+            options("collection", recorded, storedCollections, slug)
           ),
       })),
     ...Object.entries(entities.singles)
@@ -163,24 +330,41 @@ async function recordedRows(
           singles.writeRecordedSingle(
             recordedSingle(slug, recorded),
             originOf(recorded),
-            recordedOptions(recorded, storedSingles, slug)
+            options("single", recorded, storedSingles, slug)
           ),
       })),
     ...Object.entries(entities.fieldGroups)
       .filter(kept)
-      .map(([slug, recorded]) => {
-        const { config, tableName } = recordedFieldGroup(slug, recorded);
-        return {
-          kind: "fieldGroup" as const,
-          slug,
-          write: () =>
-            fieldGroups.writeRecordedComponent(config, originOf(recorded), {
-              ...recordedOptions(recorded, storedFieldGroups, slug),
+      .map(([slug, recorded]) => ({
+        kind: "fieldGroup" as const,
+        slug,
+        write: () => {
+          // Projected inside the row's own write, so a record that cannot be
+          // read costs that row alone.
+          const { config, tableName } = recordedFieldGroup(slug, recorded);
+          return fieldGroups.writeRecordedComponent(
+            config,
+            originOf(recorded),
+            {
+              ...options("fieldGroup", recorded, storedFieldGroups, slug),
               ...(tableName === undefined ? {} : { tableName }),
-            }),
-        };
-      }),
+            }
+          );
+        },
+      })),
   ];
+  return {
+    rows,
+    stored: {
+      ...(storedCollections === undefined
+        ? {}
+        : { collection: storedCollections }),
+      ...(storedSingles === undefined ? {} : { single: storedSingles }),
+      ...(storedFieldGroups === undefined
+        ? {}
+        : { fieldGroup: storedFieldGroups }),
+    },
+  };
 }
 
 /**
@@ -364,4 +548,48 @@ function declaration(
     });
   }
   return recorded.settings;
+}
+
+/**
+ * The registry rows a migration's file writes with itself: those of the
+ * entities whose field types change between the record the database stands
+ * at before the file (`from`) and the one it stands at after (`to`), brought
+ * to `to`, and no other. Undefined where nothing changes type, or where
+ * either record is missing (an earlier release's snapshot, or none), since
+ * then no type change can be told.
+ *
+ * Written so that no write is judged against a type the column no longer
+ * has: in the file's transaction where it runs in one, so the conversion and
+ * the row commit together; otherwise right after its last statement and
+ * before it is recorded. Any row that cannot be written fails the file
+ * (`strict`). The run's end then finds these rows already matching.
+ */
+export function typeChangedRowsWriter(args: {
+  from: Pick<SnapshotFile, "entities"> | null;
+  to: Pick<SnapshotFile, "entities"> | null;
+  file: string;
+  deps: RegistryWriteDeps;
+}): (() => Promise<void>) | undefined {
+  const { from, to } = args;
+  if (from === null || to === null) return undefined;
+  if (!carriesRegistryMetadata(from) || !carriesRegistryMetadata(to)) {
+    return undefined;
+  }
+  const only = typeChangedEntities(from.entities, to.entities);
+  if (!anySlugs(only)) return undefined;
+  const source = {
+    kind: "snapshot" as const,
+    file: args.file,
+    entities: to.entities,
+    // Judged against the record the file starts from, so a Builder setting
+    // the file itself cleared is cleared with it.
+    chain: [from.entities, to.entities],
+  };
+  return async () => {
+    await writeRegistryRows(
+      args.deps.adapter,
+      () => writeRegistryFromSource(source, args.deps, { only, strict: true }),
+      { wrote: written => RECORDED_KINDS.some(([k]) => written.written[k] > 0) }
+    );
+  };
 }

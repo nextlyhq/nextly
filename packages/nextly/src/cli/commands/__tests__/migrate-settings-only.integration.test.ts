@@ -284,9 +284,12 @@ describe.each(getConfiguredTestDialects())(
       const document = JSON.parse(printed.join("\n")) as {
         migrations: { filename: string; status: string }[];
       };
-      expect(document.migrations).toContainEqual(
-        expect.objectContaining({ filename: file, status: "applied" })
-      );
+      const base = file.replace(/\.sql$/, "");
+      expect(
+        document.migrations
+          .filter(entry => entry.filename.replace(/\.sql$/, "") === base)
+          .map(entry => entry.status)
+      ).toEqual(["applied"]);
     });
 
     it("migrate:down rolls a settings-only migration back, with no table to undo", async () => {

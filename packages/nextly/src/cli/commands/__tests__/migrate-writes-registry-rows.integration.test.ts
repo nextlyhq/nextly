@@ -1147,11 +1147,17 @@ describe.each(getConfiguredTestDialects())(
 
       it("nextly migrate clears no setting because of what they lack", async () => {
         await asEarlierRelease(await migrateCreate(posts("Posts"), "create"));
-        await migrated(posts("Posts"));
         const withBody = posts("Posts", text({ name: "body" }));
         await asEarlierRelease(await migrateCreate(withBody, "add_body"));
+        // The first run on this release writes the rows from the configuration
+        // and takes the registry record.
+        await migrated(withBody);
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("Posts");
 
-        // A configuration without the description: nothing of it is read here.
+        // A configuration without the description: nothing of it is read here,
+        // and the newest applied snapshot says nothing of the description.
         await migrated(undescribed(text({ name: "body" })));
         expect(
           (await collectionRow(instance!, dialect, "rr_posts"))?.description
