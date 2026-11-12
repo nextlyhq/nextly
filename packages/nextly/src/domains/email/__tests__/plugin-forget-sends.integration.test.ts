@@ -276,6 +276,35 @@ describe.each(getConfiguredTestDialects())(
       expect(kept?.keyDigest).toMatch(/^[0-9a-f]{64}$/);
     });
 
+    it("clears the claim of a keyed send whose records were never written", async () => {
+      const t = await boot(dialect);
+      await plugin().services.email.send({
+        ...message,
+        to: "ada@example.com",
+        idempotencyKey: "submission-1",
+      });
+      const [record] = await deliveriesTo(t, "ada@example.com");
+      const digest = record?.keyDigest;
+      expect(digest).toMatch(/^[0-9a-f]{64}$/);
+      // As a send whose records failed to be written after its claim
+      // committed: the claim carries the key's digest, and no record does.
+      await t.adapter.delete("email_deliveries", {
+        and: [{ column: "keyDigest", op: "=", value: digest }],
+      });
+      const claimed = () =>
+        t.adapter.select<{ id: string; messageDigest: string | null }>(
+          "email_send_claims",
+          { where: { and: [{ column: "keyDigest", op: "=", value: digest }] } }
+        );
+      expect(await claimed()).toHaveLength(1);
+
+      await plugin().services.email.forgetSends({
+        idempotencyKeys: ["submission-1"],
+      });
+
+      expect(await claimed()).toEqual([]);
+    });
+
     it("commits with the plugin's transaction, and not when it rolls back", async () => {
       const t = await boot(dialect);
       const kept = await waiting("ada@example.com");

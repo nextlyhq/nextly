@@ -245,16 +245,24 @@ export async function eraseKeyedDeliveries(
   deliveries: ErasableDeliveriesTable,
   keyDigests: readonly string[]
 ): Promise<void> {
+  const claims = sendClaimsTableBeside(deliveries);
   for (let start = 0; start < keyDigests.length; start += KEY_DIGEST_BATCH) {
-    const sends = inArray(
-      deliveries.keyDigest,
-      keyDigests.slice(start, start + KEY_DIGEST_BATCH)
-    );
+    const batch = keyDigests.slice(start, start + KEY_DIGEST_BATCH);
+    const sends = inArray(deliveries.keyDigest, batch);
     await db
       .update(deliveries)
       .set({ recipientHash: ERASED_RECIPIENT_HASH })
       .where(sends);
     await clearSendKeyDigests(db, deliveries, sends);
+    // The claims by the digests themselves as well: a send whose records
+    // failed to be written after its claim committed has a claim and no
+    // record, and clearing through the records would never reach it.
+    if (claims) {
+      await db
+        .update(claims)
+        .set({ keyDigest: null, messageDigest: null })
+        .where(inArray(claims.keyDigest, batch));
+    }
   }
 }
 
