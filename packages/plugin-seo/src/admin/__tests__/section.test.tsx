@@ -15,12 +15,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
 
 import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
 
-import {
-  receivedMovedTo,
-  SeoBulkMoved,
-  SeoReceivedMoved,
-  SeoTrail,
-} from "../section";
+import { receivedMovedTo, SeoReceivedMoved, SeoTrail } from "../section";
 
 const SECTION = "/admin/plugins/nextlyhq-plugin-seo";
 
@@ -50,14 +45,7 @@ describe("the section's trail", () => {
   });
 });
 
-describe("the old addresses", () => {
-  it("send bulk edit on to Pages in its Edit mode, in place of the old entry", () => {
-    render(<SeoBulkMoved />);
-    expect(navigateTo).toHaveBeenCalledWith(`${SECTION}/pages?mode=edit`, {
-      replace: true,
-    });
-  });
-
+describe("the old address of the check of what search engines received", () => {
   it("send a check of one page on to Inspect for that page", () => {
     window.history.replaceState(
       null,

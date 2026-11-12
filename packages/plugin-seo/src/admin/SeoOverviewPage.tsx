@@ -33,7 +33,6 @@ import {
   usePluginRoute,
   usePluginRouteMutation,
   type BadgeProps,
-  type PluginRouteRead,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useId, useMemo, type JSX, type ReactNode } from "react";
 
@@ -57,11 +56,9 @@ import {
   type ConnectionLine,
 } from "../overview/contract";
 import {
-  PROBLEMS_ROUTE_PATH,
   problemsHref,
   severityCounts,
   SEVERITY_ORDER,
-  type ProblemListBody,
   type ProblemSeverity,
 } from "../problems/contract";
 import {
@@ -76,6 +73,7 @@ import {
   SETTINGS_PAGE_HREF,
 } from "../settings/contract";
 
+import { useCheckedProblemList, type CheckedProblemList } from "./problem-list";
 import { AdminLink, SeoTrail } from "./section";
 
 /** A list route's answer. */
@@ -368,20 +366,36 @@ const SEVERITY_TEXT: Record<
 };
 
 /** The site's search health: a verdict, and how many of each severity. */
-function HealthCard({
-  list,
-}: {
-  list: PluginRouteRead<ProblemListBody>;
-}): JSX.Element {
+function HealthCard({ checked }: { checked: CheckedProblemList }): JSX.Element {
+  const { list, failed, checking } = checked;
+  // A list never checked whole, or due a check, is no measure of the site:
+  // the check this screen asks for is waited on rather than read as healthy.
+  const unchecked =
+    list !== undefined && (list.checkedAt === undefined || list.due);
   return (
     <SmallCard title="Search health" leadsWithStat>
       <ReadState
         what="The problem list"
-        pending={list.pending}
-        error={list.error}
+        pending={list === undefined && failed === null}
+        error={list === undefined ? failed : null}
       >
         {() => {
-          const counts = severityCounts(list.data?.problems ?? []);
+          if (list === undefined) return null;
+          if (unchecked && (checking || failed === null)) {
+            return (
+              <p className="text-sm text-muted-foreground" role="status">
+                Checking the site…
+              </p>
+            );
+          }
+          if (unchecked) {
+            return (
+              <p className="text-sm text-danger-text" role="alert">
+                {`The site hasn't been checked yet. ${apiErrorMessage(failed)}`}
+              </p>
+            );
+          }
+          const counts = severityCounts(list.problems);
           const good = counts.error + counts.warning === 0;
           return (
             <>
@@ -613,15 +627,11 @@ export function SeoOverviewPage(): JSX.Element {
   });
   useSetupFirst(checklist.data);
   const visibility = useChecklistVisibility();
-  // Read once for the page: the health card counts it, and it names the
-  // site's production host.
-  const problems = usePluginRoute<ProblemListBody>({
-    plugin: SEO_PLUGIN_NAME,
-    path: PROBLEMS_ROUTE_PATH,
-    staleTime: 0,
-  });
+  // Read once for the page, and checked where a full check is due: the
+  // health card counts it, and it names the site's production host.
+  const problems = useCheckedProblemList();
   const host =
-    problems.data?.site ??
+    problems.list?.site ??
     (typeof window === "undefined" ? "the site" : window.location.host);
   return (
     <PageFrame type="list">
@@ -648,7 +658,7 @@ export function SeoOverviewPage(): JSX.Element {
           />
         )}
         <Grid cols={4} gap={4} responsive>
-          <HealthCard list={problems} />
+          <HealthCard checked={problems} />
           <PagesCard />
           <NotFoundCard />
           <ConnectionsCard />

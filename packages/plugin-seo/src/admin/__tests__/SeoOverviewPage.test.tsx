@@ -53,6 +53,7 @@ function problem(kind: Problem["kind"], id?: string): Problem {
 
 const PROBLEMS: ProblemListBody = {
   site: "acme.example",
+  checkedAt: new Date().toISOString(),
   pagesChecked: 12,
   outOfDate: false,
   due: false,
@@ -144,6 +145,7 @@ const CONNECTIONS: ConnectionsBody = {
 /** What each route answers, by its path; an Error is a failed read. */
 let answers: Record<string, unknown>;
 let write: ReturnType<typeof vi.fn>;
+let check: ReturnType<typeof vi.fn>;
 
 function serve(overrides: Record<string, unknown> = {}) {
   answers = {
@@ -166,11 +168,16 @@ function serve(overrides: Record<string, unknown> = {}) {
       : { data: answer, pending: false, error: null };
   }) as unknown as typeof usePluginRoute);
   write = vi.fn(async (body: { hidden: boolean }) => ({ ...body }));
-  vi.mocked(usePluginRouteMutation).mockReturnValue({
-    write,
+  check = vi.fn(async () => ({ ...PROBLEMS, message: "Checked 12 pages." }));
+  vi.mocked(usePluginRouteMutation).mockImplementation((({
+    path,
+  }: {
+    path: string;
+  }) => ({
+    write: path === "/problems/check" ? check : write,
     pending: false,
     error: null,
-  } as unknown as ReturnType<typeof usePluginRouteMutation>);
+  })) as unknown as typeof usePluginRouteMutation);
 }
 
 /** The card named `name`. */
@@ -306,6 +313,22 @@ describe("SeoOverviewPage", () => {
         `${name}${expected[severity]}`
       );
     }
+  });
+
+  it("checks a site never checked whole as it opens, and waits for it rather than calling it good", async () => {
+    const { checkedAt: _never, ...unchecked } = PROBLEMS;
+    serve({ "/problems": { ...unchecked, problems: [], due: true } });
+    render(<SeoOverviewPage />);
+    const health = card("Search health");
+    expect(within(health).getByRole("status").textContent).toBe(
+      "Checking the site…"
+    );
+    expect(within(health).queryByText("Good")).toBeNull();
+    await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+    // The check's answer is the list counted.
+    await vi.waitFor(() =>
+      expect(within(health).getByText("Should improve")).toBeTruthy()
+    );
   });
 
   it("calls a site with no errors or warnings good, and counts zeros", () => {

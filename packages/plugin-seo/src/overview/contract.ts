@@ -11,9 +11,10 @@
  * | Path            | Screen                                             |
  * | --------------- | -------------------------------------------------- |
  * | `overview`      | Overview, the section's landing                    |
- * | `pages`         | Pages; `?mode=edit` asks for its Edit mode         |
+ * | `pages`         | Pages                                              |
  * | `pages/import`  | Import, reached from Pages                         |
  * | `pages/inspect` | Inspect a page; `?address=` names it               |
+ * | `bulk`          | Bulk edit, until Pages' Edit mode takes it over    |
  * | `problems`      | Problems; `?severity=` narrows it to one severity  |
  * | `redirects`     | Redirects; `?tab=notfound` opens Not found, and     |
  * |                 | `?from=` (with `&to=`) opens a new redirect        |
@@ -21,7 +22,6 @@
  *
  * @module overview/contract
  */
-import { PAGES_PAGE_HREF } from "../code-pages/contract";
 import type {
   ConnectionAttempt,
   ConnectionsBody,
@@ -43,9 +43,6 @@ export const OVERVIEW_PAGE: {
 
 /** Where the Overview is: the section's landing, and its trail's first step. */
 export const OVERVIEW_PAGE_HREF: string = `${SECTION_BASE}/${OVERVIEW_PAGE.path}`;
-
-/** Pages in its Edit mode, which took over bulk edit. */
-export const PAGES_EDIT_HREF: string = `${PAGES_PAGE_HREF}?mode=edit`;
 
 /** Import, reached from Pages: its path under the plugin, and its component. */
 export const IMPORT_PAGE: {

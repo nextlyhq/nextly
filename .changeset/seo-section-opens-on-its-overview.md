@@ -40,8 +40,8 @@ First-time setup ends on the Overview.
 Every kind of problem now has a severity, and a problem is counted once for each page a check fails
 on and once for a check of the whole site. The SEO menu's Problems item shows the errors and
 warnings as a badge, the same number the dashboard's SEO problems line now counts. The Bulk edit and
-What search engines received menu items are gone; their old addresses open Pages, and Inspect for
-the page an old link named. Each page the Pages list answers says where its title and description
+What search engines received menu items are gone: bulk edit stays at its address, and the check's
+old address opens Inspect for the page it named, or Pages. Each page the Pages list answers says where its title and description
 come from.
 
 `navigateTo` from `@nextlyhq/plugin-sdk/admin` takes `{ replace: true }`, to move without leaving the

@@ -29,13 +29,8 @@ import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 import { PAGE_BUILDER_TAB_COMPONENT } from "../template/contributions";
 
 import { PageBuilderSeoTab } from "./PageBuilderSeoTab";
-import {
-  PAGES_STEP,
-  SeoBulkMoved,
-  SeoReceivedMoved,
-  withTrail,
-} from "./section";
-import { SeoBulkPage } from "./SeoBulkPage";
+import { PAGES_STEP, SeoReceivedMoved, withTrail } from "./section";
+import { SeoBulkPage as BulkScreen } from "./SeoBulkPage";
 import { SeoOverviewPage } from "./SeoOverviewPage";
 import { SeoPagesPage as PagesScreen } from "./SeoPagesPage";
 import { SeoProblemsPage as ProblemsScreen } from "./SeoProblemsPage";
@@ -61,8 +56,13 @@ export const SeoRedirectsPage: () => JSX.Element = withTrail(RedirectsScreen, [
 export const SeoSettingsPage: () => JSX.Element = withTrail(SettingsScreen, [
   { label: "Settings" },
 ]);
+/** Bulk edit, at its own address until Pages' Edit mode takes it over. */
+export const SeoBulkPage: () => JSX.Element = withTrail(BulkScreen, [
+  PAGES_STEP,
+  { label: "Bulk edit" },
+]);
 /** Import, reached from Pages: drawn, for now, by the bulk edit screen and its import panel. */
-export const SeoImportPage: () => JSX.Element = withTrail(SeoBulkPage, [
+export const SeoImportPage: () => JSX.Element = withTrail(BulkScreen, [
   PAGES_STEP,
   { label: "Import" },
 ]);
@@ -81,9 +81,9 @@ registerComponents({
   [PROBLEMS_PAGE.component]: SeoProblemsPage,
   [REDIRECTS_PAGE.component]: SeoRedirectsPage,
   [SETTINGS_PAGE.component]: SeoSettingsPage,
-  // The old addresses, each sending a bookmark on to the screen that
-  // replaced it.
-  [BULK_PAGE.component]: SeoBulkMoved,
+  [BULK_PAGE.component]: SeoBulkPage,
+  // The old address of the check of what search engines received, sending
+  // a bookmark on to Inspect.
   [RECEIVED_PAGE.component]: SeoReceivedMoved,
   [SEO_TAB_COMPONENT]: SeoTab,
   [PAGE_BUILDER_TAB_COMPONENT]: PageBuilderSeoTab,
@@ -91,8 +91,7 @@ registerComponents({
 });
 
 export { SeoOverviewPage } from "./SeoOverviewPage";
-export { SeoBulkMoved, SeoReceivedMoved } from "./section";
-export { SeoBulkPage } from "./SeoBulkPage";
+export { SeoReceivedMoved } from "./section";
 export { SeoReceivedPage } from "./SeoReceivedPage";
 export { SeoTab } from "./SeoTab";
 export { PageBuilderSeoTab } from "./PageBuilderSeoTab";

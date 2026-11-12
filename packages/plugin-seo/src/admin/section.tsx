@@ -1,8 +1,8 @@
 /**
  * What every screen of the SEO section shares: its trail in the admin's top
  * bar (SEO / Pages / Import), a link that moves within the admin without
- * reloading it, and the screens left at old addresses, which send a bookmark
- * on to the screen that replaced them.
+ * reloading it, and the screen left at an old address, which sends a
+ * bookmark on to the screen that replaced it.
  *
  * @module admin/section
  */
@@ -19,11 +19,7 @@ import {
 } from "react";
 
 import { PAGES_PAGE_HREF } from "../code-pages/contract";
-import {
-  INSPECT_PAGE_HREF,
-  OVERVIEW_PAGE_HREF,
-  PAGES_EDIT_HREF,
-} from "../overview/contract";
+import { INSPECT_PAGE_HREF, OVERVIEW_PAGE_HREF } from "../overview/contract";
 
 /** One step of a trail after SEO: its name, and where it leads, if back. */
 export interface TrailStep {
@@ -124,12 +120,6 @@ export function receivedMovedTo(search: string): string {
   return address === null || address === ""
     ? PAGES_PAGE_HREF
     : `${INSPECT_PAGE_HREF}?address=${encodeURIComponent(address)}`;
-}
-
-/** Bulk edit's old address: Pages, in its Edit mode. */
-export function SeoBulkMoved(): null {
-  useMovedTo(PAGES_EDIT_HREF);
-  return null;
 }
 
 /** The old "What search engines received" address: Inspect, or Pages. */

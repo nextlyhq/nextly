@@ -9,15 +9,16 @@
  */
 
 /**
- * Bulk edit's old address: its path under the plugin, and the component
- * that sends a bookmark on to Pages in its Edit mode, which took it over.
+ * The bulk edit screen: its path under the plugin, and its component. It
+ * has no menu item of its own, and stays at its address, for whoever may
+ * read a type's pages, until Pages' Edit mode takes it over.
  */
 export const BULK_PAGE: {
   readonly path: "bulk";
-  readonly component: "@nextlyhq/plugin-seo/admin#SeoBulkMoved";
+  readonly component: "@nextlyhq/plugin-seo/admin#SeoBulkPage";
 } = {
   path: "bulk",
-  component: "@nextlyhq/plugin-seo/admin#SeoBulkMoved",
+  component: "@nextlyhq/plugin-seo/admin#SeoBulkPage",
 };
 
 /** Where the screen reads the content types it can edit. */

@@ -758,7 +758,7 @@ describe("the SEO section", () => {
       ["problems", "SeoProblemsPage", undefined],
       ["redirects", "SeoRedirectsPage", "manage-seo"],
       ["settings", "SeoSettingsPage", "manage-seo"],
-      ["bulk", "SeoBulkMoved", undefined],
+      ["bulk", "SeoBulkPage", undefined],
       ["received", "SeoReceivedMoved", undefined],
     ]);
   });

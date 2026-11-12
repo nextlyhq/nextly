@@ -592,9 +592,9 @@ The plugin adds an **SEO** item to the admin's rail. It opens a section with its
 | **Redirects** | The redirects, and the addresses not found                                                                        |
 | **Settings**  | The rules for the whole site                                                                                      |
 
-Each screen shows its place in the admin's top bar, such as SEO / Pages / Import. The addresses of
-the screens the section replaced still work: an old **Bulk edit** link opens Pages, and an old
-**What search engines received** link opens Inspect for the page it named, or Pages.
+Each screen shows its place in the admin's top bar, such as SEO / Pages / Import. **Bulk edit** has
+no menu item of its own and stays at its address, and an old **What search engines received** link
+opens Inspect for the page it named, or Pages.
 
 ### The Overview
 
@@ -610,7 +610,9 @@ so in its place and the rest still show:
   checklist hidden for everyone until someone chooses **Show setup**.
 - **Search health**: the number of errors, warnings and notices on the problem list, each linking
   to Problems narrowed to that severity, with a verdict: **Good** while there is no error or
-  warning, **Should improve** otherwise.
+  warning, **Should improve** otherwise. Where the site was never checked whole, or its last full
+  check is over a day old, the site is checked as the Overview opens, as it is when Problems
+  opens, and the card says so until the check is done.
 - **Pages**: the number of public pages, and of those, how many are hidden from search and, of the
   rest, how many have both their title and description set for the page (typed for it, or given
   by its route's code), both worked out (from a template, a pattern, the page's content or the

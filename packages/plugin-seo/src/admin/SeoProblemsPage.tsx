@@ -13,25 +13,18 @@ import {
   Button,
   navigateTo,
   toastMutationResult,
-  usePluginRoute,
-  usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useRef, useState, type JSX } from "react";
+import type { JSX } from "react";
 
 import {
   fixHref,
-  PROBLEMS_CHECK_ROUTE_PATH,
-  PROBLEMS_ROUTE_PATH,
   type Problem,
   type ProblemListBody,
 } from "../problems/contract";
-import { SEO_PLUGIN_NAME } from "../settings/contract";
 
+import { useCheckedProblemList } from "./problem-list";
 import { checkedWords, groupsOf, type ProblemGroup } from "./problem-view";
 import { Icon, ROOT, SeoStyles } from "./styles";
-
-/** What the check route answers: the list it leaves, and what it did. */
-type CheckBody = ProblemListBody & { message: string };
 
 /** `n problems`, `1 problem`. */
 const problemCount = (count: number) =>
@@ -219,47 +212,8 @@ function Body({
 
 /** The problem list's screen, as the admin mounts it. */
 export function SeoProblemsPage(): JSX.Element {
-  const read = usePluginRoute<ProblemListBody>({
-    plugin: SEO_PLUGIN_NAME,
-    path: PROBLEMS_ROUTE_PATH,
-    // Pages change elsewhere in the admin, so each visit reads afresh.
-    staleTime: 0,
-  });
-  const recheck = usePluginRouteMutation<undefined, CheckBody>({
-    plugin: SEO_PLUGIN_NAME,
-    path: PROBLEMS_CHECK_ROUTE_PATH,
-    invalidates: [PROBLEMS_ROUTE_PATH],
-  });
-  // The list a check answered, with the read it was answered over: shown
-  // until a read newer than that one arrives, so a refresh that fails never
-  // puts the older list back.
-  const [checked, setChecked] = useState<
-    { list: ProblemListBody; over: ProblemListBody | undefined } | undefined
-  >();
-  const list =
-    checked !== undefined && read.data === checked.over
-      ? checked.list
-      : (read.data ?? checked?.list);
-
-  const check = () => {
-    const over = read.data;
-    void recheck.write().then(answer => {
-      if (answer === undefined) return;
-      setChecked({ list: answer, over });
-      toastMutationResult(answer.message, []);
-    });
-  };
-
-  // A list a day old, or never checked whole, is checked once as it opens.
-  const asked = useRef(false);
-  useEffect(() => {
-    if (asked.current || read.data?.due !== true) return;
-    asked.current = true;
-    check();
-  });
-
+  const { list, checking, failed, check } = useCheckedProblemList();
   const site = list?.site ?? "the site";
-  const failed = recheck.error ?? read.error;
   return (
     <div className={`${ROOT} nx-seo-page`}>
       <SeoStyles />
@@ -271,7 +225,7 @@ export function SeoProblemsPage(): JSX.Element {
             Each one links to its fix. Nothing here stops anyone publishing.
           </p>
         </div>
-        <Meta list={list} checking={recheck.pending} check={check} />
+        <Meta list={list} checking={checking} check={() => check()} />
       </div>
       {failed !== null && list !== undefined ? (
         <p className="nx-seo-alert" role="alert">
