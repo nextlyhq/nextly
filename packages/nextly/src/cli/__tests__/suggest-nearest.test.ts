@@ -132,6 +132,59 @@ describe("a misspelt command", () => {
   );
 });
 
+describe("a misspelt command asked for its help", () => {
+  // Commander answers a help flag before it looks for the subcommand, so a
+  // name the program does not define printed its parent's help, exit 0: the
+  // reader saw the program's or the group's help and no word that the
+  // command they asked about is missing.
+  it.each(paths.map(path => [path.join(" "), path] as const))(
+    "nextly %s, misspelt, --help: refused, exit 1, the command suggested",
+    async (_name, path) => {
+      const name = path.at(-1) ?? "";
+      const { exitCode, printed } = await refused([
+        ...path.slice(0, -1),
+        misspelt(name),
+        "--help",
+      ]);
+      expect(exitCode).toBe(1);
+      expect(printed).toContain(
+        `error: unknown command '${misspelt(name)}'\n(Did you mean ${name}?)`
+      );
+      // The parent's help is not printed beside the refusal.
+      expect(printed).not.toContain("Usage:");
+    }
+  );
+
+  it.each([
+    // A group the release does not define, with a subcommand under it.
+    [["no-such-group", "abandon", "--help"], "no-such-group"],
+    // A subcommand a group does not define.
+    [["plugins", "no-such-command", "--help"], "no-such-command"],
+    [["events", "no-such-command", "-h"], "no-such-command"],
+  ] as const)("nextly %j: refused as unknown", async (args, unknown) => {
+    const { exitCode, printed } = await refused([...args]);
+    expect(exitCode).toBe(1);
+    expect(printed).toContain(`error: unknown command '${unknown}'`);
+    expect(printed).not.toContain("Usage:");
+  });
+
+  it("still answers a group's own --help, and a subcommand's", async () => {
+    // The control: a defined name is answered with its own help.
+    for (const [args, usage] of [
+      [["plugins", "--help"], "Usage: nextly plugins [options] [command]"],
+      [["plugins", "add", "--help"], "Usage: nextly plugins add [options]"],
+      [["events", "abandon", "--help"], "Usage: nextly events abandon"],
+      [["--help"], "Usage: nextly [options] [command]"],
+    ] as const) {
+      const { program, printed } = quietProgram();
+      await expect(
+        program.parseAsync([...args], { from: "user" })
+      ).rejects.toMatchObject({ exitCode: 0, code: "commander.helpDisplayed" });
+      expect(printed()).toContain(usage);
+    }
+  });
+});
+
 describe("every command takes the program's settings", () => {
   it.each(paths.map(path => [path.join(" "), path] as const))(
     "nextly %s sorts its help as the program does",

@@ -93,6 +93,11 @@ import type {
   ResolvedFormBuilderConfig,
 } from "./types";
 import {
+  askedAfterEdit,
+  askedSnapshotOf,
+  readAskedSnapshot,
+} from "./utils/asked-fields";
+import {
   CONSENT_EDIT_REFUSED,
   editedConsents,
   isConsentAnswer,
@@ -114,6 +119,7 @@ import {
   SCHEMA_ONLY_CONTEXT,
   SCHEMA_ONLY_READ,
 } from "./utils/schema-only-read";
+import { submissionTitleOf } from "./utils/submission-title";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -1292,6 +1298,10 @@ export async function prepareSubmissionForWrite(
   // A submission's one-response key is the plugin's to write, never a
   // caller's: one posting a key could take a value's place before its owner.
   delete submission.responseKey;
+  // What it was asked is the plugin's to record, from the form, never a
+  // caller's to set.
+  delete submission.asked;
+  delete submission.title;
   const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
@@ -1394,6 +1404,7 @@ export async function prepareSubmissionForWrite(
       ctx.data.data as Record<string, unknown>
     );
   }
+  recordAsked(ctx, form.fields as AnyFormField[], formId);
   stampRequestAddress(ctx, ctx.data);
   if (ctx.operation === "create") {
     // Made from what is stored, after the spam verdict: spam takes no key.
@@ -1413,6 +1424,54 @@ export async function prepareSubmissionForWrite(
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * Keep with the submission what it was asked (`asked-fields`): the form's
+ * fields as the visitor saw them on create, or as staff edited an answer to
+ * on update. A submission moved to another form is read with that form's
+ * fields from then on; one stored before submissions kept this keeps none.
+ */
+function recordAsked(
+  ctx: {
+    operation?: string;
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+  },
+  fields: AnyFormField[],
+  formId: string
+): void {
+  const row = ctx.data;
+  if (!row) return;
+  const data = submittedPayload(row.data);
+  const stored = ctx.originalData;
+  const movedFrom = stored ? parentFormId(stored) : null;
+  if (
+    ctx.operation === "create" ||
+    (movedFrom !== null && movedFrom !== formId)
+  ) {
+    row.asked = askedSnapshotOf(fields, data);
+    titleFrom(row, fields, data);
+    return;
+  }
+  const after = askedAfterEdit(
+    readAskedSnapshot(stored?.asked),
+    fields,
+    stored?.data === undefined ? {} : submittedPayload(stored.data),
+    data
+  );
+  if (after !== undefined) row.asked = after;
+  titleFrom(row, fields, data);
+}
+
+/** The submission's title: who sent it, from its answers as asked. */
+function titleFrom(
+  row: Record<string, unknown>,
+  fields: AnyFormField[],
+  data: Record<string, unknown>
+): void {
+  const asked = readAskedSnapshot(row.asked);
+  row.title = submissionTitleOf(asked?.fields ?? fields, data) ?? null;
 }
 
 /**

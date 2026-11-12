@@ -32,11 +32,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@nextlyhq/plugin-sdk": "workspace:*",
     "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "0.0.2-alpha.75",
-    "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/ui": "workspace:^",
     "lucide-react": ">=0.400.0",
     "nextly": "0.0.2-alpha.75",
@@ -68,7 +68,6 @@
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/blocks-react": "workspace:*",
     "@nextlyhq/plugin-page-builder": "workspace:*",
-    "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
     "@testing-library/jest-dom": "^6.9.1",
