@@ -298,7 +298,11 @@ describe.each(getConfiguredTestDialects())(
             part: "en",
             localized: true,
             step: "Clear",
-            actor: "dave",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "dave",
           },
         }),
       ]);
@@ -340,7 +344,11 @@ describe.each(getConfiguredTestDialects())(
         expect.objectContaining({
           userId: "bob",
           kind: "workflows.assigned",
-          data: expect.objectContaining({ step: "Clear", actor: "alice" }),
+          data: expect.objectContaining({
+            step: "Clear",
+            actor: null,
+            actorUserId: "alice",
+          }),
         }),
       ]);
       expect(await emailJobNotices()).toEqual([notices[0]?.id]);
@@ -369,7 +377,11 @@ describe.each(getConfiguredTestDialects())(
             title: "Hello",
             part: "en",
             step: "Clear",
-            actor: "bob",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "bob",
           }),
         }),
       ]);
@@ -401,7 +413,11 @@ describe.each(getConfiguredTestDialects())(
           kind: "workflows.changes-requested",
           data: expect.objectContaining({
             step: "Bounce",
-            actor: "bob",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "bob",
             comment,
           }),
         }),
@@ -872,7 +888,11 @@ describe.each(getConfiguredTestDialects())(
             part,
             localized: part !== null,
             step: "Bounce",
-            actor: "bob",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "bob",
             comment: "Rework it",
           },
         });
