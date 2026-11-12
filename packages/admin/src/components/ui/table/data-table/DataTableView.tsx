@@ -45,8 +45,8 @@ import {
   useMemo,
   useSyncExternalStore,
   type Context,
-  type KeyboardEvent,
   type JSX,
+  type ReactNode,
 } from "react";
 
 import { Pagination } from "@admin/components/shared/pagination";
@@ -192,6 +192,153 @@ export function useDataTablePluginRegistrations(): DataTablePluginRegistrations 
   );
 }
 
+/** Where a row leads: a page to open, or a handler a click runs. */
+interface RowNavigation {
+  href?: string;
+  onClick?: () => void;
+}
+
+/**
+ * The focus ring of a row's way in, the one the shared Button draws, so the
+ * keyboard's position in a list reads like it does on any other control.
+ */
+const ROW_ENTRY_FOCUS =
+  "rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+/**
+ * `py-0.5 -my-0.5` gives the way in a 24px-tall target around 20px text, the
+ * minimum WCAG 2.5.8 asks of a pointer target, while its margin box keeps the
+ * text's height: the row is drawn exactly as tall as before.
+ */
+const ROW_ENTRY_HIT_AREA = "py-0.5 -my-0.5";
+
+/**
+ * A row's way in: its primary cell as a link to the row's page, or as a button
+ * running the row's click handler, or as it is when the row leads nowhere.
+ *
+ * The row and the card are NOT themselves focusable or given a role. They hold
+ * other controls (the selection box, the actions menu), and a control inside a
+ * control is announced as one and cannot be reached as the other. This element
+ * is the keyboard's one way to the row; a pointer may still click anywhere on
+ * the row, which runs the same navigation without being a second target.
+ * `data-row-entry` lets a page find it again, to return focus to the row.
+ */
+function RowEntry({
+  nav,
+  children,
+}: {
+  nav: RowNavigation;
+  children: ReactNode;
+}): JSX.Element {
+  const { href, onClick } = nav;
+  if (href) {
+    return (
+      <a
+        href={href}
+        data-row-entry=""
+        onClick={e => {
+          e.preventDefault();
+          e.stopPropagation();
+          navigateTo(href);
+        }}
+        className={cn(
+          "inline-block text-foreground font-medium hover:underline",
+          ROW_ENTRY_HIT_AREA,
+          ROW_ENTRY_FOCUS
+        )}
+      >
+        {children}
+      </a>
+    );
+  }
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        data-row-entry=""
+        onClick={e => {
+          e.stopPropagation();
+          onClick();
+        }}
+        // Drawn as the cell it replaces: block and full width as the cell's
+        // content was, aligned and cased as the cell says (a button centres
+        // its text by default).
+        className={cn(
+          "block w-full cursor-pointer [text-align:inherit] [text-transform:inherit]",
+          ROW_ENTRY_HIT_AREA,
+          ROW_ENTRY_FOCUS
+        )}
+      >
+        {children}
+      </button>
+    );
+  }
+  return <>{children}</>;
+}
+
+/**
+ * A header's `aria-sort`: the order of the sorted column, `none` on a column
+ * that can be sorted but is not, and nothing on one that cannot be sorted.
+ * The header cell keeps its native `columnheader` role, the only role besides
+ * `rowheader` that may carry the attribute.
+ */
+function ariaSortOf(
+  sorted: "asc" | "desc" | null,
+  canSort: boolean
+): "ascending" | "descending" | "none" | undefined {
+  if (sorted) return sorted === "asc" ? "ascending" : "descending";
+  return canSort ? "none" : undefined;
+}
+
+/**
+ * A header's label, and for a sortable column the button that sorts it. The
+ * button sits inside the header cell rather than the cell becoming one, so
+ * the cell stays a column header and its sort state stays announced. Its
+ * `after:` layer spans the cell (which is `relative`), so a click anywhere on
+ * the header still sorts, as it did when the whole cell was the control.
+ */
+function HeaderLabel({
+  label,
+  sorted,
+  align,
+  onSort,
+}: {
+  label: ReactNode;
+  sorted: "asc" | "desc" | null;
+  align: NextlyColumn<object>["align"];
+  onSort?: () => void;
+}): JSX.Element {
+  const layout = cn(
+    "inline-flex items-center gap-1",
+    align === "right" && "flex-row-reverse",
+    align === "center" && "justify-center"
+  );
+  const content = (
+    <>
+      {label}
+      {sorted && (
+        <span className="text-muted-foreground">
+          {sorted === "asc" ? "↑" : "↓"}
+        </span>
+      )}
+    </>
+  );
+  if (!onSort) return <span className={layout}>{content}</span>;
+  return (
+    <button
+      type="button"
+      onClick={onSort}
+      className={cn(
+        layout,
+        "cursor-pointer select-none [text-transform:inherit] after:absolute after:inset-0",
+        ROW_ENTRY_FOCUS
+      )}
+    >
+      {content}
+    </button>
+  );
+}
+
 export function DataTableView<Row extends object>({
   columns,
   rows,
@@ -238,7 +385,11 @@ export function DataTableView<Row extends object>({
     () => visibleColumns.filter(c => !c.hideOnMobile),
     [visibleColumns]
   );
-  const firstColName = primaryColumn ?? visibleColumns[0]?.name;
+  // The column holding each row's way in. A primary column that is not shown
+  // falls back to the first shown one, so a row is never left without it.
+  const firstColName =
+    visibleColumns.find(c => c.name === primaryColumn)?.name ??
+    visibleColumns[0]?.name;
 
   // Card-view primary/secondary split (skip synthetic select/actions columns).
   const cardPrimary = useMemo(
@@ -267,8 +418,14 @@ export function DataTableView<Row extends object>({
   const someSelected =
     selectableRows.some(r => selectedSet.has(getRowId(r))) && !allSelected;
 
-  // Resolve a cell's rendered content: explicit cell -> registry -> text.
-  const renderCell = (col: NextlyColumn<Row>, row: Row, href?: string) => {
+  // Resolve a cell's rendered content: explicit cell -> registry -> text. The
+  // cell holding the row's way in (`asEntry`) is wrapped in it.
+  const renderCell = (
+    col: NextlyColumn<Row>,
+    row: Row,
+    nav: RowNavigation,
+    asEntry: boolean
+  ) => {
     const value = col.accessor
       ? col.accessor(row)
       : (row as Record<string, unknown>)[col.name];
@@ -277,50 +434,28 @@ export function DataTableView<Row extends object>({
       row,
       column: col,
       field: col.field,
-      href,
+      href: nav.href,
       viewType: "list",
     };
     const renderer = resolveCellRenderer<Row>(col.cell, col.fieldType);
     const content = renderer(ctx);
-    // Primary column becomes the navigation link when rowClick yields an href.
-    if (href && col.name === firstColName) {
-      return (
-        <a
-          href={href}
-          onClick={e => {
-            e.preventDefault();
-            e.stopPropagation();
-            navigateTo(href);
-          }}
-          className="text-foreground font-medium hover:underline"
-        >
-          {content}
-        </a>
-      );
-    }
-    return content;
+    if (!asEntry) return content;
+    return <RowEntry nav={nav}>{content}</RowEntry>;
   };
 
   // Per-row navigation: a pure href (navigate + anchor) or a click side-effect.
   // rowHref runs during render, so it must stay side-effect free; onRowClick only
   // ever runs on an actual click.
-  const resolveRow = (row: Row): { href?: string; onClick?: () => void } => {
+  const resolveRow = (row: Row): RowNavigation => {
     const href = rowHref?.(row);
     if (href) return { href };
     if (onRowClick) return { onClick: () => onRowClick(row) };
     return {};
   };
 
-  // Activate a mouse-only control from the keyboard (Enter/Space) so clickable
-  // rows/cards and sortable headers are operable without a pointer.
-  const onActivateKey = (fn: () => void) => (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      fn();
-    }
-  };
-
-  const activateRow = (nav: { href?: string; onClick?: () => void }) => () => {
+  // A pointer click anywhere on a row or card. The keyboard reaches the same
+  // navigation through the row's way in (`RowEntry`).
+  const activateRow = (nav: RowNavigation) => () => {
     if (nav.href) navigateTo(nav.href);
     else nav.onClick?.();
   };
@@ -502,21 +637,19 @@ export function DataTableView<Row extends object>({
                   data-row-id={id}
                   variant={clickable ? "interactive" : "default"}
                   className={cn(clickable && "cursor-pointer")}
-                  role={clickable ? "button" : undefined}
-                  tabIndex={clickable ? 0 : undefined}
+                  // No role or tab stop: the title is the card's way in.
                   onClick={activateRow(nav)}
-                  onKeyDown={
-                    clickable ? onActivateKey(activateRow(nav)) : undefined
-                  }
                 >
                   <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
                     {/* min-w-0: without it the title refuses to shrink below
                         its content and pushes the header row past the card,
                         painting long primary/secondary text over the border. */}
                     <CardTitle className="min-w-0 text-base">
-                      {cardPrimary
-                        ? renderCell(cardPrimary, row, nav.href)
-                        : id}
+                      {cardPrimary ? (
+                        renderCell(cardPrimary, row, nav, true)
+                      ) : (
+                        <RowEntry nav={nav}>{id}</RowEntry>
+                      )}
                     </CardTitle>
                     <div
                       className="flex items-center gap-1"
@@ -557,7 +690,7 @@ export function DataTableView<Row extends object>({
                                   : "text-right"
                               )}
                             >
-                              {renderCell(col, row, nav.href)}
+                              {renderCell(col, row, nav, false)}
                             </dd>
                           </div>
                         ))}
@@ -597,53 +730,24 @@ export function DataTableView<Row extends object>({
                         className={cn(
                           col.align === "right" && "text-right",
                           col.align === "center" && "text-center",
-                          canSort && "cursor-pointer select-none"
+                          canSort && "relative cursor-pointer select-none"
                         )}
-                        role={canSort ? "button" : undefined}
-                        tabIndex={canSort ? 0 : undefined}
-                        aria-sort={
-                          sorted === "asc"
-                            ? "ascending"
-                            : sorted === "desc"
-                              ? "descending"
-                              : canSort
-                                ? "none"
-                                : undefined
-                        }
-                        onClick={
-                          canSort
-                            ? () =>
-                                onSortChange?.(
-                                  col.name,
-                                  sorted === "asc" ? "desc" : "asc"
-                                )
-                            : undefined
-                        }
-                        onKeyDown={
-                          canSort
-                            ? onActivateKey(() =>
-                                onSortChange?.(
-                                  col.name,
-                                  sorted === "asc" ? "desc" : "asc"
-                                )
-                              )
-                            : undefined
-                        }
+                        aria-sort={ariaSortOf(sorted, canSort)}
                       >
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1",
-                            col.align === "right" && "flex-row-reverse",
-                            col.align === "center" && "justify-center"
-                          )}
-                        >
-                          {col.header}
-                          {sorted && (
-                            <span className="text-muted-foreground">
-                              {sorted === "asc" ? "↑" : "↓"}
-                            </span>
-                          )}
-                        </span>
+                        <HeaderLabel
+                          label={col.header}
+                          sorted={sorted}
+                          align={col.align}
+                          onSort={
+                            canSort
+                              ? () =>
+                                  onSortChange?.(
+                                    col.name,
+                                    sorted === "asc" ? "desc" : "asc"
+                                  )
+                              : undefined
+                          }
+                        />
                       </TableHead>
                     );
                   })}
@@ -676,14 +780,9 @@ export function DataTableView<Row extends object>({
                           clickable && "cursor-pointer",
                           selectedSet.has(id) && "bg-muted/50"
                         )}
-                        role={clickable ? "button" : undefined}
-                        tabIndex={clickable ? 0 : undefined}
+                        // No role or tab stop: the primary cell is the row's
+                        // way in, and the row holds other controls.
                         onClick={activateRow(nav)}
-                        onKeyDown={
-                          clickable
-                            ? onActivateKey(activateRow(nav))
-                            : undefined
-                        }
                       >
                         {selection && (
                           <TableCell
@@ -706,7 +805,12 @@ export function DataTableView<Row extends object>({
                               col.align === "center" && "text-center"
                             )}
                           >
-                            {renderCell(col, row, nav.href)}
+                            {renderCell(
+                              col,
+                              row,
+                              nav,
+                              col.name === firstColName
+                            )}
                           </TableCell>
                         ))}
                         {hasRowActions && (
