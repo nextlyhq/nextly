@@ -625,6 +625,27 @@ describe("saving", () => {
     expect(sent).toEqual([]);
   });
 
+  it("opens no other tab while a save is on its way", async () => {
+    serving({ _rev: "2", siteName: "Acme", setupStep: 3 });
+    let finish = () => {};
+    answerSave = () =>
+      new Promise<void>(resolve => {
+        finish = resolve;
+      });
+    render(<SeoSettingsPage />);
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    openTab(/Content types/);
+    expect(window.location.search).toBe("");
+    finish();
+    await settle();
+    openTab(/Content types/);
+    expect(window.location.search).toBe("?tab=types");
+  });
+
   it("keeps what was typed while a save was on its way", async () => {
     serving({ _rev: "2", siteName: "Acme", setupStep: 3 });
     let finish = () => {};
