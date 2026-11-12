@@ -28,6 +28,7 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
@@ -147,10 +148,18 @@ function tick(): void {
   vi.setSystemTime(new Date(Date.UTC(2026, 10, 10, 12, 0, clock, 0)));
 }
 
-/** `nextly migrate:create --name=<name> --non-interactive` over `config`. */
-async function migrateCreate(config: unknown, name: string): Promise<string> {
+/**
+ * `nextly migrate:create --name=<name> --non-interactive` over `config`, at
+ * the next tick of the clock, or at `at`, which names the file by that time.
+ */
+async function migrateCreate(
+  config: unknown,
+  name: string,
+  at?: Date
+): Promise<string> {
   loaded.config = config;
-  tick();
+  if (at === undefined) tick();
+  else vi.setSystemTime(at);
   const { context, said } = command();
   setNonInteractive(true);
   const code = await exiting(() =>
@@ -666,6 +675,35 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(expect.arrayContaining(["title", "body"]));
     });
 
+    // The rows a migration's change owes are owed until they are written, not
+    // only during the run that applied it: the stored schema version names
+    // the newest migration whose rows are written, so a run after a failed
+    // write still writes them.
+    it("writes, on a later run in development, the row a failed write left behind", async () => {
+      await migrateCreate(posts("Posts"), "create_posts");
+      await migrated(posts("Posts"));
+      const withBody = posts("Posts", text({ name: "body" }));
+      await migrateCreate(withBody, "add_body");
+
+      const write = vi
+        .spyOn(CollectionRegistryService.prototype, "writeRecordedCollection")
+        .mockRejectedValueOnce(new Error("the registry write failed"));
+      try {
+        await inDevelopment(() => migrate(withBody));
+      } finally {
+        write.mockRestore();
+      }
+      // The file applied; its row was not written.
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).not.toContain("body");
+
+      await inDevelopment(() => migrated(withBody));
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).toEqual(expect.arrayContaining(["title", "body"]));
+    });
+
     // Only the entities the applied migration changes: another entity's row,
     // edited by a live sync with no migration for the edit, is left as it is.
     it("leaves a synced row in development while a migration for another entity applies", async () => {
@@ -707,6 +745,65 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await collectionRow(instance!, dialect, "rr_tags"))?.description
       ).toBe("synced from the code");
+    });
+
+    // A migration named before the one the stored version names (from a
+    // parallel branch) applies after it, where the later ones changed no
+    // table. The newest applied snapshot is the later one's, which lacks its
+    // change, so its entity's row is not written from it; the next
+    // `migrate:create` records the merged state in a migration named after
+    // the version, whose rows a development run then writes.
+    it("writes, in development, the change of a migration named before the version once the merge is recorded", async () => {
+      const declared = (
+        postsDescription: string,
+        ...tagFields: ReturnType<typeof text>[]
+      ) =>
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_posts",
+              description: postsDescription,
+              fields: [text({ name: "title" })],
+            }),
+            defineCollection({
+              slug: "rr_tags",
+              description: "Tags",
+              fields: [text({ name: "label" }), ...tagFields],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+      await migrateCreate(declared("Posts"), "create_both");
+      const created = clock;
+      await migrated(declared("Posts"));
+      // A settings-only change, named and applied first: the version names it.
+      await migrateCreate(declared("Articles"), "describe_posts");
+      await inDevelopment(() => migrated(declared("Articles")));
+
+      // Named half a second after `create_both`, so before `describe_posts`.
+      const merged = declared("Articles", text({ name: "color" }));
+      const parallel = await migrateCreate(
+        merged,
+        "add_color",
+        new Date(Date.UTC(2026, 10, 10, 12, 0, created, 500))
+      );
+      const named = () =>
+        readdirSync(join(dir, "migrations"))
+          .filter(file => file.endsWith(".sql"))
+          .sort();
+      expect(named().indexOf(parallel)).toBe(1);
+      vi.setSystemTime(new Date(Date.UTC(2026, 10, 10, 12, 0, clock, 0)));
+      await inDevelopment(() => migrated(merged));
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_tags"))
+      ).not.toContain("color");
+
+      const record = await migrateCreate(merged, "record_merge");
+      expect(named().at(-1)).toBe(record);
+      await inDevelopment(() => migrated(merged));
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_tags"))
+      ).toEqual(["title", "slug", "label", "color"]);
     });
 
     /**
