@@ -40,7 +40,10 @@ import {
   judgeBotCheck,
   warnUncheckedBotChecks,
 } from "./handlers/bot-check";
-import { registerFormClosing } from "./handlers/form-closing-hold";
+import {
+  registerFormClosing,
+  respondedRefusal,
+} from "./handlers/form-closing-hold";
 import {
   browserTokenOf,
   responseKeyAfterUpdate,
@@ -1131,6 +1134,42 @@ async function keysFitInSave(
 }
 
 /**
+ * On a form that keeps no addresses, compare a keyed submission's address
+ * with the earlier submissions' before it is dropped: the hold compares
+ * stored addresses, and this one will have none. An earlier submission with
+ * the address but without a key for the current version (one stored before
+ * the form stopped keeping addresses, while its keys are made) would
+ * otherwise let the network respond again. Read outside the form's lock,
+ * which is enough: the earlier submissions it guards against are not being
+ * written, and new ones race on their keys, which the unique index decides.
+ */
+async function refuseEarlierAddress(
+  settings: { oneResponse?: string; storeIpAndBrowser?: boolean },
+  ctx: { collection?: string; data?: Record<string, unknown> },
+  formId: string,
+  nextly: NextlyInstance
+): Promise<void> {
+  const row = ctx.data;
+  if (settings.storeIpAndBrowser !== false || settings.oneResponse !== "ip") {
+    return;
+  }
+  if (typeof row?.ipAddress !== "string" || !row.responseKey) return;
+  const earlier = await nextly.services.collections.count(
+    ctx.collection ?? "form-submissions",
+    {
+      where: {
+        form: { equals: formId },
+        ipAddress: { equals: row.ipAddress },
+        status: { not_equals: "spam" },
+      },
+    },
+    // Elevated: the earlier submission counts whoever may read it.
+    { as: "system" }
+  );
+  if (earlier > 0) throw respondedRefusal(formId);
+}
+
+/**
  * A form that keeps no IP address or browser (Settings › Privacy) stores
  * neither with a new submission. Cleared after the one-response key is made,
  * so one per network still compares the address, by its keyed digest only.
@@ -1292,6 +1331,7 @@ export async function prepareSubmissionForWrite(
       { ...ctx.data, browserToken }
     );
     warnTokenless(settings, browserToken, ctx, formId, nextly);
+    await refuseEarlierAddress(settings, ctx, formId, nextly);
     withholdAddress(settings, ctx.data);
   } else {
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);

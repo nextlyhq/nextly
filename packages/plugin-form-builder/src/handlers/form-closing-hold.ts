@@ -297,7 +297,7 @@ async function refuseEarlierEmail(
 }
 
 /** The refusal for a person who has responded to the form already. */
-function respondedRefusal(formId: string) {
+export function respondedRefusal(formId: string): NextlyError {
   return NextlyError.conflict({
     reason: "state",
     message: ALREADY_RESPONDED,

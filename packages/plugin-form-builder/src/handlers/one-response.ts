@@ -283,6 +283,21 @@ export async function responseKeyAfterUpdate(input: {
       input.moved
     );
   }
+  // A network's key on a submission that never stored its address (a form
+  // that keeps none): it cannot be made again, so it is kept, as a
+  // browser's is. An update that sets or clears the address is judged below.
+  if (
+    input.settings.oneResponse === "ip" &&
+    textOf(stored?.ipAddress) === undefined &&
+    patch.ipAddress === undefined
+  ) {
+    return keptKeyAfterUpdate(
+      patch,
+      stored,
+      input.settings.oneResponseVersion,
+      input.moved
+    );
+  }
   // What the update leaves out is as stored; what it clears (null) is gone.
   const after = (field: keyof KeyedSubmission) =>
     patch[field] === undefined ? stored?.[field] : patch[field];
@@ -346,4 +361,33 @@ function browserKeyFor(
   return match
     ? `${keyPrefixOf(version)}${BROWSER_KEY_PREFIX}${match[1]}`
     : null;
+}
+
+/**
+ * A key the row holds but cannot be made again from it (a network's on a
+ * form that keeps no addresses), after an update: none once the submission
+ * is spam; spelled for the destination's version when it moves to another
+ * form; else the key it holds, while that is for the form's current version.
+ */
+function keptKeyAfterUpdate(
+  patch: KeyedSubmission,
+  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined,
+  version: number | undefined,
+  moved: boolean
+): string | null {
+  const key = networkKeyHeld(patch, stored);
+  if (key === null) return null;
+  if (moved) return `${keyPrefixOf(version)}${key.replace(/^v\d+:/, "")}`;
+  return keyVersionOf(key) === (version ?? 0) ? key : null;
+}
+
+/** The network key a submission holds, unless the update makes it spam. */
+function networkKeyHeld(
+  patch: KeyedSubmission,
+  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined
+): string | null {
+  const status = patch.status === undefined ? stored?.status : patch.status;
+  const key = stored?.responseKey;
+  if (status === "spam" || typeof key !== "string") return null;
+  return key.includes(BROWSER_KEY_PREFIX) ? null : key;
 }

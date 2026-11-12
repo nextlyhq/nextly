@@ -73,7 +73,7 @@ describe.each(getConfiguredTestDialects())("a form's privacy (%s)", dialect => {
         userAgent: string | null;
         responseKey: string | null;
       }[];
-    return { submit, rows };
+    return { submit, rows, t: current! };
   }
 
   it("stores neither address nor browser, and still takes one per network", async () => {
@@ -97,6 +97,120 @@ describe.each(getConfiguredTestDialects())("a form's privacy (%s)", dialect => {
       expect(row.responseKey).toMatch(/^[0-9a-f]{64}$/);
       expect(JSON.stringify(row)).not.toContain("203.0.113");
     }
+  });
+
+  it("keeps a network's key through staff edits of an addressless submission", async () => {
+    const { submit, rows, t } = await boot({
+      oneResponse: "ip",
+
+      storeIpAndBrowser: false,
+    });
+
+    expect((await submit("ada@example.com", "203.0.113.9")).success).toBe(true);
+
+    const { items } = await t.nextly.find({
+      collection: "form-submissions",
+
+      limit: 1,
+    });
+
+    const id = String((items[0] as { id: unknown }).id);
+
+    const [before] = await rows();
+
+    await t.nextly.update({
+      collection: "form-submissions",
+
+      id,
+
+      data: { status: "read", _overwrite: true },
+    });
+
+    await t.nextly.update({
+      collection: "form-submissions",
+
+      id,
+
+      data: { data: { email: "ada@other.example" }, _overwrite: true },
+    });
+
+    const [after] = await rows();
+
+    expect(after?.responseKey).toBe(before?.responseKey);
+
+    expect(await submit("grace@example.com", "203.0.113.9")).toMatchObject({
+      outcome: "duplicate",
+    });
+  });
+
+  it("refuses a network an earlier, unkeyed submission came from, at every door", async () => {
+    const { t } = await boot({ oneResponse: "ip" });
+
+    const formId = String(
+      (
+        (await t.nextly.find({ collection: "forms", limit: 1 })).items[0] as {
+          id: unknown;
+        }
+      ).id
+    );
+
+    // An earlier submission with its address and no key, as one stored before
+
+    // keys were.
+
+    const earlier = await t.nextly.create({
+      collection: "form-submissions",
+
+      data: {
+        form: formId,
+
+        data: { email: "ada@example.com" },
+
+        ipAddress: "203.0.113.9",
+      },
+    });
+
+    await t.adapter.update(
+      "dc_form_submissions",
+
+      { response_key: null },
+
+      { and: [{ column: "id", op: "=", value: String(earlier.item.id) }] }
+    );
+
+    // The form stops keeping addresses; what it compares is unchanged.
+
+    const form = (await t.nextly.findByID({
+      collection: "forms",
+
+      id: formId,
+    })) as { settings: Record<string, unknown> };
+
+    await t.nextly.update({
+      collection: "forms",
+
+      id: formId,
+
+      data: {
+        settings: { ...form.settings, storeIpAndBrowser: false },
+
+        _overwrite: true,
+      },
+    });
+
+    await expect(
+      t.nextly.create({
+        collection: "form-submissions",
+
+        data: {
+          form: formId,
+
+          data: { email: "grace@example.com" },
+
+          ipAddress: "203.0.113.9",
+        },
+      })
+    ).rejects.toThrow();
   });
 
   it("stores both on a form that keeps them", async () => {
