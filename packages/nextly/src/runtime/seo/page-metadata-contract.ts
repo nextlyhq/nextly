@@ -81,6 +81,43 @@ export type PageMetadataSource =
       readonly document: Readonly<Record<string, unknown>>;
     };
 
+/** @experimental One entry a page lists, such as a post on a blog's index. */
+export interface PageListItem {
+  /** The entry's name, as the list shows it. */
+  name: string;
+  /** Its own page: absolute, or from the site's root. */
+  url: string;
+}
+
+/** @experimental One question a page answers, with its answer, as shown. */
+export interface PageQuestion {
+  question: string;
+  /** The answer as plain text, as a reader sees it on the page. */
+  answer: string;
+}
+
+/**
+ * @experimental What a route knows about its page that the page's document
+ * does not hold, for its structured data: what kind of page it is, its own
+ * name, the entries it lists and the questions it answers. Every part is
+ * what the page shows; a provider describes nothing a reader cannot see.
+ */
+export interface PageStructuredDataHints {
+  /**
+   * The kind of page, as the provider names its types (for the SEO plugin,
+   * `"aboutPage"`, `"contactPage"`, `"collectionPage"`, ...): used where
+   * neither the page nor its content type chose one. A kind the provider
+   * does not offer is ignored.
+   */
+  type?: string;
+  /** The page's own name, as its heading shows it, without the site's name. */
+  name?: string;
+  /** The entries the page lists, in the order shown. */
+  items?: readonly PageListItem[];
+  /** The questions the page answers, in the order shown. */
+  questions?: readonly PageQuestion[];
+}
+
 /** @experimental What a resolver is asked about one page. */
 export interface PageMetadataInput {
   /**
@@ -100,6 +137,12 @@ export interface PageMetadataInput {
   readonly code: PageMetadataValues;
   /** What the page's own content offers, such as a Page Builder page's blocks. */
   readonly derived: PageMetadataValues;
+  /**
+   * What the route says about the page for its structured data, where it
+   * says anything. Given only when the page's structured data is asked for,
+   * never with its head, which it cannot change.
+   */
+  readonly structuredDataHints?: PageStructuredDataHints;
 }
 
 /** @experimental The page's answer: the values its head is built from. */

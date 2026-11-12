@@ -25,13 +25,21 @@ plugin owns the data, and delivery belongs to whatever is serving the pages. See
 npm install @nextlyhq/plugin-seo
 ```
 
-Its peer dependencies are `nextly` and `@nextlyhq/plugin-sdk`, and while Nextly is in
-alpha the manifest pins `nextly` at the **matching lockstep version**: every publishable
-package ships on one train, so install the plugin and the core at the same version.
+Its peer dependency is `nextly`, and while Nextly is in alpha the manifest pins it at the
+**matching lockstep version**: every publishable package ships on one train, so install the
+plugin and the core at the same version. `@nextlyhq/plugin-sdk`, which the plugin imports at
+run time, is installed with it as a dependency of its own, so a site never has to list it (and
+cannot leave it out of a production install by listing it among its `devDependencies`).
 
 The plugin also declares a compatibility range for the runtime check: `>=` its own
 version, so a core older than the plugin is refused at boot. Install the two at the same
 version.
+
+The plugin keeps records of its own (redirects, the record of each page's address, the problem
+list, the SEO of pages built in code, and what each page's route sets in code) in collections it
+adds, each with a table. A site that applies its schema with migrations creates those tables
+as it creates its own: `nextly migrate:create`, then `nextly migrate`, after installing the
+plugin and after upgrading to a release that adds one. The release notes say when one does.
 
 ## Basic setup
 
@@ -77,8 +85,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 
 | Field                | Type     | Notes                                                                                                                                                           |
 | -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `metaTitle`          | text     | Capped at 60 characters, which is roughly where search engines truncate a title                                                                                 |
-| `metaDescription`    | textarea | Capped at 160 characters, for the same reason                                                                                                                   |
+| `metaTitle`          | text     | Any length. Past about 60 characters Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                |
+| `metaDescription`    | textarea | Any length. Past about 160 characters the same warning applies                                                                                                  |
 | `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                    |
 | `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                        |
 | `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                    |
@@ -105,6 +113,23 @@ All nine are optional. `canonical` and `noindex` ship by default rather than bei
 you to add, because a canonical URL and a search opt-out are baseline controls rather than
 advanced ones.
 
+**A long title is a warning, not a refusal.** Google has no maximum length for a title or a
+description: it shows as much as fits the width of the results and cuts the rest
+([title links](https://developers.google.com/search/docs/appearance/title-link),
+[snippets](https://developers.google.com/search/docs/appearance/snippet)). So the default fields
+save any length, and the SEO tab's count (`68 / 60`) and the problem list (`68 characters, Google
+shows about 60`) say how much is past what Google usually shows. A site that wants the lengths
+enforced passes `hardLengthLimits: true`, and a save of a title over 60 characters or a
+description over 160 is then refused:
+
+```ts
+seoPlugin({ collections: ["posts"], hardLengthLimits: true });
+```
+
+`hardLengthLimits` applies to the default fields; a site passing its own `fields` sets
+`maxLength` on them itself. Turning it on or off changes the two fields' settings, which, like any
+field change, reaches a deployed database through `nextly migrate:create` and `nextly migrate`.
+
 ### Custom fields
 
 Replace the whole set when a project needs a different shape:
@@ -119,7 +144,7 @@ export default defineConfig({
     seoPlugin({
       collections: ["posts"],
       fields: [
-        text({ name: "metaTitle", label: "Meta Title", maxLength: 60 }),
+        text({ name: "metaTitle", label: "Meta Title" }),
         text({ name: "focusKeyword", label: "Focus Keyword" }),
       ],
     }),
@@ -174,9 +199,14 @@ always agree; a page hidden from search has no title or description problem in e
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
 anyone who may read that collection or Single, a reader shown the page read-only too.
-What a page's route sets in its own code is not known to the admin, so the tab does not
-show it. What a [Page Builder design](#in-the-page-builder) sets is, where the Page Builder is
-installed, and the tab says so: "from this page's template".
+What a page's route sets in its own code (the title, description and social values its
+`buildMetadata` returns, and whether it hides the page) is recorded each time the page's head
+is worked out, and the tab shows it marked **Set in code**, "by this page's route"; a page its
+route hides says **Hidden from search by the page's code**. Until the route has answered once
+after it changed, for example before the first visit to a page after a deploy, the tab shows
+what it last recorded. A later page of a list (`/blog/page/2`) is that page's own, and is
+not recorded as the list's. What a [Page Builder design](#in-the-page-builder) sets is
+shown too, where the Page Builder is installed: "from this page's template".
 
 The tab's component is `@nextlyhq/plugin-seo/admin#SeoTab`. `nextly generate:types`
 adds it to your app's generated component map, as it does every component a plugin
@@ -229,7 +259,7 @@ in `optionalDependsOn`.
 | `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                                           |
 | `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
 | `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
-| `structuredData`  | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
+| `structuredData`  | `{ brand, types, defaultAuthor, breadcrumbs }`                   | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
 | `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
@@ -592,8 +622,12 @@ newest page updates as you type.
 - A pattern naming a variable the type has no field for is refused before it can be saved.
 - A pattern whose variables a page has no value for gives way to the next source in the order
   below, rather than leaving a gap in the title.
-- The site's name is never added right after a title that already ends with it: with the pattern
-  `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays `Pricing | Acme`.
+- The site's name is never added right after a title that already ends with it, where the pattern
+  ends with `{Site name}`: with `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays
+  `Pricing | Acme`. A title that names the brand before its end, such as `Acme pricing`, still
+  gets it: `Acme pricing | Acme`.
+- Where the pattern goes on after `{Site name}`, the name is always filled in, since it is part of
+  a longer suffix: `{Title} | {Site name} Blog` gives `Why we chose Acme | Acme Blog`.
 
 **Reset to default** returns a type to the site's default pattern.
 
@@ -746,7 +780,9 @@ built from the page's head. The plugin states everything the card reads:
   pattern and structured data name the site the same way; until it is saved, `socialCard.siteName`;
 - the page's **language**: the one the route read it in, or else `socialCard.language`, or else
   the site's default language (English on a site that declares no languages), written as Open
-  Graph writes it (`en-US` becomes `en_US`).
+  Graph writes it, always with a territory (`en-US` becomes `en_US`). A bare language is given the
+  territory it is most often written for: `en` is `en_US`, `de` is `de_DE`, `pt` is `pt_BR`. Set
+  `socialCard.language` (such as `en-GB`) where that is not the site's.
 
 ```ts
 seoPlugin({
@@ -766,6 +802,13 @@ input)` says so for a page, such as `800 × 600, LinkedIn will crop it`, and say
 by making a share image, in the route's code where the route set the picture, or in the settings
 where the site's address is missing. `shareImageSizeProblem({ width, height })` answers the same
 for one picture.
+
+The picture's file type is checked too. X's cards take JPEG, PNG, WebP and GIF, and no network
+shows an SVG on a card, while AVIF and WebP are shown by fewer apps than JPEG and PNG, which every
+network shows. A share image whose address ends in `.svg`, `.avif` or `.webp` is named (`An SVG
+image, which networks don't show on a card`), and the same `twitter:image` is served as the
+`og:image`. Making a share image fixes it, since the copy is a JPEG; an image a route draws at an
+address with no file type, such as `/og?title=…`, is not checked.
 
 Making a share image is one action. The plugin's `POST /share-image` route
 (`/admin/api/plugins/@nextlyhq/plugin-seo/share-image` in a scaffolded project), sent
@@ -789,58 +832,125 @@ made from, and **Go back to automatic** returns to the page's own picture.
 ## Structured data
 
 Each page served by a route helper also gets structured data: JSON-LD describing the site, the page
-and what the page is about, which search engines read to show details such as an article's author
-and date, or a product's price. It is built from the same answer as the page's head, so its title,
-description, address and image are the head's own. Every address in it is absolute, so it needs the
-site's origin: set `baseUrl`.
+and what the page is about, which search and answer engines read to show details such as an
+article's author and date, a product's price, or a page's place in the site. It is built from the
+same answer as the page's head, so its description, address and image are the head's own. Every
+address in it is absolute, so it needs the site's origin: set `baseUrl`.
 
-A page is described as one linked graph:
+A page is described as one linked graph, each node naming the others by `@id`:
 
-- the **organisation** that owns the site (`structuredData.brand`: its name, logo and official
-  profiles), and the **website**, named by the site name;
-- the **page**, at its canonical address, with a **breadcrumb trail** from the site's home;
-- the page's **subject**, as its type describes it.
+- the **organisation** that owns the site (`<home>#organization`), from the brand facts: its name,
+  other names, logo, description, official profiles, email and phone, contact points, founding date
+  and parent organisation, each where given;
+- the **website** (`<home>#website`), named by the site name, with the brand's other names (which
+  Google reads a site's name from), its description and its language. A page read in no particular
+  language is in the site's default language;
+- the **page** (`<address>#webpage`), named by **its own title** rather than the title its pattern
+  made for search results (`What is Acme?`, not `What is Acme? | Acme Blog`), with its description,
+  share image, language, and the dates it was published and last changed;
+- a **breadcrumb trail** (`<address>#breadcrumb`) from the site's home along the page's address:
+  one step for each part of the address that holds a page, named by that page's title (or the name
+  a page built in code goes by), so a post reads Home › Blog › the post. A part of the address that
+  holds no page gets no step, since a trail leads only through pages a visitor can open;
+- the page's **subject**, as its type describes it (`<address>#<type>`), and, where the page lists
+  entries or answers questions, the list and the questions.
 
-Only types Google still shows a result for are offered:
+The home page is the start of every trail, so it has none; it is named by its whole title, and
+what it describes, such as the site's app, by the brand's name. Every address is spelled as the
+page's canonical is, so the home page, the organisation and the website share one spelling, and a
+site whose addresses end in a slash has its trail's addresses end in one too.
 
-| Type            | Key                   | Details it needs                              |
-| --------------- | --------------------- | --------------------------------------------- |
-| Article         | `article`             | author, date published, image                 |
-| Blog post       | `blogPosting`         | author, date published, image                 |
-| Web page        | `webPage`             | none                                          |
-| Collection page | `collectionPage`      | none                                          |
-| Profile page    | `profilePage`         | person                                        |
-| Software app    | `softwareApplication` | operating system, price, rating, rating count |
-| Product         | `product`             | price, availability                           |
-| Event           | `event`               | start date, location                          |
-| Video           | `videoObject`         | video file, upload date, image                |
-| Review          | `review`              | author, item reviewed, item type, rating      |
-| Local business  | `localBusiness`       | street address, opening hours                 |
+These types are offered. Each says what search engines read from it; some can earn a rich result in
+Google, the rest describe the page without one:
+
+| Type                  | Key                   | Details it needs                         | Rich result in Google                               |
+| --------------------- | --------------------- | ---------------------------------------- | --------------------------------------------------- |
+| Article               | `article`             | author, date published, image            | Yes                                                 |
+| Blog post             | `blogPosting`         | author, date published, image            | Yes                                                 |
+| Technical article     | `techArticle`         | none                                     | Yes                                                 |
+| Web page              | `webPage`             | none                                     | No                                                  |
+| About page            | `aboutPage`           | none                                     | No                                                  |
+| Contact page          | `contactPage`         | none                                     | No                                                  |
+| Collection page       | `collectionPage`      | none                                     | No                                                  |
+| Questions and answers | `faqPage`             | questions and answers                    | No (retired by Google in May 2026)                  |
+| Profile page          | `profilePage`         | person                                   | Yes                                                 |
+| Software app          | `softwareApplication` | none                                     | Only with a price and a rating                      |
+| Source code           | `softwareSourceCode`  | code repository                          | No                                                  |
+| Product               | `product`             | price, availability                      | Yes                                                 |
+| Event                 | `event`               | start date, location                     | Yes                                                 |
+| Video                 | `videoObject`         | video file, upload date, image           | Yes                                                 |
+| Review                | `review`              | author, item reviewed, item type, rating | Yes                                                 |
+| Local business        | `localBusiness`       | street address, opening hours            | Yes                                                 |
+
+What each type states beyond what it needs, where the page has it:
+
+- an **article** of any kind: when it was last changed, its keywords (such as its tags), its
+  section (such as its category), its word count (a field holding one, or else the words of the
+  page's `content` or `body`, rich text included) and its language. Its author is a person with
+  their job title and, where they have a page of their own, that page and an `@id` made from it, so
+  every post by one author names one person;
+- an **About page** is about the organisation, and names its founders (`brand.founders`), each
+  with an `@id` the organisation's `founder` names; a **Contact page** is about the organisation;
+- a **software app** states its category, operating system and image, a price only where the
+  page gives one, and a rating only where the page gives one with its count. Google shows an app as
+  a rich result only with both a price and a rating; without them the app is still described, and
+  no rating is ever made up to earn one;
+- **source code** states its repository (an absolute address), programming language and licence.
 
 The image is the page's share image unless a field is mapped to it. A rating is read out of 5, as
 search engines read one with no scale; a content type rating out of 10 maps `bestRating`, such as
 `{ value: "10" }`, and a rating off its scale is reported missing. An event's location is a group or
-an entry with the venue's name and its address, never text alone. A page with no type chosen is
-an Article when it has an author and a publish date, and a Web page otherwise. A content type
-chooses its pages' type, and a page can choose another in its `seo.structuredDataType`. A page
-hidden from search is offered only Web page and Collection page.
+an entry with the venue's name and its address, never text alone.
+
+A page's type is the first of: the page's own choice (`seo.structuredDataType`), its content type's,
+and an automatic one: the kind its route says it is, a Collection page where its route lists
+entries, an Article where it has an author and a publish date, and a Web page otherwise. A page
+hidden from search is offered only the kinds of page: Web, About, Contact and Collection page.
 
 Each detail is read from the field the content type maps to it, or else from the first field named
-like it (`author`, `publishedAt`, `price`, `startDate` and so on). Structured data states only what the route
+like it (`author`, `publishedAt`, `price`, `startDate`, `tags`, `category` and so on). The date a
+page last changed is read from `dateModified`, `modifiedAt`, `correctedAt`, `revisedAt` or
+`lastReviewed` before the row's own `updatedAt`, which changes with every save; map
+`dateModified` (or `datePublished`) to read another field. Structured data states only what the route
 read for the page, so a relationship names someone only where the route read the entry it holds:
 give a route that shows its author `depth: 1`. The route's own access rules, language and cache
 tags then govern the author as they govern the page, so an unpublished or private author is never
-named. An author with a public address of their own is linked to it. A relationship read at
-`depth: 0` holds only an id, which is not a name, and the problem says the route is the fix.
+named. A relationship read at `depth: 0` holds only an id, which is not a name, and the problem says
+the route is the fix.
 
 ```ts
 seoPlugin({
   collections: ["posts", "events"],
+  singles: ["about", "contact"],
   baseUrl: "https://example.com",
   structuredData: {
-    brand: { name: "Acme", profiles: [{ url: "https://x.com/acme" }] },
+    brand: {
+      name: "Acme",
+      otherNames: ["Acme Inc"],
+      profiles: [{ url: "https://x.com/acme" }],
+      description: "Acme makes rockets for small teams.",
+      email: "hello@example.com",
+      contactPoints: [
+        { contactType: "customer support", email: "help@example.com" },
+      ],
+      foundingDate: "2020",
+      parentOrganization: {
+        name: "Acme Holdings",
+        url: "https://holdings.example.com",
+      },
+      founders: [{ name: "Sara Khan", jobTitle: "Founder", url: "/about" }],
+    },
+    // A post that names no author is credited to the brand.
+    defaultAuthor: "organization",
+    // The step at /blog is named "Blog", whatever its page's title is.
+    breadcrumbs: { names: { "/blog": "Blog" } },
     types: {
-      posts: { type: "blogPosting" },
+      posts: {
+        type: "blogPosting",
+        details: { blogPosting: { dateModified: "correctedAt" } },
+      },
+      "single:about": { type: "aboutPage" },
+      "single:contact": { type: "contactPage" },
       events: {
         type: "event",
         // A field by name, a field in a group, or a value for every page.
@@ -852,10 +962,62 @@ seoPlugin({
 });
 ```
 
+`defaultAuthor` credits an article whose page names no author at all: `"organization"` for the
+brand, or a person such as `{ name: "Editorial team" }`. A page that names an author the route did
+not read is never credited to anyone else. `breadcrumbs.home` names the first step (`"Home"` unless
+given), and `breadcrumbs.names` names the step at an address over the title of the page there. Each
+of these options is checked when the plugin is created, so a mistyped email or date fails at start.
+
 The [SEO settings](#the-seo-settings) take over from these options fact by fact: their first
 production address is the origin, their brand name (else the site's name), other names, logo and
-social profiles describe the organisation, and a content type's choice kept in the settings wins
-over the one given here. Whatever the settings leave empty, the options still answer.
+social profiles describe the organisation, their default description is the brand's description
+where `brand.description` is not given, and a content type's choice kept in the settings wins over
+the one given here. Whatever the settings leave empty, the options still answer.
+
+### What a route tells structured data
+
+Some of what a page shows is not in its document: the posts a blog index lists, the questions a
+page answers, what kind of page it is. A route says so with `structuredDataHints`, which is asked
+only for the page's structured data, never for its head, so a list read there costs nothing in
+`generateMetadata`:
+
+```ts
+import { createPublicContentRoute } from "nextly/runtime";
+
+// Your own read of the questions a page shows.
+declare function questionsShownOn(
+  slug: string
+): Promise<Array<{ question: string; answer: string }>>;
+
+export const route = createPublicContentRoute({
+  collections: ["pages"],
+  render: (entry, context) => context.structuredData ?? "",
+  structuredDataHints: async entry => ({
+    // A kind of page the plugin offers, used where nobody chose one.
+    type: entry.slug === "about" ? "aboutPage" : undefined,
+    // The page's own name, as its heading shows it.
+    name: typeof entry.title === "string" ? entry.title : undefined,
+    // The questions the page shows, as plain text.
+    questions: await questionsShownOn(String(entry.slug)),
+  }),
+});
+```
+
+`items` lists the entries a page shows, in order, each `{ name, url }`: the page is then a
+Collection page with an `ItemList` as its main subject, unless somebody chose another type.
+`questions` lists the questions it answers, each `{ question, answer }`: on a Questions and answers
+page they are its main subject, and on any other page they are described beside it as an
+`FAQPage`. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
+item with its `question` and its `answer` (plain or rich text). Give only what the page shows:
+Google asks that structured data describe content a visitor can see, and the plugin never makes a
+question, a list or a rating up.
+
+A Single route (`createSingleRoute` and its public form) takes `structuredDataHints` the same way,
+called with the Single's document; so does `singlePageStructuredData` in its config. A page built
+in code passes them as an object in `seoStructuredData`'s options
+(`seoStructuredData("/about", { structuredDataHints: { type: "aboutPage" } })`); `seoMetadata`
+ignores them, so the head is the same either way. A page built in code is named by the `name` its
+route gives, or else by its route's own title without the site's name.
 
 **A type missing a detail it needs is left out**, rather than sending search engines a description
 they would reject; the page and the site are still described. `structuredDataProblems(ctx, input)`
@@ -986,16 +1148,19 @@ it is published in and at its address there, as its head would be served, for:
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
 - a title or description another page has too;
-- a title over 60 characters, or a description over 160;
+- a title over 60 characters, or a description over 160, named with its length as a warning (the
+  value is saved and served as it is);
 - a canonical typed for the page that names another address;
 - a link in its content to an address of a content type that no page holds;
-- no share image, or one networks crop or shrink;
+- no share image, one networks crop or shrink, or one in a format some networks don't show
+  (SVG, AVIF or WebP);
 - an image in its content (rich text, a media field or a Page Builder image block) with no alt
   text, unless it is marked decorative;
 - structured data missing a detail its type needs;
 - a language the site's language links leave out, because search engines don't accept its code.
 
-A page hidden from search on purpose is checked only for broken links and alt text. The site as a
+A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
+checked only for broken links and alt text. The site as a
 whole is checked for a missing production address, a collection with no public address, a
 redirect whose To address redirects again, and a page left out of the sitemap because another page
 holds its address.
@@ -1030,11 +1195,13 @@ readers. It is served at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems`, and a full check at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
 
-The check reads the values the plugin keeps: the page's own, its content type's pattern, its
-content and the site's defaults, and, where the Page Builder is installed, what the design drawing
-the page sets, worked out as the page's route works it out. A title, description or share image
-that only the route's code sets is not seen, so such a page is listed as missing it; typing the
-value on the page's SEO tab settles it either way.
+The check reads the values the plugin keeps: the page's own, what its route last set in code
+(see [The SEO tab](#the-seo-tab)), its content type's pattern, its content and the site's
+defaults, and, where the Page Builder is installed, what the design drawing the page sets, worked
+out as the page's route works it out. A title, description or share image that only the route's
+code sets is seen once the page's head has been worked out since that code was deployed; a page
+listed as missing one before then is settled by the next check after a visit, or by typing the
+value on the page's SEO tab.
 
 Not checked yet: whether a response is small enough for every value to fall within its first
 2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page
@@ -1088,8 +1255,10 @@ With no production address set, the screen asks for one and checks nothing.
 ## Bulk edit and import
 
 The **Bulk edit** screen, under SEO in the admin, shows the title and description of every page
-of one content type in one table. A cell left empty shows, in grey, what the page uses
-automatically, from the type's title pattern or its own content; typing in it sets the page's own.
+of one content type in one table. Each Single SEO is added to is a type of its own, with its one
+page. A cell left empty shows, in grey, what the page uses automatically: what its route last set
+in code, else the type's title pattern or its own content; typing in it sets the page's own. A
+page whose route hides it from search says so under its name.
 **Show** narrows the table to the pages with something typed, or to those wholly automatic. Each
 cell counts its characters against what Google shows: about 60 for a title, 160 for a description.
 
@@ -1097,14 +1266,17 @@ cell counts its characters against what Google shows: about 60 for a title, 160 
 nothing is saved, and the screen names the page. A page whose SEO you may not change is shown
 read-only (see [Who may change SEO](#who-may-change-seo)). The table and the import work in the
 site's default language; a type that keeps working drafts is shown read-only, and its pages' SEO is
-changed in each page's editor, where its draft is.
+changed in each page's editor, where its draft is. A Single's page is saved on its own, at the
+version the table read. A Single made in the Schema Builder rather than declared in code is shown
+read-only, since whether it keeps working drafts can't be read from the plugin; change its SEO in
+its own editor.
 
 ### Importing SEO values
 
 The panel beside the table brings existing SEO values across. It reads:
 
-- **An existing field group** on your content types, such as a `group` or a component holding a
-  title and a description. Each field that holds values is matched to where it goes, from its name,
+- **An existing field group** on your content types, Singles included, such as a `group` or a
+  component holding a title and a description. Each field that holds values is matched to where it goes, from its name,
   for you to check. The plugin's own group, as an earlier version of the plugin kept it, is offered
   too: its titles and descriptions typed the same as the automatic ones become automatic again, so a
   later change to a pattern reaches them, and every other value stays.
@@ -1118,12 +1290,20 @@ The panel beside the table brings existing SEO values across. It reads:
 Pages in a file are matched by their address, or by their slug where the file names no address. A
 share image is matched to the media library by its file name.
 
+The import is one engine, whichever way it is started: it reads each page as the person
+importing and reports, for every page and every record it passes over, what it would set, what
+is already the same as the page's automatic value, what a person already typed (which it keeps),
+and why it skips one. Run again after an import, it sets nothing, since every place it filled is
+filled.
+
 **Do a dry run** shows what would change and changes nothing: how many pages each value would
 reach, the values left automatic because they are the same as what the page uses already, the
 values a person already typed here, which are kept, the fields left out, and anything to check,
 such as pages in the file that are not on this site. **Import** then applies exactly what the dry
-run showed, in one step: every page and redirect, or, if anything fails part-way, nothing. Where a
-page changed after the dry run, the import is refused and asks for another dry run. Importing needs
+run showed, in one step: every page and redirect, or, if anything fails part-way, nothing. A
+Single's page cannot be part of that one step, so it is written first and put back as it was
+when anything after it fails. Where a page changed after the dry run, the import is refused and
+asks for another dry run. Importing needs
 `manage-seo`, and a page whose SEO you may not change is left out and named.
 
 ## Who may change SEO

@@ -44,6 +44,14 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
     status: "resolved",
     path: locale === "en" ? path : `/${locale}${path}`,
   }),
+  // The other way round, on the site's own domain only.
+  addressOfRequest: async (url: URL) => {
+    if (url.origin !== "https://example.com") return undefined;
+    const prefixed = /^\/(de)(\/.*)?$/.exec(url.pathname);
+    return prefixed === null
+      ? { locale: "en", path: url.pathname }
+      : { locale: prefixed[1], path: prefixed[2] ?? "/" };
+  },
 }));
 
 /** An author as a route reads it populated, at `depth: 1`. */
@@ -213,24 +221,28 @@ describe("a page's structured data", () => {
       sameAs: ["https://x.com/rext"],
     });
     expect(nodeOf(nodes, "WebPage")).toMatchObject({
-      "@id": PAGE_URL,
+      "@id": `${PAGE_URL}#webpage`,
       url: PAGE_URL,
-      name: ANSWER.title,
+      name: POST.title,
       description: ANSWER.description,
       isPartOf: { "@id": `${ORIGIN}/#website` },
       breadcrumb: { "@id": `${PAGE_URL}#breadcrumb` },
+      datePublished: "2026-11-10",
+      dateModified: "2026-11-11T09:00:00.000Z",
+      mainEntity: { "@id": `${PAGE_URL}#article` },
       inLanguage: "en",
     });
     expect(nodeOf(nodes, "BreadcrumbList")?.itemListElement).toEqual([
-      { "@type": "ListItem", position: 1, name: "Rext AI", item: `${ORIGIN}/` },
-      { "@type": "ListItem", position: 2, name: ANSWER.title },
+      { "@type": "ListItem", position: 1, name: "Home", item: `${ORIGIN}/` },
+      { "@type": "ListItem", position: 2, name: POST.title },
     ]);
     expect(nodeOf(nodes, "Article")).toEqual({
       "@type": "Article",
       "@id": `${PAGE_URL}#article`,
-      mainEntityOfPage: { "@id": PAGE_URL },
-      headline: ANSWER.title,
+      mainEntityOfPage: { "@id": `${PAGE_URL}#webpage` },
+      headline: POST.title,
       description: ANSWER.description,
+      url: PAGE_URL,
       image: {
         "@type": "ImageObject",
         url: `${ORIGIN}/media/cover.jpg`,
@@ -264,6 +276,8 @@ describe("a page's structured data", () => {
         ...leaves(rules().brand),
         // The language the page was read in.
         ...leaves(input.locale),
+        // The trail's first step, as the site names its home.
+        ["name", "Home"],
       ].map(([, value]) => value)
     );
     const unheld = leaves(nodes).filter(([key, value]) => {
@@ -289,6 +303,7 @@ describe("a page's structured data", () => {
 
     expect(nodeOf(nodes, "Article")?.author).toEqual({
       "@type": "Person",
+      "@id": `${ORIGIN}/de/authors/sara-khan#person`,
       name: "Sara Khan",
       url: `${ORIGIN}/de/authors/sara-khan`,
     });
@@ -351,6 +366,7 @@ describe("a page's structured data", () => {
     expect(unread.problems.map(problem => problem.fix)).toEqual(["route"]);
     expect(nodeOf(read.nodes, "Article")?.author).toEqual({
       "@type": "Person",
+      "@id": `${ORIGIN}/authors/sara-khan#person`,
       name: "Sara Khan",
       url: `${ORIGIN}/authors/sara-khan`,
     });
@@ -410,12 +426,14 @@ describe("a page's structured data", () => {
       rules()
     );
 
-    expect(nodeOf(nodes, "WebPage")?.["@id"]).toBe(
+    expect(nodeOf(nodes, "WebPage")?.url).toBe(
       "https://elsewhere.example/original"
     );
     expect(nodeOf(nodes, "Article")?.mainEntityOfPage).toEqual({
-      "@id": "https://elsewhere.example/original",
+      "@id": "https://elsewhere.example/original#webpage",
     });
+    // A page that first appeared on another site has no trail on this one.
+    expect(nodeOf(nodes, "BreadcrumbList")).toBeUndefined();
   });
 
   it("describes only the site for a page with no canonical, guessing no address", async () => {
@@ -432,7 +450,7 @@ describe("a page's structured data", () => {
     ]);
   });
 
-  it("names no site, and draws no trail, for a site with no name", async () => {
+  it("names no site for a site with no name, and still draws the page's trail", async () => {
     const { nodes } = await buildStructuredData(
       context(),
       postInput(POST),
@@ -440,8 +458,12 @@ describe("a page's structured data", () => {
       { origin: ORIGIN, brand: {}, types: {} }
     );
 
-    expect(nodes.map(each => each["@type"])).toEqual(["WebPage", "Article"]);
-    expect(nodeOf(nodes, "WebPage")).not.toHaveProperty("breadcrumb");
+    expect(nodes.map(each => each["@type"])).toEqual([
+      "WebPage",
+      "BreadcrumbList",
+      "Article",
+    ]);
+    expect(nodeOf(nodes, "WebPage")).not.toHaveProperty("isPartOf");
   });
 
   it("generates nothing without the site's address, and says so", async () => {
@@ -501,7 +523,7 @@ const TYPE_CASES: TypeCase[] = [
   },
   {
     type: "softwareApplication",
-    needs: ["operatingSystem", "price", "rating", "ratingCount"],
+    needs: [],
     mapping: { operatingSystem: "platform", price: "price" },
     fields: { platform: "Web", price: 0, rating: 4.6, ratingCount: "120" },
     expected: {
@@ -593,12 +615,12 @@ describe("each type a content type can be mapped to", () => {
       expect(nodeOf(nodes, expected["@type"] as string)).toMatchObject({
         ...expected,
         "@id": `${PAGE_URL}#${type}`,
-        mainEntityOfPage: { "@id": PAGE_URL },
+        mainEntityOfPage: { "@id": `${PAGE_URL}#webpage` },
       });
     }
   );
 
-  it.each(TYPE_CASES)(
+  it.each(TYPE_CASES.filter(each => each.needs.length > 0))(
     "leaves $type out, with a problem per detail, on a page with none of them",
     async ({ type }) => {
       const { nodes, problems } = await buildStructuredData(
@@ -799,7 +821,7 @@ describe("the type a page is described as", () => {
   });
 
   it("is the content type's choice where the page chose none or no type", async () => {
-    for (const own of [undefined, "", "faqPage"]) {
+    for (const own of [undefined, "", "recipe"]) {
       const result = await buildStructuredData(
         context(),
         postInput({ ...POST, seo: { structuredDataType: own } }),
@@ -830,21 +852,31 @@ describe("the type a page is described as", () => {
       rules({ posts: { type: "article" } })
     );
 
-    expect(result.offered).toEqual(["collectionPage", "webPage"]);
+    expect(result.offered).toEqual([
+      "webPage",
+      "aboutPage",
+      "contactPage",
+      "collectionPage",
+    ]);
     expect([result.type, result.chosen]).toEqual(["webPage", "automatic"]);
   });
 
-  it("offers every type on a listed page, and only the types Google still shows", () => {
+  it("offers every type on a listed page", () => {
     expect(structuredDataTypesFor({ hidden: false })).toEqual(
       STRUCTURED_DATA_TYPE_KEYS
     );
     expect(STRUCTURED_DATA_TYPE_KEYS).toEqual([
       "article",
       "blogPosting",
+      "techArticle",
       "webPage",
+      "aboutPage",
+      "contactPage",
       "collectionPage",
+      "faqPage",
       "profilePage",
       "softwareApplication",
+      "softwareSourceCode",
       "product",
       "event",
       "videoObject",

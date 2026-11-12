@@ -458,9 +458,14 @@ async function settleFailedBootMigrations(
   allowBootMigrations();
 }
 
+/**
+ * Applies a production boot's migrations where the site opted in (`db.runMigrationsOnBoot`), and
+ * answers whether they applied: a start that migrated itself then does the deploy step's other
+ * work too, as `nextly migrate` would have.
+ */
 export async function runProdMigrationsIfEnabled(
   args: RunProdMigrationsArgs
-): Promise<void> {
+): Promise<boolean> {
   // Before the environment checks, because a process that has already refused
   // must keep refusing regardless of how the next caller reaches this.
   //
@@ -474,7 +479,7 @@ export async function runProdMigrationsIfEnabled(
   // decided not to migrate.
   if (!bootMigrationsEnabled(args)) {
     allowBootMigrations();
-    return;
+    return false;
   }
 
   // Opened here, once the decision to run is made, because every path below
@@ -496,7 +501,9 @@ export async function runProdMigrationsIfEnabled(
 
   try {
     await applyBootMigrations(args, run);
+    return true;
   } catch (err) {
     await settleFailedBootMigrations(err, args);
+    return false;
   }
 }

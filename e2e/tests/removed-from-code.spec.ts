@@ -178,7 +178,7 @@ for (const state of ["kept", "pending", "half"] as const) {
 function contentPanel(page: Page) {
   return page
     .getByRole("complementary")
-    .filter({ has: page.getByRole("navigation", { name: "Content type" }) });
+    .filter({ has: page.getByRole("navigation", { name: "Content" }) });
 }
 
 /** `text` as a literal in a regular expression. */

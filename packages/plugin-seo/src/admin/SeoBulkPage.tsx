@@ -601,6 +601,10 @@ function Sheet({
                 {row.path !== undefined ? (
                   <span className="nx-seo-mono">{row.path}</span>
                 ) : null}
+                {/* Served hidden whatever is typed here, so said beside it. */}
+                {row.hiddenByCode === true ? (
+                  <small>Hidden from search by the page&apos;s code</small>
+                ) : null}
               </td>
               <td data-label="Title on Google">
                 <Cell
