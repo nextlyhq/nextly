@@ -5,25 +5,25 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261112_190532_127_create_not_found_log",
+  name: "20261112_221359_851_create_not_found_log",
   schemaVersion: 1,
-  checksum: "d056fdce7ee6bccac446862c58ba939e87f2d58592a3957774ada07178f345f7",
+  checksum: "8e35838a5751ef9ca45a0e57a7f1685424d59adf807d503dc1e988122b0cd806",
   dialects: {
     postgresql: {
       up: [
-        'CREATE TABLE "seo__not_found" (\n  "id" text PRIMARY KEY NOT NULL,\n  "path_key" bpchar(64) NOT NULL,\n  "locale" text NOT NULL,\n  "path" text NOT NULL,\n  "asked" text,\n  "hits" int4 NOT NULL,\n  "first_seen" timestamp NOT NULL,\n  "last_seen" timestamp NOT NULL,\n  "kind" text NOT NULL\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_seo__not_found_path_key" ON "seo__not_found" ("path_key");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_hits" ON "seo__not_found" ("hits");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_last_seen" ON "seo__not_found" ("last_seen")',
+        'CREATE TABLE "seo__not_found" (\n  "id" text PRIMARY KEY NOT NULL,\n  "path_key" bpchar(64) NOT NULL,\n  "locale" text NOT NULL,\n  "path" text NOT NULL,\n  "asked" text,\n  "hits" int4 NOT NULL,\n  "first_seen" timestamp NOT NULL,\n  "last_seen" timestamp NOT NULL,\n  "kind" text NOT NULL,\n  "came_from" text,\n  "ignored" bool NOT NULL DEFAULT false\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_seo__not_found_path_key" ON "seo__not_found" ("path_key");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_hits" ON "seo__not_found" ("hits");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_last_seen" ON "seo__not_found" ("last_seen")',
       ],
       down: ['DROP TABLE "seo__not_found" CASCADE'],
     },
     mysql: {
       up: [
-        "CREATE TABLE `seo__not_found` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `path_key` char(64) NOT NULL,\n  `locale` varchar(64) NOT NULL,\n  `path` text NOT NULL,\n  `asked` text,\n  `hits` int NOT NULL,\n  `first_seen` timestamp NOT NULL,\n  `last_seen` timestamp NOT NULL,\n  `kind` varchar(16) NOT NULL\n);\nCREATE UNIQUE INDEX `uq_seo__not_found_path_key` ON `seo__not_found` (`path_key`);\nCREATE INDEX `idx_seo__not_found_hits` ON `seo__not_found` (`hits`);\nCREATE INDEX `idx_seo__not_found_last_seen` ON `seo__not_found` (`last_seen`)",
+        "CREATE TABLE `seo__not_found` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `path_key` char(64) NOT NULL,\n  `locale` varchar(64) NOT NULL,\n  `path` text NOT NULL,\n  `asked` text,\n  `hits` int NOT NULL,\n  `first_seen` timestamp NOT NULL,\n  `last_seen` timestamp NOT NULL,\n  `kind` varchar(16) NOT NULL,\n  `came_from` text,\n  `ignored` tinyint(1) NOT NULL DEFAULT false\n);\nCREATE UNIQUE INDEX `uq_seo__not_found_path_key` ON `seo__not_found` (`path_key`);\nCREATE INDEX `idx_seo__not_found_hits` ON `seo__not_found` (`hits`);\nCREATE INDEX `idx_seo__not_found_last_seen` ON `seo__not_found` (`last_seen`)",
       ],
       down: ["DROP TABLE `seo__not_found`"],
     },
     sqlite: {
       up: [
-        'CREATE TABLE "seo__not_found" (\n  "id" text PRIMARY KEY NOT NULL,\n  "path_key" text NOT NULL,\n  "locale" text NOT NULL,\n  "path" text NOT NULL,\n  "asked" text,\n  "hits" integer NOT NULL,\n  "first_seen" integer NOT NULL,\n  "last_seen" integer NOT NULL,\n  "kind" text NOT NULL\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_seo__not_found_path_key" ON "seo__not_found" ("path_key");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_hits" ON "seo__not_found" ("hits");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_last_seen" ON "seo__not_found" ("last_seen")',
+        'CREATE TABLE "seo__not_found" (\n  "id" text PRIMARY KEY NOT NULL,\n  "path_key" text NOT NULL,\n  "locale" text NOT NULL,\n  "path" text NOT NULL,\n  "asked" text,\n  "hits" integer NOT NULL,\n  "first_seen" integer NOT NULL,\n  "last_seen" integer NOT NULL,\n  "kind" text NOT NULL,\n  "came_from" text,\n  "ignored" integer NOT NULL DEFAULT false\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_seo__not_found_path_key" ON "seo__not_found" ("path_key");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_hits" ON "seo__not_found" ("hits");\nCREATE INDEX IF NOT EXISTS "idx_seo__not_found_last_seen" ON "seo__not_found" ("last_seen")',
       ],
       down: ['DROP TABLE "seo__not_found"'],
     },
@@ -80,6 +80,17 @@ export default {
               name: "kind",
               type: "text",
               nullable: false,
+            },
+            {
+              name: "came_from",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "ignored",
+              type: "bool",
+              nullable: false,
+              default: "false",
             },
           ],
           indexes: [
@@ -155,6 +166,17 @@ export default {
               type: "varchar(16)",
               nullable: false,
             },
+            {
+              name: "came_from",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "ignored",
+              type: "tinyint(1)",
+              nullable: false,
+              default: "false",
+            },
           ],
           indexes: [
             {
@@ -228,6 +250,17 @@ export default {
               name: "kind",
               type: "text",
               nullable: false,
+            },
+            {
+              name: "came_from",
+              type: "text",
+              nullable: true,
+            },
+            {
+              name: "ignored",
+              type: "integer",
+              nullable: false,
+              default: "false",
             },
           ],
           indexes: [

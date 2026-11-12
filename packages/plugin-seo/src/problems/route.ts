@@ -106,9 +106,12 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
       noStore: true,
       handler: async (_req, ctx) => {
         const readable = await readableTypes(ctx, checks);
-        return respondDoc(
-          await problemList(ctx, checks, await readerOf(ctx, readable))
+        const list = await problemList(
+          ctx,
+          checks,
+          await readerOf(ctx, readable)
         );
+        return respondDoc({ ...list, types: [...readable] });
       },
     },
     {
@@ -136,7 +139,10 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
           await readerOf(ctx, readable)
         );
         const pages = `${list.pagesChecked} ${list.pagesChecked === 1 ? "page" : "pages"}`;
-        return respondAction(`Checked ${pages}.`, { ...list });
+        return respondAction(`Checked ${pages}.`, {
+          ...list,
+          types: [...readable],
+        });
       },
     },
   ];

@@ -180,7 +180,7 @@ The tab shows, in order:
   (the canonical), a different title and description when shared, the share image, and
   the [structured data type](#structured-data), with what the type still lacks.
 - **Check what search engines received**, once the page is saved and has an address: it
-  opens [What search engines received](#what-search-engines-received) for this page.
+  opens [Inspect](#inspect-what-search-engines-receive) for this page.
 
 The official address is the page's own public address. **Use another address** takes an
 address on the same site as typed; one on another site is used only once the person
@@ -584,17 +584,40 @@ Other code can read a page's links, and the languages left out for their code, w
 
 The plugin adds an **SEO** item to the admin's rail. It opens a section with its own menu:
 
-| Screen        | What it holds                                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Overview**  | Where the section opens: setup, the site's search health, how its pages stand, addresses not found, connections   |
-| **Pages**     | Every public address the site knows of, with an **Import** button, and Inspect reached from it                    |
+| Screen        | What it holds                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Overview**  | Where the section opens: setup, the site's search health, how its pages stand, addresses not found, connections    |
+| **Pages**     | Every public page, its title, description and status; an Edit mode, an **Import** button, and Inspect per page     |
 | **Problems**  | What affects how the site shows up in search, grouped by kind; its badge counts the errors and warnings you'd find |
-| **Redirects** | The redirects, and the addresses not found                                                                        |
-| **Settings**  | The rules for the whole site                                                                                      |
+| **Redirects** | The redirects, and the addresses not found                                                                         |
+| **Settings**  | The rules for the whole site                                                                                       |
 
-Each screen shows its place in the admin's top bar, such as SEO / Pages / Import. **Bulk edit** has
-no menu item of its own and stays at its address, and an old **What search engines received** link
-opens Inspect for the page it named, or Pages.
+Each screen shows its place in the admin's top bar, such as SEO / Pages / Import. An old **Bulk
+edit** link opens Pages in Edit mode, and an old **What search engines received** link opens Inspect
+for the page it named, or Pages.
+
+### Pages
+
+**Pages** lists every public page the site knows of: each entry at its address, in each language
+it is published in, each page a route builds from its own code, and each address a dynamic route
+declares. Each row shows the title and description search is given for the page, where the title
+comes from (its own value, the page's code, or the pattern it was made from), and its **Status**:
+the most serious problem the [problem list](#problems) holds for the page, else **Not connected**
+for a page built in code whose route doesn't call the plugin, **Hidden** for a page kept out of
+search, or **Good**. Search by address or name, and narrow the list by **Type** (each collection,
+the Singles, or the pages built in code) and by **Status**.
+
+Each row's menu offers **Edit SEO** (the entry's SEO tab, or the side panel of a page built in
+code), **Inspect what search engines receive**, **Add a redirect** from its address, and **Open
+entry** or, for a page built in code, **View page**.
+
+**Edit titles and descriptions** switches the list to Edit mode: each title and description is a
+box to type in, an empty one showing in grey the automatic value that fills it, with its length
+under it. **Save** saves the pages of each content type together, all of them or none, and each
+page built in code on its own; where one step is refused, the others still save, and the screen
+names the pages not saved and keeps their changes to save again. A translation, a page of a type
+that keeps working drafts, and a page you may not change are shown read-only, with why: change
+those on the page itself. Edit mode works in the site's default language.
 
 ### The Overview
 
@@ -745,14 +768,14 @@ from the plugin: nothing to call in `generateMetadata`. A site that renders its 
 [A site that renders its own pages](/docs/guides/routing-and-seo#a-site-that-renders-its-own-pages).
 Each value is worked out on its own, from the first of these that has one:
 
-| Order | Where the value comes from                                                     | For                                         |
-| ----- | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| 1     | What a person typed in the page's `seo` group                                  | every value                                 |
-| 2     | What the route's own `buildMetadata` returns                                   | title, description and the social card      |
-| 3     | The Page Builder design drawing the page                                       | title, description, the social card         |
-| 4     | The content type's pattern, such as `{Title} \| {Site name}`                   | title, description                          |
-| 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image             |
-| 6     | The site's defaults                                                            | title, description, share image             |
+| Order | Where the value comes from                                                     | For                                    |
+| ----- | ------------------------------------------------------------------------------ | -------------------------------------- |
+| 1     | What a person typed in the page's `seo` group                                  | every value                            |
+| 2     | What the route's own `buildMetadata` returns                                   | title, description and the social card |
+| 3     | The Page Builder design drawing the page                                       | title, description, the social card    |
+| 4     | The content type's pattern, such as `{Title} \| {Site name}`                   | title, description                     |
+| 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image        |
+| 6     | The site's defaults                                                            | title, description, share image        |
 
 Level 3 is what the design drawing the page sets: a page's own blocks, or the template or own
 design an entry is drawn with, its SEO settings first. A route hands it as it serves the page; the
@@ -908,24 +931,24 @@ site whose addresses end in a slash has its trail's addresses end in one too.
 These types are offered. Each says what search engines read from it; some can earn a rich result in
 Google, the rest describe the page without one:
 
-| Type                  | Key                   | Details it needs                         | Rich result in Google                               |
-| --------------------- | --------------------- | ---------------------------------------- | --------------------------------------------------- |
-| Article               | `article`             | author, date published, image            | Yes                                                 |
-| Blog post             | `blogPosting`         | author, date published, image            | Yes                                                 |
-| Technical article     | `techArticle`         | none                                     | Yes                                                 |
-| Web page              | `webPage`             | none                                     | No                                                  |
-| About page            | `aboutPage`           | none                                     | No                                                  |
-| Contact page          | `contactPage`         | none                                     | No                                                  |
-| Collection page       | `collectionPage`      | none                                     | No                                                  |
-| Questions and answers | `faqPage`             | questions and answers                    | No (retired by Google in May 2026)                  |
-| Profile page          | `profilePage`         | person                                   | Yes                                                 |
-| Software app          | `softwareApplication` | none                                     | Only with a price and a rating                      |
-| Source code           | `softwareSourceCode`  | code repository                          | No                                                  |
-| Product               | `product`             | price, availability                      | Yes                                                 |
-| Event                 | `event`               | start date, location                     | Yes                                                 |
-| Video                 | `videoObject`         | video file, upload date, image           | Yes                                                 |
-| Review                | `review`              | author, item reviewed, item type, rating | Yes                                                 |
-| Local business        | `localBusiness`       | street address, opening hours            | Yes                                                 |
+| Type                  | Key                   | Details it needs                         | Rich result in Google              |
+| --------------------- | --------------------- | ---------------------------------------- | ---------------------------------- |
+| Article               | `article`             | author, date published, image            | Yes                                |
+| Blog post             | `blogPosting`         | author, date published, image            | Yes                                |
+| Technical article     | `techArticle`         | none                                     | Yes                                |
+| Web page              | `webPage`             | none                                     | No                                 |
+| About page            | `aboutPage`           | none                                     | No                                 |
+| Contact page          | `contactPage`         | none                                     | No                                 |
+| Collection page       | `collectionPage`      | none                                     | No                                 |
+| Questions and answers | `faqPage`             | questions and answers                    | No (retired by Google in May 2026) |
+| Profile page          | `profilePage`         | person                                   | Yes                                |
+| Software app          | `softwareApplication` | none                                     | Only with a price and a rating     |
+| Source code           | `softwareSourceCode`  | code repository                          | No                                 |
+| Product               | `product`             | price, availability                      | Yes                                |
+| Event                 | `event`               | start date, location                     | Yes                                |
+| Video                 | `videoObject`         | video file, upload date, image           | Yes                                |
+| Review                | `review`              | author, item reviewed, item type, rating | Yes                                |
+| Local business        | `localBusiness`       | street address, opening hours            | Yes                                |
 
 What each type states beyond what it needs, where the page has it:
 
@@ -1105,23 +1128,26 @@ A redirect's From address is held like a page's address, so a published page and
 
 ### The redirects screen
 
-**SEO › Redirects** in the admin lists every redirect, who added it and when. Add one by typing its From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back.
+**SEO › Redirects** in the admin lists every redirect: its From and To addresses, the status the site answers with (301 permanent, 302 temporary, or 410 Gone), who made it (a page that moved, a file imported, or the person, "You" for your own), how many requests it has answered and when it last did. **Add redirect** opens a form: type the From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back. Choose **Gone (410)** for a page removed for good with nothing to replace it: the address answers `410 Gone`, which search engines drop sooner than a 404, and needs no To address. Each row's menu edits or removes it.
+
+Hits are counted by the site's Proxy as it answers each request, in the background, so no visitor waits on the count; a redirect saved before counting began shows none until its next request. Where the Proxy does not run, the list says the redirects are saved but not served, with a note to copy for a developer.
 
 The form refuses what would break: an address a published page holds, a second redirect from one address, and a redirect that would send visitors round in a loop. Where the To address already redirects onward, the new redirect goes straight to the end in one hop, and the form says so.
 
-The **Not found** tab lists the addresses people and search engines asked for that don't exist, most visited first. **Redirect…** fills the form with the address and the closest live page as a suggestion, for you to check before adding.
+The **Not found** tab (`redirects?tab=notfound`) lists the addresses people and search engines asked for that don't exist, most asked for first: how many times, when last, and where visitors came from (another site's name, a page on this site, or Direct). Choose the range by when an address was last asked for; the counts are all-time. **Redirect** opens the form with the address and the closest live page as a suggestion, for you to check before adding. **Ignore** sets an address aside; **Show ignored** lists the ones set aside, each with **Show again**. Bots probing for other systems' pages (`/wp-login.php`, `/.env` and the like) are left out.
 
 The screen, its import and the **Not found** tab are for someone holding `manage-seo`. The plugin keeps the redirects and the not-found log itself, so the permissions the role screen lists for their collections open nothing on their own.
 
 ### Importing redirects from a file
 
-**Import CSV** reads a file of redirects, one per line: the From address, the To address and, optionally, `temporary`. A first line naming the columns is skipped.
+**Import CSV** reads a file of redirects, one per line: the From address, the To address and, optionally, a type: `temporary` (or `302`, `307`) for one for now, `gone` (or `410`) for an address gone for good, whose To is left empty. A first line naming the columns is skipped.
 
 ```text
 From,To,Type
 /old-blog/*,/blog/*
 /guides/seo-basics,/resources
 /webinar,/events/spring-webinar,temporary
+/retired-offer,,gone
 ```
 
 Nothing changes until you confirm. The dry run shows what each row would do: a new redirect, one that joins a chain or replaces an existing redirect, one already there, or one that can't be imported, such as a loop. A file with any row that can't be imported is not imported at all; fix it and upload it again. A confirmed file is applied in full or not at all.
@@ -1205,40 +1231,71 @@ Keep the site's matcher, written out in the file. A request the site's own rules
 
 ### Addresses not found
 
-The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, so each can be given a redirect. Admin, API and asset requests are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
+The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, and where the last visitor sent from another page came from, so each can be given a redirect. Only another site's name, or the path of a page on this site, is kept: never a query or another site's path. Admin, API and asset requests, and bots' probes for other systems' pages, are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
 
-Log a request from the site's not-found page, with the request headers the Proxy passes on, after the page is sent:
+Log an address where a route decides it has nothing for the request: answer with `notFoundLogged()` from `@nextlyhq/plugin-seo/next` in place of Next.js's `notFound()`. It counts the address once the response is sent, then answers not found as `notFound()` does.
+
+Never log from `app/not-found.tsx`. Next.js renders the not-found file's element on every request for every page under it, so that it is ready should a navigation end in a 404, and a log written there counts every page view as an address not found.
+
+#### With the page builder
+
+Every address goes through the page builder's content route, so pass the helper to it as `notFound`. It is called for each address no page or entry holds, from the page and from its `generateMetadata`:
 
 ```tsx
-// src/app/not-found.tsx
-import { logNotFound } from "@nextlyhq/plugin-seo";
-import { headers } from "next/headers";
-import { after, connection } from "next/server";
-import { Suspense } from "react";
+// src/app/(frontend)/[...slug]/page.tsx
+import { createContentPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
+import { previewDraftGate } from "nextly/runtime";
 
-async function LogThisAddress() {
-  await connection();
-  const requestHeaders = await headers();
-  // Written once the page is sent, so the visitor never waits on the log.
-  after(() => logNotFound(requestHeaders));
-  return null;
-}
+const { ContentPage, generateMetadata } = createContentPage({
+  ...pageBuilderContent(),
+  pages: { collections: ["pages"], field: "content", draft: previewDraftGate() },
+  notFound: notFoundLogged,
+});
 
-export default function NotFound() {
-  return (
-    <main>
-      <h1>Page not found</h1>
-      <Suspense fallback={null}>
-        <LogThisAddress />
-      </Suspense>
-    </main>
-  );
+export { generateMetadata };
+export default ContentPage;
+```
+
+`createPublicContentPage`, `createBlocksPage` and `createSinglePage`, and Nextly's own `createContentRoute` and `createSingleRoute`, take the same `notFound`. Without Cache Components, a public route (`createPublicContentPage` and the other public forms) renders an address once and keeps the answer, so its misses are answered by Next.js's `notFound()` and not logged.
+
+#### Without the page builder
+
+Call it where your own routes decide not found, in a route rendered per request. Without Cache Components, Next.js refuses a read of the request in a page it renders once and keeps (one with `generateStaticParams`, for instance), so answer a miss there with `notFound()`:
+
+```tsx
+// src/app/blog/[slug]/page.tsx
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
+
+declare function getPost(slug: string): Promise<{ title: string } | null>;
+
+export default async function Post({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const post = await getPost((await params).slug);
+  // Returned, so TypeScript knows `post` is found below.
+  if (post === null) return notFoundLogged();
+  return <h1>{post.title}</h1>;
 }
 ```
 
-The headers are read under a `Suspense` boundary because reading them makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted. `after()` runs the write once the response is finished, so a slow database never holds the page.
+And log the addresses no route matches with a catch-all at the root of `app`, which Next.js chooses only when no other route matches:
 
-A request is counted once, however many times Next.js renders its not-found page. `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
+```tsx
+// src/app/[...missing]/page.tsx
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
+
+export default async function Missing(): Promise<never> {
+  return notFoundLogged();
+}
+```
+
+`notFoundLogged` reads the request before it answers, so the answer is made for each request and never kept from a build. With Cache Components on, Next.js then refuses to build the catch-all unless `Missing` renders inside `<Suspense>` from the page, as any part of a page that reads the request must. A not-found answered while the page renders is sent with status 200 and a `noindex` tag rather than a 404, as Next.js answers every request-time not-found under Cache Components; it is logged either way. A site with an optional catch-all at its root (`app/[[...slug]]`) has no addresses left for this one: pass the helper to that route instead.
+
+A request is counted once, though its page and its `generateMetadata` both answer it. A prefetch is not counted (the visit, if it comes, is), and neither is a request the Proxy did not pass on. `notFoundLogged` throws only Next.js's own errors, and on the Edge runtime, where the plugin does not run, it answers not found and logs nothing. `logNotFound(headers)`, from the package root, is what it calls once the response is sent.
 
 ## Problems
 
@@ -1328,25 +1385,34 @@ fetched as a search engine fetches it. A link is judged only under a collection'
 prefix (`/blog/{slug}`): under one served from the root (`/{slug}`), pages built in code share
 every address, so a missing one can't be told from the record alone.
 
-## What search engines received
+## Inspect: what search engines receive
 
-**Inspect**, reached from Pages, fetches one of the
-site's pages as Googlebot, LinkedIn, X and Slack would, and shows what each received beside
-what Nextly holds for the page: its title, description, share image, official address
-(canonical) and whether it is listed in search. A value that differs is numbered in the
-table and explained below it in plain words, with its likely cause: a copy the host saved
-before the last change, a title template in the site's layout, an `opengraph-image` file
-beside the route, a `noindex` sent in a header, or a firewall that turned a crawler away.
-Where LinkedIn received something different, the explanation links its Post Inspector,
+**Inspect**, reached from a row of Pages, fetches one of the site's pages as Google, Bing,
+Facebook, X, LinkedIn and an AI crawler (GPTBot) would, and shows each one's result side by
+side: **Matches**, the number of differences, or why the fetch stopped. The AI crawlers' result
+also says what the site's robots.txt asks of them. Below, the **Head** table lists each value
+Nextly holds for the page (its title, description, official address, robots rules, share image,
+the card's language and the site's name), where each comes from, and what the crawler chosen
+under **Compare with** received. **Structured data** lists each thing the page is described as,
+and any type left out with what it is missing; **View the JSON-LD** shows it whole.
+
+A difference is explained in a note in plain words, with its likely cause: a copy the host saved
+before the last change, a title template in the site's layout, an `opengraph-image` file beside
+the route, a `noindex` sent in a header, a share image a network doesn't display (an SVG on any
+card, an AVIF on X's), or a firewall that turned a crawler away. A difference that needs nothing
+fixing, such as a saved copy or a value the page's design or route rightly sets itself, is said
+to be expected. Where LinkedIn received something different, the note links its Post Inspector,
 which refreshes the card LinkedIn keeps for about a week.
 
-Open it from a page's SEO tab, which names the page at the address its language serves it at
-(with the language in it, on a site that puts the language in every address), or from Pages. Any address on the site can be typed in. What Nextly holds is the head the plugin
-answers for the published page at that address, shown only to someone who may read that
-page's content type. Running a check, and the screen itself, need `check-seo`, since a check has
-the server fetch the site's pages.
+Open it from Pages or from a page's SEO tab, which names the page at the address its language
+serves it at (with the language in it, on a site that puts the language in every address); the
+page is fetched as it opens, and again with **Fetch the live page**. What Nextly holds is the head
+the plugin answers for the published page at that address, shown only to someone who may read
+that page's content type, and it is shown even where the address isn't fetched or the fetch
+stops. Running a check, and the screen itself, need `check-seo`, since a check has the server
+fetch the site's pages.
 
-What Google shows in its results can still differ from what Googlebot received: Google
+What Google shows in its results can still differ from what Google's crawler received: Google
 sometimes writes its own title, and keeps an older copy until it visits again. The check
 shows what the page serves today.
 
@@ -1368,29 +1434,28 @@ refuses, before anything is fetched, an address that:
 Every redirect is held to the same rules before it is followed, and the connection is
 made to the very address that was checked, so a name whose answer changes in between
 reaches nothing new. A fetch stops after 10 seconds, 5 MB or 5 redirects, and says so.
-With no production address set, the screen asks for one and checks nothing.
+With no production address set, the screen asks for one and fetches nothing.
 
-## Bulk edit and import
+## Editing in bulk, and import
 
-Pages' **Import** screen holds the bulk editor beside the import. It shows the title and description of every page
-of one content type in one table. Each Single SEO is added to is a type of its own, with its one
-page. A cell left empty shows, in grey, what the page uses automatically: what its route last set
-in code, else the type's title pattern or its own content; typing in it sets the page's own.
-**Show** narrows the table to the pages with something typed, or to those wholly automatic. Each
-cell counts its characters against what Google shows: about 60 for a title, 160 for a description.
+[Pages in Edit mode](#pages) edits the titles and descriptions of many pages at once. A box left
+empty shows, in grey, what the page uses automatically: what its route last set in code, else the
+type's title pattern or its own content; typing in it sets the page's own. Each box counts its
+characters against what Google shows: about 60 for a title, 160 for a description. Each Single SEO
+is added to is a type of its own, with its one page.
 
-**Save all** saves every change in one step, or, where any is refused, none of them. Where a page was saved by someone else after the table was read,
-nothing is saved, and the screen names the page. A page whose SEO you may not change is shown
-read-only (see [Who may change SEO](#who-may-change-seo)). The table and the import work in the
-site's default language; a type that keeps working drafts is shown read-only, and its pages' SEO is
-changed in each page's editor, where its draft is. A Single's page is saved on its own, at the
-version the table read. A Single made in the Schema Builder rather than declared in code is shown
-read-only, since whether it keeps working drafts can't be read from the plugin; change its SEO in
-its own editor.
+A content type's changes are saved in one step, or, where any is refused, none of them. Where a
+page was saved by someone else after it was read, its type's step saves nothing, and the screen
+names the pages not saved. A page whose SEO you may not change is shown read-only (see [Who may
+change SEO](#who-may-change-seo)). Edit mode and the import work in the site's default language;
+a type that keeps working drafts is shown read-only, and its pages' SEO is changed in each page's
+editor, where its draft is. A Single's page is saved on its own, at the version Edit mode read. A
+Single made in the Schema Builder rather than declared in code is shown read-only, since whether
+it keeps working drafts can't be read from the plugin; change its SEO in its own editor.
 
 ### Importing SEO values
 
-The panel beside the table brings existing SEO values across. It reads:
+Pages' **Import** brings existing SEO values across. It reads:
 
 - **An existing field group** on your content types, Singles included, such as a `group` or a
   component holding a title and a description. Each field that holds values is matched to where it goes, from its name,
@@ -1430,7 +1495,7 @@ The plugin declares its own permissions, which the role screen files under **SEO
 | Permission        | What it allows                                                                                                                                                                                                                                                                               |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, [importing SEO values](#importing-seo-values), the addresses not found, and the SEO of [pages built in code](#pages-built-in-code) |
-| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                                                                                                                             |
+| `check-seo`       | [Inspect](#inspect-what-search-engines-receive): the screen, and the check it runs                                                                                                                                                                                                           |
 | `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                                                                                                                        |
 
 Each is asked by the server on every request, whatever the admin shows: someone without it is

@@ -28,6 +28,7 @@ import { notFoundLog } from "../schema/tables";
 
 import { notFoundSlug } from "./collection";
 import { notAPageAddress } from "./page-address";
+import { isBotProbe } from "./probes";
 
 /** The most addresses the log keeps once it is pruned. */
 const NOT_FOUND_LIMIT = 1000;
@@ -55,6 +56,10 @@ export interface LoggedRow {
   /** ISO text. */
   lastSeen: string;
   kind: NotFoundKind;
+  /** Where the last visitor sent from another page came from, if known. */
+  cameFrom: string | null;
+  /** Someone chose to ignore the address: listed only when asked for. */
+  ignored: boolean;
 }
 
 /** An address as it is kept: a language and a path. */
@@ -63,6 +68,11 @@ export interface LoggedAddress {
   path: string;
   /** The address exactly as it was asked for, where it is known. */
   asked?: string;
+  /**
+   * Where the visitor came from, as the log keeps it (`cameFromOf`): kept
+   * on the address's row, the latest one known.
+   */
+  cameFrom?: string;
 }
 
 /** The stored key of an address in a language. */
@@ -89,6 +99,12 @@ function loggedRowOf(row: Record<string, unknown>): LoggedRow {
     firstSeen: isoOf(row.firstSeen),
     lastSeen: isoOf(row.lastSeen),
     kind: row.kind === "moved" ? "moved" : "missing",
+    cameFrom:
+      typeof row.cameFrom === "string" && row.cameFrom !== ""
+        ? row.cameFrom
+        : null,
+    // A boolean, or 0/1 where the dialect keeps one as a number.
+    ignored: row.ignored === true || row.ignored === 1,
   };
 }
 
@@ -101,6 +117,7 @@ async function bumpLogged(
   key: string,
   lastSeen: Date,
   kind: NotFoundKind,
+  cameFrom: string | undefined,
   hits: number = 1
 ): Promise<boolean> {
   const columns = ctx.db.table(notFoundLog);
@@ -111,6 +128,8 @@ async function bumpLogged(
       // An address a deploy moved stays listed as moved however it is
       // asked for afterwards.
       ...(kind === "moved" ? { kind } : {}),
+      // A direct visit leaves the last known source as it was.
+      ...(cameFrom === undefined ? {} : { cameFrom }),
     })
     .where(eq(columns.pathKey, key));
   return changed > 0;
@@ -136,19 +155,21 @@ export async function recordNotFound(
     slack: PRUNE_SLACK,
   }
 ): Promise<void> {
-  if (notAPageAddress(address.path)) return;
+  // Bots probing for other systems' pages are not addresses worth a redirect.
+  if (notAPageAddress(address.path) || isBotProbe(address.path)) return;
   // `/gone/` is the address `/gone`, as redirects and the Proxy read it.
   if (address.path.length > 1 && address.path.endsWith("/")) {
     address = { ...address, path: address.path.slice(0, -1) };
   }
   const key = pathKey(address);
-  if (await bumpLogged(ctx, key, now, kind)) return;
+  if (await bumpLogged(ctx, key, now, kind, address.cameFrom)) return;
   try {
     await ctx.db.insert(notFoundLog, {
       pathKey: key,
       locale: address.locale,
       path: address.path,
       asked: address.asked ?? null,
+      cameFrom: address.cameFrom ?? null,
       hits: 1,
       firstSeen: now,
       lastSeen: now,
@@ -157,7 +178,7 @@ export async function recordNotFound(
   } catch (error) {
     // Another request made the row first: count this one on it.
     if (!isUniqueViolation(ctx.dialect, error)) throw error;
-    await bumpLogged(ctx, key, now, kind);
+    await bumpLogged(ctx, key, now, kind, address.cameFrom);
     return;
   }
   if ((await ctx.db.select(notFoundLog).count()) > bound.limit + bound.slack) {
@@ -221,6 +242,29 @@ export async function pruneNotFound(
       .delete(notFoundLog)
       .where(inArray(columns.id, gone.slice(at, at + PAGE)));
   }
+}
+
+/**
+ * Mark the log's row `id` ignored, or not: an ignored address is listed only
+ * when someone asks to see the ignored ones. Answers the row, or none where
+ * it is gone (a redirect answered it, or the log was pruned). One update, and
+ * the row read back for the answer.
+ */
+export async function setNotFoundIgnored(
+  ctx: PluginContext,
+  id: string,
+  ignored: boolean
+): Promise<LoggedRow | undefined> {
+  const columns = ctx.db.table(notFoundLog);
+  const changed = await ctx.db
+    .update(notFoundLog, { ignored })
+    .where(eq(columns.id, id));
+  if (changed === 0) return undefined;
+  const row = await ctx.db
+    .select(notFoundLog)
+    .where(eq(columns.id, id))
+    .first();
+  return row === null ? undefined : loggedRowOf(row);
 }
 
 /**

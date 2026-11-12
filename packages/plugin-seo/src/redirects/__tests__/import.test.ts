@@ -15,6 +15,16 @@ describe("reading a file of redirects", () => {
     ]);
   });
 
+  it("reads an address gone for good, its To cell left empty", () => {
+    expect(
+      readImportFile("/retired,,gone\n/old-post,,410\n/legacy,,410 Gone\n")
+    ).toEqual([
+      { line: 1, from: "/retired", to: "", type: "gone" },
+      { line: 2, from: "/old-post", to: "", type: "gone" },
+      { line: 3, from: "/legacy", to: "", type: "gone" },
+    ]);
+  });
+
   it("reads quoted cells, a comma or a doubled quote inside them included", () => {
     expect(readImportFile('"/a,b","https://example.com/?q=""x"""')).toEqual([
       {

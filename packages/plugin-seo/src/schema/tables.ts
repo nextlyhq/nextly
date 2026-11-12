@@ -43,6 +43,8 @@ type NotFoundLogColumns = {
   readonly firstSeen: ColumnBuilder<Date, false, false>;
   readonly lastSeen: ColumnBuilder<Date, false, false>;
   readonly kind: ColumnBuilder<string, false, false>;
+  readonly cameFrom: ColumnBuilder<string, true, false>;
+  readonly ignored: ColumnBuilder<boolean, false, true>;
 };
 
 /**
@@ -55,7 +57,9 @@ type NotFoundLogColumns = {
  * added to in the statement that counts a request (`increment`), so requests
  * arriving at once each count. `kind` is `missing` for a request that found
  * nothing and `moved` for an old address a deploy moved whose redirect could
- * not be saved.
+ * not be saved. `cameFrom` is the last known source of a visit, and a hit
+ * with none leaves it as it was; `ignored` is a person's choice, which a hit
+ * never changes.
  */
 export const notFoundLog: TableDefinition<"not_found", NotFoundLogColumns> =
   defineTable<"not_found", NotFoundLogColumns>(
@@ -70,6 +74,12 @@ export const notFoundLog: TableDefinition<"not_found", NotFoundLogColumns> =
       firstSeen: col.timestamp(),
       lastSeen: col.timestamp(),
       kind: col.varchar(16),
+      // Where the last visitor sent from another page came from: another
+      // site's host, or a path on this site without its query. Empty while
+      // every visitor came directly.
+      cameFrom: col.longText({ nullable: true }),
+      // Someone chose to ignore the address: listed only when asked for.
+      ignored: col.boolean({ default: false }),
     },
     {
       indexes: [

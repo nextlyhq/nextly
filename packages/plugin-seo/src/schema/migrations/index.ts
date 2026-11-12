@@ -5,6 +5,6 @@
  */
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
-import migration0 from "./20261112_190532_127_create_not_found_log";
+import migration0 from "./20261112_221359_851_create_not_found_log";
 
 export const migrations: PluginMigration[] = [migration0];

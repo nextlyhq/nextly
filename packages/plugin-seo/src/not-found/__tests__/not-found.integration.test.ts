@@ -120,6 +120,37 @@ describe.each(getConfiguredTestDialects())(
       expect(await logged(t)).toEqual({ "/missing": 2, "/blog/feed.xml": 1 });
     });
 
+    it("keeps where visitors came from: another site's host, a path here, a direct visit changing nothing", async () => {
+      const { seo } = await boot(dialect);
+      const cameFrom = async () =>
+        (await readNotFoundLog(seo))[0]?.cameFrom ?? null;
+
+      await logNotFound(await renderedWith("/missing"));
+      expect(await cameFrom()).toBeNull();
+      await logNotFound(
+        await renderedWith("/missing", {
+          referer: "https://news.example.org/story?id=7",
+        })
+      );
+      expect(await cameFrom()).toBe("news.example.org");
+      await logNotFound(await renderedWith("/missing"));
+      expect(await cameFrom()).toBe("news.example.org");
+      await logNotFound(
+        await renderedWith("/missing", {
+          referer: "https://example.com/blog/launch?utm=x",
+        })
+      );
+      expect(await cameFrom()).toBe("/blog/launch");
+    });
+
+    it("leaves bots' probes for other systems out of the log", async () => {
+      const { t } = await boot(dialect);
+      await logNotFound(await renderedWith("/wp-login.php"));
+      await logNotFound(await renderedWith("/.env"));
+      await logNotFound(await renderedWith("/old-page"));
+      expect(await logged(t)).toEqual({ "/old-page": 1 });
+    });
+
     it("counts a request once, however many times its not-found page renders", async () => {
       const { t } = await boot(dialect);
       const once = await renderedWith("/twice");

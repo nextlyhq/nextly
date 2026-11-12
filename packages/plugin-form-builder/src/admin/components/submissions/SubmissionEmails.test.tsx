@@ -79,7 +79,8 @@ const group = (
  */
 function draw(
   items: NotificationSendsView[] | (() => NotificationSendsView[]),
-  canResend = false
+  canResend = false,
+  status?: string
 ) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   vi.stubGlobal(
@@ -100,7 +101,11 @@ function draw(
         new QueryClient({ defaultOptions: { queries: { retry: false } } })
       }
     >
-      <SubmissionEmails submissionId="s1" canResend={canResend} />
+      <SubmissionEmails
+        submissionId="s1"
+        status={status}
+        canResend={canResend}
+      />
     </QueryClientProvider>
   );
   return calls;
@@ -209,6 +214,31 @@ describe("a submission's emails", () => {
     }
   });
 
+  it("offers no Resend on a submission marked Spam, and says why", async () => {
+    const failed = group({
+      recipients: [recipient("a•••@acme.test", "failed")],
+      addressable: [
+        {
+          digest: "d1",
+          hint: "a•••@acme.test",
+          source: "team",
+          reached: false,
+        },
+      ],
+    });
+    draw([failed], true, "spam");
+    await screen.findByText("Hiring team");
+    expect(screen.queryByRole("button", { name: "Resend" })).toBeNull();
+    expect(
+      screen.getByText(
+        "Marked Spam: its emails are not sent. Mark it Not spam to send them again."
+      )
+    ).toBeTruthy();
+    cleanup();
+    draw([failed], true, "read");
+    expect(await screen.findByRole("button", { name: "Resend" })).toBeTruthy();
+  });
+
   it("offers Resend only to a person who may", async () => {
     const failed = group({
       recipients: [recipient("a•••@acme.test", "failed")],
@@ -258,10 +288,16 @@ describe("a submission's emails", () => {
     );
     await user.click(await screen.findByRole("button", { name: "Resend" }));
     const dialog = await screen.findByRole("dialog");
-    // Who missed it goes regardless; who received it goes only if ticked.
+    // Who missed it goes regardless, listed rather than offered as a box;
+    // who received it goes only if ticked.
     expect(
-      within(dialog).getByRole("checkbox", { name: /a•••@acme.test/ })
-    ).toHaveProperty("disabled", true);
+      within(
+        within(dialog).getByRole("region", { name: "Sends to" })
+      ).getByText(/a•••@acme.test/)
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("checkbox", { name: /a•••@acme.test/ })
+    ).toBeNull();
     await user.click(
       within(dialog).getByRole("checkbox", { name: /e•••@acme.test/ })
     );
