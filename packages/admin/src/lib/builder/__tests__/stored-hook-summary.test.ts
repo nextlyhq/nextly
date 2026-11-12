@@ -247,15 +247,17 @@ describe("summarizeStoredHooks", () => {
   it("orders after-change hooks together with after-create ones", () => {
     // `afterChange` is matched into the same pass as `afterCreate` and sorted
     // with it by `order`, so neither phase goes first as a block.
+    // The after-change hook sits between the two after-create ones by
+    // `order`; ranking the phases as blocks would put it first or last.
     const summaries = summarizeStoredHooks([
-      hook({ hookId: "audit-fields", hookType: "afterCreate", order: 1 }),
-      hook({ hookId: "auto-slug", hookType: "afterChange", order: 0 }),
+      hook({ hookId: "audit-fields", hookType: "afterCreate", order: 0 }),
+      hook({ hookId: "auto-slug", hookType: "afterChange", order: 1 }),
       hook({ hookId: "unique-validation", hookType: "afterCreate", order: 2 }),
     ]);
 
     expect(summaries.map(s => s.hookId)).toEqual([
-      "auto-slug",
       "audit-fields",
+      "auto-slug",
       "unique-validation",
     ]);
   });
