@@ -330,6 +330,55 @@ describe("SeoOverviewPage", () => {
     }
   });
 
+  it("crosses off done steps, in two columns where the card is wide enough", () => {
+    render(<SeoOverviewPage />);
+    const setup = card("Set up SEO");
+    const list = within(setup).getByRole("list", { name: "Setup steps" });
+    expect(list).toHaveClass("@2xl:grid-cols-2");
+    const names = within(list)
+      .getAllByRole("listitem")
+      .map(step => step.querySelector("p"));
+    // Four done, then two open.
+    expect(names.map(name => name?.classList.contains("line-through"))).toEqual(
+      [true, true, true, true, false, false]
+    );
+  });
+
+  it("marks the verdict with a dot in its colour, and writes each count in its severity's colour", () => {
+    render(<SeoOverviewPage />);
+    const health = card("Search health");
+    const dot = health.querySelector("[data-stat-tone]");
+    expect(dot?.getAttribute("data-stat-tone")).toBe("warning");
+    // The count is the line's end: the element after the linked name.
+    const countOf = (name: string) =>
+      within(health).getByRole("link", { name }).closest("li")?.lastElementChild
+        ?.firstElementChild as HTMLElement;
+    // Coloured numbers, not chips.
+    expect(countOf("Errors")).toHaveClass("text-danger-text", "font-semibold");
+    expect(countOf("Warnings")).toHaveClass("text-warning-text");
+    expect(countOf("Notices")).toHaveClass("text-muted-foreground");
+    expect(health.querySelector('[data-slot^="badge."]')).toBeNull();
+    for (const name of ["Errors", "Warnings", "Notices"]) {
+      expect(countOf(name).textContent).toMatch(/^\d+$/);
+    }
+  });
+
+  it("marks a good verdict in the success colour, and writes no count of zero in a warning colour", () => {
+    serve({
+      "/problems": { ...PROBLEMS, problems: [problem("longTitle", "a")] },
+    });
+    render(<SeoOverviewPage />);
+    const health = card("Search health");
+    expect(
+      health.querySelector("[data-stat-tone]")?.getAttribute("data-stat-tone")
+    ).toBe("success");
+    const errors = within(health)
+      .getByRole("link", { name: "Errors" })
+      .closest("li")?.lastElementChild?.firstElementChild;
+    expect(errors).toHaveClass("text-muted-foreground");
+    expect(errors).not.toHaveClass("text-danger-text");
+  });
+
   it("checks a site never checked whole as it opens, and waits for it rather than calling it good", async () => {
     const { checkedAt: _never, ...unchecked } = PROBLEMS;
     serve({ "/problems": { ...unchecked, problems: [], due: true } });
@@ -467,6 +516,28 @@ describe("SeoOverviewPage", () => {
     expect(within(card("Search health")).getByRole("alert")).toBeTruthy();
     expect(within(card("Pages")).getByText("5 public pages")).toBeTruthy();
     expect(within(card("Set up SEO")).getByText("4 of 6 done")).toBeTruthy();
+  });
+
+  it("keeps a card's title in view while its figure cannot be drawn", () => {
+    serve({
+      "/problems": new Error("The list is unavailable"),
+      "/pages": new Error("The pages are unavailable"),
+    });
+    render(<SeoOverviewPage />);
+    // The figure, which carries the title when drawn, is absent; the card
+    // still says what it is, as its heading.
+    for (const name of ["Search health", "Pages"]) {
+      const region = card(name);
+      expect(within(region).getByRole("heading", { name })).toBeTruthy();
+      expect(within(region).getByRole("alert")).toBeTruthy();
+    }
+  });
+
+  it("titles a card with its figure once drawn, not twice", () => {
+    render(<SeoOverviewPage />);
+    const health = card("Search health");
+    expect(within(health).getAllByText("Search health")).toHaveLength(1);
+    expect(within(health).queryByRole("heading")).toBeNull();
   });
 
   it("sends a first visit on to setup while it still waits, once", () => {

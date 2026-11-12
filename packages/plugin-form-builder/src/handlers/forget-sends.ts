@@ -27,7 +27,10 @@
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-import { SUBMISSION_SENDS_SLUG } from "../collections/sends";
+import { resendsSlugOf, sendsSlugOf } from "../collections/sends";
+import type { StoredRecipient } from "../utils/send-status";
+
+import { nameCancels } from "./send-history";
 
 type InTransactionHandler = Parameters<
   PluginContext["hooks"]["onInTransaction"]
@@ -46,13 +49,16 @@ type ForgettingContext = Pick<PluginContext, "hooks" | "services" | "self">;
 export const DELETE_PAGE = 200;
 
 /**
- * The sends collection's slug as this install has it: a host may rename a
- * collection the plugin contributes, and the services know only the name it
- * was given.
+ * How a submission's sends and requests are read: with no row lock. The
+ * write deleting the submission or marking it Spam holds the submission's
+ * row, and core changes or cancels each queued email under that email's own
+ * row lock before telling the plugin, so nothing else changes them
+ * meanwhile, and each is then written by its id. A locking read would take
+ * MySQL's next-key locks on the `submission` index, which deadlock when
+ * several submissions are deleted or marked Spam at once, each in its own
+ * transaction.
  */
-function sendsSlugOf(ctx: Pick<PluginContext, "self">): string {
-  return ctx.self.collections[SUBMISSION_SENDS_SLUG] ?? SUBMISSION_SENDS_SLUG;
-}
+const UNLOCKED = { lock: "none" } as const;
 
 /**
  * The forms each transaction is deleting, by the transaction's key. A
@@ -69,10 +75,21 @@ export function deletingForm(
   return formsBeingDeleted.get(write.transactionKey)?.has(formId) ?? false;
 }
 
-/** A send as it is recorded: the queued email and the key it went with. */
+/**
+ * A send as it is recorded: the queued email and the key it went with, and,
+ * for a notification, which one sent it and who it was configured for
+ * (`send-history`).
+ */
 export interface RecordedSend {
   queuedId: string;
   sendKey: string;
+  form?: string;
+  notification?: string;
+  notificationName?: string;
+  state?: string;
+  configured?: StoredRecipient[];
+  requestedBy?: string;
+  resend?: string;
 }
 
 /**
@@ -126,7 +143,8 @@ async function queuedIdsOf(
         where: { submission: { equals: String(write.id) } },
         pagination: { limit: DELETE_PAGE, page },
         depth: 0,
-      }
+      },
+      UNLOCKED
     );
     const sends = data as Array<Partial<RecordedSend>>;
     for (const send of sends) if (send.queuedId) ids.push(send.queuedId);
@@ -147,6 +165,8 @@ async function cancelSpamSends(
   const queuedIds = await queuedIdsOf(ctx, write);
   if (queuedIds.length === 0) return;
   await ctx.services.email.forgetSends({ queuedIds }, { tx: write.db });
+  // Told as the plugin's own cancel; kept as what it was: the Spam mark.
+  await nameCancels(ctx, write.transaction, queuedIds, { by: "spam" });
 }
 
 /** Forget what the submission a delete removes sent, and its records of it. */
@@ -156,8 +176,36 @@ async function forgetSubmissionSends(
 ): Promise<void> {
   if (write.operation !== "delete" || write.id === undefined) return;
   const slug = sendsSlugOf(ctx);
-  // Each batch's records are deleted once forgotten, so the first page is
-  // always the next batch.
+  await inBatches(ctx, write, slug, sends =>
+    forgetBatch(
+      ctx,
+      write,
+      slug,
+      sends
+    )
+  );
+  await inBatches(ctx, write, resendsSlugOf(ctx), async requests => {
+    for (const row of requests) {
+      await ctx.services.collections.deleteEntryInTransaction(
+        write.transaction,
+        resendsSlugOf(ctx),
+        String(row.id)
+      );
+    }
+  });
+}
+
+/**
+ * Hand `remove` each batch of the rows in `slug` that name the submission a
+ * delete removes, until none is left. `remove` deletes the batch it is
+ * given, so the first page is always the next batch.
+ */
+async function inBatches(
+  ctx: ForgettingContext,
+  write: InTransactionContext,
+  slug: string,
+  remove: (rows: Array<{ id: unknown }>) => Promise<void>
+): Promise<void> {
   for (;;) {
     const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
       write.transaction,
@@ -166,21 +214,35 @@ async function forgetSubmissionSends(
         where: { submission: { equals: String(write.id) } },
         pagination: { limit: DELETE_PAGE },
         depth: 0,
-      }
+      },
+      UNLOCKED
     );
-    const sends = data as Array<{ id: unknown } & Partial<RecordedSend>>;
-    if (sends.length > 0) await forgetBatch(ctx, write, slug, sends);
-    if (sends.length < DELETE_PAGE) return;
+    const rows = data as Array<{ id: unknown }>;
+    if (rows.length > 0) await remove(rows);
+    if (rows.length < DELETE_PAGE) return;
   }
 }
 
-/** Forget a batch of a submission's sends, and delete their records. */
+/**
+ * Delete a batch of a submission's send records, then forget the sends.
+ * Records first: the cancel each forget causes then finds no record to fold
+ * into (`send-history`), so a deletion writes nothing it is about to delete.
+ * An update and a delete of one record in one transaction, beside another
+ * deletion doing the same, deadlocks MySQL on the content-events table.
+ */
 async function forgetBatch(
   ctx: ForgettingContext,
   write: InTransactionContext,
   slug: string,
   sends: Array<{ id: unknown } & Partial<RecordedSend>>
 ): Promise<void> {
+  for (const send of sends) {
+    await ctx.services.collections.deleteEntryInTransaction(
+      write.transaction,
+      slug,
+      String(send.id)
+    );
+  }
   await ctx.services.email.forgetSends(
     {
       queuedIds: sends.flatMap(send => (send.queuedId ? [send.queuedId] : [])),
@@ -190,13 +252,6 @@ async function forgetBatch(
     },
     { tx: write.db }
   );
-  for (const send of sends) {
-    await ctx.services.collections.deleteEntryInTransaction(
-      write.transaction,
-      slug,
-      String(send.id)
-    );
-  }
 }
 
 /** Delete a form's submissions with the form, each forgetting what it sent. */

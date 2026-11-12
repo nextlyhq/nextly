@@ -38,7 +38,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import {
+  introspectLiveColumns,
+  introspectLiveSnapshot,
+} from "../../schema/pipeline/diff/introspect-live";
+import { listTablesAtStart } from "../../schema/pipeline/diff/start-catalog-scope";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
   indexCatalog,
@@ -274,7 +278,7 @@ export function forgetFieldGroupStorageNames(
 /**
  * The discriminator column each named data table actually carries.
  *
- * One `introspectLiveSnapshot` covers every table, so the cost is a single
+ * One `introspectLiveColumns` covers every table, so the cost is a single
  * catalog read at the point runtime schemas are registered — boot, or a schema
  * mutation — and nothing on a read path. Not memoized for the same reason:
  * every caller already holds the full list it cares about.
@@ -286,7 +290,9 @@ export async function resolveTypeColumns(
   if (tables.length === 0) return new Map();
 
   const rules = await readIdentifierCaseRules(adapter);
-  const snapshot = await introspectLiveSnapshot(
+  // The columns alone: the discriminator is a column, and nothing else of the
+  // tables is asked.
+  const snapshot = await introspectLiveColumns(
     adapter.getDrizzle(),
     adapter.dialect,
     [...tables]
@@ -375,5 +381,5 @@ async function readRegistryTable(
   adapter: StorageNameAdapter
 ): Promise<FieldGroupRegistryTable> {
   const rules = await readIdentifierCaseRules(adapter);
-  return chooseRegistryTable(await adapter.listTables(), rules);
+  return chooseRegistryTable(await listTablesAtStart(adapter), rules);
 }
