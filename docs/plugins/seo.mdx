@@ -117,8 +117,8 @@ advanced ones.
 description: it shows as much as fits the width of the results and cuts the rest
 ([title links](https://developers.google.com/search/docs/appearance/title-link),
 [snippets](https://developers.google.com/search/docs/appearance/snippet)). So the default fields
-save any length, and the SEO tab's count (`68 / 60`) and the problem list (`68 characters, Google
-shows about 60`) say how much is past what Google usually shows. A site that wants the lengths
+save any length, and the SEO tab ("The title is longer than Google shows.") and the problem list
+(`68 characters, Google shows about 60`) say when it is past what Google usually shows. A site that wants the lengths
 enforced passes `hardLengthLimits: true`, and a save of a title over 60 characters or a
 description over 160 is then refused:
 
@@ -168,14 +168,18 @@ stays a draft until the page is published, as the page's other changes do.
 
 The tab shows, in order:
 
-- **A preview** of the page as Google lists it, and as the card a shared link shows on
+- **A preview** of the page as Google lists it, beside the card a shared link shows on
   LinkedIn, Slack and others. It follows what is typed, saved or not, in any field of
   the page.
-- **Title on Google** and **Description on Google**, with a count against what Google
-  shows. An empty field shows, as its placeholder, the value the page will use, and under
-  it where that value comes from: the content type's pattern, one of the page's own fields
-  (its title, its excerpt), or the site's defaults. Typing marks it **Typed for this
-  page**, with one action, **Go back to automatic**, that empties it again.
+- **Each problem** the page has, in one sentence: a title or description longer than
+  Google shows or missing, a detail its structured data lacks, a share image a network
+  can't show. A share image a copy would fix offers **Make a share image** beside it.
+- **Title on Google** and **Description on Google**, both optional. An empty field shows,
+  as its placeholder, the value the page will use, and under it what that value comes
+  from, such as "Empty uses the Posts pattern: `{Title} | {Site name}`" or "Empty uses the
+  post's excerpt": the content type's pattern, one of the page's own fields, or the site's
+  defaults. Typing marks it **Typed for this page**, with one action, **Go back to
+  automatic**, that empties it again.
 - **Advanced**, closed until opened: hiding the page from search, its official address
   (the canonical), a different title and description when shared, the share image, and
   the [structured data type](#structured-data), with what the type still lacks.
@@ -507,7 +511,7 @@ and `searchconsole.googleapis.com`, each request given ten seconds and following
 ## llms.txt and plain-text copies
 
 Two optional outputs for AI tools, both off until someone switches them on in **SEO >
-Settings > Connections**. Few tools read them today, so neither is on by default.
+Settings > Search engines and AI**. Few tools read them today, so neither is on by default.
 
 - **`/llms.txt`** is a plain list of the site's pages, in the format the
   [llms.txt proposal](https://llmstxt.org) sets out: the site's name as the heading, its
@@ -584,13 +588,13 @@ Other code can read a page's links, and the languages left out for their code, w
 
 The plugin adds an **SEO** item to the admin's rail. It opens a section with its own menu:
 
-| Screen        | What it holds                                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Overview**  | Where the section opens: setup, the site's search health, how its pages stand, addresses not found, connections   |
-| **Pages**     | Every public address the site knows of, with an **Import** button, and Inspect reached from it                    |
+| Screen        | What it holds                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Overview**  | Where the section opens: setup, the site's search health, how its pages stand, addresses not found, connections    |
+| **Pages**     | Every public address the site knows of, with an **Import** button, and Inspect reached from it                     |
 | **Problems**  | What affects how the site shows up in search, grouped by kind; its badge counts the errors and warnings you'd find |
-| **Redirects** | The redirects, and the addresses not found                                                                        |
-| **Settings**  | The rules for the whole site                                                                                      |
+| **Redirects** | The redirects, and the addresses not found                                                                         |
+| **Settings**  | The rules for the whole site                                                                                       |
 
 Each screen shows its place in the admin's top bar, such as SEO / Pages / Import. **Bulk edit** has
 no menu item of its own and stays at its address, and an old **What search engines received** link
@@ -634,19 +638,24 @@ over them.
 The first time someone opens the section, three short questions come first: the site's name and production
 address, what kind of site it is and what AI tools may do, and a logo with a default share image.
 Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
-with a line on the page to finish later. Every answer stays editable on the tabs:
+with a line on the page to finish later. Every answer stays editable on the tabs. Each tab has an
+address of its own (`?tab=general`, `types`, `images`, `brand`, `crawlers`, `connections`), so a
+link lands on it, and **Save changes** under any tab saves every tab's changes; **Cancel** lets go of
+them:
 
-| Tab           | What it holds                                                                                                                                                                                                                                   |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| General       | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, the default share image and description                                                               |
-| Content types | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
-| Brand         | The kind of site, the brand's name and other names, its logo, and its social profiles                                                                                                                                                           |
-| Crawlers      | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none                                                                                                                                    |
-| Connections   | Optional services and outputs, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow), [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies)                                                        |
+| Tab                   | What it holds                                                                                                                                                                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                           |
+| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
+| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                        |
+| Organization          | The kind of site, the organization's name and other names, its logo, and its social profiles                                                                                                                                                    |
+| Search engines and AI | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on                                  |
+| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                      |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
-them for all of them. The AI tools choice on Crawlers is what robots.txt asks, and content types the
+them for all of them, and General then shows the server's addresses, read-only. The AI tools choice
+on Search engines and AI is what robots.txt asks, and content types the
 settings hide are hidden from every output; until the site chooses, the plugin's `aiCrawlers` and
 `hiddenTypes` options answer.
 
@@ -658,9 +667,9 @@ the settings, and the Single answers no one without `manage-seo`, however it is 
 ### Title patterns
 
 A content type's titles are made from its pattern wherever a page has no title typed. Every type
-starts with `{Title} | {Site name}`, using the separator chosen on General. Click a pattern to
-change it: the variables the type offers can be clicked in, and an example title from the type's
-newest page updates as you type.
+starts with `{Title} | {Site name}`, using the separator chosen on General. Each type's row on
+Content types holds its pattern: the variables the type offers can be clicked in, and an example
+title from the type's newest page updates as you type.
 
 - `{Title}` is the page's own title, `{Site name}` the site's name, and any other variable one of
   the type's own text or number fields, such as `{Category}`.
@@ -678,12 +687,12 @@ newest page updates as you type.
 
 ### Hiding a type, and its structured data
 
-The table lists every content type the plugin adds SEO to, with one entry's address as an example
-of where its pages live, and after them, greyed, the site's other types: SEO is switched on or off
-for a type in the site's code, so the switch there can't be changed.
+Content types lists every content type the plugin adds SEO to, each with one entry's address as an
+example of where its pages live, and after them, under **Without SEO**, the site's other types: SEO
+is switched on or off for a type in the site's code, not here.
 
-**Hide whole group** keeps every page of a content type out of search, whatever each page says, and
-out of the sitemap. The **Structured data** column chooses what the type's pages are described as;
+**Hide the whole group from search** keeps every page of a content type out of search, whatever each
+page says, and out of the sitemap. **Structured data** chooses what the type's pages are described as;
 **Automatic** describes a page with an author and a date as an Article, and any other as a Web page.
 For a type that needs details, such as an Article's author, **Map details** chooses the field each
 detail is read from, including a field inside a group (`event.startsAt`), and the optional details
@@ -691,7 +700,7 @@ the type can also use. A detail left unchosen is read from a field named like it
 page's share image, and a type missing a detail is left out of the page's markup and listed in
 Problems.
 
-Until the site chooses, the table shows what the plugin's `hiddenTypes` and `structuredData` options
+Until the site chooses, the tab shows what the plugin's `hiddenTypes` and `structuredData` options
 say. Hiding or showing a type saves the whole list, which then takes over from `hiddenTypes`. A
 type's structured data choice takes over from the option for that type only; other types keep
 following the option, and choosing **Automatic** over a type the option names is kept as a choice.
@@ -745,14 +754,14 @@ from the plugin: nothing to call in `generateMetadata`. A site that renders its 
 [A site that renders its own pages](/docs/guides/routing-and-seo#a-site-that-renders-its-own-pages).
 Each value is worked out on its own, from the first of these that has one:
 
-| Order | Where the value comes from                                                     | For                                         |
-| ----- | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| 1     | What a person typed in the page's `seo` group                                  | every value                                 |
-| 2     | What the route's own `buildMetadata` returns                                   | title, description and the social card      |
-| 3     | The Page Builder design drawing the page                                       | title, description, the social card         |
-| 4     | The content type's pattern, such as `{Title} \| {Site name}`                   | title, description                          |
-| 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image             |
-| 6     | The site's defaults                                                            | title, description, share image             |
+| Order | Where the value comes from                                                     | For                                    |
+| ----- | ------------------------------------------------------------------------------ | -------------------------------------- |
+| 1     | What a person typed in the page's `seo` group                                  | every value                            |
+| 2     | What the route's own `buildMetadata` returns                                   | title, description and the social card |
+| 3     | The Page Builder design drawing the page                                       | title, description, the social card    |
+| 4     | The content type's pattern, such as `{Title} \| {Site name}`                   | title, description                     |
+| 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image        |
+| 6     | The site's defaults                                                            | title, description, share image        |
 
 Level 3 is what the design drawing the page sets: a page's own blocks, or the template or own
 design an entry is drawn with, its SEO settings first. A route hands it as it serves the page; the
@@ -908,24 +917,24 @@ site whose addresses end in a slash has its trail's addresses end in one too.
 These types are offered. Each says what search engines read from it; some can earn a rich result in
 Google, the rest describe the page without one:
 
-| Type                  | Key                   | Details it needs                         | Rich result in Google                               |
-| --------------------- | --------------------- | ---------------------------------------- | --------------------------------------------------- |
-| Article               | `article`             | author, date published, image            | Yes                                                 |
-| Blog post             | `blogPosting`         | author, date published, image            | Yes                                                 |
-| Technical article     | `techArticle`         | none                                     | Yes                                                 |
-| Web page              | `webPage`             | none                                     | No                                                  |
-| About page            | `aboutPage`           | none                                     | No                                                  |
-| Contact page          | `contactPage`         | none                                     | No                                                  |
-| Collection page       | `collectionPage`      | none                                     | No                                                  |
-| Questions and answers | `faqPage`             | questions and answers                    | No (retired by Google in May 2026)                  |
-| Profile page          | `profilePage`         | person                                   | Yes                                                 |
-| Software app          | `softwareApplication` | none                                     | Only with a price and a rating                      |
-| Source code           | `softwareSourceCode`  | code repository                          | No                                                  |
-| Product               | `product`             | price, availability                      | Yes                                                 |
-| Event                 | `event`               | start date, location                     | Yes                                                 |
-| Video                 | `videoObject`         | video file, upload date, image           | Yes                                                 |
-| Review                | `review`              | author, item reviewed, item type, rating | Yes                                                 |
-| Local business        | `localBusiness`       | street address, opening hours            | Yes                                                 |
+| Type                  | Key                   | Details it needs                         | Rich result in Google              |
+| --------------------- | --------------------- | ---------------------------------------- | ---------------------------------- |
+| Article               | `article`             | author, date published, image            | Yes                                |
+| Blog post             | `blogPosting`         | author, date published, image            | Yes                                |
+| Technical article     | `techArticle`         | none                                     | Yes                                |
+| Web page              | `webPage`             | none                                     | No                                 |
+| About page            | `aboutPage`           | none                                     | No                                 |
+| Contact page          | `contactPage`         | none                                     | No                                 |
+| Collection page       | `collectionPage`      | none                                     | No                                 |
+| Questions and answers | `faqPage`             | questions and answers                    | No (retired by Google in May 2026) |
+| Profile page          | `profilePage`         | person                                   | Yes                                |
+| Software app          | `softwareApplication` | none                                     | Only with a price and a rating     |
+| Source code           | `softwareSourceCode`  | code repository                          | No                                 |
+| Product               | `product`             | price, availability                      | Yes                                |
+| Event                 | `event`               | start date, location                     | Yes                                |
+| Video                 | `videoObject`         | video file, upload date, image           | Yes                                |
+| Review                | `review`              | author, item reviewed, item type, rating | Yes                                |
+| Local business        | `localBusiness`       | street address, opening hours            | Yes                                |
 
 What each type states beyond what it needs, where the page has it:
 
