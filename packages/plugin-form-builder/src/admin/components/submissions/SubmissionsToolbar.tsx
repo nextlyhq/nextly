@@ -95,7 +95,7 @@ function StatusFilter({
           type="button"
           aria-pressed={value === tab.value}
           onClick={() => onChange(tab.value)}
-          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-sm px-2 text-sm sm:gap-1.5 sm:px-2.5 font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-card aria-pressed:text-foreground aria-pressed:ring-1 aria-pressed:ring-border"
+          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-sm px-2 text-sm sm:gap-1.5 sm:px-2.5 font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-card aria-pressed:text-foreground aria-pressed:shadow-sm"
         >
           {tab.label}
           {counts === undefined ? null : (
