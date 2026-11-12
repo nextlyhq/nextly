@@ -69,7 +69,10 @@ import {
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
+import {
+  pluginsRecordedNotInstalled,
+  seedAccessOnCommandConnection,
+} from "../../domains/schema/migrate/command-access";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
@@ -115,6 +118,7 @@ import {
 } from "../../domains/schema/migrate/old-builder-ledger";
 import {
   keepingUnrecordedPlugins,
+  leavingPluginsNotInstalled,
   orphanScopeOf,
   type MigrationOrphanScope,
 } from "../../domains/schema/migrate/permission-orphans";
@@ -598,15 +602,21 @@ export async function runMigrate(
           ),
         // A permission leaves when the recorded migration whose snapshot drops it applies, on
         // this command's connection, keeping its grants.
-        markOrphanedPermissions: (scope, migration) =>
-          markOrphansOnCommandConnection(
-            adapter as unknown as DrizzleAdapter,
+        markOrphanedPermissions: async (scope, migration) => {
+          const dz = adapter as unknown as DrizzleAdapter;
+          await markOrphansOnCommandConnection(
+            dz,
             // A configured plugin the migration does not record keeps its permissions, even one
-            // stored under the app's own owner key.
-            keepingUnrecordedPlugins(scope, configResult.config),
+            // stored under the app's own owner key; one recorded uninstalled is not declared by
+            // it, so the marks its uninstall wrote stay.
+            leavingPluginsNotInstalled(
+              keepingUnrecordedPlugins(scope, configResult.config),
+              await pluginsRecordedNotInstalled(dz)
+            ),
             migration,
             logger
-          ),
+          );
+        },
         // A translations column already in place that cannot hold a field the config newly
         // translates, judged as the files left it and before the registry records them: refused
         // here, the registry keeps its definitions and the next run is refused the same way.

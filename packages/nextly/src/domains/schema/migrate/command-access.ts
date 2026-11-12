@@ -91,40 +91,54 @@ async function onCommandConnection<T>(
 const LIFECYCLE_RECORDS_TABLE = "nextly_schema_events";
 
 /**
- * The configured plugins whose permissions and roles a run declares: each one
- * recorded installed, and each with no lifecycle record. One recorded
- * uninstalled, kept data or not, or whose uninstall began, is left out: its
- * uninstall marked its permissions orphaned, and only its install declares
- * them again, so a run with it still listed leaves the marks and the grants as
- * they are. Read by the reader a production start judges the plugins with
- * (`readPluginLifecycle`).
- *
- * A plugin with no record is declared as before: a site set up before the
- * records were written, or one whose plugin is configured and not installed
- * yet, as on a new site, whose first `nextly migrate` comes before any install
- * can. Declaring only adds, and its permissions have no mark to clear. A
- * database without the ledger or the owner registry holds no record.
+ * The plugins recorded as anything but installed: uninstalled, kept data or
+ * not, or with an uninstall begun. Read by the reader a production start
+ * judges the plugins with (`readPluginLifecycle`). Their uninstall marked
+ * their permissions orphaned, and only their install declares them again, so
+ * neither `nextly migrate`'s seeding (`pluginsDeclared`) nor an applied
+ * migration's orphan pass (`leavingPluginsNotInstalled`) takes them for
+ * declared. A plugin with no record is not among them. A database without the
+ * ledger or the owner registry holds no record.
  */
-async function pluginsDeclared(
-  adapter: DrizzleAdapter,
-  plugins: readonly PluginDefinition[]
-): Promise<PluginDefinition[]> {
-  if (plugins.length === 0) return [];
+export async function pluginsRecordedNotInstalled(
+  adapter: DrizzleAdapter
+): Promise<ReadonlySet<string>> {
   const [ledger, owners] = await Promise.all([
     adapter.tableExists(LIFECYCLE_RECORDS_TABLE),
     adapter.tableExists(SCHEMA_OWNERS_TABLE),
   ]);
-  if (!ledger || !owners) return [...plugins];
+  if (!ledger || !owners) return new Set();
   const db = adapter.getDrizzle();
   const dialect = adapter.getCapabilities().dialect;
   const states = await readPluginLifecycle(
     new SchemaEventsRepository(db, dialect),
     await new SchemaOwnersRepository(db, dialect).read()
   );
-  return plugins.filter(plugin => {
-    const state = states.get(plugin.name)?.state;
-    return state === undefined || state === "installed";
-  });
+  return new Set(
+    [...states]
+      .filter(([, record]) => record.state !== "installed")
+      .map(([name]) => name)
+  );
+}
+
+/**
+ * The configured plugins whose permissions and roles a run declares: each one
+ * recorded installed, and each with no lifecycle record. One recorded as
+ * anything else (`pluginsRecordedNotInstalled`) is left out, so a run with it
+ * still listed leaves its marks and grants as its uninstall left them.
+ *
+ * A plugin with no record is declared as before: a site set up before the
+ * records were written, or one whose plugin is configured and not installed
+ * yet, as on a new site, whose first `nextly migrate` comes before any install
+ * can. Declaring only adds, and its permissions have no mark to clear.
+ */
+async function pluginsDeclared(
+  adapter: DrizzleAdapter,
+  plugins: readonly PluginDefinition[]
+): Promise<PluginDefinition[]> {
+  if (plugins.length === 0) return [];
+  const notInstalled = await pluginsRecordedNotInstalled(adapter);
+  return plugins.filter(plugin => !notInstalled.has(plugin.name));
 }
 
 /**

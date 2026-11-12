@@ -46,6 +46,8 @@ export interface MigrationOrphanScope extends OrphanMarkScope {
   declared: { action: string; resource: string }[];
   /** The plugins the snapshot, or the one before it, records. */
   plugins: ReadonlySet<string>;
+  /** What the snapshot declares for each plugin it records, by plugin name. */
+  declaredByPlugin: ReadonlyMap<string, { action: string; resource: string }[]>;
 }
 
 /** A snapshot as this module reads it. */
@@ -71,6 +73,21 @@ function everyPermission(
   ];
   return owners.flatMap(owned =>
     Object.values(owned).map(({ action, resource }) => ({ action, resource }))
+  );
+}
+
+/** What a record declares for each plugin it records. */
+function eachPluginsPermissions(
+  record: PermissionRecord
+): Map<string, { action: string; resource: string }[]> {
+  return new Map(
+    Object.entries(record.plugins).map(([plugin, owned]) => [
+      plugin,
+      Object.values(owned).map(({ action, resource }) => ({
+        action,
+        resource,
+      })),
+    ])
   );
 }
 
@@ -100,7 +117,12 @@ export function orphanScopeOf(args: {
   for (const plugin of Object.keys(then?.plugins ?? {})) plugins.add(plugin);
   const owners = new Set([APP_OWNER, ...plugins]);
   if (then !== undefined) {
-    return { declared: everyPermission(now), owners, plugins };
+    return {
+      declared: everyPermission(now),
+      declaredByPlugin: eachPluginsPermissions(now),
+      owners,
+      plugins,
+    };
   }
   const baseline =
     args.record !== undefined && args.record.point === args.previous
@@ -108,6 +130,7 @@ export function orphanScopeOf(args: {
       : undefined;
   return {
     declared: everyPermission(now),
+    declaredByPlugin: eachPluginsPermissions(now),
     owners,
     plugins,
     ...(baseline === undefined
@@ -135,4 +158,31 @@ export function keepingUnrecordedPlugins(
     p => p.source === "plugin" && !scope.plugins.has(p.owner)
   );
   return { ...scope, kept };
+}
+
+/**
+ * `scope` without what its snapshot declares for each plugin in
+ * `notInstalled`, the plugins recorded as anything but installed
+ * (`pluginsRecordedNotInstalled`). A migration written before such a plugin's
+ * uninstall still declares its permissions, and a declared permission has its
+ * mark cleared, which would undo the uninstall without a reinstall. Left out,
+ * a permission the uninstall marked stays marked, and one not yet marked is
+ * marked where the migration speaks for the plugin, as its uninstall marks it.
+ */
+export function leavingPluginsNotInstalled(
+  scope: MigrationOrphanScope,
+  notInstalled: ReadonlySet<string>
+): MigrationOrphanScope {
+  const keyOf = (p: { action: string; resource: string }) =>
+    `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`;
+  const left = new Set(
+    [...scope.declaredByPlugin]
+      .filter(([plugin]) => notInstalled.has(plugin))
+      .flatMap(([, owned]) => owned.map(keyOf))
+  );
+  if (left.size === 0) return scope;
+  return {
+    ...scope,
+    declared: scope.declared.filter(p => !left.has(keyOf(p))),
+  };
 }

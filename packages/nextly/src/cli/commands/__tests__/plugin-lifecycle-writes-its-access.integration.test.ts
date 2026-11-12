@@ -40,6 +40,9 @@
  * - A migration written before a plugin named `app` joined, which drops one
  *   of the app's own permissions, orphans that permission and not the
  *   plugin's, though both are stored under the owner key `app`.
+ * - A migration written after a plugin joined, and applied after its
+ *   uninstall, leaves the plugin's permission orphaned, though its snapshot
+ *   still declares it: only the plugin's install declares it again.
  * - In production, an older release's install and uninstall are refused
  *   before anything is written, naming the recorded release; the recorded
  *   release's succeed. In development an older release's install goes on.
@@ -939,6 +942,42 @@ describe.each(getConfiguredTestDialects())(
         'Permission "tally-pla-app" is no longer declared'
       );
     }, 240_000);
+
+    it.each([false, true])(
+      "keeps an uninstalled plugin's permission orphaned when a migration written after it joined applies (keepData: %s)",
+      async keepData => {
+        await migrateCreate();
+        await migrate(NEW);
+        await install(FEEDS.name);
+        await install(DIGEST.name);
+        // Written with both plugins configured, so its snapshot declares their permissions.
+        await migrateCreate("plugins_joined", configWith(FEEDS, DIGEST));
+        await uninstall(FEEDS.name, keepData);
+        expect(await permission(FEEDS_PERMISSION)).toEqual({
+          owner: FEEDS.name,
+          orphaned: true,
+        });
+        const grants = await grantRows();
+
+        const said = await migrate(NEW, configWith(FEEDS, DIGEST));
+
+        // The control: the migration applied, its snapshot speaking for both plugins.
+        expect(said.join("\n")).toContain("plugins_joined");
+        expect(await permission(DIGEST_PERMISSION)).toEqual({
+          owner: DIGEST.name,
+          orphaned: false,
+        });
+        expect(await permission(FEEDS_PERMISSION)).toEqual({
+          owner: FEEDS.name,
+          orphaned: true,
+        });
+        expect(said.join("\n")).not.toContain(
+          `Permission "${FEEDS_PERMISSION}" is declared again`
+        );
+        expect(await grantRows()).toEqual(grants);
+      },
+      240_000
+    );
 
     it("refuses an older release's install and uninstall in production, naming the recorded release, and the recorded release's succeed", async () => {
       await migrateCreate();
