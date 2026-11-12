@@ -8,7 +8,7 @@ Nextly's schema-evolution model splits responsibilities cleanly between developm
 - **Local development:** `next dev` + Nextly's HMR pipeline auto-applies schema changes as you edit `nextly.config.ts`.
 - **Production:** schema changes are committed as `.sql` files in your repo. A CI/CD step (or your laptop) runs `nextly migrate` against the production database **before** the new app code is deployed.
 
-**By default the deployed Next.js app does not touch the schema** — you apply migrations in CI/build, before deploy (Patterns 1–3). Two production-grade options make this safe and flexible:
+**By default the deployed Next.js app does not touch the schema** — you apply migrations in CI/build, before deploy (Patterns 1–3). Nor does it write the registry of your collections, Singles and field groups, the permissions, or the roles and their grants: those arrive through `nextly migrate` too, so **run `nextly migrate` before serving** a new build (see [What a production start writes](#what-a-production-start-writes)). Two production-grade options make this safe and flexible:
 
 - **A migrate lock** guards every `nextly migrate`, so two runs never apply schema at once. It's a pooler-safe lock row (works through Neon/Supabase PgBouncer) with a TTL, plus a `--force-unlock` escape hatch.
 - **Optional run-on-boot** (`db.runMigrationsOnBoot`, opt-in) applies pending migrations during app startup in production — safe across multiple instances thanks to the lock. See [Pattern 4](#pattern-4-run-migrations-on-boot-opt-in).
@@ -239,6 +239,8 @@ export default defineConfig({
 ```
 
 - **Production only** (`NODE_ENV === "production"`) — a no-op in development.
+- The step is `nextly migrate`, run by the start: it writes the registry, the permissions and the
+  preset grants as the command does. The rest of the start writes none of them.
 - Pending migrations apply during initialization, **under the migrate lock**, so
   multiple instances starting together are safe: one applies while the others
   wait, then all serve with the schema ready.
@@ -300,7 +302,7 @@ Specific examples:
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp). A pending file whose snapshot an earlier release's `migrate:create` wrote, without the registry metadata, is refused before anything applies when it comes after a migration that carries the metadata, or once the database has its registry record; see [The first `nextly migrate` on this release](#the-first-nextly-migrate-on-this-release).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`. Once a file is recorded, it marks as no longer declared each permission that file's snapshot drops, keeping every grant of it, and clears the mark of one it declares again; see [A permission your build no longer declares](#a-permission-your-build-no-longer-declares).
-7. Adds the permissions and roles the database lacks, and sets the preset roles' grants, under the same lock and after the registry rows are written. It adds Nextly's own permissions, each registered collection's and Single's (with the ones an attached workflow's steps add), the ones your config declares and each plugin's, and the roles your plugins declare. A declared role that bundles a permission which does not exist yet is not created until it does, and the run says so. Then it brings each preset role (Admin, Editor, Author, Viewer) to the permissions its preset grants, adding and removing only what differs, so a database set up by `nextly migrate` alone has an Admin role that holds them before the first start. It sets every preset role's grants in one transaction with a record of the Nextly release that set them, and a run from an older release leaves them as they are (see [The preset grants and the release that set them](#the-preset-grants-and-the-release-that-set-them)). When it changes a grant, it records every collection's and Single's cache tags as expired in the database, so running instances stop serving cached content that the change no longer allows. A run that finds nothing to add or change writes nothing to these tables. This step never marks a permission as no longer declared (step 6 does, from the migrations), and it keeps every grant of one already marked. If a permission can't be written, the run fails after its migrations have applied; run `nextly migrate` again to finish.
+7. Adds the permissions and roles the database lacks, and sets the preset roles' grants, under the same lock and after the registry rows are written. It adds Nextly's own permissions, each registered collection's and Single's (with the ones an attached workflow's steps add), the ones your config declares and each plugin's, and the roles your plugins declare. A declared role that bundles a permission which does not exist yet is not created until it does, and the run says so. Then it brings each preset role (Admin, Editor, Author, Viewer) to the permissions its preset grants, adding and removing only what differs, so a database set up by `nextly migrate` alone has an Admin role that holds them before the first start. It makes the built-in Public role, the one visitors are judged by, and grants it `read-media`, the read of each collection and Single whose read rule answers a visitor `true`, and what your plugins declare for it, each once, so a grant you take away on the Roles screen stays away (see [Permissions](/docs/permissions)). A plugin's install does the same for that plugin. It sets every preset role's grants in one transaction with a record of the Nextly release that set them, and a run from an older release leaves them as they are (see [The preset grants and the release that set them](#the-preset-grants-and-the-release-that-set-them)). When it changes a grant, it records every collection's and Single's cache tags as expired in the database, so running instances stop serving cached content that the change no longer allows. A run that finds nothing to add or change writes nothing to these tables. This step never marks a permission as no longer declared (step 6 does, from the migrations), and it keeps every grant of one already marked. If a permission can't be written, the run fails after its migrations have applied; run `nextly migrate` again to finish.
 8. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
 9. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
 
@@ -380,8 +382,9 @@ snapshot, and no migration marks one. A migration whose snapshot an earlier rele
 the registry metadata or without the permissions, marks nothing.
 
 No server start marks a permission, in production or in development: a build that no longer
-declares a permission, an older build included, leaves it as it is. A start still adds the
-permissions its config declares, and clears the mark of one it declares again. An older
+declares a permission, an older build included, leaves it as it is. A development start still
+adds the permissions its config declares, and clears the mark of one it declares again; a
+production start adds none (see [What a production start writes](#what-a-production-start-writes)). An older
 build's `nextly migrate` marks nothing either, since it stops before writing when the database
 records a migration its folder lacks (see [A build older than the database](#a-build-older-than-the-database)).
 
@@ -401,11 +404,59 @@ A `nextly migrate` from a release older than the recorded one adds and removes n
 and says which release set them. The rest of its run is unchanged. Permissions it adds meanwhile,
 for a new collection for instance, get their preset grants at the next `nextly migrate` from the
 recorded release or a newer one. Roles your app or plugins define are not presets and are not
-affected. A start, in development or in production, still sets the preset grants by its own
-release's presets, as before, and neither reads nor writes the record.
+affected. A development start still sets the preset grants by its own release's presets, as
+before, and neither reads nor writes the record. A production start sets none.
 
 This covers `nextly migrate` from this release on. A release from before it reads no record, so
 its `nextly migrate` and its starts set the preset grants to its own presets.
+
+### What a production start writes
+
+A production start (`next start`, or any start with `NODE_ENV=production`) serves the database
+as `nextly migrate` left it. It writes none of the site's bookkeeping:
+
+- no registry row of a collection, Single or field group, and no entity's migration status;
+- no permission, no role and no grant, the preset roles' and the Public role's included;
+- no user field definition.
+
+Every start used to write the registry rows from the configuration of the build that was
+starting, and seed the permissions and the preset grants. Whichever build started last then
+decided what the database said, an older one or a preview of another branch included, and the
+start ran a few statements for every collection, Single and permission. A production start now
+runs the same number of statements however many entities your site has. The bookkeeping arrives
+only through `nextly migrate` (step 7 above, and its registry phase) and a plugin's install and
+uninstall, all under the migrate lock.
+
+So **run `nextly migrate` before serving a new build**. The scaffolded `build` script already runs
+`nextly migrate && next build`. A deployment that relied on its start to bring a new field,
+collection or permission into the database must run `nextly migrate` first. Until it does, the
+start keeps serving the registry as it is: a declared field the database has not been migrated
+for is not served, and a read or write that reaches it answers `ENTITY_NOT_MIGRATED` (HTTP 409),
+naming the field to trusted server code and telling a REST caller only the collection or Single.
+The start also warns once, naming both versions, when the database is behind the build (see
+[The schema version a production start checks](#the-schema-version-a-production-start-checks)).
+With [`db.runMigrationsOnBoot`](#pattern-4-run-migrations-on-boot-opt-in), the start runs
+`nextly migrate` first and gets the same.
+
+What a production start still writes is its own upkeep, none of which compares your build with
+the database:
+
+- the [setup token](/docs/guides/deployment#the-first-administrator), made while the install has
+  no administrator and cleared once it has one;
+- stored secrets sealed again under the current `NEXTLY_SECRET`, before any plugin starts;
+- on SQLite, the database file's journal mode;
+- after the start, the built-in email templates and, on SQLite, a one-time repair of timestamps
+  an older release stored as text;
+- whatever a plugin's own start-up code writes.
+
+A development start (`next dev`) is unchanged: it keeps the registry, the permissions and the
+preset grants in step with your configuration as you edit it.
+
+**Moving production back to a release from before this one is outside this guarantee.** Such a
+release seeds the permissions and the preset grants at every production start, from its own
+configuration and presets, and has no setting that turns that off. Its first start sets the
+grants its presets resolve to, and an older one may mark as no longer declared the permissions its
+build lacks. Keep production on this release or a newer one.
 
 ### The schema version a production start checks
 

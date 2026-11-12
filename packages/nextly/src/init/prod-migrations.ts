@@ -73,6 +73,8 @@ interface MigrateCoreLike {
     pluginsWithMigrations?: ReadonlySet<string>;
     /** Spread in by `pluginMigrationArgs`, checked here for the same reason. */
     declaredPlugins?: ReadonlySet<string>;
+    /** See `MigrateCoreDeps.seedPermissions`. */
+    seedPermissions?: () => Promise<void>;
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -115,6 +117,11 @@ export interface RunProdMigrationsArgs {
   logger: LoggerLike;
   /** Injected for tests; defaults to the real migrateCore + ledger bootstrap. */
   migrateCore?: MigrateCoreLike;
+  /**
+   * Injected for tests; defaults to provisioning the user fields' storage as
+   * `nextly migrate` does (`provisionStartUserFields`).
+   */
+  provisionUserFields?: () => Promise<void>;
 }
 
 /**
@@ -203,9 +210,64 @@ function migrateCoreFor(args: RunProdMigrationsArgs): MigrateCoreLike {
   );
 }
 
+/**
+ * Phase 4 of `nextly migrate`, as the command runs it: the permissions, the
+ * declared roles, the preset grants and the Public role with its grants
+ * (`seedAccessOnCommandConnection`), for the configuration this start serves.
+ * A production start writes none of them itself, so a site that migrates at
+ * start gets them here, under the same lock and in the same order as the
+ * command: after the registry rows they are read from.
+ */
+function startAccessSeeder(
+  adapter: AdapterLike,
+  logger: LoggerLike
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    const [{ seedAccessOnCommandConnection }, { getService }] =
+      await Promise.all([
+        import("../domains/schema/migrate/command-access"),
+        import("../di/service-access"),
+      ]);
+    // The boot adapter and logger are the command's in all it uses, as for
+    // `migrateCore` above.
+    await seedAccessOnCommandConnection(
+      adapter as never,
+      { config: getService("config") as never, configPath: null },
+      logger as never
+    );
+  };
+}
+
+/**
+ * The user fields' storage, as `nextly migrate` provisions it once its
+ * migrations have applied (`provisionUserFieldTables`): the code-defined
+ * fields synced into `user_field_definitions`, merged with the admin's, and a
+ * `user_ext` column for each, for the configuration this start serves. A
+ * production start only loads the merged fields, so a site that migrates at
+ * start gets a newly declared field here.
+ */
+async function provisionStartUserFields(
+  adapter: AdapterLike,
+  logger: LoggerLike
+): Promise<void> {
+  const [{ provisionUserFieldTables }, { getService }] = await Promise.all([
+    import("../cli/commands/migrate"),
+    import("../di/service-access"),
+  ]);
+  // The boot adapter and logger are the command's in all it uses, as for
+  // `migrateCore` above.
+  await provisionUserFieldTables(
+    getService("config").users,
+    adapter as never,
+    logger as never
+  );
+}
+
 /** What one boot-migration run is handed besides the caller's arguments. */
 interface BootMigrationRun {
   core: MigrateCoreLike;
+  /** The user fields' storage once the migrations have applied. */
+  provisionUserFields: () => Promise<void>;
   coreLogger: LoggerLike;
   migrationsDir: string;
   ensureLedger: () => Promise<void>;
@@ -267,6 +329,9 @@ async function applyBootMigrations(
     // table while reporting a clean migrate.
     ...(await pluginMigrationArgs(args.config.plugins ?? [])),
     ensureLedger: run.ensureLedger,
+    // The access `nextly migrate` adds once the registry rows are written:
+    // a production start adds none, so these migrations are the deploy step.
+    seedPermissions: startAccessSeeder(adapter, run.coreLogger),
   });
   // REFUSES rather than serving. A held lock no longer comes back as
   // `ran: false` (the lock throws `NEXTLY_MIGRATE_LOCK_BUSY`, which the
@@ -285,6 +350,9 @@ async function applyBootMigrations(
   if (!ran) {
     throw bootMigrationsNotRun();
   }
+  // After the migrations, as `nextly migrate` provisions them: the table
+  // follows the configuration's final schema.
+  await run.provisionUserFields();
   logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
 
   /*
@@ -412,11 +480,15 @@ export async function runProdMigrationsIfEnabled(
   // opens it, so the decision to run is read in one place.
   openBootMigrationsGate();
 
+  const coreLogger = bootCoreLogger(args.logger);
   const run: BootMigrationRun = {
     migrationsDir: resolve(process.cwd(), args.config.db.migrationsDir),
-    coreLogger: bootCoreLogger(args.logger),
+    coreLogger,
     ensureLedger: schemaLedgerEnsurer(args.adapter),
     core: migrateCoreFor(args),
+    provisionUserFields:
+      args.provisionUserFields ??
+      (() => provisionStartUserFields(args.adapter, coreLogger)),
   };
 
   try {
