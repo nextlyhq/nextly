@@ -68,6 +68,17 @@ function ImageSummary({
 }
 
 /** What keeps the picture from showing in full, and the action that fixes it. */
+/**
+ * Whether a 1200 × 630 copy made from the image fixes any of its problems:
+ * the one decision behind "Make a share image", beside the notice above the
+ * fields and in this row alike.
+ */
+export function copyFixes(
+  problems: readonly { fix: string }[] | undefined
+): boolean {
+  return (problems ?? []).some(problem => problem.fix === "make");
+}
+
 function ImageProblems({
   problems,
   onMake,
@@ -78,7 +89,7 @@ function ImageProblems({
   writable: boolean;
 }): ReactNode {
   if (problems.length === 0) return null;
-  const makeable = onMake !== undefined && problems.some(p => p.fix === "make");
+  const makeable = onMake !== undefined && copyFixes(problems);
   return (
     <Note tone="warning">
       <b className="font-semibold">

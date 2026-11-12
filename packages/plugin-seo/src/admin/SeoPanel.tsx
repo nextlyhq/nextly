@@ -41,7 +41,7 @@ import {
   type SourceNames,
 } from "./parts";
 import { PreviewCard } from "./previews";
-import { useMakeFailure, type MakeFailure } from "./share-image-row";
+import { copyFixes, useMakeFailure, type MakeFailure } from "./share-image-row";
 import {
   isTyped,
   typedText,
@@ -200,9 +200,7 @@ function makerOf(
   track: MakeFailure["track"]
 ): (() => void) | undefined {
   const make = props.onMakeShareImage;
-  const fixable = (props.context?.shareImage?.problems ?? []).some(
-    problem => problem.fix === "make"
-  );
+  const fixable = copyFixes(props.context?.shareImage?.problems);
   if (!props.writable || make === undefined || !fixable) return undefined;
   // A copy that could not be made answers with no image: said beside the
   // notice, so trying again is a choice rather than a silent repeat.
