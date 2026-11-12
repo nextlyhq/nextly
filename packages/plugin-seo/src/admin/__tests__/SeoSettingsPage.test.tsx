@@ -625,6 +625,33 @@ describe("saving", () => {
     expect(sent).toEqual([]);
   });
 
+  it("keeps an edit made while a save was on its way when a read lands first", async () => {
+    serving({ _rev: "2", siteName: "Acme", setupStep: 3 });
+    let finish = () => {};
+    answerSave = () =>
+      new Promise<void>(resolve => {
+        finish = resolve;
+      });
+    const { rerender } = render(<SeoSettingsPage />);
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    // Changed back while the save is on its way.
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme" },
+    });
+    // The save's own refresh reads the new version before the save answers.
+    stored = { ...stored, siteName: "Acme Ltd", _rev: "3" };
+    rerender(<SeoSettingsPage />);
+    finish();
+    await settle();
+    expect((screen.getByLabelText("Site name") as HTMLInputElement).value).toBe(
+      "Acme"
+    );
+  });
+
   it("opens no other tab while a save is on its way", async () => {
     serving({ _rev: "2", siteName: "Acme", setupStep: 3 });
     let finish = () => {};
