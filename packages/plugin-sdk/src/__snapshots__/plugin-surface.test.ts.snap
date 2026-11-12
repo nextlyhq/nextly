@@ -38,6 +38,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "ChallengeViewProps (type)",
   "Checkbox (value)",
   "Checklist (value)",
+  "ChecklistDoneStyle (type)",
   "ChecklistItem (value)",
   "ChecklistItemProps (type)",
   "ChecklistMark (value)",
