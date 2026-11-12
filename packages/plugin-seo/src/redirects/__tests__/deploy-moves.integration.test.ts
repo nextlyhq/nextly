@@ -22,7 +22,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { catchUp, lastCatchUp } from "../../address-record/catch-up";
 import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
 import { claimKey } from "../../address-record/rows";
-import { NOT_FOUND_SLUG } from "../../not-found/collection";
+import { readNotFoundLog } from "../../not-found/log";
+import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
 
@@ -141,14 +142,10 @@ async function redirects(t: TestNextly) {
   );
 }
 
-async function notFound(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: NOT_FOUND_SLUG,
-    limit: 500,
-  });
-  return (items as Record<string, unknown>[]).map(
-    row => `${row.path} ${row.kind}`
-  );
+async function notFound(_t: TestNextly) {
+  const seo = keptSeoContext();
+  if (!seo) throw new Error("the SEO plugin never started");
+  return (await readNotFoundLog(seo)).map(row => `${row.path} ${row.kind}`);
 }
 
 async function held(t: TestNextly) {

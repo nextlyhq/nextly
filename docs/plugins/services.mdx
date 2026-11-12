@@ -595,6 +595,13 @@ It comes in two layers:
   the one they were called on as it was, and `first()` runs the query without
   changing its builder, so one base builder can be narrowed several ways. See
   [Tables of your own](/docs/plugins/schema#tables-of-your-own).
+  A counter is `ctx.db.update(table, { hits: increment(1) }).where(...)`, with
+  `increment` from `@nextlyhq/plugin-sdk/db` (**`@experimental`**): the database
+  adds to the stored value in that one statement (`hits = hits + 1`), so
+  updates made at once all count, and the number it resolves to says whether a
+  row matched. It takes a numeric column (`integer`, `smallint`, `bigint`,
+  `real`, `double`, `decimal`) and refuses any other with a `NextlyError`, code
+  `VALIDATION_ERROR`; it is a value `update` reads, not SQL.
 - **`ctx.db.raw`** is Drizzle's fluent builder for the configured dialect —
   `select`, `insert`, `update`, `delete` — plus `transaction`, with no owner
   check, and you own dialect portability. It has no `execute`, `run` or
