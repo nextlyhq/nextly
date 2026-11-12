@@ -985,8 +985,10 @@ export type {
  * your project" card draws: `Checklist` puts a progress bar over an ordered
  * list, and `ChecklistItem` is one step, marked open, done or skipped, with
  * its name, a hint line and its buttons. The bar is a picture only; say the
- * count in words beside the list's title ("4 of 6 done"). `ChecklistMark` and
- * `ChecklistProgress` are the parts, for a layout of its own.
+ * count in words beside the list's title ("4 of 6 done"). `columns={2}` lays
+ * the steps in two columns where the list is wide enough, and
+ * `doneStyle="struck"` strikes a done step's name through. `ChecklistMark`
+ * and `ChecklistProgress` are the parts, for a layout of its own.
  *
  * Intended to be stable once a first-party plugin's setup list exercises it.
  */
@@ -1002,6 +1004,7 @@ export type {
   ChecklistMarkProps,
   ChecklistProgressProps,
   ChecklistStatus,
+  ChecklistDoneStyle,
 } from "@nextlyhq/admin";
 
 /**

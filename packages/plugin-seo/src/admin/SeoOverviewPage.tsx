@@ -5,7 +5,7 @@
  * connections.
  *
  * Drawn only from the admin's own parts (`PageFrame`, `PageHeader`,
- * `Breadcrumbs`, `Card`, `Checklist`, `Stat`, `Grid`, `Badge`, `Button`), so
+ * `Breadcrumbs`, `Card`, `Checklist`, `Stat`, `Grid`, `Button`), so
  * it looks like the rest of the admin. Each card reads its own route and
  * says for itself when that read fails, so one that cannot be read never
  * takes the rest of the page with it.
@@ -14,7 +14,6 @@
  */
 import {
   apiErrorMessage,
-  Badge,
   Button,
   Card,
   CardAction,
@@ -22,8 +21,8 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Checklist,
   ChecklistItem,
-  ChecklistProgress,
   Grid,
   navigateTo,
   PageFrame,
@@ -32,7 +31,6 @@ import {
   toastMutationResult,
   usePluginRoute,
   usePluginRouteMutation,
-  type BadgeProps,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useId, useMemo, type JSX, type ReactNode } from "react";
 
@@ -163,8 +161,10 @@ function TextLink({
 
 /**
  * One of the four small cards: a region named by its title, which is its
- * heading, or, where the card leads with a figure, the `Stat`'s label drawn
- * above it.
+ * heading, or, while the card leads with a figure, the `Stat`'s label drawn
+ * above it. A card whose figure is not drawn (still loading, or its read
+ * failed) shows its title as the heading instead, so it always says what it
+ * is.
  */
 function SmallCard({
   title,
@@ -319,29 +319,31 @@ function SetupCard({
         <CardContent className="pt-0">
           <ReadState what="The setup checklist" pending={pending} error={error}>
             {() => (
-              <>
-                <ChecklistProgress done={done} total={items.length} />
-                <ol
-                  aria-label="Setup steps"
-                  className="grid grid-cols-1 gap-x-6 sm:grid-cols-2 sm:[&>li:nth-child(2)]:border-t-0"
-                >
-                  {items.map(item => {
-                    const text = checklistItemText(item);
-                    return (
-                      <ChecklistItem
-                        key={item.id}
-                        status={item.done ? "done" : "open"}
-                        label={text.label}
-                        actions={
-                          item.done ? undefined : (
-                            <TextLink href={text.href}>{text.action}</TextLink>
-                          )
-                        }
-                      />
-                    );
-                  })}
-                </ol>
-              </>
+              // Two columns where the card is wide enough, each done step
+              // crossed off.
+              <Checklist
+                label="Setup steps"
+                done={done}
+                total={items.length}
+                columns={2}
+                doneStyle="struck"
+              >
+                {items.map(item => {
+                  const text = checklistItemText(item);
+                  return (
+                    <ChecklistItem
+                      key={item.id}
+                      status={item.done ? "done" : "open"}
+                      label={text.label}
+                      actions={
+                        item.done ? undefined : (
+                          <TextLink href={text.href}>{text.action}</TextLink>
+                        )
+                      }
+                    />
+                  );
+                })}
+              </Checklist>
             )}
           </ReadState>
           {visibility.error === null ? null : (
@@ -355,15 +357,18 @@ function SetupCard({
   );
 }
 
-/** Each severity's name on the health card, and its badge. */
-const SEVERITY_TEXT: Record<
-  ProblemSeverity,
-  { name: string; badge: BadgeProps["variant"] }
-> = {
-  error: { name: "Errors", badge: "destructive" },
-  warning: { name: "Warnings", badge: "warning" },
-  notice: { name: "Notices", badge: "default" },
-};
+/**
+ * Each severity's name on the health card, and the text colour its count is
+ * written in while there is any: a number in its severity's colour reads
+ * quieter than a chip, and the name beside it says what it counts, so colour
+ * is never the only sign. A count of none is muted whatever its severity.
+ */
+const SEVERITY_TEXT: Record<ProblemSeverity, { name: string; count: string }> =
+  {
+    error: { name: "Errors", count: "text-danger-text" },
+    warning: { name: "Warnings", count: "text-warning-text" },
+    notice: { name: "Notices", count: "text-muted-foreground" },
+  };
 
 /** The site's search health: a verdict, and how many of each severity. */
 function HealthCard({ checked }: { checked: CheckedProblemList }): JSX.Element {
@@ -372,8 +377,10 @@ function HealthCard({ checked }: { checked: CheckedProblemList }): JSX.Element {
   // the check this screen asks for is waited on rather than read as healthy.
   const unchecked =
     list !== undefined && (list.checkedAt === undefined || list.due);
+  // The verdict is drawn only for a list checked whole.
+  const drawsVerdict = list !== undefined && !unchecked;
   return (
-    <SmallCard title="Search health" leadsWithStat>
+    <SmallCard title="Search health" leadsWithStat={drawsVerdict}>
       <ReadState
         what="The problem list"
         pending={list === undefined && failed === null}
@@ -402,6 +409,8 @@ function HealthCard({ checked }: { checked: CheckedProblemList }): JSX.Element {
               <Stat
                 label="Search health"
                 value={good ? "Good" : "Should improve"}
+                tone={good ? "success" : "warning"}
+                size="compact"
               />
               <ul className="flex flex-col gap-2">
                 {SEVERITY_ORDER.map(severity => (
@@ -413,9 +422,15 @@ function HealthCard({ checked }: { checked: CheckedProblemList }): JSX.Element {
                       </TextLink>
                     }
                     end={
-                      <Badge variant={SEVERITY_TEXT[severity].badge}>
+                      <span
+                        className={`font-semibold ${
+                          counts[severity] === 0
+                            ? "text-muted-foreground"
+                            : SEVERITY_TEXT[severity].count
+                        }`}
+                      >
                         {counts[severity]}
-                      </Badge>
+                      </span>
                     }
                   />
                 ))}
@@ -440,13 +455,17 @@ function PagesCard(): JSX.Element {
     [pages.data]
   );
   return (
-    <SmallCard title="Pages" leadsWithStat>
+    <SmallCard
+      title="Pages"
+      leadsWithStat={!pages.pending && pages.error === null}
+    >
       <ReadState what="The pages" pending={pages.pending} error={pages.error}>
         {() => (
           <>
             <Stat
               label="Pages"
               value={`${coverage.total} public ${coverage.total === 1 ? "page" : "pages"}`}
+              size="compact"
             />
             <ul className="flex flex-col gap-2">
               <Line name="Hidden from search" end={<b>{coverage.hidden}</b>} />

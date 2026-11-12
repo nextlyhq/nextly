@@ -421,6 +421,7 @@ export type {
   ChecklistMarkProps,
   ChecklistProgressProps,
   ChecklistStatus,
+  ChecklistDoneStyle,
 } from "./components/shared/checklist";
 export { SettingsRowGroup } from "./components/features/settings/SettingsRowGroup";
 export type { SettingsRowGroupProps } from "./components/features/settings/SettingsRowGroup";

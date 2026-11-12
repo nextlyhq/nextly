@@ -625,8 +625,7 @@ function TypeRow({
               Hide the whole group from search
             </span>
             <span className="text-xs text-muted-foreground">
-              Every {type.label} page stays out of search, whatever each page
-              says.
+              Its pages stay out of search, whatever each page says.
             </span>
           </label>
         </div>

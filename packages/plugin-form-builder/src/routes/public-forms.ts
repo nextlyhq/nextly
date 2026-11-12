@@ -135,7 +135,7 @@ function positiveInt(raw: string | null): number | undefined {
  * one that was asked for, so `?page=100` on a single-page list cannot answer
  * "page 100 of 1".
  */
-function toPageMeta(pagination: {
+export function toPageMeta(pagination: {
   total: number;
   limit: number;
   offset: number;

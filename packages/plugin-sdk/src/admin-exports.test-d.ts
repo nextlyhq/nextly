@@ -432,6 +432,25 @@ expectTypeOf(adminEntry.ChecklistItem)
 expectTypeOf<adminEntry.ChecklistStatus>().toEqualTypeOf<
   "open" | "done" | "skipped"
 >();
+// Two columns and struck-through done steps are opt-in, so a list that sets
+// neither draws as it always did.
+expectTypeOf<adminEntry.ChecklistProps["columns"]>().toEqualTypeOf<
+  1 | 2 | undefined
+>();
+expectTypeOf<adminEntry.ChecklistDoneStyle>().toEqualTypeOf<
+  "quiet" | "struck"
+>();
+expectTypeOf<adminEntry.ChecklistProps["doneStyle"]>().toEqualTypeOf<
+  adminEntry.ChecklistDoneStyle | undefined
+>();
+
+// A stat's dot takes a badge's status names, and its compact size is opt-in.
+expectTypeOf<adminEntry.StatProps["tone"]>().toEqualTypeOf<
+  "success" | "warning" | "destructive" | "info" | undefined
+>();
+expectTypeOf<adminEntry.StatProps["size"]>().toEqualTypeOf<
+  "default" | "compact" | undefined
+>();
 
 expectTypeOf(adminEntry.SettingsRowGroup)
   .parameter(0)

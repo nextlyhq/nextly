@@ -653,6 +653,22 @@ A failure that a retry can help (the provider is down, or times out) is not drop
 
 A notification that fails for good is logged twice, and the two lines share the queued email's id (`queuedId`): the Form Builder's line names the form and the notification, and the server's own `queued-email-failed` line gives the reason. Neither names a recipient.
 
+### What each send did, and Resend
+
+A submission's page lists every notification it triggered under **Emails**, and each recipient with what became of it and when: Waiting, Retrying, Sending, Sent, Sent after N retries, Failed, or Cancelled (in Settings › Email, by marking the submission Spam, or by erasing the address). A notification whose recipients differ reads **Partly sent**. A notification's own page lists its **Recent sends** across the form's submissions.
+
+The plugin keeps this with the submission, in its internal `form-submission-sends` collection, written in the same transaction as each change of the queued email, so it never falls behind what was sent. Recipients are kept by a masked hint (`j•••@acme.test`) and a keyed digest, never by address. The record outlives core's delivery log, which is pruned after 90 days, does not change when the submission's answers or the notification are edited later, and is deleted with the submission.
+
+**Resend** sends a notification of a submission again, to the recipients who have not received it, built from the notification and the answers as they are now. You may tick a recipient who did receive it, among those the notification can address now, to send it to them again. A recipient a send filter added is left out once it has received it. When only copied (Cc or Bcc) recipients missed it, each gets a message addressed to them alone. A failed earlier send whose message is still held is retired in the same transaction, so it cannot be retried as well. Resend is not offered while a send of the notification is waiting, retrying or sending; the page says a send is in progress. It needs both `update-<submissions>` and `manage-email-deliveries`, and records who asked.
+
+The routes, under `/admin/api/plugins/@nextlyhq/plugin-form-builder`:
+
+- `GET /submissions/:id/sends` (reading submissions): each notification with its recipients and whether a send is in progress.
+- `GET /notification-sends?form=&notification=&limit=` (reading submissions): a notification's recent sends.
+- `POST /submissions/:id/resend` with `{ notification, tick? }` (updating submissions and managing email deliveries).
+
+Existing installations receive the new fields of `form-submission-sends` and the new internal `form-submission-resends` collection through their migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A send recorded before the upgrade has no notification or recipients on record, so it is not listed.
+
 ### beforeEmail Hook
 
 Modify or filter outgoing emails before they are queued. The hook runs inside the transaction that saves the submission: a hook that throws refuses the submission, and the hook may run again if that transaction is retried, so keep it to changing the emails and do no other work in it.

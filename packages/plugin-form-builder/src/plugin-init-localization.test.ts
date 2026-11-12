@@ -11,7 +11,11 @@ import { formBuilder } from "./plugin";
 function bootContext(getCollection: (slug: string) => Promise<unknown>) {
   return {
     self: { collections: {} as Record<string, string> },
-    services: { collections: { getCollection } },
+    services: {
+      collections: { getCollection },
+      // `init` subscribes send history to changes in its queued emails.
+      email: { onQueuedEmailChange: vi.fn() },
+    },
     logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
     // `init` also subscribes the submission-notification hook. Stubbed
     // because this file is about what it RECORDS, not what it subscribes.

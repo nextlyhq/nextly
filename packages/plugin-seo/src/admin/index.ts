@@ -34,7 +34,7 @@ import { SeoBulkPage as BulkScreen } from "./SeoBulkPage";
 import { SeoImportPage } from "./SeoImportPage";
 import { SeoOverviewPage } from "./SeoOverviewPage";
 import { SeoPagesPage as PagesScreen } from "./SeoPagesPage";
-import { SeoProblemsPage as ProblemsScreen } from "./SeoProblemsPage";
+import { SeoProblemsPage } from "./SeoProblemsPage";
 import { SeoReceivedPage } from "./SeoReceivedPage";
 import { SeoRedirectsPage as RedirectsScreen } from "./SeoRedirectsPage";
 import { SeoSettingsPage } from "./SeoSettingsPage";
@@ -47,9 +47,6 @@ import { SeoStatusSection } from "./status";
 // registers that export.
 export const SeoPagesPage: () => JSX.Element = withTrail(PagesScreen, [
   { label: "Pages" },
-]);
-export const SeoProblemsPage: () => JSX.Element = withTrail(ProblemsScreen, [
-  { label: "Problems" },
 ]);
 export const SeoRedirectsPage: () => JSX.Element = withTrail(RedirectsScreen, [
   { label: "Redirects" },
@@ -85,6 +82,7 @@ registerComponents({
 
 export { SeoOverviewPage } from "./SeoOverviewPage";
 export { SeoImportPage } from "./SeoImportPage";
+export { SeoProblemsPage } from "./SeoProblemsPage";
 export { SeoSettingsPage } from "./SeoSettingsPage";
 export { SeoReceivedMoved } from "./section";
 export { SeoReceivedPage } from "./SeoReceivedPage";
