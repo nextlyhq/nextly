@@ -5,12 +5,14 @@
  *
  * The log is written beneath a Suspense boundary: reading the request's
  * headers makes that part dynamic, and under Cache Components dynamic work
- * outside a boundary fails the build. Where the SEO plugin is not on, or the
- * request did not pass through the site's Proxy, nothing is logged.
+ * outside a boundary fails the build. The write itself waits for `after`, so
+ * the page is sent without waiting on the database. Where the SEO plugin is
+ * not on, or the request did not pass through the site's Proxy, nothing is
+ * logged.
  */
 import { logNotFound } from "@nextlyhq/plugin-seo";
 import { headers } from "next/headers";
-import { connection } from "next/server";
+import { after, connection } from "next/server";
 import { Suspense } from "react";
 
 async function LogThisAddress(): Promise<null> {
@@ -18,7 +20,8 @@ async function LogThisAddress(): Promise<null> {
   // for good, so it neither counts a visit nor reads the time while
   // prerendering, which Next.js refuses.
   await connection();
-  await logNotFound(await headers());
+  const requestHeaders = await headers();
+  after(() => logNotFound(requestHeaders));
   return null;
 }
 

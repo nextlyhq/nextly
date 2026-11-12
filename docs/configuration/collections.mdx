@@ -321,7 +321,7 @@ Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the data
 | **Type** | `string` |
 | **Default** | `undefined` |
 
-Where each entry is served on your site, as a path with placeholders: `"/blog/{slug}"`. [`publicAddressOf`](/docs/configuration/public-addresses) reads it, and answers that a collection without one has no address rather than guessing. Experimental: the SEO plugin's sitemap and canonical links don't read it yet, so it changes nothing there.
+Where each entry is served on your site, as a path with placeholders: `"/blog/{slug}"`. [`publicAddressOf`](/docs/configuration/public-addresses) reads it, and answers that a collection without one has no address rather than guessing. Experimental. With the [SEO plugin](/docs/plugins/seo) installed, the sitemap lists each published entry at this address and each page's canonical link is this address; a collection without one is left out of the sitemap.
 
 ```ts
 defineCollection({

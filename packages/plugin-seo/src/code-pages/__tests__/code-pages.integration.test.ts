@@ -306,6 +306,37 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("describes a page as its route says it is, with the head unchanged", async () => {
+      const t = await boot();
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, siteName: "Acme" },
+      });
+      const options = { metadata: { title: "About Acme" } };
+      const hinted = {
+        ...options,
+        structuredDataHints: {
+          type: "aboutPage",
+          questions: [{ question: "Who are we?", answer: "A small team." }],
+        },
+      };
+
+      const text = await seoStructuredData("/about", hinted);
+
+      expect(await seoMetadata("/about", hinted)).toEqual(
+        await seoMetadata("/about", options)
+      );
+      const graph = (JSON.parse(text ?? "{}") as { "@graph"?: unknown[] })[
+        "@graph"
+      ];
+      const types = (graph ?? []).map(
+        node => (node as { "@type"?: unknown })["@type"]
+      );
+      expect(types).toContain("AboutPage");
+      expect(types).toContain("FAQPage");
+      expect(text).toContain("Who are we?");
+    });
+
     it("titles a page with nothing set by the site's pattern and the page's name", async () => {
       const t = await boot();
       await t.nextly.updateSingle({

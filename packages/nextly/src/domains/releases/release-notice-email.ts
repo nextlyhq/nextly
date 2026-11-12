@@ -2,55 +2,36 @@
  * The email that copies a release notice to the person it is for.
  *
  * A release notice is recorded in the transaction of the change it reports,
- * and its email must stand or fall with it. The change adds this job in the
- * same transaction ({@link enqueueReleaseNoticeEmail}), and the job sends the
- * email once that has committed: a notice therefore never stands without its
- * email handed on, and a process that stops before the job runs leaves it
- * for the next jobs run.
- *
- * Every attempt is the job's, through core's send (`EmailService.send`), and
- * asks again first whether the notice's person may still be sent it: its
- * kind's `visible`, and an active account. A failure a retry can help is
- * thrown to the job queue, which tries again with backoff up to the attempt
- * limit core's queued email uses; so a person who lost access or was
- * deactivated between two attempts is sent nothing by the second. A failure
- * no retry can help is logged, and the notice alone stands.
- *
- * Sent under a key made from the notice's id, so however often the job runs
- * the notice's email is sent once where the provider honours keys: core's
- * send claim answers a repeat of the same message from the first send.
+ * and its email stands or falls with it: the change adds this job in the same
+ * transaction ({@link enqueueReleaseNoticeEmail}), and the job sends the email
+ * once that has committed. How the job reads the notice, asks again whether
+ * its person may still be sent it, sends it under a key made from the
+ * notice's id and retries a failure is the notices domain's one notice email
+ * (`domains/notices/notice-email`), shared with every feature that emails its
+ * notices; what is the releases' own is here: the job's slug, and the message
+ * a release notice makes, with the instant the release was scheduled for.
  *
  * @module domains/releases/release-notice-email
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { NextlyError } from "../../errors";
-import { getNextlyLogger } from "../../observability/logger";
-import { getPublicOrigin } from "../../shared/lib/get-base-url";
-import type { EmailFailure } from "../email/failure";
-import { QUEUED_EMAIL_MAX_ATTEMPTS } from "../email/queued-email-job";
-import { thrownAttemptFailure } from "../email/queued-send";
-import type { EmailService } from "../email/services/email-service";
+import type { EmailSendOutcome } from "../email/services/send-failures";
+import type { JobDefinition } from "../jobs/job-registry";
 import {
-  notAcceptedFailure,
-  type EmailSendOutcome,
-} from "../email/services/send-failures";
-import { escapeHtml } from "../email/services/template-engine";
-import { defineJob, type JobDefinition } from "../jobs/job-registry";
-import { enqueueInTransaction } from "../jobs/jobs-repository";
-import {
-  registeredNoticeKind,
-  type NoticeKind,
-  type NoticeText,
-} from "../notices/notice-kinds";
-import {
-  NoticesService,
-  type NoticesDb,
-  type StoredNotice,
-} from "../notices/notices-service";
+  createNoticeEmailJob,
+  enqueueNoticeEmail,
+  noticeEmailKey,
+  noticeEmailMessage,
+  sendNoticeEmail,
+  type NoticeEmail,
+  type NoticeEmailDeps,
+  type NoticeEmailJobInput,
+  type NoticeEmailMessage,
+} from "../notices/notice-email";
+import type { NoticeKind, NoticeText } from "../notices/notice-kinds";
+import type { StoredNotice } from "../notices/notices-service";
 
 import { isKnownTimeZone } from "./release-calendar";
-import { releaseNoticeLinks } from "./release-notice-links";
 import { RELEASE_OVERDUE_NOTICE } from "./release-overdue-notice";
 import { RELEASE_STOPPED_NOTICE } from "./release-stopped-notice";
 
@@ -58,22 +39,29 @@ import { RELEASE_STOPPED_NOTICE } from "./release-stopped-notice";
 export const RELEASE_NOTICE_EMAIL_JOB = "releases:notice-email";
 
 /** What the job is given: the notice to copy, by id, and nothing of it. */
-export type ReleaseNoticeEmailJobInput = { noticeId: string };
+export type ReleaseNoticeEmailJobInput = NoticeEmailJobInput;
 
 /** What the job reads and sends through. */
-export interface ReleaseNoticeEmailDeps {
-  /** The database the notice and its person are read from. */
-  db: NoticesDb;
-  /** Core's send service, or `null` where none is registered. */
-  email: Pick<EmailService, "isConfigured" | "send"> | null;
-}
+export type ReleaseNoticeEmailDeps = NoticeEmailDeps;
 
 /** The email made from one notice. */
-export interface ReleaseNoticeMessage {
-  subject: string;
-  html: string;
-  plainText: string;
-}
+export type ReleaseNoticeMessage = NoticeEmailMessage;
+
+/**
+ * The releases' notice email, as the shared job runs it: under the releases'
+ * own slug, its keys and logs naming a "release" notice, and each message made
+ * from a release notice alone, so the job sends nothing for another feature's.
+ */
+const RELEASE_NOTICE_EMAIL: NoticeEmail = {
+  slug: RELEASE_NOTICE_EMAIL_JOB,
+  name: "release",
+  message: (notice, subject) => {
+    const copy = copyOf(notice, subject.subjectGone);
+    return copy === null
+      ? null
+      : releaseNoticeMessage({ ...copy, url: subject.url });
+  },
+};
 
 /**
  * Hand a newly recorded notice's email to the job queue, in the notice's own
@@ -84,15 +72,7 @@ export async function enqueueReleaseNoticeEmail(
   noticeId: string,
   now: Date
 ): Promise<void> {
-  const input: ReleaseNoticeEmailJobInput = { noticeId };
-  await enqueueInTransaction(tx, {
-    slug: RELEASE_NOTICE_EMAIL_JOB,
-    input,
-    runAt: null,
-    // The email names its person itself; the job acts as nobody.
-    runAsUserId: null,
-    now,
-  });
+  await enqueueNoticeEmail(tx, RELEASE_NOTICE_EMAIL_JOB, noticeId, now);
 }
 
 /**
@@ -100,7 +80,7 @@ export async function enqueueReleaseNoticeEmail(
  * and unlike any other notice's.
  */
 export function releaseNoticeEmailKey(noticeId: string): string {
-  return `release-notice:${noticeId}`;
+  return noticeEmailKey(RELEASE_NOTICE_EMAIL, noticeId);
 }
 
 /**
@@ -122,82 +102,24 @@ export function releaseNoticeMessage(input: {
     input.scheduledAt === null
       ? null
       : instantIn(input.scheduledAt, input.timezone);
-  const paragraphs = [
-    input.text.title,
-    ...(input.text.body === undefined ? [] : [input.text.body]),
-    ...(when === null ? [] : [`It was scheduled for ${when}.`]),
-  ];
-  const html = [
-    ...paragraphs.map(paragraph => `<p>${escapeHtml(paragraph)}</p>`),
-    ...(input.url === null
-      ? []
-      : [`<p><a href="${escapeHtml(input.url)}">Open the release</a></p>`]),
-  ].join("\n");
-  const plainText = [
-    ...paragraphs,
-    ...(input.url === null ? [] : [`Open the release: ${input.url}`]),
-  ].join("\n\n");
-  // One line: a title carrying a line break must not become a second header.
-  const subject = input.text.title.replace(/\s+/g, " ").trim();
-  return { subject, html, plainText };
-}
-
-/**
- * The job that sends a notice's email. Its dependencies are resolved per
- * run, as the queued email's own job resolves them, so the send service is
- * the one registered when it runs.
- */
-export function createReleaseNoticeEmailJob(
-  deps: () => ReleaseNoticeEmailDeps
-): JobDefinition<ReleaseNoticeEmailJobInput> {
-  return defineJob<ReleaseNoticeEmailJobInput>({
-    slug: RELEASE_NOTICE_EMAIL_JOB,
-    // As many attempts as core's queued email makes, so a notice's email is
-    // tried as long as any other queued email would be.
-    retry: { maxAttempts: QUEUED_EMAIL_MAX_ATTEMPTS },
-    handler: async input => {
-      // A row's input is whatever was stored; one without an id names no
-      // notice, and there is nothing to send.
-      if (typeof input?.noticeId !== "string") return;
-      const failure = await attemptFailure(deps(), input.noticeId);
-      if (failure === undefined) return;
-      if (!failure.retryable) {
-        getNextlyLogger().warn({
-          kind: "release-notice-email-failed",
-          message:
-            "A release notice's email could not be sent, and trying again would not help; the notice stands",
-          noticeId: input.noticeId,
-          reason: failure.reason,
-        });
-        return;
-      }
-      // To the job queue, which records this as the attempt's error and
-      // backs off; the next attempt asks again who may be sent it.
-      throw new NextlyError({
-        code: "EXTERNAL_SERVICE_ERROR",
-        publicMessage:
-          "A release notice's email was not sent and will be tried again.",
-        logContext: { noticeId: input.noticeId, reason: failure.reason },
-      });
-    },
+  return noticeEmailMessage({
+    text: input.text,
+    after: when === null ? [] : [`It was scheduled for ${when}.`],
+    url: input.url,
+    linkLabel: "Open the release",
   });
 }
 
 /**
- * One attempt at a notice's email, and why it failed, if it did: by the send's
- * own answer, or by what core's queued email makes of a send that threw.
+ * The job that sends a notice's email: the shared notice email job, under the
+ * releases' slug. Its dependencies are resolved per run, as the queued email's
+ * own job resolves them, so the send service is the one registered when it
+ * runs.
  */
-async function attemptFailure(
-  deps: ReleaseNoticeEmailDeps,
-  noticeId: string
-): Promise<EmailFailure | undefined> {
-  try {
-    const outcome = await emailReleaseNotice(deps, noticeId);
-    if (outcome === null || outcome.success) return undefined;
-    return outcome.failure ?? notAcceptedFailure();
-  } catch (error) {
-    return thrownAttemptFailure(error);
-  }
+export function createReleaseNoticeEmailJob(
+  deps: () => ReleaseNoticeEmailDeps
+): JobDefinition<ReleaseNoticeEmailJobInput> {
+  return createNoticeEmailJob(RELEASE_NOTICE_EMAIL, deps);
 }
 
 /**
@@ -209,59 +131,11 @@ async function attemptFailure(
  *
  * @returns the send's outcome, or `null` when nothing was sent
  */
-export async function emailReleaseNotice(
+export function emailReleaseNotice(
   deps: ReleaseNoticeEmailDeps,
   noticeId: string
 ): Promise<EmailSendOutcome | null> {
-  const { db, email } = deps;
-  if (email === null || !(await email.isConfigured())) return null;
-  const notice = await new NoticesService({ db }).byId(noticeId);
-  if (notice === null) return null;
-  // Only to a person the notice itself still shows to, by its kind's own
-  // rule as their list of notices applies it: a person who may no longer
-  // read releases is not sent what their list now hides from them.
-  const kind = registeredNoticeKind(notice.kind);
-  if (kind === undefined) return null;
-  if (kind.visible !== undefined && !(await kind.visible(notice.userId))) {
-    return null;
-  }
-  // Only an active account, asked of the database as the releases domain
-  // asks it of a member's author, so SQLite's 0 and 1 and a real boolean give
-  // one answer: a deactivated person keeps their roles, and with them the
-  // kind's `visible`, so that alone would still send it.
-  const [person] = await db.select<{ email: string | null }>("users", {
-    columns: ["email"],
-    where: {
-      and: [
-        { column: "id", op: "=", value: notice.userId },
-        { column: "isActive", op: "=", value: true },
-      ],
-    },
-    limit: 1,
-  });
-  if (!person?.email) return null;
-
-  // The link every release notice has (`release-notice-links`), so the notice
-  // and its email lead to the same page; none where the release is gone, or
-  // where no public origin is set, since a guessed host is a broken link.
-  const path =
-    (await releaseNoticeLinks([notice.subjectId])).get(notice.subjectId) ??
-    null;
-  const copy = copyOf(notice, path === null);
-  if (copy === null) return null;
-  const origin = getPublicOrigin();
-  const message = releaseNoticeMessage({
-    ...copy,
-    url: path === null || origin === null ? null : `${origin}${path}`,
-  });
-  return email.send({
-    to: person.email,
-    subject: message.subject,
-    html: message.html,
-    plainText: message.plainText,
-    person: { kind: "staff", id: notice.userId },
-    idempotencyKey: releaseNoticeEmailKey(notice.id),
-  });
+  return sendNoticeEmail(RELEASE_NOTICE_EMAIL, deps, noticeId);
 }
 
 /** A release notice's text and instant, or `null` for any other notice. */

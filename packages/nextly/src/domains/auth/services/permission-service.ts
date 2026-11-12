@@ -219,7 +219,7 @@ export class PermissionService extends BaseService {
           (bySlug
             ? await slugs.where(inArray(registry.slug, unrecognised))
             : await slugs
-          ).map(row => String(row.slug))
+          ).map((row: { slug: unknown }) => String(row.slug))
         );
         unrecognised = unrecognised.filter(resource => !found.has(resource));
       } catch {

@@ -1,6 +1,7 @@
 /**
  * The redirects screen's routes: list, add, edit and remove redirects, and
- * list the addresses not found with a suggested page for each.
+ * list the addresses not found with a suggested page for each, and say
+ * whether the site's Proxy, which serves them, runs.
  *
  * People see and type addresses as visitors open them (`/de/alt` on a site
  * with language prefixes); the routes turn them into the language and kept
@@ -11,6 +12,7 @@
  */
 import {
   NextlyError,
+  respondDoc,
   respondList,
   respondMutation,
   type PluginContext,
@@ -27,6 +29,7 @@ import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 import { redirectsSlug } from "./collection";
 import type { NotFoundView, RedirectView } from "./contract";
 import { importRedirects, readImportFile } from "./import";
+import { readProxyStatus } from "./proxy-seen";
 import { keptFrom, originBeside, servedOf } from "./served";
 import {
   putRedirect,
@@ -423,6 +426,13 @@ export function redirectRoutes(): PluginRoute[] {
       method: "GET",
       path: "/not-found",
       handler: (_req, ctx) => listNotFound(ctx),
+    },
+    // Whether the site's Proxy runs, so the admin can say when redirects
+    // are saved but not served.
+    {
+      method: "GET",
+      path: "/proxy-status",
+      handler: async (_req, ctx) => respondDoc(await readProxyStatus(ctx)),
     },
   ];
   return routes.map(route =>

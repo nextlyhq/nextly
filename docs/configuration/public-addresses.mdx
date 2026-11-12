@@ -5,7 +5,7 @@ description: Declare where each entry of a collection or Single is served, and r
 
 A page's public address is where a visitor reaches it on your site: `/blog/hello` for a post, `/` for a homepage. You declare it once, and `publicAddressOf` answers it, so code that builds a canonical link, a sitemap entry or a redirect from that answer never disagrees with itself, and a type with no declared address gets none rather than a guess.
 
-This is experimental, and nothing reads it unless you call it. The SEO plugin's sitemap and canonical links don't read `publicAddress` yet: they keep using their own settings, so declaring an address doesn't change them, and leaving one out doesn't remove a type from the sitemap.
+This is experimental. With the [SEO plugin](/docs/plugins/seo) installed, it decides where pages are listed and what they name as canonical: the sitemap lists each published page of a type at its declared address, and leaves out a type that declares none, and each page's canonical link is its declared address in its language. Without the plugin, nothing reads it unless you call it.
 
 ## Declaring an address
 

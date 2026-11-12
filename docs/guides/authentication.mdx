@@ -491,6 +491,10 @@ export default defineConfig({
 
 Self-registration is off unless the `auth` block sets `allowRegistration: true`. While it's off, `POST /admin/api/auth/register` answers `403` "Registration is not open.", creating no account and sending no email; an account already awaiting verification can still verify. With it on, a registered account gets no role, and never becomes the [first administrator](#the-first-administrator).
 
+> **Needs the release after 0.0.2-alpha.75.**
+
+The admin follows the same setting. Its sign-in page offers "Sign up" only while registration is on, and `/admin/register` shows its form only then; while it's off, that page says registration is closed and links back to sign-in. Both read the setting from `GET /admin/api/auth/setup-status`, which reports it as `allowRegistration`.
+
 Built-in defaults you can rely on (not configurable yet):
 
 | Setting                    | Default    |
@@ -521,26 +525,26 @@ openssl rand -base64 32
 
 ## Auth endpoints
 
-| Method | Path                                   | Description                                                                                  |
-| ------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| GET    | `/admin/api/auth/setup-status`         | Is setup still open, and does it need a setup token (`requiresSetupToken`)?                  |
-| GET    | `/admin/api/auth/session`              | Get the current session.                                                                     |
-| GET    | `/admin/api/auth/csrf`                 | Mint a CSRF token.                                                                           |
-| GET    | `/admin/api/auth/pending`              | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
-| GET    | `/admin/api/auth/ui`                   | The login page's provider buttons, challenge views and slots.                                |
-| POST   | `/admin/api/auth/setup`                | Create the first super-admin (auto-logs in); in production, with the setup token.            |
-| POST   | `/admin/api/auth/login`                | Email + password login.                                                                      |
-| POST   | `/admin/api/auth/challenge/resolve`    | Answer a second factor with the pending token.                                               |
-| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in.                                      |
-| POST   | `/admin/api/auth/logout`               | Revoke the current session.                                                                  |
-| POST   | `/admin/api/auth/refresh`              | Rotate access + refresh tokens.                                                              |
-| POST   | `/admin/api/auth/register`             | User registration, when `auth.allowRegistration` is on.                                      |
-| PATCH  | `/admin/api/auth/change-password`      | Change password (auth required).                                                             |
-| POST   | `/admin/api/auth/forgot-password`      | Request a password-reset email.                                                              |
-| POST   | `/admin/api/auth/reset-password`       | Reset password with the email token.                                                         |
-| POST   | `/admin/api/auth/accept-invite`        | Set a password from an invite link.                                                          |
-| POST   | `/admin/api/auth/verify-email`         | Verify email with the email token.                                                           |
-| POST   | `/admin/api/auth/verify-email/resend`  | Resend the verification email.                                                               |
+| Method | Path                                   | Description                                                                                                                   |
+| ------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/admin/api/auth/setup-status`         | Is setup still open, does it need a setup token (`requiresSetupToken`), and does the app take sign-ups (`allowRegistration`)? |
+| GET    | `/admin/api/auth/session`              | Get the current session.                                                                                                      |
+| GET    | `/admin/api/auth/csrf`                 | Mint a CSRF token.                                                                                                            |
+| GET    | `/admin/api/auth/pending`              | Which second factor an interrupted sign-in left outstanding. Never returns the token itself.                                  |
+| GET    | `/admin/api/auth/ui`                   | The login page's provider buttons, challenge views and slots.                                                                 |
+| POST   | `/admin/api/auth/setup`                | Create the first super-admin (auto-logs in); in production, with the setup token.                                             |
+| POST   | `/admin/api/auth/login`                | Email + password login.                                                                                                       |
+| POST   | `/admin/api/auth/challenge/resolve`    | Answer a second factor with the pending token.                                                                                |
+| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in.                                                                       |
+| POST   | `/admin/api/auth/logout`               | Revoke the current session.                                                                                                   |
+| POST   | `/admin/api/auth/refresh`              | Rotate access + refresh tokens.                                                                                               |
+| POST   | `/admin/api/auth/register`             | User registration, when `auth.allowRegistration` is on.                                                                       |
+| PATCH  | `/admin/api/auth/change-password`      | Change password (auth required).                                                                                              |
+| POST   | `/admin/api/auth/forgot-password`      | Request a password-reset email.                                                                                               |
+| POST   | `/admin/api/auth/reset-password`       | Reset password with the email token.                                                                                          |
+| POST   | `/admin/api/auth/accept-invite`        | Set a password from an invite link.                                                                                           |
+| POST   | `/admin/api/auth/verify-email`         | Verify email with the email token.                                                                                            |
+| POST   | `/admin/api/auth/verify-email/resend`  | Resend the verification email.                                                                                                |
 
 ## Next steps
 

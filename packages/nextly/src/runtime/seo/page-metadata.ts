@@ -42,6 +42,7 @@ import {
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
+  type PageStructuredDataHints,
 } from "./page-metadata-contract";
 import { structuredDataText } from "./structured-data";
 
@@ -421,6 +422,11 @@ export interface PageMetadataRequest {
   source: PageMetadataSource;
   /** What the page's own content offers, such as a Page Builder page's blocks. */
   derived?: PageMetadataValues;
+  /**
+   * What the route says about the page for its structured data. Given only
+   * when the structured data is asked for: it cannot change the head.
+   */
+  structuredDataHints?: PageStructuredDataHints;
   /** The route's own metadata, from its `buildMetadata`; undefined when none. */
   code: Metadata | undefined;
   /**
@@ -489,6 +495,11 @@ async function pageAnswerFor(
     source: request.source,
     code: codeValuesOf(request.code),
     derived: request.derived ?? {},
+    // In the input, so in the answer's cache key: a page asked with what its
+    // route lists is answered apart from its head, which is asked without.
+    ...(request.structuredDataHints === undefined
+      ? {}
+      : { structuredDataHints: request.structuredDataHints }),
   };
   // Parsed inside the cached read, so an answer that is not one is refused
   // there and never stored: the next request asks the provider again.
