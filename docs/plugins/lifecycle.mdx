@@ -166,6 +166,36 @@ dependencies first, and stops at the first that fails.
 the plugin to your config and to your build (see
 [Adding a Plugin](/docs/plugins#adding-a-plugin)).
 
+### The permissions and roles an install and an uninstall write
+
+`nextly plugins install <name>` adds the permissions and roles the plugin declares, and
+sets every preset role's grants (Admin, Editor, Author, Viewer) by this release's
+presets with the record of the release that set them, as `nextly migrate` from the same
+release does (see
+[The preset grants and the release that set them](/docs/guides/production-migrations#the-preset-grants-and-the-release-that-set-them)).
+It writes them in the same transaction that records the plugin installed, under the
+schema lock, so a plugin a production boot serves always has them, whether or not a
+`nextly migrate` follows. An install that stops part-way records none of them. Only the
+installed plugin's own permissions are added: the permissions of a collection or Single
+it contributes come with that entity's registry row, through `nextly migrate`, and until
+then the entity is not served. If the preset grants cannot be set, the install fails and
+nothing is recorded; run it again once the cause is fixed.
+
+`nextly plugins uninstall <name>`, with or without `--keep-data`, marks the plugin's
+permissions as no longer declared in the same transaction that records it uninstalled,
+and logs each with the roles that hold it. It changes no grant: the permissions leave
+the role editor and the preset roles' choices and enforce nothing, but a role that held
+one still holds it. Installing the plugin again clears the marks, and the grants are as
+they were. A `nextly migrate` with the plugin still in your config leaves them
+as they are: it adds the permissions and roles only of plugins recorded installed, and of
+plugins no install or uninstall has recorded yet.
+
+In production (any mode but development), both commands refuse, before changing
+anything, when the database records that a newer Nextly release set the preset grants:
+the message names that release, and the command succeeds when run from it or a newer
+one. In development the install goes on and leaves the preset grants as the newer
+release set them.
+
 A pending module that deletes data needs the data-loss consent before the install
 applies anything, exactly as `nextly migrate` asks for it. The install lists each
 module above what it deletes. At a terminal it asks once. Without a terminal it is

@@ -56,6 +56,70 @@ export interface SeedResult {
 export interface OrphanMarkScope {
   owners: ReadonlySet<string>;
   heldSlugs?: ReadonlySet<string>;
+  /**
+   * Permissions another owner declares, whose rows the pass leaves as they are,
+   * neither marked nor cleared, whatever owner key they are stored under. The
+   * app's own are stored under `app`, which a plugin may also be named, so an
+   * owner key alone cannot tell the plugin's rows from the app's.
+   */
+  kept?: readonly { action: string; resource: string }[];
+}
+
+/** A permission row as the orphan pass reads it. */
+interface OrphanPassRow {
+  id: string;
+  slug: string;
+  action: string;
+  resource: string;
+  owner: string | null;
+  orphanedAt: Date | null;
+}
+
+/** A permission's identity as the orphan pass compares it: action and resource, in any case. */
+function orphanPassKey(p: { action: string; resource: string }): string {
+  return `${String(p.action).toLowerCase()}|${String(p.resource).toLowerCase()}`;
+}
+
+/**
+ * The owners a pass speaks for: those `scope` names, and each owner of a
+ * permission the point before held, read from the same rows the pass walks.
+ */
+function ownersSpokenFor(
+  rows: readonly OrphanPassRow[],
+  scope: OrphanMarkScope
+): Set<string> {
+  const spokenFor = new Set(scope.owners);
+  for (const row of rows) {
+    if (row.owner && scope.heldSlugs?.has(String(row.slug))) {
+      spokenFor.add(row.owner);
+    }
+  }
+  return spokenFor;
+}
+
+/**
+ * The orphan mark the pass gives `row`: true to mark it, false to clear it, or
+ * undefined to leave it as it is. A row with no owner is core's or an
+ * entity's, and one another owner declares (`kept`) is not the pass's. A mark
+ * is set only for an owner the declaration speaks for; one it does not speak
+ * for may have added the permission outside it. A permission it declares is
+ * live whoever is recorded as its owner, so its mark is cleared.
+ */
+function orphanMarkFor(
+  row: OrphanPassRow,
+  judged: {
+    declared: ReadonlySet<string>;
+    kept: ReadonlySet<string>;
+    spokenFor: ReadonlySet<string>;
+  }
+): boolean | undefined {
+  if (!row.owner) return undefined;
+  const key = orphanPassKey(row);
+  if (judged.kept.has(key)) return undefined;
+  const isDeclared = judged.declared.has(key);
+  if (isDeclared === (row.orphanedAt === null)) return undefined;
+  if (!isDeclared && !judged.spokenFor.has(row.owner)) return undefined;
+  return !isDeclared;
 }
 
 /**
@@ -1113,9 +1177,9 @@ export class PermissionSeedService extends BaseService {
     const result = this.emptySeedResult();
     const { permissions } = this.tables;
 
-    const declaredKeys = new Set(
-      declared.map(p => `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`)
-    );
+    const declaredKeys = new Set(declared.map(orphanPassKey));
+    // Another owner's declarations: their rows are not this pass's to change.
+    const keptKeys = new Set((scope.kept ?? []).map(orphanPassKey));
 
     try {
       const rows = (await this.db
@@ -1127,44 +1191,22 @@ export class PermissionSeedService extends BaseService {
           owner: permissions.owner,
           orphanedAt: permissions.orphanedAt,
         })
-        .from(permissions)) as Array<{
-        id: string;
-        slug: string;
-        action: string;
-        resource: string;
-        owner: string | null;
-        orphanedAt: Date | null;
-      }>;
+        .from(permissions)) as OrphanPassRow[];
 
-      // The owners spoken for: those named, and each owner of a permission
-      // the point before held, read from the same rows the pass walks.
-      const spokenFor = new Set(scope.owners);
+      const judged = {
+        declared: declaredKeys,
+        kept: keptKeys,
+        spokenFor: ownersSpokenFor(rows, scope),
+      };
       for (const row of rows) {
-        if (row.owner && scope.heldSlugs?.has(String(row.slug))) {
-          spokenFor.add(row.owner);
-        }
-      }
-
-      for (const row of rows) {
-        if (!row.owner) continue;
-
-        const key = `${String(row.action).toLowerCase()}|${String(
-          row.resource
-        ).toLowerCase()}`;
-        const isDeclared = declaredKeys.has(key);
-        const isMarked = row.orphanedAt !== null;
-
-        if (isDeclared === !isMarked) continue;
-        // A mark is set only for an owner the declaration speaks for; one it
-        // does not speak for may have added the permission outside it. A
-        // permission it declares is live whoever is recorded as its owner.
-        if (!isDeclared && !spokenFor.has(row.owner)) continue;
+        const orphaned = orphanMarkFor(row, judged);
+        if (orphaned === undefined || row.owner === null) continue;
 
         result.total++;
         await writingPermissions(permissions, table =>
           this.db
             .update(table)
-            .set({ orphanedAt: isDeclared ? null : new Date() })
+            .set({ orphanedAt: orphaned ? new Date() : null })
             .where(eq(table.id, String(row.id)))
         );
         result.created++;
@@ -1176,7 +1218,7 @@ export class PermissionSeedService extends BaseService {
           action: row.action,
           resource: row.resource,
           owner: row.owner,
-          orphaned: !isDeclared,
+          orphaned,
         });
       }
     } catch (error) {
