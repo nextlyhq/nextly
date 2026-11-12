@@ -1,18 +1,23 @@
 // @vitest-environment jsdom
 
 /**
- * The Pages and addresses screen as a person uses it: the list and its
- * filters, and a page built in code given a title in the panel beside it,
- * its preview following what is typed. What a save sends is read from the
- * save itself.
+ * Pages as a person uses it: the list with each page's title, description
+ * and status read from the shared problem list, its search and filters and
+ * each row's actions; a page built in code given its SEO in the side panel;
+ * and Edit mode, typed straight into, saved one content type at a time and
+ * saying which pages a save that stopped part-way left unsaved. What each
+ * write sends is read from the write itself.
  */
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   usePluginRoute: vi.fn(),
   usePluginRouteMutation: vi.fn(),
+  readPluginRoute: vi.fn(),
+  writePluginRoute: vi.fn(),
   useMediaItem: vi.fn(() => ({ data: undefined })),
   MediaPickerDialog: () => null,
   toastMutationResult: vi.fn(),
@@ -21,12 +26,16 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
 
 import {
   navigateTo,
+  readPluginRoute,
   toastMutationResult,
   usePluginRoute,
   usePluginRouteMutation,
+  writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import type { BulkRow } from "../../bulk/contract";
 import type { SiteAddress } from "../../code-pages/contract";
+import type { Problem, ProblemListBody } from "../../problems/contract";
 import { SeoPagesPage } from "../SeoPagesPage";
 
 const ITEMS: SiteAddress[] = [
@@ -37,8 +46,22 @@ const ITEMS: SiteAddress[] = [
     from: "Pages",
     standing: "listed",
     title: "Acme | Acme",
+    titlePattern: "{Title} | {Site name}",
+    description: "Acme makes things.",
+    sources: { title: "pattern", description: "site" },
     canonical: "https://acme.example/",
     entry: { kind: "collection", slug: "pages", id: "7" },
+  },
+  {
+    path: "/blog",
+    name: "Blog",
+    source: "entry",
+    from: "Pages",
+    standing: "listed",
+    title: "Blog | Acme",
+    sources: { title: "page" },
+    canonical: "https://acme.example/blog",
+    entry: { kind: "collection", slug: "pages", id: "8" },
   },
   {
     path: "/pricing",
@@ -46,6 +69,7 @@ const ITEMS: SiteAddress[] = [
     source: "built",
     from: "app/pricing/page.tsx",
     standing: "not-connected",
+    sources: { title: "pattern" },
     canonical: "https://acme.example/pricing",
     seo: {
       typed: { hidden: false },
@@ -65,6 +89,7 @@ const ITEMS: SiteAddress[] = [
     source: "built",
     from: "app/contact/page.tsx",
     standing: "listed",
+    sources: {},
     canonical: "https://acme.example/contact",
     seo: { typed: { hidden: false }, automatic: {}, siteName: "Acme" },
   },
@@ -74,6 +99,7 @@ const ITEMS: SiteAddress[] = [
     source: "built",
     from: "app/about/page.tsx",
     standing: "listed",
+    sources: {},
     canonical: "https://acme.example/about",
     seo: {
       typed: { hidden: false, image: "m1" },
@@ -86,21 +112,60 @@ const ITEMS: SiteAddress[] = [
   },
 ];
 
-/** Every body a save sent, in order. */
+/** A warning about the Blog page, from the shared problem list. */
+const BLOG_WARNING: Problem = {
+  kind: "noDescription",
+  subject: { label: "Blog", type: "pages", id: "8", detail: "/blog" },
+  what: "No description",
+  action: "Add a description",
+  fix: { place: "page", tab: "seo", field: "metaDescription" },
+};
+
+const PROBLEMS: ProblemListBody = {
+  problems: [BLOG_WARNING],
+  pagesChecked: 2,
+  outOfDate: false,
+  due: false,
+};
+
+const ROWS: BulkRow[] = [
+  {
+    id: "7",
+    label: "Home",
+    path: "/",
+    title: "",
+    description: "",
+    autoTitle: "Acme | Acme",
+    rev: "r7",
+    editable: true,
+  },
+  {
+    id: "8",
+    label: "Blog",
+    path: "/blog",
+    title: "Blog | Acme",
+    description: "",
+    autoTitle: "Blog | Acme",
+    rev: "r8",
+    editable: true,
+  },
+];
+
+/** Every body a panel save sent, in order. */
 let sent: unknown[];
+/** Every write Edit mode sent, in order. */
+let writes: { path: string; body?: unknown }[];
 
 beforeEach(() => {
   sent = [];
-  vi.mocked(usePluginRoute).mockImplementation(
-    () =>
-      ({
-        data: { items: ITEMS },
-        pending: false,
-        error: null,
-        refetch: () => {},
-        fetching: false,
-      }) as unknown as ReturnType<typeof usePluginRoute>
-  );
+  writes = [];
+  vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+    data: args.path === "/problems" ? PROBLEMS : { items: ITEMS },
+    pending: false,
+    error: null,
+    refetch: () => {},
+    fetching: false,
+  })) as unknown as typeof usePluginRoute);
   vi.mocked(usePluginRouteMutation).mockImplementation(
     () =>
       ({
@@ -112,9 +177,41 @@ beforeEach(() => {
         error: null,
       }) as unknown as ReturnType<typeof usePluginRouteMutation>
   );
+  vi.mocked(readPluginRoute).mockImplementation((async () => ({
+    type: "pages",
+    rows: ROWS,
+    total: 2,
+    more: false,
+  })) as unknown as typeof readPluginRoute);
+  vi.mocked(writePluginRoute).mockImplementation((async (request: {
+    path: string;
+    body?: unknown;
+  }) => {
+    writes.push({ path: request.path, body: request.body });
+    return { message: "Saved.", saved: 1, revs: {} };
+  }) as unknown as typeof writePluginRoute);
 });
 
-const rows = () => screen.getAllByRole("row").slice(1);
+/** The desktop table: both the table and the cards are drawn in jsdom. */
+const table = () => within(screen.getByRole("table"));
+
+/** The row of the page named `name`. */
+const rowOf = (name: string) => {
+  const cell = table().getByText(name);
+  const row = cell.closest("tr");
+  if (row === null) throw new Error(`no row for ${name}`);
+  return within(row);
+};
+
+/** Chooses `action` from the menu of the row of the page named `name`. */
+async function rowAction(name: string, action: string): Promise<void> {
+  const user = userEvent.setup();
+  await user.click(rowOf(name).getByRole("button", { name: "Row actions" }));
+  await user.click(await screen.findByRole("menuitem", { name: action }));
+}
+
+/** Opens the side panel of the page built in code named `name`. */
+const editSeo = (name: string) => rowAction(name, "Edit SEO");
 
 describe("the list", () => {
   it("leads to Import, which is reached from here", () => {
@@ -124,38 +221,207 @@ describe("the list", () => {
     ).toBe("/admin/plugins/nextlyhq-plugin-seo/pages/import");
   });
 
-  it("counts the addresses, and narrows them by filter and by search", () => {
+  it("shows each page's title, where it comes from, its description and its status", () => {
     render(<SeoPagesPage />);
-
-    expect(screen.getByText("not connected").textContent).toBe(
-      "1 not connected"
-    );
-    expect(rows()).toHaveLength(4);
-
-    fireEvent.click(screen.getByRole("button", { name: "Not connected" }));
-    expect(rows()).toHaveLength(1);
-    expect(within(rows()[0]).getByText("/pricing")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
-    fireEvent.change(screen.getByRole("searchbox"), {
-      target: { value: "nothing here" },
-    });
-    expect(screen.getByText("No addresses match.")).toBeTruthy();
+    const home = rowOf("Home");
+    expect(home.getByText("Acme | Acme")).toBeTruthy();
+    expect(home.getByText("Pattern: {Title} | {Site name}")).toBeTruthy();
+    expect(home.getByText("Acme makes things.")).toBeTruthy();
+    expect(home.getByText("Good")).toBeTruthy();
+    // The shared problem list's warning about the Blog page is its status.
+    expect(rowOf("Blog").getByText("Warning")).toBeTruthy();
+    expect(rowOf("Blog").getByText("Own value")).toBeTruthy();
+    expect(rowOf("Pricing").getByText("Not connected")).toBeTruthy();
+    expect(screen.getByText("5 pages")).toBeTruthy();
   });
 
-  it("opens an entry's own screen for its SEO", () => {
+  it("finds a page by part of its address or name", async () => {
     render(<SeoPagesPage />);
+    fireEvent.change(screen.getByPlaceholderText("Search pages"), {
+      target: { value: "pric" },
+    });
+    // The admin's search field waits for typing to pause.
+    await vi.waitFor(() => expect(table().queryByText("Home")).toBeNull());
+    expect(table().getByText("Pricing")).toBeTruthy();
+    expect(screen.getByText("1 page")).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Open entry" }));
+  it("opens an entry's SEO tab, inspects a page and adds a redirect from it", async () => {
+    render(<SeoPagesPage />);
+    await rowAction("Home", "Edit SEO");
+    expect(navigateTo).toHaveBeenLastCalledWith(
+      "/admin/collections/pages/7?tab=nextlyhq-plugin-seo.tab"
+    );
+    await rowAction("Home", "Inspect what search engines receive");
+    expect(navigateTo).toHaveBeenLastCalledWith(
+      "/admin/plugins/nextlyhq-plugin-seo/pages/inspect?address=%2F"
+    );
+    await rowAction("Blog", "Add a redirect");
+    expect(navigateTo).toHaveBeenLastCalledWith(
+      "/admin/plugins/nextlyhq-plugin-seo/redirects?from=%2Fblog"
+    );
+    await rowAction("Blog", "Open entry");
+    expect(navigateTo).toHaveBeenLastCalledWith("/admin/collections/pages/8");
+  });
 
-    expect(navigateTo).toHaveBeenCalledWith("/admin/collections/pages/7");
+  it("opens a translation's entry in its own language", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/problems"
+          ? PROBLEMS
+          : {
+              items: [
+                {
+                  path: "/de/ueber",
+                  name: "Über uns",
+                  source: "entry",
+                  from: "Pages",
+                  standing: "listed",
+                  sources: {},
+                  entry: {
+                    kind: "collection",
+                    slug: "pages",
+                    id: "7",
+                    locale: "de",
+                  },
+                },
+              ],
+            },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+    await rowAction("Über uns", "Open entry");
+    expect(navigateTo).toHaveBeenCalledWith(
+      "/admin/collections/pages/7?locale=de"
+    );
+  });
+});
+
+describe("Edit mode", () => {
+  const editMode = () =>
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Edit titles and descriptions" })
+    );
+
+  it("types into a page's title, the automatic value in grey, and saves its type in one write", async () => {
+    render(<SeoPagesPage />);
+    editMode();
+    const home = (await screen.findByLabelText(
+      "Title for Home"
+    )) as HTMLInputElement;
+    expect(home.placeholder).toBe("Acme | Acme");
+    expect(screen.getAllByText("Pattern: {Title} | {Site name}")).toBeTruthy();
+
+    fireEvent.change(home, { target: { value: "Acme, the maker" } });
+    expect(screen.getByText("15 characters · Good · changed")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("1 page changed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() =>
+      expect(toastMutationResult).toHaveBeenCalledWith("Saved 1 page.", [])
+    );
+    expect(writes).toEqual([
+      {
+        path: "/bulk/save",
+        body: {
+          type: "pages",
+          changes: [{ id: "7", rev: "r7", title: "Acme, the maker" }],
+        },
+      },
+    ]);
+  });
+
+  it("saves a page built in code through its own save, its visibility as it is", async () => {
+    render(<SeoPagesPage />);
+    editMode();
+    fireEvent.change(await screen.findByLabelText("Title for Pricing"), {
+      target: { value: "Plans" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toEqual({
+      path: "/pages/seo",
+      body: {
+        path: "/pricing",
+        title: "Plans",
+        description: "",
+        hidden: false,
+      },
+    });
+  });
+
+  it("says which pages a save left unsaved, and keeps their changes", async () => {
+    vi.mocked(writePluginRoute).mockImplementation((async (request: {
+      path: string;
+      body?: unknown;
+    }) => {
+      writes.push({ path: request.path, body: request.body });
+      if (request.path === "/pages/seo") {
+        throw new Error("The database didn't answer.");
+      }
+      return { message: "Saved.", saved: 1, revs: {} };
+    }) as unknown as typeof writePluginRoute);
+    render(<SeoPagesPage />);
+    editMode();
+    fireEvent.change(await screen.findByLabelText("Title for Home"), {
+      target: { value: "Home of Acme" },
+    });
+    fireEvent.change(screen.getByLabelText("Title for Pricing"), {
+      target: { value: "Plans" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("1 page saved, 1 page not");
+    expect(alert.textContent).toContain("Pricing: The database didn't answer.");
+    // The page not saved keeps its change; the one saved lets go of it.
+    expect(
+      (screen.getByLabelText("Title for Pricing") as HTMLInputElement).value
+    ).toBe("Plans");
+    expect(screen.getByRole("status").textContent).toContain("1 page changed");
+  });
+
+  it("discards every change without writing", async () => {
+    render(<SeoPagesPage />);
+    editMode();
+    fireEvent.change(await screen.findByLabelText("Title for Home"), {
+      target: { value: "Something" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(
+      (screen.getByLabelText("Title for Home") as HTMLInputElement).value
+    ).toBe("");
+    expect(writes).toEqual([]);
+  });
+
+  it("shows a page the person may not change, and a translation, read-only with why", async () => {
+    vi.mocked(readPluginRoute).mockImplementation((async () => ({
+      type: "pages",
+      rows: [{ ...ROWS[0], editable: false }, ROWS[1]],
+      total: 2,
+      more: false,
+    })) as unknown as typeof readPluginRoute);
+    render(<SeoPagesPage />);
+    editMode();
+    const home = (await screen.findByLabelText(
+      "Title for Home"
+    )) as HTMLInputElement;
+    await vi.waitFor(() => expect(home.readOnly).toBe(true));
+    expect(
+      screen.getAllByText(
+        "You can't change this page's SEO here. Open the page to change it."
+      ).length
+    ).toBeGreaterThan(0);
   });
 });
 
 describe("the panel of a page built in code", () => {
   it("says the route is not connected, previews what is typed and saves it", async () => {
     render(<SeoPagesPage />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[0]);
+    await editSeo("Pricing");
 
     const panel = screen.getByRole("dialog", { name: "SEO for /pricing" });
     expect(
@@ -188,9 +454,9 @@ describe("the panel of a page built in code", () => {
     );
   });
 
-  it("hides the page from search under Advanced, the preview saying so", () => {
+  it("hides the page from search under Advanced, the preview saying so", async () => {
     render(<SeoPagesPage />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[1]);
+    await editSeo("Contact");
     const panel = screen.getByRole("dialog", { name: "SEO for /contact" });
     expect(within(panel).getByText(/calls the SEO function, so/)).toBeTruthy();
 
@@ -206,9 +472,9 @@ describe("the panel of a page built in code", () => {
 });
 
 describe("the share image of a page built in code", () => {
-  it("falls back to the image the page gets automatically once its own is removed", () => {
+  it("falls back to the image the page gets automatically once its own is removed", async () => {
     render(<SeoPagesPage />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[2]);
+    await editSeo("About");
     const panel = screen.getByRole("dialog", { name: "SEO for /about" });
     fireEvent.click(within(panel).getByRole("tab", { name: "When shared" }));
     fireEvent.click(within(panel).getByRole("button", { name: /Advanced/ }));
@@ -227,83 +493,8 @@ describe("the share image of a page built in code", () => {
   });
 });
 
-describe("a save that finishes late", () => {
-  it("leaves another page's panel open, opened while the save was on its way", async () => {
-    let finish: (value: { path: string }) => void = () => {};
-    vi.mocked(usePluginRouteMutation).mockImplementation(
-      () =>
-        ({
-          write: vi.fn(
-            () =>
-              new Promise<{ path: string }>(resolve => {
-                finish = resolve;
-              })
-          ),
-          pending: false,
-          error: null,
-        }) as unknown as ReturnType<typeof usePluginRouteMutation>
-    );
-    render(<SeoPagesPage />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[0]);
-    fireEvent.click(
-      within(
-        screen.getByRole("dialog", { name: "SEO for /pricing" })
-      ).getByRole("button", { name: "Save" })
-    );
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[1]);
-    expect(
-      screen.getByRole("dialog", { name: "SEO for /contact" })
-    ).toBeTruthy();
-
-    finish({ path: "/pricing" });
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    expect(
-      screen.getByRole("dialog", { name: "SEO for /contact" })
-    ).toBeTruthy();
-  });
-});
-
-describe("a translation's entry", () => {
-  it("opens in its own language", () => {
-    vi.mocked(usePluginRoute).mockImplementation(
-      () =>
-        ({
-          data: {
-            items: [
-              {
-                path: "/de/ueber",
-                name: "Über uns",
-                source: "entry",
-                from: "Pages",
-                standing: "listed",
-                entry: {
-                  kind: "collection",
-                  slug: "pages",
-                  id: "7",
-                  locale: "de",
-                },
-              },
-            ],
-          },
-          pending: false,
-          error: null,
-          refetch: () => {},
-          fetching: false,
-        }) as unknown as ReturnType<typeof usePluginRoute>
-    );
-    render(<SeoPagesPage />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Open entry" }));
-
-    expect(navigateTo).toHaveBeenCalledWith(
-      "/admin/collections/pages/7?locale=de"
-    );
-  });
-});
-
 describe("while a save is on its way", () => {
-  it("takes no edits, so what it sends is what the panel holds", () => {
+  it("takes no edits, so what it sends is what the panel holds", async () => {
     vi.mocked(usePluginRouteMutation).mockImplementation(
       () =>
         ({
@@ -313,7 +504,7 @@ describe("while a save is on its way", () => {
         }) as unknown as ReturnType<typeof usePluginRouteMutation>
     );
     render(<SeoPagesPage />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[0]);
+    await editSeo("Pricing");
     const panel = screen.getByRole("dialog", { name: "SEO for /pricing" });
 
     // Disabled by the fieldset holding them, as a browser reads it.

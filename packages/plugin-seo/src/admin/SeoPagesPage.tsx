@@ -32,10 +32,11 @@ import {
   SelectTrigger,
   usePluginRoute,
   type BadgeProps,
+  type ListSearch,
   type NextlyColumn,
   type RowAction,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo, useRef, useState, type JSX } from "react";
+import { useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 
 import { ADDRESSES_ROUTE_PATH, type SiteAddress } from "../code-pages/contract";
 import { IMPORT_PAGE_HREF } from "../overview/contract";
@@ -46,7 +47,6 @@ import { CodePagePanel } from "./code-page-panel";
 import { useLeaveWarning } from "./leave-warning";
 import type { PageEdits } from "./pages-edit";
 import { PagesEditor } from "./pages-editor";
-import { PagesStyles } from "./pages-styles";
 import {
   entryHref,
   newRedirectHref,
@@ -162,16 +162,21 @@ export function SeoPagesPage(): JSX.Element {
           </div>
         }
       />
-      <Filters
-        items={items ?? []}
-        filter={filter}
-        onFilter={setFilter}
-        search={mode === "view"}
-        count={mode === "view" ? shown.length : undefined}
-      />
       {mode === "view" ? (
         <PagesList
           shown={shown}
+          search={{
+            value: filter.query,
+            onChange: query => setFilter({ ...filter, query }),
+            placeholder: "Search pages",
+          }}
+          filters={
+            <TypeAndStatus
+              items={items ?? []}
+              filter={filter}
+              onFilter={setFilter}
+            />
+          }
           loading={items === undefined && failure === null}
           failure={failure}
           filtered={
@@ -184,6 +189,13 @@ export function SeoPagesPage(): JSX.Element {
       ) : (
         <PagesEditor
           shown={shown}
+          filters={
+            <TypeAndStatus
+              items={items ?? []}
+              filter={filter}
+              onFilter={setFilter}
+            />
+          }
           loading={items === undefined && failure === null}
           failure={failure}
           byPage={byPage}
@@ -199,34 +211,19 @@ export function SeoPagesPage(): JSX.Element {
   );
 }
 
-/** The search, where the mode has one, and the Type and Status filters. */
-function Filters({
+/** The Type and Status filters, over `items`. */
+function TypeAndStatus({
   items,
   filter,
   onFilter,
-  search,
-  count,
 }: {
   items: readonly SiteAddress[];
   filter: PagesFilter;
   onFilter: (filter: PagesFilter) => void;
-  search: boolean;
-  /** How many pages are listed, said at the row's end where given. */
-  count: number | undefined;
 }): JSX.Element {
   const types = useMemo(() => typeChoices(items), [items]);
   return (
-    <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-      {search ? (
-        <input
-          type="search"
-          aria-label="Search pages"
-          placeholder="Search pages"
-          value={filter.query}
-          onChange={event => onFilter({ ...filter, query: event.target.value })}
-          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-72"
-        />
-      ) : null}
+    <>
       <FilterSelect
         name="Type"
         value={filter.type}
@@ -247,12 +244,7 @@ function Filters({
           })
         }
       />
-      {count === undefined ? null : (
-        <span className="text-sm text-muted-foreground sm:ml-auto">
-          {count} {count === 1 ? "page" : "pages"}
-        </span>
-      )}
-    </div>
+    </>
   );
 }
 
@@ -342,12 +334,16 @@ function actionsFor(
 /** View mode: the list, and the panel of a page built in code being edited. */
 function PagesList({
   shown,
+  search,
+  filters,
   loading,
   failure,
   filtered,
   statusFor,
 }: {
   shown: SiteAddress[];
+  search: ListSearch;
+  filters: ReactNode;
   loading: boolean;
   failure: string | null;
   filtered: boolean;
@@ -382,6 +378,15 @@ function PagesList({
         loading={loading}
         error={failure}
         ariaLabel="Pages"
+        search={search}
+        inlineFilters={filters}
+        toolbarActions={
+          loading ? null : (
+            <span className="text-sm text-muted-foreground">
+              {shown.length} {shown.length === 1 ? "page" : "pages"}
+            </span>
+          )
+        }
         empty={{
           title: "No public pages yet",
           description:
@@ -394,17 +399,14 @@ function PagesList({
         hasActiveFilters={filtered}
       />
       {open?.seo !== undefined ? (
-        <>
-          <PagesStyles />
-          <CodePagePanel
-            key={open.path}
-            item={open}
-            host={host}
-            onClose={() => {
-              if (openNow.current?.path === open.path) setOpen(null);
-            }}
-          />
-        </>
+        <CodePagePanel
+          key={open.path}
+          item={open}
+          host={host}
+          onClose={() => {
+            if (openNow.current?.path === open.path) setOpen(null);
+          }}
+        />
       ) : null}
     </>
   );
