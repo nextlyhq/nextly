@@ -50,6 +50,10 @@ export function usePluginPanelCounts(
     // A number is a convenience: one that fails is left out rather than asked
     // for again and again while the panel is open.
     retry: false,
+    // The admin turns focus refetching off by default; a panel left open
+    // asks again when the reader comes back, once its answer is stale, so a
+    // number they have since dealt with does not linger.
+    refetchOnWindowFocus: true,
   });
   const menu = plugin.menu;
   return useMemo(
