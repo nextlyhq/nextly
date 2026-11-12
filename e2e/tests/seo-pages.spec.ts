@@ -28,7 +28,8 @@ const SECTION = "/plugins/nextlyhq-plugin-seo";
 const run = Date.now().toString(36);
 const TITLE = `SEO pages ${run}`;
 const SLUG = `seo-pages-${run}`;
-const PATH = `/seo/${SLUG}`;
+// Served in each language: the site's own, English, is listed under its prefix.
+const PATH = `/en/seo/${SLUG}`;
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -55,11 +56,22 @@ async function ensurePage(page: Page): Promise<string> {
   return pageId;
 }
 
+/**
+ * This run's row in the desktop table: the one whose address is exactly
+ * this run's page in English, not a translation at `/es/…` or `/ar/…`.
+ */
+function rowAt(page: Page) {
+  return page
+    .getByRole("table")
+    .getByRole("row")
+    .filter({ has: page.getByText(PATH, { exact: true }) });
+}
+
 /** This run's row in the list, once Pages has read it. */
 async function rowOf(page: Page) {
   await gotoAdmin(page, `${SECTION}/pages`);
   await page.getByRole("searchbox").fill(SLUG);
-  const row = page.getByRole("row").filter({ hasText: PATH });
+  const row = rowAt(page);
   await expect(row).toBeVisible({ timeout: 15_000 });
   return row;
 }
@@ -106,7 +118,12 @@ test("Edit mode saves a title typed into the list, which the page then holds", a
   await page
     .getByRole("radio", { name: "Edit titles and descriptions" })
     .click();
-  const box = page.getByLabel(`Title for ${TITLE}`);
+  // This run's page in the site's language, not its translation.
+  const box = page
+    .getByRole("list", { name: "Pages" })
+    .getByRole("listitem")
+    .filter({ has: page.getByText(PATH, { exact: true }) })
+    .getByLabel(`Title for ${TITLE}`);
   await expect(box).toBeEditable({ timeout: 15_000 });
   const typed = `Typed in the list ${run}`;
   await box.fill(typed);
@@ -125,7 +142,7 @@ test("Edit mode saves a title typed into the list, which the page then holds", a
   }).toPass({ timeout: 10_000 });
 
   await page.getByRole("radio", { name: "View" }).click();
-  const row = page.getByRole("row").filter({ hasText: PATH });
+  const row = rowAt(page);
   await expect(async () => {
     await page.reload();
     await page.getByRole("searchbox").fill(SLUG);

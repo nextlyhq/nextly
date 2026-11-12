@@ -474,8 +474,12 @@ function pageColumns(
       name: "page",
       header: "Page",
       cell: ({ row }) => (
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-medium text-foreground">{row.name}</span>
+        // Wraps within its width, so a long name never pushes the
+        // description and status out of the table.
+        <div className="flex w-[240px] min-w-0 flex-col gap-0.5 whitespace-normal">
+          <span className="break-words font-medium text-foreground">
+            {row.name}
+          </span>
           <span className="break-all font-mono text-xs text-muted-foreground">
             {row.path}
           </span>
@@ -486,7 +490,7 @@ function pageColumns(
       name: "title",
       header: "Title in search",
       cell: ({ row }) => (
-        <div className="flex min-w-0 max-w-[260px] flex-col gap-0.5">
+        <div className="flex w-[220px] min-w-0 flex-col gap-0.5">
           <span className="truncate" title={row.title}>
             {row.title ?? "—"}
           </span>
@@ -502,7 +506,7 @@ function pageColumns(
       hideOnMobile: true,
       cell: ({ row }) => (
         <span
-          className="block max-w-[300px] truncate text-muted-foreground"
+          className="block w-[240px] truncate text-muted-foreground"
           title={row.description}
         >
           {row.description ?? "—"}
