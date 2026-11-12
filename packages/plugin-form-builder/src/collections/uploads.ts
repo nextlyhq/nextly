@@ -26,8 +26,7 @@
  * @module collections/uploads
  */
 
-import type { CollectionConfig } from "nextly";
-import { date, text } from "nextly";
+import { date, text, type CollectionConfig } from "@nextlyhq/plugin-sdk";
 
 /** The slug the uploads are kept under. */
 export const FORM_UPLOADS_SLUG = "form-uploads";

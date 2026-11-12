@@ -40,3 +40,5 @@ Deleting a submission, one at a time, in bulk, by the nightly retention pass or 
 A plugin's `ctx.services.media.delete` now removes the item's stored files durably: they are recorded as left to remove in the delete's own transaction, and the jobs queue retries a removal storage refused until the files are gone, rather than leaving them behind after a storage error.
 
 Migration: the plugin adds an internal `form-uploads` collection. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). Files named by submissions stored before the upgrade were not recorded, so they are not deleted with them.
+
+The plugin SDK also re-exports the `date` field factory and the `CollectionConfig` type, as part of its public field-authoring surface, so a plugin can author the collections it contributes without importing from core.
