@@ -150,6 +150,42 @@ describe("typeChangedEntities", () => {
     expect([...changed.fieldGroup]).toEqual(["hero"]);
   });
 
+  // The column changes shape with the type unchanged: a select holding many
+  // values, or a relationship to several collections.
+  it("names an entity a field of which turns to hold many values or relate to several", () => {
+    const changed = typeChangedEntities(
+      record({
+        tags: code([{ name: "kind", type: "select" }]),
+        links: code([
+          { name: "to", type: "relationship", relationTo: "posts" },
+        ]),
+      }),
+      record({
+        tags: code([{ name: "kind", type: "select", hasMany: true }]),
+        links: code([
+          {
+            name: "to",
+            type: "relationship",
+            relationTo: ["posts", "pages"],
+          },
+        ]),
+      })
+    );
+    expect([...changed.collection].sort()).toEqual(["links", "tags"]);
+  });
+
+  it("names no entity whose fields changed only a help text", () => {
+    const changed = typeChangedEntities(
+      record({ posts: code([{ name: "title", type: "text" }]) }),
+      record({
+        posts: code([
+          { name: "title", type: "text", admin: { description: "Help" } },
+        ]),
+      })
+    );
+    expect(changed.collection.size).toBe(0);
+  });
+
   // A field added or removed changes the field list, not a type: its row is
   // written at the run's end like any other.
   it("names no entity whose fields were only added or removed", () => {

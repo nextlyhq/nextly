@@ -526,9 +526,10 @@ export async function planRollbackBookkeeping(args: {
 }): Promise<RollbackBookkeeping> {
   const { adapter, dialect } = args;
   if (args.rolledBack.length === 0) return {};
-  const record = (await adapter.tableExists("nextly_meta"))
-    ? await readRegistryRecord(adapter.getDrizzle(), dialect)
-    : undefined;
+  // A database `nextly migrate` has not prepared keeps no registry
+  // bookkeeping, and has no table to store a write's schema version in.
+  if (!(await adapter.tableExists("nextly_meta"))) return {};
+  const record = await readRegistryRecord(adapter.getDrizzle(), dialect);
 
   const targets = new Set(args.rolledBack.map(baseNameOf));
   const applied = appliedAppMigrations(args.rows);
@@ -673,7 +674,7 @@ async function undoToOwnSource(args: {
       if (outcome.failed.length > 0) {
         args.deps.logger.warn(
           `${outcome.failed.length} registry row(s) not brought back to ${named}: ${outcome.failed.join(", ")}. ` +
-            "Run `nextly migrate`, which brings them to the newest applied snapshot."
+            "Run `nextly migrate`, which writes the rows the newest applied snapshot records."
         );
       }
     },

@@ -89,7 +89,7 @@ export interface RegistryWriteResult {
   written: Record<SettingsEntityKind, number>;
   /** Rows removed, as `<kind> <slug>`. */
   removed: string[];
-  /** Entities whose row could not be written or removed, as `<kind> <slug>`. */
+  /** Entities whose row could not be written, as `<kind> <slug>`. */
   failed: string[];
 }
 
@@ -186,9 +186,9 @@ export async function writeRegistryFromSource(
 }
 
 /**
- * Remove the stored row of each entity in `remove`, each its own step, on
- * the registry write the caller opened (or one of its own): a row that
- * cannot be removed costs only itself, and the run says which. An entity of
+ * Remove the stored row of each entity in `remove`, on the registry write
+ * the caller opened (or one of its own); a removal that fails fails that
+ * write, so nothing of any removal is kept. An entity of
  * a reserved slug, or with no stored row, is passed over; a kind whose rows
  * could not be read is passed over whole, as its rows were not written.
  * With `keepWhereTableStands`, so is a row whose table is still there.
@@ -229,19 +229,12 @@ async function removeRows(
         ) {
           continue;
         }
-        try {
-          await inRegistryStep(deps.adapter, () =>
-            removeRegistryRow({ tx, view, tables }, kind, slug)
-          );
-          result.removed.push(`${kind} ${slug}`);
-        } catch (error) {
-          result.failed.push(`${kind} ${slug}`);
-          deps.logger.warn(
-            `Could not remove the registry row of ${kind} "${slug}": ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
+        // Not one row's failure to report and go on from: a removal deletes
+        // the entity's autosaves and pins before its row, and on MySQL a
+        // step has no savepoint to undo them, so a removal that fails fails
+        // the registry write it is part of, which then leaves them all.
+        await removeRegistryRow({ tx, view, tables }, kind, slug);
+        result.removed.push(`${kind} ${slug}`);
       }
       return result.removed.length;
     },

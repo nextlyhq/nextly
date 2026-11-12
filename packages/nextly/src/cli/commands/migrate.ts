@@ -2100,6 +2100,9 @@ async function runMigrationStreams(
     judged,
     ...(beforeApply === undefined ? {} : { beforeApply }),
     ...(afterApply === undefined ? {} : { afterApply }),
+    ...(deps.collectionSources === undefined
+      ? {}
+      : { collectionSources: deps.collectionSources }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -3861,6 +3864,11 @@ export async function runFileMigrations(args: {
    * declares a permission again clears the mark again. A throw stops the run after the file.
    */
   afterApply?: (applied: AppliedAppMigration) => Promise<void>;
+  /**
+   * Each plugin-contributed collection's origin, so a registry row a file
+   * creates with itself is that plugin's (`RegistryWriteDeps.collectionSources`).
+   */
+  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -4091,7 +4099,13 @@ export async function runFileMigrations(args: {
         from: beforeFile,
         to: targetFile,
         file: filename,
-        deps: { adapter: dz, logger: asServiceLogger(logger) },
+        deps: {
+          adapter: dz,
+          logger: asServiceLogger(logger),
+          ...(args.collectionSources === undefined
+            ? {}
+            : { collectionSources: args.collectionSources }),
+        },
       });
       await reconcileFile({
         file: {

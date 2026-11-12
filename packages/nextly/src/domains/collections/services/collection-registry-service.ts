@@ -40,6 +40,7 @@ import { clearRegistryRowCache } from "../../dynamic-collections/services/collec
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import { settingsOf } from "../../schema/migrate-create/entity-settings";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 import {
   calculateSchemaHash,
@@ -298,9 +299,13 @@ export function withUnsaidKept<
  * where the schema hash cannot see them: each field's admin options (help
  * text, placeholder, hidden and the rest) and custom data, at any depth.
  * They change no column, so the hash leaves them out, yet the row carries
- * them and the admin reads them from it. Functions are left out, as a
- * stored field list has none; key order is not content. One answer for
- * every kind's code-first decision, so a start and `nextly migrate` agree.
+ * them and the admin reads them from it.
+ *
+ * Each side is read as a snapshot records it (`settingsOf`): functions and
+ * what held only functions or nothing are left out, and an empty object is
+ * no setting. A declaration, the row a start stored from it and the row
+ * `nextly migrate` wrote from its snapshot then compare equal, so no writer
+ * undoes another's row. One answer for every kind's code-first decision.
  */
 export function fieldSettingsChanged(
   declared: unknown,
@@ -326,8 +331,8 @@ function fieldSettingsOf(fields: unknown): unknown[] {
     } = field as Record<string, unknown>;
     return {
       name: name ?? null,
-      admin: admin ?? null,
-      custom: custom ?? null,
+      admin: recordedSetting(admin),
+      custom: recordedSetting(custom),
       fields: fieldSettingsOf(nested),
       blocks: Array.isArray(blocks)
         ? blocks.map((block: unknown) => {
@@ -340,6 +345,17 @@ function fieldSettingsOf(fields: unknown): unknown[] {
         : [],
     };
   });
+}
+
+/** A setting as a snapshot records it, or null where it records none. */
+function recordedSetting(value: unknown): unknown {
+  const recorded = settingsOf({ value }, "code").value;
+  if (recorded === undefined || recorded === null) return null;
+  return typeof recorded === "object" &&
+    !Array.isArray(recorded) &&
+    Object.keys(recorded).length === 0
+    ? null
+    : recorded;
 }
 
 /** Result of syncing code-first collections. */

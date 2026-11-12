@@ -15,10 +15,11 @@
  * @module domains/schema/migrate/registry-history
  */
 import type { UnsaidSetting } from "../../collections/services/collection-registry-service";
-import type {
-  EntitySettingsRecord,
-  RecordedEntitySettings,
-  SettingsEntityKind,
+import {
+  settingsChangesFor,
+  type EntitySettingsRecord,
+  type RecordedEntitySettings,
+  type SettingsEntityKind,
 } from "../migrate-create/entity-settings";
 
 /** Slugs by kind of entity. */
@@ -124,62 +125,44 @@ function says(recorded: RecordedEntitySettings, setting: UnsaidSetting) {
 }
 
 /**
- * The entities both records hold whose fields' types differ between them: a
- * field, at any depth and named by its path, that has one type in `before`
- * and another in `after`. A field only one of them holds is not a type
- * change.
+ * The settings changes that alter what a field stores in its column: its
+ * type, whether it holds many values, and what it relates to. Matched on the
+ * paths `settingsChangesFor` names, at any depth (`fields.points.type`,
+ * `fields.cta.fields.count.hasMany`), and on a field list it could not
+ * match field by field (`fields`), which may hide one.
+ */
+const COLUMN_CHANGE =
+  /^fields(\.[^ ]+\.(type|hasMany|relationTo)( \(cleared\))?)?$/;
+
+/**
+ * The entities both records hold whose fields' column shapes differ between
+ * them (`COLUMN_CHANGE`), read from the one diff of two records that
+ * `migrate:create` writes a migration for. A field only one of them holds is
+ * not a type change: its row is written at the run's end like any other.
  */
 export function typeChangedEntities(
   before: EntitySettingsRecord,
   after: EntitySettingsRecord
 ): SlugsByKind {
   const changed = noSlugs();
-  for (const [kind, key] of RECORDED_KINDS) {
-    for (const [slug, recorded] of Object.entries(after[key])) {
-      const earlier = before[key][slug];
-      if (earlier === undefined) continue;
-      const was = fieldTypes(earlier.settings.fields);
-      for (const [path, type] of fieldTypes(recorded.settings.fields)) {
-        if (was.has(path) && was.get(path) !== type) {
-          changed[kind].add(slug);
-          break;
-        }
-      }
+  const listed = (key: keyof EntitySettingsRecord) =>
+    Object.entries(after[key])
+      .filter(([slug]) => slug in before[key])
+      .map(([slug, settings]) => ({ slug, settings }));
+  const changes = settingsChangesFor(
+    {
+      collections: listed("collections"),
+      singles: listed("singles"),
+      components: listed("fieldGroups"),
+    },
+    before
+  );
+  for (const change of changes) {
+    if (change.changes.some(path => COLUMN_CHANGE.test(path))) {
+      changed[change.kind].add(change.slug);
     }
   }
   return changed;
-}
-
-/** Each named field's type by its path, nested fields and block fields included. */
-function fieldTypes(fields: unknown, prefix = ""): Map<string, unknown> {
-  const types = new Map<string, unknown>();
-  if (!Array.isArray(fields)) return types;
-  for (const field of fields as unknown[]) {
-    if (field === null || typeof field !== "object") continue;
-    const {
-      name,
-      type,
-      fields: nested,
-      blocks,
-    } = field as Record<string, unknown>;
-    const path = typeof name === "string" ? `${prefix}${name}` : prefix;
-    if (typeof name === "string") types.set(path, type);
-    for (const [inner, innerType] of fieldTypes(nested, `${path}.`)) {
-      types.set(inner, innerType);
-    }
-    if (!Array.isArray(blocks)) continue;
-    for (const block of blocks as unknown[]) {
-      if (block === null || typeof block !== "object") continue;
-      const { slug, fields: inBlock } = block as Record<string, unknown>;
-      for (const [inner, innerType] of fieldTypes(
-        inBlock,
-        `${path}.${String(slug)}.`
-      )) {
-        types.set(inner, innerType);
-      }
-    }
-  }
-  return types;
 }
 
 /** Whether any kind holds a slug. */
