@@ -303,7 +303,9 @@ function actionsFor(
       label: "Edit SEO",
       isVisible: () => entry !== undefined || item.seo !== undefined,
       onSelect: () =>
-        entry === undefined ? openPanel(item) : navigateTo(entryHref(entry, "seo")),
+        entry === undefined
+          ? openPanel(item)
+          : navigateTo(entryHref(entry, "seo")),
     },
     {
       id: "inspect",
@@ -394,7 +396,8 @@ function PagesList({
         }}
         emptyFiltered={{
           title: "No pages match",
-          description: "Try part of the address, like /blog, or another filter.",
+          description:
+            "Try part of the address, like /blog, or another filter.",
         }}
         hasActiveFilters={filtered}
       />

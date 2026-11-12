@@ -201,9 +201,7 @@ describe("a save", () => {
     const many = Array.from({ length: BULK_SAVE_LIMIT + 1 }, (_, at) =>
       post(String(at), `/blog/${at}`)
     );
-    const read = new Map([
-      ["posts", many.map((_, at) => row(String(at)))],
-    ]);
+    const read = new Map([["posts", many.map((_, at) => row(String(at)))]]);
     const edits = Object.fromEntries(
       many.map(item => [item.path, { title: "New" }])
     );

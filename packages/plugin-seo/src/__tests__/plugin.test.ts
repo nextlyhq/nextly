@@ -126,7 +126,6 @@ describe("seoPlugin", () => {
       ["GET", "/proxy-status", undefined, undefined],
       // What search engines received: the pages it offers, and the check,
       // for anyone signed in.
-      ["GET", "/received/pages", undefined, undefined],
       ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // A Page Builder template's SEO panel's read.
@@ -228,7 +227,6 @@ describe("seoPlugin", () => {
       "/redirects/import",
       "/not-found",
       "/proxy-status",
-      "/received/pages",
       "/received",
       "/resolve",
       "/template",
@@ -273,7 +271,6 @@ describe("seoPlugin", () => {
       "/redirects/import",
       "/not-found",
       "/proxy-status",
-      "/received/pages",
       "/received",
       "/resolve",
       "/template",

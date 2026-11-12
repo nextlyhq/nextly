@@ -3,15 +3,20 @@
  * cell per value and crawler, and every difference numbered once and said in
  * plain words, with its likely cause.
  *
- * Each crawler reads the values it uses: Googlebot the page's title,
- * description, share image, official address and robots rules; LinkedIn,
- * X and Slack the shared card, falling back to the page's own title and
- * description as they do. What Nextly holds is compared with what the page
- * served each one; a value the crawler does not use is said so, not compared.
+ * Each crawler reads the values it uses: Google, Bing and the AI crawlers the
+ * page's title, description, share image and official address, and Google its
+ * robots rules; Facebook, X and LinkedIn the shared card, falling back to the
+ * page's own title and description as they do, with its language and the
+ * site's name. What Nextly holds is compared with what the page served each
+ * one; a value the crawler does not use is said so, not compared. A share
+ * image a network doesn't display is a difference even where it was served.
  *
  * @module received/compare
  */
+import { imageFormatOf } from "../social/contract";
+
 import {
+  CRAWLER_NAMES,
   CRAWLERS,
   fileOf,
   inSentence,
@@ -36,6 +41,10 @@ export interface StoredHead {
   image?: { url: string; width?: number; height?: number };
   canonical?: string;
   listed: boolean;
+  /** The language the card states, such as `en_US`. */
+  locale?: string;
+  /** The site's name, as the card states it. */
+  siteName?: string;
   /**
    * The values Nextly worked out automatically, from the content type's
    * pattern, the page's content or the site's defaults: a Page Builder
@@ -60,8 +69,17 @@ interface Seen {
   description?: string;
   image?: string;
   canonical?: string;
+  locale?: string;
+  siteName?: string;
   /** Where Googlebot was told not to list it, or false where it was not. */
   noindex: NoindexFrom | false;
+}
+
+/** Whether `key` reads the page's own title and description, not the card's. */
+function readsPage(key: CrawlerKey): boolean {
+  return CRAWLERS.some(
+    crawler => crawler.key === key && crawler.reads === "page"
+  );
 }
 
 /** `text` with its runs of white space made one space, and trimmed. */
@@ -128,7 +146,7 @@ function seenBy(
       ? "tag"
       : false;
   const canonical = absolute(head.canonical, url);
-  if (key === "googlebot") {
+  if (readsPage(key)) {
     return {
       ...defined("title", head.title),
       ...defined("description", head.description),
@@ -154,6 +172,8 @@ function seenBy(
       absolute((x ? head.twitter.image : undefined) ?? head.og.image, url)
     ),
     ...defined("canonical", canonical),
+    ...defined("locale", head.og.locale),
+    ...defined("siteName", head.og.siteName),
     noindex,
   };
 }
@@ -208,7 +228,7 @@ function shown(row: RowKey, value: string | undefined): string | undefined {
 interface Group {
   number: number;
   keys: CrawlerKey[];
-  row: RowKey | "fetch";
+  row: RowKey | "fetch" | "imageFormat";
   received?: string;
   /** Each crawler's answer headers, for whether a saved copy was served. */
   headers: Record<string, string>[];
@@ -218,9 +238,7 @@ interface Group {
   noindex?: NoindexFrom;
 }
 
-const NAME: Record<CrawlerKey, string> = Object.fromEntries(
-  CRAWLERS.map(crawler => [crawler.key, crawler.name])
-) as Record<CrawlerKey, string>;
+const NAME = CRAWLER_NAMES;
 
 /** What a status says about why the crawler saw none of the page. */
 function statusText(status: number, names: string): string {
@@ -268,27 +286,33 @@ function textDifference(
   names: string,
   what: "title" | "description",
   automatic: boolean
-): { title: string; text: string } {
+): Said {
   const cached = cachedText(group);
+  // A saved copy the host served is replaced in its own time: nothing to fix.
+  const expected = cached === undefined ? {} : { expected: true as const };
   if (group.received === undefined) {
     return {
       title: `${names} received no ${what}.`,
       text: `Nextly holds “${stored ?? ""}”, but the page's head has none. ${cached ?? "The page's route may not build its head from Nextly."}`,
+      ...expected,
     };
   }
   if (stored === undefined) {
     return {
       title: `${names} received a ${what} Nextly doesn't hold.`,
       text: `The page served “${group.received}”. ${cached ?? "It comes from the page's route, its Page Builder design or the site's layout, not from Nextly."}`,
+      ...expected,
     };
   }
   if (automatic && cached === undefined) {
     return {
       title: `${names} received a different ${what}.`,
       text: `Nextly's automatic ${what} is “${stored}”; the page served “${group.received}”. ${setAbove(what)}`,
+      expected: true,
     };
   }
   return {
+    ...expected,
     title: `${names} received a different ${what}.`,
     text: `Nextly holds “${stored}”; the page served “${group.received}”. ${
       cached ??
@@ -299,10 +323,11 @@ function textDifference(
   };
 }
 
-/** A difference's heading and its explanation. */
+/** A difference's heading and its explanation, and whether it is expected. */
 interface Said {
   title: string;
   text: string;
+  expected?: true | undefined;
 }
 
 /** The words of a crawler's fetch that went wrong. */
@@ -326,7 +351,7 @@ function cardTextSaid(
   row: "title" | "description"
 ): Said {
   const card = row === "title" ? stored?.cardTitle : stored?.cardDescription;
-  const own = group.keys.includes("googlebot") ? stored?.[row] : card;
+  const own = group.keys.some(readsPage) ? stored?.[row] : card;
   return textDifference(
     group,
     own,
@@ -351,12 +376,15 @@ function imageSaid(
     };
   }
   const automatic = stored?.automatic?.image === true;
+  const expected =
+    cached !== undefined || automatic ? { expected: true as const } : {};
   const why =
     cached ??
     (automatic
       ? setAbove("share image")
       : "An image file named opengraph-image or twitter-image beside the page's route replaces the one Nextly holds.");
   return {
+    ...expected,
     title: `${names} received a different share image.`,
     text: `${automatic && cached === undefined ? `Nextly's automatic share image is ${own}` : `Nextly holds ${own}`}; the page served ${group.received}. ${why}`,
   };
@@ -416,7 +444,61 @@ function saidOf(
       return canonicalSaid(group, stored, names);
     case "robots":
       return robotsSaid(group);
+    case "locale":
+      return cardFactSaid(group, stored?.locale, names, "language");
+    case "siteName":
+      return cardFactSaid(group, stored?.siteName, names, "site name");
+    case "imageFormat":
+      return imageFormatSaid(group, names);
   }
+}
+
+/** The words of a card's language or site name another than Nextly's. */
+function cardFactSaid(
+  group: Group,
+  own: string | undefined,
+  names: string,
+  what: "language" | "site name"
+): Said {
+  if (group.received === undefined) {
+    return {
+      title: `${names} received no ${what}.`,
+      text: `Nextly holds ${own ?? "none"}, but the page's head states none. The page's route may not build its head from Nextly.`,
+    };
+  }
+  return {
+    title: `${names} received another ${what}.`,
+    text: `Nextly holds ${own ?? "none"}; the page stated ${group.received}. The page's route or the site's layout sets its own.`,
+  };
+}
+
+/** The words of a share image the networks named don't display. */
+function imageFormatSaid(group: Group, names: string): Said {
+  const format = group.received ?? "";
+  const one = group.keys.length === 1;
+  return {
+    title: `${names} ${one ? "shows" : "show"} no picture for this page.`,
+    // Said letter by letter, as a file type is: "an SVG", "an AVIF".
+    text: `Its share image is ${/^[AEFHILMNORSX]/.test(format) ? "an" : "a"} ${format}, which ${one ? "it doesn't" : "they don't"} display, so the card appears with text only.`,
+  };
+}
+
+/**
+ * The networks that don't display a share image of each file type: an SVG
+ * on no network's card, an AVIF not on X's.
+ */
+const NOT_DISPLAYED: Readonly<Record<string, readonly CrawlerKey[]>> = {
+  svg: ["facebook", "x", "linkedin"],
+  avif: ["x"],
+};
+
+/** The file type of `url` where `key` doesn't display it on a card. */
+function notDisplayed(url: string, key: CrawlerKey): string | undefined {
+  const format = imageFormatOf(url);
+  if (format === undefined) return undefined;
+  return NOT_DISPLAYED[format]?.includes(key) === true
+    ? format.toUpperCase()
+    : undefined;
 }
 
 /** The rows a shared card shows, where LinkedIn's kept card matters. */
@@ -430,15 +512,24 @@ const CARD_ROWS: ReadonlySet<Group["row"]> = new Set([
 function explained(
   group: Group,
   stored: StoredHead | undefined,
-  address: string
+  input: { address: string; editHref?: string | undefined }
 ): ReceivedDifference {
+  const { address, editHref } = input;
   const names = inSentence(group.keys.map(key => NAME[key]));
   const said = saidOf(group, stored, names);
+  if (group.row === "imageFormat" && editHref !== undefined) {
+    return {
+      number: group.number,
+      ...said,
+      action: { label: "Make a share image", href: editHref },
+    };
+  }
   if (!CARD_ROWS.has(group.row) || !group.keys.includes("linkedin")) {
     return { number: group.number, ...said };
   }
   return {
     number: group.number,
+    ...(said.expected === true ? { expected: true } : {}),
     title: said.title,
     text: `${said.text} Once it's fixed, LinkedIn keeps its old card for about a week; its Post Inspector refreshes it.`,
     action: {
@@ -456,15 +547,17 @@ function expectedOf(
 ): string | undefined {
   switch (row) {
     case "title":
-      return tidy(key === "googlebot" ? stored.title : stored.cardTitle);
+      return tidy(readsPage(key) ? stored.title : stored.cardTitle);
     case "description":
-      return tidy(
-        key === "googlebot" ? stored.description : stored.cardDescription
-      );
+      return tidy(readsPage(key) ? stored.description : stored.cardDescription);
     case "image":
       return stored.image?.url;
     case "canonical":
       return stored.canonical;
+    case "locale":
+      return stored.locale;
+    case "siteName":
+      return tidy(stored.siteName);
   }
 }
 
@@ -474,7 +567,7 @@ function sameNote(
   key: CrawlerKey,
   stored: StoredHead
 ): string | undefined {
-  if (key === "googlebot" || (row !== "title" && row !== "description")) {
+  if (readsPage(key) || (row !== "title" && row !== "description")) {
     return undefined;
   }
   if (key === "x") return "X doesn't display it";
@@ -562,6 +655,17 @@ function valueCell(
   const expected = expectedOf(row, reading.key, stored);
   const got =
     row === "image" || row === "canonical" ? seen[row] : tidy(seen[row]);
+  const format =
+    row === "image" && got !== undefined && got === expected
+      ? notDisplayed(got, reading.key)
+      : undefined;
+  if (format !== undefined) {
+    // Served as Nextly holds it, and still not on the card.
+    return different(
+      groupFor(groups, "imageFormat", format, reading, {}),
+      `No picture shown: ${NAME[reading.key]} doesn't display ${format}`
+    );
+  }
   if (got === expected) {
     const note = sameNote(row, reading.key, stored);
     return note === undefined ? { kind: "same" } : { kind: "same", note };
@@ -579,6 +683,10 @@ function cellFor(
 ): ReceivedCell {
   const { key, seen } = reading;
   if (row === "robots" && key !== "googlebot") return { kind: "not-used" };
+  // The card's language and the site's name are the card's alone.
+  if ((row === "locale" || row === "siteName") && readsPage(key)) {
+    return { kind: "not-used" };
+  }
   if (seen === undefined) return { kind: "none" };
   if (stored === undefined) {
     const value =
@@ -595,7 +703,7 @@ function cellFor(
 /** The group of crawlers that received `received` for `row`, made where new. */
 function groupFor(
   groups: Map<string, Group>,
-  row: RowKey,
+  row: Group["row"],
   received: string | undefined,
   reading: Reading,
   extra: Pick<Group, "noindex">
@@ -621,6 +729,8 @@ function groupFor(
  */
 export function compareReceived(input: {
   address: string;
+  /** Where the page's SEO is edited, for a difference fixed there. */
+  editHref?: string;
   stored?: StoredHead;
   fetched: Record<CrawlerKey, Fetched>;
 }): Comparison {
@@ -663,7 +773,9 @@ export function compareReceived(input: {
       ...(fetched.kind === "received" ? { status: fetched.status } : {}),
       ms: fetched.ms,
       redirected: fetched.redirects.length > 0,
-      ...(fetched.kind === "failed" ? { failure: fetched.message } : {}),
+      ...(fetched.kind === "failed"
+        ? { failure: fetched.message, reason: fetched.reason }
+        : {}),
       ...(number === undefined ? {} : { difference: number }),
     };
   });
@@ -671,7 +783,7 @@ export function compareReceived(input: {
     crawlers,
     rows,
     differences: [...groups.values()].map(group =>
-      explained(group, input.stored, input.address)
+      explained(group, input.stored, input)
     ),
   };
 }

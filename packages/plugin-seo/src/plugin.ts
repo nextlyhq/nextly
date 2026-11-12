@@ -841,13 +841,15 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),
-    // What the "What search engines received" screen reads and checks.
+    // What Inspect checks.
     ...receivedRoutes({
       collections: targets,
       singles: singleTargets,
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
       readRules,
       pageMetadata,
+      structuredDataReaders: problemChecks.readers,
+      aiCrawlers: options.aiCrawlers ?? "all",
     }),
     ...tab.routes,
     // What a Page Builder template's SEO panel reads.

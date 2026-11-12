@@ -89,7 +89,10 @@ export function problemsOf(
 }
 
 /** How `item` stands, from the problem list grouped by `problemsByPage`. */
-export function statusOf(item: SiteAddress, byPage: ProblemsByPage): PageStatus {
+export function statusOf(
+  item: SiteAddress,
+  byPage: ProblemsByPage
+): PageStatus {
   const severities = new Set(
     problemsOf(item, byPage).map(problem => KIND_SEVERITY[problem.kind])
   );

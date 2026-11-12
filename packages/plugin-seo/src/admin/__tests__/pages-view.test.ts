@@ -158,9 +158,9 @@ describe("where a title comes from", () => {
 
 describe("where an entry opens", () => {
   it("opens a translation in its language", () => {
-    expect(entryHref({ kind: "collection", slug: "posts", id: "7", locale: "de" })).toBe(
-      "/admin/collections/posts/7?locale=de"
-    );
+    expect(
+      entryHref({ kind: "collection", slug: "posts", id: "7", locale: "de" })
+    ).toBe("/admin/collections/posts/7?locale=de");
     expect(entryHref({ kind: "single", slug: "home", id: "1" })).toBe(
       "/admin/singles/home"
     );

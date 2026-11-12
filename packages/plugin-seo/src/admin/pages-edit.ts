@@ -103,7 +103,8 @@ function targetOf(item: SiteAddress, rows: TypeRows): EditTarget {
     ? { kind: "entry", type, row }
     : {
         kind: "read-only",
-        reason: "You can't change this page's SEO here. Open the page to change it.",
+        reason:
+          "You can't change this page's SEO here. Open the page to change it.",
       };
 }
 
@@ -184,7 +185,9 @@ export function boxChanged(
 
 /** Whether any box of a row holds a change. */
 export function rowChanged(row: EditRow, edits: PageEdits): boolean {
-  return boxChanged(row, "title", edits) || boxChanged(row, "description", edits);
+  return (
+    boxChanged(row, "title", edits) || boxChanged(row, "description", edits)
+  );
 }
 
 /** The problem kinds that say a value is shared with another page. */
@@ -215,7 +218,10 @@ export function boxLine(
     };
   }
   const changed = boxChanged(row, field, edits);
-  if (!changed && problems.some(problem => problem.kind === SHARED_KIND[field])) {
+  if (
+    !changed &&
+    problems.some(problem => problem.kind === SHARED_KIND[field])
+  ) {
     return { text: "Same as another page · give it its own", tone: "warning" };
   }
   // Counted as the SEO tab and the problem list count it, in characters.

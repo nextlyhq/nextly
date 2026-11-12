@@ -29,12 +29,7 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { Switch } from "@nextlyhq/ui";
 import { Check, Info } from "lucide-react";
-import {
-  useRef,
-  useState,
-  type JSX,
-  type ReactNode,
-} from "react";
+import { useRef, useState, type JSX, type ReactNode } from "react";
 
 import {
   ADDRESSES_ROUTE_PATH,
@@ -506,68 +501,70 @@ export function CodePagePanel({
           </SheetDescription>
         </SheetHeader>
         <div className="flex flex-col gap-4 p-4">
-        <ConnectionNote item={item} />
-        <PreviewCard answer={answer} site={site} status="ready" />
-        <fieldset
-          className="m-0 grid min-w-0 gap-4 border-0 p-0"
-          disabled={save.pending}
-        >
-          <SeoTextField
-            label="Title on Google"
-            help="The blue link people click in Google's results."
-            value={draft.title}
-            placeholder={automatic.title}
-            count={characters(answer.title?.value ?? "")}
-            limit={TITLE_LIMIT}
-            maxLength={LONGEST_SEO_TEXT}
-            writable={writable}
-            inputRef={titleField}
-            onChange={title => change({ title: title ?? "" })}
-            source={id => (
-              <Source
-                id={id}
-                item={item}
-                field="title"
-                typed={draft.title.trim() !== ""}
-                onAutomatic={() => change({ title: "" })}
-              />
-            )}
-          />
-          <SeoTextField
-            multiline
-            label="Description on Google"
-            help="The grey text under the link."
-            value={draft.description}
-            placeholder={automatic.description}
-            count={characters(answer.description?.value ?? "")}
-            limit={DESCRIPTION_LIMIT}
-            maxLength={LONGEST_SEO_TEXT}
-            writable={writable}
-            onChange={description => change({ description: description ?? "" })}
-            source={id => (
-              <Source
-                id={id}
-                item={item}
-                field="description"
-                typed={draft.description.trim() !== ""}
-                onAutomatic={() => change({ description: "" })}
-              />
-            )}
-          />
-          <Advanced
-            item={item}
-            address={address}
-            draft={draft}
-            change={change}
-          />
-        </fieldset>
-        {save.error ? (
-          <Alert variant="destructive">
-            <AlertDescription>
-              Not saved. {apiErrorMessage(save.error)}
-            </AlertDescription>
-          </Alert>
-        ) : null}
+          <ConnectionNote item={item} />
+          <PreviewCard answer={answer} site={site} status="ready" />
+          <fieldset
+            className="m-0 grid min-w-0 gap-4 border-0 p-0"
+            disabled={save.pending}
+          >
+            <SeoTextField
+              label="Title on Google"
+              help="The blue link people click in Google's results."
+              value={draft.title}
+              placeholder={automatic.title}
+              count={characters(answer.title?.value ?? "")}
+              limit={TITLE_LIMIT}
+              maxLength={LONGEST_SEO_TEXT}
+              writable={writable}
+              inputRef={titleField}
+              onChange={title => change({ title: title ?? "" })}
+              source={id => (
+                <Source
+                  id={id}
+                  item={item}
+                  field="title"
+                  typed={draft.title.trim() !== ""}
+                  onAutomatic={() => change({ title: "" })}
+                />
+              )}
+            />
+            <SeoTextField
+              multiline
+              label="Description on Google"
+              help="The grey text under the link."
+              value={draft.description}
+              placeholder={automatic.description}
+              count={characters(answer.description?.value ?? "")}
+              limit={DESCRIPTION_LIMIT}
+              maxLength={LONGEST_SEO_TEXT}
+              writable={writable}
+              onChange={description =>
+                change({ description: description ?? "" })
+              }
+              source={id => (
+                <Source
+                  id={id}
+                  item={item}
+                  field="description"
+                  typed={draft.description.trim() !== ""}
+                  onAutomatic={() => change({ description: "" })}
+                />
+              )}
+            />
+            <Advanced
+              item={item}
+              address={address}
+              draft={draft}
+              change={change}
+            />
+          </fieldset>
+          {save.error ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                Not saved. {apiErrorMessage(save.error)}
+              </AlertDescription>
+            </Alert>
+          ) : null}
         </div>
         <SheetFooter className="mt-auto gap-2 border-t border-border p-4">
           <Button type="button" variant="outline" onClick={onClose}>

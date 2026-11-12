@@ -125,7 +125,11 @@ function useTypeRows(types: readonly string[]) {
 async function sendStep(step: SaveStep): Promise<void> {
   if (step.kind === "entries") {
     const body: BulkSaveRequest = { type: step.type, changes: step.changes };
-    await writePluginRoute({ plugin: SEO_PLUGIN_NAME, path: BULK_SAVE_PATH, body });
+    await writePluginRoute({
+      plugin: SEO_PLUGIN_NAME,
+      path: BULK_SAVE_PATH,
+      body,
+    });
     return;
   }
   await writePluginRoute({
@@ -172,7 +176,8 @@ function Box({
     "aria-label": label,
     "aria-describedby": lineId,
     value: boxValue(row, field, edits),
-    placeholder: (field === "title" ? row.autoTitle : row.autoDescription) ?? "",
+    placeholder:
+      (field === "title" ? row.autoTitle : row.autoDescription) ?? "",
     readOnly: locked || !editable(row),
     maxLength: LONGEST_SEO_TEXT,
     onChange: (event: { target: { value: string } }) =>
@@ -185,7 +190,10 @@ function Box({
         {field === "title" ? "Title in search" : "Description"}
       </span>
       {field === "title" ? (
-        <Input {...shared} className={changed ? "border-foreground" : undefined} />
+        <Input
+          {...shared}
+          className={changed ? "border-foreground" : undefined}
+        />
       ) : (
         <Textarea
           {...shared}
@@ -339,7 +347,9 @@ export function PagesEditor({
 
   return (
     <div className="flex flex-col gap-4 pb-20">
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">{filters}</div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        {filters}
+      </div>
       {outcome === null ? null : <PartSaved outcome={outcome} />}
       {failure !== null ? (
         <Alert variant="destructive">
@@ -364,7 +374,8 @@ export function PagesEditor({
           <ul className="m-0 list-none p-0" aria-label="Pages">
             {rows.map(row => {
               const item = byPath.get(row.path);
-              const problems = item === undefined ? [] : problemsOf(item, byPage);
+              const problems =
+                item === undefined ? [] : problemsOf(item, byPage);
               return (
                 <li
                   key={row.path}
