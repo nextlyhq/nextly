@@ -11,7 +11,7 @@
  * mocked at the request.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   collections: [] as Fixture[],
   singles: [] as Fixture[],
   loading: false,
+  singlesError: null as Error | null,
   content: { isLoading: false, hasAnswer: true, error: null as Error | null },
   /** Per slug: what the reader may do. */
   caps: {} as Record<
@@ -45,35 +46,59 @@ const state = vi.hoisted(() => ({
   >,
 }));
 
-vi.mock("@admin/hooks/useSidebarContentLists", async () => {
-  const landing = await import("@admin/lib/sidebar-landing");
-  const capabilities = () => ({
-    collections: Object.fromEntries(
-      Object.entries(state.caps).map(([slug, c]) => [
-        slug,
-        { canCreate: false, canUpdate: false, ...c },
-      ])
-    ),
+/**
+ * The collections endpoint, one page at a time, as the navigation reads it:
+ * the overview's own walk over every page is the real one.
+ */
+const { fetchCollections } = vi.hoisted(() => ({
+  fetchCollections: vi.fn(),
+}));
+vi.mock("@admin/services/collectionApi", () => ({
+  collectionApi: { fetchCollections },
+}));
+
+/** Answers the collections endpoint from the fixture, `pageSize` at a time. */
+function pagedCollections(params: {
+  pagination: { page: number; pageSize: number };
+}) {
+  const { page, pageSize } = params.pagination;
+  const items = state.collections.slice(page * pageSize, (page + 1) * pageSize);
+  return Promise.resolve({
+    items,
+    meta: {
+      total: state.collections.length,
+      page,
+      hasNext: (page + 1) * pageSize < state.collections.length,
+    },
   });
+}
+
+const singlesRetry = vi.hoisted(() => vi.fn());
+
+vi.mock("@admin/hooks/useSidebarContentLists", async importOriginal => {
+  const landing = await import("@admin/lib/sidebar-landing");
   return {
-    useSidebarCollectionList: () => ({
-      items: landing.getSidebarCollectionsForLanding(
-        state.collections as never,
-        {
-          branding: state.branding,
-          capabilities: capabilities() as never,
-          pinnedCollections: new Set(),
-        }
-      ),
-      isLoading: state.loading,
-      error: null,
-    }),
+    // The collections through the real hook, its walk over every page and
+    // the panel's filter and order.
+    ...(await importOriginal<
+      typeof import("@admin/hooks/useSidebarContentLists")
+    >()),
     useSidebarSingleList: () => ({
       items: landing.getSidebarSinglesForLanding(state.singles as never, {
-        capabilities: capabilities() as never,
+        capabilities: {
+          collections: Object.fromEntries(
+            Object.entries(state.caps).map(([slug, c]) => [
+              slug,
+              { canCreate: false, canUpdate: false, ...c },
+            ])
+          ),
+        } as never,
         pinnedSingles: new Set(),
       }),
       isLoading: state.loading,
+      isComplete: !state.loading && state.singlesError === null,
+      error: state.singlesError,
+      retry: singlesRetry,
     }),
   };
 });
@@ -145,16 +170,25 @@ function serverRows() {
 
 import { ContentOverview } from "../ContentOverview";
 
-function draw(scope: React.ComponentProps<typeof ContentOverview>["scope"]) {
+/** The page at an address, once its reads have settled. */
+async function draw(
+  scope: React.ComponentProps<typeof ContentOverview>["scope"]
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  drawnWith = client;
+  const view = render(
     <QueryClientProvider client={client}>
       <ContentOverview scope={scope} />
     </QueryClientProvider>
   );
+  await waitFor(() => expect(client.isFetching()).toBe(0));
+  return view;
 }
+
+/** The query client the last page was drawn with. */
+let drawnWith: QueryClient | undefined;
 
 const RECENT = new Date(Date.now() - 5 * 60_000).toISOString();
 
@@ -206,6 +240,11 @@ function readsBoth() {
 
 beforeEach(() => {
   vi.mocked(replaceTo).mockClear();
+  localStorage.clear();
+  fetchCollections.mockReset();
+  fetchCollections.mockImplementation(pagedCollections);
+  singlesRetry.mockReset();
+  state.singlesError = null;
   get.mockReset();
   get.mockImplementation(async () => ({ rows: serverRows() }));
   state.loading = false;
@@ -225,7 +264,7 @@ beforeEach(() => {
 
 describe("the Content overview", () => {
   it("shows both tables, each row with its figures and its action", async () => {
-    draw("all");
+    await draw("all");
 
     expect(screen.getByRole("heading", { level: 1, name: "Content" }));
     expect(
@@ -297,7 +336,7 @@ describe("the Content overview", () => {
         { total: 100 + i, drafts: i, newest: RECENT },
       ])
     );
-    draw("all");
+    await draw("all");
 
     const last = rowOf("Collections", "Collection 29");
     expect(await within(last).findByText("129")).toBeInTheDocument();
@@ -310,8 +349,8 @@ describe("the Content overview", () => {
     expect(get).toHaveBeenCalledWith("/dashboard/content");
   });
 
-  it("draws each kind's default icon, and a set icon where one is set", () => {
-    draw("all");
+  it("draws each kind's default icon, and a set icon where one is set", async () => {
+    await draw("all");
 
     const iconIn = (tableName: string, link: string) =>
       within(table(tableName))
@@ -325,7 +364,7 @@ describe("the Content overview", () => {
     expect(iconIn("Singles", "Footer")).toHaveClass("lucide-archive");
   });
 
-  it("lists each sidebar group under its heading, the groups first, then Other", () => {
+  it("lists each sidebar group under its heading, the groups first, then Other", async () => {
     state.collections = [
       { id: "c1", name: "posts", label: "Posts", admin: { order: 1 } },
       {
@@ -348,7 +387,7 @@ describe("the Content overview", () => {
       homepage: { canRead: true },
     };
     state.branding = { customGroups: [{ slug: "shop", name: "Online shop" }] };
-    draw("collections");
+    await draw("collections");
 
     // Each group's heading, in order: the groups as their first collection
     // appears, then the ungrouped under Other.
@@ -371,7 +410,7 @@ describe("the Content overview", () => {
 
   it("searches both tables by name", async () => {
     const user = userEvent.setup();
-    draw("all");
+    await draw("all");
 
     await user.type(
       screen.getByRole("searchbox", { name: "Search content" }),
@@ -382,8 +421,8 @@ describe("the Content overview", () => {
     expect(namesIn("Singles")).toEqual(["Homepage"]);
   });
 
-  it("shows only the collections table at /admin/collections, and stays", () => {
-    draw("collections");
+  it("shows only the collections table at /admin/collections, and stays", async () => {
+    await draw("collections");
 
     expect(
       screen.getByRole("heading", { level: 1, name: "Collections" })
@@ -399,8 +438,8 @@ describe("the Content overview", () => {
     expect(replaceTo).not.toHaveBeenCalled();
   });
 
-  it("shows only the Singles table at /admin/singles, and stays", () => {
-    draw("singles");
+  it("shows only the Singles table at /admin/singles, and stays", async () => {
+    await draw("singles");
 
     expect(namesIn("Singles")).toEqual(["Footer", "Homepage"]);
     expect(screen.queryByRole("table", { name: "Collections" })).toBeNull();
@@ -409,45 +448,148 @@ describe("the Content overview", () => {
 });
 
 describe("a reader of one kind alone", () => {
-  it("who reads only Singles sees no collections table, and is sent from /admin/collections to /admin/singles", () => {
+  it("who reads only Singles sees no collections table, and is sent from /admin/collections to /admin/singles", async () => {
     state.caps = {
       posts: { canRead: false },
       authors: { canRead: false },
       homepage: { canRead: true },
       footer: { canRead: true },
     };
-    const all = draw("all");
+    const all = await draw("all");
     expect(screen.queryByRole("table", { name: "Collections" })).toBeNull();
     expect(namesIn("Singles")).toEqual(["Footer", "Homepage"]);
     expect(screen.getByText("2 Singles. Everything editors write lives here."));
     all.unmount();
 
-    const collections = draw("collections");
+    const collections = await draw("collections");
     expect(replaceTo).toHaveBeenCalledWith("/admin/singles");
     expect(screen.queryByRole("table")).toBeNull();
     collections.unmount();
 
     vi.mocked(replaceTo).mockClear();
-    draw("singles");
+    await draw("singles");
     expect(namesIn("Singles")).toEqual(["Footer", "Homepage"]);
     expect(replaceTo).not.toHaveBeenCalled();
   });
 
-  it("who reads only collections sees no Singles table, and is sent from /admin/singles to /admin/collections", () => {
+  it("who reads only collections sees no Singles table, and is sent from /admin/singles to /admin/collections", async () => {
     state.caps = {
       posts: { canRead: true },
       authors: { canRead: true },
       homepage: { canRead: false },
       footer: { canRead: false },
     };
-    const all = draw("all");
+    const all = await draw("all");
     expect(screen.queryByRole("table", { name: "Singles" })).toBeNull();
     expect(namesIn("Collections")).toEqual(["Authors", "Posts"]);
     all.unmount();
 
-    draw("singles");
+    await draw("singles");
     expect(replaceTo).toHaveBeenCalledWith("/admin/collections");
     expect(screen.queryByRole("table")).toBeNull();
+  });
+});
+
+describe("every collection, from every page", () => {
+  it("lists collections past the first page, counts them and searches them", async () => {
+    // A hundred and thirty: the navigation's page holds a hundred.
+    state.collections = Array.from({ length: 130 }, (_, i) => ({
+      id: `c${i}`,
+      name: `c${String(i).padStart(3, "0")}`,
+      label: `Type ${String(i).padStart(3, "0")}`,
+    }));
+    state.caps = Object.fromEntries(
+      state.collections.map(c => [String(c.name), { canRead: true }])
+    );
+    state.singles = [];
+    const user = userEvent.setup();
+    await draw("collections");
+
+    expect(namesIn("Collections")).toHaveLength(130);
+    expect(screen.getByText("130 collections")).toBeInTheDocument();
+    // Both pages read, and no further.
+    expect(
+      fetchCollections.mock.calls.map(
+        ([params]) =>
+          (params as { pagination: { page: number } }).pagination.page
+      )
+    ).toEqual([0, 1]);
+
+    // A collection only the second page holds is searched too.
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search collections" }),
+      "Type 129"
+    );
+    expect(namesIn("Collections")).toEqual(["Type 129"]);
+  });
+});
+
+describe("a list that could not be read", () => {
+  it("says the collections could not be loaded, offers to retry, and sends nowhere", async () => {
+    // Only a Single is readable once the collections arrive, so taking the
+    // failed list as "no collections" would send the reader to Singles.
+    fetchCollections.mockRejectedValue(new Error("offline"));
+    const user = userEvent.setup();
+    const collections = await draw("collections");
+
+    expect(screen.getByText("Couldn't load your content")).toBeInTheDocument();
+    expect(screen.queryByText("No content you can open")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(replaceTo).not.toHaveBeenCalled();
+
+    const asked = fetchCollections.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() =>
+      expect(fetchCollections.mock.calls.length).toBeGreaterThan(asked)
+    );
+    collections.unmount();
+
+    // Nor does the overview call it an empty install.
+    state.caps = {};
+    await draw("all");
+    expect(screen.getByText("Couldn't load your content")).toBeInTheDocument();
+    expect(screen.queryByText("No content you can open")).toBeNull();
+  });
+
+  it("says the Singles could not be loaded, offers to retry, and sends nowhere", async () => {
+    // Collections are readable, so taking the failed Singles list as "no
+    // Singles" would send the reader from /admin/singles to collections.
+    state.singlesError = new Error("offline");
+    const user = userEvent.setup();
+    await draw("singles");
+
+    expect(screen.getByText("Couldn't load your content")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(replaceTo).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    expect(singlesRetry).toHaveBeenCalled();
+  });
+});
+
+describe("the overview's rows", () => {
+  it("names each collection's row by its slug", async () => {
+    await draw("collections");
+
+    expect(rowOf("Collections", "Posts")).toHaveAttribute(
+      "data-row-id",
+      "posts"
+    );
+    expect(rowOf("Collections", "Authors")).toHaveAttribute(
+      "data-row-id",
+      "authors"
+    );
+  });
+
+  it("asks for its figures again when the dashboard's figures go stale, as an entry write makes them", async () => {
+    await draw("all");
+    expect(get).toHaveBeenCalledTimes(1);
+
+    // What `refreshAfterEntryChange` and `refreshAfterEntryDelete` do after a
+    // write.
+    await act(() => drawnWith!.invalidateQueries({ queryKey: ["dashboard"] }));
+
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   });
 });
 
@@ -456,9 +598,9 @@ describe("a reader with no content to open", () => {
     state.caps = {};
   });
 
-  it("is redirected nowhere, and each address says there is nothing to open", () => {
+  it("is redirected nowhere, and each address says there is nothing to open", async () => {
     for (const scope of ["all", "collections", "singles"] as const) {
-      const view = draw(scope);
+      const view = await draw(scope);
       expect(
         screen.getByRole("heading", { name: "No content you can open" })
       ).toBeInTheDocument();
@@ -468,8 +610,8 @@ describe("a reader with no content to open", () => {
     expect(replaceTo).not.toHaveBeenCalled();
   });
 
-  it("is offered to build a collection only where they may", () => {
-    const without = draw("all");
+  it("is offered to build a collection only where they may", async () => {
+    const without = await draw("all");
     expect(
       screen.queryByRole("link", { name: "Create a collection" })
     ).toBeNull();
@@ -480,7 +622,7 @@ describe("a reader with no content to open", () => {
       "update-settings",
       "delete-settings",
     ]);
-    const builder = draw("all");
+    const builder = await draw("all");
     expect(
       screen.getByRole("link", { name: "Create a collection" })
     ).toHaveAttribute("href", "/admin/builder/collections/new");
@@ -488,15 +630,15 @@ describe("a reader with no content to open", () => {
 
     // Not where the Schema Builder is turned off.
     state.branding = { showBuilder: false };
-    draw("all");
+    await draw("all");
     expect(
       screen.queryByRole("link", { name: "Create a collection" })
     ).toBeNull();
   });
 
-  it("is told nothing, and sent nowhere, before the server answers what they may do", () => {
+  it("is told nothing, and sent nowhere, before the server answers what they may do", async () => {
     state.content = { isLoading: true, hasAnswer: false, error: null };
-    const pending = draw("collections");
+    const pending = await draw("collections");
     expect(screen.queryByText("No content you can open")).toBeNull();
     expect(replaceTo).not.toHaveBeenCalled();
     pending.unmount();
@@ -509,7 +651,7 @@ describe("a reader with no content to open", () => {
       hasAnswer: false,
       error: new Error("offline"),
     };
-    draw("collections");
+    await draw("collections");
     expect(screen.getByText("Couldn't check your access")).toBeInTheDocument();
     expect(screen.queryByText("No content you can open")).toBeNull();
     expect(replaceTo).not.toHaveBeenCalled();

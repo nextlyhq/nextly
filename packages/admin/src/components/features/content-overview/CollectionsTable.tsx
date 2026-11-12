@@ -40,6 +40,11 @@ import {
 } from "./overview-cells";
 import { useCollectionRowStats } from "./overview-rows";
 
+/** A row's id: the collection's slug, which names it uniquely. */
+function rowIdOf(collection: ApiCollection): string {
+  return collection.name;
+}
+
 function listHref(collection: ApiCollection): string {
   return buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: collection.name });
 }
@@ -200,6 +205,7 @@ export function CollectionsTable({
       {groups.length === 0 ? (
         <DataTableView
           columns={COLUMNS}
+          getRowId={rowIdOf}
           rows={[]}
           ariaLabel="Collections"
           emptyMessage={`No collections match “${search}”.`}
@@ -214,6 +220,7 @@ export function CollectionsTable({
               ) : null}
               <DataTableView
                 columns={COLUMNS}
+                getRowId={rowIdOf}
                 rows={group.items}
                 ariaLabel={grouped ? `Collections: ${name}` : "Collections"}
               />

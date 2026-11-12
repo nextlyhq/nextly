@@ -14,6 +14,7 @@ import { useEffect, useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
+import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useSidebarPins } from "@admin/hooks/useSidebarPins";
 import {
@@ -66,6 +67,29 @@ export function useSidebarCollectionList() {
   };
 }
 
+/**
+ * Every collection the Content panel lists, past the one page the panel reads:
+ * for the Content overview, which lists them all. The same filter and order as
+ * the panel's list, over every page of the navigation's collections.
+ */
+export function useEveryListedCollection() {
+  const { capabilities } = useCurrentUserPermissions();
+  const branding = useBranding();
+  const query = useEveryNavCollection();
+  const pins = useSidebarCollectionPins();
+  return {
+    items: getSidebarCollectionsForLanding(query.data ?? [], {
+      branding,
+      capabilities,
+      pinnedCollections: pins.pinned,
+    }),
+    // One read of every page: once it settles the list is whole.
+    isLoading: query.isLoading,
+    error: query.error,
+    retry: () => void query.refetch(),
+  };
+}
+
 /** The Singles the sidebar lists, before any search, with their pins. */
 export function useSidebarSingleList({
   enabled = true,
@@ -86,6 +110,8 @@ export function useSidebarSingleList({
     isFetchingNextPage,
     isFetchNextPageError,
     fetchNextPage,
+    error,
+    refetch,
   } = useInfiniteQuery({
     queryKey: [
       "singles",
@@ -153,6 +179,10 @@ export function useSidebarSingleList({
     // Whether every page is in this tab's cache, asked for by this reader or
     // another: what the device remembers of the list waits for this.
     hasArrived: singlesPages !== undefined && !hasNextPage,
+    // A page that could not be read, the first or a later one: until it is,
+    // the list is not whole, and a reader must not take it as everything.
+    error,
+    retry: () => void refetch(),
     isPinned: pins.isPinned,
     togglePin: pins.togglePin,
   };

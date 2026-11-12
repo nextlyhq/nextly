@@ -5,9 +5,9 @@
  * two tables, at `/admin/content`; and the one table of each kind at
  * `/admin/collections` and `/admin/singles`.
  *
- * The lists are the Content panel's own (`useSidebarCollectionList`,
- * `useSidebarSingleList`): the same collections and Singles in the same order,
- * a hidden one left out of both. What each address shows of them is decided by
+ * The lists are the Content panel's (`useEveryListedCollection`, every page of
+ * them, and `useSidebarSingleList`): the same collections and Singles in the
+ * same order, a hidden one left out of both. What each address shows of them is decided by
  * `overviewPlan`; this page only draws it. The search filters both tables by
  * name, as the panel's search does.
  *
@@ -24,7 +24,7 @@ import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import {
-  useSidebarCollectionList,
+  useEveryListedCollection,
   useSidebarSingleList,
 } from "@admin/hooks/useSidebarContentLists";
 import { replaceTo } from "@admin/lib/navigation";
@@ -90,25 +90,75 @@ function OverviewSearch({
   );
 }
 
+/** Why the page cannot say what the reader has, and how to ask again. */
+interface OverviewFailure {
+  title: string;
+  description: string;
+  error: Error | null;
+  retry: () => void;
+}
+
+/**
+ * The first failure the page must say rather than read past: the server's
+ * answer about access, or a list that could not be read. Either leaves the
+ * lists short of what the reader has, which would otherwise read as having
+ * nothing and redirect or show the empty state.
+ */
+function failureOf(
+  access: { failed: boolean; error: Error | null; retry: () => void },
+  lists: readonly { error: Error | null; retry: () => void }[]
+): OverviewFailure | null {
+  if (access.failed) {
+    return {
+      title: "Couldn't check your access",
+      description:
+        "The admin couldn't load what you may do with collections and Singles, so it can't tell which ones to show.",
+      error: access.error,
+      retry: access.retry,
+    };
+  }
+  const failed = lists.find(list => list.error !== null);
+  if (failed === undefined) return null;
+  return {
+    title: "Couldn't load your content",
+    description:
+      "The admin couldn't load every collection and Single, so it can't tell which ones to show.",
+    error: failed.error,
+    retry: () => lists.forEach(list => list.retry()),
+  };
+}
+
 /**
  * The lists the page draws, what it shows of them, and the redirect that
  * follows when it sends the reader to the other kind's address.
  */
 function useOverview(scope: OverviewScope) {
-  const collections = useSidebarCollectionList();
+  // Every collection, past the first page the panel reads.
+  const collections = useEveryListedCollection();
   const singles = useSidebarSingleList();
   const { content, retry } = useCurrentUserPermissions();
 
-  // Without the server's answer about what the reader may do, the lists are
-  // filtered through nothing and read as empty: that is a failure to say, not
-  // a reader with no content to redirect or tell so.
-  const accessFailed = !content.hasAnswer && content.error !== null;
+  const failure = failureOf(
+    {
+      // Without the server's answer about what the reader may do, the lists
+      // are filtered through nothing and read as empty.
+      failed: !content.hasAnswer && content.error !== null,
+      error: content.error,
+      retry,
+    },
+    [collections, singles]
+  );
   // The lists are filtered through the server's answer about each entity, so
-  // they are not settled until that answer is.
-  const pending = [collections.isLoading, singles.isLoading, content.isLoading];
+  // they are not settled until that answer is, nor until every page of each
+  // has arrived.
+  const pending = [
+    collections.isLoading,
+    !singles.isComplete,
+    content.isLoading,
+  ];
   const plan = overviewPlan({
     scope,
-    settled: !pending.includes(true) && !accessFailed,
+    settled: !pending.includes(true) && failure === null,
     readable: {
       collections: collections.items.length > 0,
       singles: singles.items.length > 0,
@@ -124,7 +174,7 @@ function useOverview(scope: OverviewScope) {
     collections: collections.items,
     singles: singles.items,
     plan,
-    failure: accessFailed ? { error: content.error, retry } : null,
+    failure,
   };
 }
 
@@ -156,8 +206,8 @@ function OverviewBody({
   if (failure !== null) {
     return (
       <SectionErrorFallback
-        title="Couldn't check your access"
-        description="The admin couldn't load what you may do with collections and Singles, so it can't tell which ones to show."
+        title={failure.title}
+        description={failure.description}
         error={failure.error ?? undefined}
         reset={failure.retry}
       />

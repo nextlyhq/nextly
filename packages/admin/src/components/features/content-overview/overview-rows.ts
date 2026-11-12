@@ -22,9 +22,14 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import { describeActivityActor } from "@admin/lib/dashboard";
 import type { ApiCollection } from "@admin/types/entities";
 
-/** Where the overview's rows are read, and the cache entry they are kept under. */
+/**
+ * Where the overview's rows are read, and the cache entry they are kept under:
+ * under the dashboard's key, so a write to an entry, which refreshes the
+ * dashboard (`hooks/queries/entry-cache`), refreshes the overview's figures
+ * with it.
+ */
 const CONTENT_OVERVIEW_PATH = "/dashboard/content";
-const CONTENT_OVERVIEW_KEY = ["content-overview"] as const;
+const CONTENT_OVERVIEW_KEY = ["dashboard", "content-overview"] as const;
 
 /** How long the rows are reused before they are asked for again. */
 const ROWS_STALE_MS = 30_000;
