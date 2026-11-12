@@ -37,28 +37,33 @@ export function startCompanionReadinessWarmUp(deps: {
   registries: StoredRegistries;
   logger: Pick<Logger, "warn">;
 }): void {
-  warmed = (async () => {
-    let entities: Awaited<ReturnType<typeof storedLocalizableEntities>>;
-    try {
-      entities = await storedLocalizableEntities(deps.registries);
-    } catch (error) {
-      deps.logger.warn(
-        "The translated entities could not be listed to resolve their tables at boot",
-        { code: codeOf(error) }
-      );
-      return;
-    }
-    for (const entity of entities) {
+  // Begun once the start has finished its turn, as the post-start tasks are:
+  // on SQLite, whose driver blocks, reads begun now would run on the start's
+  // own time.
+  warmed = new Promise<void>(resolve => setImmediate(resolve)).then(
+    async () => {
+      let entities: Awaited<ReturnType<typeof storedLocalizableEntities>>;
       try {
-        await isCompanionReady(deps.adapter, entity.companionTable);
+        entities = await storedLocalizableEntities(deps.registries);
       } catch (error) {
         deps.logger.warn(
-          "A translation table's readiness could not be resolved at boot",
-          { table: entity.companionTable, code: codeOf(error) }
+          "The translated entities could not be listed to resolve their tables at boot",
+          { code: codeOf(error) }
         );
+        return;
+      }
+      for (const entity of entities) {
+        try {
+          await isCompanionReady(deps.adapter, entity.companionTable);
+        } catch (error) {
+          deps.logger.warn(
+            "A translation table's readiness could not be resolved at boot",
+            { table: entity.companionTable, code: codeOf(error) }
+          );
+        }
       }
     }
-  })();
+  );
 }
 
 /**

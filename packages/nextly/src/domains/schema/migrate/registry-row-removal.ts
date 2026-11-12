@@ -12,6 +12,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import {
   deleteEntityRegistryRow,
@@ -36,6 +37,9 @@ export async function removeRegistryRow(
     await scope.view.delete(await resolveRegistryTableName(scope.view), {
       and: [{ column: "slug", op: "=", value: slug }],
     });
+    // Cleared as the row goes, as `deleteEntityRegistryRow` clears for the
+    // other kinds, so a read later in the transaction does not find it.
+    clearRegistryRowCache();
     return;
   }
   await deleteEntityRegistryRow(scope.tx, kind, slug, scope.tables);
