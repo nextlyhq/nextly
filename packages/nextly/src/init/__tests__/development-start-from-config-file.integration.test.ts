@@ -144,6 +144,10 @@ function configFile(
   return `${JSON.stringify({ collections, extendColumn })}\n`;
 }
 
+/** `nextly_meta`'s key column, quoted: `key` is a reserved word in MySQL. */
+const keyColumn = (dialect: TestDialect) =>
+  dialect === "mysql" ? "`key`" : '"key"';
+
 /** The entities a statement names, by slug or by table. */
 function named(call: RecordedStatement): Set<string> {
   const said = `${call.text} ${JSON.stringify(call.values)}`;
@@ -324,7 +328,7 @@ describe.each(getConfiguredTestDialects())(
         const reader = await adapterFor();
         try {
           const rows = await reader.executeQuery<{ value: unknown }>(
-            "SELECT value FROM nextly_meta WHERE key = 'development_start:entity:collection:p2x'"
+            `SELECT value FROM nextly_meta WHERE ${keyColumn(dialect)} = 'development_start:entity:collection:p2x'`
           );
           return rows.map(row => String(row.value));
         } finally {

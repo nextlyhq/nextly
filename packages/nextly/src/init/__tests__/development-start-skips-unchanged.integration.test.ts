@@ -117,6 +117,10 @@ function entities(
   };
 }
 
+/** `nextly_meta`'s key column, quoted: `key` is a reserved word in MySQL. */
+const keyColumn = (dialect: TestDialect) =>
+  dialect === "mysql" ? "`key`" : '"key"';
+
 /** The entities a statement names, by slug or by table. */
 function named(call: RecordedStatement): Set<string> {
   const said = `${call.text} ${JSON.stringify(call.values)}`;
@@ -203,7 +207,7 @@ describe.each(getConfiguredTestDialects())(
       const reader = await adapterFor();
       try {
         const rows = await reader.executeQuery<{ value: unknown }>(
-          `SELECT value FROM nextly_meta WHERE key = 'development_start:entity:${key}'`
+          `SELECT value FROM nextly_meta WHERE ${keyColumn(dialect)} = 'development_start:entity:${key}'`
         );
         return rows.map(row => String(row.value));
       } finally {
@@ -376,11 +380,11 @@ describe.each(getConfiguredTestDialects())(
         try {
           if (value !== undefined) {
             await db.executeQuery(
-              `UPDATE nextly_meta SET value = '${value.replace(/'/g, "''")}' WHERE key = 'development_start:salt'`
+              `UPDATE nextly_meta SET value = '${value.replace(/'/g, "''")}' WHERE ${keyColumn(dialect)} = 'development_start:salt'`
             );
           }
           const [row] = await db.executeQuery<{ value: unknown }>(
-            "SELECT value FROM nextly_meta WHERE key = 'development_start:salt'"
+            `SELECT value FROM nextly_meta WHERE ${keyColumn(dialect)} = 'development_start:salt'`
           );
           return String(row.value);
         } finally {
