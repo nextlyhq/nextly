@@ -171,6 +171,8 @@ function pageHtml(origin: string, agent: string): string {
     `<meta property="og:title" content="Surfer vs Rext | Rext AI"/>`,
     `<meta property="og:description" content="Surfer grades drafts; Rext writes them."/>`,
     `<meta name="twitter:title" content="Surfer vs Rext | Rext AI"/>`,
+    // The card's language, as the plugin states it for the site's language.
+    `<meta property="og:locale" content="en_US"/>`,
     "</head><body><h1>Surfer vs Rext</h1></body></html>",
   ].join("");
 }

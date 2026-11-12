@@ -16,6 +16,7 @@ import {
   saveOutcome,
   saveSteps,
   typesToRead,
+  withEdit,
   type PageEdits,
   type TypeRows,
 } from "../pages-edit";
@@ -230,5 +231,23 @@ describe("a save", () => {
     expect(editsAfter(edits, outcome.saved)).toEqual({
       "/pricing": { title: "Plans and prices" },
     });
+  });
+
+  it("saves an edit at the version its page was read at when the edit began, however often it is read since", () => {
+    const [one] = rows;
+    if (one === undefined) throw new Error("no row");
+    const edits = withEdit({}, one, "title", "One");
+    // Someone else saves the page; it is read again at its new version.
+    const reread = editRowsOf(
+      ITEMS,
+      new Map<string, readonly BulkRow[] | Error>([
+        ["posts", [row("1", { rev: "r1-theirs" })]],
+      ])
+    );
+    expect(saveSteps(reread, edits)[0]).toMatchObject({
+      changes: [{ id: "1", rev: "r1", title: "One" }],
+    });
+    // A box typed back to what the page holds lets go of the version too.
+    expect(withEdit(edits, one, "title", "")).toEqual({});
   });
 });

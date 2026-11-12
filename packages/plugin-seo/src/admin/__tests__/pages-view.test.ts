@@ -106,6 +106,12 @@ describe("each page's status", () => {
     expect(status(4)).toBe("hidden");
   });
 
+  it("is unknown for every page until the problem list has been read", () => {
+    expect(statusOf(ITEMS[1] as SiteAddress, undefined)).toBe("unknown");
+    // Not even "good": nothing was checked.
+    expect(statusOf(ITEMS[0] as SiteAddress, undefined)).toBe("unknown");
+  });
+
   it("names a Single by its type key", () => {
     const single = problemsByPage([problem("canonical", "single:home", "1")]);
     expect(statusOf(ITEMS[0] as SiteAddress, single)).toBe("error");

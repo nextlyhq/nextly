@@ -447,4 +447,19 @@ describe("comparing what crawlers received with what Nextly holds", () => {
       text: "Nextly holds en_US; the page stated en_GB. The page's route or the site's layout sets its own.",
     });
   });
+
+  it("judges a card's title by where the card's own title comes from, not the page's", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      // The page's title is automatic; the card's was typed for it.
+      stored: { ...STORED, automatic: { title: true, cardTitle: false } },
+      fetched: everyone(page(), {
+        x: received(page(head => (head["twitter:title"] = "Something else"))),
+      }),
+    });
+    expect(compared.differences[0]).toMatchObject({
+      title: "X received a different title.",
+    });
+    expect(compared.differences[0]?.expected).toBeUndefined();
+  });
 });

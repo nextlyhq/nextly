@@ -166,17 +166,20 @@ beforeEach(() => {
     refetch: () => {},
     fetching: false,
   })) as unknown as typeof usePluginRoute);
-  vi.mocked(usePluginRouteMutation).mockImplementation(
-    () =>
-      ({
-        write: vi.fn(async (body: unknown) => {
-          sent.push(body);
-          return { path: "/pricing" };
-        }),
-        pending: false,
-        error: null,
-      }) as unknown as ReturnType<typeof usePluginRouteMutation>
-  );
+  vi.mocked(usePluginRouteMutation).mockImplementation(((args: {
+    path: string;
+  }) => ({
+    write: vi.fn(async (body: unknown) => {
+      // The problem list checked again after a save answers the list.
+      if (args.path === "/problems/check") {
+        return { ...PROBLEMS, message: "Checked." };
+      }
+      sent.push(body);
+      return { path: "/pricing" };
+    }),
+    pending: false,
+    error: null,
+  })) as unknown as typeof usePluginRouteMutation);
   vi.mocked(readPluginRoute).mockImplementation((async () => ({
     type: "pages",
     rows: ROWS,
@@ -233,6 +236,31 @@ describe("the list", () => {
     expect(rowOf("Blog").getByText("Own value")).toBeTruthy();
     expect(rowOf("Pricing").getByText("Not connected")).toBeTruthy();
     expect(screen.getByText("5 pages")).toBeTruthy();
+  });
+
+  it("says each status is unknown, and why, where the problem list can't be read", () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) =>
+      args.path === "/problems"
+        ? {
+            data: undefined,
+            pending: false,
+            error: new Error("The problem list is down."),
+            refetch: () => {},
+            fetching: false,
+          }
+        : {
+            data: { items: ITEMS },
+            pending: false,
+            error: null,
+            refetch: () => {},
+            fetching: false,
+          }) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The problem list is down."
+    );
+    expect(table().queryByText("Good")).toBeNull();
+    expect(rowOf("Home").getByText("Not checked")).toBeTruthy();
   });
 
   it("finds a page by part of its address or name", async () => {

@@ -408,6 +408,11 @@ async function heldAt(
         title: isAutomatic(sourced.title),
         description: isAutomatic(sourced.description),
         image: isAutomatic(sourced.image),
+        // The card's text is its own where one was set, else the page's.
+        cardTitle: isAutomatic(sourced.socialTitle ?? sourced.title),
+        cardDescription: isAutomatic(
+          sourced.socialDescription ?? sourced.description
+        ),
       },
     };
     const name = nameOf(source);

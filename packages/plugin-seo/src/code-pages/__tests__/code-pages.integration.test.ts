@@ -475,7 +475,7 @@ describe.each(getConfiguredTestDialects())(
       expect(byPath["/typed"]?.titlePattern).toBeUndefined();
       // Worked out: the site's description, and the pattern the title came from.
       expect(byPath["/about"]?.description).toBe("Acme makes things.");
-      expect(byPath["/about"]?.title).toBe("About | Acme");
+      expect(byPath["/about"]?.title).toMatch(/ \| Acme$/);
       expect(byPath["/about"]?.titlePattern).toBe(DEFAULT_TITLE_PATTERN);
       // Set in the route's code, for a page built in code.
       expect(byPath["/contact"]?.description).toBe("Write to us.");

@@ -61,9 +61,14 @@ export interface EditRow {
   autoDescriptionFrom: string;
 }
 
-/** What a person typed, by address and box. */
+/**
+ * What a person typed, by address and box, with the version the page was
+ * read at when its first edit began: a save sends that version, so a page
+ * saved by someone else since, and read again here, is refused rather than
+ * overwritten.
+ */
 export type PageEdits = Readonly<
-  Record<string, Partial<Record<EditField, string>>>
+  Record<string, Partial<Record<EditField, string>> & { rev?: string }>
 >;
 
 /**
@@ -233,6 +238,31 @@ export function boxLine(
   };
 }
 
+/**
+ * `edits` with `value` typed into `row`'s `field`: the version the page was
+ * read at kept from the first edit, and the page let go of, version and
+ * all, once nothing typed differs from what it holds.
+ */
+export function withEdit(
+  edits: PageEdits,
+  row: EditRow,
+  field: EditField,
+  value: string
+): PageEdits {
+  const held = edits[row.path];
+  const rev =
+    held?.rev ?? (row.target.kind === "entry" ? row.target.row.rev : undefined);
+  const next = { ...held, [field]: value };
+  // A box typed back to what its page holds is no change.
+  if (value === row[field]) delete next[field];
+  const { [row.path]: _dropped, ...others } = edits;
+  if (next.title === undefined && next.description === undefined) return others;
+  return {
+    ...others,
+    [row.path]: { ...next, ...(rev === undefined ? {} : { rev }) },
+  };
+}
+
 /** One step of a save: a content type's pages, or one page built in code. */
 export type SaveStep =
   | { kind: "entries"; type: string; paths: string[]; changes: BulkChange[] }
@@ -286,7 +316,8 @@ function entryChange(
   edits: PageEdits
 ): BulkChange {
   const change: BulkChange = { id: read.id };
-  if (read.rev !== undefined) change.rev = read.rev;
+  const rev = edits[row.path]?.rev ?? read.rev;
+  if (rev !== undefined) change.rev = rev;
   if (boxChanged(row, "title", edits)) {
     change.title = boxValue(row, "title", edits);
   }

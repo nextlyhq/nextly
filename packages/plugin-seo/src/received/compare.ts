@@ -50,7 +50,14 @@ export interface StoredHead {
    * pattern, the page's content or the site's defaults: a Page Builder
    * design or the page's route may set its own, which wins over them.
    */
-  automatic?: { title?: boolean; description?: boolean; image?: boolean };
+  automatic?: {
+    title?: boolean;
+    description?: boolean;
+    image?: boolean;
+    /** The card's own title and description, which may be set apart from the page's. */
+    cardTitle?: boolean;
+    cardDescription?: boolean;
+  };
 }
 
 /** The comparison of one page, as the screen shows it. */
@@ -351,14 +358,15 @@ function cardTextSaid(
   row: "title" | "description"
 ): Said {
   const card = row === "title" ? stored?.cardTitle : stored?.cardDescription;
-  const own = group.keys.some(readsPage) ? stored?.[row] : card;
-  return textDifference(
-    group,
-    own,
-    names,
-    row,
-    stored?.automatic?.[row] === true
-  );
+  const page = group.keys.some(readsPage);
+  const own = page ? stored?.[row] : card;
+  // Whether the value compared was worked out automatically: the card's own
+  // where the card is compared, since it can be set apart from the page's.
+  const cardRow = row === "title" ? "cardTitle" : "cardDescription";
+  const automatic = page
+    ? stored?.automatic?.[row]
+    : (stored?.automatic?.[cardRow] ?? stored?.automatic?.[row]);
+  return textDifference(group, own, names, row, automatic === true);
 }
 
 /** The words of a different share image. */

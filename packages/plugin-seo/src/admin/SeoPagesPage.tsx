@@ -18,6 +18,8 @@
  * @module admin/SeoPagesPage
  */
 import {
+  Alert,
+  AlertDescription,
   apiErrorMessage,
   Badge,
   Button,
@@ -99,6 +101,7 @@ const STATUS_BADGE: Record<PageStatus, BadgeProps["variant"]> = {
   notice: "info",
   "not-connected": "warning",
   hidden: "outline",
+  unknown: "outline",
 };
 
 /** The pages, the problem list they are judged by, and what a read says. */
@@ -111,8 +114,12 @@ function usePages(filter: PagesFilter) {
   });
   const problems = useCheckedProblemList();
   const items = addresses.data?.items;
+  // No list yet, or one that couldn't be read: every status is unknown.
   const byPage = useMemo(
-    () => problemsByPage(problems.list?.problems ?? []),
+    () =>
+      problems.list === undefined
+        ? undefined
+        : problemsByPage(problems.list.problems),
     [problems.list]
   );
   const shown = useMemo(
@@ -128,6 +135,10 @@ function usePages(filter: PagesFilter) {
     shown,
     failure,
     loading: items === undefined && failure === null,
+    problemsFailed:
+      problems.list === undefined && problems.failed !== null
+        ? `The problem list couldn't be read, so each page's status is unknown. ${apiErrorMessage(problems.failed)}`
+        : null,
     // Once a save has run, the list and the problems are read again.
     reread: () => {
       addresses.refetch();
@@ -185,6 +196,11 @@ export function SeoPagesPage(): JSX.Element {
         description={DESCRIPTION[mode]}
         actions={<ModeActions mode={mode} onMode={setMode} />}
       />
+      {pages.problemsFailed === null ? null : (
+        <Alert variant="warning" className="mb-4">
+          <AlertDescription>{pages.problemsFailed}</AlertDescription>
+        </Alert>
+      )}
       {mode === "view" ? (
         <PagesList
           shown={pages.shown}

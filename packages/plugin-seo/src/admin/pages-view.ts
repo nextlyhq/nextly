@@ -27,7 +27,12 @@ import { SEO_ADMIN_SLUG } from "../settings/contract";
  * problem list holds for it; else, for a page built in code whose route
  * doesn't call the plugin, not connected; else hidden from search, or good.
  */
-export type PageStatus = ProblemSeverity | "not-connected" | "hidden" | "good";
+export type PageStatus =
+  | ProblemSeverity
+  | "not-connected"
+  | "hidden"
+  | "good"
+  | "unknown";
 
 /** Each status's word, as the Status column and its filter say it. */
 export const STATUS_TEXT: Readonly<Record<PageStatus, string>> = {
@@ -37,6 +42,7 @@ export const STATUS_TEXT: Readonly<Record<PageStatus, string>> = {
   "not-connected": "Not connected",
   hidden: "Hidden",
   good: "Good",
+  unknown: "Not checked",
 };
 
 /** The statuses in the order the Status filter offers them. */
@@ -88,11 +94,16 @@ export function problemsOf(
   return byPage.get(pageKey(entryTypeKey(entry), entry.id, entry.locale)) ?? [];
 }
 
-/** How `item` stands, from the problem list grouped by `problemsByPage`. */
+/**
+ * How `item` stands, from the problem list grouped by `problemsByPage`:
+ * unknown while there is no list to read it from, since a page the list
+ * was never read for is not one with no problems.
+ */
 export function statusOf(
   item: SiteAddress,
-  byPage: ProblemsByPage
+  byPage: ProblemsByPage | undefined
 ): PageStatus {
+  if (byPage === undefined) return "unknown";
   const severities = new Set(
     problemsOf(item, byPage).map(problem => KIND_SEVERITY[problem.kind])
   );

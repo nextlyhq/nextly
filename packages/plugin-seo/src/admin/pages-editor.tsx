@@ -68,6 +68,7 @@ import {
   type SaveOutcome,
   type SaveStep,
   type StepResult,
+  withEdit,
 } from "./pages-edit";
 import { problemsOf, type ProblemsByPage } from "./pages-view";
 
@@ -275,22 +276,6 @@ function ChangesBar({
   );
 }
 
-/** `edits` with `value` typed into `row`'s `field`. */
-function withEdit(
-  edits: PageEdits,
-  row: EditRow,
-  field: EditField,
-  value: string
-): PageEdits {
-  const next = { ...edits[row.path], [field]: value };
-  // A box typed back to what its page holds is no change.
-  if (value === row[field]) delete next[field];
-  const { [row.path]: _dropped, ...others } = edits;
-  return Object.keys(next).length === 0
-    ? others
-    : { ...others, [row.path]: next };
-}
-
 /** The rows, or what stands in their place while there are none to show. */
 function EditBody({
   rows,
@@ -382,7 +367,7 @@ export function PagesEditor({
   filters: ReactNode;
   loading: boolean;
   failure: string | null;
-  byPage: ProblemsByPage;
+  byPage: ProblemsByPage | undefined;
   edits: PageEdits;
   onEdits: Dispatch<SetStateAction<PageEdits>>;
   /** Called once a save has run, so the list and the problems are read again. */
@@ -441,7 +426,9 @@ export function PagesEditor({
         loading={loading}
         problemsFor={row => {
           const item = byPath.get(row.path);
-          return item === undefined ? [] : problemsOf(item, byPage);
+          return item === undefined || byPage === undefined
+            ? []
+            : problemsOf(item, byPage);
         }}
         edits={edits}
         saving={saving}

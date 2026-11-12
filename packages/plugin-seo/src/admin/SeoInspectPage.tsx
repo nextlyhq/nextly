@@ -413,7 +413,10 @@ function HeadCard({
           <p className="px-4 py-3 text-sm text-muted-foreground">
             Nextly holds no published page at this address that you can read.
           </p>
-        ) : (
+        ) : null}
+        {/* What a crawler received is shown even where Nextly holds no page
+            here, such as a page built in code; with neither, no table. */}
+        {stored === undefined && answer.kind !== "checked" ? null : (
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="text-left text-muted-foreground">
@@ -451,7 +454,7 @@ function HeadCard({
                       {row.tag}
                     </td>
                     <td className="break-words px-2 py-2.5">
-                      {heldText(stored, row.key)}
+                      {stored === undefined ? "—" : heldText(stored, row.key)}
                     </td>
                     {received === undefined ? null : (
                       <td
@@ -461,7 +464,9 @@ function HeadCard({
                       </td>
                     )}
                     <td className="py-2.5 pl-2 pr-4 text-muted-foreground">
-                      {originText(row.key, stored.from[row.key])}
+                      {stored === undefined
+                        ? "—"
+                        : originText(row.key, stored.from[row.key])}
                     </td>
                   </tr>
                 );

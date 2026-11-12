@@ -265,6 +265,38 @@ describe("Inspect", () => {
     await vi.waitFor(() => expect(asked).toHaveLength(2));
   });
 
+  it("shows what each crawler received where Nextly holds no page there, such as a page built in code", async () => {
+    const received = Object.fromEntries(
+      ROWS.map(row => [
+        row,
+        Object.fromEntries(
+          KEYS.map(key => [
+            key,
+            row === "title"
+              ? { kind: "received", received: "Pricing in code" }
+              : { kind: "received" },
+          ])
+        ),
+      ])
+    ) as Record<RowKey, Record<CrawlerKey, ReceivedCell>>;
+    answering({
+      ...CHECKED,
+      name: undefined,
+      editHref: undefined,
+      stored: undefined,
+      structuredData: undefined,
+      rows: received,
+      differences: [],
+    });
+    render(<SeoInspectPage />);
+    const table = within(await screen.findByRole("table"));
+    expect(table.getByText("Google received")).toBeTruthy();
+    expect(table.getByText("Pricing in code")).toBeTruthy();
+    expect(
+      screen.getByText(/Nextly holds no published page at this address/)
+    ).toBeTruthy();
+  });
+
   it("sends an address naming no page on to Pages", () => {
     window.history.pushState(
       {},
