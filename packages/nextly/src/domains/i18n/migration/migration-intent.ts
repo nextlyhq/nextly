@@ -20,7 +20,7 @@ export const LOCALIZATION_INTENT_HEADER = "-- Localization:";
  * Absence of the field is different, and does mean verbatim — that is what every file written
  * before this existed looks like.
  */
-export const LOCALIZATION_INTENT_VERSION = 6;
+export const LOCALIZATION_INTENT_VERSION = 7;
 
 /**
  * Every payload version this build has a parser for.

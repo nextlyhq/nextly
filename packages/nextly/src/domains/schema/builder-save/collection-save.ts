@@ -1017,6 +1017,9 @@ async function generateFor(
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
     defaultLocale: deps.config.localization?.defaultLocale,
+    // The configuration's order, which decides the value a field leaving translation keeps, as
+    // the save's own push decides it.
+    languageOrder: deps.config.localization?.locales.map(locale => locale.code),
     onWarning: message => deps.logger.warn(message),
     scope: {
       kind: "collection",
