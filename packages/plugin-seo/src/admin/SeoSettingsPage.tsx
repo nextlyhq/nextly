@@ -281,28 +281,43 @@ function versionOf(stored: StoredSettings): string {
   return `${id}@${typeof version === "string" ? version : JSON.stringify(stored)}`;
 }
 
-/**
- * Unsaved changes, kept while the screen is mounted again: the admin may
- * mount the page anew when a tab link changes the address, which would drop
- * what was typed on the tab left. Kept only for the settings and the version
- * it was made from, and let go once the screen is left for another page.
- */
 /** Whether a save of the settings is on its way, which holds the tabs still. */
 let saveInFlight = false;
 
+/**
+ * Unsaved changes, kept while the screen is mounted again: the admin may
+ * mount the page anew when a tab link changes the address, which would drop
+ * what was typed on the tab left. Kept with the stored settings they were
+ * made from, and let go once the screen is left for another page.
+ */
 let heldDraft:
-  | { slug: string; version: string; draft: SettingsDraft }
+  | {
+      slug: string;
+      version: string;
+      base: StoredSettings;
+      draft: SettingsDraft;
+    }
   | undefined;
 
-/** The draft to start from: one held for these settings, else theirs. */
+/**
+ * The draft to start from: one held for these settings, moved onto a newer
+ * version of the same document read since (a value edited stays as edited,
+ * every other takes the newer stored one), else theirs.
+ */
 function startingDraft(
   slug: string,
   stored: StoredSettings,
   defaults: SettingsDefaults
 ): SettingsDraft {
-  return heldDraft?.slug === slug && heldDraft.version === versionOf(stored)
-    ? heldDraft.draft
-    : draftOf(stored, defaults);
+  if (heldDraft?.slug !== slug || heldDraft.base.id !== stored.id) {
+    return draftOf(stored, defaults);
+  }
+  if (heldDraft.version === versionOf(stored)) return heldDraft.draft;
+  return rebasedDraft(
+    heldDraft.draft,
+    draftOf(heldDraft.base, defaults),
+    draftOf(stored, defaults)
+  );
 }
 
 /** Keeps `draft` while it holds changes, and lets it go off this screen. */
@@ -314,8 +329,8 @@ function useHeldDraft(
 ): void {
   const version = versionOf(stored);
   useEffect(() => {
-    heldDraft = changed ? { slug, version, draft } : undefined;
-  }, [slug, version, draft, changed]);
+    heldDraft = changed ? { slug, version, base: stored, draft } : undefined;
+  }, [slug, version, stored, draft, changed]);
   useEffect(
     () => () => {
       // Unmounted for another page, not for another tab of this one.

@@ -33,10 +33,12 @@ const PATH = `/en/seo/${SLUG}`;
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
-  // Past first-time setup, so the section opens its screens directly.
+  // Past first-time setup, so the section opens its screens directly, with
+  // a site name, so a page's title comes from its pattern. Saved here, since
+  // the specs that save one may run after this.
   await ok(
     await page.request.patch(SETTINGS_API, {
-      data: { setupStep: 3, _overwrite: true },
+      data: { setupStep: 3, siteName: "Playground", _overwrite: true },
     })
   );
 });

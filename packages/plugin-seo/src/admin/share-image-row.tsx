@@ -177,6 +177,34 @@ function shownImage(
   );
 }
 
+/** Whether the last share image copy asked for could not be made. */
+export interface MakeFailure {
+  failed: boolean;
+  /** Follows a copy asked for: cleared as it starts, set if none comes back. */
+  track: (asked: Promise<string | undefined>) => void;
+}
+
+/**
+ * A copy that could not be made, said only while the page's image is still
+ * the one it was asked for from: choosing another image, or asking again,
+ * lets the warning go.
+ */
+export function useMakeFailure(ogImage: unknown): MakeFailure {
+  const image = imageIdOf(ogImage) ?? null;
+  const [failedFor, setFailedFor] = useState<
+    { image: string | null } | undefined
+  >(undefined);
+  return {
+    failed: failedFor !== undefined && failedFor.image === image,
+    track: asked => {
+      setFailedFor(undefined);
+      void asked.then(id =>
+        setFailedFor(id === undefined ? { image } : undefined)
+      );
+    },
+  };
+}
+
 /** The picture shown when someone shares the page. */
 export function ShareImageRow(props: AdvancedProps): ReactNode {
   const {
@@ -193,7 +221,7 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
   // The copy made in this visit; the row says so while it is the page's image.
   const [copy, setCopy] = useState<Made | undefined>(undefined);
   // Whether the last copy asked for could not be made, said in the row.
-  const [failed, setFailed] = useState(false);
+  const failure = useMakeFailure(values.ogImage);
   const chosen = values.ogImage !== null && values.ogImage !== undefined;
   const made =
     copy !== undefined && copy.id === imageIdOf(values.ogImage)
@@ -205,9 +233,10 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
     (() => {
       // Named as it was when the copy was asked for, before it replaces it.
       const from = madeFromOf(props, chosen);
-      void onMakeShareImage().then(id => {
+      const asked = onMakeShareImage();
+      failure.track(asked);
+      void asked.then(id => {
         setCopy(id === undefined ? undefined : { id, from });
-        setFailed(id === undefined);
       });
     });
   return (
@@ -247,7 +276,7 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
           </SourceRow>
         </div>
       </div>
-      {failed ? (
+      {failure.failed ? (
         <Note tone="warning">
           The share image couldn&apos;t be made. Try again, or choose another
           image.
