@@ -22,6 +22,8 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
+import type { LanguageRegistry } from "../../../i18n/language-registry";
+import { LanguageSettingsService } from "../../../i18n/services/language-settings-service";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import {
@@ -50,8 +52,17 @@ afterEach(async () => {
 
 const boot = (
   dialect: TestDialect,
-  localization: { locales: string[]; defaultLocale: string } = LOCALIZATION
-) => createTestNextly({ dialect, basePath, db: DB, localization });
+  localization: {
+    locales: string[];
+    defaultLocale: string;
+  } | null = LOCALIZATION
+) =>
+  createTestNextly({
+    dialect,
+    basePath,
+    db: DB,
+    ...(localization ? { localization } : {}),
+  });
 
 /** The columns of each of `tables`, as the database has them. */
 async function tablesOf(
@@ -190,10 +201,18 @@ describe.each(getConfiguredTestDialects())(
     // The file another installation replays keeps what that installation's readers saw, as the
     // save's own push keeps it here: the published French, not a German draft the site lists
     // first.
-    it("writes a field leaving translation's migration that keeps the published language on replay", async () => {
-      const ordered = { locales: ["en", "de", "fr"], defaultLocale: "en" };
-      const t = await boot(dialect, ordered);
+    /**
+     * A Builder save making a translated Draft/Published field shared, and the files it wrote
+     * replayed on a fresh database whose one entry readers see in French only: the shared value
+     * the replay keeps. `languages` sets the site's languages, en, de and fr in that order.
+     */
+    async function keptOnReplay(
+      languages: (t: TestNextly) => Promise<void>,
+      localization: { locales: string[]; defaultLocale: string } | null
+    ): Promise<string | null | undefined> {
+      const t = await boot(dialect, localization);
       instance = t;
+      await languages(t);
       const service = t.getService("collectionService");
       await service.createCollection(
         {
@@ -230,7 +249,7 @@ describe.each(getConfiguredTestDialects())(
 
       // A deploy's database with an entry the site's readers see in French only.
       await t.destroy();
-      instance = await boot(dialect, ordered);
+      instance = await boot(dialect, localization);
       const fresh = instance.adapter as unknown as DrizzleAdapter;
       const replay = (step?: number) =>
         migrateCore({
@@ -258,7 +277,31 @@ describe.each(getConfiguredTestDialects())(
       const [main] = (await fresh.executeQuery(
         "SELECT heading FROM dc_rposts WHERE id = 'p1'"
       )) as unknown as { heading: string | null }[];
-      expect(main?.heading).toBe("Bonjour");
+      return main?.heading;
+    }
+
+    it("writes a field leaving translation's migration that keeps the published language on replay", async () => {
+      expect(
+        await keptOnReplay(async () => {}, {
+          locales: ["en", "de", "fr"],
+          defaultLocale: "en",
+        })
+      ).toBe("Bonjour");
+    });
+
+    // A site whose languages are set in Settings, the config declaring none: the file ranks them
+    // in the order the save's own push does.
+    it("keeps the published language on replay where the site's languages are set in Settings", async () => {
+      expect(
+        await keptOnReplay(async t => {
+          const settings = new LanguageSettingsService(
+            t.adapter,
+            t.getService("languageRegistry") as LanguageRegistry
+          );
+          await settings.change({ kind: "add", code: "de", label: "German" });
+          await settings.change({ kind: "add", code: "fr", label: "French" });
+        }, null)
+      ).toBe("Bonjour");
     });
   }
 );

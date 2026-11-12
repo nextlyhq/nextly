@@ -50,6 +50,7 @@ import type {
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { appLanguageOrder } from "../../i18n/configured-locales";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -1017,9 +1018,12 @@ async function generateFor(
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
     defaultLocale: deps.config.localization?.defaultLocale,
-    // The configuration's order, which decides the value a field leaving translation keeps, as
-    // the save's own push decides it.
-    languageOrder: deps.config.localization?.locales.map(locale => locale.code),
+    // The site's order, which decides the value a field leaving translation keeps, from the same
+    // source the save's own push reads (`appLanguageOrder`: the configuration's where it declares
+    // the languages, Settings' otherwise), the configuration's where that has no answer.
+    languageOrder:
+      appLanguageOrder() ??
+      deps.config.localization?.locales.map(locale => locale.code),
     onWarning: message => deps.logger.warn(message),
     scope: {
       kind: "collection",
