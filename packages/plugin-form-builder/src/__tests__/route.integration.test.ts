@@ -43,6 +43,25 @@ describe("form-builder export route", () => {
     );
   });
 
+  it("lets whoever may read submissions read the fields a site added to them", () => {
+    const { plugin } = formBuilder();
+    const route = plugin.contributes?.routes?.find(
+      each => each.path === "/submission-fields"
+    );
+    expect(route?.method).toBe("GET");
+    // Asked of the collection as installed: renamed "leads", it is read-leads.
+    const installedAs = (slug: string, action: string) =>
+      `${action}-${slug === "form-submissions" ? "leads" : slug}`;
+    const permission = route?.requiredPermission;
+    expect(
+      typeof permission === "function"
+        ? permission({ collection: installedAs } as Parameters<
+            typeof permission
+          >[0])
+        : permission
+    ).toBe("read-leads");
+  });
+
   it("mounts the route under the catch-all, secured by default (401 without a session)", async () => {
     current = await createTestNextly({ plugins: [formBuilder().plugin] });
     const handlers = createDynamicHandlers();
