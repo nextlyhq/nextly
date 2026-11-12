@@ -20,23 +20,24 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { MigrationFolder } from "../../cli/utils/migration-discovery";
 
 import { groupMigrationFiles } from "./migrate/migration-groups";
-import { compareMigrationBaseNames } from "./migrate/migration-order";
+import { compareMigrationRecency } from "./migrate/migration-order";
 import { hasOldBuilderName } from "./migrate/old-builder-name";
 
 /** The environment variable that carries the build's schema version. */
 export const BUILD_SCHEMA_VERSION_ENV = "NEXTLY_BUILD_SCHEMA_VERSION";
 
 /**
- * The newest of `names` in the order migrations run (`compareMigrationBaseNames`),
- * or undefined for none. Migration names start with a UTC timestamp
- * (`YYYYMMDD_HHMMSS_mmm_<name>`), so the newest is the last to run.
+ * The newest of `names` (`compareMigrationRecency`), or undefined for none.
+ * Migration names start with a UTC timestamp (`YYYYMMDD_HHMMSS_mmm_<name>`),
+ * so the newest is the last to run; a hand-named file without one is older
+ * than any that has one, though it sorts after them.
  */
 export function newestMigrationName(
   names: Iterable<string>
 ): string | undefined {
   let newest: string | undefined;
   for (const name of names) {
-    if (newest === undefined || compareMigrationBaseNames(name, newest) > 0) {
+    if (newest === undefined || compareMigrationRecency(name, newest) > 0) {
       newest = name;
     }
   }

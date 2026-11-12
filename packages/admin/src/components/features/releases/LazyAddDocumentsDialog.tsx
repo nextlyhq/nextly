@@ -17,6 +17,7 @@ import { useRetryableModule } from "@admin/hooks/useRetryableModule";
 import { retryableModule } from "@admin/lib/retryable-module";
 
 import type { AddDocumentsDialogProps } from "./AddDocumentsDialog";
+import { useReturnFocusOnClose } from "./dialog-opener";
 
 const addDocumentsModule = retryableModule(() =>
   import("./AddDocumentsDialog").then(m => m.AddDocumentsDialog)
@@ -36,6 +37,7 @@ function LoadedAddDocumentsDialog(props: AddDocumentsDialogProps): JSX.Element {
       open={props.open}
       onOpenChange={props.onOpenChange}
       className="w-[calc(100%-2rem)] max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+      {...(props.returnFocus ? { onCloseAutoFocus: props.returnFocus } : {})}
       failure={
         state.status === "error"
           ? { exhausted: attempt > 0, onRetry: retry }
@@ -48,7 +50,12 @@ function LoadedAddDocumentsDialog(props: AddDocumentsDialogProps): JSX.Element {
 export function LazyAddDocumentsDialog(
   props: AddDocumentsDialogProps
 ): JSX.Element | null {
+  // The opener is read here, in the render the click causes: this component
+  // is on the page before the dialog opens, while the dialog that stands in
+  // for the code takes focus as it opens, so the real dialog, rendered after
+  // the code arrives, would find that stand-in focused instead.
+  const returnFocus = useReturnFocusOnClose(props.open);
   return useHasOpened(props.open) ? (
-    <LoadedAddDocumentsDialog {...props} />
+    <LoadedAddDocumentsDialog {...props} returnFocus={returnFocus} />
   ) : null;
 }

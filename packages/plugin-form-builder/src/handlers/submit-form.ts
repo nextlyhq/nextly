@@ -29,6 +29,7 @@ import {
   type RedirectTargetDocument,
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
+import { pageFromReferer } from "../utils/sent-from";
 
 import { botCheckReady, botTokensOf, judgeBotCheck } from "./bot-check";
 import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
@@ -56,6 +57,12 @@ export interface SubmitFormOptions {
     ipAddress?: string;
     /** Submitter's user agent string */
     userAgent?: string;
+    /**
+     * The page it was sent from, such as the request's `Referer`. Kept as
+     * its origin and path only, and only when it is a web page
+     * (`pageFromReferer`).
+     */
+    page?: string;
   };
 
   /**
@@ -587,6 +594,7 @@ export async function submitForm(
       spamReason: isContentSpam ? (spamResult.reason ?? null) : null,
       ipAddress: metadata?.ipAddress || null,
       userAgent: metadata?.userAgent || null,
+      page: pageFromReferer(metadata?.page) ?? null,
       submittedAt: new Date(),
     };
 

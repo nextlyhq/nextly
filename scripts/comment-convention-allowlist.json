@@ -934,8 +934,8 @@
     "digests": ["618413b00a8fa802", "d1938ae75e12cb5f", "f5ffbbe2b158e4dd"]
   },
   "packages/nextly/src/routeHandler.ts": {
-    "count": 3,
-    "digests": ["4b8a85bc737116f6", "88cc9af4e10532f7", "c2df31454df025bd"]
+    "count": 2,
+    "digests": ["88cc9af4e10532f7", "c2df31454df025bd"]
   },
   "packages/nextly/src/runtime/notifications/__tests__/build-event.test.ts": {
     "count": 1,

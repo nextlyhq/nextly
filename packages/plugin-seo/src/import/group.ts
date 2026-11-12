@@ -136,8 +136,14 @@ function valuesIn(page: ReadPage, field: string): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
 
-/** Keys a stored component carries that are not its fields. */
-const COMPONENT_KEYS = new Set(["id", "_componentType", "_order"]);
+/**
+ * Whether a key a stored component carries is one of its fields: its id is
+ * not, nor is any system key, which begins with an underscore where a field
+ * name must begin with a letter.
+ */
+function isFieldKey(key: string): boolean {
+  return key !== "id" && !key.startsWith("_");
+}
 
 /** A group as the types holding it declare it, before its pages are read. */
 interface DeclaredGroup {
@@ -186,7 +192,7 @@ function offeredGroup(
   // component holds, is found in the values themselves.
   const inner = new Map(group.inner);
   for (const key of read.flatMap(page => Object.keys(valuesIn(page, name)))) {
-    if (!COMPONENT_KEYS.has(key) && !inner.has(key)) {
+    if (isFieldKey(key) && !inner.has(key)) {
       inner.set(key, humanizeFieldName(key));
     }
   }

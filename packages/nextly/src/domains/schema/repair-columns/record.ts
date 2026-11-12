@@ -17,7 +17,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getTableColumns, sql, type SQL } from "drizzle-orm";
+import { getColumns, sql, type SQL } from "drizzle-orm";
 import {
   boolean as mysqlBoolean,
   datetime,
@@ -112,7 +112,7 @@ function declaredColumns(dialect: SupportedDialect) {
       : dialect === "mysql"
         ? mysqlColumnRepairs
         : sqliteColumnRepairs;
-  return Object.values(getTableColumns(table));
+  return Object.values(getColumns(table));
 }
 
 /** DDL for the repairs table, built from its declaration so the two cannot disagree. */
@@ -145,7 +145,7 @@ export async function ensureColumnRepairsTable(
 }
 
 /** Run one Drizzle statement for its effect, on a Drizzle instance of the dialect. */
-async function runSql(
+export async function runSql(
   db: unknown,
   dialect: SupportedDialect,
   statement: SQL
@@ -234,10 +234,12 @@ export async function insertRepair(
 
 /**
  * A type as the record keeps it: with the size PostgreSQL reports beside it (`numeric` and
- * `10,2` as `numeric(10,2)`), so the record says exactly what was converted.
+ * `10,2` as `numeric(10,2)`), so the record says exactly what was converted. MySQL's type already
+ * spells its size (`varchar(36)`, with `36` beside it as well), so a type that carries one is kept
+ * as it is rather than given it twice.
  */
 function typeText(state: ColumnState): string {
-  return state.typeModifier === undefined
+  return state.typeModifier === undefined || state.type.includes("(")
     ? state.type
     : `${state.type}(${state.typeModifier})`;
 }
@@ -261,6 +263,19 @@ export async function recordStep(
     dialect,
     sql`UPDATE ${id(COLUMN_REPAIRS_TABLE)} SET ${id("step")} = ${step}, ${id("state")} = ${finished ? "converted" : "in-progress"}, ${id("ended_at")} = ${finished ? nowExpression(dialect) : sql`NULL`} WHERE ${id("id")} = ${rowId}`
   );
+}
+
+/**
+ * The statement that moves an in-progress row past a lossy conversion's clearing: to `step`, with
+ * `cleared` added to the values it has cleared. It runs in the clearing's own transaction, so the
+ * values cleared and their count commit together and the record can never miss a clearing.
+ */
+export function clearedStepStatement(
+  rowId: string,
+  step: number,
+  cleared: number
+): SQL {
+  return sql`UPDATE ${id(COLUMN_REPAIRS_TABLE)} SET ${id("step")} = ${step}, ${id("values_cleared")} = ${id("values_cleared")} + ${cleared} WHERE ${id("id")} = ${rowId}`;
 }
 
 interface RawRow {

@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   getSidebarCollectionsForLanding,
   getSidebarSinglesForLanding,
-  pickCollectionsLandingTarget,
-  pickSinglesLandingTarget,
 } from "../sidebar-landing";
 
 import type { AdminBranding } from "@admin/types/branding";
@@ -172,33 +170,58 @@ describe("getSidebarCollectionsForLanding", () => {
   });
 });
 
-describe("pickCollectionsLandingTarget", () => {
-  it("returns null when no collections are visible", () => {
-    expect(
-      pickCollectionsLandingTarget([], {
-        branding: noBranding,
-        capabilities: superAdmin,
-        pinnedCollections: new Set(),
-      })
-    ).toBeNull();
+describe("getSidebarCollectionsForLanding with sidebar groups", () => {
+  const deps = (pinned: string[] = []) => ({
+    branding: noBranding,
+    capabilities: superAdmin,
+    pinnedCollections: new Set(pinned),
   });
 
-  it("returns the first item the sidebar would render", () => {
+  it("lists a collection naming a group of its own, before the ungrouped ones", () => {
     const items = [
-      makeCollection("zebras", { order: 100 }),
-      makeCollection("alligators", { order: 100 }),
       makeCollection("posts", { order: 1 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 50 }),
     ];
-    const target = pickCollectionsLandingTarget(items, {
-      branding: noBranding,
-      capabilities: superAdmin,
-      pinnedCollections: new Set(),
-    });
-    expect(target?.name).toBe("posts");
+    expect(
+      getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
+    ).toEqual(["products", "posts"]);
+  });
+
+  it("puts each group where its first collection appears, its collections together", () => {
+    const items = [
+      makeCollection("newsletters", { sidebarGroup: "marketing", order: 30 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 20 }),
+      makeCollection("case-studies", { sidebarGroup: "marketing", order: 10 }),
+      makeCollection("orders", { sidebarGroup: "shop", order: 40 }),
+    ];
+    expect(
+      getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
+    ).toEqual(["case-studies", "newsletters", "products", "orders"]);
+  });
+
+  it("moves a pinned collection up its own group, not its group past others", () => {
+    const items = [
+      makeCollection("case-studies", { sidebarGroup: "marketing", order: 10 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 20 }),
+      makeCollection("orders", { sidebarGroup: "shop", order: 40 }),
+    ];
+    expect(
+      getSidebarCollectionsForLanding(items, deps(["orders"])).map(c => c.name)
+    ).toEqual(["case-studies", "orders", "products"]);
+  });
+
+  it("reads the built-in section's name as no group", () => {
+    const items = [
+      makeCollection("pages", { sidebarGroup: "collections", order: 1 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 50 }),
+    ];
+    expect(
+      getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
+    ).toEqual(["products", "pages"]);
   });
 });
 
-describe("getSidebarSinglesForLanding + pickSinglesLandingTarget", () => {
+describe("getSidebarSinglesForLanding", () => {
   it("uses the same pinned/order/name comparator as collections", () => {
     const items = [
       makeSingle("zebras", { order: 1 }),
@@ -216,6 +239,18 @@ describe("getSidebarSinglesForLanding + pickSinglesLandingTarget", () => {
     ]);
   });
 
+  it("lists a Single that names a sidebar group, where it would otherwise be listed nowhere", () => {
+    const items = [
+      makeSingle("banner", { sidebarGroup: "marketing", order: 1 }),
+      makeSingle("footer", { order: 5 }),
+    ];
+    const result = getSidebarSinglesForLanding(items, {
+      capabilities: superAdmin,
+      pinnedSingles: new Set(),
+    });
+    expect(result.map(s => s.slug)).toEqual(["banner", "footer"]);
+  });
+
   it("excludes hidden singles", () => {
     const items = [
       makeSingle("visible"),
@@ -226,14 +261,5 @@ describe("getSidebarSinglesForLanding + pickSinglesLandingTarget", () => {
       pinnedSingles: new Set(),
     });
     expect(result.map(s => s.slug)).toEqual(["visible"]);
-  });
-
-  it("returns null when no singles are visible", () => {
-    expect(
-      pickSinglesLandingTarget([], {
-        capabilities: superAdmin,
-        pinnedSingles: new Set(),
-      })
-    ).toBeNull();
   });
 });

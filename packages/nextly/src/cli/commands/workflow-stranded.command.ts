@@ -5,6 +5,7 @@
  */
 import type { Command } from "commander";
 
+import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
 /** Register `nextly workflow:stranded` and `nextly workflow:move-stranded`. */
@@ -20,7 +21,8 @@ export function registerWorkflowStrandedCommands(program: Command): void {
       )
     );
 
-  program
+  // A move writes every document it names, so it offers the dry run every writing command does.
+  const moveStranded = program
     .command("workflow:move-stranded")
     .description(
       "Move documents in a workflow stage that no longer exists to a named stage, recording each move"
@@ -35,11 +37,11 @@ export function registerWorkflowStrandedCommands(program: Command): void {
       "Why they are moved, kept with each move"
     )
     .option("--collection <slug>", "Only this collection's documents")
-    .option("--single <slug>", "Only this Single's document")
-    .action(
-      lazyAction(
-        async () =>
-          (await import("./workflow-stranded")).workflowMoveStrandedAction
-      )
-    );
+    .option("--single <slug>", "Only this Single's document");
+  withDryRun(moveStranded).action(
+    lazyAction(
+      async () =>
+        (await import("./workflow-stranded")).workflowMoveStrandedAction
+    )
+  );
 }

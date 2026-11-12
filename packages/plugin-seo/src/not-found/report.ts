@@ -68,17 +68,19 @@ export interface HeaderReader {
  *
  * ```tsx
  * import { headers } from "next/headers";
- * import { connection } from "next/server";
+ * import { after, connection } from "next/server";
  * import { logNotFound } from "@nextlyhq/plugin-seo";
  *
  * async function LogThisAddress() {
  *   await connection();
- *   await logNotFound(await headers());
+ *   const requestHeaders = await headers();
+ *   after(() => logNotFound(requestHeaders));
  *   return null;
  * }
  * ```
  *
- * rendered inside `<Suspense>` on the not-found page. A request is counted
+ * rendered inside `<Suspense>` on the not-found page, the write left to
+ * `after` so the page is sent without waiting on it. A request is counted
  * once however many times Next.js renders its not-found page. It never
  * throws: a log that cannot be written must not break the page.
  */

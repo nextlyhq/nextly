@@ -83,6 +83,7 @@ const VERSION_META_COLUMNS = [
   "label",
   "locale",
   "sourceVersionNo",
+  "fieldSources",
   "createdBy",
   "createdAt",
   "updatedAt",
@@ -238,6 +239,8 @@ export interface InsertVersionInput {
   label?: string | null;
   locale?: string | null;
   sourceVersionNo?: number | null;
+  /** The version each restored field came from; see `restored-from`. */
+  fieldSources?: Readonly<Record<string, number>> | null;
   createdBy?: string | null;
 }
 
@@ -255,6 +258,12 @@ export interface VersionRow {
   label: string | null;
   locale: string | null;
   sourceVersionNo: number | null;
+  /**
+   * The version each restored field came from, as `{ field: versionNo }`, on
+   * the version of a write that carried restored values. Null or absent on
+   * every other row, and on rows recorded before it existed.
+   */
+  fieldSources?: Readonly<Record<string, number>> | null;
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -376,6 +385,11 @@ export class VersionsRepository {
         label: input.label ?? null,
         locale: input.locale ?? null,
         sourceVersionNo: input.sourceVersionNo ?? null,
+        // Pre-stringified, as `snapshot` is above and for the same reason;
+        // null where the write carried no restored values.
+        fieldSources: input.fieldSources
+          ? JSON.stringify(input.fieldSources)
+          : null,
         createdBy: input.createdBy ?? null,
         createdAt: now,
         updatedAt: now,
@@ -986,6 +1000,35 @@ export class VersionsRepository {
   }
 
   /**
+   * The snapshots of several durable versions, by number, in one read. A
+   * number with no version (never recorded, or pruned) is simply absent.
+   */
+  async snapshotsByVersionNo(
+    ref: VersionRef,
+    versionNos: readonly number[]
+  ): Promise<Map<number, unknown>> {
+    const wanted = [...new Set(versionNos)];
+    if (wanted.length === 0) return new Map();
+    const rows = await this.db.select<
+      Pick<VersionRow, "versionNo" | "snapshot">
+    >(TABLE, {
+      columns: ["versionNo", "snapshot"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IN", value: wanted },
+        ],
+      },
+    });
+    return new Map(
+      rows
+        .filter(row => typeof row.versionNo === "number")
+        .map(row => [row.versionNo as number, row.snapshot])
+    );
+  }
+
+  /**
    * Metadata list for a document, newest first. Snapshots are intentionally
    * excluded (history lists never load them). Autosave rows are excluded unless
    * `includeAutosave` is set.
@@ -1109,6 +1152,7 @@ export class VersionsRepository {
         "locale",
         "label",
         "sourceVersionNo",
+        "fieldSources",
       ],
       where: {
         and: [

@@ -70,6 +70,7 @@ import * as net from "node:net";
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { assertSchemaName } from "@nextlyhq/adapter-drizzle/schema-name";
 import type {
   PostgresAdapterConfig,
@@ -252,13 +253,18 @@ const INVALID_SCHEMA_NAME = "3F000";
  */
 async function assertSchemaExists(
   client: PoolClient,
-  schema: string
+  schema: string,
+  /** What to do about it, where the caller knows: said after the fact. */
+  remedy?: string
 ): Promise<void> {
   const name = assertSchemaName(schema);
   if (await schemaExists(client, name)) return;
   throw createDatabaseError({
     kind: "connection",
-    message: `schema "${name}" does not exist`,
+    message:
+      remedy === undefined
+        ? `schema "${name}" does not exist`
+        : `schema "${name}" does not exist. ${remedy}`,
     code: INVALID_SCHEMA_NAME,
   });
 }
@@ -536,8 +542,18 @@ export class PostgresAdapter extends DrizzleAdapter {
           // Before anything writes. `search_path` naming a schema that is not
           // there does not fail — it falls through to whatever else is on the
           // path — so the first migration would create its tables in `public`
-          // and the setting would appear to do nothing.
-          if (this.config.schema && this.config.readOnly) {
+          // and the setting would appear to do nothing. A read-only
+          // connection and `next build`, which writes nothing to the
+          // database, only check that it is there.
+          if (this.config.schema && isNextBuildPhase()) {
+            // A schema the build does not find is a database the deploy has
+            // not migrated, which the message says how to fix.
+            await assertSchemaExists(
+              client,
+              this.config.schema,
+              "Run `nextly migrate` before `next build`."
+            );
+          } else if (this.config.schema && this.config.readOnly) {
             await assertSchemaExists(client, this.config.schema);
           } else if (this.config.schema) {
             await ensureSchemaExists(client, this.config.schema);

@@ -21,7 +21,12 @@ import {
   type ProblemKind,
   type ProblemSubject,
 } from "./contract";
-import { textChecks, type TextCheck } from "./text-checks";
+import {
+  DESCRIPTION_LIMIT,
+  TITLE_LIMIT,
+  textChecks,
+  type TextCheck,
+} from "./text-checks";
 
 /** An image a page's content shows, and the alt text it is shown with. */
 export interface ImageFact {
@@ -137,7 +142,11 @@ function textProblems(facts: PageFacts): Problem[] {
     return {
       kind: words.kind,
       subject,
-      what: words.what ?? `${check.length ?? 0} characters`,
+      // A long value is a warning, with its length beside what Google
+      // shows: it is saved and served as it is, and Google cuts it to fit.
+      what:
+        words.what ??
+        `${check.length ?? 0} characters, Google shows about ${check.value === "title" ? TITLE_LIMIT : DESCRIPTION_LIMIT}`,
       // A long value only code sets is a note for a developer.
       action:
         check.problem === "long" ? (action ?? words.action) : words.action,

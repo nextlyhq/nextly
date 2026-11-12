@@ -1,3 +1,4 @@
+import { declaredCollectionFieldsOf } from "../domains/collections/services/declared-collection-fields";
 import { columnsDeclaredBy } from "../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../errors/nextly-error";
 
@@ -84,6 +85,9 @@ export function collectionNotMigrated(
     kind: "collection",
     slug,
     load: () => registry.getCollection(slug),
+    // The fields the running configuration declares, as a Single's are: a
+    // production start does not write them over the served registry row.
+    declaredFields: () => declaredCollectionFieldsOf(slug),
     caller,
   };
 }
@@ -104,6 +108,7 @@ export function collectionRowNotMigrated(
     kind: "collection",
     slug,
     load: () => Promise.resolve(row),
+    declaredFields: () => declaredCollectionFieldsOf(slug),
     caller,
   };
 }

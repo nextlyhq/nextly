@@ -162,7 +162,8 @@ export type ReleasesDbApi = Omit<VersionsDbApi, "select"> & {
  * compare-and-set on the release, the read of the revision that compare-and-set
  * is fenced on, the member write it guards, and the owner's notice a
  * transition records with it (`NoticesWriter`), with the job that emails the
- * notice's copy (`getDrizzle`, the jobs table's own insert). Each is declared
+ * notice's copy (`insert`, into the jobs table), and the reads it takes under
+ * a row lock (`getDrizzle`). Each is declared
  * in the adapter's `TransactionContext` shape, narrowed to the where clause and
  * options this repository uses, so the transaction context satisfies it
  * without adapting. Kept separate from {@link ReleasesDbApi} rather than
@@ -1584,12 +1585,7 @@ export class ReleasesRepository {
       tx
     );
     if (!recorded.created || recorded.id === null) return false;
-    await enqueueReleaseNoticeEmail(
-      tx,
-      this.db.dialect,
-      recorded.id,
-      new Date()
-    );
+    await enqueueReleaseNoticeEmail(tx, recorded.id, new Date());
     return true;
   }
 

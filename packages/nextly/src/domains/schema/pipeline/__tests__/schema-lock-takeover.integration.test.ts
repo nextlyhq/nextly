@@ -14,6 +14,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
@@ -32,9 +33,13 @@ import {
   type Holder,
   type LockWorld,
 } from "./helpers/schema-lock-world";
+import {
+  HOLDER_LITERAL,
+  HOLDER_UNIT,
+} from "./helpers/schema-lock-statement-holder-names";
 
 const PREFIX = `slt_${randomBytes(4).toString("hex")}`;
-/** A role that may see every session's statement but stop none of a superuser's. */
+/** A user that may see every session's statement but stop none of the suite's own. */
 const WATCHER = `${PREFIX}_watcher`;
 const BUSY = `${PREFIX}_busy`;
 const TAKER = `${PREFIX}_taker`;
@@ -279,72 +284,134 @@ describe.each(SERVERS)(
       expect(await columnsOf(adapter, dialect, BUSY)).toEqual(["id"]);
     });
 
-    it.runIf(dialect === "postgresql")(
-      "refuses, changing nothing, when an earlier statement outlives the wait",
-      async () => {
-        const killed = await holderWaitingOnTheTable();
-        killed.kill("SIGKILL");
-        await killed.exited;
-        holder = undefined;
-        await adapter.executeQuery(
-          `CREATE ROLE ${WATCHER} LOGIN PASSWORD 'watcher'`
-        );
-        await adapter.executeQuery(`GRANT pg_read_all_stats TO ${WATCHER}`);
-        await adapter.executeQuery(`GRANT ALL ON SCHEMA public TO ${WATCHER}`);
-        await adapter.executeQuery(
-          `GRANT ALL ON ALL TABLES IN SCHEMA public TO ${WATCHER}`
-        );
-        const url = new URL(world.url);
-        url.username = WATCHER;
-        url.password = "watcher";
-        const watcher = createPostgresAdapter({
-          url: url.toString(),
-        }) as unknown as DrizzleAdapter;
-        await watcher.connect();
-        installRegistryResolver(watcher);
-        try {
-          await sleep(PAST_THE_LEASE_MS);
-
-          const refused = await withSchemaLock(
-            {
-              adapter: watcher,
-              command: "nextly migrate",
-              whenHeld: "wait",
-              waitMs: 1_000,
-              leaseSeconds: LEASE_SECONDS,
-              logger: quiet,
-            },
-            async () => {
-              await watcher.executeQuery(`CREATE TABLE ${TAKER} (id integer)`);
-            }
-          ).catch((error: unknown) => error);
-
-          expect(refused).toMatchObject({
-            code: "NEXTLY_MIGRATE_LOCK_BUSY",
-            logContext: { holder: { kind: "earlier-statement" } },
-          });
-          expect(String((refused as Error).message)).toContain(
-            `ALTER TABLE ${BUSY} ADD COLUMN late integer`
-          );
-          expect(await tablesWithPrefix(adapter, PREFIX)).toEqual([BUSY]);
-          // Refused with the lock handed back to the earlier holder's claim, not freed and not kept:
-          // the next run finds that claim and waits for its statement in turn, where a freed row
-          // would let it start beside the statement still running.
-          const rows = await adapter.executeQuery<{ owner: string | null }>(
-            "SELECT owner FROM nextly_schema_lock"
-          );
-          expect(rows).toHaveLength(1);
-          expect(rows[0].owner).toMatch(/^.+:\d+#[0-9a-f-]{36}$/);
-          expect(rows[0].owner).not.toContain(`:${process.pid}#`);
-        } finally {
-          await watcher.disconnect();
-          freeTheTable();
-          await busy.catch(() => {});
+    /**
+     * A user that may see every session's statement but stop none of the suite's own: on
+     * PostgreSQL a role with `pg_read_all_stats`, on MySQL a user with `PROCESS` and no
+     * `CONNECTION_ADMIN`. Returns its adapter and what removes it again.
+     */
+    async function watcherUser(): Promise<{
+      watcher: DrizzleAdapter;
+      remove: () => Promise<void>;
+    }> {
+      const url = new URL(world.url);
+      const remove = async () => {
+        if (dialect === "postgresql") {
           await adapter.executeQuery(`DROP OWNED BY ${WATCHER}`);
           await adapter.executeQuery(`DROP ROLE ${WATCHER}`);
+        } else {
+          await adapter.executeQuery(`DROP USER '${WATCHER}'@'%'`);
+        }
+      };
+      try {
+        if (dialect === "postgresql") {
+          await adapter.executeQuery(
+            `CREATE ROLE ${WATCHER} LOGIN PASSWORD 'watcher'`
+          );
+          await adapter.executeQuery(`GRANT pg_read_all_stats TO ${WATCHER}`);
+          await adapter.executeQuery(
+            `GRANT ALL ON SCHEMA public TO ${WATCHER}`
+          );
+          await adapter.executeQuery(
+            `GRANT ALL ON ALL TABLES IN SCHEMA public TO ${WATCHER}`
+          );
+        } else {
+          const database = url.pathname.replace(/^\//, "");
+          await adapter.executeQuery(
+            `CREATE USER '${WATCHER}'@'%' IDENTIFIED BY 'watcher'`
+          );
+          await adapter.executeQuery(
+            `GRANT PROCESS ON *.* TO '${WATCHER}'@'%'`
+          );
+          await adapter.executeQuery(
+            `GRANT ALL ON \`${database}\`.* TO '${WATCHER}'@'%'`
+          );
+        }
+      } catch (error) {
+        // A user made only in part is still removed, so a failed setup leaves none behind.
+        await remove().catch(() => {});
+        throw error;
+      }
+      url.username = WATCHER;
+      url.password = "watcher";
+      const watcher = (dialect === "postgresql"
+        ? createPostgresAdapter({ url: url.toString() })
+        : createMySqlAdapter({
+            url: url.toString(),
+          })) as unknown as DrizzleAdapter;
+      return { watcher, remove };
+    }
+
+    it("refuses, changing nothing, when an earlier statement outlives the wait", async () => {
+      const killed = await holderWaitingOnTheTable();
+      killed.kill("SIGKILL");
+      await killed.exited;
+      holder = undefined;
+      const { watcher, remove } = await watcherUser();
+      // The user is removed however the case ends, so none is left on the shared server.
+      try {
+        await watcher.connect();
+        installRegistryResolver(watcher);
+        await sleep(PAST_THE_LEASE_MS);
+
+        const refused = await withSchemaLock(
+          {
+            adapter: watcher,
+            command: "nextly migrate",
+            whenHeld: "wait",
+            waitMs: 1_000,
+            leaseSeconds: LEASE_SECONDS,
+            logger: quiet,
+          },
+          async () => {
+            await watcher.executeQuery(`CREATE TABLE ${TAKER} (id integer)`);
+          }
+        ).catch((error: unknown) => error);
+
+        expect(refused).toMatchObject({
+          code: "NEXTLY_MIGRATE_LOCK_BUSY",
+          logContext: {
+            holder: { kind: "earlier-statement", unit: HOLDER_UNIT },
+          },
+        });
+        // The file and the session are named; the statement, which holds a literal value, is
+        // in neither the message nor the log context.
+        const message = String((refused as Error).message);
+        expect(message).toContain(`A statement for \`${HOLDER_UNIT}\``);
+        expect(message).toMatch(/running in database session \d+ /);
+        const logged = JSON.stringify(
+          (refused as { logContext?: unknown }).logContext
+        );
+        for (const text of [message, logged]) {
+          expect(text).not.toContain(HOLDER_LITERAL);
+          expect(text).not.toContain("ALTER TABLE");
+        }
+        expect(await tablesWithPrefix(adapter, PREFIX)).toEqual([BUSY]);
+        // Refused with the lock handed back to the earlier holder's claim, not freed and not kept:
+        // the next run finds that claim and waits for its statement in turn, where a freed row
+        // would let it start beside the statement still running.
+        const rows = await adapter.executeQuery<{ owner: string | null }>(
+          "SELECT owner FROM nextly_schema_lock"
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0].owner).toMatch(/^.+:\d+#[0-9a-f-]{36}$/);
+        expect(rows[0].owner).not.toContain(`:${process.pid}#`);
+      } finally {
+        try {
+          await watcher.disconnect().catch(() => {});
+          freeTheTable();
+          await busy.catch(() => {});
+          // The killed holder's statement still runs in its session and lands once the table is
+          // free; revoking the watcher's grants on that table while it does fails as a
+          // concurrent update of the table's catalog row, so it is waited out first.
+          await until(
+            async () => (await markedRunning(adapter, dialect)) === 0,
+            "the killed holder's statement to end"
+          );
+        } finally {
+          await remove();
         }
       }
-    );
+    });
   },
   60_000
 );

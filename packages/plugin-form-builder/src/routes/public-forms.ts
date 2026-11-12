@@ -72,7 +72,7 @@ const DEFAULT_SUCCESS_MESSAGE = "Thank you for your submission!";
  * Reading the declared name directly is what made the core endpoints fail on a
  * renamed install while the plugin's own export route kept working.
  */
-function installedSlugs(
+export function installedSlugs(
   config: ResolvedFormBuilderConfig,
   self: PluginRouteContext["self"]
 ): { forms: string; submissions: string } {
@@ -389,6 +389,7 @@ async function acceptSubmission(
       metadata: {
         ipAddress: trustedClientIp(req) ?? undefined,
         userAgent: req.headers.get("user-agent") ?? undefined,
+        page: req.headers.get("referer") ?? undefined,
       },
       access: PUBLIC,
     },

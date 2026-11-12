@@ -35,6 +35,7 @@
  */
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 // F17: connect-time DB version check shared across all adapters.
 import {
   createDatabaseError,
@@ -301,7 +302,23 @@ export class SqliteAdapter extends DrizzleAdapter {
       // a fresh clone with `DATABASE_URL=file:./data/app.db` reliably
       // hits this on first run. Create the dir lazily so DATABASE_URL
       // can point anywhere without a separate setup step.
-      if (dbPath !== ":memory:" && !this.config.readonly) {
+      //
+      // Not in `next build`, which writes nothing to the database: there a
+      // file that is not there yet is a database nobody has migrated, and
+      // opening it would create it. The build refuses instead, naming the
+      // command that sets it up, and opens an existing file as it is.
+      const building = isNextBuildPhase();
+      if (building && dbPath !== ":memory:") {
+        const fs = await import("node:fs");
+        if (!fs.existsSync(dbPath)) {
+          throw createDatabaseError({
+            kind: "connection",
+            message:
+              `The SQLite database file ${dbPath} does not exist. ` +
+              "Run `nextly migrate` before `next build`.",
+          });
+        }
+      } else if (dbPath !== ":memory:" && !this.config.readonly) {
         const fs = await import("node:fs");
         const path = await import("node:path");
         const dir = path.dirname(path.resolve(dbPath));
@@ -311,6 +328,7 @@ export class SqliteAdapter extends DrizzleAdapter {
       // Create database instance
       this.db = new Database(dbPath, {
         readonly: this.config.readonly ?? false,
+        fileMustExist: building,
         timeout: this.config.busyTimeout ?? DEFAULT_CONFIG.busyTimeout,
       });
 
@@ -318,11 +336,14 @@ export class SqliteAdapter extends DrizzleAdapter {
       // case call here, whose absence would refuse every such statement.
       registerSqliteFunctions(this.db);
 
-      // Configure WAL mode for better concurrency (unless in-memory or readonly)
+      // Configure WAL mode for better concurrency (unless in-memory or
+      // readonly). Not in `next build`: the journal mode is kept in the file,
+      // so setting it is a write, and the first start after the build sets it.
       if (
         (this.config.wal ?? DEFAULT_CONFIG.wal) &&
         dbPath !== ":memory:" &&
-        !this.config.readonly
+        !this.config.readonly &&
+        !building
       ) {
         this.db.pragma("journal_mode = WAL");
       }
