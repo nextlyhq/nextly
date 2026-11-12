@@ -339,10 +339,11 @@ describe.each(getConfiguredTestDialects())(
       // The site was asked once by each crawler, each naming itself.
       expect(
         site.asked
-          .map(each =>
-            /Googlebot|bingbot|facebookexternalhit|Twitterbot|LinkedInBot|GPTBot/.exec(
-              each.agent
-            )?.[0]
+          .map(
+            each =>
+              /Googlebot|bingbot|facebookexternalhit|Twitterbot|LinkedInBot|GPTBot/.exec(
+                each.agent
+              )?.[0]
           )
           .sort()
       ).toEqual([

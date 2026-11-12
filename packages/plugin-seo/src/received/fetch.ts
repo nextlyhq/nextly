@@ -20,12 +20,7 @@ import type { LookupFunction } from "node:net";
 import type { Readable } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 
-import {
-  mayConnect,
-  refusedAt,
-  type Refusal,
-  type RefusalReason,
-} from "./addresses";
+import { mayConnect, refusedAt, type Refusal } from "./addresses";
 import { FETCH_LIMITS, type FetchLimits, type FetchStop } from "./contract";
 import { kindOfIp } from "./ip";
 

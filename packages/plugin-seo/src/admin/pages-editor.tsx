@@ -275,6 +275,98 @@ function ChangesBar({
   );
 }
 
+/** `edits` with `value` typed into `row`'s `field`. */
+function withEdit(
+  edits: PageEdits,
+  row: EditRow,
+  field: EditField,
+  value: string
+): PageEdits {
+  const next = { ...edits[row.path], [field]: value };
+  // A box typed back to what its page holds is no change.
+  if (value === row[field]) delete next[field];
+  const { [row.path]: _dropped, ...others } = edits;
+  return Object.keys(next).length === 0
+    ? others
+    : { ...others, [row.path]: next };
+}
+
+/** The rows, or what stands in their place while there are none to show. */
+function EditBody({
+  rows,
+  failure,
+  loading,
+  problemsFor,
+  edits,
+  saving,
+  onEdit,
+}: {
+  rows: readonly EditRow[];
+  failure: string | null;
+  loading: boolean;
+  problemsFor: (row: EditRow) => ReturnType<typeof problemsOf>;
+  edits: PageEdits;
+  saving: boolean;
+  onEdit: (row: EditRow, field: EditField, value: string) => void;
+}): JSX.Element {
+  if (failure !== null) {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>{failure}</AlertDescription>
+      </Alert>
+    );
+  }
+  if (loading) {
+    return (
+      <p className="text-sm text-muted-foreground" role="status">
+        Reading the site&apos;s pages…
+      </p>
+    );
+  }
+  if (rows.length === 0) {
+    return <p className="text-sm text-muted-foreground">No pages match.</p>;
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div
+        className="hidden border-b border-border text-xs text-muted-foreground md:grid md:grid-cols-[200px_minmax(0,1fr)_minmax(0,1.4fr)]"
+        aria-hidden
+      >
+        <div className="px-3.5 py-2.5">Page</div>
+        <div className="px-3 py-2.5">Title in search</div>
+        <div className="px-3 py-2.5">Description</div>
+      </div>
+      <ul className="m-0 list-none p-0" aria-label="Pages">
+        {rows.map(row => (
+          <li
+            key={row.path}
+            className={`grid grid-cols-1 gap-2 border-b border-border px-3.5 py-3 last:border-b-0 md:grid-cols-[200px_minmax(0,1fr)_minmax(0,1.4fr)] md:gap-0 md:px-0 md:py-0 ${rowChanged(row, edits) ? "bg-muted/40" : ""}`}
+          >
+            <div className="flex min-w-0 flex-col gap-0.5 md:px-3.5 md:py-3">
+              <span className="font-medium text-foreground">{row.name}</span>
+              <span className="break-all font-mono text-xs text-muted-foreground">
+                {row.path}
+              </span>
+            </div>
+            {(["title", "description"] as const).map(field => (
+              <div key={field} className="md:px-3 md:py-2">
+                <Box
+                  row={row}
+                  field={field}
+                  edits={edits}
+                  locked={saving}
+                  problems={problemsFor(row)}
+                  onEdit={onEdit}
+                />
+              </div>
+            ))}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** Edit mode, over the pages the filters keep. */
 export function PagesEditor({
   shown,
@@ -308,15 +400,7 @@ export function PagesEditor({
   );
 
   const edit = (row: EditRow, field: EditField, value: string) => {
-    onEdits(current => {
-      const next = { ...current[row.path], [field]: value };
-      // A box typed back to what its page holds is no change.
-      if (value === row[field]) delete next[field];
-      const { [row.path]: _dropped, ...others } = current;
-      return Object.keys(next).length === 0
-        ? others
-        : { ...others, [row.path]: next };
-    });
+    onEdits(current => withEdit(current, row, field, value));
   };
 
   const save = async () => {
@@ -351,70 +435,18 @@ export function PagesEditor({
         {filters}
       </div>
       {outcome === null ? null : <PartSaved outcome={outcome} />}
-      {failure !== null ? (
-        <Alert variant="destructive">
-          <AlertDescription>{failure}</AlertDescription>
-        </Alert>
-      ) : loading ? (
-        <p className="text-sm text-muted-foreground" role="status">
-          Reading the site's pages…
-        </p>
-      ) : rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No pages match.</p>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
-          <div
-            className="hidden border-b border-border text-xs text-muted-foreground md:grid md:grid-cols-[200px_minmax(0,1fr)_minmax(0,1.4fr)]"
-            aria-hidden
-          >
-            <div className="px-3.5 py-2.5">Page</div>
-            <div className="px-3 py-2.5">Title in search</div>
-            <div className="px-3 py-2.5">Description</div>
-          </div>
-          <ul className="m-0 list-none p-0" aria-label="Pages">
-            {rows.map(row => {
-              const item = byPath.get(row.path);
-              const problems =
-                item === undefined ? [] : problemsOf(item, byPage);
-              return (
-                <li
-                  key={row.path}
-                  className={`grid grid-cols-1 gap-2 border-b border-border px-3.5 py-3 last:border-b-0 md:grid-cols-[200px_minmax(0,1fr)_minmax(0,1.4fr)] md:gap-0 md:px-0 md:py-0 ${rowChanged(row, edits) ? "bg-muted/40" : ""}`}
-                >
-                  <div className="flex min-w-0 flex-col gap-0.5 md:px-3.5 md:py-3">
-                    <span className="font-medium text-foreground">
-                      {row.name}
-                    </span>
-                    <span className="break-all font-mono text-xs text-muted-foreground">
-                      {row.path}
-                    </span>
-                  </div>
-                  <div className="md:px-3 md:py-2">
-                    <Box
-                      row={row}
-                      field="title"
-                      edits={edits}
-                      locked={saving}
-                      problems={problems}
-                      onEdit={edit}
-                    />
-                  </div>
-                  <div className="md:px-3 md:py-2">
-                    <Box
-                      row={row}
-                      field="description"
-                      edits={edits}
-                      locked={saving}
-                      problems={problems}
-                      onEdit={edit}
-                    />
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
+      <EditBody
+        rows={rows}
+        failure={failure}
+        loading={loading}
+        problemsFor={row => {
+          const item = byPath.get(row.path);
+          return item === undefined ? [] : problemsOf(item, byPage);
+        }}
+        edits={edits}
+        saving={saving}
+        onEdit={edit}
+      />
       <ChangesBar
         pages={changedPages}
         saving={saving}

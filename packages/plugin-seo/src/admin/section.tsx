@@ -133,7 +133,7 @@ export function SeoReceivedMoved(): null {
 }
 
 /** Where the old Bulk edit address leads: Pages, in Edit mode. */
-export const PAGES_EDIT_HREF: string = `${PAGES_PAGE_HREF}?mode=edit`;
+const PAGES_EDIT_HREF: string = `${PAGES_PAGE_HREF}?mode=edit`;
 
 /** The old Bulk edit address: Pages in Edit mode, which took it over. */
 export function SeoBulkMoved(): null {

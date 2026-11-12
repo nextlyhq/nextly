@@ -74,8 +74,8 @@ export interface ReceivedSetup {
   pageMetadata: (ctx: PluginContext) => PageMetadataResolver;
   /** What the problem list reads structured data with, for what a type is missing. */
   structuredDataReaders?: StructuredDataReaders;
-  /** What robots.txt asks of AI crawlers until the settings choose. */
-  aiCrawlers?: AiCrawlerChoice;
+  /** What robots.txt asks of AI crawlers until the settings choose: all allowed where unset. */
+  aiCrawlers?: AiCrawlerChoice | undefined;
   /** How pages are fetched; the network itself unless a test says else. */
   fetch?: Pick<FetchOptions, "resolve" | "transport" | "limits">;
 }
@@ -320,7 +320,8 @@ function nodeName(node: Record<string, unknown>): string | undefined {
 /** A node's type, as JSON-LD writes one or several. */
 function nodeType(node: Record<string, unknown>): string {
   const type = node["@type"];
-  return Array.isArray(type) ? type.map(String).join(", ") : String(type ?? "");
+  const types = Array.isArray(type) ? type : [type];
+  return types.filter(each => typeof each === "string").join(", ");
 }
 
 /** The page's structured data, and each type left out with what it misses. */

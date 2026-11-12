@@ -106,16 +106,16 @@ export function statusOf(
 }
 
 /** The Type filter's choice for pages built in code. */
-export const CODE_TYPE = "code";
+const CODE_TYPE = "code";
 
 /** The Type filter's choice for every Single. */
-export const SINGLES_TYPE = "singles";
+const SINGLES_TYPE = "singles";
 
 /**
  * The Type filter's choice `item` falls under: its collection, every Single
  * together, or every page built in code together.
  */
-export function typeOf(item: SiteAddress): string {
+function typeOf(item: SiteAddress): string {
   if (item.entry === undefined) return CODE_TYPE;
   return item.entry.kind === "single"
     ? SINGLES_TYPE

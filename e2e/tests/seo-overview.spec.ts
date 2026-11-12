@@ -232,16 +232,3 @@ test("an address not found is redirected from the Overview, the redirect saved f
     expect(items.some(item => item.from.endsWith(missing))).toBe(true);
   }).toPass({ timeout: 10_000 });
 });
-
-test("bulk edit stays at its address, and the old check address moves on to Pages", async ({
-  page,
-}) => {
-  await settle(page, { setupStep: 3 });
-  await gotoAdmin(page, `${SECTION}/bulk`);
-  await expect(page).toHaveURL(new RegExp(`${SECTION}/bulk$`));
-  await expect(
-    page.getByRole("heading", { level: 1, name: /Bulk edit/ })
-  ).toBeVisible();
-  await gotoAdmin(page, `${SECTION}/received`);
-  await expect(page).toHaveURL(new RegExp(`${SECTION}/pages$`));
-});

@@ -59,7 +59,6 @@ import {
   typeChoices,
   type PagesFilter,
   type PageStatus,
-  type ProblemsByPage,
   type TypeChoice,
 } from "./pages-view";
 import { useCheckedProblemList } from "./problem-list";
@@ -72,9 +71,6 @@ interface AddressesBody {
 
 /** The screen's two modes. */
 type Mode = "view" | "edit";
-
-/** The query an address opens Edit mode with: `?mode=edit`. */
-export const EDIT_MODE_QUERY = "mode=edit";
 
 /** The mode the screen's own address asks for. */
 function modeInAddress(): Mode {
@@ -105,8 +101,8 @@ const STATUS_BADGE: Record<PageStatus, BadgeProps["variant"]> = {
   hidden: "outline",
 };
 
-/** The Pages screen, as the admin mounts it. */
-export function SeoPagesPage(): JSX.Element {
+/** The pages, the problem list they are judged by, and what a read says. */
+function usePages(filter: PagesFilter) {
   const addresses = usePluginRoute<AddressesBody>({
     plugin: SEO_PLUGIN_NAME,
     path: ADDRESSES_ROUTE_PATH,
@@ -114,6 +110,61 @@ export function SeoPagesPage(): JSX.Element {
     staleTime: 0,
   });
   const problems = useCheckedProblemList();
+  const items = addresses.data?.items;
+  const byPage = useMemo(
+    () => problemsByPage(problems.list?.problems ?? []),
+    [problems.list]
+  );
+  const shown = useMemo(
+    () => shownPages(items ?? [], filter, item => statusOf(item, byPage)),
+    [items, filter, byPage]
+  );
+  const failure = addresses.error
+    ? `The site's pages could not be read. ${apiErrorMessage(addresses.error)}`
+    : null;
+  return {
+    items: items ?? [],
+    byPage,
+    shown,
+    failure,
+    loading: items === undefined && failure === null,
+    // Once a save has run, the list and the problems are read again.
+    reread: () => {
+      addresses.refetch();
+      problems.check(false);
+    },
+  };
+}
+
+/** The header's actions: Import, in View mode, and the mode. */
+function ModeActions({
+  mode,
+  onMode,
+}: {
+  mode: Mode;
+  onMode: (mode: Mode) => void;
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Import is reached from Pages, as its one way in. */}
+      {mode === "view" ? (
+        <Button variant="outline" asChild>
+          <AdminLink href={IMPORT_PAGE_HREF}>Import</AdminLink>
+        </Button>
+      ) : null}
+      <SegmentedChoice
+        aria-label="Mode"
+        size="bordered"
+        options={MODES}
+        value={mode}
+        onSelect={next => onMode(next === "edit" ? "edit" : "view")}
+      />
+    </div>
+  );
+}
+
+/** The Pages screen, as the admin mounts it. */
+export function SeoPagesPage(): JSX.Element {
   const [mode, setMode] = useState<Mode>(modeInAddress);
   const [filter, setFilter] = useState<PagesFilter>({
     query: "",
@@ -123,88 +174,45 @@ export function SeoPagesPage(): JSX.Element {
   // Kept here, not in Edit mode, so a look at View mode and back keeps them.
   const [edits, setEdits] = useState<PageEdits>({});
   useLeaveWarning(Object.keys(edits).length > 0);
-
-  const items = addresses.data?.items;
-  const byPage = useMemo(
-    () => problemsByPage(problems.list?.problems ?? []),
-    [problems.list]
+  const pages = usePages(filter);
+  const filters = (
+    <TypeAndStatus items={pages.items} filter={filter} onFilter={setFilter} />
   );
-  const statusFor = (item: SiteAddress) => statusOf(item, byPage);
-  const shown = useMemo(
-    () => shownPages(items ?? [], filter, item => statusOf(item, byPage)),
-    [items, filter, byPage]
-  );
-  const failure =
-    addresses.error === null || addresses.error === undefined
-      ? null
-      : `The site's pages could not be read. ${apiErrorMessage(addresses.error)}`;
-
   return (
     <PageFrame type="list">
       <PageHeader
         title="Pages"
         description={DESCRIPTION[mode]}
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Import is reached from Pages, as its one way in. */}
-            {mode === "view" ? (
-              <Button variant="outline" asChild>
-                <AdminLink href={IMPORT_PAGE_HREF}>Import</AdminLink>
-              </Button>
-            ) : null}
-            <SegmentedChoice
-              aria-label="Mode"
-              size="bordered"
-              options={MODES}
-              value={mode}
-              onSelect={next => setMode(next === "edit" ? "edit" : "view")}
-            />
-          </div>
-        }
+        actions={<ModeActions mode={mode} onMode={setMode} />}
       />
       {mode === "view" ? (
         <PagesList
-          shown={shown}
+          shown={pages.shown}
           search={{
             value: filter.query,
             onChange: query => setFilter({ ...filter, query }),
             placeholder: "Search pages",
           }}
-          filters={
-            <TypeAndStatus
-              items={items ?? []}
-              filter={filter}
-              onFilter={setFilter}
-            />
-          }
-          loading={items === undefined && failure === null}
-          failure={failure}
+          filters={filters}
+          loading={pages.loading}
+          failure={pages.failure}
           filtered={
             filter.query !== "" ||
             filter.type !== "all" ||
             filter.status !== "all"
           }
-          statusFor={statusFor}
+          statusFor={item => statusOf(item, pages.byPage)}
         />
       ) : (
         <PagesEditor
-          shown={shown}
-          filters={
-            <TypeAndStatus
-              items={items ?? []}
-              filter={filter}
-              onFilter={setFilter}
-            />
-          }
-          loading={items === undefined && failure === null}
-          failure={failure}
-          byPage={byPage}
+          shown={pages.shown}
+          filters={filters}
+          loading={pages.loading}
+          failure={pages.failure}
+          byPage={pages.byPage}
           edits={edits}
           onEdits={setEdits}
-          onSaved={() => {
-            addresses.refetch();
-            problems.check(false);
-          }}
+          onSaved={pages.reread}
         />
       )}
     </PageFrame>

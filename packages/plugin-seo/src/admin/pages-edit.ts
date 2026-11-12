@@ -252,39 +252,58 @@ export function saveSteps(
   const code: SaveStep[] = [];
   for (const row of rows) {
     if (!rowChanged(row, edits)) continue;
-    const title = boxChanged(row, "title", edits);
-    const description = boxChanged(row, "description", edits);
     const { target } = row;
     if (target.kind === "code") {
-      code.push({
-        kind: "code",
-        paths: [row.path],
-        input: {
-          path: row.path,
-          title: boxValue(row, "title", edits),
-          description: boxValue(row, "description", edits),
-          hidden: target.seo.typed.hidden,
-        },
-      });
-      continue;
+      code.push(codeStep(row, target.seo, edits));
+    } else if (target.kind === "entry") {
+      const step = byType.get(target.type) ?? { paths: [], changes: [] };
+      step.paths.push(row.path);
+      step.changes.push(entryChange(row, target.row, edits));
+      byType.set(target.type, step);
     }
-    if (target.kind !== "entry") continue;
-    const step = byType.get(target.type) ?? { paths: [], changes: [] };
-    step.paths.push(row.path);
-    step.changes.push({
-      id: target.row.id,
-      ...(target.row.rev === undefined ? {} : { rev: target.row.rev }),
-      ...(title ? { title: boxValue(row, "title", edits) } : {}),
-      ...(description
-        ? { description: boxValue(row, "description", edits) }
-        : {}),
-    });
-    byType.set(target.type, step);
   }
-  const entries: SaveStep[] = [];
+  return [...entrySteps(byType), ...code];
+}
+
+/** The save of one page built in code, its visibility sent as it is. */
+function codeStep(row: EditRow, seo: CodePageSeo, edits: PageEdits): SaveStep {
+  return {
+    kind: "code",
+    paths: [row.path],
+    input: {
+      path: row.path,
+      title: boxValue(row, "title", edits),
+      description: boxValue(row, "description", edits),
+      hidden: seo.typed.hidden,
+    },
+  };
+}
+
+/** One entry's change: each box changed, and the version it was read at. */
+function entryChange(
+  row: EditRow,
+  read: BulkRow,
+  edits: PageEdits
+): BulkChange {
+  const change: BulkChange = { id: read.id };
+  if (read.rev !== undefined) change.rev = read.rev;
+  if (boxChanged(row, "title", edits)) {
+    change.title = boxValue(row, "title", edits);
+  }
+  if (boxChanged(row, "description", edits)) {
+    change.description = boxValue(row, "description", edits);
+  }
+  return change;
+}
+
+/** Each type's changes, as many to a step as one save takes. */
+function entrySteps(
+  byType: ReadonlyMap<string, { paths: string[]; changes: BulkChange[] }>
+): SaveStep[] {
+  const steps: SaveStep[] = [];
   for (const [type, step] of byType) {
     for (let at = 0; at < step.changes.length; at += BULK_SAVE_LIMIT) {
-      entries.push({
+      steps.push({
         kind: "entries",
         type,
         paths: step.paths.slice(at, at + BULK_SAVE_LIMIT),
@@ -292,7 +311,7 @@ export function saveSteps(
       });
     }
   }
-  return [...entries, ...code];
+  return steps;
 }
 
 /** How each step of a save went. */

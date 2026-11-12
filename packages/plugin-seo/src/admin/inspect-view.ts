@@ -164,7 +164,7 @@ function failedLead(reason: FetchStop, message: string): string {
 }
 
 /** The limits every fetch is held to, as the notice says them. */
-export const LIMITS_TEXT: string = `Nextly stops a fetch at ${FETCH_LIMITS.timeoutMs / 1000} seconds, ${FETCH_LIMITS.maxBytes / (1024 * 1024)} MB or ${FETCH_LIMITS.maxRedirects} redirects.`;
+const LIMITS_TEXT: string = `Nextly stops a fetch at ${FETCH_LIMITS.timeoutMs / 1000} seconds, ${FETCH_LIMITS.maxBytes / (1024 * 1024)} MB or ${FETCH_LIMITS.maxRedirects} redirects.`;
 
 /**
  * The notice for a check that fetched nothing: the address refused, or

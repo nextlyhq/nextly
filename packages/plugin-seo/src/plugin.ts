@@ -743,7 +743,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // the Page Builder's Settings, where it runs.
       contributions: [...(tab.admin?.contributions ?? []), PAGE_BUILDER_TAB],
       clientConfig: {
-        aiCrawlers: options.aiCrawlers ?? "all",
+        aiCrawlers: options.aiCrawlers,
         hiddenTypes: [...new Set(options.hiddenTypes ?? [])],
         // Each type's structured data choice the options make, which the
         // screen shows until the site chooses its own.

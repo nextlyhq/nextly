@@ -51,7 +51,7 @@ import { Row, RowButton } from "./rows";
 import { SeoTextField } from "./SeoPanel";
 
 /** Where each source of an address is said to come from. */
-export const SOURCE_LABELS: Record<SiteAddress["source"], string> = {
+const SOURCE_LABELS: Record<SiteAddress["source"], string> = {
   entry: "Entry",
   built: "Built route",
   dynamic: "Declared by a dynamic route",
