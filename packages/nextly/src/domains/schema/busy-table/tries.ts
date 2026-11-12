@@ -1,0 +1,140 @@
+/**
+ * The tries a schema change makes for a busy table: run the change as one bounded try; where the
+ * try ended waiting for a lock, pause and try again, as the schedule and the total bound allow;
+ * stop with a report once they run out, or at once where what the try ran may not run again.
+ *
+ * The loop is dialect-free: how one try is bounded and run is the caller's `attempt`, which says
+ * how the try ended. Before every try after the first the run shows it still holds the schema lock
+ * (`assertHeld`), so a run that lost it during a pause sends no further try.
+ *
+ * @module domains/schema/busy-table/tries
+ */
+import type { BusyTableBounds } from "./bounds";
+import type { StatementJudgement } from "./judge";
+import { mayStartTry, pauseAfterTry, plannedTryStarts } from "./schedule";
+import type { BusyTableOutcome, BusyTableStop, EndedTry } from "./types";
+
+/** How one try ended. */
+export type TryResult<T> =
+  /** The change got its locks and ran: the tries are over. */
+  | { readonly kind: "done"; readonly value: T }
+  /** It ended waiting for a lock. */
+  | {
+      readonly kind: "ended";
+      readonly ended: EndedTry;
+      /**
+       * The first statement of what the next try would run again that may not be sent again, with
+       * its judgement; undefined where everything the next try would run may run again.
+       */
+      readonly lasting?: {
+        readonly statement: string;
+        readonly judgement: Extract<StatementJudgement, { kind: "no-retry" }>;
+      };
+      /** Whether the rest of the change was undone with its transaction. */
+      readonly undone: boolean;
+      /** The statements this try's change made durable before the wait (none in a transaction). */
+      readonly committed: readonly string[];
+    };
+
+export interface BusyTableTriesOptions {
+  readonly bounds: BusyTableBounds;
+  /** The change, as the operator knows it: a migration file, a down section. */
+  readonly change: string;
+  /** The changes this run applied before this one. */
+  readonly appliedBefore: readonly string[];
+  /** Prints one line on standard error at each try after the first. */
+  readonly notify: (line: string) => void;
+  /** The notice for a try after the first (`report.ts`'s `tryNotice`). */
+  readonly notice: (input: {
+    change: string;
+    table: string | null;
+    holder: EndedTry["holder"];
+    tryNumber: number;
+    plannedTries: number;
+  }) => string;
+  /** Refuses a run that can no longer show it holds the schema lock. */
+  readonly assertHeld: () => Promise<void>;
+  /** The error a stopped change throws (`report.ts`'s `tableBusyError`). */
+  readonly stopped: (stop: BusyTableStop) => Error;
+  /**
+   * The last moment a try may still end by, beyond the total bound, where the run cannot renew
+   * its schema lock while it waits (SQLite, whose holder holds the whole database); undefined
+   * where it can.
+   */
+  readonly leaseDeadline?: () => number | undefined;
+  readonly now?: () => number;
+  readonly sleep?: (ms: number) => Promise<void>;
+}
+
+const wait = (ms: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, ms));
+
+/** The outcome a try that ended leaves the change in, by what it ran and what committed. */
+function outcomeOf(
+  result: Extract<TryResult<unknown>, { kind: "ended" }>
+): BusyTableOutcome {
+  if (result.lasting !== undefined) {
+    return {
+      kind: "no-retry",
+      statement: result.lasting.statement,
+      reason: result.lasting.judgement.reason,
+      restUndone: result.undone,
+    };
+  }
+  return result.committed.length === 0
+    ? { kind: "nothing-changed" }
+    : { kind: "part-way", committed: result.committed };
+}
+
+/**
+ * Runs `attempt` as tries until one gets its locks, and returns what that try returned. Throws
+ * `options.stopped(…)` once the tries run out, at once where a try ran a statement that may not
+ * run again, and lets every other error of a try through as it is.
+ */
+export async function withBusyTableTries<T>(
+  options: BusyTableTriesOptions,
+  attempt: (tryNumber: number) => Promise<TryResult<T>>
+): Promise<T> {
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? wait;
+  const plannedTries = plannedTryStarts(options.bounds).length;
+  const firstStartedAt = now();
+  let committed: readonly string[] = [];
+  for (let tryNumber = 1; ; tryNumber++) {
+    if (tryNumber > 1) await options.assertHeld();
+    const result = await attempt(tryNumber);
+    if (result.kind === "done") return result.value;
+    // What earlier tries made durable stays durable, and is reported with this try's.
+    committed = [...committed, ...result.committed];
+    const ended = { ...result, committed };
+    const stop = (endedAtLease: boolean): Error =>
+      options.stopped({
+        change: options.change,
+        ended: result.ended,
+        tries: tryNumber,
+        elapsedMs: now() - firstStartedAt,
+        appliedBefore: options.appliedBefore,
+        outcome: outcomeOf(ended),
+        cause: "table-busy",
+        endedAtLease,
+      });
+    // A statement that may not be sent again ran, or waited: no further try.
+    if (result.lasting !== undefined) throw stop(false);
+    const nextAt = now() + pauseAfterTry(tryNumber - 1);
+    if (!mayStartTry(options.bounds, firstStartedAt, nextAt)) throw stop(false);
+    const lease = options.leaseDeadline?.();
+    if (lease !== undefined && nextAt + options.bounds.tryMs > lease) {
+      throw stop(true);
+    }
+    await sleep(nextAt - now());
+    options.notify(
+      options.notice({
+        change: options.change,
+        table: result.ended.table,
+        holder: result.ended.holder,
+        tryNumber: tryNumber + 1,
+        plannedTries,
+      })
+    );
+  }
+}
