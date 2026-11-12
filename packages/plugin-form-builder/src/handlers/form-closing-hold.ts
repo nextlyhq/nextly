@@ -167,10 +167,29 @@ async function holdFormClosing(
   if (pastClosingTime(locked.settings, new Date())) {
     throw closedRefusal(locked.form, { formId, closedBy: "date" });
   }
+  refuseKeptAddress(write, formId, locked.settings);
   if (submission.takesAPlace) {
     await holdLimit(deps.own, write, slugs, formId, locked);
   }
   await holdResponseKey(deps, write, slugs, formId, locked.settings);
+}
+
+/**
+ * Refuse a new submission that carries an IP address or browser to a form
+ * that, as committed, keeps neither: the write seam read the setting before
+ * it changed. The visitor sends it again, and it is stored without them.
+ */
+function refuseKeptAddress(
+  write: InTransactionContext,
+  formId: string,
+  settings: { storeIpAndBrowser?: boolean }
+): void {
+  if (settings.storeIpAndBrowser !== false) return;
+  const row = write.data as { ipAddress?: unknown; userAgent?: unknown };
+  const kept = (value: unknown) => typeof value === "string" && value !== "";
+  if (kept(row?.ipAddress) || kept(row?.userAgent)) {
+    throw changedRefusal(formId);
+  }
 }
 
 /** Refuse a submission that takes the form past its limit, under the lock. */

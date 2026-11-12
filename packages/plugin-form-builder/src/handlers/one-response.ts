@@ -381,6 +381,28 @@ function keptKeyAfterUpdate(
   return keyVersionOf(key) === (version ?? 0) ? key : null;
 }
 
+/**
+ * The key a stored submission should hold under `settings`: its value's,
+ * made again from the row; or, for a network's on a row that kept no
+ * address (a form that keeps none), the key it holds while that is for the
+ * current version, since it cannot be made again. The rebuild asks this, so
+ * a submission stored under a form that keeps no addresses keeps its key.
+ */
+export async function storedRowKeyOf(
+  digests: () => Digests,
+  settings: KeySettings,
+  row: KeyedSubmission & { responseKey?: unknown }
+): Promise<string | null> {
+  if (settings.oneResponse !== "ip" || textOf(row.ipAddress) !== undefined) {
+    return responseKeyOf(digests, settings, row);
+  }
+  const key = networkKeyHeld({}, row);
+  return key !== null &&
+    keyVersionOf(key) === (settings.oneResponseVersion ?? 0)
+    ? key
+    : null;
+}
+
 /** The network key a submission holds, unless the update makes it spam. */
 function networkKeyHeld(
   patch: KeyedSubmission,

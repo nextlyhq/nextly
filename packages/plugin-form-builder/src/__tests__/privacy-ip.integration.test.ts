@@ -24,7 +24,14 @@ describe.each(getConfiguredTestDialects())("a form's privacy (%s)", dialect => {
     current = undefined;
   });
 
-  async function boot(settings: Record<string, unknown>) {
+  /**
+   * `afterSeam` runs on each submission's write after the forms plugin's own
+   * write hook (registered first) has prepared it.
+   */
+  async function boot(
+    settings: Record<string, unknown>,
+    afterSeam?: () => Promise<void>
+  ) {
     const fb = formBuilder({
       spamProtection: { honeypot: false, recaptcha: { enabled: false } },
     });
@@ -39,6 +46,12 @@ describe.each(getConfiguredTestDialects())("a form's privacy (%s)", dialect => {
           nextly: ">=0.0.0",
           init: ctx => {
             probe = ctx;
+            if (afterSeam) {
+              ctx.hooks.on("beforeChange", "form-submissions", async hook => {
+                await afterSeam();
+                return (hook as { data?: unknown }).data;
+              });
+            }
           },
         }),
       ],
@@ -211,6 +224,68 @@ describe.each(getConfiguredTestDialects())("a form's privacy (%s)", dialect => {
         },
       })
     ).rejects.toThrow();
+  });
+
+  it("refuses a submission prepared before the form stopped keeping addresses", async () => {
+    let formId = "";
+
+    let change = false;
+
+    const { submit, rows, t } = await boot(
+      { oneResponse: "off" },
+
+      async () => {
+        if (!change) return;
+
+        change = false;
+
+        // The privacy setting changes after the seam kept this one's address.
+
+        const form = (await current!.nextly.findByID({
+          collection: "forms",
+
+          id: formId,
+        })) as { settings: Record<string, unknown> };
+
+        await current!.nextly.update({
+          collection: "forms",
+
+          id: formId,
+
+          data: {
+            settings: { ...form.settings, storeIpAndBrowser: false },
+
+            _overwrite: true,
+          },
+        });
+      }
+    );
+
+    formId = String(
+      (
+        (await t.nextly.find({ collection: "forms", limit: 1 })).items[0] as {
+          id: unknown;
+        }
+      ).id
+    );
+
+    change = true;
+
+    expect(await submit("ada@example.com", "203.0.113.9")).toMatchObject({
+      success: false,
+    });
+
+    expect(await rows()).toHaveLength(0);
+
+    // Sent again, it is stored as the form now keeps it.
+
+    expect((await submit("ada@example.com", "203.0.113.9")).success).toBe(true);
+
+    const [row] = await rows();
+
+    expect(row?.ipAddress ?? null).toBeNull();
+
+    expect(row?.userAgent ?? null).toBeNull();
   });
 
   it("stores both on a form that keeps them", async () => {
