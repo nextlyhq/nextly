@@ -4,9 +4,20 @@
  * may create in it; and the collections and Singles that have a Page Builder
  * field, derived from the registries, as far as they may read them.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { OverviewContext, OverviewReads } from "./route";
+// The server's own reads, for the one test that runs them: core's count and
+// a Single's read, made as the caller.
+const { count, findSingle } = vi.hoisted(() => ({
+  count: vi.fn(),
+  findSingle: vi.fn(),
+}));
+vi.mock("nextly/runtime", async importOriginal => ({
+  ...(await importOriginal<typeof import("nextly/runtime")>()),
+  requireNextly: () => ({ count, findSingle }),
+}));
+
 import { pageBuilderUses, readOverview } from "./route";
 
 const blocks = (name: string, label?: string) => ({
@@ -275,5 +286,29 @@ describe("pageBuilderUses", () => {
     expect(
       pageBuilderUses(COLLECTIONS, [], new Set()).map(use => use.slug)
     ).toEqual(["landing", "pages", "site-components", "site-patterns"]);
+  });
+});
+
+describe("the overview's own reads", () => {
+  it("count every entry the caller may open, drafts included", async () => {
+    count.mockResolvedValue({ total: 4 });
+    findSingle.mockResolvedValue({ id: "single" });
+    const ctx = contextFor(() => true);
+    // The real reads ask who the caller is, which the other tests never reach.
+    const caller = ctx.caller as NonNullable<OverviewContext["caller"]>;
+    const answer = await readOverview(
+      {
+        ...ctx,
+        caller: { ...caller, identity: async () => ({ user: { id: "u1" } }) },
+      } as OverviewContext,
+      { collection: undefined }
+    );
+    expect(count).toHaveBeenCalled();
+    for (const [args] of count.mock.calls) {
+      expect(args).toMatchObject({ status: "all", overrideAccess: false });
+    }
+    expect(answer.libraries.map(library => library.count)).toEqual([
+      4, 4, 4, 4,
+    ]);
   });
 });

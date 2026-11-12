@@ -36,7 +36,7 @@ import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
 import { PATTERNS_SLUG } from "../collections/patterns";
 import { TEMPLATES_SLUG } from "../collections/templates";
-import { isOrphanedSingle } from "../declared-singles";
+import { declaredSingleSlugs, isOrphanedSingle } from "../declared-singles";
 import { singleReadableByCaller } from "../entry-reads";
 import { readingAsUser, type ComponentStore } from "../library-route";
 import { builderBlocksFields } from "../nested-blocks-fields";
@@ -107,6 +107,9 @@ async function countAsCaller(
     const { total } = await requireNextly().count({
       collection,
       ...(await readingAsUser(ctx)),
+      // Every entry the caller may open, drafts included, as the collection's
+      // list shows them: a read defaults to published entries otherwise.
+      status: "all",
     });
     return total;
   } catch {
@@ -231,20 +234,6 @@ async function singleRecords(ctx: OverviewContext): Promise<unknown[]> {
   return rows;
 }
 
-/** The slugs the app's configuration declares as Singles, when it lists them. */
-function configuredSingles(
-  ctx: OverviewContext
-): ReadonlySet<string> | undefined {
-  const singles = ctx.config?.singles;
-  if (!Array.isArray(singles)) return undefined;
-  return new Set(
-    singles.flatMap(single => {
-      const slug = (single as { slug?: unknown } | null)?.slug;
-      return typeof slug === "string" && slug !== "" ? [slug] : [];
-    })
-  );
-}
-
 /** One candidate as the caller may see it, with its entries for a collection. */
 async function useFor(
   ctx: OverviewContext,
@@ -302,7 +291,7 @@ export async function readOverview(
     collections,
     singles,
     excluded,
-    configuredSingles(ctx)
+    declaredSingleSlugs(ctx)
   );
   const usedIn = await inTurns(candidates, candidate =>
     useFor(ctx, caller, candidate, reads)
