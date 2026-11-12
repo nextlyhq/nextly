@@ -220,6 +220,35 @@ describe("the SEO panel at rest", () => {
   });
 });
 
+describe("a value the page's design gives", () => {
+  /** A title the design level answers, drawn by `drawnBy`. */
+  function drawn(drawnBy?: "design" | "template"): SeoTabContext {
+    return {
+      ...CONTEXT,
+      levels: {
+        ...LEVELS,
+        template: { title: "About us | Acme" },
+        pattern: {},
+      },
+      ...(drawnBy === undefined ? {} : { drawnBy }),
+    };
+  }
+
+  it("comes from this page's design where the page's own blocks draw it", () => {
+    render(<Harness context={drawn("design")} />);
+    expect(titleField().parentElement).toHaveTextContent(
+      "Automaticfrom this page's design"
+    );
+  });
+
+  it("comes from this page's template where a template draws it", () => {
+    render(<Harness context={drawn("template")} />);
+    expect(titleField().parentElement).toHaveTextContent(
+      "Automaticfrom this page's template"
+    );
+  });
+});
+
 describe("what search engines received", () => {
   it("links the page's check at the foot of the panel", () => {
     const href =

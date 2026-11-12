@@ -9,7 +9,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentLocale: () => undefined,
 }));
 
-import { documentKeyOf, documentOf } from "../tab-document";
+import { documentKeyOf, documentOf, withValueAt } from "../tab-document";
 
 describe("the document the tab asks about", () => {
   it("names a saved entry by its id", () => {
@@ -53,5 +53,28 @@ describe("the document the tab asks about", () => {
     expect(one).not.toBe(
       documentKeyOf({ kind: "single", slug: "home", locale: "en", id: "s2" })
     );
+  });
+});
+
+describe("the document as typed, with a value the form does not hold yet", () => {
+  it("puts the value at its path, top-level or nested, leaving the form's own untouched", () => {
+    const typed = { title: "About", layout: { hero: "old" } };
+    expect(withValueAt(typed, "content", { nodes: [1] })).toEqual({
+      title: "About",
+      layout: { hero: "old" },
+      content: { nodes: [1] },
+    });
+    expect(withValueAt(typed, "layout.hero", "new")).toEqual({
+      title: "About",
+      layout: { hero: "new" },
+    });
+    expect(typed.layout.hero).toBe("old");
+  });
+
+  it("puts it in a row of a list by its index", () => {
+    const typed = { rows: [{ blocks: "a" }, { blocks: "b" }] };
+    expect(withValueAt(typed, "rows.1.blocks", "c")).toEqual({
+      rows: [{ blocks: "a" }, { blocks: "c" }],
+    });
   });
 });

@@ -95,6 +95,8 @@ export type SourcedValue = "title" | "description" | "image" | "socialTitle";
 export interface SourceNames {
   typeLabel: string;
   fieldLabels: Readonly<Record<string, string>>;
+  /** What drew the page where a design gives its template level. */
+  drawnBy?: "design" | "template";
 }
 
 /** What the site supplies for each value, as the source line names it. */
@@ -167,7 +169,11 @@ function sourceWords(
       </>
     );
   }
-  if (level === "template") return "from this page's template";
+  if (level === "template") {
+    return names.drawnBy === "design"
+      ? "from this page's design"
+      : "from this page's template";
+  }
   if (level === "code")
     return "by this page's route. Anything you type here wins over it.";
   return SITE_DEFAULT[value];
