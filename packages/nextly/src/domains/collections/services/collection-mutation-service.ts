@@ -9722,6 +9722,36 @@ export class CollectionMutationService extends BaseService {
           }
         );
 
+        // Taking the shared part down while a language not chosen stays live would leave that
+        // language shown without it. Judged here, under the lock, on the statuses this write
+        // overwrites: a language published since the request was judged refuses it too.
+        if (params.parts !== undefined && params.parts.shared && !publishes) {
+          const chosen = params.parts.locales;
+          const stillLive = [...priorCompanionStatuses]
+            .filter(
+              ([locale, status]) =>
+                status === "published" && !chosen.has(locale)
+            )
+            .map(([locale]) => locale);
+          if (stillLive.length > 0) {
+            const refusal = NextlyError.conflict({
+              reason: "state",
+              message:
+                `The shared part stays live while ${stillLive.join(", ")} ` +
+                `${stillLive.length === 1 ? "is" : "are"} published: unpublish ` +
+                `${stillLive.length === 1 ? "it" : "them"} too, or keep the shared part. ` +
+                `Nothing was changed.`,
+              logContext: {
+                cause: "shared-part-under-live-languages",
+                collection: params.collectionName,
+                stillLive,
+              },
+            });
+            publishRefused = refusal;
+            throw refusal;
+          }
+        }
+
         // Every language's pending change, in the order their languages
         // last saved, read under the lock: a change saved after the rule was
         // asked either landed before this read, and is promoted, or waits
@@ -10644,7 +10674,9 @@ export class CollectionMutationService extends BaseService {
             versionNo: publishVersionNo,
           },
           [
-            ...(hasMainStatus
+            // The entry's own move only where the shared part moved: a move of chosen languages
+            // alone leaves the entry's status, so its history records none.
+            ...(hasMainStatus && movesShared(params.parts)
               ? [
                   {
                     from: promotions.some(p => p.locale === null)
@@ -11557,6 +11589,22 @@ export class CollectionMutationService extends BaseService {
           [...statuses.keys()]
         )
       : new Map<string, Map<string, Record<string, unknown>>>();
+    const fields = (collection.fields ?? []).flatMap(field =>
+      typeof field.name === "string"
+        ? [
+            {
+              name: field.name,
+              label: typeof field.label === "string" ? field.label : field.name,
+              required: field.required === true,
+              unique: (field as { unique?: unknown }).unique === true,
+              translatable: isFieldLocalized(
+                field as Parameters<typeof isFieldLocalized>[0],
+                collection.localized === true
+              ),
+            },
+          ]
+        : []
+    );
     const languages = new Map(
       [...statuses].map(([locale, status]) => [
         locale,
@@ -11566,29 +11614,38 @@ export class CollectionMutationService extends BaseService {
         },
       ])
     );
+    // What each language puts live: its stored values with its pending change laid over them,
+    // since a publish promotes that change. Only the language's translated fields come from the
+    // change; a language with a change and no stored row yet is judged on the change alone.
+    const translated = new Set(
+      fields.filter(field => field.translatable).map(field => field.name)
+    );
+    for (const draft of await new VersionsRepository(
+      this.adapter
+    ).findAllWorkingDrafts({
+      scopeKind: "collection",
+      scopeSlug: params.collectionName,
+      entryId: params.entryId,
+    })) {
+      if (typeof draft.locale !== "string") continue;
+      const stored = languages.get(draft.locale);
+      const pending = Object.fromEntries(
+        Object.entries(snapshotRecord(draft.snapshot)).filter(([name]) =>
+          translated.has(name)
+        )
+      );
+      languages.set(draft.locale, {
+        live: stored?.live ?? false,
+        values: { ...stored?.values, ...pending },
+      });
+    }
     const state: PartsState = {
       configured,
       defaultLocale,
       sharedLive:
         (existingEntry as { status?: unknown }).status === "published",
       languages,
-      fields: (collection.fields ?? []).flatMap(field =>
-        typeof field.name === "string"
-          ? [
-              {
-                name: field.name,
-                label:
-                  typeof field.label === "string" ? field.label : field.name,
-                required: field.required === true,
-                unique: (field as { unique?: unknown }).unique === true,
-                translatable: isFieldLocalized(
-                  field as Parameters<typeof isFieldLocalized>[0],
-                  collection.localized === true
-                ),
-              },
-            ]
-          : []
-      ),
+      fields,
       requireEveryLanguage: requiresEveryLanguage(params.collectionName),
     };
     // The publish or unpublish permission and rule, as the transition asks it: never

@@ -320,6 +320,18 @@ export async function publishParts(
   const describe = request.describe === true;
   const everyLanguage = request.locales === "all";
   const asked = everyLanguage ? [] : [...new Set(request.locales)];
+  // A request that chooses nothing moves nothing: refused, rather than read as a request for the
+  // shared part a first publish would add.
+  if (!everyLanguage && asked.length === 0 && request.shared !== true) {
+    return refused([
+      {
+        path: "locales",
+        code: "NOTHING_CHOSEN",
+        message:
+          "Choose at least one language, or the shared part (`shared: true`).",
+      },
+    ]);
+  }
   // The shared part's rule is asked whether or not the request ends up moving it: whether a first
   // publish adds it is known only once the entry is read.
   const read = await engines.reads({
@@ -333,6 +345,7 @@ export async function publishParts(
   // while its shared part is not.
   const added =
     !everyLanguage &&
+    asked.length > 0 &&
     request.direction === "publish" &&
     !state.sharedLive &&
     request.shared !== true;

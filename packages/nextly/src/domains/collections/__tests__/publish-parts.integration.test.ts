@@ -476,4 +476,131 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(refusal).toMatch(/slug/);
     expect(await states(id, "dc_pages")).toEqual(before);
   });
+  it("refuses a request that chooses no part, and moves nothing", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const before = await states(id);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: [],
+        data: { _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/NOTHING_CHOSEN/);
+    expect(await states(id)).toEqual(before);
+  });
+
+  // Judged again under the entry's lock: a language published after the request was judged on the
+  // pool keeps its shared part. The transition is called as the service calls it once that judgement
+  // has passed.
+  it("keeps the shared part live when a language not chosen is live under the lock", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    const before = await states(id);
+    const entries = (
+      t!.getService("collectionsHandler") as unknown as {
+        getEntryService(): {
+          unpublishAllLocales(params: Record<string, unknown>): Promise<{
+            success: boolean;
+            message?: string;
+          }>;
+        };
+      }
+    ).getEntryService();
+
+    const moved = await entries.unpublishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+      data: { _overwrite: true },
+      parts: { locales: new Set(["en"]), shared: true },
+    });
+
+    expect(moved.success).toBe(false);
+    expect(moved.message).toMatch(/es/);
+    expect(await states(id)).toEqual(before);
+  });
+
+  // What a language puts live is its pending change: a unique value the change supplies counts.
+  it("publishes a language whose pending change supplies its required unique field", async () => {
+    await boot(
+      defineCollection({
+        slug: "pages",
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug", required: true, unique: true }),
+        ],
+      })
+    );
+    const created = (await t!.nextly.create({
+      collection: "pages",
+      locale: "en",
+      data: { title: "Hello", slug: "hola", status: "published" },
+    })) as { item: { id: string } };
+    const id = created.item.id;
+    // Held as Spanish's pending change, since the entry is live.
+    await t!.nextly.update({
+      collection: "pages",
+      id,
+      locale: "es",
+      data: { title: "Hola", slug: "hola-es", _overwrite: true },
+    });
+
+    await t!.nextly.publish({
+      collection: "pages",
+      id,
+      locales: ["es"],
+      data: { _overwrite: true },
+    });
+
+    const read = (await t!.nextly.findByID({
+      collection: "pages",
+      id,
+      locale: "es",
+    })) as { slug?: unknown };
+    expect(read.slug).toBe("hola-es");
+  });
+
+  // A move of languages alone leaves the entry's own status, so its history records no move of it.
+  it("records no move of the entry when a language with nothing to take down is unpublished", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    const unpublishedBefore = await unpublishedEvents(id);
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["fr"],
+      data: { _overwrite: true },
+    });
+
+    expect(await unpublishedEvents(id)).toBe(unpublishedBefore);
+    expect((await states(id)).shared).toBe("published");
+  });
+
+  async function unpublishedEvents(id: string): Promise<number> {
+    const rows = await t!.adapter.executeQuery<{ n: number | string }>(
+      `SELECT COUNT(*) AS n FROM ${q("nextly_content_events")} WHERE ${q("subject_id")} = '${id}' AND ${q("kind")} = 'unpublished'`
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
 });

@@ -986,6 +986,12 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
+  /** Publish the chosen parts of one entry. @experimental */
+  publish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).publish(args),
+  /** Unpublish the chosen parts of one entry. @experimental */
+  unpublish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).unpublish(args),
   delete: async (args: DeleteArgs) =>
     (await requireNextlyOnceStarted()).delete(args),
   count: async (args: CountArgs) =>
