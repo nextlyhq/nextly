@@ -282,7 +282,7 @@ const SettingsGeneralPage: React.FC = () => {
   }
 
   return (
-    <PageContainer width="form">
+    <PageContainer type="form">
       {/* The page's own form is the `content` built-in: plugins' blocks
           draw around it and their tabs beside it, in the order sent. */}
       <PlaceTabs

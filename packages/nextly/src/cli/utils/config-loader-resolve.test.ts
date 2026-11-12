@@ -137,6 +137,35 @@ describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
     expect(result.webhookAuditEnabled).toBe(true);
   });
 
+  // The boot collects the app's permissions from the transformed config, so a setup() that adds
+  // or replaces them must reach every command that reads the loaded config, `migrate:create` and
+  // the loader's own permission check among them; one that removes them all leaves none.
+  it.each([
+    [
+      "replaced",
+      [{ action: "export", resource: "reports" }],
+      [{ action: "archive", resource: "reports" }],
+    ],
+    ["removed", [{ action: "export", resource: "reports" }], undefined],
+  ])(
+    "carries the app permissions a plugin setup() %s",
+    (_how, before, after) => {
+      const baseCfg = {
+        ...base(),
+        permissions: before,
+      } as unknown as SanitizedNextlyConfig;
+      const transformed = {
+        ...base(),
+        plugins: [],
+        permissions: after,
+      } as unknown as SanitizedNextlyConfig;
+
+      const result = mergeSetupResultIntoConfig(baseCfg, transformed, []);
+
+      expect(result.permissions).toEqual(after);
+    }
+  );
+
   it("carries the site dashboard a plugin setup() adds, so the component map lists its widget", () => {
     // The boot registers the dashboard of the transformed config; `generate:types` and its
     // `--check` list components from this merge, so a widget a setup() adds must reach it.

@@ -456,7 +456,7 @@ export class NoticesService {
     userId: string
   ): Promise<NoticeView[]> {
     const links = new Map<string, ReadonlyMap<string, string> | null>();
-    const readable = new Map<string, ReadonlySet<string>>();
+    const readable = new Map<string, ReadonlyMap<string, unknown>>();
     for (const kindKey of new Set(rows.map(row => row.kind))) {
       const kind = registeredNoticeKind(kindKey);
       if (kind?.readable !== undefined) {
@@ -511,7 +511,9 @@ export class NoticesService {
           },
         ];
       }
-      const parsed = kind.data.safeParse(row.data);
+      // The snapshot as the person may see it, where the kind decides that; as stored otherwise.
+      const shown = judged?.get(row.id);
+      const parsed = kind.data.safeParse(shown ?? row.data);
       const text = parsed.success
         ? kind.render(parsed.data, { subjectGone: gone })
         : // A snapshot written before its kind's schema changed. Shown

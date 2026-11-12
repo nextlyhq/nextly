@@ -123,6 +123,19 @@ export function bootSteps(
         access: { read: ({ locale }) => locale !== "es" },
         fields: [text({ name: "title", localized: true })],
       }),
+      // Its title is hidden from Alice by a field read rule, while she may read the rest.
+      defineCollection({
+        slug: "dossiers",
+        ...table("dossiers"),
+        ...drafts,
+        workflow: editorial,
+        fields: [
+          text({
+            name: "title",
+            access: { read: ({ user }) => user?.id !== "alice" },
+          }),
+        ],
+      }),
       defineCollection({
         slug: "notes",
         ...table("notes"),

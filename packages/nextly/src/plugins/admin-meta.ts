@@ -6,10 +6,7 @@
  * @module plugins/admin-meta
  */
 
-import type {
-  FieldStoragePrimitive,
-  FieldTypeCategory,
-} from "../collections/fields/catalog";
+import type { PluginFieldTypeMeta } from "../collections/fields/catalog";
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
@@ -19,7 +16,7 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import { contributedListFilters } from "./admin-filters";
-import type { FieldSurface, PluginTranslations } from "./contributions";
+import type { PluginTranslations } from "./contributions";
 import {
   publishedDocumentSurfaces,
   type PublishedDocumentActionOverride,
@@ -31,6 +28,10 @@ import type {
   PluginCategory,
   PluginDefinition,
 } from "./plugin-context";
+import {
+  resolvedPluginPlacement,
+  resolvePluginLanding,
+} from "./plugin-landing";
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginTranslations } from "./plugin-translations";
 import { collectPluginRoutes } from "./routes/collect-routes";
@@ -38,6 +39,7 @@ import { isRouteError } from "./routes/route-error";
 import {
   collectionContributors,
   renamedSlug,
+  retargetedTo,
   servedCollectionSlug,
 } from "./served-collection-slug";
 import { settingsPermissionOf } from "./settings-permission";
@@ -81,6 +83,15 @@ export interface PluginAdminMeta {
   placement: string;
   order?: number;
   after?: PluginOverride["after"];
+  /**
+   * Where the plugin's own rail item goes, as an admin address: the site's
+   * `pluginOverrides` landing or the plugin's `admin.landing`, resolved as a
+   * menu item's `to` is (`resolvePluginLanding`). Absent when neither names
+   * one of the plugin's pages or collections, and for a disabled plugin,
+   * whose pages are not drawn; the admin then falls back to the plugin's
+   * first visible collection.
+   */
+  landing?: string;
   appearance?: PluginAdminAppearance;
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
@@ -179,17 +190,7 @@ export interface PluginAdminMeta {
    * enabled state (a disabled plugin's collections + their fields are
    * retained, D14/D49).
    */
-  fieldTypes?: Array<{
-    type: string;
-    component: string;
-    storage: FieldStoragePrimitive;
-    layout?: "takeover";
-    label?: string;
-    description?: string;
-    icon?: string;
-    category?: FieldTypeCategory;
-    surfaces?: readonly FieldSurface[];
-  }>;
+  fieldTypes?: PluginFieldTypeMeta[];
 }
 
 /**
@@ -212,8 +213,8 @@ export { pluginAdminSlug } from "./plugin-slug";
  */
 /**
  * Build the `plugins[]` admin-meta array from the registered plugins, applying
- * host `pluginOverrides` (placement/order/after/appearance) and folding each
- * enabled plugin's `contributes.admin` menu/pages/settings.
+ * host `pluginOverrides` (placement/order/after/landing/appearance) and
+ * folding each enabled plugin's `contributes.admin` menu/pages/settings.
  *
  * Disabled plugins (`enabled: false`) keep their entry (their schema still
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
@@ -261,35 +262,6 @@ function resolvedMenuItem(
     // from exactly the readers who can open the list.
     requiredPermission: `read-${slug}`,
   };
-}
-
-/**
- * The item's destination, pointed at the slug the host registered.
- *
- * Returns the declared `to` UNCHANGED when nothing was renamed. Naming a
- * collection is how an item opts into rename-safety and RBAC, not a request to
- * be sent somewhere canonical, so an item whose destination carries list state
- * — `?status=draft`, a hash, a sub-path — keeps it. Overwriting it made adding
- * `collection` to a working link change where that link went.
- *
- * When the slug DID move, only the collection segment is rewritten and
- * whatever followed it is carried across. A destination that does not address
- * the declared collection at all is left alone: the item named a collection so
- * its permission still moves, but a path this function does not recognise is
- * not one it should be inventing a new spelling for.
- */
-function retargetedTo(to: string, declared: string, resolved: string): string {
-  if (declared === resolved) return to;
-
-  const prefix = `/admin/collections/${declared}`;
-  const addressesTheList =
-    to === prefix ||
-    to.startsWith(`${prefix}/`) ||
-    to.startsWith(`${prefix}?`) ||
-    to.startsWith(`${prefix}#`);
-  if (!addressesTheList) return to;
-
-  return `/admin/collections/${resolved}${to.slice(prefix.length)}`;
 }
 
 /**
@@ -377,6 +349,38 @@ function listFiltersMeta(
   );
 }
 
+/** A plugin's collections, Singles and field groups, by registered slug. */
+export interface PluginEntitySlugs {
+  collections: string[];
+  singles: string[];
+  fieldGroups: string[];
+}
+
+/**
+ * The slugs a plugin's entities are registered under: each declared slug
+ * through the host's rename, as every list and link in the admin addresses
+ * them. A declared slug a host renamed names nothing the admin can find.
+ *
+ * One answer for the plugin metadata the admin reads and for the lists that
+ * separate the plugins' entities from the site's, so an entity a host renamed
+ * is the plugin's in both.
+ */
+export function pluginEntitySlugs(plugin: PluginDefinition): PluginEntitySlugs {
+  const renameMap = plugin.renameMap ?? {};
+  return {
+    collections: pluginCollectionSlugs(plugin).map(declared =>
+      renamedSlug(renameMap, declared)
+    ),
+    singles:
+      plugin.contributes?.singles?.map(s => renamedSlug(renameMap, s.slug)) ??
+      [],
+    fieldGroups:
+      plugin.contributes?.fieldGroups?.map(c =>
+        renamedSlug(renameMap, c.slug)
+      ) ?? [],
+  };
+}
+
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
   pluginOverrides: Record<string, PluginOverride> | undefined
@@ -406,6 +410,7 @@ export function buildPluginAdminMeta(
       : plugin.admin?.appearance;
 
     const isEnabled = plugin.enabled !== false;
+    const entities = pluginEntitySlugs(plugin);
 
     const meta: PluginAdminMeta = {
       name: plugin.name,
@@ -424,20 +429,20 @@ export function buildPluginAdminMeta(
       ...(plugin.dependsOn && Object.keys(plugin.dependsOn).length > 0
         ? { dependsOn: plugin.dependsOn }
         : {}),
-      placement:
-        hostOverride?.placement ?? plugin.admin?.placement ?? "plugins",
+      placement: resolvedPluginPlacement(plugin, hostOverride),
       order: hostOverride?.order ?? plugin.admin?.order,
       after: hostOverride?.after ?? plugin.admin?.after,
       appearance: effectiveAppearance,
-      collections: pluginCollectionSlugs(plugin),
+      // Registered slugs, through the host's rename (`pluginEntitySlugs`).
+      collections: entities.collections,
     };
 
     // Contributed singles/field-group slugs, so the detail page can list
     // everything the plugin adds without loading the plugin itself.
-    const singles = plugin.contributes?.singles?.map(s => s.slug) ?? [];
-    if (singles.length > 0) meta.singles = singles;
-    const fieldGroups = plugin.contributes?.fieldGroups?.map(c => c.slug) ?? [];
-    if (fieldGroups.length > 0) meta.fieldGroups = fieldGroups;
+    if (entities.singles.length > 0) meta.singles = entities.singles;
+    if (entities.fieldGroups.length > 0) {
+      meta.fieldGroups = entities.fieldGroups;
+    }
 
     // Serialized regardless of enabled state, on the same reasoning as
     // `fieldTypes` below: a disabled plugin keeps its collections and their
@@ -460,6 +465,12 @@ export function buildPluginAdminMeta(
     if (declared !== undefined) meta.translations = declared;
 
     // Behavioral admin UI only for enabled plugins.
+    // Resolved here so the admin follows the address and never re-derives it.
+    // An unknown landing is dropped in silence: this runs on every request,
+    // and start-up has already reported it (`pluginLandingWarnings`).
+    const landing = resolvePluginLanding(plugin, hostOverride);
+    if (isEnabled && landing.kind === "resolved") meta.landing = landing.href;
+
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
       if (admin.menu && admin.menu.length > 0) {
@@ -542,6 +553,8 @@ export function buildPluginAdminMeta(
         ...(ft.icon ? { icon: ft.icon } : {}),
         ...(ft.category ? { category: ft.category } : {}),
         ...(ft.surfaces ? { surfaces: ft.surfaces } : {}),
+        // Already refused at boot when malformed, so served as declared.
+        ...(ft.settings ? { settings: ft.settings } : {}),
       }));
     }
 

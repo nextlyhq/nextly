@@ -76,6 +76,10 @@ export class CollectionFileManager {
   private db: DatabaseInstance;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private schemaRegistry: Map<string, any> = new Map();
+  // The keys a caller registered a schema of its own under
+  // (`registerSchema(s)`), which `forgetBuiltSchemas` keeps: there may be no
+  // registry row to build them again from.
+  private callerSchemas = new Set<string>();
   private adapter?: DrizzleAdapter;
   private metadataFetcher?: CollectionMetadataFetcher;
 
@@ -101,7 +105,9 @@ export class CollectionFileManager {
   }
 
   registerSchema(collectionName: string, schema: unknown): void {
-    this.schemaRegistry.set(`dc_${collectionName.replace(/-/g, "_")}`, schema);
+    const key = `dc_${collectionName.replace(/-/g, "_")}`;
+    this.schemaRegistry.set(key, schema);
+    this.callerSchemas.add(key);
   }
 
   registerSchemas(schemas: Record<string, unknown>): void {
@@ -110,6 +116,7 @@ export class CollectionFileManager {
     });
     Object.entries(schemas).forEach(([key, schema]) => {
       this.schemaRegistry.set(key, schema);
+      this.callerSchemas.add(key);
       consoleLogger.info("[FileManager] Registered schema", { key });
     });
     consoleLogger.info("[FileManager] Registry now has", {
@@ -130,6 +137,21 @@ export class CollectionFileManager {
   // (built from the apply payload's `fields` list).
   refreshSchema(tableName: string, freshTable: unknown): void {
     this.schemaRegistry.set(tableName, freshTable);
+    // Built from the registry's fields now, so a later reload may build it again.
+    this.callerSchemas.delete(tableName);
+  }
+
+  /**
+   * Drop every table this cache built from registry rows (or was handed by a
+   * save), so each is built again from the rows as they now are on its next
+   * read. Called when the registry changed somewhere this process did not see:
+   * another server copy's save, a migration, the CLI. Schemas a caller
+   * registered itself are kept, since no registry row may describe them.
+   */
+  forgetBuiltSchemas(): void {
+    for (const key of [...this.schemaRegistry.keys()]) {
+      if (!this.callerSchemas.has(key)) this.schemaRegistry.delete(key);
+    }
   }
 
   /**

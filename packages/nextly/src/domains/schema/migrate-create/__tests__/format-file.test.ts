@@ -142,6 +142,41 @@ describe("formatMigrationFile", () => {
   });
 });
 
+// A header line names what a config or a plugin declares, text the generator does not write
+// itself: a line break in it would end the comment and leave the rest as a statement that
+// `nextly migrate` runs. Every header line stays one comment line.
+describe("a header line that names declared text", () => {
+  it.each([
+    [
+      "a permission change",
+      { permissionChanges: ["p: + export-reports\nDELETE FROM users"] },
+    ],
+    [
+      "a settings change",
+      { settingsChanges: ["posts: description\r\nDROP TABLE x"] },
+    ],
+  ])("keeps %s on one comment line", (_n, changes) => {
+    const out = formatMigrationFile({
+      name: "change",
+      dialect: "postgresql",
+      sqlStatements: [],
+      downSqlStatements: [],
+      collections: [],
+      singles: [],
+      components: [],
+      hasUserExt: false,
+      changesNoTable: true,
+      now: new Date("2026-04-29T15:45:00.123Z"),
+      ...changes,
+    });
+    const named = out
+      .split("\n")
+      .filter(line => /DELETE FROM users|DROP TABLE x/.test(line));
+    expect(named).toHaveLength(1);
+    expect(named[0]).toMatch(/^-- /);
+  });
+});
+
 describe("formatBlankFile", () => {
   it("emits a -- UP section and a -- DOWN placeholder, no body", () => {
     const out = formatBlankFile(

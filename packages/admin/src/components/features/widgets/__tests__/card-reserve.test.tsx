@@ -127,7 +127,7 @@ function skeletonAt(
   return boxes;
 }
 
-/** The body once an answer of `count` rows lands, at `tier`: more rows than it draws. */
+/** The body once an answer of `count` rows lands, at `tier`: the list draws every one of them. */
 function loadedAt(
   tier: Tier,
   count: number,
@@ -163,8 +163,9 @@ describe("a list card holds its rows' place in their own line boxes", () => {
     tier => {
       // 🔴 The skeleton the card used to draw was three plain bars at every tier: a medium
       // card then gained a detail line per row, a large one a table head, and every card the
-      // footer line, all at once, as the answer landed.
-      const loaded = loadedAt(tier, 11);
+      // footer line, all at once, as the answer landed. Five rows: the default number the
+      // skeleton holds, and the rows a load that read it answers.
+      const loaded = loadedAt(tier, 5);
       expect(loaded.length).toBeGreaterThan(0);
       expect(skeletonAt(tier, null)).toEqual(loaded);
     }
@@ -172,14 +173,14 @@ describe("a list card holds its rows' place in their own line boxes", () => {
 
   it("draws the same line boxes loading as loaded at compact density", () => {
     // The default five rows, each in a compact row's box, on both sides.
-    const loaded = loadedAt("medium", 11, "compact");
+    const loaded = loadedAt("medium", 5, "compact");
     expect(
       loaded.filter(box => box === "LIST_ROW_HEIGHT_CLASS.compact")
     ).toHaveLength(5);
     expect(skeletonAt("medium", null, "compact")).toEqual(loaded);
   });
 
-  it("lays a large card out as a table of its columns, and counts each tier's rows", () => {
+  it("lays a large card out as a table of its columns, and holds its Number of entries at every tier", () => {
     // The control that the comparison above compares something: the tiers draw differently.
     const rowsOf = (boxes: string[]) =>
       boxes.filter(
@@ -189,8 +190,9 @@ describe("a list card holds its rows' place in their own line boxes", () => {
       ).length;
     expect(skeletonAt("large", 5)).toContain("TABLE_HEADING_CLASS");
     expect(skeletonAt("small", 5)).not.toContain("TABLE_HEADING_CLASS");
-    expect(rowsOf(skeletonAt("small", 10))).toBe(3);
-    expect(rowsOf(skeletonAt("medium", 10))).toBe(5);
+    // 🔴 Counted by the tier, a small card held three of these ten and a medium one five.
+    expect(rowsOf(skeletonAt("small", 10))).toBe(10);
+    expect(rowsOf(skeletonAt("medium", 10))).toBe(10);
     expect(rowsOf(skeletonAt("large", 10))).toBe(10);
   });
 });
@@ -237,7 +239,18 @@ describe("the footer", () => {
       </WidgetCard>
     );
     const footer = screen.getByTestId("widget-card-footer");
-    expect(footer).toHaveClass("h-7");
+    expect(footer).toHaveClass("min-h-7");
     expect(footer).toHaveTextContent("");
+    expect(footer.className).not.toMatch(/:empty\]:hidden/);
+  });
+
+  it("takes no room once the answer is drawn with nothing for the footer", () => {
+    // Cards are as tall as their content: an empty footer under a drawn answer is not drawn.
+    render(<WidgetCard title="Note">body</WidgetCard>);
+    const footer = screen.getByTestId("widget-card-footer");
+    expect(footer).toHaveClass(
+      "has-[[data-testid=widget-card-footer-slot]:empty]:hidden"
+    );
+    expect(screen.getByTestId("widget-card-footer-slot")).toBeEmptyDOMElement();
   });
 });

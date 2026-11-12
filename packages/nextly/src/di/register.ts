@@ -69,6 +69,7 @@ import {
   getEmailProviderRegistry,
   resetEmailProviderRegistry,
 } from "../domains/email/services/email-provider-registry";
+import { judgeFieldGroupCyclesAtStart } from "../domains/field-groups/field-group-cycles";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
@@ -76,7 +77,10 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
-import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type {
+  LanguageAddressRule,
+  SanitizedLocalizationConfig,
+} from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
@@ -100,6 +104,9 @@ import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
+import { startAddressPhase } from "../domains/public-addresses/address-phase";
+import { assertConfiguredPublicAddresses } from "../domains/public-addresses/distinct-public-addresses";
+import { clearParticipants } from "../domains/public-addresses/participants";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
@@ -110,6 +117,7 @@ import {
   registerFieldType,
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
+import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import {
   holdRecordedAtStart,
   registryRows,
@@ -132,10 +140,8 @@ import type {
   SingleRegistryService,
   CodeFirstSingleConfig,
 } from "../domains/singles/services/single-registry-service";
-import { resolveVersionsConfig } from "../domains/versions/resolve-config";
 import type { VersionsService } from "../domains/versions/versions-service";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
-import { storedWebhookRecording } from "../domains/webhooks/builder-webhooks";
 import { resetWebhookActivation } from "../domains/webhooks/recording-activation";
 import {
   resetWebhookRecordingPolicy,
@@ -178,6 +184,7 @@ import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
+import { getNextlyLogger } from "../observability/logger";
 import { maskingServiceLogger } from "../observability/mask-emails";
 import {
   forgetCapabilityProviders,
@@ -209,11 +216,19 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
+import { pluginLandingWarnings } from "../plugins/plugin-landing";
 import {
   clearPluginDependencies,
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
+import {
+  clearProxyHandlers,
+  collectProxyHandlers,
+  markProxyHandlersReady,
+  registerProxyHandlers,
+  type CollectedProxyHandler,
+} from "../plugins/proxy/proxy-registry";
 import {
   resolveDeclaredPlugins,
   resolveTransformedPlugins,
@@ -243,12 +258,14 @@ import {
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
 import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
+import { resealPluginDigestKeys } from "../plugins/security/keyed-digest";
 import {
   clearPluginServices,
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { assertSettingsPermissionsOwned } from "../plugins/settings-permission";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { assertFieldTypeSettings } from "../plugins/validate-field-type-settings";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import {
   installTagExpiryLedger,
@@ -348,7 +365,7 @@ import {
 import { languageChangeContentCache } from "./registrations/language-change-content-cache";
 // Looking a service up needs only the container, so it lives apart from
 // this file and its every registration.
-import { getService } from "./service-access";
+import { announceServicesRegistered, getService } from "./service-access";
 
 // ============================================================
 // Configuration Interface
@@ -528,6 +545,13 @@ export interface NextlyServiceConfig {
    * populating localized fields from the companion `_locales` table.
    */
   localization?: SanitizedLocalizationConfig;
+
+  /**
+   * How each language's public address is formed, as the app declares it.
+   * Carried through so the address of a page in a language is answered from
+   * the running configuration.
+   */
+  languageAddresses?: LanguageAddressRule;
 
   /**
    * Resolved webhook retention policy, carried through so services can offer a
@@ -923,6 +947,9 @@ async function registerServicesOnce(
   // shutdown, and the config reload -- reaches the instance they went into
   // rather than whichever one happens to be global at the time.
   setActiveHookRegistry(hookRegistry);
+  // Core's public-address question joins this registry while any plugin
+  // keeps an address record (`ctx.publicAddresses.participate`).
+  startAddressPhase(hookRegistry);
 
   // Masked once here, whatever logger the app supplied: every service is
   // handed this one, so no line it writes carries a full email address
@@ -1016,7 +1043,8 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard
+    transformedConfig.admin?.dashboard,
+    transformedConfig.collections
   );
 
   // Every schema write a development start makes runs inside one hold of the
@@ -1154,6 +1182,7 @@ async function registerServicesOnce(
         }),
         schemasDir,
         migrationsDir,
+        deferredExtends,
         storage,
         mediaStorage,
         imageProcessor,
@@ -1210,6 +1239,10 @@ async function registerServicesOnce(
         logger: resolvedLogger,
       });
 
+      // After the boot migrations, which store a new version where they run:
+      // the database's schema version against the build's, read once.
+      await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
+
       // Review state recorded under an earlier configuration follows the workflows this boot
       // registered first: a detached collection's is removed, and renamed or mapped stages are
       // followed. Before the approvals are judged below, so a part a rename kept is judged under the
@@ -1261,6 +1294,13 @@ async function registerServicesOnce(
   // since rotated is sealed again under the current one while the previous
   // can still open it, so a message outlives any number of rotations.
   await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
+  // And every plugin digest key stored, a removed plugin's included, for the
+  // same reason: a digest stored beside a plugin's records must match for as
+  // long as they are kept.
+  await resealPluginDigestKeys(
+    getService("metaService"),
+    pluginSettingsSecrets(env)
+  );
 
   // In production, until the install has an administrator, setup needs a
   // token: an install with none gets one here, printed once to this output.
@@ -1342,6 +1382,9 @@ async function registerServicesOnce(
   // settled or refused, never pending.
 
   globalForReg.__nextly_isRegistered = true;
+  // Work a plugin started during the boot without awaiting it (an address
+  // catch-up, say) waits for this moment rather than failing before it.
+  announceServicesRegistered();
 
   // Re-point the handler store at the TRANSFORMED plugin list, and only now.
   //
@@ -1565,6 +1608,12 @@ function validateBootContributions(
     transformedPlugins
   );
 
+  // Fail fast on a public address that breaks the template rule, or two
+  // Singles at one address. Asked of the merged configuration, since a
+  // plugin's types reach it without passing through `defineCollection` or
+  // `defineSingle`, and a plugin must not take a page the site declares.
+  assertConfiguredPublicAddresses(transformedConfig);
+
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
   collectRoles(transformedConfig, transformedPlugins);
@@ -1578,6 +1627,8 @@ function validateBootContributions(
   // again there.
   const pluginBootContributions: PluginBootContributions = {
     routes: collectPluginRoutes(transformedPlugins),
+    // A proxy handler with no name or no `handle` fails the boot here too.
+    proxy: collectProxyHandlers(transformedPlugins),
   };
 
   registerPluginFieldTypes(transformedPlugins);
@@ -1609,6 +1660,9 @@ function validateBootContributions(
  * boot; fail-fast on collision.
  */
 function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
+  // A type's declared settings are checked before any type is registered, so
+  // a malformed list refuses boot naming the plugin, not a panel control later.
+  assertFieldTypeSettings(plugins);
   clearFieldTypes();
   for (const fieldTypePlugin of plugins) {
     for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
@@ -1617,7 +1671,10 @@ function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
   }
 }
 
-/** Name the boot's plugins, and warn about any without a description. */
+/**
+ * Name the boot's plugins, and warn about any without a description, and in
+ * development about a landing a plugin or the site names wrongly or leaves out.
+ */
 function logRegisteredPlugins(
   transformedConfig: NextlyServiceConfig,
   logger: Logger
@@ -1634,6 +1691,18 @@ function logRegisteredPlugins(
   // plugin author's and breaks nothing, and an operator cannot fix a
   // third-party package from their own config.
   warnUndescribedPlugins(transformedConfig.plugins, logger);
+
+  // Once per start, here rather than in the admin metadata, which is built on
+  // every request. Reported in development only and never thrown: the value
+  // is already ignored everywhere, and a rail item that opens a menu item
+  // still works.
+  for (const warning of pluginLandingWarnings(
+    transformedConfig.plugins,
+    transformedConfig.admin?.pluginOverrides,
+    process.env.NODE_ENV
+  )) {
+    getNextlyLogger().warn(warning);
+  }
 }
 
 /**
@@ -1948,6 +2017,14 @@ async function reconcileBuilderTargets<T>(
     builderEntities,
     table => adapter.tableExists(table)
   );
+  // Field groups placed in a cycle, judged over code and the Builder's field groups as this start
+  // reconciled them, plugin extensions included, before anything below writes.
+  judgeFieldGroupCyclesAtStart({
+    code: transformedConfig.fieldGroups ?? [],
+    registered: entities.components ?? [],
+    stored: builderEntities.components ?? [],
+    warn: message => logger.warn(message),
+  });
 
   // Only touch the DB for entities whose merged field set actually differs
   // from what's persisted — keeps an unchanged/plugin-free boot write-free and
@@ -2179,6 +2256,9 @@ async function addMissingCompanionColumns(
       },
     });
   }
+  // What the reconcile reports, kept apart from the create's: the create's failure has already been
+  // thrown above, so a check of it here would always read nothing.
+  let reconcileFailure: unknown;
   const inStep = await reconcileCompanionColumns(
     ctx.adapter,
     {
@@ -2190,12 +2270,12 @@ async function addMissingCompanionColumns(
       status: entity.status,
     },
     error => {
-      failure = error;
+      reconcileFailure = error;
     }
   );
   if (inStep) return;
   throw NextlyError.internal({
-    ...(failure instanceof Error ? { cause: failure } : {}),
+    ...(reconcileFailure instanceof Error ? { cause: reconcileFailure } : {}),
     logContext: {
       reason: "builder-companion-columns-failed",
       slug: entity.slug,
@@ -2568,6 +2648,39 @@ async function runBootMigrations(
 }
 
 /**
+ * Layer 6.6: the database's schema version against the build's, in
+ * production only.
+ *
+ * One read of the stored version (`reportSchemaVersionAtStart`), and a
+ * warning where the database is behind the build, naming `nextly migrate`,
+ * or a note where it is ahead. Nothing is written and nothing refused: the
+ * app serves whichever way they stand. A development start reaches its schema
+ * through the Builder and the code-first sync as they change, and compares
+ * nothing here.
+ */
+async function reportStartSchemaVersion(
+  adapter: DrizzleAdapter,
+  adapterDrizzleDb: DatabaseInstance,
+  logger: Logger
+): Promise<void> {
+  if (process.env.NODE_ENV !== "production") return;
+  const [{ reportSchemaVersionAtStart }, { buildSchemaVersion }] =
+    await Promise.all([
+      import("../domains/schema/schema-version"),
+      import("../domains/schema/build-schema-version"),
+    ]);
+  await reportSchemaVersionAtStart({
+    db: adapterDrizzleDb,
+    dialect: adapter.dialect,
+    build: buildSchemaVersion(),
+    logger: {
+      warn: message => logger.warn(message),
+      info: message => logger.info(message),
+    },
+  });
+}
+
+/**
  * Layer 6.75: schemaVersion gate, BEFORE any plugin initialises.
  *
  * A plugin whose code expects a schema the database has not applied would
@@ -2903,6 +3016,7 @@ function bindDirectApi(): void {
  */
 interface PluginBootContributions {
   routes: CollectedRoute[];
+  proxy: CollectedProxyHandler[];
 }
 
 /**
@@ -3731,12 +3845,9 @@ async function syncCodeFirstCollections(
   // Provenance (D14): tag each collection by who contributed it. A slug that a
   // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
   // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
-  const sourceBySlug = new Map<string, CollectionSource>();
-  for (const plugin of transformedConfig.plugins ?? []) {
-    for (const contributed of plugin.contributes?.collections ?? []) {
-      sourceBySlug.set(contributed.slug, `plugin:${plugin.name}`);
-    }
-  }
+  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
+  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
+    pluginCollectionSources(transformedConfig.plugins ?? []);
 
   // The projection every sync route shares, so what boot stores and publishes
   // for a collection is what reload and `db:sync` store and publish for it.
@@ -4026,20 +4137,15 @@ async function syncCodeFirstComponents(
     "fieldGroupRegistryService"
   );
 
+  // The one projection from a config entry to the sync payload, shared with
+  // `nextly migrate` so both write a component's row the same way. Loaded
+  // here, as the registry service is elsewhere in this file, rather than with
+  // this module.
+  const { toCodeFirstComponentConfig } = await import(
+    "../domains/field-groups/services/field-group-registry-service"
+  );
   const codeFirstComponentConfigs: CodeFirstComponentConfig[] =
-    transformedConfig.fieldGroups.map(comp => ({
-      slug: comp.slug,
-      label:
-        comp.label?.singular ??
-        comp.slug.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
-      fields: comp.fields,
-      description: comp.description,
-      admin: comp.admin,
-      configPath: `${STORAGE_FORMAT.configPathDir}/${comp.slug}.ts`,
-      // i18n: forward the localized flag from defineFieldGroup so the registry persists
-      // it and the companion is provisioned for embedded per-language values.
-      localized: (comp as { localized?: boolean }).localized === true,
-    }));
+    transformedConfig.fieldGroups.map(comp => toCodeFirstComponentConfig(comp));
 
   const componentSyncResult = await componentRegistry.syncCodeFirstComponents(
     codeFirstComponentConfigs
@@ -4237,37 +4343,15 @@ async function syncCodeFirstSingles(
     "singleRegistryService"
   );
 
+  // The one projection from a config entry to the sync payload, shared with
+  // `nextly migrate` so both write a Single's row the same way. Loaded here,
+  // as the registry service is elsewhere in this file, rather than with this
+  // module.
+  const { toCodeFirstSingleConfig } = await import(
+    "../domains/singles/services/single-registry-service"
+  );
   const codeFirstSingleConfigs: CodeFirstSingleConfig[] =
-    transformedConfig.singles.map(single => ({
-      slug: single.slug,
-      label:
-        single.label?.singular ??
-        single.slug
-          .split("-")
-          .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-          .join(" "),
-      fields: single.fields,
-      description: single.description,
-      tableName: single.dbName,
-      admin: single.admin,
-      // Forward Draft/Published flag from code-first config so the boot-time
-      // sync persists it to dynamic_singles.status.
-      status: single.status === true,
-      // Forward the i18n flag so a code-first single with localized:true
-      // persists it to dynamic_singles.localized at boot (parity with
-      // collections; previously dropped here).
-      localized: single.localized === true,
-      // Resolve + forward the versioning config so it persists to
-      // dynamic_singles.versions (status:true aliases to a versioned config).
-      versions: resolveVersionsConfig(single.versions, single.status),
-      // Forward the cache-revalidation config verbatim so it persists to
-      // dynamic_singles.revalidate; the write path reads it to honor `disable`
-      // and merge extra `tags`.
-      revalidate: single.revalidate,
-      // Mirror the recording opt-out onto the registry row (same reason as
-      // collections).
-      webhooks: storedWebhookRecording(single.webhooks),
-    }));
+    transformedConfig.singles.map(single => toCodeFirstSingleConfig(single));
 
   // Declared out here so the per-single failures can be judged AFTER the catch
   // below. Judged inside it, the refusal this raises would be caught by the
@@ -4722,6 +4806,9 @@ async function initializePlugins(
   hookRegistry: HookRegistry | undefined
 ): Promise<Array<{ plugin: PluginDefinition; context: PluginContext }>> {
   const plugins = transformedConfig.plugins ?? [];
+  // Before the early return: a boot with no plugin left must not keep an
+  // earlier boot's proxy handlers answering requests.
+  clearProxyHandlers();
   if (plugins.length === 0) return [];
 
   const collectedRoutes = contributions.routes;
@@ -4790,6 +4877,7 @@ async function initializePlugins(
       | JobRegistry
       | JobsPassDatabase
       | WebhookFastDrainScheduler
+      | MetaService
       | null
   > = {
     collectionService: () =>
@@ -4843,6 +4931,9 @@ async function initializePlugins(
             "webhookFastDrainScheduler"
           )
         : null,
+    // This registration's `nextly_meta`, where each plugin's sealed digest
+    // key is kept.
+    metaService: () => services.container.get<MetaService>("metaService"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
@@ -4901,6 +4992,9 @@ async function initializePlugins(
    * plugin's failure to clean up must not spare the others'.
    */
   const destroyInitializedPlugins = async (): Promise<void> => {
+    // The proxy handlers registered so far belong to plugins about to be
+    // destroyed: the Proxy must not run them against a failed boot.
+    clearProxyHandlers();
     for (let i = initialized.length - 1; i >= 0; i -= 1) {
       const { plugin, context } = initialized[i];
       if (!plugin.destroy) continue;
@@ -5071,6 +5165,13 @@ async function initializePlugins(
     logger.info?.(`Registered ${collectedRoutes.length} plugin route(s)`);
   }
 
+  // The proxy handlers, each with its plugin's context, registered with the
+  // routes so they too are rebuilt on every boot rather than accumulated.
+  registerProxyHandlers(
+    contributions.proxy,
+    new Map(teardown.map(t => [t.plugin.name, t.context]))
+  );
+
   // PASS 3 — `onReady`, after every plugin's init AND after the route registry
   // is rebuilt, so a plugin reading the assembled system sees all of it. In
   // topological order like init, so a plugin still observes its dependencies
@@ -5106,6 +5207,9 @@ async function initializePlugins(
     }
   }
 
+  // Every plugin is ready, so the Proxy may now run their handlers; until
+  // here it lets each request through as the page alone.
+  markProxyHandlersReady();
   return teardown;
 }
 
@@ -5125,6 +5229,8 @@ async function initializePlugins(
  */
 function clearActiveHookRegistry(): void {
   getActiveHookRegistry().clear();
+  // Participants were added by the plugins torn down with these hooks.
+  clearParticipants();
   setActiveHookRegistry(undefined);
   // Nothing is initialized in a process whose services have been cleared, and a
   // stale list would let the next reload treat a plugin as started.
@@ -5243,6 +5349,9 @@ async function releaseServices(opts: {
     consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
+    // The proxy handlers close over the released plugins' contexts, so they
+    // go with them; the Proxy stands aside until a start registers new ones.
+    clearProxyHandlers();
     // The recording policy is a process-global registry, so it must be cleared
     // with the container — otherwise a later instance where a slug is only
     // DB/Builder-backed inherits a prior instance's stale opt-out and silently

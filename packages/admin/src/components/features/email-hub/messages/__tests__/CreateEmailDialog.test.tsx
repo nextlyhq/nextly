@@ -30,7 +30,7 @@ describe("CreateEmailDialog", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Create email" }));
     expect(navigateTo).toHaveBeenCalledWith(
-      "/admin/email/messages/create?name=Back-in-stock+alert"
+      "/admin/settings/email/messages/create?name=Back-in-stock+alert"
     );
   });
 
@@ -53,7 +53,7 @@ describe("CreateEmailDialog", () => {
 
   it("carries the email to copy", () => {
     expect(createRouteFor("Order shipped copy", "tpl_1")).toBe(
-      "/admin/email/messages/create?name=Order+shipped+copy&duplicate=tpl_1"
+      "/admin/settings/email/messages/create?name=Order+shipped+copy&duplicate=tpl_1"
     );
   });
 });

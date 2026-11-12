@@ -33,7 +33,8 @@ import { storedFieldConfigurationTables } from "./slug-columns";
 
 /** A registry row as this reads it. */
 interface RegistryRow {
-  id: unknown;
+  /** Every registry's primary key is text. */
+  id: string;
   slug: unknown;
   source: unknown;
   fields: unknown;
@@ -82,7 +83,7 @@ function visitFields(
     if (!isRecord(field)) continue;
     const name = `${path}.${isSlug(field.name) ? field.name : "?"}`;
     visit(field, name);
-    const nested = subFieldsOf(field as FieldConfig);
+    const nested = subFieldsOf(field);
     if (nested) visitFields(nested, name, visit);
   }
 }
@@ -119,7 +120,7 @@ export function retargeted(
       if (!isRecord(field)) return field;
       const next = retargetedField(field, from, to);
       if (next !== field) changed = true;
-      const nested = subFieldsOf(next as FieldConfig);
+      const nested = subFieldsOf(next);
       return nested ? { ...next, fields: visit(nested) } : next;
     });
   const result = visit(fields);

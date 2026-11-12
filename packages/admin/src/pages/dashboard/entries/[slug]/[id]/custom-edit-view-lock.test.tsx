@@ -9,10 +9,11 @@
  * @module pages/dashboard/entries/[slug]/[id]/custom-edit-view-lock.test
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useReportUnsavedWork } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import type { UpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import {
@@ -122,9 +123,6 @@ vi.mock("@admin/hooks/useTranslationMode", () => ({
     enterTranslationMode: vi.fn(),
     exitTranslationMode: vi.fn(),
   }),
-}));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
 }));
 
 import EditEntryPage from "./index";
@@ -636,5 +634,155 @@ describe("a custom edit view that gains the entry", () => {
     view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
 
     expect(await screen.findByText("editing Ada's post")).toBeInTheDocument();
+  });
+});
+
+describe("a site collection's own edit view", () => {
+  // The site's own collection names its view relative to its config, and the
+  // generated component map registers it under exactly that path. Nothing else
+  // loads it: the admin imports no module by name.
+  const SITE_VIEW = "./views/orders#OrderEditor";
+
+  it("draws in place of the default editor once the map has registered it", () => {
+    registerComponent(SITE_VIEW, () => <div>site order editor</div>);
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("site order editor")).toBeInTheDocument();
+    expect(entryFormProps).toBeUndefined();
+  });
+
+  it("leaves the default editor when the map does not register it, and nothing loads it later", async () => {
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(entryFormProps).toBeDefined();
+    // Given every chance to: a run-time import resolved in a later task.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByText("site order editor")).toBeNull();
+    expect(entryFormProps).toBeDefined();
+  });
+});
+
+describe("a custom edit view with pages of its own", () => {
+  /** The view's pages, each a document view that draws the view itself. */
+  function withPages() {
+    registerDocumentViews([
+      { slug: "posts", path: "settings", component: CUSTOM_VIEW },
+      { slug: "posts", path: "preview", component: CUSTOM_VIEW },
+    ]);
+  }
+
+  it("draws the view at each page's address, told which page, and keeps it mounted from page to page", () => {
+    let mounts = 0;
+    registerComponent(CUSTOM_VIEW, (props: Record<string, unknown>) => {
+      // Counted once per mount: a remount would lose what the view holds.
+      useState(() => (mounts += 1));
+      customViewProps = props;
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    withPages();
+
+    const page = renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "settings" }} />
+    );
+    // The view draws its own page; the form hosts nothing.
+    expect(screen.getByText("bespoke product editor")).toBeInTheDocument();
+    expect(entryFormProps).toBeUndefined();
+    expect(customViewProps?.view).toBe("settings");
+    // It is the document's editor, so it claims the document.
+    expect(claimRequest()).toMatchObject({ enabled: true });
+
+    page.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(customViewProps?.view).toBeUndefined();
+    page.rerender(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "preview" }} />
+    );
+    expect(customViewProps?.view).toBe("preview");
+    expect(mounts).toBe(1);
+  });
+
+  it("leaves a view drawing another component to the form", () => {
+    // The control: only a view whose component IS the edit view is one of
+    // its pages.
+    registerDocumentViews([
+      { slug: "posts", path: "settings", component: "@acme/other#View" },
+    ]);
+    withCustomView();
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "settings" }} />
+    );
+    expect(screen.queryByText("bespoke product editor")).toBeNull();
+    expect(entryFormProps?.documentView).toMatchObject({
+      component: "@acme/other#View",
+    });
+  });
+
+  it("asks before leaving while the view holds unsaved work, but not to move between its pages", async () => {
+    registerComponent(CUSTOM_VIEW, () => {
+      useReportUnsavedWork("product", true);
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    withPages();
+    window.history.pushState(null, "", "/admin/collections/posts/42");
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    // One of the view's own pages: the same document, so not asked about.
+    act(() => {
+      window.history.pushState(
+        null,
+        "",
+        "/admin/collections/posts/42/settings"
+      );
+    });
+    expect(window.location.pathname).toBe(
+      "/admin/collections/posts/42/settings"
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // Away from the document: held, and asked about.
+    act(() => {
+      window.history.pushState(null, "", "/admin/collections/posts");
+    });
+    expect(window.location.pathname).toBe(
+      "/admin/collections/posts/42/settings"
+    );
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("lets a view with nothing unsaved leave without asking", () => {
+    // The control for the case above: the page asks only because the view
+    // said it holds work.
+    registerComponent(CUSTOM_VIEW, () => {
+      useReportUnsavedWork("product", false);
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    window.history.pushState(null, "", "/admin/collections/posts/42");
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    act(() => {
+      window.history.pushState(null, "", "/admin/collections/posts");
+    });
+    expect(window.location.pathname).toBe("/admin/collections/posts");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

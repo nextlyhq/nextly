@@ -8,9 +8,11 @@
  * @since 0.1.0
  */
 
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 import {
+  type AuthUser,
   definePlugin,
   type HookContext,
   NextlyError,
@@ -28,6 +30,39 @@ import {
   asSubmissionDocument,
   asSubmissionDocuments,
 } from "./document-shapes";
+import { submissionAnswers } from "./emails/answers";
+import { formsEmailTemplates } from "./emails/starter-messages";
+import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
+import {
+  botCheckDefaults,
+  botCheckHosts,
+  botCheckOptions,
+  botTokensOf,
+  judgeBotCheck,
+  warnUncheckedBotChecks,
+} from "./handlers/bot-check";
+import {
+  registerFormClosing,
+  respondedRefusal,
+} from "./handlers/form-closing-hold";
+import {
+  browserTokenOf,
+  responseKeyAfterUpdate,
+  responseKeyOf,
+  touchesResponseKey,
+} from "./handlers/one-response";
+import { refuseOneResponseFieldProblem } from "./handlers/one-response-field-check";
+import {
+  oneResponseOptions,
+  REBUILD_KEYS_JOB,
+  REBUILD_ON_SAVE_MS,
+  rebuildInSave,
+  type RebuildDeps,
+  rebuildAfterSave,
+  rebuildKeysJob,
+  rebuildResponseKeys,
+  stampOneResponseVersion,
+} from "./handlers/one-response-rebuild";
 import {
   sameSubmittedPayload,
   submissionMarks,
@@ -47,6 +82,7 @@ import type {
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
+import { normalizeFormSettings } from "./utils/form-settings";
 import { normalizeRedirectRelationships } from "./utils/redirect-target";
 import {
   SCHEMA_ONLY_CONTEXT,
@@ -132,9 +168,11 @@ function resolveConfig(
       enabled: options.notifications?.enabled ?? true,
     },
 
+    oneResponse: oneResponseOptions(options.oneResponse),
+
     spamProtection: {
       honeypot: options.spamProtection?.honeypot ?? true,
-      recaptcha: options.spamProtection?.recaptcha ?? { enabled: false },
+      ...botCheckOptions(options.spamProtection),
       rateLimit: {
         maxSubmissions: options.spamProtection?.rateLimit?.maxSubmissions ?? 10,
         windowMs: options.spamProtection?.rateLimit?.windowMs ?? 60_000,
@@ -218,10 +256,20 @@ export function formBuilder(
     () => installedSubmissionsSlug
   );
 
+  // The bot-check providers the plugin verifies tokens with: declared only
+  // for a provider whose secret is set, so a site using neither gives the
+  // plugin no network access.
+  const outbound = botCheckHosts(resolvedConfig.spamProtection);
+
+  // What the one-response sweep reads and writes with, once `init` has the
+  // live context; until then a pass defers its work to the next.
+  let rebuildDeps: RebuildDeps | undefined;
+
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
     version: PLUGIN_VERSION,
     nextly: ">=0.0.2-alpha.21",
+    ...(outbound.length > 0 ? { capabilities: { net: { outbound } } } : {}),
     // Identity metadata for the admin plugins page, mirroring package.json.
     author: "Nextly",
     homepage: "https://nextlyhq.com",
@@ -234,10 +282,34 @@ export function formBuilder(
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
       collections: [formsCol, submissionsCol],
+      // Gives earlier submissions their one-response keys after a form
+      // changes how it tells people apart.
+      jobs: [
+        rebuildKeysJob(async deadline => {
+          if (rebuildDeps) await rebuildResponseKeys(rebuildDeps, deadline);
+        }),
+      ],
       // New form submissions, the one plugin widget core's default dashboard
       // names. Contributed, never suggested: where it goes is core's default's
       // to say, and a site's own default may leave it out.
       dashboard: { widgets: [newSubmissions] },
+      // Each page of the form editor (Preview, Settings, Notifications,
+      // Submissions) at an address of its own under the form's. Every one
+      // draws the form editor itself, so the admin hands the editor the page
+      // and keeps it mounted from tab to tab; Builder is the edit address.
+      admin: {
+        views: {
+          [resolvedConfig.formOverrides.slug]: {
+            documentViews: addressedFormPages().map(page => ({
+              ...page,
+              component: FORM_EDITOR_VIEW,
+            })),
+          },
+        },
+      },
+      // The team's and the visitor's starter emails, so a new notification has
+      // a message to send from the start; a site edits them in Settings › Email.
+      emailTemplates: formsEmailTemplates(),
       // A visitor submits a form without an account, so the Public role, the
       // role visitors are judged by, may create submissions. Granted once;
       // an owner who takes it away closes public submissions for good.
@@ -407,6 +479,7 @@ export function formBuilder(
                   honeypot: resolvedConfig.spamProtection.honeypot,
                   recaptchaEnabled:
                     resolvedConfig.spamProtection.recaptcha?.enabled ?? false,
+                  ...botCheckDefaults(resolvedConfig.spamProtection),
                 },
                 // Runtime-resolved collection slugs (through ctx.self, so a
                 // framework .rename() is honored too) — admin components
@@ -461,6 +534,11 @@ export function formBuilder(
         nextly.self.collections[declaredSubmissionsSlug] ??
         declaredSubmissionsSlug;
       installedSubmissionsSlug = submissionSlug;
+
+      // The plugin's digest key, made and read now, at start: a submission's
+      // one-response key is taken inside its write's transaction, where a
+      // first use is refused.
+      await nextly.security.digests.prepare();
 
       // Hook/event subscriptions are idempotent across HMR — the platform
       // clears a plugin's prior subscriptions before re-init (B2), so the old
@@ -608,6 +686,78 @@ export function formBuilder(
         return ctx.data;
       });
 
+      // A bot check in use with no secret accepts submissions unchecked:
+      // said once at start, naming the option, without holding the start up.
+      void warnUncheckedBotChecks({
+        spam: resolvedConfig.spamProtection,
+        forms: async () =>
+          (
+            await nextly.services.ownCollections.listEntries(formsSlug, {
+              pagination: { limit: 500 },
+            })
+          ).data ?? [],
+        readSettings: normalizeFormSettings,
+        warn: (message, context) => nextly.logger.warn?.(message, context),
+      });
+
+      // A form saved to compare one response per email has an Email field
+      // it can compare, however it is saved.
+      nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
+        refuseOneResponseFieldProblem(context);
+        return (context as { data?: unknown }).data;
+      });
+
+      // One response per person after a form changes how it tells people
+      // apart: the save moves the form's version on, and once it commits the
+      // earlier submissions are given keys for it (`one-response-rebuild`).
+      rebuildDeps = {
+        collections: nextly.services.collections,
+        digests: () => nextly.security.digests,
+        formsSlug,
+        submissionsSlug: submissionSlug,
+      };
+      nextly.hooks.on("beforeChange", formsSlug, async (context: unknown) => {
+        await stampOneResponseVersion(context, async formId =>
+          keysFitInSave(
+            nextly,
+            submissionSlug,
+            formId,
+            resolvedConfig.oneResponse.keysInSave
+          )
+        );
+        return (context as { data?: unknown }).data;
+      });
+      // A form small enough is given its keys inside the save's own
+      // transaction; a larger one by the sweep, started once the save commits.
+      nextly.hooks.onInTransaction(formsSlug, write =>
+        rebuildInSave(
+          {
+            own: nextly.services.ownCollections,
+            collections: nextly.services.collections,
+            digests: () => nextly.security.digests,
+            submissionsSlug: submissionSlug,
+          },
+          write
+        )
+      );
+      nextly.hooks.on("afterUpdate", formsSlug, (context: unknown) =>
+        rebuildAfterSave(
+          context,
+          () =>
+            nextly.services.jobs.runSweepNow(REBUILD_KEYS_JOB, {
+              maxDurationMs: REBUILD_ON_SAVE_MS,
+            }),
+          (message, context) => nextly.logger.warn?.(message, context)
+        )
+      );
+
+      // Each form's closing time and limit, held inside the transaction that
+      // stores a submission, whatever stores it.
+      registerFormClosing(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
+      });
+
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").
       nextly.hooks.on("afterRead", formsSlug, (context: unknown) =>
@@ -753,9 +903,18 @@ export function buildNotificationEmails(input: {
   formName: unknown;
   submissionId: unknown;
   defaultFrom?: string;
+  /**
+   * The form's fields, which turn the answers into `_submission.answers`, the
+   * list the starter messages loop over. Absent, the list is empty and
+   * templates that name answers by field (`{{ full_name }}`) still read them
+   * as before.
+   */
+  fields?: readonly AnyFormField[];
 }): { emails: FormEmailNotification[]; skipped: SkippedNotification[] } {
   const { notifications, submittedData, formName, submissionId, defaultFrom } =
     input;
+  // Built once: every notification of a submission lists the same answers.
+  const answers = submissionAnswers(input.fields ?? [], submittedData);
 
   const seen = new Set<string>();
   const emails: FormEmailNotification[] = [];
@@ -824,10 +983,14 @@ export function buildNotificationEmails(input: {
     emails.push({
       to,
       templateSlug: notification.templateSlug,
+      // `_submission` holds the answers by label and the id. A field name must
+      // start with a letter, so no submitted field can share this name, and
+      // every field still reaches templates under its own name as before.
       variables: {
         ...submittedData,
         formName,
         submissionId,
+        _submission: { id: submissionId, answers },
       },
       providerId: notification.providerId,
       from,
@@ -960,6 +1123,106 @@ function updateNeedsChecking(
   );
 }
 
+/**
+ * Whether a form has few enough non-spam submissions for a change of its
+ * one-response setting to give them keys inside the save.
+ */
+async function keysFitInSave(
+  nextly: NextlyInstance,
+  submissionsSlug: string,
+  formId: string,
+  limit: number
+): Promise<boolean> {
+  const count = await nextly.services.collections.count(
+    submissionsSlug,
+    { where: { form: { equals: formId }, status: { not_equals: "spam" } } },
+    // Elevated: every submission counts, whoever is saving the form.
+    { as: "system" }
+  );
+  return count <= limit;
+}
+
+/**
+ * On a form that keeps no addresses, compare a keyed submission's address
+ * with the earlier submissions' before it is dropped: the hold compares
+ * stored addresses, and this one will have none. An earlier submission with
+ * the address but without a key for the current version (one stored before
+ * the form stopped keeping addresses, while its keys are made) would
+ * otherwise let the network respond again. Read outside the form's lock,
+ * which is enough: the earlier submissions it guards against are not being
+ * written, and new ones race on their keys, which the unique index decides.
+ */
+async function refuseEarlierAddress(
+  settings: { oneResponse?: string; storeIpAndBrowser?: boolean },
+  ctx: { collection?: string; data?: Record<string, unknown> },
+  formId: string,
+  nextly: NextlyInstance
+): Promise<void> {
+  const row = ctx.data;
+  if (settings.storeIpAndBrowser !== false || settings.oneResponse !== "ip") {
+    return;
+  }
+  if (typeof row?.ipAddress !== "string" || !row.responseKey) return;
+  const earlier = await nextly.services.collections.count(
+    ctx.collection ?? "form-submissions",
+    {
+      where: {
+        form: { equals: formId },
+        ipAddress: { equals: row.ipAddress },
+        status: { not_equals: "spam" },
+      },
+    },
+    // Elevated: the earlier submission counts whoever may read it.
+    { as: "system" }
+  );
+  if (earlier > 0) throw respondedRefusal(formId);
+}
+
+/**
+ * A form that keeps no IP address or browser (Settings › Privacy) stores
+ * neither with a new submission. Cleared after the one-response key is made,
+ * so one per network still compares the address, by its keyed digest only.
+ */
+function withholdAddress(
+  settings: { storeIpAndBrowser?: boolean },
+  row: Record<string, unknown>
+): void {
+  if (settings.storeIpAndBrowser !== false) return;
+  row.ipAddress = null;
+  row.userAgent = null;
+}
+
+/**
+ * A request's address as the server judged it, never one the caller posted:
+ * the collection grants public create, and a posted address would choose the
+ * network one response per person compares. A create no request produced
+ * (an import) keeps the address it was given.
+ */
+function stampRequestAddress(
+  ctx: { operation?: string; req?: { http?: { ip: string | null } } },
+  row: Record<string, unknown>
+): void {
+  if (ctx.operation === "create" && ctx.req?.http) {
+    row.ipAddress = ctx.req.http.ip ?? null;
+  }
+}
+
+/**
+ * The plugin's own write of a one-response key it made (`setKey`): the
+ * key is written and nothing else is done to the patch. Whether `row` was one.
+ */
+function pluginKeyWrite(
+  operation: string | undefined,
+  row: Record<string, unknown>,
+  stored: Record<string, unknown> | undefined
+): boolean {
+  const key = submissionMarks(row)?.setKey;
+  if (operation !== "update" || key === undefined) return false;
+  // Spam holds no key, whatever was decided before it was marked.
+  row.responseKey = stored?.status === "spam" ? null : key;
+  return true;
+}
+
 export async function prepareSubmissionForWrite(
   context: unknown,
   formsSlug: string,
@@ -969,11 +1232,18 @@ export async function prepareSubmissionForWrite(
     data?: Record<string, unknown>;
     operation?: string;
     originalData?: Record<string, unknown>;
+    collection?: string;
     user?: { id?: string };
     req?: { http?: { ip: string | null; method: string } };
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
+  if (pluginKeyWrite(ctx.operation, submission, ctx.originalData)) {
+    return submission;
+  }
+  // A submission's one-response key is the plugin's to write, never a
+  // caller's: one posting a key could take a value's place before its owner.
+  delete submission.responseKey;
   const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
@@ -983,6 +1253,8 @@ export async function prepareSubmissionForWrite(
   if (!formId) return ctx.data;
 
   if (ctx.operation !== "create" && !updateNeedsChecking(submission, stored)) {
+    // A status change still moves the key: spam gives it back.
+    await rekeyAfterUpdate(ctx, formsSlug, formId, nextly);
     return ctx.data;
   }
 
@@ -1006,7 +1278,7 @@ export async function prepareSubmissionForWrite(
   // server that is importing ten thousand rows as one.
   const spam =
     ctx.operation === "create" && ctx.req?.http
-      ? await judgeSubmission(incoming, form, ctx.req.http, nextly)
+      ? await judgeSubmission(incoming, form, ctx.req.http, nextly, marks)
       : undefined;
 
   if (spam?.reason === "rate_limit") {
@@ -1055,7 +1327,171 @@ export async function prepareSubmissionForWrite(
   if (ctx.operation !== "create" && submission.data === undefined) {
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
+  stampRequestAddress(ctx, ctx.data);
+  if (ctx.operation === "create") {
+    // Made from what is stored, after the spam verdict: spam takes no key.
+    // The browser token is the one answer the row does not keep, so it comes
+    // from the handler that read it, or the payload at every other door.
+    const settings = normalizeFormSettings(form.settings);
+    const browserToken = marks?.browserToken ?? browserTokenOf(incoming);
+    ctx.data.responseKey = await responseKeyOf(
+      () => nextly.security.digests,
+      settings,
+      { ...ctx.data, browserToken }
+    );
+    warnTokenless(settings, browserToken, ctx, formId, nextly);
+    await refuseEarlierAddress(settings, ctx, formId, nextly);
+    withholdAddress(settings, ctx.data);
+  } else {
+    await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
+  }
   return ctx.data;
+}
+
+/**
+ * Say so when a visitor's submission reaches a form taking one response per
+ * browser without the browser's token: it is accepted, as a browser that
+ * cleared its data is, and nothing stops that visitor sending another. Left
+ * silent, a site whose form script does not send the token would never learn
+ * the setting has no effect.
+ */
+function warnTokenless(
+  settings: { oneResponse?: string },
+  browserToken: string | undefined,
+  ctx: { req?: { http?: unknown }; data?: Record<string, unknown> },
+  formId: string,
+  nextly: NextlyInstance
+): void {
+  if (settings.oneResponse !== "browser" || browserToken !== undefined) return;
+  if (!ctx.req?.http || ctx.data?.status === "spam") return;
+  nextly.logger.warn?.(
+    "A submission to a form taking one response per browser came without the browser's token, so it is accepted without a check. The form's script sends it as the `nextly-browser-token` answer.",
+    { formId }
+  );
+}
+
+/**
+ * Move an updated submission's one-response key with what the update changes
+ * (`responseKeyAfterUpdate`): spam gives it back, a restored or edited
+ * submission takes the key of what it now holds. An update that touches none
+ * of status, answers or address leaves it as stored.
+ */
+async function rekeyAfterUpdate(
+  ctx: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    collection?: string;
+    user?: { id?: string };
+  },
+  formsSlug: string,
+  formId: string,
+  nextly: NextlyInstance,
+  form?: Record<string, unknown>
+): Promise<void> {
+  const row = ctx.data;
+  if (!row || !touchesResponseKey(row)) return;
+  const parent =
+    form ?? (await formToCheckAgainst(undefined, formsSlug, formId, nextly));
+  const stored = ctx.originalData;
+  const movedFrom = stored ? parentFormId(stored) : null;
+  row.responseKey = await responseKeyAfterUpdate({
+    moved: movedFrom !== null && movedFrom !== formId,
+    digests: () => nextly.security.digests,
+    settings: normalizeFormSettings(parent.settings),
+    patch: row,
+    stored,
+    heldElsewhere: async key =>
+      (await nextly.services.collections.count(
+        ctx.collection ?? "form-submissions",
+        {
+          where: {
+            form: { equals: formId },
+            responseKey: { equals: key },
+            ...(stored?.id ? { id: { not_equals: stored.id } } : {}),
+          },
+        },
+        // Elevated: the value is held whoever may read the holder.
+        { as: "system" }
+      )) > 0,
+  });
+  await refuseTakenAddress(ctx, formId, nextly, parent);
+}
+
+/**
+ * Refuse an edit that moves a submission onto an email address another
+ * submission of the form already holds, saying which one only to a person who
+ * may read it. The holder is found as the system, since the address is taken
+ * whoever may see it; whether to name it is the editor's own read, judged by
+ * the access gate. Anyone else is told only that the address is used, so the
+ * refusal never shows a submission they could not open. The unique index
+ * still refuses a holder that commits after this look, without the name.
+ */
+async function refuseTakenAddress(
+  ctx: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    collection?: string;
+    user?: { id?: string };
+  },
+  formId: string,
+  nextly: NextlyInstance,
+  form: Record<string, unknown>
+): Promise<void> {
+  const key = ctx.data?.responseKey;
+  const stored = ctx.originalData;
+  if (typeof key !== "string" || key === stored?.responseKey) return;
+  if (normalizeFormSettings(form.settings).oneResponse !== "email") return;
+  const collection = ctx.collection ?? "form-submissions";
+  const { data: holders } = await nextly.services.collections.listEntries(
+    collection,
+    {
+      where: {
+        form: { equals: formId },
+        responseKey: { equals: key },
+        ...(stored?.id ? { id: { not_equals: stored.id } } : {}),
+      },
+      pagination: { limit: 1 },
+    },
+    { as: "system" }
+  );
+  const id = (holders?.[0] as { id?: unknown } | undefined)?.id;
+  if (typeof id !== "string" && typeof id !== "number") return;
+  const holderId = String(id);
+  const named = await mayRead(nextly, collection, holderId, ctx.user);
+  throw NextlyError.duplicate({
+    message: named
+      ? `This email address is already used by submission ${holderId} of this form.`
+      : "This email address is already used by another submission of this form.",
+    logContext: { formId, holderId },
+  });
+}
+
+/** Whether a hook's user is a signed-in person the access gate can judge. */
+function isAuthUser(user: unknown): user is AuthUser {
+  if (!user || typeof user !== "object") return false;
+  const { id, email } = user as Record<string, unknown>;
+  return typeof id === "string" && typeof email === "string";
+}
+
+/** Whether `user` may read the submission `id`, asked of the access gate. */
+async function mayRead(
+  nextly: NextlyInstance,
+  collection: string,
+  id: string,
+  user: unknown
+): Promise<boolean> {
+  if (!isAuthUser(user)) return false;
+  try {
+    const count = await nextly.services.collections.count(
+      collection,
+      { where: { id: { equals: id } } },
+      { as: "user", user }
+    );
+    return count > 0;
+  } catch {
+    // Refused by the gate: this person may not read it.
+    return false;
+  }
 }
 
 /**
@@ -1149,7 +1585,8 @@ async function judgeSubmission(
   payload: Record<string, unknown>,
   form: Record<string, unknown>,
   http: { ip: string | null; method: string },
-  nextly: NextlyInstance
+  nextly: NextlyInstance,
+  marks: SubmissionOriginMarks | undefined
 ): Promise<SpamCheckResult | undefined> {
   const config = getFormBuilderConfig(nextly);
   if (!config) return undefined;
@@ -1174,10 +1611,27 @@ async function judgeSubmission(
     formSlug: rateLimitKeyFor(form),
     config: {
       honeypot: settings.honeypotEnabled ?? config.spamProtection.honeypot,
-      rateLimit: config.spamProtection.rateLimit,
+      // Counted once: not again when the handler counted it already.
+      rateLimit:
+        marks?.rateCounted === true
+          ? undefined
+          : config.spamProtection.rateLimit,
     },
   });
-  return verdict.isSpam ? verdict : undefined;
+  if (verdict.isSpam) return verdict;
+  // A submission the handler already flagged is not checked again: it is
+  // spam whatever its token says, and a token is spent once verified.
+  if (marks?.keepAsEvidence === true) return undefined;
+  return judgeBotCheck({
+    settings: normalizeFormSettings(form.settings),
+    spam: config.spamProtection,
+    // Handed over by the plugin's own handler, which keeps only the form's
+    // fields in the row; read off the payload at every other door.
+    tokens: marks?.botTokens ?? botTokensOf(payload),
+    ip: http.ip ?? undefined,
+    fetch: nextly.fetch,
+    warn: (message, context) => nextly.logger.warn?.(message, context),
+  });
 }
 
 /**
@@ -1257,6 +1711,7 @@ async function handleSubmissionCreated(
     formName: form.name,
     submissionId: submission.id,
     defaultFrom: config.notifications.defaultFrom,
+    fields: Array.isArray(form.fields) ? (form.fields as AnyFormField[]) : [],
   });
 
   for (const skip of skipped) {
@@ -1285,7 +1740,7 @@ async function handleSubmissionCreated(
     BeforeEmailFilterContext
   >("form-builder.beforeEmail", emails, { form, submission });
 
-  // -- Send phase: send the (possibly transformed) outgoing notifications,
+  // -- Send phase: queue the (possibly transformed) outgoing notifications,
   // once the submission is durable. An email cannot be taken back, and a
   // submission saved inside a caller's transaction runs this hook before that
   // transaction commits: sent here, it would go out, and its delivery be
@@ -1293,11 +1748,18 @@ async function handleSubmissionCreated(
   // `afterCommit` holds the send until the outermost transaction commits and
   // drops it on rollback; outside a transaction it sends at once, as before.
   const send = () =>
-    sendNotificationEmails({
+    queueNotificationEmails({
       emails: finalEmails,
       emailService,
       logger: nextly.logger,
       formSlug: form.slug,
+      // A submission's id is a string or a number by dialect.
+      submissionId:
+        typeof submission.id === "number"
+          ? `${submission.id}`
+          : typeof submission.id === "string"
+            ? submission.id
+            : "",
       fileAttachments,
     });
   const { afterCommit } = context as Pick<HookContext, "afterCommit">;
@@ -1305,31 +1767,55 @@ async function handleSubmissionCreated(
 }
 
 /**
- * Send each notification, and log what happened to it.
- *
- * The email service reports a provider's failure in its result rather than by
- * throwing, so the result is read: a notification the provider did not take is
- * logged as failed, with whether a retry can help, and never as sent. No log
- * line names a recipient: an address in a log outlives the submission it came
- * from, and the notification's id is enough to find it.
+ * The key a notification is queued under: its submission, its place among
+ * the submission's emails, and a short digest of its notification's id. The
+ * place keeps apart two emails of one notification (a `beforeEmail` hook
+ * may add a copy of one), and the digest keeps the key short whatever the
+ * id's length. The same submission's emails, built again, get the same keys.
  */
-export async function sendNotificationEmails(input: {
+function notificationKey(
+  submissionId: string,
+  index: number,
+  notificationId: string | undefined
+): string {
+  const digest = createHash("sha256")
+    .update(notificationId ?? "")
+    .digest("hex")
+    .slice(0, 16);
+  return `form-notification:${submissionId}:${index}:${digest}`;
+}
+
+/**
+ * Queue each notification, and log where it stands.
+ *
+ * Queued through the email service's queued send rather than sent once: the
+ * queue makes the first attempt at once, and a failure a retry can help is
+ * tried again through the job queue, with backoff, until it is sent or fails
+ * for good, never dropped. Each carries an idempotency key from its
+ * submission and notification (`notificationKey`), so a provider that takes keys delivers it
+ * once even if this hook runs again. No log line names a recipient: an
+ * address in a log outlives the submission it came from, and the
+ * notification's id and the queued email's id are enough to find it.
+ */
+export async function queueNotificationEmails(input: {
   emails: FormEmailNotification[];
-  emailService: Pick<PluginEmailService, "sendWithTemplate">;
+  emailService: Pick<PluginEmailService, "queueWithTemplate">;
   logger: Pick<NextlyInstance["logger"], "info" | "error">;
   /** The form's slug as stored, for the log lines only. */
   formSlug: unknown;
+  /** The submission the notifications are for, which keys each one. */
+  submissionId: string;
   fileAttachments: Array<{ mediaId: string; filename?: string }>;
 }): Promise<void> {
   const { emails, emailService, logger, formSlug, fileAttachments } = input;
-  for (const email of emails) {
+  for (const [index, email] of emails.entries()) {
     const identity = {
       formSlug,
       templateSlug: email.templateSlug,
       notificationId: email.notificationId,
     };
     try {
-      const result = await emailService.sendWithTemplate(
+      const queued = await emailService.queueWithTemplate(
         email.templateSlug,
         email.to,
         email.variables,
@@ -1340,29 +1826,33 @@ export async function sendNotificationEmails(input: {
           cc: email.cc,
           bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
+          idempotencyKey: notificationKey(
+            input.submissionId,
+            index,
+            email.notificationId
+          ),
         }
       );
-
-      if (result.success) {
-        logger.info?.("Form Builder: notification sent", {
-          ...identity,
-          attachmentCount: fileAttachments.length,
-        });
-      } else {
+      // The first attempt has been made: sent, waiting for a retry, or
+      // failed for good (a refusal no retry can change).
+      if (queued.state === "failed") {
         logger.error?.("Form Builder: notification failed", {
           ...identity,
-          retryable: result.failure?.retryable ?? true,
-          ...(result.failure?.status !== undefined
-            ? { status: result.failure.status }
-            : {}),
-          reason: result.failure?.reason ?? "The email was not sent.",
+          queuedId: queued.id,
+          retryable: false,
+        });
+      } else {
+        logger.info?.("Form Builder: notification queued", {
+          ...identity,
+          queuedId: queued.id,
+          state: queued.state,
+          attachmentCount: fileAttachments.length,
         });
       }
     } catch (err) {
-      // Thrown rather than returned: nothing was sent. A refusal of the send
-      // itself (an invalid address) would be refused again, so it is not
-      // retryable; anything else, a storage read or a lookup that failed, may
-      // pass, and counts as retryable, as an unclassified failure does.
+      // Thrown rather than returned: nothing was queued. A refusal of the
+      // email itself (an invalid address) would be refused again, so it is
+      // not retryable; anything else may pass on another submission.
       logger.error?.("Form Builder: notification failed", {
         ...identity,
         retryable: !NextlyError.isCode(err, "VALIDATION_ERROR"),

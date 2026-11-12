@@ -46,14 +46,21 @@ let hostIconChanges: MutationObserver | undefined;
  * node this adds or removes. A host icon React adds later, or a host link whose
  * `rel` React changes to an icon's, is switched off as it happens. The host's
  * original `rel` values are kept here, never written onto its nodes.
+ *
+ * `null` leaves the page's icon alone: nothing is added and no host icon is
+ * switched off. The page's own icon is then the one its first HTML carried
+ * (the host's, or a configured one the admin route linked), and it is never
+ * swapped after load.
  */
-export function useFaviconInjection(href: string): void {
+export function useFaviconInjection(href: string | null): void {
   const own = useRef<HTMLLinkElement | null>(null);
+  const shown = href !== null;
 
-  // The admin's icon lives as long as the provider, not as long as one
+  // The admin's icon lives while there is one to show, not as long as one
   // `href`: a branding change that went through a remove and an add would
   // switch the host's icons on for that moment.
   useEffect(() => {
+    if (!shown) return;
     const icon = document.createElement("link");
     icon.setAttribute(ADMIN_ICON, "");
     icon.rel = "icon";
@@ -69,13 +76,13 @@ export function useFaviconInjection(href: string): void {
       own.current = null;
       if (adminIcons.size === 0) showHostIcons();
     };
-  }, []);
+  }, [shown]);
 
   // Runs after the effect above on mount, so the icon exists; a branding
   // change only points it somewhere else.
   useEffect(() => {
     const icon = own.current;
-    if (!icon) return;
+    if (!icon || href === null) return;
     if (href.startsWith("data:image/svg+xml")) icon.type = "image/svg+xml";
     else icon.removeAttribute("type");
     icon.href = href;

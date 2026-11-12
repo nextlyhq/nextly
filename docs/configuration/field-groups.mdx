@@ -13,7 +13,7 @@ Key characteristics:
 
 - **Templates, not documents.** Field groups define a field structure; each embed creates its own data row.
 - **Own database table.** Each field group gets a table derived from its slug and prefixed with `comp_` (e.g. `comp_seo`). The name is always derived; it cannot be overridden.
-- **Nesting.** A field group's fields can include `component` fields referencing other field groups (max depth: 3 levels).
+- **Nesting.** A field group's fields can include `component` fields referencing other field groups, to any depth. A field group cannot be placed inside itself, directly or through other field groups.
 - **Slug uniqueness.** Field group slugs must be unique across field groups, collections, **and** singles.
 - **Dual creation.** Define in code with `defineFieldGroup()` or visually in the Visual Schema Builder.
 
@@ -191,7 +191,17 @@ export default defineFieldGroup({
 
 ## Field group nesting
 
-Field groups can embed other field groups using the `component` field type, up to **3 levels deep**. `defineConfig()` rejects circular references and configurations that exceed the depth limit at startup.
+Field groups can embed other field groups using the `component` field type, at any depth. There is no depth limit.
+
+Each level's values are stored, read and migrated like the outer field group's. A field group placed directly in another's fields is stored as rows of its own table, each pointing at the row of the instance that holds it; one placed inside a group or repeater is stored in that container's value. Either way it is validated by its own fields' rules, a required one is required, and removing an instance removes everything placed in it. Filtering reaches a field group's own fields only (`hero.title`); a path that goes further (`hero.cta.label`) is refused as a field that cannot be filtered on.
+
+A field group placed inside itself, directly or through other field groups (`a` holds `b`, which holds `a`), is a cycle, and a cycle is refused where it is written. A placement inside a group, a repeater or a list of allowed field groups counts as well. The refusal names the field groups in the cycle:
+
+- `defineConfig()` refuses a cycle among the field groups your code defines.
+- Your app refuses to start when a cycle takes in a field group your code defines, including one closed by a field group made in the Schema Builder.
+- The Schema Builder refuses a save that would leave the saved field group in a cycle.
+
+A cycle among Schema Builder field groups saved before cycles were refused does not stop your app from starting. The start, and CLI commands that load your configuration such as `nextly migrate:check`, name it in a warning. The next save of any field group in it is refused until one of them stops placing the next.
 
 ```typescript title="src/field-groups/faq-item.ts"
 import { defineFieldGroup, text, fieldGroup } from "nextly";

@@ -44,7 +44,7 @@ export interface NewSubmissionRow {
   href: string;
 }
 
-/** The card's data: the rows its size holds, how many new submissions there are, and their list. */
+/** The card's data: its "Number of entries" of rows, how many new submissions there are, and their list. */
 export interface NewSubmissionsData {
   items: NewSubmissionRow[];
   /** How many new submissions the reader may read, in all. */

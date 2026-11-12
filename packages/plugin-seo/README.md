@@ -7,7 +7,7 @@
 
 First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
-This package is **framework-agnostic** (zero `next`): it adds SEO fields to your content and serves a sitemap of your published content over plain HTTP, nothing Next-specific, so it is safe in headless and admin-only projects. In a Next.js app, turn the SEO fields into `<meta>` tags with `buildMetadata` from `nextly/runtime` (see [Next.js metadata](#nextjs-metadata) below); wiring a canonical `app/sitemap.ts` / `robots.ts` is still your app's job today, and first-party helpers for that are planned.
+This package is **framework-agnostic** (zero `next`): it adds SEO fields to your content and serves the site's sitemap and robots.txt over plain HTTP, nothing Next-specific, so it is safe in headless and admin-only projects. In a Next.js app, content routes get each page's head from the plugin (see [Next.js metadata](#nextjs-metadata) below).
 
 ## Install
 
@@ -59,13 +59,29 @@ seoPlugin({
 
 ## Next.js metadata
 
-In a Next.js app, `buildMetadata` from `nextly/runtime` turns the `seo` group into a Next `Metadata` object, so a page's `generateMetadata` is one call instead of a hand-written mapping. It sets the title, description, canonical, OpenGraph, Twitter card, and `robots` (from `noindex`), with per-call fallbacks for blank fields:
+With the plugin installed, content routes and Single routes from `nextly/runtime` get each page's head from the plugin, with no call needed. Each value comes from the first level that has one: what a person typed, then the route's own `buildMetadata` (title, description and social values only), the Page Builder design, the content type's pattern, the page's content, and the site's defaults. The canonical is the page's declared address in its language. See the [SEO plugin guide](https://nextlyhq.com/docs/plugins/seo).
+
+Without a content route, `buildMetadata` from `nextly/runtime` turns the `seo` group into a Next `Metadata` object, so a page's `generateMetadata` is one call instead of a hand-written mapping. It sets the title, description, canonical, OpenGraph, Twitter card, and `robots` (from `noindex`), with per-call fallbacks for blank fields:
 
 ```ts
 // app/blog/[slug]/page.tsx
-import { buildMetadata } from "nextly/runtime";
+import { buildMetadata, type MetadataEntry } from "nextly/runtime";
 
-export async function generateMetadata({ params }) {
+// Your own read of one post by its slug, with the fields used below.
+declare function getPostBySlug(slug: string): Promise<
+  | (MetadataEntry & {
+      title: string;
+      excerpt?: string;
+      publishedAt?: string | null;
+    })
+  | null
+>;
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
   const post = await getPostBySlug(slug);
   if (!post) return {};
@@ -87,112 +103,110 @@ export async function generateMetadata({ params }) {
 
 Set `metadataBase` once in your root layout so a relative `canonical` resolves to an absolute URL. Pass `languages` (locale → URL) to emit `alternates.languages` (hreflang) for a localized page. `buildMetadata` lives in `nextly/runtime` (Next-only), so it stays out of the agnostic plugin.
 
-## Sitemap
+## SEO settings
 
-The plugin serves a sitemap of your **published** entries — one `<url>` per entry across the named collections — at a public HTTP route under Nextly's dynamic handler. In an app scaffolded by `create-nextly-app` (handler at `app/admin/api`), that is:
+The plugin adds an **SEO** item to the admin, whose Settings page holds the rules for the whole
+site: its name and production address, a default description and share image, a title pattern
+per content type (such as `{Title} | {Site name}`, set by clicking the type's variables, with a
+preview of the result), and one record of brand facts. The first visit asks three short questions before
+the page opens. Every page's head, the sitemap, robots.txt and the staging guard read these
+settings, with the plugin's options answering what they leave unset, and each save reaches pages
+without a redeploy. Server code reads them with `readSeoRules(ctx)` and `readBrandFacts(ctx)`.
 
-```text
-GET /admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
-```
+## Sitemap and robots.txt
 
-It reads live content, so a publish or an edit is reflected on the next request. Drafts, entries with `seo.noindex` set, and entries with no usable slug are left out. When an entry declares a same-host `seo.canonical` URL, the sitemap advertises that canonical URL instead of the generated one (a canonical on another host drops the entry, since a sitemap only lists URLs on its own host).
+The plugin serves the site's `/sitemap.xml` and `/robots.txt` at the root: `withNextly()` rewrites both to Nextly's API handler, and a site that ships its own file keeps serving it.
 
-The published filter targets Nextly's built-in draft/published lifecycle (`status: true` on the collection). A collection without that lifecycle has no unpublished state, so all of its entries are listed.
+The sitemap lists every published page of each content type that declares a public address, Singles and the homepage included, at that address. A type with none is left out, and nothing is guessed for it:
 
 ```ts
-seoPlugin({
-  collections: ["pages", "posts"],
-  // Absolute origin used for <loc>. When omitted, the route uses the request
-  // origin — correct for a single-origin deployment, wrong behind a host-
-  // rewriting proxy, so set it explicitly there.
-  baseUrl: "https://example.com",
-  // Where each collection's route is MOUNTED. Defaults to `/<collection>`.
-  // Everything after the prefix is derived from the route's own answer, so this
-  // is all you normally need to supply.
-  basePath: collection => (collection === "posts" ? "/blog" : ""),
+import { defineCollection, defineConfig, text } from "nextly";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  collections: [
+    defineCollection({
+      slug: "posts",
+      status: true,
+      fields: [text({ name: "title" }), text({ name: "slug" })],
+      // Each post is listed, and canonical, at /blog/<slug>.
+      publicAddress: "/blog/{slug}",
+    }),
+  ],
+  plugins: [
+    seoPlugin({ collections: ["posts"], baseUrl: "https://example.com" }),
+  ],
 });
 ```
 
-Each entry's path below the prefix comes from `slugToStaticParam`, the same function the content
-route pre-renders from and a page's canonical is built with — so the sitemap lists the URL the page
-actually serves. A nested slug (`docs/getting-started`) keeps its segments, and a slug the route
-refuses to serve (a `..` segment, a stray leading or doubled slash) is skipped rather than
-advertised.
+Whether a page is listed is decided from the same answer its head is built from: a page hidden from search, alone or with its whole type, or whose canonical points elsewhere, is left out, and so is a page whose address the address record gives another page. `<lastmod>` follows the published page, so a working draft changes nothing, and each entry lists the page's main image. Past 50,000 addresses or 50 MB, `/sitemap.xml` is a sitemap index naming `/sitemap.xml?page=<n>`.
 
-The reserved-path denylist — `/admin`, `/api`, `/sitemap.xml` and the rest — is judged on the
-**stored slug**, which is the value the content route itself checks: the route joins its catch-all
-params, and those exclude the mount prefix. So a page stored as `admin` is skipped under every
-mount, including a non-root one, because the route answers `notFound()` for it either way. Listing
-it because `/pages/admin` looks unreserved would advertise a dead link.
-
-`basePath` must be a plain path prefix. One carrying a query or fragment is rejected rather than
-silently emitted as a different URL, and it is checked once per collection so an empty collection
-cannot hide the misconfiguration. It is used verbatim — already-escaped prefixes such as
-`/docs%20archive` are not encoded a second time.
-
-`basePath` may be a plain string when every collection shares a prefix, and returning `null` from
-the function excludes that collection from the sitemap entirely. Pass `""` for a collection served
-at the site root — page-builder pages render at `/about`, not `/pages/about`.
-
-It names the prefix only. An entry whose slug is EMPTY — a site's homepage — is skipped whatever
-`basePath` says, because whether a mount's own root routes depends on the route file: a required
-`[...slug]` catch-all matches no segments and 404s there, an optional `[[...slug]]` serves it. List
-a homepage with `urlFor`.
-
-For routing the prefix cannot express, `urlFor` still overrides the whole path:
+robots.txt lets search engines read every page but the admin, asks AI crawlers what `aiCrawlers` says (`"all"` by default, `"search"` or `"block"`), and names the sitemap by its absolute address. These are requests crawlers may ignore. Asking Google not to train (`Google-Extended`) also limits what Gemini can use.
 
 ```ts
-seoPlugin({
-  collections: ["posts"],
-  baseUrl: "https://example.com",
-  urlFor: entry => `/${entry.publishedYear}/${entry.slug}`,
+import { defineConfig } from "nextly";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  plugins: [
+    seoPlugin({
+      collections: ["posts", "tags"],
+      baseUrl: "https://example.com",
+      // Every tag page served noindex and left out of the sitemap.
+      hiddenTypes: ["tags"],
+      // Ask AI crawlers that collect pages for training to stay away.
+      aiCrawlers: "search",
+    }),
+  ],
 });
 ```
 
-`urlFor` owns the entire path when supplied, so `basePath` is ignored and the route-derived slug
-handling above does not apply — reproduce the encoding you need yourself, and return `null` to
-exclude an entry.
-
-> **The sitemap is public and bypasses read access.** The route is unauthenticated and lists entries as the system role, so it enumerates every published entry's URL (and `lastModified`) **regardless of per-collection read access**. Do not enumerate a collection whose entries should stay private (owner-only, role-gated, or internal). Control it with the `sitemap` option:
->
-> ```ts
-> // Turn the sitemap route off entirely:
-> seoPlugin({ collections: ["pages", "internalDocs"], sitemap: false });
->
-> // Or advertise only the public subset (the rest still get SEO fields):
-> seoPlugin({
->   collections: ["pages", "internalDocs"],
->   sitemap: { collections: ["pages"] },
-> });
-> ```
-
-### Exposing it to crawlers
-
-Plugin routes are namespaced under the mount point of Nextly's dynamic handler. In an app scaffolded by `create-nextly-app` that handler lives at `app/admin/api/[[...params]]/route.ts`, so this route is served at:
-
-```text
-/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml
-```
-
-Search engines scope a sitemap to URLs beneath its own path unless it is submitted through Search Console or referenced in `robots.txt`, so a sitemap under `/admin/api/...` whose `<loc>` values live at `/<collection>/...` may be ignored. Expose it at the site root instead — for a Next.js app, add a rewrite (point `destination` at wherever your dynamic handler is mounted):
+> **The sitemap is public and reads as the system.** It lists every published page's address in the types it covers, regardless of per-collection read access. Hide a type, or narrow the list, for pages that should not be enumerable. It is built on every request: set `baseUrl` so it can be cached, and cache it in front of a large site.
 
 ```ts
-// next.config.ts
-export default {
-  async rewrites() {
-    return [
+import { defineConfig } from "nextly";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+
+export default defineConfig({
+  plugins: [
+    seoPlugin({
+      collections: ["pages", "posts", "internalDocs"],
+      // Only these collections' pages are listed; Singles still are.
+      sitemap: { collections: ["pages", "posts"] },
+    }),
+  ],
+});
+```
+
+Other code reads what the sitemap lists, and the pages left out because another page holds their address, through the plugin's `listedPages` service:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import type { ListedPagesService } from "@nextlyhq/plugin-seo";
+
+export default definePlugin({
+  name: "acme-page-list",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.74",
+  contributes: {
+    routes: [
       {
-        source: "/sitemap.xml",
-        destination: "/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml",
+        method: "GET",
+        path: "/pages.txt",
+        public: true,
+        handler: async (req, ctx) => {
+          const listing = ctx.services.plugins["@nextlyhq/plugin-seo"]
+            ?.listedPages as ListedPagesService;
+          const { pages } = await listing.list(new URL(req.url).origin);
+          return new Response(pages.map(page => page.loc).join("\n"));
+        },
       },
-    ];
+    ],
   },
-};
+});
 ```
 
-Then reference `https://example.com/sitemap.xml` from `robots.txt` or submit it in Search Console. An integrated Next.js app can also read the data through the planned Next helpers to serve the canonical `/sitemap.xml` directly. A pure-headless frontend can proxy the route to its own root the same way.
-
-> **Cache or rate-limit the public route.** It is unauthenticated and regenerates the document per request (up to the 50,000-URL / 50 MB caps), and on the `/admin/api` mount Nextly's built-in rate limiter is skipped. Put it behind an edge/CDN cache (sitemaps are crawled infrequently) or a rate limiter at your proxy — or disable it with `sitemap: false` if you don't need it.
+`urlFor` and `basePath` no longer shape the sitemap and are deprecated: declare `publicAddress` instead. The sitemap is also still served at `/admin/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`. See the [SEO plugin guide](https://nextlyhq.com/docs/plugins/seo).
 
 ## Related packages
 

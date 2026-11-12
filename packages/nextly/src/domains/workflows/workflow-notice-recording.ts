@@ -27,7 +27,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
-import { entryHeading } from "../../lib/entry-heading";
+import { entryHeadingSource } from "../../lib/entry-heading";
 import type { CollectionRegistryService } from "../collections/services/collection-registry-service";
 import type { ContentEventActor } from "../content-events/actor";
 import type { EmailService } from "../email/services/email-service";
@@ -253,13 +253,22 @@ function namingOf(telling: NoticeTelling, slug: string): CollectionNaming {
   );
 }
 
-/** A document's title, from a version's snapshot, as every other surface names it. */
-function titleOf(snapshot: unknown, titleField: string | undefined): string {
+/**
+ * A document's title, from a version's snapshot, as every other surface names it, with the field
+ * it came from: each recipient is judged on that field when the notice is shown to them.
+ */
+function titleOf(
+  snapshot: unknown,
+  titleField: string | undefined
+): { title: string; titleField?: string } {
   const content =
     snapshot !== null && typeof snapshot === "object"
       ? (snapshot as Record<string, unknown>)
       : {};
-  return entryHeading(content, titleField, UNTITLED);
+  const heading = entryHeadingSource(content, titleField);
+  return heading === undefined
+    ? { title: UNTITLED }
+    : { title: heading.text, titleField: heading.field };
 }
 
 /** The snapshot a notice keeps of its document and the move. */
@@ -275,7 +284,7 @@ async function dataOf(
       : await snapshotOn(tx, notice.document, notice.part);
   return {
     collection: naming.label,
-    title: titleOf(snapshot, naming.titleField),
+    ...titleOf(snapshot, naming.titleField),
     part: notice.part,
     localized: naming.localized,
     step: notice.step,

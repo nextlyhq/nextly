@@ -71,6 +71,7 @@ import {
   desiredSchemaTableNames,
 } from "./desired-snapshot";
 import { diffSnapshots } from "./diff/diff";
+import { liveIndexesStandingInForDeclared } from "./diff/index-util";
 import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
@@ -90,6 +91,10 @@ import {
   stripKitDropsOfLiveUniqueConstraints,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
+import {
+  companionsHoldingBack,
+  withKeptScopeFieldsIn,
+} from "./kept-scope-fields";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import {
   desiredUniqueColumns,
@@ -149,6 +154,7 @@ import {
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 import { uniqueColumnLookup } from "./unique-columns";
+import { currentWithheldScopeFields } from "./withheld-scope-fields";
 
 // F5 PR 4: produces a copy of `desired` where any field targeted by a
 // make_optional resolution has its `required` flag flipped to false (or
@@ -680,7 +686,7 @@ export class PushSchemaPipeline {
     // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
     // inside either leaves the other on the raw fields, so a table would converge and then report a
     // type change against itself on every following diff.
-    const desired = args.desired;
+    let desired = args.desired;
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -725,9 +731,13 @@ export class PushSchemaPipeline {
     // Without the fingerprint, editing only a schema hook leaves `desired`
     // byte-identical and the push is skipped, so the hook's change never
     // reaches the database and nothing reports that it did not.
+    // And on what plugins' scopes hold back from switched-off types: a type
+    // switched on again, or its plugin removed, leaves `desired` as it was
+    // while its kept column is no longer kept (`kept-scope-fields.ts`).
     const cacheKey = {
       desired,
       extensions: extensions?.fingerprint ?? null,
+      withheld: currentWithheldScopeFields(),
     };
     const cachedSnapshot = getCachedSnapshot();
     if (cachedSnapshot !== undefined && dequal(cacheKey, cachedSnapshot)) {
@@ -788,6 +798,29 @@ export class PushSchemaPipeline {
             ? (cached as NextlySchemaSnapshot)
             : await introspectLiveSnapshot(db, dialect, managedTableNames);
       }
+      // A field a plugin's scope holds back from a type switched off keeps
+      // its column while the database has it: added back here, before
+      // anything reads the desired state, so neither the diff nor the tables
+      // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
+      // A translated one keeps its column in the type's translations table,
+      // read here for the types something is held back from only: turning
+      // translation off then brings the column back to the main table.
+      const companions = companionsHoldingBack(desired);
+      const keptFrom =
+        companions.length === 0
+          ? liveSnapshot
+          : {
+              tables: [
+                ...liveSnapshot.tables,
+                ...(
+                  await (
+                    this.testHooks._introspectSnapshotOverride ??
+                    introspectLiveSnapshot
+                  )(db, dialect, companions)
+                ).tables,
+              ],
+            };
+      desired = withKeptScopeFieldsIn(desired, keptFrom, dialect);
 
       // 🔴 Contained, and its failure means "declare NEITHER registry".
       //
@@ -1418,7 +1451,11 @@ export class PushSchemaPipeline {
           // of every managed table it did not rebuild.
           const stripped = stripKitDropsOfDeclaredIndexes(
             pushResult.sqlStatements,
-            desiredSnapshot
+            desiredSnapshot,
+            liveIndexesStandingInForDeclared(
+              desiredSnapshot.tables,
+              liveSnapshot.tables
+            )
           );
           // Likewise the declared checks and foreign keys, which the kit's
           // runtime tables do not carry on PostgreSQL and MySQL either.

@@ -28,6 +28,8 @@ function addsStatements(dialect: SupportedDialect): string[] {
       { name: "code", type: "text", localized: true },
       { name: "note", type: "text", localized: true },
     ],
+    // A code-first collection's translations table.
+    builtBy: "codeFirst",
   });
   return splitSqlStatements(plan.upSql, dialect);
 }

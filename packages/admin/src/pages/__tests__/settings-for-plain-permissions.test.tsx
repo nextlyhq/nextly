@@ -84,8 +84,11 @@ function guardAdmits(
 const SEEN = [ROUTES.SETTINGS, ROUTES.USERS_FIELDS];
 const EDITED = [ROUTES.USERS_FIELDS_EDIT];
 const CREATED = [ROUTES.USERS_FIELDS_CREATE];
-/** The settings nav entries a settings reader is shown. */
-const NAV = ["general", "user-fields"];
+/**
+ * The settings nav entries a settings reader is shown. The user fields screen
+ * (in SEEN above) is reached from the Users page, not from an entry here.
+ */
+const NAV = ["general"];
 
 /** The settings nav entries shown, the API-key and webhook entries aside. */
 const navIds = (access: { hasPermission: (slug: string) => boolean }) =>

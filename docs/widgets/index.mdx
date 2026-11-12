@@ -32,8 +32,8 @@ collection the reader chooses. On a terminal it asks for anything you leave out.
 - `--dry-run` shows the files and the config edit without writing them.
 - When it cannot edit your config safely, it leaves the file as it was and prints the line to add.
 
-Then open `/admin/dev/widget-previews` on your dev server to see the card before it has data,
-and run its test with `npx vitest run`.
+Its test draws the card from its `preview` case, so you see it before it has data. Run the test
+with `npx vitest run`.
 
 ## Availability
 
@@ -81,20 +81,26 @@ A widget declared with `defineWidget` draws one of those with its own component,
 `view: { component }`, handed its `load`'s data. `access` gates the whole card: nothing in a
 declaration gates one item inside it.
 
-A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
-from 1 to 12 columns and `h` from 2 to 12 rows. It declares the size a card starts at and, if it
-likes, the smallest and largest a reader may resize it to:
+A widget's size is `{ w, h }` on a grid 12 columns wide: `w` is from 1 to 12 columns and `h`
+from 2 to 12. It declares the size a card starts at and, if it likes, the smallest and largest a
+reader may resize it to:
 `size: { default: { w: 6, h: 3 }, min: { w: 4, h: 2 }, max: { w: 12, h: 6 } }`. The minimum
-defaults to the default, and the maximum to the full width at the default's height. On the
+defaults to the default, and the maximum to the full width at the default's `h`. On the
 dashboard, cards sit in one ordered list, filling rows left to right and wrapping, each spanning
-its `w` columns and `h` rows, and a reader can change a card's width and height from its menu
-within the widget's bounds. Columns follow the dashboard's own width rather than the window's:
-from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at 12, and
-below 640 pixels every card is drawn at the full width. A card keeps its height at every width. A reader can arrange the dashboard at every width.
-Where it shows more than one column, a card is dragged by its handle, with the pointer or the
-keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,
-cards are moved, resized and removed from their menu instead. The arrangement applies at every
-width.
+its `w` columns, and a reader can change a card's width from its menu within the widget's
+bounds. A card is as tall as its content, and the cards that share a row are drawn as tall as the
+tallest of them; nothing inside a card is cut off or scrolls. `h` no longer sets a card's height:
+it is kept in the declaration and in saved layouts. A list's length is its reader's "Number of
+entries" setting rather than its size (below). Columns follow the dashboard's own width rather than the
+window's: from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at
+12, and below 640 pixels a card of 3 columns (25%) or fewer is drawn at half the width, so two
+share a row, and every other card at the full width. A reader can arrange the
+dashboard at every width.
+Where it shows more than one column, a card is dragged by its handle with the pointer: a dashed
+outline the size of the card shows where it will land, and the other cards move aside. From the
+keyboard, a card's ⋯ menu moves it with Move earlier and Move later. Below 640 pixels, where every
+card is full width, cards are moved, resized and removed from their menu instead. The arrangement
+applies at every width.
 
 ## Loaded as the viewer
 
@@ -105,9 +111,10 @@ person could have read directly. That is what makes permission scoping reliable 
 something each widget author has to remember.
 
 Core's Count, Breakdown, Over time and Recent entries are declared this way too, each with a
-Collection setting: the add panel offers each once per collection the reader may read, set to
-that collection. Offered, never placed — nobody's dashboard gains a card because a collection
-was created — and a new collection needs no new widget.
+Collection setting: the add panel lists each once, and a card added starts on the first
+collection the reader may read that no card of that widget uses yet. Offered, never placed —
+nobody's dashboard gains a card because a collection was created — and a new collection needs
+no new widget.
 
 <Callout type="warn">
   Contributing a widget from a plugin works today, but `defineWidget` is marked
@@ -151,35 +158,49 @@ A widget declared with `defineWidget` can compute its own data in a `load` funct
 runs on the server for each card, as the person viewing it. It is handed the card's `size`: its
 `w` and `h` in grid units, kept within the widget's size bounds, and its `tier`, which is
 `"small"`, `"medium"` or `"large"`. The tier depends on how wide the card is drawn on that
-reader's screen. Use the size to read only what the card can show:
+reader's screen. A card is as tall as its content, so how many rows a list reads is not a
+question of its size: it is the reader's "Number of entries", a setting the widget declares.
 
 ```ts
-import { defineWidget, rowsThatFit } from "@nextlyhq/plugin-sdk";
+import {
+  defineWidget,
+  listEntries,
+  MAX_WIDGET_ROWS,
+  setting,
+} from "@nextlyhq/plugin-sdk";
 
 export const recentOrders = defineWidget({
   id: "acme/recent-orders",
   title: "Recent orders",
-  description: "The newest orders, and how many there are on a large card.",
+  description: "The newest orders, and how many there are in all.",
   size: { default: { w: 6, h: 4 }, max: { w: 12, h: 8 } },
   view: "list",
-  load: async ({ size, services }) => {
-    // As many rows as this card's body draws: never more than ten.
-    const limit = rowsThatFit(size, { density: "default" });
-    const { items } = await services.find("orders", {
+  settings: {
+    limit: setting.number({
+      label: "Number of entries",
+      defaultValue: 5,
+      min: 1,
+      max: MAX_WIDGET_ROWS,
+    }),
+  },
+  load: async ({ settings, services }) => {
+    // The reader's "Number of entries": five unless chosen, never more than twenty.
+    const { items, total } = await services.find("orders", {
       sort: "-createdAt",
-      limit,
+      limit: listEntries(settings.limit),
+      total: true,
     });
-    if (size.tier !== "large") return { items };
-    // Only a large card shows the total, so only a large card counts the orders.
-    return { items, total: await services.count("orders") };
+    return total === undefined ? { items } : { items, total };
   },
 });
 ```
 
-`rowsThatFit(size, { density })` counts the list rows that fit in a card of that height. It
-uses the same formula as core's own list cards, so a load reads exactly the rows the card
-draws. `density` is `"default"` or `"compact"`, the values a list card's Density setting takes.
-Compact rows are shorter, so the same card holds more of them.
+`listEntries(limit)` is the rule core's own list cards read their "Number of entries" by: five
+where the setting is missing, at most `MAX_WIDGET_ROWS` (twenty). With `total`, the card's
+footer reads "View all (N)" when there are more than it shows.
+
+`rowsThatFit(size, { density })` still answers the list rows a card of that `h` held when cards
+were drawn at fixed heights, at most ten, for the loads that call it.
 
 The size is part of the question a load answers. When a reader resizes a card, or a card
 crosses into another tier, that card's `load` runs again on its own. The other cards keep their
@@ -206,7 +227,7 @@ export const ordersThisMonth = defineWidget({
   description: "How many orders came in over the last 30 days.",
   size: { default: { w: 3, h: 2 } },
   view: "figure",
-  // Drawn as a number while it loads, and in the add panel.
+  // Drawn as a number while it loads.
   skeleton: "figure",
   load: async ({ services }) => ({
     total: await services.count("orders", { window: { range: "30d" } }),
@@ -234,9 +255,10 @@ export const ordersThisMonth = defineWidget({
 A `dateField`, for `count`'s window or for `timeseries`, must be a date field of the collection
 that everyone who can read the collection can read. Any other field is refused, whoever asks.
 
-`skeleton` says what a card looks like while its data is on the way, and how its row is
-sketched in the add panel: `"figure"`, `"list"`, `"bars"`, `"series"` or `"table"`. Without it,
-the card loads in the frame's generic shape.
+`skeleton` says what a card looks like while its data is on the way: `"figure"`, `"list"`,
+`"bars"`, `"series"` or `"table"`. Without it, the card loads in the frame's generic shape. The
+add panel lists a widget by its `icon` (a Lucide icon's name), its `title` and its
+`description`, which reads best as one line.
 
 All of these are experimental.
 
@@ -294,6 +316,42 @@ The editor is registered like the widget's own component, from your admin entry,
 component map holds it to the setting's value: an editor written for another setting's value
 fails to compile. Startup refuses an `editor` that names no component, and one component used both
 as a widget's view and as a setting's editor.
+
+## Statuses in your own component
+
+Core's cards draw every status the same way, in light and dark, and a widget drawn by its own
+component reads best beside them when it does too. The admin has four statuses, `success`,
+`warning`, `danger` and `info`, each with four tokens: `--nx-<status>-surface`, `-border`,
+`-text` and `-solid`.
+
+- **A status label** (Published, Draft, Failed) is a quiet chip: the card's surface, ordinary
+  text, and a small dot in the status's colour before the word. Draw it with the kit's status
+  chip, `Badge` from `@nextlyhq/ui`, with `variant="success"`, `"warning"`, `"destructive"` or
+  `"info"`; a status that marks nothing to act on, such as a draft, takes the plain
+  `variant="outline"`. The word carries the status, so colour is never the only signal.
+- **A dot, an icon, a progress bar or a chart mark** is drawn in the status's `-solid` colour,
+  which keeps 3:1 against the page in both themes. The kit's `Widget.BarChart` already draws a
+  chart of statuses this way.
+- **A warning or a failure that needs reading** sits on the status's `-surface` with its
+  `-border`, and its icon in `-text`.
+
+```tsx
+import { Badge } from "@nextlyhq/ui";
+
+export function ReportStatus({ failed }: { failed: boolean }) {
+  return failed ? (
+    <Badge variant="destructive">Failed</Badge>
+  ) : (
+    <Badge variant="success">Sent</Badge>
+  );
+}
+```
+
+Use the tokens through `var()` or the token utilities in your plugin's own stylesheet (see
+[Styling your admin UI](/docs/plugins/admin-ui#styling-your-admin-ui)). Avoid the numbered
+status shades (`bg-success-100`, `text-warning-700`) and opacity mixes (`bg-destructive/10`):
+they are pale tints that read differently in each theme, and they are deprecated. Core leaves a
+widget's own markup as it is, so this is a recommendation, not a check.
 
 ## Testing a widget
 
@@ -356,25 +414,31 @@ shape may change.
 
 ## Where a setting is drawn
 
-A card's More settings panel draws its settings in three sections: **Data**, what the card reads;
-**Display**, how it shows it (every card's title is there too); and **Advanced**, folded until a
-reader opens it. Name a setting's section with `section`:
+A card's settings drawer, opened from Settings… in its menu, shows a preview of the card, then
+its settings in sections, none folded: **Content**, what the card reads; **Display**, how it
+shows it (every card's title is there too); and **Size**, the card's width. Name a setting's
+section with `section`, `"data"` for Content or `"display"`:
 
 ```ts
 density: setting.select({
-  label: "Density",
+  label: "Row spacing",
   options: [
-    { label: "Default", value: "default" },
+    { label: "Comfortable", value: "default" },
     { label: "Compact", value: "compact" },
   ],
   defaultValue: "default",
-  section: "advanced",
+  section: "display",
 }),
 ```
 
 Without one, a Collection, Filter, Sort, Group by or Field setting and a `setting.dateRange` are
-drawn under Data, and every other setting under Display. A setting is folded under Advanced only
-when it says so. Startup refuses a `section` other than `"data"`, `"display"` or `"advanced"`.
+drawn under Content, and every other setting under Display. `"advanced"` is still accepted, from
+when the drawer folded settings away, and is drawn under Display. Startup refuses a `section`
+other than `"data"`, `"display"` or `"advanced"`.
+
+A list's "Number of entries", a number setting keyed `limit`, is drawn as a choice of 5, 10 or
+20 within its bounds; a number stored before that is none of them is shown and kept until the
+reader picks another.
 
 ## Related
 

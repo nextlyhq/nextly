@@ -13,7 +13,15 @@ import {
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
-import { User as UserIcon, LogOut } from "@admin/components/icons";
+import {
+  Discord,
+  ExternalLink,
+  Github,
+  HelpCircle,
+  User as UserIcon,
+  LogOut,
+} from "@admin/components/icons";
+import { ThemeChoice } from "@admin/components/shared/theme-toggle";
 import { ROUTES } from "@admin/constants/routes";
 import {
   useSetInterfaceLanguage,
@@ -32,6 +40,70 @@ interface UserProfileDropdownProps {
   } | null;
   onLogout: () => void;
   className?: string;
+  /**
+   * The help links a plugin has hidden (`header.hide` / `hideDefaults`), read
+   * by the same rule that hid them from the top bar.
+   */
+  hidden?: ReadonlySet<"github" | "discord" | "docs" | "notifications">;
+  /** Where the menu opens from its trigger: to the right of the rail. */
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
+}
+
+/** The help and community links, each hideable by a plugin. */
+const HELP_LINKS = [
+  {
+    id: "docs",
+    label: "Documentation",
+    href: "https://nextlyhq.com/docs",
+    icon: HelpCircle,
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    href: "https://github.com/nextlyhq/nextly",
+    icon: Github,
+  },
+  {
+    id: "discord",
+    label: "Discord",
+    href: "https://discord.gg/hJUg9AZMn",
+    icon: Discord,
+  },
+] as const;
+
+/**
+ * Documentation, GitHub and Discord, as one group.
+ * They lived as icons across the top bar on every page; here they are a click
+ * away without taking the bar's width from the page.
+ */
+function HelpAndCommunity({
+  hidden,
+}: {
+  hidden: ReadonlySet<string>;
+}): JSX.Element | null {
+  const links = HELP_LINKS.filter(link => !hidden.has(link.id));
+  if (links.length === 0) return null;
+  return (
+    <>
+      <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+        Help and community
+      </DropdownMenuLabel>
+      {links.map(({ id, label, href, icon: Icon }) => (
+        <DropdownMenuItem key={id} asChild className="cursor-pointer text-sm">
+          <a href={href} target="_blank" rel="noopener noreferrer">
+            <Icon className="mr-2 h-4 w-4" aria-hidden="true" />
+            {label}
+            <ExternalLink
+              className="ml-auto h-3.5 w-3.5 text-muted-foreground"
+              aria-hidden="true"
+            />
+          </a>
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuSeparator className="my-1" />
+    </>
+  );
 }
 
 /** The radio value standing for "no choice stored": follow the browser. */
@@ -100,6 +172,9 @@ export function UserProfileDropdown({
   user,
   onLogout,
   className,
+  hidden = new Set(),
+  side = "bottom",
+  align = "end",
 }: UserProfileDropdownProps): JSX.Element {
   return (
     <div className={className}>
@@ -120,8 +195,8 @@ export function UserProfileDropdown({
         </DropdownMenuTrigger>
         <DropdownMenuContent
           className="w-64 p-2 mb-2 ml-2 rounded-lg shadow-xl shadow-(color:--nx-shadow-color)/5 admin-dropdown-content border border-border bg-popover"
-          side="bottom"
-          align="end"
+          side={side}
+          align={align}
           forceMount
         >
           {/* User identity block */}
@@ -138,6 +213,9 @@ export function UserProfileDropdown({
             )}
           </div>
           <InterfaceLanguageChoice />
+          <ThemeChoice />
+          <DropdownMenuSeparator className="my-1" />
+          <HelpAndCommunity hidden={hidden} />
           {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             // The signed-in person's own page, which every one of them may

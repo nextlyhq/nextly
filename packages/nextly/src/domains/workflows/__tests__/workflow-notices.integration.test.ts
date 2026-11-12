@@ -293,6 +293,8 @@ describe.each(getConfiguredTestDialects())(
             // The registry's singular label: "Posts" for a collection that names none.
             collection: "Posts",
             title: "Hello",
+            // The field the title came from, for each reader to be judged on.
+            titleField: "title",
             part: "en",
             localized: true,
             step: "Clear",
@@ -711,6 +713,52 @@ describe.each(getConfiguredTestDialects())(
         { retentionMs: null }
       );
       expect(sent).toEqual([]);
+    });
+
+    it("withholds a notice's title from a recipient a field read rule hides the title from", async () => {
+      await boot(dialect);
+      await person(app(), "alice", [
+        ["read", "dossiers"],
+        ["update", "dossiers"],
+      ]);
+      const bob = await person(app(), "bob", [
+        ["read", "dossiers"],
+        ["sign-off", "dossiers"],
+      ]);
+      const dossier = await entry(app(), "dossiers");
+      await seedState(app(), partOf("dossiers", dossier, null), "legal", {
+        enteredBy: "alice",
+        definitionHash: EDITORIAL,
+      });
+      const comment = "Rework the summary";
+
+      await take("dossiers", dossier, [null], "bounce", bob, comment);
+
+      // The snapshot keeps where its title came from, for each reader to be judged on.
+      const [stored] = await workflowNotices();
+      expect(stored?.data).toMatchObject({
+        title: "Hello",
+        titleField: "title",
+      });
+      const service = container.get<NoticesService>("noticesService");
+      const [shown] = (await service.find({ userId: "alice" })).rows;
+      // She may read the document, so she is told of the request, its comment and its page,
+      // but not the title the rule hides from her.
+      expect(JSON.stringify(shown)).not.toContain("Hello");
+      expect(shown?.title).toContain("Dossiers");
+      expect(shown?.body).toContain(comment);
+      expect(shown?.subject.link).toBe(
+        `/admin/collections/dossiers/${dossier}`
+      );
+
+      // Nor does her email name it.
+      await runJobsPass(
+        app().adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        { retentionMs: null }
+      );
+      expect(sent).toHaveLength(1);
+      expect(JSON.stringify(sent[0])).not.toContain("Hello");
     });
 
     it("judges each notice in its own part's language, and a Single as a Single", async () => {

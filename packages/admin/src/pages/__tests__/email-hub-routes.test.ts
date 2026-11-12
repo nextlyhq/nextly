@@ -4,6 +4,9 @@
  * Settings resolves to the redirect and lands on the matching place in the
  * hub.
  *
+ * The hub is a Settings destination, served under `/admin/settings/email`, and
+ * every address it had under `/admin/email` redirects to the same page there.
+ *
  * Asked of the resolver, as a click asks it: a template that is declared but
  * not registered falls through to `NotFoundPage` while every constant reads as
  * intended.
@@ -24,7 +27,10 @@ import {
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
 
-import { emailHubPathFor } from "../dashboard/redirects/EmailSettingsRedirect";
+import {
+  emailHubPathFor,
+  emailRedirectTarget,
+} from "../dashboard/redirects/EmailSettingsRedirect";
 import { routeConfig } from "../registry";
 
 const ID = "3f6c1d2e-8a4b-4c5d-9e6f-7a8b9c0d1e2f";
@@ -134,5 +140,87 @@ describe("the old Settings email URLs", () => {
     expect(
       emailHubPathFor("/admin/settings/email-templates/other/1")
     ).toBeNull();
+  });
+});
+
+describe("the hub's addresses under Settings", () => {
+  it("serves every page of the hub under /admin/settings/email", () => {
+    const hub = [
+      ROUTES.EMAIL,
+      ROUTES.EMAIL_DESIGN,
+      ROUTES.EMAIL_SENDING,
+      ROUTES.EMAIL_ACTIVITY,
+      ROUTES.EMAIL_MESSAGES_CREATE,
+      ROUTES.EMAIL_MESSAGES_EDIT,
+      ROUTES.EMAIL_SENDING_CREATE,
+      ROUTES.EMAIL_SENDING_EDIT,
+    ];
+    for (const path of hub) {
+      expect(
+        path === "/admin/settings/email" ||
+          path.startsWith("/admin/settings/email/"),
+        path
+      ).toBe(true);
+    }
+  });
+});
+
+describe("the hub's old addresses under /admin/email", () => {
+  const OLD: Array<[old: string, now: string]> = [
+    ["/admin/email", ROUTES.EMAIL],
+    ["/admin/email/", ROUTES.EMAIL],
+    ["/admin/email/design", ROUTES.EMAIL_DESIGN],
+    ["/admin/email/sending", ROUTES.EMAIL_SENDING],
+    ["/admin/email/activity", ROUTES.EMAIL_ACTIVITY],
+    ["/admin/email/messages/create", ROUTES.EMAIL_MESSAGES_CREATE],
+    [
+      `/admin/email/messages/edit/${ID}`,
+      buildRoute(ROUTES.EMAIL_MESSAGES_EDIT, { id: ID }),
+    ],
+    ["/admin/email/sending/create", ROUTES.EMAIL_SENDING_CREATE],
+    [
+      `/admin/email/sending/edit/${ID}`,
+      buildRoute(ROUTES.EMAIL_SENDING_EDIT, { id: ID }),
+    ],
+  ];
+
+  it.each(OLD)("resolves %s to the redirect, unguarded", old => {
+    const resolved = resolveRoute(old, "");
+    expect(resolved.Component).toBe(
+      routeConfig[ROUTES.SETTINGS_EMAIL_TEMPLATES].component
+    );
+    // The page it lands on is guarded; a guard here would refuse on a URL
+    // that no longer means anything.
+    expect(resolved.requiredPermission).toBeUndefined();
+  });
+
+  it.each(OLD)("sends %s to %s", (old, now) => {
+    expect(emailHubPathFor(old)).toBe(now);
+  });
+
+  it("keeps the query string and fragment the old address was opened with", () => {
+    expect(
+      emailRedirectTarget({
+        pathname: "/admin/email/messages/create",
+        search: `?duplicate=${ID}`,
+        hash: "",
+      })
+    ).toBe(`${ROUTES.EMAIL_MESSAGES_CREATE}?duplicate=${ID}`);
+    expect(
+      emailRedirectTarget({
+        pathname: `/admin/email/sending/edit/${ID}`,
+        search: "?tab=advanced",
+        hash: "#credentials",
+      })
+    ).toBe(
+      `${buildRoute(ROUTES.EMAIL_SENDING_EDIT, { id: ID })}?tab=advanced#credentials`
+    );
+  });
+
+  it("names nothing that only shares the prefix", () => {
+    expect(emailHubPathFor("/admin/emails")).toBeNull();
+    expect(emailHubPathFor("/admin/email-log")).toBeNull();
+    // The new addresses are not themselves redirected.
+    expect(emailHubPathFor(ROUTES.EMAIL_SENDING)).toBeNull();
   });
 });

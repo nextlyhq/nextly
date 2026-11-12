@@ -4,11 +4,46 @@ import {
   ShieldAlert,
 } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import type { PluginMetadata } from "@admin/types/branding";
 import { describe, expect, it } from "vitest";
 
 import { resolveItemHref } from "../lib/resolve-item-href";
+import type { StandaloneLandingReader } from "../lib/standalone-plugin-landing";
 import type { MainMenuItem } from "../sidebar-types";
+
+/** A reader with no collections and no permissions. */
+const NO_READER: StandaloneLandingReader = {
+  collections: [],
+  capabilities: buildCapabilities([], false, undefined),
+  can: () => false,
+};
+
+/** A reader who may read the given plugin collections, and nothing else. */
+function reading(slugs: readonly string[]): StandaloneLandingReader {
+  return {
+    collections: slugs.map(name => ({ name, admin: { isPlugin: true } })),
+    capabilities: buildCapabilities([], false, {
+      isSuperAdmin: false,
+      validUntil: null,
+      entities: Object.fromEntries(
+        slugs.map(slug => [
+          slug,
+          {
+            kind: "collection" as const,
+            read: true,
+            create: false,
+            update: false,
+            delete: false,
+            publish: false,
+            unpublish: false,
+          },
+        ])
+      ),
+    }),
+    can: () => false,
+  };
+}
 
 const makeItem = (overrides: Partial<MainMenuItem>): MainMenuItem => ({
   id: "dashboard",
@@ -23,7 +58,8 @@ describe("resolveItemHref", () => {
     expect(
       resolveItemHref(
         makeItem({ id: "collections", label: "Collections", href: "#" }),
-        []
+        [],
+        NO_READER
       )
     ).toBe(ROUTES.COLLECTIONS);
   });
@@ -32,7 +68,8 @@ describe("resolveItemHref", () => {
     expect(
       resolveItemHref(
         makeItem({ id: "singles", label: "Singles", href: "#" }),
-        []
+        [],
+        NO_READER
       )
     ).toBe(ROUTES.SINGLES);
   });
@@ -42,6 +79,7 @@ describe("resolveItemHref", () => {
       resolveItemHref(
         makeItem({ id: "plugins", label: "Plugins", href: "#" }),
         [],
+        NO_READER,
         undefined,
         true
       )
@@ -57,6 +95,7 @@ describe("resolveItemHref", () => {
       resolveItemHref(
         makeItem({ id: "plugins", label: "Plugins", href: "#" }),
         [],
+        NO_READER,
         undefined,
         false
       )
@@ -67,7 +106,8 @@ describe("resolveItemHref", () => {
     expect(
       resolveItemHref(
         makeItem({ id: "plugins", label: "Plugins", href: "#" }),
-        []
+        [],
+        NO_READER
       )
     ).toBe("#");
   });
@@ -79,11 +119,11 @@ describe("resolveItemHref", () => {
       href: ROUTES.SETTINGS,
     });
     // Webhook-only role: General is read-settings-guarded, so land on Webhooks.
-    expect(resolveItemHref(settings, [], ROUTES.SETTINGS_WEBHOOKS)).toBe(
-      ROUTES.SETTINGS_WEBHOOKS
-    );
+    expect(
+      resolveItemHref(settings, [], NO_READER, ROUTES.SETTINGS_WEBHOOKS)
+    ).toBe(ROUTES.SETTINGS_WEBHOOKS);
     // No override → the item's own href (General).
-    expect(resolveItemHref(settings, [])).toBe(ROUTES.SETTINGS);
+    expect(resolveItemHref(settings, [], NO_READER)).toBe(ROUTES.SETTINGS);
   });
 
   it("returns the item's own href for non-categorical items (e.g. builders)", () => {
@@ -95,12 +135,13 @@ describe("resolveItemHref", () => {
           href: ROUTES.BUILDER_COLLECTIONS,
           icon: ShieldAlert,
         }),
-        []
+        [],
+        NO_READER
       )
     ).toBe(ROUTES.BUILDER_COLLECTIONS);
   });
 
-  it("routes a standalone plugin icon to its first registered collection", () => {
+  it("routes a standalone plugin icon to the first collection its panel lists", () => {
     const plugins: PluginMetadata[] = [
       {
         name: "Form Builder",
@@ -116,12 +157,13 @@ describe("resolveItemHref", () => {
           href: "#",
           icon: Database,
         }),
-        plugins
+        plugins,
+        reading(["forms", "submissions"])
       )
     ).toBe("/admin/collections/forms");
   });
 
-  it("falls back to '#' for a standalone plugin with no collections", () => {
+  it("falls back to '#' for a standalone plugin with nothing to open", () => {
     const plugins: PluginMetadata[] = [
       { name: "Empty Plugin", collections: [] },
     ];
@@ -133,9 +175,32 @@ describe("resolveItemHref", () => {
           href: "#",
           icon: Database,
         }),
-        plugins
+        plugins,
+        NO_READER
       )
     ).toBe("#");
+  });
+
+  it("routes a standalone plugin icon to the landing the plugin names", () => {
+    const plugins: PluginMetadata[] = [
+      {
+        name: "Form Builder",
+        collections: ["forms"],
+        landing: "/admin/plugins/form-builder/overview",
+      },
+    ];
+    expect(
+      resolveItemHref(
+        makeItem({
+          id: "standalone-form-builder",
+          label: "Forms",
+          href: "#",
+          icon: Database,
+        }),
+        plugins,
+        reading(["forms"])
+      )
+    ).toBe("/admin/plugins/form-builder/overview");
   });
 
   it("falls back to '#' when no matching standalone plugin is found", () => {
@@ -147,16 +212,17 @@ describe("resolveItemHref", () => {
           href: "#",
           icon: Database,
         }),
-        []
+        [],
+        NO_READER
       )
     ).toBe("#");
   });
 
   it("gives the Content item the href it is handed, and none by default", () => {
     const content = makeItem({ id: "content", label: "Content", href: "#" });
-    expect(resolveItemHref(content, [])).toBe("#");
-    expect(resolveItemHref(content, [], undefined, false, ROUTES.SINGLES)).toBe(
-      ROUTES.SINGLES
-    );
+    expect(resolveItemHref(content, [], NO_READER)).toBe("#");
+    expect(
+      resolveItemHref(content, [], NO_READER, undefined, false, ROUTES.SINGLES)
+    ).toBe(ROUTES.SINGLES);
   });
 });

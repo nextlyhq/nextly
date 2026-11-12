@@ -26,10 +26,10 @@ import {
   BuilderNotFoundScreen,
   BuilderPageLayout,
   BuilderSchemaChangeDialogs,
-  DirectFieldGroupsNotice,
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
+import { FieldGroupUsedBy } from "@admin/components/features/schema-builder/FieldGroupUsedBy";
 import { AlertTriangle, RefreshCw } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import {
@@ -293,6 +293,7 @@ export default function FieldGroupBuilderEditPage({
     <BuilderPageLayout
       config={FIELD_GROUP_BUILDER_CONFIG}
       builder={builder}
+      entitySlug={entitySlug}
       name={settings.singularName || slug}
       locked={isLocked}
       configPath={fieldGroup?.configPath}
@@ -351,7 +352,11 @@ export default function FieldGroupBuilderEditPage({
               </div>
             </Alert>
           ) : null}
-          <DirectFieldGroupsNotice fields={fieldGroup.fields} />
+          {/* Who a change here reaches, before any change is made. */}
+          <FieldGroupUsedBy
+            slug={fieldGroup.slug}
+            unsavedCount={unsavedCount}
+          />
         </>
       }
       isSaving={isSaving || confirmation.isApplying}

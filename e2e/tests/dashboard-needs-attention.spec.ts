@@ -161,6 +161,32 @@ async function readCardAsEmpty(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Passes the layout read through without the setup card, so the cards after it pair as a
+ * dashboard without setup pairs them: the setup card shows to the suite's super-admin until
+ * setup is done, and drawn beside Needs attention it would set that row's height.
+ */
+async function readWithoutSetupCard(page: Page): Promise<void> {
+  await page.route(isLayoutRead, async (route: Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const layout = (Array.isArray(body.placements) ? body : body.data) as {
+      placements: Array<{ id: string; widgetId: string }>;
+    };
+    layout.placements = layout.placements.filter(
+      p => p.widgetId !== "core/setup"
+    );
+    await route.fulfill({ response, json: body }).catch(() => {});
+  });
+}
+
 /** A batch answered whole, `{ results }`, or `undefined` for one streamed as lines. */
 function wholeAnswer(text: string): { results: unknown[] } | undefined {
   try {
@@ -400,6 +426,7 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
   const id = await overdueRelease(page, Date.now().toString(36));
   try {
     await answerWithOneItem(page, [CARD, RELEASES]);
+    await readWithoutSetupCard(page);
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoAdmin(page, "");
     const card = page
@@ -411,13 +438,25 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
     await expect(card.getByTestId("needs-attention-item")).toHaveCount(1);
     await expect(releases).toBeVisible();
 
-    // 🔴 At least a row shorter than its stored rows: fixed rows draw it at their full height,
-    // one item over three empty rows. The row it shares sizes to the taller of the two, and
-    // both stand at it, their tops and bottoms aligned.
+    // 🔴 As tall as its content, not its stored rows: fixed rows drew it at their full height,
+    // one item over empty rows. The row it shares is as tall as the taller content of the two,
+    // read with each cell unstretched (`align-self: start`), and both stand at it, their tops and
+    // bottoms aligned.
     const stored = cardHeightPx((await defaultSizeOf(page, CARD)).h);
     const heightOf = async (cell: typeof card) =>
       (await cell.boundingBox())?.height ?? Number.POSITIVE_INFINITY;
-    await expect.poll(() => heightOf(card)).toBeLessThan(stored - 72);
+    await expect.poll(() => heightOf(card)).toBeLessThan(stored);
+    const contentOf = (cell: typeof card) =>
+      cell.evaluate(element => {
+        const style = (element as HTMLElement).style;
+        const before = style.alignSelf;
+        style.alignSelf = "start";
+        const height = element.getBoundingClientRect().height;
+        style.alignSelf = before;
+        return height;
+      });
+    const tallest = Math.max(await contentOf(card), await contentOf(releases));
+    expect(await heightOf(card)).toBeCloseTo(tallest, 0);
     const [attentionBox, releasesBox] = await Promise.all([
       card.boundingBox(),
       releases.boundingBox(),
@@ -431,6 +470,7 @@ test("stands at its one item's height, its row beside Upcoming releases at the s
     ).toBeLessThanOrEqual(1);
   } finally {
     await page.unroute(isBatchRead).catch(() => {});
+    await page.unroute(isLayoutRead).catch(() => {});
     await cancel(page, id);
   }
 });
