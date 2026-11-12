@@ -421,6 +421,22 @@ export interface FormBuilderPluginOptions {
   /**
    * Spam protection configuration.
    */
+  /**
+   * One response per person.
+   */
+  oneResponse?: {
+    /**
+     * How many earlier submissions a form may have for a change of its
+     * one-response setting to give them their keys inside the save itself,
+     * so the save answers with the form as it then stands. A form with more
+     * is brought up to date by the plugin's background sweep instead, and
+     * until it is, each new submission is compared with the earlier answers.
+     * Lower it to keep saves short on a slow database.
+     * @default 200
+     */
+    keysInSave?: number;
+  };
+
   spamProtection?: {
     /**
      * Enable honeypot field for spam detection.
@@ -1019,6 +1035,14 @@ export interface FormSettings {
   oneResponseVersion?: number;
 
   /**
+   * The one-response version whose earlier submissions all carry their keys.
+   * Behind `oneResponseVersion` while the plugin is still making them, after
+   * a change of mode or Email field; unset reads as up to date. Written by
+   * the plugin only.
+   */
+  oneResponseKeyedVersion?: number;
+
+  /**
    * The bot check: `"default"` follows the plugin's option, `"off"` none, or
    * a named provider.
    *
@@ -1232,6 +1256,9 @@ export interface ResolvedFormBuilderConfig {
     defaultToEmail?: string;
     enabled: boolean;
   };
+
+  /** `FormBuilderPluginOptions["oneResponse"]`, every option filled. */
+  oneResponse: Required<NonNullable<FormBuilderPluginOptions["oneResponse"]>>;
 
   spamProtection: {
     honeypot: boolean;

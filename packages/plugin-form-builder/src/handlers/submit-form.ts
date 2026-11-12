@@ -361,6 +361,22 @@ export interface SubmitFormContext {
 // ============================================================
 
 /**
+ * Whether a failed store was refused because the person has responded
+ * already: the database refused a second one-response key, or the hold found
+ * an earlier submission with the same value (`heldRefusal`).
+ */
+function isRepeatResponse(
+  error: unknown,
+  held: ReturnType<typeof heldRefusal>
+): boolean {
+  return (
+    held === "responded" ||
+    (error instanceof NextlyError &&
+      (error as { code?: unknown }).code === "DUPLICATE")
+  );
+}
+
+/**
  * Process a form submission.
  *
  * This is the main entry point for handling form submissions.
@@ -636,12 +652,9 @@ export async function submitForm(
         return { success: false, outcome: "failed", error: SETTINGS_CHANGED };
       }
       // The database refused a second submission with the same one-response
-      // key: one with the same email or network was stored first, even if
-      // only a moment before.
-      if (
-        error instanceof NextlyError &&
-        (error as { code?: unknown }).code === "DUPLICATE"
-      ) {
+      // key, or the hold found an earlier one with its value: one with the
+      // same email or network was stored first, even if only a moment before.
+      if (isRepeatResponse(error, held)) {
         logger.info?.("Repeat submission rejected (one response per person)", {
           formSlug,
         });

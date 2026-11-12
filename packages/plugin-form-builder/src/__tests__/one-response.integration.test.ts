@@ -543,7 +543,8 @@ describe.each(getConfiguredTestDialects())(
         true
       );
       const [row] = await stored(nextly);
-      expect(row?.responseKey).toMatch(/^[0-9a-f]{64}$/);
+      // A network's key, made for the version the change moved the form to.
+      expect(row?.responseKey).toMatch(/^v1:[0-9a-f]{64}$/);
     });
   }
 );
