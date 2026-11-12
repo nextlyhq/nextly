@@ -843,7 +843,7 @@ function Imported({ run }: { run: DryRunBody }): JSX.Element {
     <Card className="grid gap-3 px-6 py-5" role="status">
       <h2 className="flex items-center gap-2.5 text-lg font-semibold text-foreground">
         <CircleCheck className="size-6 text-success-text" aria-hidden="true" />
-        {`${counted(counts.set.values, "value")} imported on ${counted(counts.set.pages, "page")}`}
+        {`${counted(counts.set.values, "value")} imported on ${counted(counts.set.pages, "page")}${run.redirects > 0 ? `, and ${counted(run.redirects, "redirect")} added` : ""}`}
       </h2>
       <p className="text-sm text-muted-foreground">
         {skipped.values > 0
@@ -936,7 +936,7 @@ async function readFor(
       parsed,
     };
     const run = await dryRun(source, false);
-    if (run.held === 0) return nothingIn(tool);
+    if (run.held === 0 && run.redirects === 0) return nothingIn(tool);
     return { tool, name: chosen.name, text, source, run };
   } catch (error) {
     return unreadable(apiErrorMessage(error));
@@ -1038,6 +1038,7 @@ function useImportFlow() {
   return {
     groups,
     ownSeo,
+    language,
     groupsFailed,
     step,
     choice,
@@ -1063,7 +1064,9 @@ function useImportFlow() {
       setRun(undefined);
     },
     readFile: async (chosen: File) => {
-      if (choice?.kind !== "file") return;
+      // A file is read in the site's own language, known once the groups
+      // are read: until then the drop area takes nothing.
+      if (choice?.kind !== "file" || language === undefined) return;
       setFileProblem(undefined);
       setBusy(true);
       const read = await readFor(choice.tool, chosen, language);
@@ -1108,7 +1111,7 @@ function StepBody({ flow }: { flow: ImportFlow }): JSX.Element {
         choice={flow.choice}
         choose={flow.choose}
         file={flow.file}
-        reading={flow.busy}
+        reading={flow.busy || flow.language === undefined}
         problem={flow.fileProblem}
         onFile={chosen => void flow.readFile(chosen)}
         again={flow.forgetFile}
@@ -1118,7 +1121,15 @@ function StepBody({ flow }: { flow: ImportFlow }): JSX.Element {
   if (flow.step === 1) {
     return (
       <div className="grid gap-4">
-        {flow.group !== undefined ? (
+        {flow.group?.own === true ? (
+          // The plugin's own group, as an earlier version kept it: nothing
+          // to match, since its fields are the plugin's own places.
+          <p className="text-sm text-muted-foreground">
+            Titles and descriptions typed the same as the automatic ones
+            become automatic again, so a change to a pattern reaches them.
+            Every other value stays as it is.
+          </p>
+        ) : flow.group !== undefined ? (
           <MatchTable
             group={flow.group}
             map={flow.map}
@@ -1176,18 +1187,27 @@ export function SeoImportPage(): JSX.Element {
   );
 }
 
+/** What the import button says it imports: values, redirects, or both. */
+function importLabel(values: number, redirects: number): string {
+  if (redirects === 0) return `Import ${counted(values, "value")}`;
+  if (values === 0) return `Import ${counted(redirects, "redirect")}`;
+  return `Import ${counted(values, "value")} and ${counted(redirects, "redirect")}`;
+}
+
 /** The step's buttons: back and on, or none once the import is done. */
 function Actions({ flow }: { flow: ImportFlow }): JSX.Element | null {
   const { step, busy } = flow;
   if (typeof step !== "number") return null;
   const valuesToSet =
     flow.run === undefined ? 0 : valueCounts(flow.run).set.values;
+  // Redirects a file names are imported too, with or without values.
+  const redirects = flow.run?.redirects ?? 0;
   const label =
     step === 0
       ? "Continue"
       : step === 1
         ? "Check the result"
-        : `Import ${counted(valuesToSet, "value")}`;
+        : importLabel(valuesToSet, redirects);
   return (
     <div className="flex justify-end gap-2">
       {step === 0 ? (
@@ -1206,7 +1226,11 @@ function Actions({ flow }: { flow: ImportFlow }): JSX.Element | null {
       )}
       <Button
         type="button"
-        disabled={busy || !flow.ready || (step === 2 && valuesToSet === 0)}
+        disabled={
+          busy ||
+          !flow.ready ||
+          (step === 2 && valuesToSet === 0 && redirects === 0)
+        }
         onClick={() =>
           step === 2 ? flow.apply() : flow.goTo(step === 0 ? 1 : 2)
         }

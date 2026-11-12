@@ -81,9 +81,16 @@ export function reportedPages(run: DryRunBody): ImportReportEntry[] {
   );
 }
 
-/** One cell of the downloaded report, quoted where it holds a separator. */
+/**
+ * One cell of the downloaded report: text a spreadsheet would run as a
+ * formula is marked as text first, as the admin's other exports do, since
+ * titles come from outside; then quoted where it holds a separator.
+ */
 function cell(value: string): string {
-  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const formulaLike =
+    /^[=+\-@\t\r]/.test(value) && !/^-?\d+(\.\d+)?$/.test(value);
+  const text = formulaLike ? `'${value}` : value;
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 /** A value's result in words, for the downloaded report. */

@@ -98,9 +98,7 @@ export function sourceOfFile(
       if (!start.startsWith("<") || !/wordpress\.org\/export/i.test(text)) {
         return undefined;
       }
-      return text.includes("rank_math_") && !text.includes("_yoast_wpseo_")
-        ? "rankMath"
-        : "yoast";
+      return pluginOfMeta(text);
     case "rankMathCsv":
       return start.startsWith("<") || start.startsWith("{") || start === ""
         ? undefined
@@ -110,6 +108,24 @@ export function sourceOfFile(
         ? "payload"
         : undefined;
   }
+}
+
+/**
+ * Whose values a WordPress export holds, read from its meta keys alone, not
+ * from page content that may mention another tool's keys: the tool with
+ * more keys in the file, Yoast where neither has any.
+ */
+function pluginOfMeta(xml: string): ImportFileSource {
+  let yoast = 0;
+  let rankMath = 0;
+  for (const match of xml.matchAll(
+    /<wp:meta_key>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)/g
+  )) {
+    const key = match[1] ?? "";
+    if (key.startsWith("_yoast_wpseo_")) yoast++;
+    else if (key.startsWith("rank_math_")) rankMath++;
+  }
+  return rankMath > yoast ? "rankMath" : "yoast";
 }
 
 /** Why a file can't be used, as the one notice says it: its title and what to do. */
