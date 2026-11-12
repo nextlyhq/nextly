@@ -70,6 +70,7 @@ import * as net from "node:net";
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { assertSchemaName } from "@nextlyhq/adapter-drizzle/schema-name";
 import type {
   PostgresAdapterConfig,
@@ -536,8 +537,13 @@ export class PostgresAdapter extends DrizzleAdapter {
           // Before anything writes. `search_path` naming a schema that is not
           // there does not fail — it falls through to whatever else is on the
           // path — so the first migration would create its tables in `public`
-          // and the setting would appear to do nothing.
-          if (this.config.schema && this.config.readOnly) {
+          // and the setting would appear to do nothing. A read-only
+          // connection and `next build`, which writes nothing to the
+          // database, only check that it is there.
+          if (
+            this.config.schema &&
+            (this.config.readOnly || isNextBuildPhase())
+          ) {
             await assertSchemaExists(client, this.config.schema);
           } else if (this.config.schema) {
             await ensureSchemaExists(client, this.config.schema);

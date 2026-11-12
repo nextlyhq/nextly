@@ -11,6 +11,7 @@
  * @module domains/i18n/runtime/companion-io
  */
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type {
   SqlParam,
   SupportedDialect,
@@ -2003,6 +2004,10 @@ export async function ensureCompanionTable(
    */
   onError?: (error: unknown) => void
 ): Promise<boolean> {
+  // `next build` creates no table: a translated entity whose translation table
+  // is missing is one the deploy has not migrated, and `nextly migrate` makes
+  // it. Nothing was created, which is what the answer says.
+  if (isNextBuildPhase()) return false;
   const companionTableName = `${args.tableName}_locales`;
   // Tracked because only a failure of the CREATE itself can be explained away by a concurrent
   // winner. The plan may also carry a seed, and a seed that fails leaves a table this call made —

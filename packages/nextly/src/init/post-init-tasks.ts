@@ -8,6 +8,8 @@
  * @module init/post-init-tasks
  */
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
+
 import {
   repairSqliteTimestamps,
   TIMESTAMP_REPAIR_META_KEY,
@@ -33,6 +35,12 @@ import { provisionUserFieldStorage } from "../domains/users/services/provision-u
  */
 export async function provisionUserFieldsAtStart(): Promise<void> {
   try {
+    // `next build` writes nothing: it loads the fields the database already
+    // records, which is a read, and syncs no definition and adds no column.
+    if (isNextBuildPhase()) {
+      await getService("userExtSchemaService").loadMergedFields();
+      return;
+    }
     await provisionUserFieldStorage({
       codeFields: getService("config").users?.fields ?? [],
       fieldDefService: getService("userFieldDefinitionService"),
@@ -64,19 +72,25 @@ export async function provisionUserFieldsAtStart(): Promise<void> {
  * Failures are caught and logged — they should never prevent Nextly from starting.
  */
 export async function runPostInitTasks(): Promise<void> {
+  // `next build` writes nothing, so the reconciliation and the repair below,
+  // which write, wait for the first start after it. The warnings after them
+  // only read, and run as at any start.
+  const building = isNextBuildPhase();
   // Reconcile email templates with their owners: core's built-ins, each
   // running plugin's contributions, and what the site's code sets. Owned
   // templates follow their owner until the site overrides them, and an edit
   // made before ownership existed is kept as an override. Idempotent.
-  try {
-    const emailTemplateService = getService("emailTemplateService");
-    emailTemplateService.configureOwnership(
-      ownershipFromConfig(getService("config"))
-    );
-    await emailTemplateService.ensureBuiltInTemplates();
-  } catch {
-    // Silently skip — email services may not be registered,
-    // or the email_templates table may not exist yet (migrations not run)
+  if (!building) {
+    try {
+      const emailTemplateService = getService("emailTemplateService");
+      emailTemplateService.configureOwnership(
+        ownershipFromConfig(getService("config"))
+      );
+      await emailTemplateService.ensureBuiltInTemplates();
+    } catch {
+      // Silently skip — email services may not be registered,
+      // or the email_templates table may not exist yet (migrations not run)
+    }
   }
 
   // Rewrite timestamps an older SQLite writer stored as text. Runs once and
@@ -86,7 +100,7 @@ export async function runPostInitTasks(): Promise<void> {
   // database sorts wrongly while looking fine.
   try {
     const adapter = getService("adapter");
-    if (adapter.dialect === "sqlite") {
+    if (adapter.dialect === "sqlite" && !building) {
       const meta = getService("metaService");
       const done = await meta.get<string>(TIMESTAMP_REPAIR_META_KEY);
       if (!done) {

@@ -25,6 +25,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 import type { AnyRelations } from "drizzle-orm";
@@ -1011,6 +1012,16 @@ async function registerServicesOnce(
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
 
+  // `next build` sets up nothing: a database with no Nextly tables is one the
+  // deploy has not migrated, and the build refuses, naming the command, rather
+  // than creating the schema in a database other deployments may share.
+  if (isNextBuildPhase()) {
+    const { refuseUnmigratedDatabaseInBuild } = await import(
+      "../init/first-run"
+    );
+    await refuseUnmigratedDatabaseInBuild(adapter);
+  }
+
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
@@ -1251,16 +1262,19 @@ async function registerServicesOnce(
       // Review state recorded under an earlier configuration follows the workflows this boot
       // registered first: a detached collection's is removed, and renamed or mapped stages are
       // followed. Before the approvals are judged below, so a part a rename kept is judged under the
-      // definition it now carries.
-      await followWorkflowDefinitions(adapter, workflows.values());
+      // definition it now carries. Not in `next build`, which writes nothing: the first start of the
+      // build's own deployment brings both in line.
+      if (!isNextBuildPhase()) {
+        await followWorkflowDefinitions(adapter, workflows.values());
 
-      // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
-      // this boot registered are published, unless the definition keeps them. After the migrations,
-      // so the review states table is there to read where it exists at all.
-      await withdrawApprovalsUnderEarlierDefinitions(
-        adapter,
-        workflows.values()
-      );
+        // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
+        // this boot registered are published, unless the definition keeps them. After the
+        // migrations, so the review states table is there to read where it exists at all.
+        await withdrawApprovalsUnderEarlierDefinitions(
+          adapter,
+          workflows.values()
+        );
+      }
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing
@@ -1293,19 +1307,24 @@ async function registerServicesOnce(
   // Before any plugin starts, as stored plugin secrets are: the key naming
   // deleted plugin-defined people, sealed under a secret since rotated, is
   // sealed again under the current one, so the retired secret can go once
-  // the app has started with both.
-  await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
-  // Held queued messages too, for the same reason: one sealed under a secret
-  // since rotated is sealed again under the current one while the previous
-  // can still open it, so a message outlives any number of rotations.
-  await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
-  // And every plugin digest key stored, a removed plugin's included, for the
-  // same reason: a digest stored beside a plugin's records must match for as
-  // long as they are kept.
-  await resealPluginDigestKeys(
-    getService("metaService"),
-    pluginSettingsSecrets(env)
-  );
+  // the app has started with both. Not in `next build`: no plugin needs these
+  // to start, the first start after the build still has the retired secret to
+  // open them, and the build writes nothing but a plugin's own settings seal.
+  if (!isNextBuildPhase()) {
+    await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
+    // Held queued messages too, for the same reason: one sealed under a
+    // secret since rotated is sealed again under the current one while the
+    // previous can still open it, so a message outlives any number of
+    // rotations.
+    await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
+    // And every plugin digest key stored, a removed plugin's included, for
+    // the same reason: a digest stored beside a plugin's records must match
+    // for as long as they are kept.
+    await resealPluginDigestKeys(
+      getService("metaService"),
+      pluginSettingsSecrets(env)
+    );
+  }
 
   // In production, until the install has an administrator, setup needs a
   // token: an install with none gets one here, printed once to this output.
@@ -2051,11 +2070,15 @@ async function reconcileBuilderTargets<T>(
 
   const judged = await args.beforeWrites(changed.components);
 
+  // Not in `next build`, which writes nothing: a plugin's field on a Builder
+  // entity reaches the database through `nextly migrate`, and the build reads
+  // the entity as the database holds it.
   if (
     changed.collections.length +
       changed.singles.length +
       changed.components.length >
-    0
+      0 &&
+    !isNextBuildPhase()
   ) {
     await materializeBuilderChanges({
       adapter,
@@ -2535,6 +2558,14 @@ async function syncCodeFirstEntities(
    */
   workflows: ReadonlyMap<string, RegisteredWorkflow>
 ): Promise<{ databaseNotSetUp: boolean }> {
+  // `next build` writes no registry row and creates no table: it publishes
+  // what the configuration declares, which is all a read needs beside the
+  // registry rows `nextly migrate` wrote.
+  if (isNextBuildPhase()) {
+    publishCodeFirstDeclarations(transformedConfig, workflows);
+    return { databaseNotSetUp: false };
+  }
+
   // In development only, what each code-first collection's, Single's and field group's registry
   // row records before the syncs below replace it, held for the apply this start runs next: on
   // SQLite a relationship switched between one related entry and many while the server was stopped
@@ -2627,6 +2658,46 @@ async function syncCodeFirstEntities(
 }
 
 /**
+ * What the code-first sync publishes in this process, without the sync: the
+ * collections' database options, the code-defined access rules, the declared
+ * entities, the code-first Singles and the workflows. A start in `next build`
+ * runs this in place of `syncCodeFirstEntities`, so its reads see the
+ * configuration's declarations while it writes nothing.
+ */
+function publishCodeFirstDeclarations(
+  transformedConfig: NextlyServiceConfig,
+  workflows: ReadonlyMap<string, RegisteredWorkflow>
+): void {
+  publishCollectionDbOptions(codeFirstCollectionConfigs(transformedConfig));
+  registerCodeDefinedAccess(transformedConfig);
+  publishDeclaredEntities(transformedConfig);
+  if (transformedConfig.singles && transformedConfig.singles.length > 0) {
+    container
+      .get<SingleRegistryService>("singleRegistryService")
+      .setCodeFirstSingles(transformedConfig.singles);
+  }
+  publishWorkflows(workflows);
+}
+
+/**
+ * The code-first collections as every sync route stores and publishes them,
+ * each tagged by who contributed it (D14): `plugin:<name>` for a slug a
+ * resolved plugin declares in `contributes.collections`, `code` otherwise.
+ */
+function codeFirstCollectionConfigs(
+  transformedConfig: NextlyServiceConfig
+): CodeFirstCollectionConfig[] {
+  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
+    pluginCollectionSources(transformedConfig.plugins ?? []);
+  return (transformedConfig.collections ?? []).map(collection =>
+    toCodeFirstCollectionConfig(
+      collection,
+      sourceBySlug.get(collection.slug) ?? "code"
+    )
+  );
+}
+
+/**
  * Layer 6.5: Pending migrations, BEFORE any plugin initialises.
  *
  * Pending migrations apply before `initializePlugins`, so a plugin's `init`
@@ -2642,6 +2713,10 @@ async function runBootMigrations(
   deferredExtends: DeferredExtends,
   deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
 ): Promise<void> {
+  // `next build` runs no migration, whatever the setting: the build may point
+  // at a database other deployments share, and the deploy's own `nextly
+  // migrate`, or the first start with migrations at start, migrates it.
+  if (isNextBuildPhase()) return;
   const { runProdMigrationsIfEnabled } = await import(
     "../init/prod-migrations"
   );
@@ -3849,22 +3924,11 @@ async function syncCodeFirstCollections(
     }
   }
 
-  // Provenance (D14): tag each collection by who contributed it. A slug that a
-  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
-  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
-  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
-  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
-    pluginCollectionSources(transformedConfig.plugins ?? []);
-
-  // The projection every sync route shares, so what boot stores and publishes
-  // for a collection is what reload and `db:sync` store and publish for it.
-  const codeFirstConfigs: CodeFirstCollectionConfig[] =
-    transformedConfig.collections.map(collection =>
-      toCodeFirstCollectionConfig(
-        collection,
-        sourceBySlug.get(collection.slug) ?? "code"
-      )
-    );
+  // Provenance (D14) drives locking + `nextly prune`, and is the rule
+  // `nextly migrate`'s registry writer gives a row it creates, too. The
+  // projection every sync route shares, so what boot stores and publishes for
+  // a collection is what reload and `db:sync` store and publish for it.
+  const codeFirstConfigs = codeFirstCollectionConfigs(transformedConfig);
 
   // Boot's one publish of the collection db options, from the same projection
   // the sync stores, and before it: they are the config's, not the
