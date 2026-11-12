@@ -507,11 +507,22 @@ export type {
  * the fields it contributes (`contributes.collections` / `contributes.extend`).
  * @public Exercised by `plugin-seo` (its `seo` field group) and
  *   `plugin-form-builder` (its internal `form-uploads` and
- *   `form-submission-sends` collections, typed `CollectionConfig`, with a
- *   `date` field). Field factories graduate here as first-party plugins
+ *   `form-submission-sends` collections, typed `CollectionConfig`, with
+ *   `date`, `json` and `number` fields: a send's when, its recipients and
+ *   cancel causes, and its attempts). Intended to be stable, as the other
+ *   factories here are. Field factories graduate here as first-party plugins
  *   exercise them; more can be added the same way.
  */
-export { text, textarea, checkbox, upload, group, date } from "nextly";
+export {
+  text,
+  textarea,
+  checkbox,
+  upload,
+  group,
+  date,
+  json,
+  number,
+} from "nextly";
 export type { FieldConfig, CollectionConfig } from "nextly";
 
 /**

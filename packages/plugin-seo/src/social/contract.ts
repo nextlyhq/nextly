@@ -70,11 +70,20 @@ const FORMATS_NOT_SHOWN: Readonly<Record<string, string>> = {
  * image a route draws (`/og?title=...`).
  */
 export function shareImageFormatProblem(url: string): string | undefined {
+  const format = imageFormatOf(url);
+  return format === undefined ? undefined : FORMATS_NOT_SHOWN[format];
+}
+
+/**
+ * A picture's file type, in lower case, read from the last segment of its
+ * address: nothing where the address names none, such as an image a route
+ * draws (`/og?title=...`).
+ */
+export function imageFormatOf(url: string): string | undefined {
   const path = url.split(/[?#]/, 1)[0] ?? "";
   const last = path.slice(path.lastIndexOf("/") + 1);
   const dot = last.lastIndexOf(".");
-  if (dot <= 0) return undefined;
-  return FORMATS_NOT_SHOWN[last.slice(dot + 1).toLowerCase()];
+  return dot <= 0 ? undefined : last.slice(dot + 1).toLowerCase();
 }
 
 /** Where the action answers, under the plugin's routes. */

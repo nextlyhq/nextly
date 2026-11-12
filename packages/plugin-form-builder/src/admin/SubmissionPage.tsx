@@ -92,6 +92,7 @@ import {
   AnswerValue,
   SubmissionAnswers,
 } from "./components/submissions/SubmissionAnswers";
+import { SubmissionEmails } from "./components/submissions/SubmissionEmails";
 import { readPermissions } from "./use-admin-permissions";
 import { useBuilderConfig } from "./use-builder-config";
 import {
@@ -870,7 +871,7 @@ function SidePanel({
   return (
     <aside
       aria-label="Submission details"
-      className="w-full shrink-0 border-t border-border bg-card lg:w-80 lg:border-t-0 lg:border-l"
+      className="w-full shrink-0 border-t border-border bg-card @4xl/content:w-80 @4xl/content:border-t-0 @4xl/content:border-l"
     >
       <div className="space-y-6 px-4 py-6 sm:px-6">
         <section
@@ -1115,6 +1116,11 @@ function useSubmissionRights(slug: string, held: boolean) {
     known: has !== undefined,
     canUpdate: !held && has?.(`update-${slug}`) === true,
     canDelete: !held && has?.(`delete-${slug}`) === true,
+    // Resend asks both: updating submissions and managing email deliveries.
+    canResend:
+      !held &&
+      has?.(`update-${slug}`) === true &&
+      has?.("manage-email-deliveries") === true,
   };
 }
 
@@ -1372,7 +1378,10 @@ export function SubmissionPage({
   const { formId, form, formsSlug } = useSubmissionForm(submission);
   const extensionFields = useSubmissionFields();
   const held = heldBy(documentLock);
-  const { known, canUpdate, canDelete } = useSubmissionRights(slug, held);
+  const { known, canUpdate, canDelete, canResend } = useSubmissionRights(
+    slug,
+    held
+  );
   const { data: place } = useListPlace(slug, submission, scope);
   const { save, remove, error } = useSubmissionWrites(slug, id, held);
   useReadOnOpen(submission, known, canUpdate, save);
@@ -1409,8 +1418,12 @@ export function SubmissionPage({
       />
 
       <PageFrame type="editor">
-        <div className="flex min-h-full flex-col lg:flex-row">
-          <div className="min-w-0 flex-1 space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+        {/* Beside the answers once the admin's content area, not the window,
+            is wide enough: its sidebars take a varying share of the window,
+            and a viewport breakpoint at 1024px left the answers a column
+            narrower than the details. */}
+        <div className="flex min-h-full flex-col @4xl/content:flex-row">
+          <div className="min-w-0 flex-1 space-y-5 px-4 py-6 sm:px-6 @4xl/content:px-8">
             <SubmissionHeader sender={sender} formName={formName} when={when} />
             <ChangeError error={pageNotice(error, readError)} />
 
@@ -1421,6 +1434,14 @@ export function SubmissionPage({
               canUpdate={canUpdate}
               save={save}
             />
+
+            <Box title="Emails">
+              <SubmissionEmails
+                submissionId={submission.id}
+                status={status}
+                canResend={canResend}
+              />
+            </Box>
 
             <ActivityBox submission={submission} status={status} />
           </div>

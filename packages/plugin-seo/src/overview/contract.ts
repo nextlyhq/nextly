@@ -246,7 +246,7 @@ const RECENT_NOT_FOUND_SHOWN = 3;
 
 /**
  * The addresses not found in the last week, most recent first, as many as
- * the Overview lists.
+ * the Overview lists; one someone chose to ignore is left out.
  */
 export function recentNotFound(
   rows: readonly NotFoundView[],
@@ -255,6 +255,7 @@ export function recentNotFound(
   const since = now - RECENT_NOT_FOUND_DAYS * 24 * 60 * 60 * 1000;
   return rows
     .filter(row => {
+      if (row.ignored) return false;
       const seen = Date.parse(row.lastSeen);
       return Number.isFinite(seen) && seen >= since;
     })

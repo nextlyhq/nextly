@@ -1,6 +1,7 @@
 /**
- * The bulk edit screen's routes: the content types it can edit, one type's
- * pages, and a save of the titles and descriptions a person changed.
+ * The bulk routes Pages' Edit mode reads and saves through: the content
+ * types it can edit, one type's pages, and a save of the titles and
+ * descriptions a person changed.
  *
  * Every read and write is made as the person asking, so the collection's own
  * access decides what they see and change. A save is one transaction: every
@@ -675,7 +676,7 @@ async function save(
   return { saved: ids.length, revs };
 }
 
-/** The bulk edit screen's routes. */
+/** The bulk routes, which Pages' Edit mode reads and saves through. */
 export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
   return [
     {

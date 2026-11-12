@@ -10,8 +10,8 @@
  * ```
  *
  * The page is answered by the same order of who wins as every page with an
- * entry: what a person set for the address on the Pages and addresses
- * screen wins, the route's own title, description and social values come
+ * entry: what a person set for the address on Pages wins, the route's own
+ * title, description and social values come
  * next, then the site's title pattern and defaults. Its canonical is its own
  * address. It is hidden where the screen hides it or its route's own
  * metadata does; the route can hide it, never list one the screen hides.
