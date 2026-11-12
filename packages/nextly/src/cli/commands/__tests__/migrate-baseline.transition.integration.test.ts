@@ -928,6 +928,85 @@ function runSuite(dialect: SupportedDialect): void {
     ]);
   });
 
+  it("allows a pending owner index definition change while its name remains declared", async () => {
+    // When a plugin updates an explicitly named index (e.g. changing columns
+    // or uniqueness) and the migration has not applied yet, the live index
+    // still belongs to the plugin's declared stream and must not block adoption.
+    const pluginV1 = definePlugin({
+      name: "fx",
+      version: "0.0.0",
+      nextly: "*",
+      contributes: {
+        schema: {
+          prefix: "fx",
+          tables: [
+            defineTable(
+              "notes",
+              { id: col.id(), title: col.shortText() },
+              { indexes: [{ columns: ["title"], name: "idx_fx_notes_custom" }] }
+            ),
+          ],
+        },
+      },
+    });
+    const pluginV2 = definePlugin({
+      name: "fx",
+      version: "0.0.0",
+      nextly: "*",
+      contributes: {
+        schema: {
+          prefix: "fx",
+          tables: [
+            defineTable(
+              "notes",
+              { id: col.id(), title: col.shortText() },
+              {
+                indexes: [
+                  {
+                    columns: ["title"],
+                    unique: true,
+                    name: "idx_fx_notes_custom",
+                  },
+                ],
+              }
+            ),
+          ],
+        },
+      },
+    });
+    const appHook: SchemaHook = ({ schema }) => {
+      schema.extendTable("fx__notes", {
+        columns: { app_ref: col.shortText({ nullable: true }) },
+      });
+    };
+    await runDbSync(
+      h,
+      defineConfig({
+        plugins: [pluginV1],
+        collections: [],
+        db: { schema: { extend: [appHook] } },
+      })
+    );
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: defineConfig({
+          plugins: [pluginV2],
+          collections: [],
+          db: { schema: { extend: [appHook] } },
+        }),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(adopted.kind).toBe("baselined");
+  });
+
   it("refuses a withdrawn index-only contribution on a core table", async () => {
     // An app index added to an existing core column carries no contributed
     // column beside it; withdrawing it must still be caught rather than skipped

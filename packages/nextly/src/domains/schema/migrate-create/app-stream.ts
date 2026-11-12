@@ -41,11 +41,7 @@ import {
   onlyElements,
   withEntityContributions,
 } from "../extension/entity-contributions";
-import {
-  indexKey,
-  isManagedIndexName,
-  textColumnsOf,
-} from "../pipeline/diff/index-util";
+import { isManagedIndexName } from "../pipeline/diff/index-util";
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
@@ -816,15 +812,15 @@ function unexplainedColumns(input: {
 /**
  * Live indexes on an owner's table that neither declaration nor contribution explains.
  *
- * Matches by exact index name and `indexKey` (ordered columns, uniqueness,
- * predicate and expression): every plugin index derives a deterministic
+ * Matches by index name (as `unexplainedColumns` and `unexplainedChecks` do)
+ * rather than definition shape: every plugin index derives a deterministic
  * `idx_`/`uq_` name through `resolveIndexName` (as every contributed index
- * does), so matching by name prevents both a duplicate-shape withdrawn app
- * index and a withdrawn app index shadowing a pending owner declaration from
- * passing as declared. On core tables, dialect bundles declare column uniques
- * and partial indexes outside `bare.indexes` under non-managed names
- * (`*_key`, `*_unique`, etc.), so unmanaged core indexes are skipped while
- * withdrawn index-only contributions are caught.
+ * does), so matching by name flags withdrawn app indexes without refusing a
+ * pending owner index whose columns, uniqueness, predicate or expression
+ * changed. On core tables, dialect bundles declare column uniques and
+ * partial indexes outside `bare.indexes` under non-managed names (`*_key`,
+ * `*_unique`, etc.), so unmanaged core indexes are skipped while withdrawn
+ * index-only contributions are caught.
  */
 function unexplainedIndexes(input: {
   bare: TableSpec;
@@ -836,18 +832,15 @@ function unexplainedIndexes(input: {
     return [];
   }
   const isCore = input.core.has(input.bare.name);
-  const contributed = new Set(input.elements.indexes);
-  const bareText = textColumnsOf(input.bare.columns);
-  const liveText = textColumnsOf(input.live.columns);
-  const declaredByName = new Map(
-    input.bare.indexes.map(index => [index.name, indexKey(index, bareText)])
-  );
+  const explained = new Set([
+    ...input.bare.indexes.map(index => index.name),
+    ...input.elements.indexes,
+  ]);
   return input.live.indexes
     .filter(
       index =>
-        !contributed.has(index.name) &&
         (!isCore || isManagedIndexName(index.name)) &&
-        declaredByName.get(index.name) !== indexKey(index, liveText)
+        !explained.has(index.name)
     )
     .map(index => index.name);
 }
