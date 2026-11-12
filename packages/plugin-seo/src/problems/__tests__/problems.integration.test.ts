@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
 import { lastCatchUp } from "../../address-record/catch-up";
+import { recordProxySeen } from "../../redirects/proxy-seen";
 import { putRedirect } from "../../redirects/store";
 import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
@@ -393,6 +394,35 @@ describe.each(getConfiguredTestDialects())(
       // Given a moment, as a save's check would have had.
       await new Promise(resolve => setTimeout(resolve, 300));
       expect(await rows(t)).toEqual(kept);
+    });
+
+    it("lists saved redirects as not served until the site's Proxy runs, to who may see redirects", async () => {
+      const { ctx } = await boot(dialect);
+      const unserved = async (reader: Reader) =>
+        (await problemList(ctx, CHECKS, reader)).problems.filter(
+          p => p.kind === "proxyNotWired"
+        );
+      // No redirect saved: nothing is going unserved yet.
+      expect(await unserved(everything)).toEqual([]);
+
+      await ctx.services.collections.withTransaction(tx =>
+        putRedirect(ctx, tx, {
+          locale: "en",
+          origin: "person",
+          source: "/old",
+          target: "/new",
+        })
+      );
+      expect((await unserved(everything)).map(p => p.what)).toEqual([
+        "1 redirect is saved but not served: proxy.ts is not wired, so no request has reached the site's Proxy.",
+      ]);
+      expect(await unserved({ ...everything, seesRedirects: false })).toEqual(
+        []
+      );
+
+      // Once the Proxy has handled a request, the redirects are served.
+      await recordProxySeen(ctx);
+      expect(await unserved(everything)).toEqual([]);
     });
 
     it("a full check reports a redirect that takes more than one hop", async () => {

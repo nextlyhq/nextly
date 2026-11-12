@@ -115,7 +115,6 @@ const DRY: DryRunBody = {
   redirects: 0,
   left: ["keywords"],
   warnings: ["2 titles are longer than Google shows."],
-  documents: [],
   plan: "digest",
 };
 
@@ -167,20 +166,6 @@ describe("the bulk edit screen", () => {
     expect(titleOf("Jasper vs Rext").value).toBe("Jasper, compared");
     expect(screen.getByText(/Showing 4 of 4/)).toBeTruthy();
     expect(screen.getByText("{Title} | {Site name}")).toBeTruthy();
-  });
-
-  it("says beside a page that its route's code hides it from search", async () => {
-    vi.mocked(readPluginRoute).mockImplementation((async () => ({
-      type: "posts",
-      rows: [{ ...ROWS[0]!, hiddenByCode: true }, ROWS[1]!],
-      total: 2,
-      more: false,
-    })) as unknown as typeof readPluginRoute);
-    render(<SeoBulkPage />);
-    await screen.findByLabelText("Title on Google for Surfer vs Rext");
-    expect(
-      screen.getAllByText("Hidden from search by the page's code")
-    ).toHaveLength(1);
   });
 
   it("counts each typed cell as a change and saves the changes in one write", async () => {

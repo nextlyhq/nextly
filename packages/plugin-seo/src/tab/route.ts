@@ -29,6 +29,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
+import { readSingle, singleAccessOf } from "../bulk/singles";
 import { productionAddressesOf } from "../canonical";
 import { servedAt } from "../languages/versions";
 import { mayChangePageSeo } from "../permissions";
@@ -300,9 +301,23 @@ async function mayReadEntry(
 }
 
 /**
+ * Whether the caller may read the Single `slug` itself in `locale`, through
+ * the Single's own read: its rules may refuse one language and not another.
+ */
+async function mayReadSingle(
+  ctx: PluginRouteContext,
+  slug: string,
+  locale: string | undefined
+): Promise<boolean> {
+  const document = await readSingle(slug, await singleAccessOf(ctx), locale);
+  return document !== undefined;
+}
+
+/**
  * What the page's route last supplied in code, in `locale` (the site's
  * default language where none): nothing for an entry not yet saved, which
- * no route has answered, or one the caller may not read.
+ * no route has answered, or a page the caller may not read in that
+ * language.
  */
 async function codeLevelOf(
   ctx: PluginRouteContext,
@@ -314,6 +329,8 @@ async function codeLevelOf(
     if (id === undefined || !(await mayReadEntry(ctx, body.slug, id, locale))) {
       return {};
     }
+  } else if (!(await mayReadSingle(ctx, body.slug, locale))) {
+    return {};
   }
   const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
   return routeValuesOf(ctx, {
