@@ -32,9 +32,10 @@ const ENCODED_UNIT = /^[A-Za-z0-9%._-]+$/;
 
 /**
  * What a decoded name may not hold: control and format characters (a line break, a terminal
- * escape, a direction override) and the backtick a message quotes it with.
+ * escape, a direction override), Unicode's line and paragraph separators, which break a line as a
+ * line feed does, and the backtick a message quotes it with.
  */
-const UNPRINTABLE = /[\p{Cc}\p{Cf}`]/u;
+const UNPRINTABLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}`]/u;
 
 /** `name` percent-encoded down to letters, digits, `%`, `.`, `_` and `-`; undefined where it cannot be. */
 function encoded(name: string): string | undefined {
