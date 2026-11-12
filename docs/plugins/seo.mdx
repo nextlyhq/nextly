@@ -1252,9 +1252,11 @@ A request is counted once, however many times Next.js renders its not-found page
 ## Problems
 
 **SEO › Problems** in the admin lists what affects how the site shows up in search and when
-shared, grouped by kind, each with a button that goes straight to its fix: the page's SEO tab or
-its content, the SEO settings, the media library, or a note to copy for a developer where the fix
-is in code. There is no score, and nothing on the list stops anyone publishing.
+shared, one row for each kind of problem, the most serious first: its severity, what is wrong,
+whether it is on the whole site or on pages, and on how many pages. Each problem goes straight to
+its fix: the page's SEO tab or its content, the SEO settings, the media library, or a note to copy
+for a developer where the fix is in code. A row naming several pages opens on each of them, with
+its own fix. There is no score, and nothing on the list stops anyone publishing.
 
 Each public page of the collections and Singles the plugin extends is checked, in every language
 it is published in and at its address there, as its head would be served, for:
@@ -1264,7 +1266,8 @@ it is published in and at its address there, as its head would be served, for:
 - a title or description another page has too;
 - a title over 60 characters, or a description over 160, named with its length as a warning (the
   value is saved and served as it is);
-- a canonical typed for the page that names another address;
+- a canonical typed for the page that names another address, unless the page is marked as having
+  first appeared on another site, which makes that address the one meant;
 - a link in its content to an address of a content type that no page holds;
 - no share image, one networks crop or shrink, or one in a format some networks don't show
   (SVG, AVIF or WebP);
@@ -1280,8 +1283,8 @@ another address. **Notices** are worth a look with nothing wrong in what is serv
 description longer than Google shows, and images with no alt text. Everything else is a
 **warning**. A problem is counted once for each page a check fails on, however many times it fails
 there, and once for a check of the whole site, however many things it names, on Problems and on
-the Overview alike. A count on the Overview opens Problems showing that severity only, with a link
-back to every problem.
+the Overview alike. Problems shows every severity or one at a time, each with its count, and a
+count on the Overview opens it showing that severity only.
 
 A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
 checked only for broken links and alt text. The site as a
@@ -1309,7 +1312,7 @@ a redirect that takes more than one hop: those are on the list itself.
   it. A save that changes a page's address, title or description, and a deletion, mark the last
   full check as out of date, since another page's result may have changed.
 - **The whole site is checked when the list opens** and its last full check is over 24 hours old,
-  and whenever someone chooses **Check now**. The list says when it was last checked. No scheduler
+  and whenever someone chooses **Check again**. The list says when it was last checked. No scheduler
   is needed, so this works the same on a self-hosted server.
 - **Serving a page runs no check.** What each check found is kept, and the list reads it.
 - **A full check waits for the plugin's record of addresses** to be brought up to date after a

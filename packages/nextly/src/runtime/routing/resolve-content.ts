@@ -110,6 +110,11 @@ interface ResolveContentOptionsBase {
   /** Rich-text output format for rich-text fields (default the reader's). */
   richTextFormat?: "json" | "html" | "both";
   /**
+   * How rich-text HTML is styled (default the reader's): `"none"` for classes
+   * only, so the site's stylesheet decides the look.
+   */
+  richTextStyles?: "default" | "none";
+  /**
    * Extra cache tags merged with the collection's own tag. Add related
    * collections' tags (e.g. `nextlyTags("authors")`) when a `depth > 0` read
    * populates relations, so a write to one of those busts this read too.
@@ -269,6 +274,23 @@ async function readOverlay(
   }
 }
 
+/**
+ * How a read returns rich text, from the options: each part only where the
+ * caller set it, so an unset one leaves the reader's own default.
+ */
+function richTextOutputOf(
+  options: Pick<ResolveContentOptions, "richTextFormat" | "richTextStyles">
+): Pick<ResolveContentOptions, "richTextFormat" | "richTextStyles"> {
+  return {
+    ...(options.richTextFormat
+      ? { richTextFormat: options.richTextFormat }
+      : {}),
+    ...(options.richTextStyles
+      ? { richTextStyles: options.richTextStyles }
+      : {}),
+  };
+}
+
 export async function resolveContent(
   collection: string,
   slug: string,
@@ -282,6 +304,8 @@ export async function resolveContent(
   const grantedEntryId = options.entryId;
   const depth = options.depth ?? 1;
   const locale = options.locale;
+  // How rich text comes back, on every read below.
+  const richTextOutput = richTextOutputOf(options);
   const overrideAccess = options.overrideAccess ?? false;
   const callerOverrideAccess = options.callerOverrideAccess ?? overrideAccess;
   const user = options.user;
@@ -408,9 +432,7 @@ export async function resolveContent(
       overrideAccess: callerOverrideAccess,
       trusted,
       user,
-      ...(options.richTextFormat
-        ? { richTextFormat: options.richTextFormat }
-        : {}),
+      ...richTextOutput,
       ...(locale ? { locale } : {}),
     });
     return result.items[0] ?? null;
@@ -436,9 +458,7 @@ export async function resolveContent(
             // Keeps the row bypass above and gives back the field half, judged
             // as the sharer.
             ...sharerFieldAccess,
-            ...(options.richTextFormat
-              ? { richTextFormat: options.richTextFormat }
-              : {}),
+            ...richTextOutput,
             ...(locale ? { locale } : {}),
           })
         );
@@ -490,9 +510,7 @@ export async function resolveContent(
         // hands back the field half to the sharer's own rules. Resolves to
         // today's behaviour on every non-draft read.
         ...sharerFieldAccess,
-        ...(options.richTextFormat
-          ? { richTextFormat: options.richTextFormat }
-          : {}),
+        ...richTextOutput,
         // The content locale drives the localized read + fallback.
         ...(locale ? { locale } : {}),
       });
@@ -529,9 +547,7 @@ export async function resolveContent(
           // by the same rules. Carrying the plain `user` here handed back the
           // fully trusted draft and undid the enforcement one line earlier.
           ...sharerFieldAccess,
-          ...(options.richTextFormat
-            ? { richTextFormat: options.richTextFormat }
-            : {}),
+          ...richTextOutput,
           ...(locale ? { locale } : {}),
         })
       );
@@ -639,6 +655,8 @@ export async function resolveContent(
       // not be "json"), so key it as "inherit" — never as a concrete format — so
       // an explicit-format call can't reuse an inherited-shape cache entry.
       options.richTextFormat ?? "inherit",
+      // The styles change the HTML the read returns, keyed the same way.
+      options.richTextStyles ?? "inherit",
       // The bound changes which related rows come back, so two routes that
       // differ only in what they trust must not share an entry.
       //

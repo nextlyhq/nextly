@@ -32,6 +32,15 @@ export interface StoredLanguageReader {
   fingerprint(): Promise<string>;
   rows(): Promise<StoredLanguage[]>;
   /**
+   * The fingerprint and the rows in one read, for the registry's first read, which needs both: a
+   * start would otherwise wait for one read and then the other. A reader without it is read in
+   * two.
+   */
+  fingerprintedRows?(): Promise<{
+    fingerprint: string;
+    rows: StoredLanguage[];
+  }>;
+  /**
    * Whether the calling flow is inside an open transaction. A read made there would take another
    * connection from the pool, outside the transaction, so the registry reads nothing and keeps the
    * list it holds. A reader that cannot tell answers as if outside one.
@@ -174,11 +183,28 @@ export class LanguageRegistry {
    * what it found, or an older read finishing late would put the previous list back and have it
    * trusted for another interval.
    */
+  /**
+   * The fingerprint, and the rows when it moved. Before anything was read the
+   * rows are wanted whatever the fingerprint says, so both come in one read
+   * where the reader offers one.
+   */
+  private async readChanged(
+    reader: StoredLanguageReader
+  ): Promise<{ fingerprint: string; rows: StoredLanguage[] | undefined }> {
+    if (this.fingerprintSeen === undefined && reader.fingerprintedRows) {
+      return reader.fingerprintedRows();
+    }
+    const fingerprint = await reader.fingerprint();
+    return {
+      fingerprint,
+      rows:
+        fingerprint !== this.fingerprintSeen ? await reader.rows() : undefined,
+    };
+  }
+
   private async read(reader: StoredLanguageReader): Promise<void> {
     const started = ++this.readsStarted;
-    const fingerprint = await reader.fingerprint();
-    const rows =
-      fingerprint !== this.fingerprintSeen ? await reader.rows() : undefined;
+    const { fingerprint, rows } = await this.readChanged(reader);
     if (started !== this.readsStarted) return;
     if (rows) {
       this.stored = localizationFromStoredLanguages(rows);

@@ -331,12 +331,14 @@ describe("introspectLiveSnapshot - mysql", () => {
 
 describe("introspectLiveSnapshot - sqlite", () => {
   it("reads columns + indexes, filtering pk/autoindex", async () => {
-    // Call order per table: table_info, index_list, then index_info per index.
+    // Three statements whatever the number of tables: the columns, the index
+    // keys (each with its index's list entry and CREATE INDEX), and each
+    // table's CREATE TABLE beside its foreign keys. Every row names its table.
     const all = vi
       .fn()
-      // table_info(dc_posts)
       .mockReturnValueOnce([
         {
+          tbl: "dc_posts",
           cid: 0,
           name: "id",
           type: "INTEGER",
@@ -345,6 +347,7 @@ describe("introspectLiveSnapshot - sqlite", () => {
           pk: 1,
         },
         {
+          tbl: "dc_posts",
           cid: 1,
           name: "slug",
           type: "TEXT",
@@ -353,13 +356,46 @@ describe("introspectLiveSnapshot - sqlite", () => {
           pk: 0,
         },
       ])
-      // index_list(dc_posts): one real unique index + one autoindex (filtered)
+      // One real unique index, and an autoindex that is filtered out.
       .mockReturnValueOnce([
-        { name: "uq_dc_posts_slug", unique: 1, origin: "c" },
-        { name: "sqlite_autoindex_dc_posts_1", unique: 1, origin: "u" },
+        {
+          tbl: "dc_posts",
+          seq: 0,
+          idx: "uq_dc_posts_slug",
+          unique: 1,
+          origin: "c",
+          partial: 0,
+          seqno: 0,
+          col: "slug",
+          idx_sql: "CREATE UNIQUE INDEX uq_dc_posts_slug ON dc_posts (slug)",
+        },
+        {
+          tbl: "dc_posts",
+          seq: 1,
+          idx: "sqlite_autoindex_dc_posts_1",
+          unique: 1,
+          origin: "u",
+          partial: 0,
+          seqno: 0,
+          col: "slug",
+          idx_sql: null,
+        },
       ])
-      // index_info(uq_dc_posts_slug)
-      .mockReturnValueOnce([{ name: "slug" }]);
+      // No foreign key: the outer join's one row of nulls, with the table's SQL.
+      .mockReturnValueOnce([
+        {
+          tbl: "dc_posts",
+          create_sql:
+            "CREATE TABLE dc_posts (id integer primary key, slug text)",
+          id: null,
+          seq: null,
+          table: null,
+          from: null,
+          to: null,
+          on_delete: null,
+          on_update: null,
+        },
+      ]);
     const db = { all };
 
     const snapshot = await introspectLiveSnapshot(db, "sqlite", ["dc_posts"]);
@@ -377,6 +413,8 @@ describe("introspectLiveSnapshot - sqlite", () => {
     expect(snapshot.tables[0].indexes).toEqual([
       { name: "uq_dc_posts_slug", columns: ["slug"], unique: true },
     ]);
+    expect(snapshot.tables[0].foreignKeys).toEqual([]);
+    expect(all).toHaveBeenCalledTimes(3);
   });
 
   it("skips tables with empty PRAGMA result (table not yet created)", async () => {

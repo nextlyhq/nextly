@@ -192,7 +192,9 @@ test("each count links to Problems narrowed to it, and Problems' badge is the er
     new RegExp(`${SECTION}/problems\\?severity=notice$`)
   );
   // Narrowed to notices, counted as the Overview counts them.
-  await expect(page.getByText("Showing notices only.")).toBeVisible();
+  await expect(
+    page.getByRole("radio", { name: /^Notices \d+$/ })
+  ).toHaveAttribute("aria-checked", "true");
   await expect(
     page.getByRole("heading", { level: 1, name: /Problems/ })
   ).toBeVisible();
