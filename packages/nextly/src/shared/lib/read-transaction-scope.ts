@@ -190,6 +190,23 @@ export function readsOnTransaction(value: object): boolean {
   return viewed.has(value);
 }
 
+/** The transaction each view reads on. */
+const viewTransactions = new WeakMap<object, TransactionContext>();
+
+/**
+ * Whether `value` is a view whose reads run on its transaction at this call:
+ * {@link readsOnTransaction}, and its scope is still the calling flow's, so a
+ * read made through it now reaches that transaction's connection rather than
+ * the pool, as a view kept past its scope's end does.
+ */
+export function readsOnTransactionNow(value: object): boolean {
+  const adapter = viewed.get(value);
+  return (
+    adapter !== undefined &&
+    readTransactionOf(adapter) === viewTransactions.get(value)
+  );
+}
+
 /**
  * The adapter a service reads through: `adapter` itself, or inside
  * {@link runReadsInTransaction} a view of it whose reads run on the scope's
@@ -208,6 +225,7 @@ export function adapterForReads(adapter: DrizzleAdapter): DrizzleAdapter {
     view = readingOn(adapter, tx);
     byTransaction.set(tx, view);
     viewed.set(view, adapter);
+    viewTransactions.set(view, tx);
   }
   return view;
 }
