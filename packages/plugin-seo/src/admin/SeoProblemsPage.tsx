@@ -119,7 +119,7 @@ function pagesOf(group: ProblemGroup): number {
 /** One row's opened region: each page or thing it names, with its own fix. */
 function Named({ group }: { group: ProblemGroup }): JSX.Element {
   return (
-    <ul className="flex flex-col gap-1 text-sm">
+    <ul className="flex max-w-2xl flex-col gap-1 text-sm">
       {group.problems.map((problem, index) => (
         <li key={index} className="flex flex-wrap items-center gap-x-2.5">
           <span className="font-medium">{problem.subject.label}</span>
@@ -164,7 +164,9 @@ function columnsFor(
       cell: ({ row }) => {
         const [only] = row.problems;
         return (
-          <div className="flex flex-col gap-0.5">
+          // The table is as wide as its cells' text, so a long sentence is
+          // held to a readable measure and wraps within it.
+          <div className="flex max-w-md flex-col gap-0.5">
             <span className="font-semibold">{row.title}</span>
             <span className="text-sm text-muted-foreground">
               {/* One problem says what is wrong; several, what they share. */}

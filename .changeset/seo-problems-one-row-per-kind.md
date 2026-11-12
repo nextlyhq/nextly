@@ -34,3 +34,6 @@ serious first: its severity, what is wrong, whether it is on the whole site or o
 pages, and the way to its fix. A row naming several pages opens on each page with its own fix, the
 errors, warnings and notices can be shown one at a time with the counts the Overview shows, and the
 screen says when the site was last checked, with Check again beside it.
+
+A page marked as having first appeared on another site no longer lists its canonical to that site
+as a problem: the address is the one meant, so the site's search health stays clear.
