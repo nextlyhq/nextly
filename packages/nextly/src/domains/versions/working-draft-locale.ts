@@ -13,8 +13,16 @@
  * collection that is not localized, and keying by it would strand the draft the
  * moment a later read arrived under a different one.
  *
+ * Under per-language storage every document keeps its translatable values per
+ * language, translated or not, and writes them in the language the request
+ * names. So every document's draft is keyed by that language, and the
+ * `null` slot is the document's SHARED draft: the pending change to its shared
+ * fields, which no language owns (see `part-drafts`).
+ *
  * @module domains/versions/working-draft-locale
  */
+
+import { perLanguageStorageEnabled } from "../i18n/per-language-storage";
 
 /** What the caller knows about the document and the request. */
 export interface WorkingDraftLocaleInput {
@@ -38,6 +46,6 @@ export interface WorkingDraftLocaleInput {
 export function workingDraftLocale(
   input: WorkingDraftLocaleInput
 ): string | null {
-  if (!input.documentLocalized) return null;
+  if (!input.documentLocalized && !perLanguageStorageEnabled()) return null;
   return input.requestLocale ?? input.defaultLocale ?? null;
 }

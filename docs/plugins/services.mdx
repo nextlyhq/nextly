@@ -129,7 +129,7 @@ its methods.
 | ------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `collections` | `PluginCollectionService` | the methods above                                                                                                                                                                                                                                                                                               |
 | `users`       | `PluginUserService`       | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile`                                                                                                                                                        |
-| `media`       | `PluginMediaService`      | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions` |
+| `media`       | `PluginMediaService`      | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions`, `isInUse` |
 | `email`       | `PluginEmailService`      | `send`, `sendWithTemplate`, `queue`, `queueWithTemplate`, `forgetSends`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate`                                                                                                                          |
 | `versions`    | `PluginVersionsService`   | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows`, and `pins` (version pins on the plugin's own transaction; see [Pinning a version](/docs/versions#from-a-plugin))                                                                                                 |
 
@@ -718,4 +718,18 @@ ctx.hooks.onInTransaction("orders", async write => {
     { tx: write.db }
   );
 });
+```
+
+## Freeing media nothing uses
+
+A plugin that uploads files for its own records can free them once those records are gone. `ctx.services.media.isInUse(mediaId)` (`@experimental`) answers whether anything still uses an item: a document's field, as the usage record has it, or an avatar or logo that keeps its address. It is the same condition the media library's **Unused** view applies, asked of one item.
+
+It answers `true` whenever that cannot be known yet: before `nextly migrate` has made the usage table, while the record is unbuilt for content written before it existed (`nextly media reindex-usage`), or for an id no item has. So a plugin that deletes only what reads as unused never deletes on a guess. Your plugin's own records are not in the usage record: check them yourself before asking. Delete after the transaction that removed your records, since a media delete is refused inside one.
+
+```ts
+for (const mediaId of fileIdsOfDeletedRecord) {
+  if (await stillReferencedByMyRecords(mediaId)) continue;
+  if (await ctx.services.media.isInUse(mediaId)) continue;
+  await ctx.services.media.delete(mediaId);
+}
 ```

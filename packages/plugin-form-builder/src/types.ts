@@ -244,6 +244,7 @@ export interface FormFieldToggles {
   date: boolean | Partial<FieldBlockConfig>;
   time: boolean | Partial<FieldBlockConfig>;
   hidden: boolean | Partial<FieldBlockConfig>;
+  consent: boolean | Partial<FieldBlockConfig>;
 }
 
 /** What a host may override on a collection this plugin contributes. */
@@ -647,7 +648,8 @@ export type FormField =
   | FileFormField
   | DateFormField
   | TimeFormField
-  | HiddenFormField;
+  | HiddenFormField
+  | ConsentFormField;
 
 /**
  * A form field of a built-in type OR a plugin-contributed type. Stored form
@@ -673,7 +675,8 @@ export type FormFieldType =
   | "file"
   | "date"
   | "time"
-  | "hidden";
+  | "hidden"
+  | "consent";
 
 /**
  * A form field's type on the wire: a built-in or a plugin-contributed type id
@@ -699,6 +702,7 @@ export const BUILT_IN_FORM_FIELD_TYPES: readonly FormFieldType[] = [
   "date",
   "time",
   "hidden",
+  "consent",
 ];
 
 const BUILT_IN_FORM_FIELD_TYPES_SET = new Set<string>(
@@ -905,6 +909,27 @@ export interface TimeFormField extends Omit<BaseFormField, "type"> {
 export interface HiddenFormField extends Omit<BaseFormField, "type"> {
   type: "hidden";
   defaultValue?: string;
+}
+
+/**
+ * A box the visitor ticks to agree to a text, such as a privacy policy. It is
+ * always required, and its answer keeps the text the visitor was shown, so a
+ * later change to the text does not change what an earlier visitor agreed to.
+ */
+export interface ConsentFormField extends Omit<BaseFormField, "type"> {
+  type: "consent";
+  /** What the visitor agrees to, shown beside the box and stored with it. */
+  agreementText: string;
+}
+
+/**
+ * A consent field's stored answer: whether the visitor agreed, and the text
+ * the form showed them. Made by the server from the form, never taken from
+ * the visitor, and never changed by an edit of the submission.
+ */
+export interface ConsentAnswer {
+  agreed: boolean;
+  text: string;
 }
 
 // ============================================================

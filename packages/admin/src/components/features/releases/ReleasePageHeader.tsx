@@ -274,15 +274,10 @@ function TitleEditor({
         </Button>
       </div>
       {trimmed === "" ? (
-        <p className="text-sm text-danger-text">
-          A release needs a name.
-        </p>
+        <p className="text-sm text-danger-text">A release needs a name.</p>
       ) : null}
       {update.isError ? (
-        <p
-          role="alert"
-          className="text-sm text-danger-text"
-        >
+        <p role="alert" className="text-sm text-danger-text">
           {releaseErrorMessage(update.error, "The release was not renamed.")}
         </p>
       ) : null}
@@ -327,10 +322,7 @@ function DescriptionEditor({
         </Button>
       </div>
       {update.isError ? (
-        <p
-          role="alert"
-          className="text-sm text-danger-text"
-        >
+        <p role="alert" className="text-sm text-danger-text">
           {releaseErrorMessage(
             update.error,
             "The description was not changed."
@@ -390,10 +382,7 @@ function HeaderActions({
                 <DropdownMenuItem
                   key={offer.id}
                   onSelect={() => onOpenDialog({ release, action: offer.id })}
-                  className={cn(
-                    offer.destructive &&
-                      "text-danger-text"
-                  )}
+                  className={cn(offer.destructive && "text-danger-text")}
                 >
                   {offer.label}
                 </DropdownMenuItem>

@@ -42,6 +42,7 @@ import {
   judgeBotCheck,
   warnUncheckedBotChecks,
 } from "./handlers/bot-check";
+import { refuseBlankConsentText } from "./handlers/consent-text-check";
 import {
   type RecordedSend,
   recordSend,
@@ -91,6 +92,12 @@ import type {
   FormEmailNotification,
   ResolvedFormBuilderConfig,
 } from "./types";
+import {
+  CONSENT_EDIT_REFUSED,
+  editedConsents,
+  isConsentAnswer,
+  storedConsentNames,
+} from "./utils/consent";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
 import { normalizeFormSettings } from "./utils/form-settings";
@@ -170,6 +177,7 @@ function resolveConfig(
       date: options.fields?.date ?? true,
       time: options.fields?.time ?? true,
       hidden: options.fields?.hidden ?? true,
+      consent: options.fields?.consent ?? true,
     },
 
     redirectRelationships: normalizeRedirectRelationships(
@@ -731,9 +739,11 @@ export function formBuilder(
       });
 
       // A form saved to compare one response per email has an Email field
-      // it can compare, however it is saved.
+      // it can compare, and each consent has a text to agree to, however it
+      // is saved.
       nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
         refuseOneResponseFieldProblem(context);
+        refuseBlankConsentText(context);
         return (context as { data?: unknown }).data;
       });
 
@@ -1304,7 +1314,16 @@ export async function prepareSubmissionForWrite(
   const marks = submissionMarks(submission);
 
   const form = await formToCheckAgainst(marks, formsSlug, formId, nextly);
-  const fields = form.fields as AnyFormField[];
+  // What the visitor sent, as stored, which an update's consents are held to.
+  const storedAnswers =
+    ctx.operation === "create" || stored?.data === undefined
+      ? undefined
+      : submittedPayload(stored.data);
+  const fields = consentsKept(
+    form.fields as AnyFormField[],
+    storedAnswers,
+    incoming
+  );
 
   // Spam is judged HERE, at the seam every door passes through, rather than in
   // the route: the submissions collection grants public create, so the generic
@@ -1338,6 +1357,9 @@ export async function prepareSubmissionForWrite(
   const prepared = prepareSubmission({
     data: incoming,
     fields,
+    // A new submission's consents are checked against the text shown; an
+    // update's are held to what is stored (`consentsKept`).
+    fresh: ctx.operation === "create",
     validate: marks?.keepAsEvidence !== true && spam === undefined,
   });
 
@@ -1351,7 +1373,7 @@ export async function prepareSubmissionForWrite(
 
   ctx.data = {
     ...submission,
-    data: prepared.data,
+    data: { ...prepared.data, ...storedConsents(form, storedAnswers) },
     ...startingStatus(ctx, marks),
   };
   if (spam) {
@@ -1363,7 +1385,14 @@ export async function prepareSubmissionForWrite(
     ctx.data.spamReason = spam.reason ?? null;
   }
   if (ctx.operation !== "create" && submission.data === undefined) {
-    stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
+    // Judged on what is stored, consents carried over: a consent read again
+    // with the form's current text is not an edit.
+    stampDerivedEdit(
+      ctx.data,
+      ctx.user,
+      incoming,
+      ctx.data.data as Record<string, unknown>
+    );
   }
   stampRequestAddress(ctx, ctx.data);
   if (ctx.operation === "create") {
@@ -1384,6 +1413,59 @@ export async function prepareSubmissionForWrite(
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * The fields an update of a submission is checked against, refusing one that
+ * would change a consent. A consent keeps what the visitor agreed to and the
+ * text they were shown, so no edit, by staff or through the API, may change
+ * it. Refused rather than quietly kept, so the editor learns their change did
+ * not happen. A consent with no stored consent (the field was added after this
+ * submission, or was another kind of field when it was made) is left out of
+ * the checks: nobody but the visitor can give one, and they were not asked.
+ */
+function consentsKept(
+  fields: AnyFormField[],
+  stored: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown>
+): AnyFormField[] {
+  if (stored === undefined) return fields;
+  const edited = editedConsents(fields, stored, incoming);
+  if (edited.length > 0) {
+    throw NextlyError.validation({
+      errors: edited.map(path => ({
+        path,
+        code: "INVALID",
+        message: CONSENT_EDIT_REFUSED,
+      })),
+    });
+  }
+  return fields.filter(
+    // Checked only where the field and the stored answer agree on being a
+    // consent: a consent stored under a field that is now something else, or
+    // an earlier answer under a field now a consent, is carried over as it is.
+    field => (field.type === "consent") === isConsentAnswer(stored[field.name])
+  );
+}
+
+/**
+ * The stored consent answers an update carries over as they were. Checking an
+ * update re-reads a consent with the form's current text, and drops one whose
+ * field the form no longer has; this puts back what the visitor agreed to.
+ */
+function storedConsents(
+  form: { fields?: unknown },
+  stored: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  if (stored === undefined) return {};
+  const kept: Record<string, unknown> = {};
+  for (const name of storedConsentNames(
+    form.fields as AnyFormField[],
+    stored
+  )) {
+    if (stored[name] !== undefined) kept[name] = stored[name];
+  }
+  return kept;
 }
 
 /**

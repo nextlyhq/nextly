@@ -28,6 +28,10 @@ import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
 import { DualSidebarOutline } from "../components/layout/sidebar/DualSidebarOutline";
 import {
+  RailFootPluginItemsProvider,
+  useIsInRailFootHost,
+} from "../components/layout/sidebar/RailFootPluginItems";
+import {
   SidePanelReservationProvider,
   useReservedInlineEnd,
 } from "../components/layout/SidePanelReservation";
@@ -133,114 +137,152 @@ function DashboardChrome({
   return (
     <MediaProvider>
       <SidebarProvider defaultOpen className="h-full overflow-hidden">
-        <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
-          {/* First in the tab order, ahead of the menu, rail and header, on
+        {/* Above every rail foot (the rail's, the drawer's and the bar's),
+            so plugins' rail-foot items are mounted once, for as long as the
+            layout is, and only moved into the foot that is showing. */}
+        <RailFootPluginItemsProvider>
+          <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
+            {/* First in the tab order, ahead of the menu, rail and header, on
               every page this layout draws, the editor included. */}
-          <SkipToContent />
-          {/* The phone header: the logo and the menu button, drawn only while
+            <SkipToContent />
+            {/* The phone header: the logo and the menu button, drawn only while
               a surface has taken the top bar away (a document view such as
               the builder). Otherwise the menu button is in the top bar, so a
               phone gets the one bar every other width gets. */}
-          {hidden.has("header") && (
-            <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
-              <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="-ml-2 h-9 w-9 text-foreground"
-                  onClick={() => setIsMobileMenuOpen(true)}
-                >
-                  <Menu className="h-5 w-5" />
-                  <span className="sr-only">Open the navigation menu</span>
-                </Button>
-                <div className="flex items-center gap-2">
-                  {/* The one boxed mark the rail and sign-in show, or the
+            {hidden.has("header") && (
+              <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
+                <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="-ml-2 h-9 w-9 text-foreground"
+                    onClick={() => setIsMobileMenuOpen(true)}
+                  >
+                    <Menu className="h-5 w-5" />
+                    <span className="sr-only">Open the navigation menu</span>
+                  </Button>
+                  <div className="flex items-center gap-2">
+                    {/* The one boxed mark the rail and sign-in show, or the
                       configured logo fitted to the same square. */}
-                  <ThemeAwareLogo
-                    boxed
-                    alt={branding?.logoText ?? "Logo"}
-                    className="size-7 object-contain"
-                  />
-                  {!branding?.logoUrl &&
-                    !branding?.logoUrlLight &&
-                    !branding?.logoUrlDark && (
-                      <span className="text-sm font-semibold tracking-tight text-foreground">
-                        {branding?.logoText ?? "Nextly"}
-                      </span>
-                    )}
+                    <ThemeAwareLogo
+                      boxed
+                      alt={branding?.logoText ?? "Logo"}
+                      className="size-7 object-contain"
+                    />
+                    {!branding?.logoUrl &&
+                      !branding?.logoUrlLight &&
+                      !branding?.logoUrlDark && (
+                        <span className="text-sm font-semibold tracking-tight text-foreground">
+                          {branding?.logoText ?? "Nextly"}
+                        </span>
+                      )}
+                  </div>
                 </div>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-1 min-h-0 overflow-hidden">
-            {!hideSidebarColumn && (
-              <div className="hidden lg:flex h-full overflow-hidden shrink-0">
-                {sessionConfirmed ? <DualSidebar /> : <DualSidebarOutline />}
               </div>
             )}
 
-            <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
-              <SheetContent
-                side="left"
-                className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
+            <div className="flex flex-1 min-h-0 overflow-hidden">
+              {!hideSidebarColumn && (
+                <div className="hidden lg:flex h-full overflow-hidden shrink-0">
+                  {sessionConfirmed ? <DualSidebar /> : <DualSidebarOutline />}
+                </div>
+              )}
+
+              <NavigationDrawer
+                open={isMobileMenuOpen}
+                onOpenChange={setIsMobileMenuOpen}
               >
-                {/* Screen-reader label for the drawer dialog. */}
-                <SheetTitle className="sr-only">Navigation menu</SheetTitle>
-                <SheetDescription className="sr-only">
-                  Primary admin navigation
-                </SheetDescription>
                 {sessionConfirmed ? (
                   <DualSidebar isMobile />
                 ) : (
                   <DualSidebarOutline isMobile />
                 )}
-              </SheetContent>
-            </Sheet>
+              </NavigationDrawer>
 
-            {/* Main Content */}
-            <div
-              className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden relative transition-[padding] duration-150"
-              style={{ paddingInlineEnd: reservedInlineEnd }}
-            >
-              {!hidden.has("header") && (
-                <DashboardHeader onOpenMenu={() => setIsMobileMenuOpen(true)} />
-              )}
-              {/* The line under the bar and the slow-start message, while
+              {/* Main Content */}
+              <div
+                className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden relative transition-[padding] duration-150"
+                style={{ paddingInlineEnd: reservedInlineEnd }}
+              >
+                {!hidden.has("header") && (
+                  <DashboardHeader
+                    onOpenMenu={() => setIsMobileMenuOpen(true)}
+                  />
+                )}
+                {/* The line under the bar and the slow-start message, while
                   the screen waits; laid over the column, so they move
                   nothing. */}
-              <ScreenWaitSigns />
-              {/* Named container so content responds to the panel width
+                <ScreenWaitSigns />
+                {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}
-              {/* The skip link's target: an id to name, and tabIndex -1 so
+                {/* The skip link's target: an id to name, and tabIndex -1 so
                   focus can land on it without adding a Tab stop. */}
-              <main
-                id={MAIN_CONTENT_ID}
-                tabIndex={-1}
-                className="@container/content flex-1 overflow-y-auto bg-transparent focus:outline-none"
-              >
-                <ErrorBoundary
-                  fallback={
-                    <div className="flex h-full items-center justify-center bg-background p-6 text-center">
-                      <div className="max-w-md rounded-lg bg-card p-6 shadow-xl  border border-border">
-                        <h2 className="text-xl font-bold text-foreground mb-2">
-                          Something went wrong
-                        </h2>
-                        <p className="text-sm text-muted-foreground">
-                          Failed to load the dashboard content. Please try
-                          refreshing the page.
-                        </p>
-                      </div>
-                    </div>
-                  }
+                <main
+                  id={MAIN_CONTENT_ID}
+                  tabIndex={-1}
+                  className="@container/content flex-1 overflow-y-auto bg-transparent focus:outline-none"
                 >
-                  {children}
-                </ErrorBoundary>
-              </main>
+                  <ErrorBoundary
+                    fallback={
+                      <div className="flex h-full items-center justify-center bg-background p-6 text-center">
+                        <div className="max-w-md rounded-lg bg-card p-6 shadow-xl  border border-border">
+                          <h2 className="text-xl font-bold text-foreground mb-2">
+                            Something went wrong
+                          </h2>
+                          <p className="text-sm text-muted-foreground">
+                            Failed to load the dashboard content. Please try
+                            refreshing the page.
+                          </p>
+                        </div>
+                      </div>
+                    }
+                  >
+                    {children}
+                  </ErrorBoundary>
+                </main>
+              </div>
             </div>
           </div>
-        </div>
+        </RailFootPluginItemsProvider>
       </SidebarProvider>
     </MediaProvider>
+  );
+}
+
+/**
+ * The navigation drawer, below the width where the rail shows.
+ *
+ * The plugins' rail-foot items are moved into its foot while it is open, but
+ * drawn from outside it in the React tree, so a press or focus on one would
+ * read as outside the drawer and close it, losing the click. Those count as
+ * inside.
+ */
+function NavigationDrawer({
+  open,
+  onOpenChange,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const inRailFoot = useIsInRailFootHost();
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="left"
+        className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
+        onInteractOutside={event => {
+          if (inRailFoot(event.target)) event.preventDefault();
+        }}
+      >
+        {/* Screen-reader label for the drawer dialog. */}
+        <SheetTitle className="sr-only">Navigation menu</SheetTitle>
+        <SheetDescription className="sr-only">
+          Primary admin navigation
+        </SheetDescription>
+        {children}
+      </SheetContent>
+    </Sheet>
   );
 }
