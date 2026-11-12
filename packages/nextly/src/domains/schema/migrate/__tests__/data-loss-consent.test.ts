@@ -465,6 +465,25 @@ describe("describing a deletion", () => {
       "0003_x's DOWN drops a table or column"
     );
   });
+
+  it("says why it goes, after what and how much", () => {
+    expect(
+      describeDeletion({
+        kind: "table",
+        table: "dc_posts",
+        count: 3,
+        reason: "no longer in the config",
+      })
+    ).toBe("table dc_posts (3 rows): no longer in the config");
+    expect(
+      describeDeletion({
+        kind: "column",
+        table: "dc_pages",
+        column: "summary",
+        reason: "rename to excerpt declined",
+      })
+    ).toBe("column dc_pages.summary: rename to excerpt declined");
+  });
 });
 
 describe("counting deletions", () => {

@@ -140,12 +140,35 @@ export function databaseNotSetUp(cause?: unknown): NextlyError {
  * race to create it without a lock, and a half-made schema serves nobody, so
  * a production start that does not run the migrations itself creates nothing
  * and says to run `nextly migrate`. Reading the probe is the only statement.
+ * In `next build`, `refuseUnmigratedDatabaseInBuild` answers instead, naming
+ * the build.
  */
 export async function assertDatabaseSetUp(
   adapter: Pick<AdapterLike, "tableExists">
 ): Promise<void> {
   if (await adapter.tableExists(PROBE_TABLE)) return;
   throw databaseNotSetUp();
+}
+
+/**
+ * In `next build`, refuse a database with no Nextly tables.
+ *
+ * The build sets up nothing: it may point at a database other deployments
+ * share, and a database with no Nextly tables is one whose deploy skipped
+ * `nextly migrate`. Saying so names the fix, where creating the schema here
+ * would race every other worker of the build without the schema lock, and
+ * reading on would fail each page with a missing table instead. Asked of the
+ * table the first start probes for, so the two agree on what "set up" means.
+ */
+export async function refuseUnmigratedDatabaseInBuild(
+  adapter: Pick<DrizzleAdapter, "tableExists">
+): Promise<void> {
+  if (await adapter.tableExists(PROBE_TABLE)) return;
+  throw new NextlyError({
+    code: "NEXTLY_DATABASE_NOT_MIGRATED",
+    publicMessage:
+      "The database has no Nextly tables. Run `nextly migrate` before `next build`.",
+  });
 }
 
 /**

@@ -97,16 +97,14 @@ describeEachDialect(
       });
       expect(made.success, JSON.stringify(made)).toBe(true);
       for (const heading of ["Hello", "World"]) {
-        const created = await handler()
-          .getEntryService()
-          .createEntry(
-            {
-              collectionName: "onelangposts",
-              overrideAccess: true,
-              locale: "en",
-            },
-            { heading }
-          );
+        const created = await handler().getEntryService().createEntry(
+          {
+            collectionName: "onelangposts",
+            overrideAccess: true,
+            locale: "en",
+          },
+          { heading }
+        );
         expect(created.success, JSON.stringify(created)).toBe(true);
       }
       return headings();

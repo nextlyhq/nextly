@@ -21,6 +21,7 @@ import type {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import {
+  fieldSettingsChanged,
   withUnsaidKept,
   type RecordedWriteOptions,
 } from "../../collections/services/collection-registry-service";
@@ -1075,6 +1076,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     if (
       repairedTableName !== undefined ||
       !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
       (config.localized === true) !== (existing.localized === true)
     ) {
       return "update";
@@ -1190,7 +1194,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         : options.existing;
     const config =
       options.leavesUnsaid === true
-        ? withUnsaidKept(recorded, existing)
+        ? withUnsaidKept(recorded, existing, options.cleared)
         : recorded;
     const schemaHash = calculateSchemaHash(config.fields);
     const pointer =

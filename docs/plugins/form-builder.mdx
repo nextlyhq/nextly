@@ -156,6 +156,14 @@ formSubmissionOverrides: {
 }
 ```
 
+Fields you add show on each submission's page in the admin, under **Details**, with their
+values, except a field hidden from the admin (`admin: { hidden: true }`), one shown only
+when a condition holds (`admin.condition`), and one that holds fields of its own (a group,
+array or blocks). The page shows them read-only: it draws editors
+for a submission's answers, status and note, not for fields it does not know. Set them from your own code with the Direct API
+(`nextly.update({ collection: 'form-submissions', id, data: { priority: 'high' } })`) or the
+REST entries API.
+
 ## Field Types
 
 All 14 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
@@ -378,12 +386,12 @@ it is supposed to depend on. An application that hosts its own route, as below, 
 
 A form's Settings can limit each person to one response. The server compares a keyed one-way digest of what tells people apart, never the value itself, and a unique index refuses a second submission with the same digest when it is stored, so two sent at once cannot both get in.
 
-| Setting (`settings.oneResponse`) | Compares | Notes |
-| --- | --- | --- |
-| `off` | nothing | The default: anyone may respond again. |
-| `email` | the answer to the chosen Email field (`settings.oneResponseField`), ignoring case | The field must be required and not hidden by a condition, so every response carries an address. Saving a form that breaks this is refused, and the builder will not delete the field, make it optional or give it a condition while it is chosen. |
-| `ip` | the network address | People sharing an office or home network count as one. Needs the trusted IP above. |
-| `browser` | a token the visitor's browser keeps | Counted from when it is chosen. Someone who clears their browser's data, or uses another browser, can respond again. |
+| Setting (`settings.oneResponse`) | Compares                                                                          | Notes                                                                                                                                                                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`                            | nothing                                                                           | The default: anyone may respond again.                                                                                                                                                                                                            |
+| `email`                          | the answer to the chosen Email field (`settings.oneResponseField`), ignoring case | The field must be required and not hidden by a condition, so every response carries an address. Saving a form that breaks this is refused, and the builder will not delete the field, make it optional or give it a condition while it is chosen. |
+| `ip`                             | the network address                                                               | People sharing an office or home network count as one. Needs the trusted IP above.                                                                                                                                                                |
+| `browser`                        | a token the visitor's browser keeps                                               | Counted from when it is chosen. Someone who clears their browser's data, or uses another browser, can respond again.                                                                                                                              |
 
 A second response is refused: `submitForm` answers `outcome: "duplicate"`, and the built-in route answers `409` with the message "You have already submitted this form." A submission marked spam gives its place back.
 
@@ -442,6 +450,15 @@ When the sweep finishes it records that on the form, which moves the form's revi
 **When a response stops counting.** If the submission holding a value is deleted, marked as spam, or edited to another address, the earliest other submission with the same value takes its place. A person who sent two responses before the form compared them still can't send a third.
 
 If a form's setting changes while a submission is on its way, the submission is refused with "This form's settings changed while your response was being sent. Please send it again." and is judged by the new setting when it is sent again.
+
+### The page a submission came from
+
+A submission through `POST /api/forms/:slug/submit` keeps the page it was sent from, taken from the
+browser's `Referer` header: the page's origin and path only. Its query string and fragment are dropped,
+since they can carry personal data, and an address that is not an `http` or `https` page is not kept.
+Each submission's page in the admin shows it under **Details › Page**. The browser reports it, so it is a
+hint for staff rather than proof; a site that sends no `Referer` keeps none. A server-side `submitForm`
+call can pass `metadata.page` itself.
 
 ### Privacy: not keeping IP addresses
 

@@ -454,7 +454,7 @@ export async function storeQueuedEmail(
   // Sealed before anything is written, so a message that cannot be stored
   // (variables that refer to themselves) refuses the queue with nothing left.
   const message = sealQueuedMessage(input.message, id, input.secrets);
-  const { id: jobId } = await enqueueInTransaction(tx, input.dialect, {
+  const { id: jobId } = await enqueueInTransaction(tx, {
     slug: QUEUED_EMAIL_JOB,
     input: { queuedId: id },
     runAt: null,

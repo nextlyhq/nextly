@@ -1,13 +1,16 @@
 /**
  * Redirects at request time: the site's Proxy asks this handler about every
  * page request, and it answers with the redirect that holds the address, if
- * any, before the page is served. A saved redirect is read from the database
- * on the next request, so it applies at once, on every instance.
+ * any, before the page is served.
  *
- * Which redirect answers is read from the address record, by the claim keys
- * of the address itself and of every range above it: one indexed read. An
- * address a page holds, exactly or in one of its ranges, is served, whatever
- * pattern covers it.
+ * A request no redirect is for, nearly every one, is passed without reading
+ * the database: the addresses redirects hold are kept in this process
+ * (`held-keys`). Only an address one of them matches is read, from the
+ * address record by the claim keys of the address itself and of every range
+ * above it, which decides the redirect: an address a page holds, exactly or
+ * in one of its ranges, is served, whatever pattern covers it. A saved
+ * redirect applies at once on the server that saved it, and within
+ * `REDIRECT_KEYS_REFRESH_MS` on every other.
  *
  * @module redirects/proxy-handler
  */
@@ -22,7 +25,9 @@ import { notAPageAddress } from "../not-found/page-address";
 
 import { destinationOf, withQuery } from "./addresses";
 import { redirectsSlug } from "./collection";
+import { heldRedirectKeys, type HeldRedirectKeys } from "./held-keys";
 import { redirectMeeting } from "./meeting";
+import { proxySeenNotes } from "./proxy-seen";
 import { askedAddress } from "./served";
 import { redirectOf, type StoredRedirect } from "./store";
 
@@ -99,11 +104,19 @@ async function pageAddressOf(
   return { ...asked, path: asked.path.slice(0, -1) };
 }
 
-/** The handler the plugin contributes to the site's Proxy. */
-export function redirectsProxyHandler(): PluginProxyHandler {
+/**
+ * The handler the plugin contributes to the site's Proxy, answering from
+ * `keys`: the plugin forgets them when a redirect saved here commits.
+ */
+export function redirectsProxyHandler(
+  keys: HeldRedirectKeys = heldRedirectKeys()
+): PluginProxyHandler {
+  const seen = proxySeenNotes();
   return {
     name: "redirects",
     async handle(request, ctx) {
+      // Noted in the background, so the admin can tell the Proxy runs.
+      seen.note(ctx);
       const url = new URL(request.url);
       const address = await pageAddressOf(ctx, request, url);
       if (address === "not-a-page") {
@@ -113,7 +126,9 @@ export function redirectsProxyHandler(): PluginProxyHandler {
           requestHeaders: { [ASKED_FOR_HEADER]: "", [REQUEST_HEADER]: "" },
         };
       }
-      const redirect = await redirectFor(ctx, address);
+      const redirect = (await keys.mayMeet(ctx, address))
+        ? await redirectFor(ctx, address)
+        : undefined;
       const location =
         redirect !== undefined
           ? await locationOf(redirect, address, url)

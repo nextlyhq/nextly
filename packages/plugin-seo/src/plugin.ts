@@ -26,6 +26,7 @@ import { startCatchUp } from "./address-record/catch-up";
 import { addressRecordCollection } from "./address-record/collection";
 import {
   ADDRESSES_MOVED,
+  REDIRECTS_CHANGED,
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
@@ -84,6 +85,7 @@ import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
 import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE } from "./redirects/contract";
+import { heldRedirectKeys } from "./redirects/held-keys";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
@@ -546,6 +548,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
+  // The addresses redirects hold, kept for the Proxy and dropped whenever a
+  // redirect saved here commits.
+  const redirectKeys = heldRedirectKeys();
   // The pages the site's routes render from their own code, read from the
   // build each time they are asked for, so a new deploy is read as it is.
   const codeRoutes = () =>
@@ -680,7 +685,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // answered here too, each at its own address only.
     proxy: [
       stagingGuard(readRules),
-      redirectsProxyHandler(),
+      redirectsProxyHandler(redirectKeys),
       plainCopyProxyHandler({
         readRules,
         ...siteOrigin,
@@ -694,9 +699,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Changed only by whoever manages site-wide SEO, through core's own
     // settings route as through the plugin's.
     settingsPermission: MANAGE_SEO_PERMISSION,
-    // The event the address record announces each committed save's
-    // addresses on, which IndexNow takes its notes from.
-    events: [{ name: ADDRESSES_MOVED }],
+    // The events the address record announces once a save commits: each
+    // page's addresses, which IndexNow takes its notes from, and that
+    // redirects changed, which the Proxy's kept addresses are dropped on.
+    events: [{ name: ADDRESSES_MOVED }, { name: REDIRECTS_CHANGED }],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -899,6 +905,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // A redirect saved here applies from this server's next request.
+      ctx.events.on(REDIRECTS_CHANGED, () => redirectKeys.forget());
       // Kept for the site's not-found page, which logs through it, and for
       // the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);

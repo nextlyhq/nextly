@@ -14,6 +14,8 @@ export interface SubmissionRow {
   notes?: string | null;
   ipAddress?: string | null;
   userAgent?: string | null;
+  /** The page it was sent from: origin and path. */
+  page?: string | null;
   submittedAt?: string | null;
   createdAt?: string | null;
   editedAt?: string | null;
