@@ -493,14 +493,18 @@ function BlocksStepsPage() {
         description="A flow of a few steps, and a save bar saying what changed."
         breadcrumbs={<Trail page="Import" />}
       />
-      <Stepper aria-label="Import steps" steps={IMPORT_STEPS} current={2} />
-      <Card>
-        <CardContent>
-          <Button variant="outline" onClick={() => setChanged(changed + 1)}>
-            Change another page
-          </Button>
-        </CardContent>
-      </Card>
+      {/* The frame sets no gap between its children, so the stepper and the
+          card it leads to are spaced here. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+        <Stepper aria-label="Import steps" steps={IMPORT_STEPS} current={2} />
+        <Card>
+          <CardContent>
+            <Button variant="outline" onClick={() => setChanged(changed + 1)}>
+              Change another page
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
       <FormActions
         dirty={changed > 0}
         message={changed === 1 ? "1 page changed" : `${changed} pages changed`}
