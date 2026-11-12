@@ -29,10 +29,19 @@ import {
   Switch,
   Textarea,
 } from "@nextlyhq/ui";
-import { ChevronLeft, ChevronRight, Pencil, TriangleAlert } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  CircleCheck,
+  CircleX,
+  Lock,
+  Pencil,
+  TriangleAlert,
+} from "lucide-react";
 import { type JSX, useEffect, useState } from "react";
 
 import type { FormField } from "../../../types";
+import { isConsentAnswer } from "../../../utils/consent";
 import { formatExportValue } from "../../../utils/export-formats";
 
 import type { FormOption, SubmissionRow } from "./SubmissionsView";
@@ -55,6 +64,53 @@ function formatDate(value: string | null | undefined): string {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+/**
+ * A consent answer: the choice, and the text the visitor was shown, quoted as
+ * stored. Read-only while editing as well, with the reason beside it, since a
+ * consent keeps what the visitor agreed to and no edit may change it.
+ */
+function ConsentValue({
+  value,
+  editing,
+}: {
+  value: unknown;
+  editing: boolean;
+}) {
+  if (!isConsentAnswer(value)) {
+    return <span className="text-sm text-muted-foreground">—</span>;
+  }
+  const Icon = value.agreed ? CircleCheck : CircleX;
+  return (
+    <div className="space-y-1">
+      <p className="flex items-start gap-2 text-sm text-foreground">
+        <Icon
+          className={
+            value.agreed
+              ? "mt-0.5 h-4 w-4 shrink-0 text-success"
+              : "mt-0.5 h-4 w-4 shrink-0 text-destructive"
+          }
+          aria-hidden="true"
+        />
+        <span className="min-w-0 wrap-break-word">
+          <span className="font-medium">
+            {value.agreed ? "Agreed" : "Not agreed"}
+          </span>
+          <span className="text-muted-foreground">
+            {" "}
+            to &ldquo;{value.text}&rdquo;
+          </span>
+        </span>
+      </p>
+      {editing && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />A consent
+          cannot be edited
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** One editable input per field type; unsupported types render read-only. */
@@ -240,9 +296,10 @@ export function SubmissionSheet({
         if (!open) onClose();
       }}
     >
+      {/* The whole width on a phone, where 560px would run off the screen. */}
       <SheetContent
         side="right"
-        className="w-[560px] sm:max-w-[560px] p-0 flex flex-col"
+        className="w-full sm:w-[560px] sm:max-w-[560px] p-0 flex flex-col"
       >
         <SheetHeader className="p-4 border-b border-border">
           <div className="flex items-center justify-between gap-2">
@@ -321,7 +378,12 @@ export function SubmissionSheet({
                   <Label htmlFor={`submission-field-${field.name}`}>
                     {field.label || field.name}
                   </Label>
-                  {editing ? (
+                  {field.type === "consent" ? (
+                    <ConsentValue
+                      value={(submission.data ?? {})[field.name]}
+                      editing={editing}
+                    />
+                  ) : editing ? (
                     <FieldValueInput
                       field={field}
                       value={draftData[field.name]}
