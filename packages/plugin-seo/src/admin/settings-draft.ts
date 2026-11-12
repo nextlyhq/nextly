@@ -525,7 +525,7 @@ export function networkOf(url: string): string {
 export interface AttentionItem {
   text: string;
   fix: string;
-  tab: "general" | "types" | "brand";
+  tab: "general" | "types" | "images" | "brand";
 }
 
 /** What a logo and share image still missing are, said as one item. */
@@ -540,7 +540,7 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
   }
   return draft.logo === null
     ? { text: "No logo yet", fix: "Add a logo", tab: "brand" }
-    : { text: "No share image yet", fix: "Add a share image", tab: "general" };
+    : { text: "No share image yet", fix: "Add a share image", tab: "images" };
 }
 
 /**
@@ -550,10 +550,15 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
  */
 export function attentionItems(
   draft: SettingsDraft,
-  types: readonly SeoContentType[]
+  types: readonly SeoContentType[],
+  /** The addresses the server names, which stand in for saved ones. */
+  serverAddresses: readonly string[] = []
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
-  if (!draft.productionAddresses.some(address => address.trim() !== "")) {
+  if (
+    serverAddresses.length === 0 &&
+    !draft.productionAddresses.some(address => address.trim() !== "")
+  ) {
     items.push({
       text: "No production address is saved",
       fix: "Set the address",

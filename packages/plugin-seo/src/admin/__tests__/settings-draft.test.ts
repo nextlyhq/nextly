@@ -291,11 +291,21 @@ describe("what setup ends on", () => {
       logo: "m1",
     };
     expect(attentionItems(withLogo, [posts])).toEqual([
-      { text: "No share image yet", fix: "Add a share image", tab: "general" },
+      { text: "No share image yet", fix: "Add a share image", tab: "images" },
     ]);
     expect(
       attentionItems({ ...withLogo, logo: null, image: "m2" }, [posts])
     ).toEqual([{ text: "No logo yet", fix: "Add a logo", tab: "brand" }]);
+  });
+
+  it("asks for no saved address where the server names one", () => {
+    expect(
+      attentionItems(
+        { ...empty, logo: "m1", image: "m2" },
+        [posts],
+        ["https://acme.com"]
+      )
+    ).toEqual([]);
   });
 
   it("is empty for a site with everything set", () => {
