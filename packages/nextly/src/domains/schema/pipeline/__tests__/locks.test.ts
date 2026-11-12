@@ -103,12 +103,12 @@ describe("describeHolder", () => {
       NOW
     );
 
-    expect(text).toContain("a statement of `0007_add_keys.sql`");
+    expect(text).toContain("a statement for `0007_add_keys.sql`");
     expect(text).toContain("process 77 on old-host");
     expect(text).toContain("database session 4242 and did not stop");
   });
 
-  it("names the session alone where the statement was sent for no file", () => {
+  it("names the session alone where the statement names nothing readable", () => {
     const text = describeHolder(
       {
         kind: "earlier-statement",

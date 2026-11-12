@@ -294,32 +294,6 @@ describe.each(SERVERS)(
       remove: () => Promise<void>;
     }> {
       const url = new URL(world.url);
-      if (dialect === "postgresql") {
-        await adapter.executeQuery(
-          `CREATE ROLE ${WATCHER} LOGIN PASSWORD 'watcher'`
-        );
-        await adapter.executeQuery(`GRANT pg_read_all_stats TO ${WATCHER}`);
-        await adapter.executeQuery(`GRANT ALL ON SCHEMA public TO ${WATCHER}`);
-        await adapter.executeQuery(
-          `GRANT ALL ON ALL TABLES IN SCHEMA public TO ${WATCHER}`
-        );
-      } else {
-        const database = url.pathname.replace(/^\//, "");
-        await adapter.executeQuery(
-          `CREATE USER '${WATCHER}'@'%' IDENTIFIED BY 'watcher'`
-        );
-        await adapter.executeQuery(`GRANT PROCESS ON *.* TO '${WATCHER}'@'%'`);
-        await adapter.executeQuery(
-          `GRANT ALL ON \`${database}\`.* TO '${WATCHER}'@'%'`
-        );
-      }
-      url.username = WATCHER;
-      url.password = "watcher";
-      const watcher = (dialect === "postgresql"
-        ? createPostgresAdapter({ url: url.toString() })
-        : createMySqlAdapter({
-            url: url.toString(),
-          })) as unknown as DrizzleAdapter;
       const remove = async () => {
         if (dialect === "postgresql") {
           await adapter.executeQuery(`DROP OWNED BY ${WATCHER}`);
@@ -328,6 +302,42 @@ describe.each(SERVERS)(
           await adapter.executeQuery(`DROP USER '${WATCHER}'@'%'`);
         }
       };
+      try {
+        if (dialect === "postgresql") {
+          await adapter.executeQuery(
+            `CREATE ROLE ${WATCHER} LOGIN PASSWORD 'watcher'`
+          );
+          await adapter.executeQuery(`GRANT pg_read_all_stats TO ${WATCHER}`);
+          await adapter.executeQuery(
+            `GRANT ALL ON SCHEMA public TO ${WATCHER}`
+          );
+          await adapter.executeQuery(
+            `GRANT ALL ON ALL TABLES IN SCHEMA public TO ${WATCHER}`
+          );
+        } else {
+          const database = url.pathname.replace(/^\//, "");
+          await adapter.executeQuery(
+            `CREATE USER '${WATCHER}'@'%' IDENTIFIED BY 'watcher'`
+          );
+          await adapter.executeQuery(
+            `GRANT PROCESS ON *.* TO '${WATCHER}'@'%'`
+          );
+          await adapter.executeQuery(
+            `GRANT ALL ON \`${database}\`.* TO '${WATCHER}'@'%'`
+          );
+        }
+      } catch (error) {
+        // A user made only in part is still removed, so a failed setup leaves none behind.
+        await remove().catch(() => {});
+        throw error;
+      }
+      url.username = WATCHER;
+      url.password = "watcher";
+      const watcher = (dialect === "postgresql"
+        ? createPostgresAdapter({ url: url.toString() })
+        : createMySqlAdapter({
+            url: url.toString(),
+          })) as unknown as DrizzleAdapter;
       return { watcher, remove };
     }
 
@@ -337,9 +347,10 @@ describe.each(SERVERS)(
       await killed.exited;
       holder = undefined;
       const { watcher, remove } = await watcherUser();
-      await watcher.connect();
-      installRegistryResolver(watcher);
+      // The user is removed however the case ends, so none is left on the shared server.
       try {
+        await watcher.connect();
+        installRegistryResolver(watcher);
         await sleep(PAST_THE_LEASE_MS);
 
         const refused = await withSchemaLock(
@@ -365,7 +376,7 @@ describe.each(SERVERS)(
         // The file and the session are named; the statement, which holds a literal value, is
         // in neither the message nor the log context.
         const message = String((refused as Error).message);
-        expect(message).toContain(`A statement of \`${HOLDER_UNIT}\``);
+        expect(message).toContain(`A statement for \`${HOLDER_UNIT}\``);
         expect(message).toMatch(/running in database session \d+ /);
         const logged = JSON.stringify(
           (refused as { logContext?: unknown }).logContext
@@ -385,17 +396,20 @@ describe.each(SERVERS)(
         expect(rows[0].owner).toMatch(/^.+:\d+#[0-9a-f-]{36}$/);
         expect(rows[0].owner).not.toContain(`:${process.pid}#`);
       } finally {
-        await watcher.disconnect();
-        freeTheTable();
-        await busy.catch(() => {});
-        // The killed holder's statement still runs in its session and lands once the table is
-        // free; revoking the watcher's grants on that table while it does fails as a
-        // concurrent update of the table's catalog row, so it is waited out first.
-        await until(
-          async () => (await markedRunning(adapter, dialect)) === 0,
-          "the killed holder's statement to end"
-        );
-        await remove();
+        try {
+          await watcher.disconnect().catch(() => {});
+          freeTheTable();
+          await busy.catch(() => {});
+          // The killed holder's statement still runs in its session and lands once the table is
+          // free; revoking the watcher's grants on that table while it does fails as a
+          // concurrent update of the table's catalog row, so it is waited out first.
+          await until(
+            async () => (await markedRunning(adapter, dialect)) === 0,
+            "the killed holder's statement to end"
+          );
+        } finally {
+          await remove();
+        }
       }
     });
   },
