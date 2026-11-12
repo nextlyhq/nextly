@@ -19,7 +19,7 @@
  * reader moves between the dashboard and a collection.
  */
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -31,6 +31,7 @@ import {
   subSidebarBorderClass,
   subSidebarHoldsWidth,
 } from "./lib/sub-sidebar-classes";
+import { PanelGhostBody } from "./RailColumn";
 import { SubSidebarContent } from "./SubSidebarContent";
 
 /** The panel's own title, which is the selection's name unless it has one. */
@@ -50,19 +51,32 @@ export function SubSidebarPanel({
   isFolderTreeVisible,
   standaloneLabel,
   content,
+  outlineBody,
 }: {
   isMobile: boolean;
   selectedMain: string;
   visibleMenuItemIds: readonly string[];
   isFolderTreeVisible: boolean;
   standaloneLabel: string;
-  /** Everything `SubSidebarContent` needs, passed through unread. */
-  content: React.ComponentProps<typeof SubSidebarContent>;
+  /**
+   * Everything `SubSidebarContent` needs, passed through unread. Absent for
+   * the panel's outline, drawn before the session is confirmed: then the panel
+   * opens for the route's section alone and holds neutral rows where its
+   * links will be.
+   */
+  content?: React.ComponentProps<typeof SubSidebarContent>;
+  /**
+   * What the panel's outline holds in place of its neutral rows: the panel
+   * drawn from what this device remembered, where it remembered one.
+   */
+  outlineBody?: ReactNode;
 }): JSX.Element {
   const suppressed = useSuppressedChrome();
   const hasSubSidebar = isSubSidebarOpen(
     selectedMain,
-    visibleMenuItemIds,
+    // The outline knows no entries yet, so the route's section stands for
+    // the one entry it will open.
+    content === undefined ? [selectedMain] : visibleMenuItemIds,
     isFolderTreeVisible,
     suppressed
   );
@@ -121,7 +135,11 @@ export function SubSidebarPanel({
       */}
       {hasSubSidebar ? (
         <div className="flex-1 overflow-y-auto motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
-          <SubSidebarContent {...content} />
+          {content === undefined ? (
+            (outlineBody ?? <PanelGhostBody />)
+          ) : (
+            <SubSidebarContent {...content} />
+          )}
         </div>
       ) : null}
     </aside>

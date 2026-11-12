@@ -84,6 +84,12 @@ export interface SchemaPreviewLeavingTranslation {
   total: number | null;
   /** Entries with no default-language value, which keep another language's; null if unknown. */
   entriesWithoutDefault: number | null;
+  /**
+   * Entries whose shared value comes from a language other than the default one, by that
+   * language: what their default-language readers will see. Null if unknown; absent from an
+   * older server.
+   */
+  sharedFrom?: Record<string, number> | null;
   /** The language whose value becomes the shared one. */
   defaultLocale: string;
   restoreCommand: string;
@@ -108,6 +114,20 @@ export interface SchemaPreviewResponse {
   // preview detects (drop, add) pairs that might be column renames.
   renamed: SchemaPreviewRenameCandidate[];
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
+  joiningTranslation?: SchemaPreviewJoiningTranslation[];
+}
+
+/**
+ * A field becoming translated, as the schema preview reports it: its values become the default
+ * language's, and every other language falls back to them until translated.
+ */
+export interface SchemaPreviewJoiningTranslation {
+  name: string;
+  column: string;
+  /** How many entries hold a value in it; null if they could not be counted. */
+  values: number | null;
+  /** The language whose value each one becomes. */
+  defaultLocale: string;
 }
 
 // Response from the apply endpoint.

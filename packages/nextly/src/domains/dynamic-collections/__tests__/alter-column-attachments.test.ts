@@ -267,17 +267,8 @@ describe("the attachments the ADD path used to lose", () => {
           { tableHasRows: false }
         );
 
-      // MySQL renders an unbounded `text` field as TEXT, which it can key in neither spelling.
-      // Because it commits each DDL statement separately, attempting the column and then its
-      // constraint would leave the column WITHOUT the guarantee, so the add is refused outright
-      // rather than half-applied. The other dialects key it and attach the constraint.
-      if (dialect === "mysql") {
-        const reported = refusalMessages(add);
-        expect(reported).toHaveLength(1);
-        expect(reported[0]).toContain("UNIQUE_NOT_ENFORCEABLE_ON_DIALECT");
-        return;
-      }
-
+      // A unique `text` field that states no width is the bounded default on MySQL, which MySQL
+      // can key, so every dialect keys it and attaches the constraint.
       expect(alterAttachments(add(), "sku").unique).toBe(true);
     }
   );

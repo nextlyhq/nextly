@@ -94,7 +94,7 @@ describe("seo sitemap route (integration)", () => {
   it("declares a public GET /sitemap.xml route", () => {
     const route = seoPlugin({
       collections: ["pages"],
-    }).contributes?.routes?.[0];
+    }).contributes?.routes?.find(declared => declared.path === "/sitemap.xml");
     expect(route).toMatchObject({
       method: "GET",
       path: "/sitemap.xml",

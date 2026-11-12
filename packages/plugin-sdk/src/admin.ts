@@ -662,6 +662,27 @@ export type { AdminChromeLayer } from "@nextlyhq/admin";
 export { useFoldedPanel } from "@nextlyhq/admin";
 
 /**
+ * A store for one of the person's interface preferences, kept by the admin's
+ * own rules (@experimental): for a plugin that remembers a choice in the
+ * browser, such as an editor's panels or its recently opened pages.
+ *
+ * - Where the site turns remembering off (`NEXTLY_ADMIN_DEVICE_MEMORY=off`),
+ *   nothing is written to the browser's storage, and the choice holds for
+ *   the page alone.
+ * - Signing out forgets it, in every open tab, with everything else the
+ *   admin kept about the person.
+ * - `lifetime: "tab"` keeps it for the tab alone, in its session storage.
+ *
+ * `read`, `write` and `remove` never throw. Key it per person (with
+ * `useCurrentUserId`) where two people may share a browser.
+ */
+export { devicePreferenceStore } from "@nextlyhq/admin";
+export type {
+  DevicePreferenceOptions,
+  DevicePreferenceStore,
+} from "@nextlyhq/admin";
+
+/**
  * Draw a page's own content into the admin's one top bar (@experimental):
  * `name="start"` is the bar's left part (where a breadcrumb goes) and
  * `name="end"` its right part, for the page's own actions such as Save. The
@@ -671,6 +692,33 @@ export { useFoldedPanel } from "@nextlyhq/admin";
  */
 export { TopBarPlace } from "@nextlyhq/admin";
 export type { TopBarPlaceName, TopBarPlaceProps } from "@nextlyhq/admin";
+
+/**
+ * A page's frame and its header, the pieces core's pages are drawn from
+ * (@experimental), so a plugin's page looks like a core one.
+ *
+ * - `PageFrame` takes the page's `type`, and the type decides its width:
+ *   `"list"` runs full width within the gutter, `"form"` is a 56rem column
+ *   under the page's left edge, `"editor"` runs full width with no gutter so
+ *   a side panel meets the window's edge, and `"workspace"` takes no gutter and
+ *   no padding, for a page that lays out its own surface.
+ * - `PageHeader` draws the page's title as its `h1`, with an optional
+ *   `description`, `actions` trailing the title, `meta` chips beside it, a
+ *   leading `media` visual and a `tabs` row (`PageTabs` with a `PageTab` per
+ *   section, each a link with its own address).
+ *
+ * A plugin page that draws no `PageFrame` is drawn as a Workspace page. A page
+ * that draws one gets no second frame from the admin. Content for the admin's
+ * top bar still goes through `TopBarPlace`.
+ */
+export { PageFrame, PageHeader, PageTab, PageTabs } from "@nextlyhq/admin";
+export type {
+  PageFrameProps,
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+  PageType,
+} from "@nextlyhq/admin";
 
 /**
  * The live values of the document being edited (@experimental), for any
@@ -1108,6 +1156,16 @@ export type {
   PluginFieldTypeDocumentView,
   PluginMenuItem,
   PluginPanelSection,
+} from "nextly";
+/**
+ * @experimental A standalone plugin's panel declarations, as the package root
+ * exports them: its groups, and the count or badge on a menu item.
+ */
+export type {
+  PluginAdminPanel,
+  PluginItemCount,
+  PluginMenuItemFields,
+  PluginPanelGroup,
 } from "nextly";
 
 /**

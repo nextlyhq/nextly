@@ -676,12 +676,24 @@ export {
   type PluginListFilterDeclaration,
   type PluginListFilterOption,
   type PluginMenuItem,
+  type PluginMenuItemFields,
   type PluginNavSection,
+  type PluginAdminPanel,
+  type PluginPanelGroup,
+  type PluginItemCount,
+  type PluginHeaderContributions,
+  type PluginHeaderSlotContributions,
+  type PluginHeaderUserMenuContributions,
+  type PluginItemPlace,
+  type PluginUserMenuAction,
+  type PluginUserMenuItem,
+  type PluginUserMenuLink,
   CORE_ADMIN_PLACES,
   type AdminPlaceId,
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins";
+export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
 
 // "Every content type except these", one answer for each reader of a scope.
 // @experimental
@@ -723,7 +735,9 @@ export {
 // declares it: the address a path kept in one language is opened at.
 // @experimental
 export {
+  addressOfRequest,
   languageAddressOf,
+  type KeptAddress,
   type LanguageAddress,
   type LanguageAddressRule,
 } from "./domains/i18n/language-addresses";

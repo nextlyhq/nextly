@@ -55,7 +55,10 @@ import {
   lastLookedAtByPart,
   markLastViewed,
 } from "../domains/versions/version-views";
-import type { VersionRef } from "../domains/versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRef,
+} from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
 import {
   errorFromServiceEnvelope,
@@ -1017,6 +1020,79 @@ async function resolveEnrichedFields(
   return enriched as unknown as FieldConfig[];
 }
 
+/**
+ * History rows with the restored fields each names (`fieldSources`) narrowed
+ * to the ones this reader may read.
+ *
+ * A source says a field was restored, and from which version, so naming one
+ * the reader's field rules withhold would disclose the field and its history.
+ * Each named field is judged the way a version read judges it: the row's own
+ * snapshot goes through `redactSnapshotForUser`, and a field it withholds
+ * loses its source. A field the snapshot does not hold is still judged, as an
+ * empty value, rather than passed unexamined. The rows that name no source
+ * are returned as they are; the others' snapshots are read in one query.
+ */
+export async function readableFieldSources<
+  Row extends {
+    // Null on an autosave row, which records no sources.
+    versionNo: number | null;
+    fieldSources?: Readonly<Record<string, number>> | null;
+  },
+>(
+  rows: readonly Row[],
+  args: {
+    ref: VersionRef;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }
+): Promise<Row[]> {
+  const naming = rows.filter(
+    (row): row is Row & { versionNo: number } =>
+      row.versionNo !== null &&
+      !!row.fieldSources &&
+      Object.keys(row.fieldSources).length > 0
+  );
+  if (naming.length === 0) return [...rows];
+  const snapshots = await new VersionsRepository(
+    getService("adapter")
+  ).snapshotsByVersionNo(
+    args.ref,
+    naming.map(row => row.versionNo)
+  );
+  return Promise.all(
+    rows.map(async row => {
+      const sources = row.fieldSources;
+      if (!sources || Object.keys(sources).length === 0) return row;
+      // A row naming sources with no version number of its own was never
+      // read above, so its snapshot is judged as empty: every source is still
+      // judged, never passed unexamined.
+      const entry = structuredClone(
+        snapshotObject(
+          row.versionNo === null ? undefined : snapshots.get(row.versionNo)
+        )
+      );
+      for (const name of Object.keys(sources)) {
+        if (!(name in entry)) entry[name] = null;
+      }
+      const withheld = await redactSnapshotForUser(
+        entry,
+        args.ref.scopeKind,
+        args.ref.scopeSlug,
+        args.user,
+        args.authenticatedScope
+      );
+      const readable = Object.entries(sources).filter(
+        ([name]) => !withheld.has(name)
+      );
+      // The row as given, with only its readable sources: the same shape.
+      return {
+        ...row,
+        fieldSources: readable.length > 0 ? Object.fromEntries(readable) : null,
+      };
+    })
+  );
+}
+
 /** A stored snapshot as a plain object, or an empty object if it is not one. */
 function snapshotObject(snapshot: unknown): Record<string, unknown> {
   return snapshot !== null &&
@@ -1232,7 +1308,11 @@ export async function compareDocumentVersions(args: {
   scopeKind: VersionScopeKind;
   slug: string;
   entryId: string;
-  user: UserContext;
+  /**
+   * The person comparing, judged and redacted for. Absent for trusted server
+   * code, which reads every language and field, as its other reads do.
+   */
+  user?: UserContext;
   authenticatedScope?: AuthenticatedScope;
   query: ComparisonQuery;
 }): Promise<VersionDiff> {
@@ -1242,15 +1322,17 @@ export async function compareDocumentVersions(args: {
   // since the baseline is found in its part, and otherwise the `locale` the
   // server pairs in. An explicit pair names no language here; its two rows are
   // asked about below.
-  await assertHistoryLocalesReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope,
-    {},
-    [await pairingPart(args, query)]
-  );
+  if (args.user) {
+    await assertHistoryLocalesReadable(
+      args.scopeKind,
+      args.slug,
+      args.entryId,
+      args.user,
+      args.authenticatedScope,
+      {},
+      [await pairingPart(args, query)]
+    );
+  }
   let pair: { from: number; to: number };
   let baseline: VersionDiff["baseline"];
   if (query.from !== undefined && query.to !== undefined) {
@@ -1389,7 +1471,8 @@ export async function diffDocumentVersions(args: {
   scopeKind: VersionScopeKind;
   slug: string;
   entryId: string;
-  user: UserContext;
+  /** The person comparing; absent for trusted server code (see above). */
+  user?: UserContext;
   from: number;
   to: number;
   modifiedOnly?: boolean;
@@ -1407,15 +1490,17 @@ export async function diffDocumentVersions(args: {
   ]);
   // Each version is of the language it records, asked about before either is
   // compared, or a mismatch reported.
-  await assertHistoryLocalesReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope,
-    {},
-    [fromRow.locale, toRow.locale]
-  );
+  if (args.user) {
+    await assertHistoryLocalesReadable(
+      args.scopeKind,
+      args.slug,
+      args.entryId,
+      args.user,
+      args.authenticatedScope,
+      {},
+      [fromRow.locale, toRow.locale]
+    );
+  }
 
   if (
     !(await onePart(args.scopeKind, args.slug, fromRow.locale, toRow.locale))
@@ -1444,20 +1529,26 @@ export async function diffDocumentVersions(args: {
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
   // surface a field the caller may not read. What either side withheld is
   // named to the engine, which reports it as hidden in its place.
-  const withheldFrom = await redactSnapshotForUser(
-    fromRow.snapshot,
-    args.scopeKind,
-    args.slug,
-    args.user,
-    args.authenticatedScope
-  );
-  const withheldTo = await redactSnapshotForUser(
-    toRow.snapshot,
-    args.scopeKind,
-    args.slug,
-    args.user,
-    args.authenticatedScope
-  );
+  // Trusted server code reads every field, so nothing is withheld from it.
+  const user = args.user;
+  const withheldFrom = user
+    ? await redactSnapshotForUser(
+        fromRow.snapshot,
+        args.scopeKind,
+        args.slug,
+        user,
+        args.authenticatedScope
+      )
+    : new Set<string>();
+  const withheldTo = user
+    ? await redactSnapshotForUser(
+        toRow.snapshot,
+        args.scopeKind,
+        args.slug,
+        user,
+        args.authenticatedScope
+      )
+    : new Set<string>();
 
   // Page scope has no HTTP diff surface; collection and single are the only
   // callers, so anything else resolves as a collection for field lookup.
@@ -1489,12 +1580,16 @@ export async function diffDocumentVersions(args: {
   // wire stays id-stable for any non-admin consumer of this surface. Both
   // versions share a locale (asserted above), so the target reads resolve in
   // that language.
-  await hydrateDiffReferences(
-    body.fields,
-    args.user,
-    args.authenticatedScope,
-    pairLocale
-  );
+  // Labels are read as the person comparing may read them; trusted server
+  // code, which names no person, gets the ids alone.
+  if (args.user) {
+    await hydrateDiffReferences(
+      body.fields,
+      args.user,
+      args.authenticatedScope,
+      pairLocale
+    );
+  }
 
   return {
     from: args.from,

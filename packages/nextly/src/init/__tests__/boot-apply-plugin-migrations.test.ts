@@ -20,8 +20,10 @@ const migrateCore = vi.fn(async (_args: unknown) => ({
   metadata: registered,
 }));
 const permissionSeedService = {
-  seedAllCollectionPermissions: vi.fn(async () => ({ newPermissionIds: [] })),
-  seedAllSinglePermissions: vi.fn(async () => ({ newPermissionIds: [] })),
+  seedAllEntityPermissions: vi.fn(async () => ({
+    collections: { newPermissionIds: [] },
+    singles: { newPermissionIds: [] },
+  })),
   assignNewPermissionsToSuperAdmin: vi.fn(async () => undefined),
 };
 const migrationModule = { name: "001_notes" };
@@ -90,7 +92,7 @@ describe("development boot migrations", () => {
     vi.spyOn(process, "cwd").mockReturnValue(migrationsRoot);
     vi.stubEnv("NODE_ENV", "development");
     migrateCore.mockClear();
-    permissionSeedService.seedAllCollectionPermissions.mockClear();
+    permissionSeedService.seedAllEntityPermissions.mockClear();
     registered = { collectionsRegistered: 0, singlesRegistered: 0 };
     applied = { applied: 0, pluginModulesApplied: 0 };
     configuredPlugins = [pluginWithModules];
@@ -132,14 +134,14 @@ describe("development boot migrations", () => {
     registered = { collectionsRegistered: 1, singlesRegistered: 0 };
     await runBootTimeApplyIfDev();
     expect(
-      permissionSeedService.seedAllCollectionPermissions
+      permissionSeedService.seedAllEntityPermissions
     ).toHaveBeenCalledTimes(1);
   });
 
   it("seeds nothing when nothing was registered", async () => {
     await runBootTimeApplyIfDev();
     expect(
-      permissionSeedService.seedAllCollectionPermissions
+      permissionSeedService.seedAllEntityPermissions
     ).not.toHaveBeenCalled();
   });
 

@@ -12,6 +12,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { SupportedDialect } from "../../database/schema-registry";
+import { container } from "../../di/container";
+import {
+  presetGrantsStanding,
+  readPresetGrantsRelease,
+} from "../../domains/meta/preset-grants-release";
 import { pluginOfLedgerRow } from "../../domains/schema/events/ledger-scope";
 import {
   appliedFilenames,
@@ -34,7 +39,9 @@ import {
   type PluginLifecycleRecord,
 } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { NextlyError } from "../../errors/nextly-error";
+import { getCoreVersion } from "../../plugins/core-version";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
@@ -181,9 +188,65 @@ async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
   });
 }
 
+/** The core table the release that set the preset grants is recorded in. */
+const PRESET_GRANTS_RECORD_TABLE = "nextly_meta";
+
+/**
+ * Refuse, in production, a run from a Nextly release older than the one that
+ * set the preset roles' grants (`preset-grants-release`), before it writes
+ * anything, naming the release to run it from.
+ *
+ * An install sets every preset role's grants with the release record, and an
+ * older release would leave them as the newer one set them, so its install
+ * would record the plugin installed, which is what lets a production start
+ * serve it, without the grants its permissions are owed. An uninstall from it
+ * is refused the same way, so neither command writes from an older release.
+ * Production is decided as for a start: anything but Nextly's development
+ * mode. A development run goes on, its preset grants left as they are.
+ */
+async function refuseFromAnOlderRelease(
+  adapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  if (process.env.NODE_ENV === "development") return;
+  // A database without the table the record is kept in holds no record, so no
+  // newer release has set the preset grants there. Asked of the database
+  // rather than inferred from a failed read, which could fail for any reason.
+  if (!(await adapter.tableExists(PRESET_GRANTS_RECORD_TABLE))) return;
+  // Loaded here, as the command's other services are: a file that imports
+  // this module for its types or helpers does not load the services with it.
+  const { MetaService } = await import(
+    "../../domains/meta/services/meta-service"
+  );
+  const recorded = await readPresetGrantsRelease(
+    new MetaService(adapter, {
+      debug: m => logger.debug(m),
+      info: m => logger.debug(m),
+      warn: m => logger.warn(m),
+      error: m => logger.error(m),
+    })
+  );
+  const running = getCoreVersion();
+  // The one decision of how a release stands against the recorded one.
+  const standing = presetGrantsStanding(recorded, running);
+  if (standing.kind === "set") return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      `The preset roles' grants were set by Nextly ${standing.recorded}, newer than this release (${running}). ` +
+      `Run this command from Nextly ${standing.recorded} or newer.`,
+    logContext: {
+      reason: "preset-grants-set-by-a-newer-release",
+      recorded: standing.recorded,
+      running,
+    },
+  });
+}
+
 async function connect(options: RunnerOptions, context: CommandContext) {
   const {
     config,
+    configPath,
     appConfig,
     pluginConsent,
     projectRoot,
@@ -270,6 +333,12 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   // sees it.
   try {
     await assertMigrated(adapter as unknown as DrizzleAdapter);
+    // Refused before anything else is decided, the dry run included, which
+    // reports the refusal the command would meet.
+    await refuseFromAnOlderRelease(
+      adapter as unknown as DrizzleAdapter,
+      context.logger
+    );
     await refreshPlan();
   } catch (error) {
     await adapter.disconnect();
@@ -460,6 +529,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     withLockOrRefuse(
       async () => {
         await refreshPlan();
+        // Decided again under the lock, where it holds: a newer release's
+        // `nextly migrate` may have recorded itself since `connect` read it.
+        await refuseFromAnOlderRelease(drizzleAdapter, context.logger);
         return work();
       },
       "nothing was run",
@@ -792,15 +864,102 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         dialect
       ).read()
     );
-  const recordLifecycle = (
+  /**
+   * The access a recorded state brings with it, written in the transaction
+   * that records the state, or nothing for a state that brings none.
+   *
+   * - `installed`: the plugin's declared permissions and roles, and every
+   *   preset role's grants with the release record, as `nextly migrate` from
+   *   this release sets them (`seedAccessOnCommandConnection`). A plugin
+   *   recorded installed, which is what lets a production start serve it,
+   *   then has its access whether or not a `nextly migrate` follows. Its
+   *   permissions come from the plugin being installed alone, so the install
+   *   never declares again a permission that another owner's recorded change
+   *   or uninstall orphaned; re-ensuring its own clears their marks, which is
+   *   what a reinstall does. The preset grants must be set, or the install
+   *   fails (`withPresetGrantsRequired`).
+   * - `uninstalled` and `orphaned` (kept data): the plugin's permissions
+   *   marked orphaned, every grant kept
+   *   (`orphanOwnedPermissionsOnCommandConnection`). No preset grant is set
+   *   and no release recorded.
+   */
+  const accessOf = (
     plugin: LifecyclePlugin,
     record: PluginLifecycleRecord
-  ): Promise<void> =>
-    recordPluginLifecycle(
-      new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect),
-      plugin.name,
-      record
-    );
+  ): (() => Promise<void>) | undefined => {
+    if (record.state === "installed") {
+      const installing = {
+        ...config,
+        // The app's own permissions and roles come with `nextly migrate`.
+        permissions: [],
+        roles: [],
+        plugins: definitions.filter(d => d.name === plugin.name),
+      };
+      return async () => {
+        // Loaded when a state is recorded, not with this module: the seeding
+        // reaches every permission and role service.
+        const [
+          { withPresetGrantsRequired },
+          { seedAccessOnCommandConnection },
+        ] = await Promise.all([
+          import("../../database/seeders/role-presets"),
+          import("../../domains/schema/migrate/command-access"),
+        ]);
+        await withPresetGrantsRequired(() =>
+          seedAccessOnCommandConnection(
+            drizzleAdapter,
+            { config: installing, configPath },
+            context.logger,
+            // The plugin being installed, whatever its record says until this
+            // transaction writes it: a reinstall declares it again.
+            { pluginsAsGiven: true }
+          )
+        );
+      };
+    }
+    if (record.state === "uninstalled" || record.state === "orphaned") {
+      return async () => {
+        const { orphanOwnedPermissionsOnCommandConnection } = await import(
+          "../../domains/schema/migrate/command-access"
+        );
+        await orphanOwnedPermissionsOnCommandConnection(
+          drizzleAdapter,
+          plugin.name,
+          config,
+          context.logger
+        );
+      };
+    }
+    return undefined;
+  };
+
+  // The record and the stored schema version in one transaction: an install
+  // or an uninstall changes the schema the app serves, so the version's count
+  // moves with the record that says it happened (`writeRegistryRows`). The
+  // access the state brings (`accessOf`) is written first on the same
+  // transaction, so a state is never recorded without it, nor it without the
+  // state.
+  const recordLifecycle = async (
+    plugin: LifecyclePlugin,
+    record: PluginLifecycleRecord
+  ): Promise<void> => {
+    const access = accessOf(plugin, record);
+    // A process that already started an instance (a test that booted one) has
+    // the services a grants change reaches registered on that instance's own
+    // connection, which would wait behind this transaction's locks. There the
+    // access is written just before the transaction, as `nextly migrate`'s
+    // first-run commit does; the command itself starts none.
+    const inside = !container.has("adapter");
+    if (!inside) await access?.();
+    await writeRegistryRows(drizzleAdapter, async tx => {
+      if (inside) await access?.();
+      await recordPluginLifecycle(
+        new SchemaEventsRepository(tx.getDrizzle(), dialect),
+        plugin.name,
+        record
+      );
+    });
+  };
 
   return {
     adapter,

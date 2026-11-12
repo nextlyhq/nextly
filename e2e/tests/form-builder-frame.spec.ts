@@ -28,6 +28,7 @@ const SETTINGS_SECTIONS = [
   "Availability",
   "One response per person",
   "Spam protection",
+  "Privacy",
 ];
 
 const formPages = (page: Page) =>

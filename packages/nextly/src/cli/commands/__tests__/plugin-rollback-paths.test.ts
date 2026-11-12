@@ -47,6 +47,26 @@ const state = vi.hoisted(() => ({
   manifestBroken: false,
 }));
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
+// The permissions, roles and grants a recorded plugin state brings are the integration suite's
+// subject (`plugin-lifecycle-writes-its-access.integration.test.ts`); they reach every permission
+// and role service, so here they write nothing and the rollback paths are judged alone.
+vi.mock("../../../domains/schema/migrate/command-access", () => ({
+  seedAccessOnCommandConnection: async () => {},
+  orphanOwnedPermissionsOnCommandConnection: async () => {},
+}));
+
 // SQLite has no migrate lock of its own to hold from outside, so a held lock
 // is produced at the lock's own boundary: while `lockHeld` is set, the lock
 // reports what it reports when another process kept it for the whole wait —

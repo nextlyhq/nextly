@@ -327,8 +327,10 @@ to the block holding it, and <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+
 
 **Settings** at the bottom of the rail opens a dialog with two tabs.
 
-**This page** holds the entry's own fields, such as its title, address and SEO, as the
-entry's page draws them. They save with the page, from **Save** or **Publish** in the top
+**This page** holds the entry's own fields, such as its title and address, as the
+entry's page draws them. Where a plugin adds a tab of its own, such as the
+[SEO plugin](/docs/plugins/seo#in-the-page-builder), these sit under **General**, with
+the plugin's tab beside them. They save with the page, from **Save** or **Publish** in the top
 bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
 It uses the SEO fields where the page has them, then the page's first heading, text and
 image, then its title. Your site's own metadata may differ. Pressing Enter in a field
@@ -348,6 +350,40 @@ may manage the page builder's site settings.
 
 The site's breakpoints change only here. A write to the site style that changes them
 any other way, through the API or the site style's own form, is refused.
+
+### A plugin's tab in Settings
+
+A plugin adds a tab to the Settings dialog at the Page Builder's admin place
+`nextlyhq-plugin-page-builder.settings`, which takes tabs (`@experimental`). Name the Page
+Builder in your plugin's `dependsOn`, or in `optionalDependsOn` so a site without it still
+starts, with your tab left out:
+
+```ts
+contributes: {
+  admin: {
+    contributions: [
+      {
+        id: "acme-notes.builder-tab",
+        kind: "tab",
+        place: "nextlyhq-plugin-page-builder.settings",
+        label: "Notes",
+        component: "@acme/notes/admin#NotesTab",
+      },
+    ],
+  },
+},
+```
+
+The tab is drawn for a page or a design, never for a Layout or a component. Besides
+`setBadge`, it receives:
+
+- `context`: `userId`, `document` (`"page"` or `"template"`), the edited document's
+  `collection` and `entryId` (null before its first save), and `draws`, for a design the
+  collection whose entries it draws and the one entry an entry's own design draws.
+- `seo`: the document's own metadata (`settings.seo`) as `value`, and `set(next)`, which
+  writes it whole, or removes it with `null`, as one edit the editor's Undo takes back.
+- `design`, the document as it is being edited; `control`, the entry's form; and
+  `writable`.
 
 ## Moving blocks in Layers
 

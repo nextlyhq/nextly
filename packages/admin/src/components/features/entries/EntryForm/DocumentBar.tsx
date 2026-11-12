@@ -36,23 +36,21 @@ import {
   PanelRight,
   PanelRightClose,
 } from "@admin/components/icons";
+import {
+  TopBarPlace,
+  useInTopBar,
+  useTopBarPlaceWidth,
+} from "@admin/components/layout/header/TopBarPlaces";
 import { useCan } from "@admin/hooks/useCan";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
-import {
-  TopBarPlace,
-  useInTopBar,
-  useTopBarPlaceWidth,
-} from "@admin/components/layout/header/TopBarPlaces";
-
 import { useEntryLocale } from "../EntryLocaleContext";
 import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
 
-import { STATE_COMPACT_ATTRIBUTE } from "./narrow-bar";
 import { actionsAt } from "./document-actions";
 import { useDocumentBarHeight } from "./document-bar-height";
 import type { DocumentPanelMode } from "./document-panel-mode";
@@ -65,6 +63,7 @@ import { useHostedDocumentActions } from "./DocumentActionsContext";
 import { DOCUMENT_PANEL_TOGGLE_ATTRIBUTE } from "./DocumentSidePanel";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { STATE_COMPACT_ATTRIBUTE } from "./narrow-bar";
 import {
   PreviewActions,
   previewChoices,

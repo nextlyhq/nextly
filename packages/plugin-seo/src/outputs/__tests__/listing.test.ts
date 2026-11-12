@@ -8,7 +8,7 @@
  * list of rows.
  */
 import type { PluginContext, PublicAddressType } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SeoAnswer } from "../../resolver/order";
 import { listPages } from "../listing";
@@ -19,6 +19,8 @@ const answers = new Map<string, SeoAnswer>();
  * Schema Builder type's template may be.
  */
 const supplied = { onlyInALanguage: false };
+/** The languages served on a domain of their own, by language. */
+const domains: Record<string, string> = {};
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk")>()),
@@ -34,12 +36,15 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
       ? { status: "unavailable" }
       : { status: "resolved", path: `/${String(entry.slug)}` };
   },
-  // Every language under its code.
-  languageAddressOf: async (path: string, locale: string) => ({
-    status: "resolved",
-    path: `/${locale}${path}`,
-  }),
+  // Every language under its code, or on the domain `domains` gives it.
+  languageAddressOf: async (path: string, locale: string) =>
+    domains[locale] === undefined
+      ? { status: "resolved", path: `/${locale}${path}` }
+      : { status: "resolved", origin: domains[locale], path },
 }));
+
+/** Each read of the pages' documents, with its filter and language. */
+const documentReads: { where: unknown; locale?: string }[] = [];
 
 /** The addresses each batch's holders were read for at once. */
 const readTogether: string[][] = [];
@@ -80,11 +85,18 @@ const resolvedIn = new Map<string, string | undefined>();
 
 vi.mock("../../resolver/provider", () => ({
   resolveSeo: async (
-    _ctx: unknown,
-    input: { source: { entry: { id: string } }; locale?: string }
+    ctx: unknown,
+    input: { source: { entry: { id: string } }; locale?: string },
+    readRules?: (ctx: unknown, locale: string | undefined) => Promise<unknown>
   ) => {
+    // The rules are read as the resolver reads them, once per answer.
+    await readRules?.(ctx, input.locale);
     resolvedIn.set(input.source.entry.id, input.locale);
-    return answers.get(input.source.entry.id);
+    // A version's own answer where one is set, keyed `<id>@<language>`.
+    return (
+      answers.get(`${input.source.entry.id}@${input.locale}`) ??
+      answers.get(input.source.entry.id)
+    );
   },
 }));
 
@@ -140,10 +152,14 @@ function context(
     services: {
       collections: {
         getCollection: async () => ({ status: true }),
-        listEntries: async () => ({
-          data: documents,
-          pagination: { hasMore: false },
-        }),
+        listEntries: async (
+          _slug: string,
+          query: { where?: unknown },
+          opts: { locale?: string }
+        ) => {
+          documentReads.push({ where: query.where, locale: opts.locale });
+          return { data: documents, pagination: { hasMore: false } };
+        },
       },
       ownCollections: {
         listEntries: async (
@@ -168,6 +184,59 @@ const holds = (id: string, path: string, locale = "en"): Row => ({
 });
 
 describe("the pages the site lists", () => {
+  beforeEach(() => {
+    answers.clear();
+    documentReads.length = 0;
+    for (const language of Object.keys(domains)) delete domains[language];
+  });
+
+  it("reads the site's rules once for the whole listing, not once a page", async () => {
+    answers.set("1", {
+      robots: listed,
+      canonical: { value: "/en/a", from: "address" },
+    });
+    answers.set("2", {
+      robots: listed,
+      canonical: { value: "/en/b", from: "address" },
+    });
+    const readRules = vi.fn(async () => ({ patterns: {} }));
+
+    await listPages(
+      context(
+        [
+          { id: "1", slug: "a" },
+          { id: "2", slug: "b" },
+        ],
+        [holds("1", "/a"), holds("2", "/b")]
+      ),
+      { origin: SITE, readRules }
+    );
+
+    expect(readRules).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops reading pages once it has listed as many as it was asked for", async () => {
+    answers.set("1", {
+      robots: listed,
+      canonical: { value: "/en/a", from: "address" },
+    });
+    const ctx = context([{ id: "1", slug: "a" }], [holds("1", "/a")]);
+    // A collection with many pages: every read says more follow.
+    let reads = 0;
+    ctx.services.collections.listEntries = (async () => {
+      reads++;
+      return {
+        data: [{ id: "1", slug: "a" }],
+        pagination: { hasMore: reads < 5 },
+      };
+    }) as unknown as typeof ctx.services.collections.listEntries;
+
+    const { pages } = await listPages(ctx, { origin: SITE, limit: 1 });
+
+    expect(pages.map(page => page.loc)).toEqual([`${SITE}/en/a`]);
+    expect(reads).toBe(1);
+  });
+
   it("lists a page at its canonical as its answer gives it", async () => {
     answers.set("1", {
       robots: listed,
@@ -216,6 +285,7 @@ describe("the pages the site lists", () => {
         kind: "held-by-another",
         holder: { collection: "pages", id: "1" },
         path: "/about",
+        language: "en",
         heldBy: { collection: "pages", id: "2" },
       },
     ]);
@@ -233,6 +303,7 @@ describe("the pages the site lists", () => {
         kind: "not-recorded",
         holder: { collection: "pages", id: "1" },
         path: "/about",
+        language: "en",
       },
     ]);
   });
@@ -261,13 +332,18 @@ describe("the pages the site lists", () => {
 
   it("counts a page as holding its address only in the language it is listed in", async () => {
     // The first page holds `/about` in French alone; the second holds it in
-    // English, the language listed.
+    // English. Each is listed in the language it holds it in, and the first
+    // is a problem in English, where the second holds it.
     for (const id of ["1", "2"]) {
       answers.set(id, {
         robots: listed,
         canonical: { value: "/en/about", from: "address" },
       });
     }
+    answers.set("1@fr", {
+      robots: listed,
+      canonical: { value: "/fr/about", from: "address" },
+    });
     const { pages, problems } = await listPages(
       context(
         [
@@ -279,12 +355,18 @@ describe("the pages the site lists", () => {
       ),
       { origin: SITE }
     );
-    expect(pages.map(page => page.holder.id)).toEqual(["2"]);
+    expect(
+      pages.map(page => [page.holder.id, page.language, page.loc])
+    ).toEqual([
+      ["1", "fr", `${SITE}/fr/about`],
+      ["2", "en", `${SITE}/en/about`],
+    ]);
     expect(problems).toEqual([
       {
         kind: "held-by-another",
         holder: { collection: "pages", id: "1" },
         path: "/about",
+        language: "en",
         heldBy: { collection: "pages", id: "2" },
       },
     ]);
@@ -362,5 +444,145 @@ describe("the pages the site lists", () => {
     );
     expect(resolvedIn.get("1")).toBe("fr");
     expect(pages.map(page => page.loc)).toEqual([`${SITE}/fr/about`]);
+  });
+});
+
+/** A version's answer: listed, at `canonical`, which is its own address. */
+const at = (canonical: string): SeoAnswer => ({
+  robots: listed,
+  canonical: { value: canonical, from: "address" },
+});
+
+describe("each page's language versions", () => {
+  beforeEach(() => {
+    answers.clear();
+    documentReads.length = 0;
+    for (const language of Object.keys(domains)) delete domains[language];
+  });
+
+  it("lists every version a page is published in, each naming every version, itself included, and x-default at the default language's", async () => {
+    answers.set("1@en", at("/en/about"));
+    answers.set("1@de", at("/de/about"));
+    const { pages, problems } = await listPages(
+      context(
+        [{ id: "1", slug: "about" }],
+        [holds("1", "/about", "en"), holds("1", "/about", "de")],
+        ["en", "de"]
+      ),
+      { origin: SITE }
+    );
+    const links = [
+      { hreflang: "en", href: `${SITE}/en/about` },
+      { hreflang: "de", href: `${SITE}/de/about` },
+      { hreflang: "x-default", href: `${SITE}/en/about` },
+    ];
+    expect(
+      pages.map(page => ({
+        language: page.language,
+        loc: page.loc,
+        alternates: page.alternates,
+      }))
+    ).toEqual([
+      { language: "en", loc: `${SITE}/en/about`, alternates: links },
+      { language: "de", loc: `${SITE}/de/about`, alternates: links },
+    ]);
+    expect(problems).toEqual([]);
+  });
+
+  it("links only the languages a page is published in, reading each language's documents once for those published in it", async () => {
+    answers.set("1@en", at("/en/about"));
+    answers.set("1@de", at("/de/about"));
+    // The second page has no published German version: the record holds it
+    // in English alone.
+    answers.set("2@en", at("/en/team"));
+    answers.set("2@de", at("/de/team"));
+    const { pages } = await listPages(
+      context(
+        [
+          { id: "1", slug: "about" },
+          { id: "2", slug: "team" },
+        ],
+        [
+          holds("1", "/about", "en"),
+          holds("1", "/about", "de"),
+          holds("2", "/team", "en"),
+        ],
+        ["en", "de"]
+      ),
+      { origin: SITE }
+    );
+    expect(
+      pages.map(page => [
+        page.loc,
+        (page.alternates ?? []).map(link => link.hreflang),
+      ])
+    ).toEqual([
+      [`${SITE}/en/about`, ["en", "de", "x-default"]],
+      [`${SITE}/de/about`, ["en", "de", "x-default"]],
+      [`${SITE}/en/team`, []],
+    ]);
+    const german = documentReads.filter(read => read.locale === "de");
+    expect(german).toHaveLength(1);
+    expect(JSON.stringify(german[0]?.where)).toContain('"in":["1"]');
+  });
+
+  it("leaves a version that does not stand for itself out of every version's links", async () => {
+    answers.set("1@en", at("/en/about"));
+    answers.set("1@de", {
+      robots: { value: { index: false, follow: true }, from: "page" },
+      canonical: { value: "/de/about", from: "address" },
+    });
+    const { pages } = await listPages(
+      context(
+        [{ id: "1", slug: "about" }],
+        [holds("1", "/about", "en"), holds("1", "/about", "de")],
+        ["en", "de"]
+      ),
+      { origin: SITE }
+    );
+    expect(pages.map(page => [page.loc, page.alternates])).toEqual([
+      [`${SITE}/en/about`, undefined],
+    ]);
+  });
+
+  it("names a version on a language's own domain among the links, and leaves it to that domain's sitemap", async () => {
+    domains.de = "https://acme.de";
+    answers.set("1@en", at("/en/about"));
+    answers.set("1@de", at("https://acme.de/about"));
+    const { pages } = await listPages(
+      context(
+        [{ id: "1", slug: "about" }],
+        [holds("1", "/about", "en"), holds("1", "/about", "de")],
+        ["en", "de"]
+      ),
+      { origin: SITE }
+    );
+    expect(pages.map(page => [page.loc, page.alternates])).toEqual([
+      [
+        `${SITE}/en/about`,
+        [
+          { hreflang: "en", href: `${SITE}/en/about` },
+          { hreflang: "de", href: "https://acme.de/about" },
+          { hreflang: "x-default", href: `${SITE}/en/about` },
+        ],
+      ],
+    ]);
+  });
+
+  it("lists a version in a language whose code search engines refuse, linking none to it", async () => {
+    answers.set("1@en", at("/en/about"));
+    answers.set("1@es-419", at("/es-419/about"));
+    const { pages } = await listPages(
+      context(
+        [{ id: "1", slug: "about" }],
+        [holds("1", "/about", "en"), holds("1", "/about", "es-419")],
+        ["en", "es-419"]
+      ),
+      { origin: SITE }
+    );
+    expect(pages.map(page => [page.loc, page.alternates])).toEqual([
+      [`${SITE}/en/about`, undefined],
+      [`${SITE}/es-419/about`, undefined],
+    ]);
   });
 });

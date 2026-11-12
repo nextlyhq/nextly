@@ -90,9 +90,12 @@ export function OutlineRowMenu({
           actions.focusRow(id);
         }}
       >
-        <DropdownMenuItem onSelect={() => actions.select(id)}>
-          {readOnly ? "View settings" : "Edit settings"}
-        </DropdownMenuItem>
+        {/* A registered block, or its prop, has no settings to open. */}
+        {!node.meta && (
+          <DropdownMenuItem onSelect={() => actions.select(id)}>
+            {readOnly ? "View settings" : "Edit settings"}
+          </DropdownMenuItem>
+        )}
         {group && (
           <DropdownMenuItem onSelect={() => actions.openFieldGroup(group.slug)}>
             Open the field group {group.label}

@@ -22,7 +22,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
-import { appLocalization } from "../../i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import {
   buildCompanionTransitionStatements,
@@ -124,6 +127,7 @@ export async function reconcileSingleCompanion(
     tableName,
     dialect,
     defaultLocale,
+    languageOrder: appLanguageOrder(),
     status,
     wasLocalized,
     isLocalized: localized,

@@ -37,14 +37,24 @@ interface LeavingTranslation {
   byLocale: Record<string, number> | null;
   total: number | null;
   entriesWithoutDefault: number | null;
+  sharedFrom?: Record<string, number> | null;
   defaultLocale: string;
   restoreCommand: string;
   refusal?: { reason: string; steps: string[] };
 }
 
+/** What the preview reports for one field becoming translated. */
+interface JoiningTranslation {
+  name: string;
+  column: string;
+  values: number | null;
+  defaultLocale: string;
+}
+
 interface Preview {
   hasChanges: boolean;
   leavingTranslation?: LeavingTranslation[];
+  joiningTranslation?: JoiningTranslation[];
 }
 
 interface Entries {
@@ -119,7 +129,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     fields: Record<string, unknown>[] = TRANSLATED
   ): Promise<void> {
     const created = await handler().createCollection({
-      name: "posts",
+      name: "flpposts",
       label: "Post",
       localized: true,
       fields,
@@ -131,7 +141,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       ["Two", { es: "Dos" }],
     ] as const) {
       const entry = await entries.createEntry(
-        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { collectionName: "flpposts", overrideAccess: true, locale: "en" },
         { heading: title, views: 1 }
       );
       expect(entry.success, JSON.stringify(entry)).toBe(true);
@@ -139,7 +149,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       for (const [locale, value] of Object.entries(translations)) {
         const translated = await entries.updateEntry(
           {
-            collectionName: "posts",
+            collectionName: "flpposts",
             entryId: id,
             overrideAccess: true,
             locale,
@@ -158,7 +168,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       await dispatchCollections(
         {} as ServiceContainer,
         "previewSchemaChanges",
-        { collectionName: "posts" },
+        { collectionName: "flpposts" },
         { fields: SHARED, localized: true }
       )
     );
@@ -173,9 +183,11 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
         byLocale: { ar: 1, es: 2 },
         total: 3,
         entriesWithoutDefault: 0,
+        // Every entry has an English value, so none takes its shared value from another language.
+        sharedFrom: {},
         defaultLocale: "en",
         restoreCommand:
-          "nextly i18n:restore --collection posts --field heading",
+          "nextly i18n:restore --collection flpposts --field heading",
       },
     ]);
   });
@@ -185,7 +197,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       await dispatchCollections(
         {} as ServiceContainer,
         "previewSchemaChanges",
-        { collectionName: "posts" },
+        { collectionName: "flpposts" },
         { fields, localized: true }
       )
     );
@@ -199,13 +211,13 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     await seedCollection(both);
     const entries = handler().getEntryService();
     const created = await entries.createEntry(
-      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { collectionName: "flpposts", overrideAccess: true, locale: "en" },
       { heading: "Three", summary: "Sub" }
     );
     const id = String((created.data as { id: unknown }).id);
     await entries.updateEntry(
       {
-        collectionName: "posts",
+        collectionName: "flpposts",
         entryId: id,
         overrideAccess: true,
         locale: "es",
@@ -229,7 +241,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     await seedCollection();
     // A companion that has drifted from its registry: the count has nothing to read.
     await query(
-      `ALTER TABLE ${quote(dialect, "dc_posts_locales")} DROP COLUMN ${quote(dialect, "heading")}`
+      `ALTER TABLE ${quote(dialect, "dc_flpposts_locales")} DROP COLUMN ${quote(dialect, "heading")}`
     );
 
     const preview = await previewShared();
@@ -246,12 +258,58 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     await seedCollection();
     // One entry translated before it had an English row, as an older install may hold.
     await query(
-      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+      `DELETE FROM ${quote(dialect, "dc_flpposts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
     );
 
     const preview = await previewShared();
 
     expect(preview.leavingTranslation?.[0]?.entriesWithoutDefault).toBe(1);
+  });
+
+  // The summary names whose page changes: an entry with no default-language value takes its shared
+  // value from another language, which its default-language readers will now see, and that
+  // language's value is the shared one rather than one sent to the archive.
+  it("names the language an entry without a default-language value takes its shared value from", async () => {
+    await seedCollection();
+    await query(
+      `DELETE FROM ${quote(dialect, "dc_flpposts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+    );
+
+    const [leaving] = (await previewShared()).leavingTranslation ?? [];
+
+    expect(leaving?.sharedFrom).toEqual({ es: 1 });
+    // "Dos" becomes the shared value and is archived as Spanish's own too, so the language can
+    // be restored; "Uno" and "واحد" go to the archive as well.
+    expect(leaving?.byLocale).toEqual({ es: 2, ar: 1 });
+  });
+
+  // The other direction says what it does too: a shared field becoming translated keeps each
+  // entry's value as the default language's, and every other language falls back to it until
+  // translated. The summary says how many values that is.
+  it("counts the values a field becoming translated keeps as the default language's", async () => {
+    const made = await handler().createCollection({
+      name: "flpposts",
+      label: "Post",
+      localized: true,
+      fields: SHARED,
+    });
+    expect(made.success, JSON.stringify(made)).toBe(true);
+    for (const heading of ["One", "Two", null]) {
+      const entry = await handler()
+        .getEntryService()
+        .createEntry(
+          { collectionName: "flpposts", overrideAccess: true, locale: "en" },
+          { heading, views: 1 }
+        );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    }
+
+    const preview = await previewShared(TRANSLATED);
+
+    expect(preview.hasChanges).toBe(true);
+    expect(preview.joiningTranslation).toEqual([
+      { name: "heading", column: "heading", values: 2, defaultLocale: "en" },
+    ]);
   });
 
   it("names the refusal before Apply when the entries cannot take a Required field's setting", async () => {
@@ -269,18 +327,22 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       (await previewShared(leaving)).leavingTranslation?.[0]?.refusal
     ).toBe(undefined);
 
-    // One entry translated before it had an English row, as an older install may hold.
+    // One entry with no heading in any language, as an older install may hold: whichever
+    // language it keeps, it would be left without one.
+    const [two] = await query<{ parent: string }>(
+      `SELECT ${quote(dialect, "_parent")} AS parent FROM ${quote(dialect, "dc_flpposts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+    );
     await query(
-      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+      `UPDATE ${quote(dialect, "dc_flpposts_locales")} SET ${quote(dialect, "heading")} = NULL WHERE ${quote(dialect, "_parent")} = '${two.parent}'`
     );
 
     expect(
       (await previewShared(leaving)).leavingTranslation?.[0]?.refusal
     ).toEqual({
       reason:
-        "1 entry has no English heading, and its English value becomes the shared one.",
+        "1 entry would have no heading once it is shared: the value it keeps is empty.",
       steps: [
-        "Give that entry an English heading, or turn off Required, and save again.",
+        "Give that entry a heading, or turn off Required, and save again.",
       ],
     });
   });
@@ -292,7 +354,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     const entries = handler().getEntryService();
     for (const heading of ["One", "Two", "Two"]) {
       const entry = await entries.createEntry(
-        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { collectionName: "flpposts", overrideAccess: true, locale: "en" },
         { heading, views: 1 }
       );
       expect(entry.success, JSON.stringify(entry)).toBe(true);

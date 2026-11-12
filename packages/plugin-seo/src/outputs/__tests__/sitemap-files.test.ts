@@ -45,6 +45,33 @@ describe("one sitemap file", () => {
     );
   });
 
+  it("lists each page's language links, declaring their namespace", () => {
+    const links = [
+      { hreflang: "en", href: "https://example.com/en/about" },
+      { hreflang: "de", href: "https://example.com/de/ueber" },
+      { hreflang: "x-default", href: "https://example.com/en/about" },
+    ];
+    const [file] = sitemapFiles([
+      page("/en/about", { alternates: links }),
+      page("/de/ueber", { alternates: links }),
+    ]);
+    const linked = links
+      .map(
+        link =>
+          `<xhtml:link rel="alternate" hreflang="${link.hreflang}" href="${link.href}"/>`
+      )
+      .join("");
+    expect(file).toBe(
+      [
+        `<?xml version="1.0" encoding="UTF-8"?>`,
+        `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xmlns:xhtml="http://www.w3.org/1999/xhtml">`,
+        `  <url><loc>https://example.com/en/about</loc>${linked}</url>`,
+        `  <url><loc>https://example.com/de/ueber</loc>${linked}</url>`,
+        `</urlset>`,
+      ].join("\n")
+    );
+  });
+
   it("escapes what XML would read as markup", () => {
     const [file] = sitemapFiles([page("/a?x=1&y=<2>")]);
     expect(file).toContain(

@@ -67,7 +67,7 @@ async function productionAddresses(
 }
 
 /** The site's recorded standing, or nothing before it is decided. */
-async function readStanding(
+export async function readStanding(
   ctx: PluginContext
 ): Promise<StagingStanding | undefined> {
   const { data } = await ctx.services.ownCollections.listEntries(

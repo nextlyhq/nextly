@@ -11,12 +11,14 @@
 // Nextly site reads, `nextlyRobots` among them.
 import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 
+import type { AiCrawlerChoice } from "../settings/contract";
+
 /**
  * What AI crawlers are asked: `all` lets every one read the site, `search`
  * asks only those that collect pages to train AI models to stay away, and
- * `block` asks every known one to.
+ * `block` asks every known one to. The SEO settings offer the same choices.
  */
-export type AiCrawlerChoice = "all" | "search" | "block";
+export type { AiCrawlerChoice } from "../settings/contract";
 
 /**
  * The crawlers that collect pages to train AI models. `Google-Extended` is how
