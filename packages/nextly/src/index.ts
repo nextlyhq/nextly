@@ -682,6 +682,7 @@ export {
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins";
+export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
 
 // "Every content type except these", one answer for each reader of a scope.
 // @experimental

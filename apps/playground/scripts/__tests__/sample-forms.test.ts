@@ -20,6 +20,10 @@ import {
   type SampleFormsStore,
 } from "../../seed/sample-forms";
 
+/** One notification of the sample forms, as the seed declares them. */
+type SampleNotification =
+  (typeof SAMPLE_FORMS)[number]["notifications"][number];
+
 type Row = Record<string, unknown> & { id: string };
 
 /** A store keeping rows per collection and filtering by one equals clause. */
@@ -186,12 +190,11 @@ describe("seedSampleForms", () => {
   });
 
   it("names a message on every enabled notification, so each can send", () => {
-    // Named, so `flatMap` reads one element type across the forms' differing
-    // notification tuples (one form has none).
-    type SampleNotification =
-      (typeof SAMPLE_FORMS)[number]["notifications"][number];
-    const enabled = SAMPLE_FORMS.flatMap(
-      (f): readonly SampleNotification[] => f.notifications
+    // Every form's notifications as one list. The element type is named,
+    // since a form with none is an empty tuple, from which `flatMap` cannot
+    // infer one.
+    const enabled = SAMPLE_FORMS.flatMap<SampleNotification>(
+      f => f.notifications
     ).filter(n => n.enabled);
     expect(enabled.length).toBeGreaterThan(0);
     for (const n of enabled) {

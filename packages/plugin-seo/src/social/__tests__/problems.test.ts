@@ -206,6 +206,20 @@ describe("shareImageProblems", () => {
     ]);
   });
 
+  it("reads the site's address from the SEO settings when the caller gives no reader", async () => {
+    savedSettings = { productionAddresses: ["https://rext.ai"] };
+    try {
+      expect(
+        await shareImageProblems(
+          context(LIBRARY),
+          post({ title: "Harbour", seo: { ogImage: "card" } })
+        )
+      ).toEqual([]);
+    } finally {
+      savedSettings = {};
+    }
+  });
+
   it("finds nothing wrong with a page that has no share image", async () => {
     expect(
       await shareImageProblems(

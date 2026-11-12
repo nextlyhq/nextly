@@ -16,7 +16,7 @@ import type {
 // return their data directly; failures throw a NextlyError.
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
-import { isSystemResource } from "../../../schemas/_zod/rbac";
+import { isSystemResource, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
@@ -89,6 +89,30 @@ function refuseDeletingBuiltIn(permission: {
     change: "delete",
     logContext,
   });
+}
+
+/**
+ * The line logged when a permission's orphan mark changes: what happened to
+ * the permission, and the roles that hold it as the database has them once
+ * the mark is written. A mark never adds or removes a grant, so those roles
+ * are the ones that held it before the change too. One wording for both
+ * places a mark changes: the sweep that marks and clears, and the ensure that
+ * clears it when a declaration returns.
+ */
+function orphanMarkChangeLine(change: {
+  permission: string;
+  owner: string | null;
+  orphaned: boolean;
+  holders: readonly string[];
+}): string {
+  const by = change.owner ? ` by ${change.owner}` : "";
+  const grants =
+    change.holders.length === 0
+      ? "no role holds it"
+      : `${change.holders.length} ${change.holders.length === 1 ? "role" : "roles"}: ${change.holders.join(", ")}`;
+  return change.orphaned
+    ? `Permission "${change.permission}" is no longer declared${by}: marked orphaned. Its grants are kept (${grants}).`
+    : `Permission "${change.permission}" is declared again${by}: orphan mark cleared. Its grants are as they were (${grants}).`;
 }
 
 /**
@@ -738,6 +762,17 @@ export class PermissionService extends BaseService {
           }
         });
       }
+      // A cleared mark is said in the log, with the grants the permission
+      // has, as the sweep says a mark it sets or clears.
+      if (currentlyOrphaned) {
+        await this.logOrphanMarkChange({
+          id: String(existing.id),
+          action,
+          resource,
+          owner: declaredOwner,
+          orphaned: false,
+        });
+      }
       return { id: String(existing.id), created: false };
     }
     const id = randomUUID();
@@ -797,6 +832,60 @@ export class PermissionService extends BaseService {
   ): Promise<string | null | undefined> {
     const row = await this.findByActionResource(action, resource);
     return row ? ((row as { owner?: string | null }).owner ?? null) : undefined;
+  }
+
+  /**
+   * Log that a permission's orphan mark was just set or cleared, naming the
+   * roles that hold it, read from the database after the mark is written.
+   *
+   * A failure to read the grants does not fail the change it reports: the
+   * mark is already written, so the line is logged as a warning that says the
+   * grants could not be read, rather than claiming any.
+   */
+  async logOrphanMarkChange(change: {
+    id: string;
+    action: string;
+    resource: string;
+    owner: string | null;
+    orphaned: boolean;
+  }): Promise<void> {
+    const permission = permissionSlug(change.action, change.resource);
+    let holders: string[];
+    try {
+      holders = await this.rolesHolding(change.id);
+    } catch (error) {
+      this.logger.warn(
+        `Permission "${permission}" ${
+          change.orphaned
+            ? "was marked orphaned"
+            : "had its orphan mark cleared"
+        }, and its grants could not be read: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return;
+    }
+    this.logger.info?.(
+      orphanMarkChangeLine({
+        permission,
+        owner: change.owner,
+        orphaned: change.orphaned,
+        holders,
+      })
+    );
+  }
+
+  /** The slugs of the roles holding a permission, sorted. */
+  private async rolesHolding(permissionId: string): Promise<string[]> {
+    const { roles, rolePermissions } = this.tables;
+    const rows = (await this.db
+      .select({ slug: roles.slug })
+      .from(rolePermissions)
+      .innerJoin(roles, eq(rolePermissions.roleId, roles.id))
+      .where(eq(rolePermissions.permissionId, permissionId))) as Array<{
+      slug: string | null;
+    }>;
+    return rows.map(row => String(row.slug)).sort();
   }
 
   /**

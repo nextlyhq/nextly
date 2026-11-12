@@ -69,11 +69,12 @@ describe("seedAllPermissions", () => {
   });
 
   /**
-   * Marking reads attribution off the rows, so it has to run against the list
-   * that was just seeded rather than a separately collected one — a second walk
-   * over the declarations is a second chance for them to disagree.
+   * A start marks nothing orphaned, whatever its build stopped declaring: a
+   * permission leaves only when `nextly migrate` applies the recorded
+   * migration that drops it. The control is the seeding itself, which this
+   * start does reach.
    */
-  it("marks orphans against the same list it seeded", async () => {
+  it("marks nothing orphaned", async () => {
     config.plugins = [
       {
         name: "@acme/p",
@@ -84,9 +85,8 @@ describe("seedAllPermissions", () => {
 
     await seedAllPermissions();
 
-    expect(markOrphanedPermissions).toHaveBeenCalledWith(
-      seedCustomPermissions.mock.calls[0][0]
-    );
+    expect(seedCustomPermissions).toHaveBeenCalledTimes(1);
+    expect(markOrphanedPermissions).not.toHaveBeenCalled();
   });
 
   /**

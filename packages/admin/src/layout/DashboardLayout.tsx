@@ -26,6 +26,7 @@ import { TopBarPlacesProvider } from "../components/layout/header/TopBarPlaces";
 import { PanelFoldProvider } from "../components/layout/PanelFold";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
+import { DualSidebarOutline } from "../components/layout/sidebar/DualSidebarOutline";
 import {
   SidePanelReservationProvider,
   useReservedInlineEnd,
@@ -34,10 +35,21 @@ import {
   MAIN_CONTENT_ID,
   SkipToContent,
 } from "../components/layout/SkipToContent";
+import {
+  ScreenWaitProvider,
+  ScreenWaitSigns,
+} from "../components/shared/loading-frame/screen-wait";
 import { MediaProvider } from "../context/providers/MediaProvider";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
+  /**
+   * Whether the server has confirmed the session. Until it has, the frame is
+   * drawn with an outline of the sidebar, which reads none of the reader's
+   * data, and `children` is the screen's outline rather than the screen.
+   * Defaults to confirmed, for a caller that mounts the layout only after.
+   */
+  sessionConfirmed?: boolean;
 }
 
 /**
@@ -59,6 +71,7 @@ interface DashboardLayoutProps {
  */
 export function DashboardLayout({
   children,
+  sessionConfirmed = true,
 }: DashboardLayoutProps): React.JSX.Element {
   return (
     <ChromeSuppressionProvider>
@@ -72,7 +85,13 @@ export function DashboardLayout({
           <HeaderTrailProvider>
             {/* And the bar draws what a page puts in its places. */}
             <TopBarPlacesProvider>
-              <DashboardChrome>{children}</DashboardChrome>
+              {/* Around the chrome and the screen: the screen reports its
+                  wait, and the chrome draws the signs of it. */}
+              <ScreenWaitProvider>
+                <DashboardChrome sessionConfirmed={sessionConfirmed}>
+                  {children}
+                </DashboardChrome>
+              </ScreenWaitProvider>
             </TopBarPlacesProvider>
           </HeaderTrailProvider>
         </SidePanelReservationProvider>
@@ -81,7 +100,10 @@ export function DashboardLayout({
   );
 }
 
-function DashboardChrome({ children }: DashboardLayoutProps) {
+function DashboardChrome({
+  children,
+  sessionConfirmed = true,
+}: DashboardLayoutProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const hidden = useSuppressedChrome();
   /*
@@ -154,7 +176,7 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {!hideSidebarColumn && (
               <div className="hidden lg:flex h-full overflow-hidden shrink-0">
-                <DualSidebar />
+                {sessionConfirmed ? <DualSidebar /> : <DualSidebarOutline />}
               </div>
             )}
 
@@ -168,7 +190,11 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
                 <SheetDescription className="sr-only">
                   Primary admin navigation
                 </SheetDescription>
-                <DualSidebar isMobile />
+                {sessionConfirmed ? (
+                  <DualSidebar isMobile />
+                ) : (
+                  <DualSidebarOutline isMobile />
+                )}
               </SheetContent>
             </Sheet>
 
@@ -180,6 +206,10 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
               {!hidden.has("header") && (
                 <DashboardHeader onOpenMenu={() => setIsMobileMenuOpen(true)} />
               )}
+              {/* The line under the bar and the slow-start message, while
+                  the screen waits; laid over the column, so they move
+                  nothing. */}
+              <ScreenWaitSigns />
               {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}
               {/* The skip link's target: an id to name, and tabIndex -1 so

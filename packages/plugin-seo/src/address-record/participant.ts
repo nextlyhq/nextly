@@ -30,6 +30,7 @@ import {
 import { redirectsSlug } from "../redirects/collection";
 import { movedRedirect } from "../redirects/moves";
 import { dropReplacedRedirect, putRedirect } from "../redirects/store";
+import { SEO_ADMIN_SLUG } from "../settings/contract";
 
 import {
   claimKey,
@@ -316,6 +317,45 @@ export async function addressHolders(
     }
   );
   return (data as unknown[]).flatMap(entry => rowOf(entry).holder ?? []);
+}
+
+/** What one page's addresses became in a recorded batch. */
+export interface AddressMove {
+  /** The addresses it held before and holds no more. */
+  released: readonly HeldAddress[];
+  /** Every address it holds now. */
+  holds: readonly HeldAddress[];
+}
+
+/**
+ * The event the record announces each page's addresses on, once a batch of
+ * saves it recorded has committed: every page, never a redirect. Never for
+ * a save that was undone, since the event waits for the save's transaction.
+ */
+export const ADDRESSES_MOVED: string = `${SEO_ADMIN_SLUG}.addresses-moved`;
+
+/** The payload `ADDRESSES_MOVED` carries. */
+export interface AddressesMoved {
+  moves: readonly AddressMove[];
+}
+
+/**
+ * Announce `moves` once the save that recorded them commits. Announcing
+ * never fails the save: whatever goes wrong only costs the announcement.
+ */
+function announceMoves(
+  ctx: PluginContext,
+  moves: readonly AddressMove[]
+): void {
+  if (moves.length === 0) return;
+  try {
+    const payload: AddressesMoved = { moves };
+    ctx.events.emit(ADDRESSES_MOVED, payload);
+  } catch (error) {
+    ctx.logger.warn("The SEO plugin could not announce moved addresses", {
+      error,
+    });
+  }
 }
 
 /** The participant, bound to the SEO plugin's context. */
@@ -613,6 +653,15 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
           await redirectReleased(transaction, update, released);
         }
       }
+      announceMoves(
+        ctx,
+        batch
+          .filter(update => !isRedirect(update.holder))
+          .map(update => ({
+            released: letGo.get(update)?.released ?? [],
+            holds: update.holds,
+          }))
+      );
     },
   };
 }

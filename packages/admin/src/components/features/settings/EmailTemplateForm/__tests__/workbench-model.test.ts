@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { PluginMetadata } from "@admin/types/branding";
 
 import {
   DESKTOP_FROM,
@@ -80,13 +81,24 @@ describe("ownsContent", () => {
 });
 
 describe("ownerName", () => {
+  const shop = record({
+    owner: { kind: "plugin", name: "@acme/plugin-shop", installed: true },
+  });
+
   it("names the owner as the list groups it", () => {
-    expect(ownerName(record({ owner: { kind: "core" } }))).toBe("Nextly");
-    expect(
-      ownerName(
-        record({ owner: { kind: "plugin", name: "shop", installed: true } })
-      )
-    ).toBe("shop");
-    expect(ownerName(record({ owner: { kind: "site" } }))).toBe("This site");
+    expect(ownerName(record({ owner: { kind: "core" } }), undefined)).toBe(
+      "Nextly"
+    );
+    expect(ownerName(shop, undefined)).toBe("@acme/plugin-shop");
+    expect(ownerName(record({ owner: { kind: "site" } }), undefined)).toBe(
+      "This site"
+    );
+  });
+
+  it("names a plugin as the admin names it everywhere else", () => {
+    const plugins = [
+      { name: "@acme/plugin-shop", appearance: { label: "Shop" } },
+    ] as PluginMetadata[];
+    expect(ownerName(shop, plugins)).toBe("Shop");
   });
 });
