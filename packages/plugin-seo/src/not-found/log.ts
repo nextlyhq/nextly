@@ -20,7 +20,16 @@
 import { createHash } from "node:crypto";
 
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
-import { desc, eq, inArray, increment } from "@nextlyhq/plugin-sdk/db";
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  inArray,
+  increment,
+  isNull,
+  lt,
+} from "@nextlyhq/plugin-sdk/db";
 import { isUniqueViolation } from "@nextlyhq/plugin-sdk/schema";
 
 import { within } from "../address-record/rows";
@@ -404,6 +413,8 @@ export async function forgetNotFoundUnder(
 interface MoveOptions {
   afterCount?: () => Promise<void>;
   afterLock?: () => Promise<void>;
+  /** Runs once the row is read, before anything is written to the table. */
+  beforeWrite?: () => Promise<void>;
 }
 
 /** A stored time read back as a date, or `fallback` where it reads as none. */
@@ -411,6 +422,81 @@ function dateOf(value: unknown, fallback: Date): Date {
   const time =
     value instanceof Date ? value.getTime() : Date.parse(isoOf(value));
   return Number.isNaN(time) ? fallback : new Date(time);
+}
+
+/** A condition, as `eq` and the other operators build one. */
+type Condition = ReturnType<typeof eq>;
+
+/** `a` and `b` together: `and` answers nothing only when given nothing. */
+function both(a: Condition, b: Condition): Condition {
+  return and(a, b) ?? a;
+}
+
+/**
+ * Add an earlier version's row for the address `key` to the table, with
+ * statements that each act on the values stored when they run, never on a
+ * value read earlier: a person's Ignore or a visit committed meanwhile is
+ * never written over.
+ *
+ * - The visits are added (`hits + n`); a row logged since that has none of
+ *   its own is made from the earlier one.
+ * - `ignored` is only ever set, and only where the earlier row was ignored:
+ *   a person chose it on either side.
+ * - The last time, and with it the source, are the earlier row's only where
+ *   it is newer than the stored one: the newer side's stand.
+ * - A source is kept from the earlier row where the stored one knows none.
+ * - The first time is the earlier row's where it is earlier.
+ *
+ * A first request for the address landing between the add (which finds no
+ * row) and the insert refuses the insert, and the move of this row is left
+ * for the next start.
+ */
+async function mergeEarlierRow(
+  tx: Parameters<Parameters<PluginContext["db"]["transaction"]>[0]>[0],
+  key: string,
+  row: LoggedRow,
+  times: { firstSeen: Date; lastSeen: Date }
+): Promise<void> {
+  const columns = tx.table(notFoundLog);
+  const byKey = eq(columns.pathKey, key);
+  const added = await tx
+    .update(notFoundLog, {
+      hits: increment(row.hits),
+      ...(row.kind === "moved" ? { kind: "moved" } : {}),
+    })
+    .where(byKey);
+  if (added === 0) {
+    await tx.insert(notFoundLog, {
+      pathKey: key,
+      locale: row.locale,
+      path: row.path,
+      asked: row.asked,
+      hits: row.hits,
+      firstSeen: times.firstSeen,
+      lastSeen: times.lastSeen,
+      kind: row.kind,
+      cameFrom: row.cameFrom,
+      ignored: row.ignored,
+    });
+    return;
+  }
+  if (row.ignored) {
+    await tx.update(notFoundLog, { ignored: true }).where(byKey);
+  }
+  await tx
+    .update(notFoundLog, {
+      lastSeen: times.lastSeen,
+      ...(row.cameFrom === null ? {} : { cameFrom: row.cameFrom }),
+    })
+    .where(both(byKey, lt(columns.lastSeen, times.lastSeen)));
+  if (row.cameFrom !== null) {
+    await tx
+      .update(notFoundLog, { cameFrom: row.cameFrom })
+      .where(both(byKey, isNull(columns.cameFrom)));
+  }
+  await tx
+    .update(notFoundLog, { firstSeen: times.firstSeen })
+    .where(both(byKey, gt(columns.firstSeen, times.firstSeen)));
 }
 
 /**
@@ -460,43 +546,8 @@ function moveOne(
     // Joins the transaction the row is read and deleted on: the row moves
     // whole or not at all.
     await ctx.db.transaction(async tx => {
-      const columns = tx.table(notFoundLog);
-      const there = await tx
-        .select(notFoundLog)
-        .where(eq(columns.pathKey, key))
-        .first();
-      if (there === null) {
-        await tx.insert(notFoundLog, {
-          pathKey: key,
-          locale: row.locale,
-          path: row.path,
-          asked: row.asked,
-          hits: row.hits,
-          firstSeen,
-          lastSeen,
-          kind: row.kind,
-          cameFrom: row.cameFrom,
-          ignored: row.ignored,
-        });
-        return;
-      }
-      // The newer side's source where it knows one, as a hit with none
-      // leaves the source it finds; ignored where either side was, since a
-      // person chose it and no visit undoes that.
-      const earlierIsNewer = lastSeen > there.lastSeen;
-      const [newer, older] = earlierIsNewer
-        ? [row.cameFrom, there.cameFrom]
-        : [there.cameFrom, row.cameFrom];
-      await tx
-        .update(notFoundLog, {
-          hits: increment(row.hits),
-          firstSeen: firstSeen < there.firstSeen ? firstSeen : there.firstSeen,
-          lastSeen: earlierIsNewer ? lastSeen : there.lastSeen,
-          ...(row.kind === "moved" ? { kind: "moved" } : {}),
-          cameFrom: newer ?? older,
-          ignored: row.ignored || there.ignored,
-        })
-        .where(eq(columns.id, there.id));
+      await options.beforeWrite?.();
+      await mergeEarlierRow(tx, key, row, { firstSeen, lastSeen });
     });
     await ctx.services.collections.deleteEntryInTransaction(
       transaction,

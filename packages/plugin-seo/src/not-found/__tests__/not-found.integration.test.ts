@@ -30,6 +30,7 @@ import {
   pruneNotFound,
   readNotFoundLog,
   recordNotFound,
+  setNotFoundIgnored,
 } from "../log";
 import { keptSeoContext, logNotFound } from "../report";
 
@@ -289,6 +290,72 @@ describe.each(getConfiguredTestDialects())(
         "/sourced": "3 /blog/launch false",
       });
     });
+
+    it.skipIf(dialect === "sqlite")(
+      "keeps an Ignore and a newer visit made while the move merges an earlier row",
+      async () => {
+        const { t, seo } = await boot(dialect);
+        await moveLoggedRows(seo);
+        await t.nextly.create({
+          collection: NOT_FOUND_SLUG,
+          data: {
+            pathKey: pathKey({ locale: "en", path: "/both" }),
+            locale: "en",
+            path: "/both",
+            hits: 2,
+            lastSeen: "2026-10-01T00:00:00.000Z",
+            kind: "missing",
+            cameFrom: "old.example.org",
+            ignored: false,
+          },
+        });
+        // Logged since the upgrade, with no source yet.
+        await recordNotFound(seo, { locale: "en", path: "/both" });
+        const [logged] = await readNotFoundLog(seo);
+        if (logged === undefined) throw new Error("the address was not logged");
+
+        // The move stops before it writes anything to the table. From the
+        // test's own flow, each on a transaction of its own: someone ignores
+        // the address, and a visitor arrives from a page here.
+        let parked!: () => void;
+        const writing = new Promise<void>(resolve => {
+          parked = resolve;
+        });
+        let release!: () => void;
+        const released = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        const moving = moveLoggedRows(seo, {
+          beforeWrite: async () => {
+            parked();
+            await released;
+          },
+        });
+        await writing;
+        await setNotFoundIgnored(seo, logged.id, true);
+        const visited = new Date();
+        await recordNotFound(
+          seo,
+          { locale: "en", path: "/both", cameFrom: "/blog/launch" },
+          "missing",
+          visited
+        );
+        release();
+        await moving;
+
+        const [row] = await readNotFoundLog(seo);
+        expect(row).toMatchObject({
+          path: "/both",
+          hits: 4,
+          ignored: true,
+          cameFrom: "/blog/launch",
+        });
+        // The visit's time, to the second some dialects keep.
+        expect(
+          Math.abs(Date.parse(row?.lastSeen ?? "") - visited.getTime())
+        ).toBeLessThan(1_000);
+      }
+    );
 
     it("keeps off the log an address a redirect was saved for before its earlier row moved", async () => {
       const { t, seo } = await boot(dialect);
