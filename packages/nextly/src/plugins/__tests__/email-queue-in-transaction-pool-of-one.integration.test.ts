@@ -15,6 +15,10 @@ import { createTestNextly, type TestNextly } from "../test-nextly";
 
 const POSTGRES_URL = process.env.TEST_POSTGRES_URL ?? "";
 
+/** A template the suite saves, whose copy address the queue must capture. */
+const TEMPLATE = "pool-of-one-notice";
+const COPY = "copies@example.com";
+
 /** How long a request waits for a pooled connection before it is refused. */
 const POOL_WAIT_MS = 5_000;
 
@@ -60,6 +64,8 @@ describe.skipIf(!POSTGRES_URL)(
     let handle: TestNextly | undefined;
     let ctx: PluginContext | undefined;
     const queued: string[] = [];
+    // Each email as it is about to be sent, its copies included.
+    const sent: Array<{ cc?: unknown }> = [];
 
     beforeAll(async () => {
       const adapter = await connectSingleConnection();
@@ -72,9 +78,30 @@ describe.skipIf(!POSTGRES_URL)(
             nextly: ">=0.0.0",
             init(captured) {
               ctx = captured;
+              captured.filters.add(
+                "email.beforeSend",
+                (value: { cc?: unknown }) => {
+                  sent.push(value);
+                  return value;
+                }
+              );
             },
           }),
         ],
+      });
+      // Saved with a copy address: the queue takes its copies when the
+      // email is queued, which is the read that must use the transaction.
+      const templates = handle.getService(
+        "emailTemplateService"
+      ) as unknown as {
+        createTemplate(input: Record<string, unknown>): Promise<unknown>;
+      };
+      await templates.createTemplate({
+        name: "Pool of one notice",
+        slug: TEMPLATE,
+        subject: "Hello",
+        htmlContent: "<p>Hello</p>",
+        cc: [COPY],
       });
     }, 60_000);
 
@@ -90,6 +117,12 @@ describe.skipIf(!POSTGRES_URL)(
       for (const id of queued) {
         await withTimeout(db.delete(table).where(eq(table.id, id)), 15_000);
       }
+      await withTimeout(
+        handle.adapter.executeQuery(
+          `DELETE FROM email_templates WHERE slug = '${TEMPLATE}'`
+        ),
+        15_000
+      );
       // Bounded: a case that hung can still hold the pool's only connection.
       await withTimeout(handle.destroy(), 15_000);
     }, 30_000);
@@ -104,7 +137,7 @@ describe.skipIf(!POSTGRES_URL)(
         // would wait for it until the pool's wait runs out.
         ctx.db.transaction(tx =>
           email.queueWithTemplate(
-            "pool-of-one-notice",
+            TEMPLATE,
             "ada@example.com",
             { name: "Ada" },
             { tx }
@@ -116,6 +149,18 @@ describe.skipIf(!POSTGRES_URL)(
 
       expect(result.id).toEqual(expect.any(String));
       expect(result.state).toBe("waiting");
+      // The template was read, not passed over: a lookup that failed on the
+      // pool queues the email with no copies, so the send after the commit
+      // goes to the visitor alone.
+      await withTimeout(
+        (async () => {
+          while (sent.length === 0) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        })(),
+        POOL_WAIT_MS * 3
+      );
+      expect(sent[0]?.cc).toEqual([COPY]);
     }, 30_000);
   }
 );
