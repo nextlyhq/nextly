@@ -1,173 +1,176 @@
-// What a planned migration deletes, read from its operations: every table and
-// column it drops, every type change that clears values, and every row a
-// person's answer removes. One list, which the file's header names and the
-// command lists, counts and asks consent for.
+// What the files `migrate:create` is about to write delete, judged by the statement judge
+// `nextly migrate` uses, against the schema the latest snapshot records, and worded from the plan
+// where the plan knows why.
 import { describe, expect, it } from "vitest";
 
-import type { Operation } from "../../pipeline/diff/types";
-import { plannedDeletions } from "../planned-deletions";
+import {
+  buildDesiredSnapshotFromConfigForTest,
+  type MinimalConfigEntity,
+} from "../generate";
+import { judgedDeletions, type DeletionPlan } from "../planned-deletions";
 
-const dropTable = (tableName: string): Operation => ({
-  type: "drop_table",
-  tableName,
-});
-const dropColumn = (tableName: string, columnName: string): Operation => ({
-  type: "drop_column",
-  tableName,
-  columnName,
-  columnType: "text",
-});
+const POSTS: MinimalConfigEntity = {
+  slug: "posts",
+  tableName: "dc_posts",
+  fields: [
+    { name: "title", type: "text" },
+    { name: "summary", type: "text" },
+    { name: "price", type: "text" },
+  ],
+};
+const TAGS: MinimalConfigEntity = {
+  slug: "posts_tags",
+  tableName: "dc_posts_tags",
+  fields: [{ name: "label", type: "text" }],
+};
+const previous = buildDesiredSnapshotFromConfigForTest(
+  [POSTS, TAGS],
+  [],
+  [],
+  "postgresql"
+);
 
-describe("plannedDeletions", () => {
-  it("names a table the config no longer declares", () => {
-    expect(plannedDeletions({ operations: [dropTable("dc_posts")] })).toEqual([
-      { kind: "table", table: "dc_posts", reason: "no longer in the config" },
+const judge = (files: string[][], plan: Partial<DeletionPlan> = {}, main = 0) =>
+  judgedDeletions({
+    files,
+    main,
+    dialect: "postgresql",
+    previous,
+    plan: { operations: [], ...plan },
+  });
+
+describe("judgedDeletions", () => {
+  it("names a removed entity's own table, and leaves any other table it drops unexplained", () => {
+    const { all } = judge(
+      [['DROP TABLE "dc_posts"', 'DROP TABLE "dc_posts_tags"']],
+      {
+        removedEntities: [
+          { kind: "collection", slug: "posts", table: "dc_posts" },
+        ],
+      }
+    );
+    expect(all).toEqual([
+      {
+        kind: "table",
+        table: "dc_posts",
+        reason: "collection posts is no longer in the config",
+      },
+      { kind: "table", table: "dc_posts_tags" },
     ]);
   });
 
-  it("names a dropped column, and a declined rename as the rename declined", () => {
-    expect(
-      plannedDeletions({
-        operations: [
-          dropColumn("dc_pages", "summary"),
-          {
-            type: "add_column",
-            tableName: "dc_pages",
-            column: { name: "excerpt", type: "text", nullable: true },
-          },
-          dropColumn("dc_pages", "legacy"),
+  it("names a dropped column as the rename declined, where it was one", () => {
+    const { all } = judge(
+      [
+        [
+          'ALTER TABLE "dc_posts" DROP COLUMN "summary"',
+          'ALTER TABLE "dc_posts" DROP COLUMN "title"',
         ],
-        declinedRenames: [
-          { tableName: "dc_pages", fromColumn: "summary", toColumn: "excerpt" },
-        ],
-      })
-    ).toEqual([
-      {
-        kind: "column",
-        table: "dc_pages",
-        column: "legacy",
-        reason: "no longer in the config",
-      },
-      {
-        kind: "column",
-        table: "dc_pages",
-        column: "summary",
-        reason: "rename to excerpt declined",
-      },
-    ]);
-  });
-
-  it("names every rename declined for one column", () => {
-    const [deletion] = plannedDeletions({
-      operations: [dropColumn("dc_pages", "summary")],
-      declinedRenames: [
-        { tableName: "dc_pages", fromColumn: "summary", toColumn: "excerpt" },
-        { tableName: "dc_pages", fromColumn: "summary", toColumn: "teaser" },
       ],
-    });
-    expect(deletion).toMatchObject({
-      reason: "rename to excerpt or teaser declined",
-    });
+      {
+        declinedRenames: [
+          { tableName: "dc_posts", fromColumn: "summary", toColumn: "excerpt" },
+          { tableName: "dc_posts", fromColumn: "summary", toColumn: "teaser" },
+        ],
+      }
+    );
+    expect(all).toEqual([
+      {
+        kind: "column",
+        table: "dc_posts",
+        column: "summary",
+        reason: "rename to excerpt or teaser declined",
+      },
+      { kind: "column", table: "dc_posts", column: "title" },
+    ]);
   });
 
-  it("names a type change that clears values as a deletion in its column", () => {
-    expect(
-      plannedDeletions({
+  it("judges a type change as nextly migrate does, and names the change", () => {
+    const { all } = judge(
+      [
+        [
+          'ALTER TABLE "dc_posts" ALTER COLUMN "price" SET DATA TYPE integer USING "price"::integer',
+        ],
+      ],
+      {
         operations: [
           {
             type: "change_column_type",
-            tableName: "dc_products",
+            tableName: "dc_posts",
             columnName: "price",
             fromType: "text",
             toType: "integer",
-            clearsValues: true,
-          },
-          // A type change that keeps every value deletes nothing.
-          {
-            type: "change_column_type",
-            tableName: "dc_products",
-            columnName: "title",
-            fromType: "varchar(100)",
-            toType: "varchar(255)",
           },
         ],
-      })
-    ).toEqual([
+      }
+    );
+    expect(all).toEqual([
       {
         kind: "column",
-        table: "dc_products",
+        table: "dc_posts",
         column: "price",
-        clearsSome: true,
-        reason: "text to integer clears the values integer cannot hold",
+        reason: "type changes from text to integer",
       },
     ]);
   });
 
-  it("names the rows a person's answer removes, and not the rows it fills", () => {
-    expect(
-      plannedDeletions({
-        operations: [],
-        resolutions: [
-          {
-            tableName: "dc_posts",
-            columnName: "author",
-            kind: "delete_nonconforming",
-          },
-          {
-            tableName: "dc_posts",
-            columnName: "title",
-            kind: "fill",
-            value: "x",
-          },
-        ],
-      })
-    ).toEqual([
+  it("names the rows a person's answer removes", () => {
+    const { all } = judge([['DELETE FROM "dc_posts" WHERE "title" IS NULL']], {
+      resolutions: [
+        {
+          tableName: "dc_posts",
+          columnName: "title",
+          kind: "delete_nonconforming",
+        },
+      ],
+    });
+    expect(all).toEqual([
       {
         kind: "rows",
         table: "dc_posts",
-        reason: "rows with no author removed, so the column can be required",
+        reason: "rows with no title removed, so the column can be required",
       },
     ]);
   });
 
-  it("deletes nothing for operations that keep every value", () => {
-    expect(
-      plannedDeletions({
-        operations: [
-          { type: "rename_table", fromName: "dc_a", toName: "dc_b" },
-          {
-            type: "rename_column",
-            tableName: "dc_b",
-            fromColumn: "x",
-            toColumn: "y",
-            fromType: "text",
-            toType: "text",
-          },
-          {
-            type: "drop_index",
-            tableName: "dc_b",
-            index: { name: "dc_b_y_idx", columns: ["y"], unique: false },
-          },
-        ],
-      })
-    ).toEqual([]);
+  it("finds nothing in statements that keep every value", () => {
+    const { all } = judge([
+      [
+        'ALTER TABLE "dc_posts" RENAME COLUMN "summary" TO "excerpt"',
+        'ALTER TABLE "dc_posts" ADD COLUMN "subtitle" text',
+        'UPDATE "dc_posts" SET "title" = \'x\' WHERE "title" IS NULL',
+      ],
+    ]);
+    expect(all).toEqual([]);
   });
 
-  it("lists tables before columns, each in name order, whatever the plan's order", () => {
-    const listed = plannedDeletions({
-      operations: [
-        dropColumn("dc_b", "z"),
-        dropTable("dc_z"),
-        dropColumn("dc_a", "y"),
-        dropTable("dc_c"),
+  it("gives the main file its own deletions, and the run every file's, each once", () => {
+    const { main, all } = judge(
+      [
+        ['ALTER TABLE "dc_posts" DROP COLUMN "summary"'],
+        ['DROP TABLE "dc_posts_tags"'],
+        ['ALTER TABLE "dc_posts" DROP COLUMN "price"'],
       ],
-    }).map(d =>
-      d.kind === "column"
-        ? `${d.table}.${d.column}`
-        : d.kind === "unnamed"
-          ? d.description
-          : d.table
+      {},
+      1
     );
-    expect(listed).toEqual(["dc_c", "dc_z", "dc_a.y", "dc_b.z"]);
+    expect(main).toEqual([{ kind: "table", table: "dc_posts_tags" }]);
+    expect(
+      all.map(d =>
+        "column" in d
+          ? `${d.table}.${d.column}`
+          : d.kind === "unnamed"
+            ? d.description
+            : d.table
+      )
+    ).toEqual(["dc_posts.summary", "dc_posts_tags", "dc_posts.price"]);
+  });
+
+  it("judges a later file against what an earlier one left: a table it created holds nothing", () => {
+    const { all } = judge([
+      ['CREATE TABLE "dc_scratch" ("id" text PRIMARY KEY)'],
+      ['DROP TABLE "dc_scratch"'],
+    ]);
+    expect(all).toEqual([]);
   });
 });

@@ -377,23 +377,29 @@ function endNothingToDo(
 const COUNT_CONNECT_MS = 3000;
 
 /**
+ * How long the counts may take, all of them together. A count is a scan of a
+ * table that may be large; past this the rest are listed without one, so a
+ * listing never waits minutes for numbers that decide nothing.
+ */
+const COUNT_BUDGET_MS = 5000;
+
+/**
  * `deletions` with their counts, where the database `DATABASE_URL` names can
  * be read: opened read-only (nothing is created, no lock taken) and closed
  * again. Any failure leaves them uncounted, said in one line: `migrate:create`
- * needs no database, and the listing is asked about either way.
+ * needs no database, and the listing is asked about either way. Counting
+ * stops once `budgetMs` has passed: no further count starts, and one still
+ * running is not waited for (the database finishes it; no dialect cancels it
+ * the same way), so the rest are listed without a count.
  */
-async function countWhereReadable(
+export async function countWhereReadable(
   deletions: readonly Deletion[],
   dialect: SupportedDialect,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  budgetMs: number = COUNT_BUDGET_MS
 ): Promise<Deletion[]> {
   const opening = openDryRunAdapter({ dialect });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<"timed-out">(settle => {
-    timer = setTimeout(() => settle("timed-out"), COUNT_CONNECT_MS);
-  });
-  const opened = await Promise.race([opening, timedOut]).catch(() => undefined);
-  clearTimeout(timer);
+  const opened = await within(opening, COUNT_CONNECT_MS);
   if (opened === "timed-out") {
     // An open that arrives late is closed, so it holds the process open no longer than it must.
     opening.then(
@@ -405,12 +411,54 @@ async function countWhereReadable(
     logger.info("Counts not shown: the database could not be read.");
     return [...deletions];
   }
+  // The CLI adapter is the Drizzle adapter its factory made, as every command that reads with it treats it.
+  const db = (opened as unknown as DrizzleAdapter).getDrizzle();
+  const deadline = Date.now() + budgetMs;
+  const counted: Deletion[] = [];
+  let unfinished: Promise<unknown> | undefined;
+  let stopped = false;
+  for (const deletion of deletions) {
+    const left = deadline - Date.now();
+    if (stopped || left <= 0) {
+      stopped = true;
+      counted.push(deletion);
+      continue;
+    }
+    const counting = countDeletions([deletion], db, dialect);
+    const one = await within(counting, left);
+    if (one === "timed-out") {
+      stopped = true;
+      unfinished = counting;
+      counted.push(deletion);
+    } else {
+      counted.push(one?.[0] ?? deletion);
+    }
+  }
+  if (stopped) {
+    logger.info(
+      "Counts stopped at their time limit; the rest are listed without one."
+    );
+  }
+  // Closed once the count still running settles, rather than waited for here.
+  const close = () => opened.disconnect().catch(() => undefined);
+  if (unfinished === undefined) await close();
+  else void unfinished.then(close, close);
+  return counted;
+}
+
+/** `work`'s result, or `timed-out` once `ms` have passed first; undefined where it failed. */
+async function within<T>(
+  work: Promise<T>,
+  ms: number
+): Promise<T | "timed-out" | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<"timed-out">(settle => {
+    timer = setTimeout(() => settle("timed-out"), ms);
+  });
   try {
-    // The CLI adapter is the Drizzle adapter its factory made, as every command that reads with it treats it.
-    const db = (opened as unknown as DrizzleAdapter).getDrizzle();
-    return await countDeletions(deletions, db, dialect);
+    return await Promise.race([work, timedOut]).catch(() => undefined);
   } finally {
-    await opened.disconnect().catch(() => undefined);
+    clearTimeout(timer);
   }
 }
 

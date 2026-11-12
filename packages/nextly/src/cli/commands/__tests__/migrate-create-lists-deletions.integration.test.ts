@@ -272,7 +272,7 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.code, refused.said).toBe(1);
       expect(files()).toHaveLength(1);
       expect(refused.said).toContain(
-        `table ${POSTS_TABLE} (3 rows): no longer in the config`
+        `table ${POSTS_TABLE} (3 rows): collection ${POSTS} is no longer in the config`
       );
       expect(refused.said).toContain(`--accept-data-loss=${POSTS_TABLE}`);
 
@@ -281,7 +281,7 @@ describe.each(getConfiguredTestDialects())(
       expect(files()).toHaveLength(2);
       const sql = readFileSync(join(dir, "migrations", files()[1]), "utf-8");
       expect(sql).toContain(
-        `-- Deletes: table ${POSTS_TABLE}: no longer in the config`
+        `-- Deletes: table ${POSTS_TABLE}: collection ${POSTS} is no longer in the config`
       );
       // The header names no count: the file runs against other databases.
       expect(sql).not.toContain("3 rows");
@@ -292,7 +292,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await migrateCreate(dropped, "drop_summary");
       expect(refused.code, refused.said).toBe(1);
       expect(refused.said).toContain(
-        `column ${PAGES_TABLE}.summary (1 non-empty value): no longer in the config`
+        `column ${PAGES_TABLE}.summary (1 non-empty value)`
       );
       expect(files()).toHaveLength(1);
     });
@@ -306,7 +306,7 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.code, refused.said).toBe(1);
       expect(files()).toHaveLength(1);
       expect(refused.said).toContain(
-        `table ${POSTS_TABLE}: no longer in the config`
+        `table ${POSTS_TABLE}: collection ${POSTS} is no longer in the config`
       );
       expect(refused.said).not.toContain("rows)");
       expect(refused.said).toContain(

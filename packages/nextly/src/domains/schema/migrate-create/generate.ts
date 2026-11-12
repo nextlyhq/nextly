@@ -84,6 +84,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
@@ -125,6 +126,10 @@ import {
   columnsDeclaredBy,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../utils/resolve-table-name";
 
 import {
   appStreamSnapshots,
@@ -155,7 +160,12 @@ import {
   slugify,
 } from "./format-file";
 import { refuseIndexedTextWidening } from "./indexed-text-widening";
-import { plannedDeletions } from "./planned-deletions";
+import {
+  fileStatements,
+  judgedDeletions,
+  mainFileStatements,
+  type RemovedEntity,
+} from "./planned-deletions";
 import type { RenameDecision } from "./prompt-renames";
 import {
   scopedSettingsChanges,
@@ -1131,17 +1141,6 @@ export async function generateMigration(
   const namesTouched = (entity: MinimalConfigEntity): boolean =>
     touched.has(entity.tableName);
 
-  // 8a. What the plan deletes, from its final operations and the person's answers: judged before
-  //     any file is written (a refusal throws and nothing is written), and named in the header.
-  const deletions = plannedDeletions({
-    operations,
-    declinedRenames: decisions
-      .filter(decision => !decision.accepted)
-      .map(decision => decision.candidate),
-    resolutions: args.resolutions,
-  });
-  if (deletions.length > 0) await args.judgeDeletions?.(deletions);
-
   const collectionSlugs = args.collections
     .filter(namesTouched)
     .map(c => c.slug)
@@ -1154,35 +1153,6 @@ export async function generateMigration(
     .filter(namesTouched)
     .map(c => c.slug)
     .sort();
-  const sqlContent = formatMigrationFile({
-    name: args.name,
-    dialect: args.dialect,
-    sqlStatements,
-    downSqlStatements,
-    collections: collectionSlugs,
-    singles: singleSlugs,
-    components: componentSlugs,
-    hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
-    settingsChanges: changedSettings.map(describeSettingsChange),
-    permissionChanges: changedPermissions.map(describePermissionChange),
-    deletions,
-    // A junction table the caller adds is a table this file changes.
-    changesNoTable:
-      operations.length === 0 &&
-      (added?.up.first.length ?? 0) + (added?.up.last.length ?? 0) === 0,
-    now,
-  });
-
-  const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
-    metaDir,
-    now,
-    sqlContent,
-    written,
-    contributions: stream.contributions,
-    entities: settingsRecord,
-    permissions: permissionRecord,
-  });
-
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
   //    - ENABLE / create-only: the companion's FK references the main table, so it must run
   //      strictly AFTER the main file — give each a timestamp a few ms later.
@@ -1317,6 +1287,97 @@ export async function generateMigration(
         },
       });
     });
+  // 8a. What the files delete, judged as `nextly migrate` will judge them (`judgedDeletions`):
+  //     every file this run writes, in the order they run, before any is written. A refusal
+  //     throws and nothing is written; the main file's header names its own.
+  const judged = judgedDeletions({
+    files: [
+      ...companionFiles
+        .slice(0, beforeMain.length)
+        .map(({ opts }) => fileStatements(opts.upSql, args.dialect)),
+      mainFileStatements(sqlStatements, args.dialect),
+      ...companionFiles
+        .slice(beforeMain.length)
+        .map(({ opts }) => fileStatements(opts.upSql, args.dialect)),
+    ],
+    main: beforeMain.length,
+    dialect: args.dialect,
+    previous: previousSnapshot,
+    plan: {
+      operations,
+      declinedRenames: decisions
+        .filter(decision => !decision.accepted)
+        .map(decision => decision.candidate),
+      resolutions: args.resolutions,
+      removedEntities: removedEntitiesOf(
+        args,
+        previous === null ? undefined : previous.data.entities
+      ),
+      translationMoves: [
+        ...companionPlans.flatMap(({ plan: { kind, spec } }) =>
+          kind === "enable"
+            ? spec.columns.map(column => ({
+                table: spec.mainTable,
+                column: column.name,
+                reason: `translation turned on for ${spec.collection}; its values move to ${spec.companionTable} first`,
+              }))
+            : kind === "disable"
+              ? [
+                  {
+                    table: spec.companionTable,
+                    reason: `translation turned off for ${spec.collection}; the default language's values move back and the others are kept in the archive`,
+                  },
+                ]
+              : []
+        ),
+        ...fieldLeavesPlans.flatMap(({ plan: { archive } }) =>
+          archive.spec.columns.map(column => ({
+            table: archive.spec.companionTable,
+            column: column.name,
+            reason: `${column.name} stops being translated in ${archive.spec.collection}; its other languages are kept in the archive`,
+          }))
+        ),
+        ...fieldJoinsPlans.flatMap(({ plan: { spec } }) =>
+          spec.columns.map(column => ({
+            table: spec.mainTable,
+            column: column.name,
+            reason: `${column.name} becomes translated in ${spec.collection}; its values move to ${spec.companionTable} first`,
+          }))
+        ),
+      ],
+    },
+  });
+  if (judged.all.length > 0) await args.judgeDeletions?.(judged.all);
+
+  const sqlContent = formatMigrationFile({
+    name: args.name,
+    dialect: args.dialect,
+    sqlStatements,
+    downSqlStatements,
+    collections: collectionSlugs,
+    singles: singleSlugs,
+    components: componentSlugs,
+    hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
+    settingsChanges: changedSettings.map(describeSettingsChange),
+    permissionChanges: changedPermissions.map(describePermissionChange),
+    deletions: judged.main,
+    // A junction table the caller adds is a table this file changes.
+    changesNoTable:
+      operations.length === 0 &&
+      (added?.up.first.length ?? 0) + (added?.up.last.length ?? 0) === 0,
+    now,
+  });
+
+  const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
+    metaDir,
+    now,
+    sqlContent,
+    written,
+    contributions: stream.contributions,
+    entities: settingsRecord,
+    permissions: permissionRecord,
+  });
+
   if (args.dryRun !== true) {
     for (const { spec, opts } of companionFiles) {
       writeCompanionMigrationFile(args.migrationsDir, spec, opts);
@@ -1337,7 +1398,7 @@ export async function generateMigration(
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
     permissionChanges: changedPermissions,
-    deletions,
+    deletions: judged.all,
   };
 }
 
@@ -3495,6 +3556,39 @@ export function removedEntityTables(input: {
     singles: names(others.filter(t => t.name.startsWith(SINGLE_TABLE_PREFIX))),
     fieldGroups: names(fieldGroups),
   };
+}
+
+/**
+ * The entities the latest snapshot records and the config no longer declares, each by the table its
+ * name gives it: what a dropped table is named as, where it is one. An entity named through a
+ * `dbName` is not matched, and its drop is listed without a reason rather than with a guess.
+ */
+function removedEntitiesOf(
+  args: GenerateArgs,
+  recorded: EntitySettingsRecord | undefined
+): RemovedEntity[] {
+  if (recorded === undefined) return [];
+  const gone = (
+    record: Record<string, unknown>,
+    declared: readonly MinimalConfigEntity[]
+  ) => Object.keys(record).filter(slug => !declared.some(e => e.slug === slug));
+  return [
+    ...gone(recorded.collections, args.collections).map(slug => ({
+      kind: "collection" as const,
+      slug,
+      table: resolveCollectionTableName(slug),
+    })),
+    ...gone(recorded.singles, args.singles).map(slug => ({
+      kind: "Single" as const,
+      slug,
+      table: resolveSingleTableName({ slug }),
+    })),
+    ...gone(recorded.fieldGroups, args.components).map(slug => ({
+      kind: "field group" as const,
+      slug,
+      table: resolveComponentTableName(slug),
+    })),
+  ];
 }
 
 /**

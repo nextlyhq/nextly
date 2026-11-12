@@ -8,12 +8,8 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Deletion } from "../../migrate/data-loss-consent";
-import {
-  buildDesiredSnapshotFromConfigForTest,
-  generateMigration,
-  type MinimalConfigEntity,
-} from "../generate";
-import { computeMigrationHash, writeSnapshot } from "../snapshot-io";
+import { generateMigration, type MinimalConfigEntity } from "../generate";
+import { computeMigrationHash } from "../snapshot-io";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
 
@@ -44,14 +40,21 @@ const PAGES: MinimalConfigEntity = {
 describe("generateMigration's deletions", () => {
   let migrationsDir: string;
 
-  /** The latest snapshot holds `entities`, as a project whose last migration created them. */
+  /**
+   * The latest snapshot holds `entities`, written by a first run as a project's first migration is,
+   * so it records each entity as well as its table.
+   */
   async function snapshotOf(entities: MinimalConfigEntity[]): Promise<void> {
-    await writeSnapshot(
-      join(migrationsDir, "meta"),
-      "20260101_000000_000_initial",
-      buildDesiredSnapshotFromConfigForTest(entities, [], [], "postgresql"),
-      ""
-    );
+    await generateMigration({
+      name: "initial",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: entities,
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
   }
 
   /** The `.sql` files in the folder and the snapshots in `meta`. */
@@ -86,16 +89,13 @@ describe("generateMigration's deletions", () => {
       },
     });
 
-    expect(judged).toEqual([
-      { kind: "table", table: "dc_posts", reason: "no longer in the config" },
-    ]);
+    // No reason: a run given no entity record cannot tell an entity's table from another table.
+    expect(judged).toEqual([{ kind: "table", table: "dc_posts" }]);
     expect(filesWhenJudged).toEqual(before);
     expect(result!.deletions).toEqual(judged);
     const sql = await readFile(result!.sqlPath, "utf-8");
     expect(sql).toContain('DROP TABLE "dc_posts"');
-    expect(sql).toContain(
-      "-- Deletes: table dc_posts: no longer in the config"
-    );
+    expect(sql).toContain("-- Deletes: table dc_posts");
     expect(sql).toMatch(/^-- Destructive: .*--accept-data-loss=dc_posts /m);
   });
 
@@ -137,6 +137,105 @@ describe("generateMigration's deletions", () => {
     expect(sql).toContain(
       "-- Deletes: column dc_posts.description: rename to summary declined"
     );
+  });
+
+  it("judges a type change as nextly migrate will, naming the change", async () => {
+    await snapshotOf([POSTS]);
+    let judged: readonly Deletion[] = [];
+    const result = await generateMigration({
+      name: "description_to_number",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [
+        {
+          ...POSTS,
+          fields: [{ name: "description", type: "number", required: true }],
+        },
+      ],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+      judgeDeletions: deletions => {
+        judged = deletions;
+        return Promise.resolve();
+      },
+    });
+    expect(judged).toEqual([
+      expect.objectContaining({
+        kind: "column",
+        table: "dc_posts",
+        column: "description",
+        reason: expect.stringMatching(/^type changes from text to /),
+      }),
+    ]);
+    const sql = await readFile(result!.sqlPath, "utf-8");
+    expect(sql).toMatch(
+      /^-- Deletes: column dc_posts\.description: type changes from text to /m
+    );
+  });
+
+  it("names a translation move as one: values moved or archived before the drop", async () => {
+    const translated: MinimalConfigEntity = {
+      slug: "docs",
+      tableName: "dc_docs",
+      localized: true,
+      fields: [{ name: "body", type: "text", localized: true }],
+    };
+    const plain: MinimalConfigEntity = {
+      slug: "docs",
+      tableName: "dc_docs",
+      fields: [{ name: "body", type: "text" }],
+    };
+    const judgedFor = async (
+      first: MinimalConfigEntity,
+      next: MinimalConfigEntity
+    ) => {
+      const dir = await mkdtemp(join(tmpdir(), "nextly-generate-moves-"));
+      const run = (
+        entity: MinimalConfigEntity,
+        name: string,
+        at: string,
+        judge?: (d: readonly Deletion[]) => Promise<void>
+      ) =>
+        generateMigration({
+          name,
+          dialect: "sqlite",
+          migrationsDir: dir,
+          defaultLocale: "en",
+          collections: [entity],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: new Date(at),
+          ...(judge === undefined ? {} : { judgeDeletions: judge }),
+        });
+      await run(first, "one", "2026-10-16T10:00:00.000Z");
+      let judged: readonly Deletion[] = [];
+      await run(next, "two", "2026-10-16T11:00:00.000Z", d => {
+        judged = d;
+        return Promise.resolve();
+      });
+      return judged;
+    };
+
+    expect(await judgedFor(plain, translated)).toEqual([
+      {
+        kind: "column",
+        table: "dc_docs",
+        column: "body",
+        reason:
+          "translation turned on for docs; its values move to dc_docs_locales first",
+      },
+    ]);
+    expect(await judgedFor(translated, plain)).toEqual([
+      {
+        kind: "table",
+        table: "dc_docs_locales",
+        reason:
+          "translation turned off for docs; the default language's values move back and the others are kept in the archive",
+      },
+    ]);
   });
 
   it("asks nothing and marks nothing when nothing is deleted", async () => {

@@ -2,10 +2,9 @@
 
 import { describe, expect, it } from "vitest";
 
+import type { Deletion } from "../../migrate/data-loss-consent";
 import { parseSqlSections } from "../../migrate/sql-sections";
 import { marksNoTransaction } from "../../migrate/split-sql";
-import type { Operation } from "../../pipeline/diff/types";
-import { plannedDeletions } from "../planned-deletions";
 
 import {
   ENTITY_HEADER_GUIDANCE,
@@ -183,10 +182,7 @@ describe("a header line that names declared text", () => {
 // A file that deletes data says so in its header, naming every table and column it deletes and the
 // consent `nextly migrate` needs for it, so a reviewer sees it in the diff before it is applied.
 describe("the destructive mark", () => {
-  const file = (
-    operations: Operation[],
-    extra: Partial<Parameters<typeof plannedDeletions>[0]> = {}
-  ) =>
+  const file = (deletions: Deletion[]) =>
     formatMigrationFile({
       name: "change",
       dialect: "postgresql",
@@ -197,7 +193,7 @@ describe("the destructive mark", () => {
       components: [],
       hasUserExt: false,
       now: new Date("2026-04-29T15:45:00.123Z"),
-      deletions: plannedDeletions({ operations, ...extra }),
+      deletions,
     });
   const header = (out: string) => out.slice(0, out.indexOf("-- UP"));
   const marks = (out: string) =>
@@ -205,53 +201,34 @@ describe("the destructive mark", () => {
       .split("\n")
       .filter(line => /^-- (Destructive|Deletes):/.test(line));
 
-  it.each<
-    [
-      string,
-      Operation[],
-      Partial<Parameters<typeof plannedDeletions>[0]>,
-      string[],
-    ]
-  >([
+  it.each<[string, Deletion, string[]]>([
     [
       "a removed entity's table",
-      [{ type: "drop_table", tableName: "dc_posts" }],
-      {},
+      {
+        kind: "table",
+        table: "dc_posts",
+        reason: "collection posts is no longer in the config",
+      },
       [
         "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_posts (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts)",
-        "-- Deletes: table dc_posts: no longer in the config",
+        "-- Deletes: table dc_posts: collection posts is no longer in the config",
       ],
     ],
     [
       "a dropped column",
-      [
-        {
-          type: "drop_column",
-          tableName: "dc_pages",
-          columnName: "legacy",
-          columnType: "text",
-        },
-      ],
-      {},
+      { kind: "column", table: "dc_pages", column: "legacy" },
       [
         "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_pages.legacy (or NEXTLY_ACCEPT_DATA_LOSS=dc_pages.legacy)",
-        "-- Deletes: column dc_pages.legacy: no longer in the config",
+        "-- Deletes: column dc_pages.legacy",
       ],
     ],
     [
       "a declined rename",
-      [
-        {
-          type: "drop_column",
-          tableName: "dc_pages",
-          columnName: "summary",
-          columnType: "text",
-        },
-      ],
       {
-        declinedRenames: [
-          { tableName: "dc_pages", fromColumn: "summary", toColumn: "excerpt" },
-        ],
+        kind: "column",
+        table: "dc_pages",
+        column: "summary",
+        reason: "rename to excerpt declined",
       },
       [
         "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_pages.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_pages.summary)",
@@ -259,113 +236,70 @@ describe("the destructive mark", () => {
       ],
     ],
     [
-      "a type change that clears values",
-      [
-        {
-          type: "change_column_type",
-          tableName: "dc_products",
-          columnName: "price",
-          fromType: "text",
-          toType: "integer",
-          clearsValues: true,
-        },
-      ],
-      {},
+      "a type change",
+      {
+        kind: "column",
+        table: "dc_products",
+        column: "price",
+        reason: "type changes from text to integer",
+      },
       [
         "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_products.price (or NEXTLY_ACCEPT_DATA_LOSS=dc_products.price)",
-        "-- Deletes: values of column dc_products.price: text to integer clears the values integer cannot hold",
+        "-- Deletes: column dc_products.price: type changes from text to integer",
       ],
     ],
     [
       "rows a person's answer removes",
-      [],
       {
-        resolutions: [
-          {
-            tableName: "dc_posts",
-            columnName: "author",
-            kind: "delete_nonconforming",
-          },
-        ],
+        kind: "rows",
+        table: "dc_posts",
+        reason: "rows with no author removed, so the column can be required",
       },
       [
         "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_posts (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts)",
         "-- Deletes: rows of dc_posts: rows with no author removed, so the column can be required",
       ],
     ],
-  ])("names %s", (_kind, operations, extra, expected) => {
-    expect(marks(file(operations, extra))).toEqual(expected);
+  ])("names %s", (_kind, deletion, expected) => {
+    expect(marks(file([deletion]))).toEqual(expected);
   });
 
   it("names every deletion, and one consent covering them all", () => {
     expect(
       marks(
         file([
-          {
-            type: "drop_column",
-            tableName: "dc_pages",
-            columnName: "summary",
-            columnType: "text",
-          },
-          { type: "drop_table", tableName: "dc_posts" },
+          { kind: "table", table: "dc_posts" },
+          { kind: "column", table: "dc_pages", column: "summary" },
         ])
       )
     ).toEqual([
       "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_posts,dc_pages.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts,dc_pages.summary)",
-      "-- Deletes: table dc_posts: no longer in the config",
-      "-- Deletes: column dc_pages.summary: no longer in the config",
+      "-- Deletes: table dc_posts",
+      "-- Deletes: column dc_pages.summary",
     ]);
   });
 
   it("marks nothing on a file that deletes nothing", () => {
-    expect(
-      marks(
-        file([
-          {
-            type: "drop_index",
-            tableName: "dc_posts",
-            index: { name: "i", columns: ["title"], unique: false },
-          },
-        ])
-      )
-    ).toEqual([]);
+    expect(marks(file([]))).toEqual([]);
   });
 
   it("names no count: the file runs against databases other than the one counted", () => {
-    const out = formatMigrationFile({
-      name: "change",
-      dialect: "postgresql",
-      sqlStatements: ["SELECT 1"],
-      downSqlStatements: [],
-      collections: [],
-      singles: [],
-      components: [],
-      hasUserExt: false,
-      deletions: [
-        {
-          kind: "table",
-          table: "dc_posts",
-          count: 12,
-          reason: "no longer in the config",
-        },
-      ],
-    });
-    expect(marks(out)[1]).toBe(
-      "-- Deletes: table dc_posts: no longer in the config"
+    expect(
+      marks(file([{ kind: "table", table: "dc_posts", count: 12 }]))[1]
+    ).toBe("-- Deletes: table dc_posts");
+  });
+
+  it("keeps a reason on one comment line", () => {
+    const named = marks(
+      file([{ kind: "table", table: "dc_x", reason: "a\nDROP TABLE users" }])
     );
+    expect(named[1]).toBe("-- Deletes: table dc_x: a DROP TABLE users");
   });
 
   it("leaves the UP and DOWN `nextly migrate` reads unchanged", () => {
-    const operations: Operation[] = [
-      { type: "drop_table", tableName: "dc_posts" },
-    ];
-    const marked = file(operations);
-    const unmarked = file(operations, {}).replace(
-      /^-- (Destructive|Deletes):.*\n/gm,
-      ""
-    );
+    const marked = file([{ kind: "table", table: "dc_posts" }]);
     expect(marks(marked)).toHaveLength(2);
-    expect(parseSqlSections(marked)).toEqual(parseSqlSections(unmarked));
+    expect(parseSqlSections(marked)).toEqual(parseSqlSections(file([])));
     expect(parseSqlSections(marked).upSql).toBe("SELECT 1;");
   });
 });

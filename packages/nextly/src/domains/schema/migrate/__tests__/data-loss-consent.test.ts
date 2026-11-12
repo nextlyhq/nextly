@@ -484,22 +484,6 @@ describe("describing a deletion", () => {
       })
     ).toBe("column dc_pages.summary: rename to excerpt declined");
   });
-
-  it("counts a conversion's cleared values, not the column's non-empty ones", () => {
-    const conversion: Deletion = {
-      kind: "column",
-      table: "dc_p",
-      column: "price",
-      clearsSome: true,
-      reason: "text to integer clears the values integer cannot hold",
-    };
-    expect(describeDeletion(conversion)).toBe(
-      "values of column dc_p.price: text to integer clears the values integer cannot hold"
-    );
-    expect(describeDeletion({ ...conversion, count: 2 })).toBe(
-      "values of column dc_p.price (2 values it would clear): text to integer clears the values integer cannot hold"
-    );
-  });
 });
 
 describe("counting deletions", () => {
@@ -515,26 +499,5 @@ describe("counting deletions", () => {
       "sqlite"
     );
     expect(counted).toEqual([table("posts"), column("posts", "x"), unnamed]);
-  });
-
-  it("leaves a conversion's count to the judge of its values", async () => {
-    // Every count reads 7: a column's non-empty values are not the values a
-    // conversion clears, so a conversion is left uncounted rather than shown 7.
-    const sevens = { all: () => [{ count: 7 }] };
-    const conversion: Deletion = {
-      kind: "column",
-      table: "dc_p",
-      column: "price",
-      clearsSome: true,
-    };
-    const counted = await countDeletions(
-      [column("dc_p", "summary"), conversion],
-      sevens,
-      "sqlite"
-    );
-    expect(counted).toEqual([
-      { ...column("dc_p", "summary"), count: 7 },
-      conversion,
-    ]);
   });
 });

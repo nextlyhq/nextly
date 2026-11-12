@@ -172,7 +172,9 @@ describe("migrate:create with a deletion and nobody to ask", () => {
     await projectWithPostsAndPages();
     expect(await migrateCreate([pages])).toBe(1);
     expect(migrations()).toHaveLength(1);
-    expect(printed()).toContain("table dc_posts: no longer in the config");
+    expect(printed()).toContain(
+      "table dc_posts: collection posts is no longer in the config"
+    );
     expect(printed()).toContain("--accept-data-loss=dc_posts");
   });
 
@@ -184,9 +186,11 @@ describe("migrate:create with a deletion and nobody to ask", () => {
     const files = migrations();
     expect(files).toHaveLength(2);
     expect(files[1]).toContain(
-      "-- Deletes: table dc_posts: no longer in the config"
+      "-- Deletes: table dc_posts: collection posts is no longer in the config"
     );
-    expect(printed()).toContain("table dc_posts: no longer in the config");
+    expect(printed()).toContain(
+      "table dc_posts: collection posts is no longer in the config"
+    );
   });
 
   it("writes it with the consent in the environment", async () => {
@@ -204,9 +208,7 @@ describe("migrate:create with a deletion and nobody to ask", () => {
       })
     ).toBe(1);
     expect(migrations()).toHaveLength(1);
-    expect(printed()).toContain(
-      "column dc_pages.summary: no longer in the config"
-    );
+    expect(printed()).toContain("column dc_pages.summary");
     expect(printed()).toContain("dc_posts");
   });
 
@@ -225,7 +227,9 @@ describe("migrate:create with a deletion and nobody to ask", () => {
     expect(await migrateCreate([pages], { dryRun: true })).toBeUndefined();
     expect(migrations()).toHaveLength(1);
     // The dry run's own lines, not the header of the file it prints.
-    expect(printed()).toMatch(/ - table dc_posts: no longer in the config$/m);
+    expect(printed()).toMatch(
+      / - table dc_posts: collection posts is no longer in the config$/m
+    );
     expect(printed()).toContain(
       "A real run that cannot ask needs: --accept-data-loss=dc_posts"
     );
@@ -254,10 +258,10 @@ describe("migrate:create with a deletion at a terminal", () => {
     expect(await migrateCreate([pagesWithoutSummary])).toBe(1);
     expect(state.asked).toHaveLength(1);
     expect(migrations()).toHaveLength(1);
-    expect(printed()).toContain("table dc_posts: no longer in the config");
     expect(printed()).toContain(
-      "column dc_pages.summary: no longer in the config"
+      "table dc_posts: collection posts is no longer in the config"
     );
+    expect(printed()).toContain("column dc_pages.summary");
     expect(printed()).toContain("No migration was written");
     expect(printed()).toContain("put the removed fields or entities back");
   });
@@ -280,7 +284,11 @@ describe("migrate:create's consent, read as it was meant", () => {
     ).toBeUndefined();
     const listed = printed()
       .split("\n")
-      .filter(line => line.includes("table dc_posts: no longer in the config"));
+      .filter(line =>
+        line.includes(
+          "table dc_posts: collection posts is no longer in the config"
+        )
+      );
     expect(listed).toHaveLength(1);
   });
 
