@@ -37,6 +37,7 @@ import {
 } from "../utils/send-status";
 
 import { type RecordedSend, recordSend } from "./forget-sends";
+import { formIdOf } from "./form-closing-hold";
 import { configuredRecipients, notificationSendDetails } from "./send-record";
 import { type SendRow, sendRowOf, sendRows, upToDate } from "./send-views";
 
@@ -104,17 +105,6 @@ function notificationOf(
 function idText(id: unknown): string {
   if (typeof id === "number") return `${id}`;
   return typeof id === "string" ? id : "";
-}
-
-/** The parent form's id, however the submission spells the relationship. */
-function formIdOf(submission: Record<string, unknown>): string | undefined {
-  const raw = submission.form;
-  if (typeof raw === "string") return raw;
-  if (raw && typeof raw === "object") {
-    const id = (raw as { id?: unknown }).id;
-    if (typeof id === "string") return id;
-  }
-  return undefined;
 }
 
 /** What a resend of `notification` would do, worked out before it is asked. */
@@ -233,7 +223,7 @@ export async function resendRoute(
   }
   const form = (await ctx.services.ownCollections.findEntryById(
     deps.formsSlug,
-    formIdOf(submission) ?? ""
+    formIdOf(submission.form) ?? ""
   )) as unknown as Record<string, unknown>;
   const notification = notificationOf(form, parsed.data.notification);
   const email = notification
@@ -358,7 +348,7 @@ async function resendInTransaction(
   const form = (await ctx.services.ownCollections.findEntryByIdInTransaction(
     write.transaction,
     deps.formsSlug,
-    formIdOf(submission) ?? "",
+    formIdOf(submission.form) ?? "",
     { lock: "none" }
   )) as unknown as Record<string, unknown>;
   const notification = notificationOf(form, request.notification);
@@ -381,7 +371,7 @@ async function resendInTransaction(
       await recordSend(ctx, write.transaction, request.submission, {
         ...sent,
         ...(await notificationSendDetails(ctx, {
-          formId: formIdOf(submission) ?? "",
+          formId: formIdOf(submission.form) ?? "",
           notifications: [notification],
           email: queued,
         })),

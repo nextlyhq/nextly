@@ -40,7 +40,7 @@ import { json, number } from "nextly";
 export const SUBMISSION_SENDS_SLUG = "form-submission-sends";
 
 /** The slug Resend's requests are kept under. */
-export const SUBMISSION_RESENDS_SLUG = "form-submission-resends";
+const SUBMISSION_RESENDS_SLUG = "form-submission-resends";
 
 /**
  * The sends collection's slug as this install has it: a host may rename a

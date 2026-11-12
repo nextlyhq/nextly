@@ -25,6 +25,7 @@ import {
 } from "nextly";
 import { z } from "zod";
 
+import { formIdOf } from "../handlers/form-closing-hold";
 import { type ResendDeps, resendRoute } from "../handlers/resend";
 import { configuredRecipients } from "../handlers/send-record";
 import {
@@ -51,17 +52,6 @@ function wholeList(total: number): PaginationMeta {
   };
 }
 
-/** The parent form's id, however the submission spells the relationship. */
-function formIdOf(submission: Record<string, unknown>): string | undefined {
-  const raw = submission.form;
-  if (typeof raw === "string") return raw;
-  if (raw && typeof raw === "object") {
-    const id = (raw as { id?: unknown }).id;
-    if (typeof id === "string") return id;
-  }
-  return undefined;
-}
-
 /** A recipient the notification can address now, and whether it has it. */
 interface AddressableNow {
   digest: string;
@@ -82,7 +72,7 @@ async function withAddressable(
 ): Promise<Array<NotificationSends & { addressable: AddressableNow[] }>> {
   const form = (await ctx.services.ownCollections.findEntryById(
     deps.formsSlug,
-    formIdOf(submission) ?? ""
+    formIdOf(submission.form) ?? ""
   )) as unknown as Record<string, unknown>;
   const notifications = Array.isArray(form.notifications)
     ? (form.notifications as FormNotification[])

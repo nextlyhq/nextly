@@ -219,9 +219,7 @@ function nameOf(sends: readonly SendRow[]): string {
 }
 
 /** A submission's sends, up to date, by notification in the order sent. */
-export function groupByNotification(
-  rows: readonly SendRow[]
-): NotificationSends[] {
+function groupByNotification(rows: readonly SendRow[]): NotificationSends[] {
   const groups = new Map<string, SendRow[]>();
   for (const row of rows) {
     const key = row.notification ?? `queued:${row.queuedId}`;

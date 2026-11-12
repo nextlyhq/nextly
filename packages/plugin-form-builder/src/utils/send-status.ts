@@ -90,7 +90,7 @@ export interface RecipientStatus {
 }
 
 /** Where a send stands, an unrecorded one read as waiting. */
-export function stateOf(send: StoredSend): SendState {
+function stateOf(send: StoredSend): SendState {
   return send.state ?? "waiting";
 }
 

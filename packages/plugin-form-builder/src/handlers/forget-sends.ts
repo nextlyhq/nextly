@@ -176,51 +176,50 @@ async function forgetSubmissionSends(
 ): Promise<void> {
   if (write.operation !== "delete" || write.id === undefined) return;
   const slug = sendsSlugOf(ctx);
-  // Each batch's records are deleted once forgotten, so the first page is
-  // always the next batch.
-  for (;;) {
-    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
-      write.transaction,
+  await inBatches(ctx, write, slug, sends =>
+    forgetBatch(
+      ctx,
+      write,
       slug,
-      {
-        where: { submission: { equals: String(write.id) } },
-        pagination: { limit: DELETE_PAGE },
-        depth: 0,
-      },
-      UNLOCKED
-    );
-    const sends = data as Array<{ id: unknown } & Partial<RecordedSend>>;
-    if (sends.length > 0) await forgetBatch(ctx, write, slug, sends);
-    if (sends.length < DELETE_PAGE) break;
-  }
-  await deleteResends(ctx, write);
-}
-
-/** Delete the Resend requests of the submission a delete removes. */
-async function deleteResends(
-  ctx: ForgettingContext,
-  write: InTransactionContext
-): Promise<void> {
-  const slug = resendsSlugOf(ctx);
-  for (;;) {
-    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
-      write.transaction,
-      slug,
-      {
-        where: { submission: { equals: String(write.id) } },
-        pagination: { limit: DELETE_PAGE },
-        depth: 0,
-      },
-      UNLOCKED
-    );
-    for (const row of data as Array<{ id: unknown }>) {
+      sends
+    )
+  );
+  await inBatches(ctx, write, resendsSlugOf(ctx), async requests => {
+    for (const row of requests) {
       await ctx.services.collections.deleteEntryInTransaction(
         write.transaction,
-        slug,
+        resendsSlugOf(ctx),
         String(row.id)
       );
     }
-    if (data.length < DELETE_PAGE) return;
+  });
+}
+
+/**
+ * Hand `remove` each batch of the rows in `slug` that name the submission a
+ * delete removes, until none is left. `remove` deletes the batch it is
+ * given, so the first page is always the next batch.
+ */
+async function inBatches(
+  ctx: ForgettingContext,
+  write: InTransactionContext,
+  slug: string,
+  remove: (rows: Array<{ id: unknown }>) => Promise<void>
+): Promise<void> {
+  for (;;) {
+    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+      write.transaction,
+      slug,
+      {
+        where: { submission: { equals: String(write.id) } },
+        pagination: { limit: DELETE_PAGE },
+        depth: 0,
+      },
+      UNLOCKED
+    );
+    const rows = data as Array<{ id: unknown }>;
+    if (rows.length > 0) await remove(rows);
+    if (rows.length < DELETE_PAGE) return;
   }
 }
 

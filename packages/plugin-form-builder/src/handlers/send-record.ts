@@ -23,7 +23,7 @@ import type { RecordedSend } from "./forget-sends";
  * A mailbox masked for a screen: its first character, then `•••`, then its
  * domain (`j•••@example.com`), as core masks the recipients it reports.
  */
-export function maskedAddress(address: string): string {
+function maskedAddress(address: string): string {
   const angled = /<([^<>]*)>\s*$/.exec(address.trim());
   const mailbox = (angled?.[1] ?? address).trim();
   const at = mailbox.lastIndexOf("@");
