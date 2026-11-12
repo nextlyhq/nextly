@@ -823,6 +823,8 @@ export class CollectionsHandler {
     translationStatus?: boolean;
     /** Attach `_sources`: for each translatable field, the language its value came from. */
     sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -946,6 +948,8 @@ export class CollectionsHandler {
     translationStatus?: boolean;
     /** Attach `_sources`: for each translatable field, the language its value came from. */
     sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */

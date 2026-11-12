@@ -141,7 +141,9 @@ describe("per-locale draft filter on locale=all / where / search (M1, M2)", () =
       status: "published",
       overrideAccess: true,
     });
-    const heading = res.data?.heading as Record<string, unknown>;
+    const heading = (
+      res.data?._allLocales as Record<string, Record<string, unknown>>
+    ).heading;
     expect(heading.en).toBe("Hello");
     expect(heading.de).toBeNull(); // draft filtered out, not "Entwurf"
   });
@@ -155,7 +157,9 @@ describe("per-locale draft filter on locale=all / where / search (M1, M2)", () =
       status: "all",
       overrideAccess: true,
     });
-    const heading = res.data?.heading as Record<string, unknown>;
+    const heading = (
+      res.data?._allLocales as Record<string, Record<string, unknown>>
+    ).heading;
     expect(heading.de).toBe("Entwurf");
   });
 

@@ -53,7 +53,10 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../domains/i18n/localization-source";
-import { readInFirstPublishedLanguage } from "../../domains/i18n/read-in-language";
+import {
+  readInFirstPublishedLanguage,
+  readOfEveryLanguage,
+} from "../../domains/i18n/read-in-language";
 import { resolveLocaleChain } from "../../domains/i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
@@ -338,7 +341,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.listEntries(params)
+        this.queryService.listEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -397,7 +400,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.countEntries(params)
+        this.queryService.countEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -499,11 +502,15 @@ export class CollectionEntryService extends BaseService {
     wholeDocumentFallback?: boolean;
     /** Attach `_sources`: for each translatable field, the language its value came from. */
     sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
   }) {
+    // Rules are judged in the languages the read was asked in, `locale=all`
+    // included; the query reads what that request stands for.
     const read = (locale: string | undefined) => {
       const inLanguage = { ...params, locale };
       return withRuleLanguage(this.readLanguages(inLanguage), () =>
-        this.queryService.getEntry(inLanguage)
+        this.queryService.getEntry(readOfEveryLanguage(inLanguage))
       );
     };
     const chain = params.wholeDocumentFallback

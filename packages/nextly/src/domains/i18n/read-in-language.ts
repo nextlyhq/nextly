@@ -15,6 +15,7 @@
 import type { SQL } from "drizzle-orm";
 
 import { buildTranslationStatusCondition } from "./companion-join";
+import { EVERY_TRANSLATION } from "./locale-selector";
 import type { CompanionSchema } from "./runtime/companion-io";
 
 /**
@@ -85,4 +86,21 @@ export async function readInFirstPublishedLanguage<T extends ReadAnswer>(
     if (answer.statusCode !== 404) return answer;
   }
   return answer;
+}
+
+/** The key a read's every-language values are attached under (`translations: "all"`). */
+export const ALL_LOCALES_KEY = "_allLocales";
+
+/**
+ * A read asked in `locale=all`, as the read it stands for: the default
+ * language, every field its own type, with every language's values beside it
+ * (`translations: "all"`, under {@link ALL_LOCALES_KEY}). Any other read is
+ * returned as it is.
+ */
+export function readOfEveryLanguage<
+  T extends { locale?: string; translations?: "all" },
+>(params: T): T {
+  return params.locale === EVERY_TRANSLATION
+    ? { ...params, locale: undefined, translations: "all" }
+    : params;
 }

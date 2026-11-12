@@ -93,6 +93,7 @@ export async function find<TSlug extends CollectionSlug>(
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
     sourceLocales: args.sourceLocales,
+    translations: args.translations,
     context: config.context,
   });
 
@@ -153,6 +154,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,
       sourceLocales: args.sourceLocales,
+      translations: args.translations,
       wholeDocumentFallback: args.wholeDocumentFallback,
       context: config.context,
     });

@@ -403,5 +403,88 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(read.data?._sources).toEqual({ title: "es", tagline: "en" });
     }, 90_000);
+
+    // One language per read, every field its own type; every language's
+    // values beside it through a separate accessor, on request. `locale=all`
+    // is that accessor on the default language. A public read's accessor
+    // holds published values only; a read allowed drafts sees them.
+    it("reads one language with every language's values beside it, on request", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInEnglish(t, {
+        title: "A in English",
+        slug: "a",
+      });
+      // Spanish holds a translation not yet published.
+      await t.nextly.update({
+        collection: DOCS,
+        id,
+        locale: "es",
+        data: { title: "A en español", slug: "a-es", _overwrite: true },
+      });
+
+      const english = (await t.nextly.findByID({
+        collection: DOCS,
+        id,
+        locale: "en",
+        status: "published",
+        translations: "all",
+      })) as Record<string, unknown>;
+      expect(english.title).toBe("A in English");
+      expect(english._allLocales).toMatchObject({
+        title: { en: "A in English", es: null },
+      });
+
+      // The alias: the default language, its fields their own type.
+      const all = (await t.nextly.findByID({
+        collection: DOCS,
+        id,
+        locale: "all",
+        status: "published",
+      } as never)) as Record<string, unknown>;
+      expect(all.title).toBe("A in English");
+      expect(all._allLocales).toMatchObject({
+        title: { en: "A in English", es: null },
+      });
+
+      // A read allowed drafts sees Spanish's draft in the accessor.
+      const drafts = (await t.nextly.findByID({
+        collection: DOCS,
+        id,
+        locale: "en",
+        status: "all",
+        translations: "all",
+      })) as Record<string, unknown>;
+      expect(drafts._allLocales).toMatchObject({
+        title: { en: "A in English", es: "A en español" },
+      });
+
+      const rest = await restRead(id, "?locale=en&translations=all");
+      expect(rest.status, JSON.stringify(rest.json)).toBe(200);
+      expect(rest.json.title).toBe("A in English");
+      expect(rest.json._allLocales).toMatchObject({
+        title: { en: "A in English", es: null },
+      });
+    }, 90_000);
+
+    // Under the alias a read of every language searches in the default
+    // language, as it reads: neither dropped nor matched on another language.
+    it("searches a locale=all read in the default language", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInEnglish(t, { title: "Harbour", slug: "a" });
+      await publishIn(t, id, "es", { title: "Puerto", slug: "a-es" });
+      // Over REST, where the alias is asked for: the Direct API's `find`
+      // takes no search, so a search through it would match every row.
+      const search = async (query: string) => {
+        const listed = await restGet(["collections", DOCS, "entries"], query);
+        expect(listed.status, JSON.stringify(listed.json)).toBe(200);
+        return (listed.json.items as { id: string }[]).map(item => item.id);
+      };
+
+      // The Spanish value is searchable in Spanish, so an empty answer under
+      // the alias is the default language deciding, not a search that missed.
+      expect(await search("?locale=es&search=Puerto")).toEqual([id]);
+      expect(await search("?locale=all&search=Harbour")).toEqual([id]);
+      expect(await search("?locale=all&search=Puerto")).toEqual([]);
+    }, 90_000);
   }
 );

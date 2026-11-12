@@ -174,7 +174,10 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
-import { publishedInLanguageCondition } from "../../i18n/read-in-language";
+import {
+  ALL_LOCALES_KEY,
+  publishedInLanguageCondition,
+} from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   isCompanionReady,
@@ -767,6 +770,8 @@ interface FilteredReadParams {
   locale?: string;
   /** Fallback control (`false`/`"none"` disables fallback). */
   fallbackLocale?: string | false;
+  /** `"all"`: every language's values are read beside the read's own. */
+  translations?: "all";
   /**
    * A grant waiving this collection's read hooks, issued to the plugin that
    * declared it. Effective only for a collection it covers; see
@@ -1218,22 +1223,25 @@ export class CollectionQueryService extends BaseService {
   private async populateLocalizedAll(
     collectionName: string,
     rows: Record<string, unknown>[],
-    locale: string | undefined,
+    translations: "all" | undefined,
     preloaded?: CompanionSchema | null,
     statusFilterValues?: readonly string[] | null
   ): Promise<void> {
-    if (!this.localization || locale !== EVERY_TRANSLATION || rows.length === 0)
+    if (!this.localization || translations !== "all" || rows.length === 0)
       return;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return;
+    // Read into copies keyed by id, then attached beside each row's own values:
+    // the row keeps every field in its own language and type.
+    const everyLanguage = rows.map(row => ({ id: row.id }));
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,
       // Outside any transaction, so this may resolve rather than only read what is remembered.
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
-      rows,
+      rows: everyLanguage,
       locales: this.localization.locales.map(l => l.code),
       // Only constrain by status on a status-enabled collection with a resolved
       // single status, so a published locale=all read drops draft translations.
@@ -1242,6 +1250,12 @@ export class CollectionQueryService extends BaseService {
           ? statusFilterValues
           : undefined,
     });
+    for (const [index, row] of rows.entries()) {
+      const values: Record<string, unknown> = everyLanguage[index] ?? {};
+      row[ALL_LOCALES_KEY] = Object.fromEntries(
+        companion.localizedFields.map(field => [field.name, values[field.name]])
+      );
+    }
   }
 
   /**
@@ -3421,6 +3435,8 @@ export class CollectionQueryService extends BaseService {
     translationStatus?: boolean;
     /** Attach `_sources`: for each translatable field, the language its value came from. */
     sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -3474,6 +3490,7 @@ export class CollectionQueryService extends BaseService {
       const companion =
         localeChain ||
         params.locale === EVERY_TRANSLATION ||
+        params.translations === "all" ||
         params.translationStatus
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
@@ -3893,7 +3910,7 @@ export class CollectionQueryService extends BaseService {
           this.populateLocalizedAll(
             params.collectionName,
             entries,
-            params.locale,
+            params.translations,
             companion,
             statusFilter?.values ?? null // the per-locale published filter
           )
@@ -4352,7 +4369,9 @@ export class CollectionQueryService extends BaseService {
       params.fallbackLocale
     );
     const companion =
-      localeChain || params.locale === EVERY_TRANSLATION
+      localeChain ||
+      params.locale === EVERY_TRANSLATION ||
+      params.translations === "all"
         ? await this.fileManager.loadCompanionSchema(params.collectionName)
         : null;
     return { localeChain, companion };
@@ -5003,6 +5022,8 @@ export class CollectionQueryService extends BaseService {
     translationStatus?: boolean;
     /** Attach `_sources`: for each translatable field, the language its value came from. */
     sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -5321,7 +5342,7 @@ export class CollectionQueryService extends BaseService {
           this.populateLocalizedAll(
             params.collectionName,
             [entry],
-            params.locale,
+            params.translations,
             companion,
             statusFilter?.values ?? null // the per-locale published filter
           )

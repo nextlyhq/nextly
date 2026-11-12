@@ -301,3 +301,22 @@ export const parseFallbackParam = (value?: unknown): boolean => {
     ],
   });
 };
+
+/**
+ * `?translations=`: `all` attaches every language's values beside a read's
+ * own (`_allLocales`), and absent leaves them out. Any other value is refused
+ * rather than ignored.
+ */
+export const parseTranslationsParam = (value?: unknown): "all" | undefined => {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "all") return "all";
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "translations",
+        code: "INVALID_VALUE",
+        message: 'translations must be "all".',
+      },
+    ],
+  });
+};

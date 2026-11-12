@@ -49,6 +49,13 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
    */
   sourceLocales?: boolean;
 
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
+
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -243,6 +250,13 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
    * @default false
    */
   sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
 
   /**
    * Specific fields to include/exclude.

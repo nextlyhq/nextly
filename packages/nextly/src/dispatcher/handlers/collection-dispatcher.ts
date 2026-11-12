@@ -97,6 +97,7 @@ import {
 import {
   isTruthyParam,
   parseFallbackParam,
+  parseTranslationsParam,
   parseRichTextFormat,
   parseSelectParam,
   parseStatusParam,
@@ -1180,6 +1181,8 @@ const COLLECTIONS_METHODS: Record<
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
         sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
       });
 
       type PaginatedShape = {
@@ -1317,6 +1320,8 @@ const COLLECTIONS_METHODS: Record<
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
         sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,
