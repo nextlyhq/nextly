@@ -16,6 +16,7 @@
  */
 import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
+import { BULK_PAGE } from "../bulk/contract";
 import { PAGES_PAGE } from "../code-pages/contract";
 import { PROBLEMS_PAGE } from "../problems/contract";
 import { RECEIVED_PAGE } from "../received/contract";
@@ -23,6 +24,7 @@ import { REDIRECTS_PAGE } from "../redirects/contract";
 import { SETTINGS_PAGE } from "../settings/contract";
 import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 
+import { SeoBulkPage } from "./SeoBulkPage";
 import { SeoPagesPage } from "./SeoPagesPage";
 import { SeoProblemsPage } from "./SeoProblemsPage";
 import { SeoReceivedPage } from "./SeoReceivedPage";
@@ -39,9 +41,11 @@ registerComponents({
   [SEO_TAB_COMPONENT]: SeoTab,
   [SEO_STATUS_COMPONENT]: SeoStatusSection,
   [PROBLEMS_PAGE.component]: SeoProblemsPage,
+  [BULK_PAGE.component]: SeoBulkPage,
   [PAGES_PAGE.component]: SeoPagesPage,
 });
 
+export { SeoBulkPage } from "./SeoBulkPage";
 export { SeoProblemsPage } from "./SeoProblemsPage";
 export { SeoReceivedPage } from "./SeoReceivedPage";
 export { SeoPagesPage } from "./SeoPagesPage";

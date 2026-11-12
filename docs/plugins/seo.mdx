@@ -1036,15 +1036,56 @@ made to the very address that was checked, so a name whose answer changes in bet
 reaches nothing new. A fetch stops after 10 seconds, 5 MB or 5 redirects, and says so.
 With no production address set, the screen asks for one and checks nothing.
 
+## Bulk edit and import
+
+The **Bulk edit** screen, under SEO in the admin, shows the title and description of every page
+of one content type in one table. A cell left empty shows, in grey, what the page uses
+automatically, from the type's title pattern or its own content; typing in it sets the page's own.
+**Show** narrows the table to the pages with something typed, or to those wholly automatic. Each
+cell counts its characters against what Google shows: about 60 for a title, 160 for a description.
+
+**Save all** saves every change in one step, or, where any is refused, none of them. Where a page was saved by someone else after the table was read,
+nothing is saved, and the screen names the page. A page whose SEO you may not change is shown
+read-only (see [Who may change SEO](#who-may-change-seo)). The table and the import work in the
+site's default language; a type that keeps working drafts is shown read-only, and its pages' SEO is
+changed in each page's editor, where its draft is.
+
+### Importing SEO values
+
+The panel beside the table brings existing SEO values across. It reads:
+
+- **An existing field group** on your content types, such as a `group` or a component holding a
+  title and a description. Each field that holds values is matched to where it goes, from its name,
+  for you to check. The plugin's own group, as an earlier version of the plugin kept it, is offered
+  too: its titles and descriptions typed the same as the automatic ones become automatic again, so a
+  later change to a pattern reaches them, and every other value stays.
+- **Yoast SEO** or **Rank Math**, from a WordPress export file (Tools › Export, All content), or
+  Rank Math's own CSV export. Their title variables, such as `%%title%% %%sep%% %%sitename%%`, are
+  filled in with the page's title and the separator and site name from the SEO settings. A redirect
+  a Rank Math CSV row names is added through the [redirects](#redirects) rules.
+- **Payload's SEO plugin**, from a JSON export of a collection, reading each document's `meta`
+  group.
+
+Pages in a file are matched by their address, or by their slug where the file names no address. A
+share image is matched to the media library by its file name.
+
+**Do a dry run** shows what would change and changes nothing: how many pages each value would
+reach, the values left automatic because they are the same as what the page uses already, the
+values a person already typed here, which are kept, the fields left out, and anything to check,
+such as pages in the file that are not on this site. **Import** then applies exactly what the dry
+run showed, in one step: every page and redirect, or, if anything fails part-way, nothing. Where a
+page changed after the dry run, the import is refused and asks for another dry run. Importing needs
+`manage-seo`, and a page whose SEO you may not change is left out and named.
+
 ## Who may change SEO
 
 The plugin declares its own permissions, which the role screen files under **SEO**:
 
-| Permission        | What it allows                                                                                                                                                                                                                                |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, the addresses not found, and the SEO of [pages built in code](#pages-built-in-code) |
-| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                                                                              |
-| `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                                                                         |
+| Permission        | What it allows                                                                                                                                                                                                                                                                               |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manage-seo`      | Site-wide SEO: the [SEO settings](#the-seo-settings) (with the Single's own read or update permission beside it), [redirects](#redirects), their imports, [importing SEO values](#importing-seo-values), the addresses not found, and the SEO of [pages built in code](#pages-built-in-code) |
+| `check-seo`       | [What search engines received](#what-search-engines-received): the screen, and the check it runs                                                                                                                                                                                             |
+| `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                                                                                                                        |
 
 Each is asked by the server on every request, whatever the admin shows: someone without it is
 refused and given nothing of what it guards. The admin hides the Pages and addresses, Settings, Redirects and What search

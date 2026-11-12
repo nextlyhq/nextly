@@ -45,6 +45,19 @@ export const IMPORT_TARGETS: readonly ImportTarget[] = [
   "skip",
 ];
 
+/** What each place is called on screen. */
+export const IMPORT_TARGET_LABELS: Readonly<Record<ImportTarget, string>> = {
+  title: "Title on Google",
+  description: "Description on Google",
+  image: "Share image",
+  socialTitle: "Different title when shared",
+  socialDescription: "Different description when shared",
+  canonical: "Official address (canonical)",
+  hidden: "Hide from search",
+  shown: "Hide from search (reversed)",
+  skip: "Leave out",
+};
+
 /** The export files the import reads, besides a field group. */
 export type ImportFileSource = "yoast" | "rankMath" | "payload";
 
@@ -131,4 +144,10 @@ export interface DryRunBody {
   warnings: string[];
   /** What the apply is checked against: the changes, as this run found them. */
   plan: string;
+}
+
+/** What an apply answers, beside its message. */
+export interface ApplyBody {
+  pages: number;
+  redirects: number;
 }
