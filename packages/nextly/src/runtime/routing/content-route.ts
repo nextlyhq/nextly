@@ -45,7 +45,7 @@ import type {
   PageStructuredDataHints,
 } from "../seo/page-metadata-contract";
 
-import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
+import { answerNotFound, triggerPermanentRedirect } from "./not-found";
 import {
   confirmedLanguage,
   requestLanguage,
@@ -416,7 +416,17 @@ export interface ContentRouteConfig<TNode> {
    *
    * @experimental Settles with list pagination.
    */
-  mountPath?: string;
+  mountPath?: string /**
+   * How this route answers a request it has nothing for, in place of
+   * Next.js's `notFound()`: a site passes its own to do something for each
+   * miss, such as logging the address. The page and `generateMetadata` may
+   * both call it for one request. A handler that returns is
+   * followed by Next.js's `notFound()`; without one the route answers as
+   * before.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */;
+  notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -991,20 +1001,22 @@ function buildRoute<TNode>(
   ): Promise<T> {
     const params = await args.params;
     const slug = joinSlug(params);
-    if (isReservedPath(`/${slug}`)) triggerNotFound();
+    if (isReservedPath(`/${slug}`)) return answerNotFound(config.notFound);
     // A `[locale]` naming none of the site's languages is not a page here.
     const language = await requestLanguage(
       params.locale,
       config.locale,
       getInstance
     );
-    if (language === null) triggerNotFound();
+    if (language === null) return answerNotFound(config.notFound);
     return runWithAccessMemo(async () => {
       const resolved = await resolvePath(slug, language);
       // A language read before Nextly had started is confirmed now the read
       // has started it, before anything is served in it.
-      if (!(await confirmedLanguage(language))) triggerNotFound();
-      if (!resolved) triggerNotFound();
+      if (!(await confirmedLanguage(language))) {
+        return answerNotFound(config.notFound);
+      }
+      if (!resolved) return answerNotFound(config.notFound);
       return use(resolved, language);
     });
   }
