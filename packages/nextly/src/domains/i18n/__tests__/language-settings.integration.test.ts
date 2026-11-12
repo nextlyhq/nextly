@@ -7,6 +7,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, expect, it, vi } from "vitest";
 
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -101,6 +102,50 @@ describeEachDialect("the site's languages in Settings", dialect => {
     ]);
     expect(registry.current()?.locales.map(l => l.code)).toEqual(["en", "fr"]);
     expect(await shape(dialect)).toBe(before);
+  });
+
+  // A site keeping every translatable field per language already has the tables a new language
+  // writes to, so adding one to a site with content sends no DDL at all: counted as the
+  // statements the database received, which a table made and dropped again would not escape.
+  it("adds a language to a site with content, under per-language storage, sending no DDL", async () => {
+    current = await createTestNextly({
+      dialect,
+      perLanguageStorage: true,
+      collections: [
+        {
+          slug: "lsarticles",
+          fields: [
+            { name: "headline", type: "text" },
+            { name: "views", type: "number" },
+          ],
+        },
+      ] as never,
+    });
+    const registry = current.getService("languageRegistry") as LanguageRegistry;
+    const settings = new LanguageSettingsService(current.adapter, registry);
+    const created = (await current.nextly.create({
+      collection: "lsarticles",
+      data: { headline: "Hello", views: 3 },
+    })) as { item?: { id: string }; id?: string };
+    const id = created.item?.id ?? created.id ?? "";
+
+    const statements = await statementsOf(dialect, () =>
+      settings.change({ kind: "add", code: "fr", label: "French" })
+    );
+
+    // The control: the change reached the database, so an empty list cannot pass for none.
+    expect(statements.length).toBeGreaterThan(0);
+    expect(
+      statements.filter(sql => /^\s*(create|alter|drop|rename)\b/i.test(sql))
+    ).toEqual([]);
+    // French is there for the translatable field at once, falling back to the content written.
+    expect(
+      await current.nextly.findByID({
+        collection: "lsarticles",
+        id,
+        locale: "fr",
+      })
+    ).toMatchObject({ headline: "Hello", views: 3 });
   });
 
   it("keeps a removed language and brings it back when added again", async () => {
