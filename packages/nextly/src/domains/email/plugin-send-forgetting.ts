@@ -59,11 +59,25 @@ import { assertIdempotencyKey, idempotencyKeyDigest } from "./send-claims";
 
 const OPERATION = "ctx.services.email.forgetSends";
 
+/** A transaction as forgetting uses it: its Drizzle handle. */
+interface ForgettingTransaction {
+  getDrizzle<D = unknown>(): D;
+}
+
 /**
- * A transaction as forgetting uses it: the adapter's, so the plugin that
- * queued the emails is told in it (`tellCancelReached`).
+ * Whether `tx` is the adapter's whole transaction, as every adapter hands
+ * its work: what telling the plugin binds its handles to.
  */
-type ForgettingTransaction = TransactionContext;
+function isTransactionContext(
+  tx: ForgettingTransaction
+): tx is ForgettingTransaction & TransactionContext {
+  const candidate = tx as Partial<TransactionContext>;
+  return (
+    typeof candidate.select === "function" &&
+    typeof candidate.insert === "function" &&
+    typeof candidate.execute === "function"
+  );
+}
 
 /**
  * What forgetting needs of an adapter: a transaction of its own, and whether
@@ -182,7 +196,16 @@ export async function forgetPluginSends(
       scope,
       queuedIds
     );
-    // The plugin is told in the same transaction, as every cancel tells it.
+    // The plugin is told in the same transaction, as every cancel tells it;
+    // refused rather than left untold where it cannot be.
+    if (!isTransactionContext(tx)) {
+      throw NextlyError.internal({
+        logContext: {
+          operation: OPERATION,
+          reason: "the transaction cannot be handed to the plugin",
+        },
+      });
+    }
     await tellCancelReached(tx, dialect, reached, { by: "sender" });
   };
 

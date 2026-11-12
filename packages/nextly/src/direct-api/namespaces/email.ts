@@ -240,7 +240,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
       );
       const actor = directApiActor(ctx.defaultConfig, args);
       const item = await ctx.emailSendService.cancelQueued(args.id, {
-        userId: actor?.type === "user" ? actor.id : null,
+        userId: actor?.type === "user" ? (actor.id ?? null) : null,
       });
       return { message: "Email cancelled.", item };
     },
