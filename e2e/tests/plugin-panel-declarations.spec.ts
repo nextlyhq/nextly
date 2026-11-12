@@ -8,8 +8,9 @@
  * not drawn. Every number is read in one request naming only the plugin
  * while the panel is open, and arriving moves no item.
  *
- * The fixture's attention items count swatches in a state only this file
- * stores, and it removes them again, so the dashboard's card reads as
+ * The fixture's attention items count checks (a listed collection: Needs
+ * your attention leaves hidden ones out) in a state only this file stores,
+ * and it removes them again, so the dashboard's card reads as
  * it would without them everywhere else; it takes the dashboard's lock while
  * they exist.
  */
@@ -30,13 +31,35 @@ import { test } from "./support/test";
 test.describe.configure({ mode: "serial", lock: [LOCK.dashboard] });
 
 const SWATCHES = "style-fixture-swatches";
+const CHECKS = "style-fixture-checks";
 const RUN = Date.now().toString(36);
 
 let admin: APIRequestContext;
-const created: string[] = [];
+const created: Array<{ slug: string; id: string }> = [];
 
-/** How many swatches are in the state the checks count, before this file adds any. */
-let toFixBefore = 0;
+/** How many swatches and checks are to fix, before this file adds any. */
+let swatchesBefore = 0;
+let checksBefore = 0;
+
+/** How many entries of `slug` are to fix, as the API lists them. */
+async function toFix(slug: string, what: string): Promise<number> {
+  const listed = await admin.get(
+    `/admin/api/collections/${slug}/entries?limit=1&where[state][equals]=to-fix`
+  );
+  await expectOk(listed, what);
+  return ((await listed.json()) as { meta: { total: number } }).meta.total;
+}
+
+/** Stores `n` entries of `slug` to fix, each removed again after the file. */
+async function seed(slug: string, n: number): Promise<void> {
+  for (let i = 1; i <= n; i += 1) {
+    const id = await createEntry(admin, slug, {
+      title: `Fixture ${slug} ${i} ${RUN}`,
+      state: "to-fix",
+    });
+    created.push({ slug, id });
+  }
+}
 
 test.beforeAll(async ({ playwright }, testInfo) => {
   const baseURL = testInfo.project.use.baseURL;
@@ -45,30 +68,21 @@ test.beforeAll(async ({ playwright }, testInfo) => {
     baseURL,
     storageState: STORAGE_STATE,
   });
-  // The fixture's collection exists only on a server started with the e2e
-  // fixtures; without it this file fails here, saying so.
-  const listed = await admin.get(
-    `/admin/api/collections/${SWATCHES}/entries?limit=1&where[state][equals]=to-fix`
-  );
-  await expectOk(
-    listed,
-    "the style fixture's swatches collection (NEXTLY_E2E_STYLE_FIXTURE=1)"
-  );
-  toFixBefore = ((await listed.json()) as { meta: { total: number } }).meta
-    .total;
-  for (const n of [1, 2]) {
-    created.push(
-      await createEntry(admin, SWATCHES, {
-        title: `Swatch ${n} ${RUN}`,
-        state: "to-fix",
-      })
-    );
-  }
+  // The fixture's collections exist only on a server started with the e2e
+  // fixtures; without them this file fails here, saying so.
+  const needs = "the style fixture's collections (NEXTLY_E2E_STYLE_FIXTURE=1)";
+  swatchesBefore = await toFix(SWATCHES, needs);
+  checksBefore = await toFix(CHECKS, needs);
+  // Stored before the page loads, so the panel's one request reads them: two
+  // swatches for the count, three checks for the badge, so neither number
+  // can stand in for the other.
+  await seed(SWATCHES, 2);
+  await seed(CHECKS, 3);
 });
 
 test.afterAll(async () => {
-  for (const id of created) {
-    await admin?.delete(`/admin/api/collections/${SWATCHES}/entries/${id}`);
+  for (const { slug, id } of created) {
+    await admin?.delete(`/admin/api/collections/${slug}/entries/${id}`);
   }
   await admin?.dispose();
 });
@@ -116,15 +130,22 @@ test("draws the fixture's groups, counts and badges in its own panel", async ({
   // The quiet count of the fixture's own collection, narrowed by its where,
   // named with its number: a collection hidden from the navigation is
   // counted all the same.
-  const expected = toFixBefore + created.length;
   await expect(
-    library.getByRole("link", { name: `Swatches to fix, ${expected}` })
+    library.getByRole("link", {
+      name: `Swatches to fix, ${swatchesBefore + 2}`,
+      exact: true,
+    })
   ).toBeVisible();
   // The badge, from the fixture's attention item, named as the Needs your
   // attention card names a count.
+  // Read from the reader's digest, which is read afresh for the request;
+  // given a digest item's own budget to answer.
   await expect(
-    checks.getByRole("link", { name: `Fixture checks: ${expected}` })
-  ).toBeVisible();
+    checks.getByRole("link", {
+      name: `Fixture checks: ${checksBefore + 3}`,
+      exact: true,
+    })
+  ).toBeVisible({ timeout: 15_000 });
   await expect(checks.getByTestId("plugin-item-badge")).toHaveCount(1);
   // A badge at 0 is not drawn: the link keeps its plain name.
   await expect(

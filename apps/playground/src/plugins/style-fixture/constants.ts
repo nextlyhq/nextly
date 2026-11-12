@@ -32,7 +32,15 @@ export const FRAME_PAGE_PATHS = {
  */
 export const SWATCHES_SLUG = "style-fixture-swatches";
 
-/** A swatch whose `state` is this is one the panel's checks badge counts. */
+/**
+ * The fixture's checks, listed in its panel and counted by its Needs your
+ * attention items. Not hidden: Needs your attention shows an item gated on
+ * collections only to a reader of one of them as the dashboard lists them,
+ * and the dashboard leaves a hidden collection out.
+ */
+export const CHECKS_SLUG = "style-fixture-checks";
+
+/** A swatch or a check whose `state` is this is one the panel counts. */
 export const SWATCH_TO_FIX = "to-fix";
 
 /** The panel's own pages, under `/admin/plugins/style-fixture/`. */

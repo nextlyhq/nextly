@@ -976,7 +976,9 @@ with the ungrouped ones), a count naming a collection the plugin does not contri
 an attention item it does not declare (the item is drawn without a number), and a menu
 item linking to one of the plugin's own pages (`/admin/plugins/<slug>/<path>`) that
 `contributes.admin.pages` does not register, which is left out of the admin in every
-environment.
+environment. It also reports a count or badge reading an attention item gated on
+`collections` that are all hidden from the navigation: Needs your attention leaves hidden
+collections out, so that item is shown to nobody and its number is always 0.
 
 ## Host overrides (D49)
 
