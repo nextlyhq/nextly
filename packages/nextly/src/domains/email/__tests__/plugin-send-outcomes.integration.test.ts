@@ -314,7 +314,16 @@ describe.each(getConfiguredTestDialects())(
         attempt: 1,
         failure: { retryable: true },
       });
-      expect(lastOf(id).recipients?.[0]?.outcome).not.toBe("accepted");
+      // A failed send reached nobody: each recipient is reported, as
+      // refused, never left out and never as accepted.
+      expect(lastOf(id).recipients).toEqual([
+        {
+          kind: "to",
+          outcome: "refused",
+          hint: "a•••@example.com",
+          digest: await digestOf(ADA),
+        },
+      ]);
       expect(await plugin().services.email.readQueued([id])).toEqual([
         expect.objectContaining({ state: "retrying", messageHeld: true }),
       ]);
