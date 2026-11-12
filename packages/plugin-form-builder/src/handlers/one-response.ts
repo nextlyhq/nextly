@@ -216,7 +216,8 @@ export async function responseKeyOf(
  * An address's key is made again from the row and compared. A browser's
  * cannot be, since its token is not stored: under one per browser a browser
  * key, or none (a submission sent without a token), is the right one, and a
- * key made for another mode is not.
+ * key made for another mode is not. Nor can a network's on a form that keeps
+ * no addresses, where a key for the current version is the right one.
  */
 export async function holdsKeyFor(
   digests: () => Digests,
@@ -226,6 +227,21 @@ export async function holdsKeyFor(
   const key = row.responseKey ?? null;
   if (settings.oneResponse === "browser" && row.status !== "spam") {
     return key === null || isBrowserKey(key, settings.oneResponseVersion);
+  }
+  // A form that keeps no addresses (Privacy) stores the network's key and
+  // not the address it was made from, so it cannot be made again here. A key
+  // made for the form's current version is the right one: the version moves
+  // on whenever what the form compares changes.
+  if (
+    settings.oneResponse === "ip" &&
+    textOf(row.ipAddress) === undefined &&
+    typeof key === "string" &&
+    row.status !== "spam"
+  ) {
+    return (
+      keyVersionOf(key) === (settings.oneResponseVersion ?? 0) &&
+      !key.includes(BROWSER_KEY_PREFIX)
+    );
   }
   return key === (await responseKeyOf(digests, settings, row));
 }

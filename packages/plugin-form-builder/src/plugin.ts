@@ -1131,6 +1131,20 @@ async function keysFitInSave(
 }
 
 /**
+ * A form that keeps no IP address or browser (Settings › Privacy) stores
+ * neither with a new submission. Cleared after the one-response key is made,
+ * so one per network still compares the address, by its keyed digest only.
+ */
+function withholdAddress(
+  settings: { storeIpAndBrowser?: boolean },
+  row: Record<string, unknown>
+): void {
+  if (settings.storeIpAndBrowser !== false) return;
+  row.ipAddress = null;
+  row.userAgent = null;
+}
+
+/**
  * A request's address as the server judged it, never one the caller posted:
  * the collection grants public create, and a posted address would choose the
  * network one response per person compares. A create no request produced
@@ -1278,6 +1292,7 @@ export async function prepareSubmissionForWrite(
       { ...ctx.data, browserToken }
     );
     warnTokenless(settings, browserToken, ctx, formId, nextly);
+    withholdAddress(settings, ctx.data);
   } else {
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
