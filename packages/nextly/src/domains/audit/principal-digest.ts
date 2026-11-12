@@ -239,6 +239,22 @@ export async function resealPrincipalDigestKey(
   return "resealed";
 }
 
+/**
+ * Whether the stored key (`stored`, as a read of its meta row without a lock gave it) needs no
+ * reseal under `secrets`: absent, or sealed under the current secret. Opened when present, so a
+ * key no configured secret can read throws here, as {@link resealPrincipalDigestKey} does.
+ * Anything else, a value it cannot judge included, answers false and is left to that reseal.
+ */
+export function principalDigestKeyIsCurrent(
+  stored: unknown,
+  secrets: readonly string[]
+): boolean {
+  if (stored === undefined) return true;
+  if (typeof stored !== "string" || needsReseal(stored, secrets)) return false;
+  openKey(stored, secrets);
+  return true;
+}
+
 /** HMAC-SHA256 of kind and id, separated by a NUL neither can contain. */
 function keyedDigest(key: Buffer, subject: DigestSubject): string {
   return createHmac("sha256", key)

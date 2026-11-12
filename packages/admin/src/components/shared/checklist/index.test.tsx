@@ -97,6 +97,52 @@ describe("Checklist", () => {
     );
   });
 
+  it("draws one column with a rule between steps, and no struck name, by default", () => {
+    renderSteps();
+    const list = screen.getByRole("list", { name: "Set up SEO" });
+    const [done] = screen
+      .getAllByRole("listitem")
+      .map(item => item.querySelector("p")!);
+
+    expect(list.className).not.toMatch(/grid-cols-2/);
+    expect(list.className).not.toContain("border-t-0");
+    expect(done).not.toHaveClass("line-through");
+  });
+
+  it("lays its steps in two columns, without rules, when asked", () => {
+    const { container } = render(
+      <Checklist label="Set up SEO" done={0} total={2} columns={2}>
+        <ChecklistItem status="open" label="One" />
+        <ChecklistItem status="open" label="Two" />
+      </Checklist>
+    );
+    const list = screen.getByRole("list", { name: "Set up SEO" });
+
+    // Two columns where the checklist's own box is wide enough, one below.
+    expect(list).toHaveClass("grid-cols-1", "@2xl:grid-cols-2");
+    expect(list).toHaveClass("[&>li]:border-t-0");
+    expect(container.firstElementChild).toHaveClass("@container");
+  });
+
+  it("strikes through a done step's name when asked, and only a done one's", () => {
+    render(
+      <Checklist label="Set up SEO" done={1} total={3} doneStyle="struck">
+        <ChecklistItem status="done" label="Name the site" />
+        <ChecklistItem status="open" label="Bring in old values" />
+        <ChecklistItem status="skipped" label="Connect Search Console" />
+      </Checklist>
+    );
+    const [done, open, skipped] = screen
+      .getAllByRole("listitem")
+      .map(item => item.querySelector("p")!);
+
+    expect(done).toHaveClass("line-through", "text-muted-foreground");
+    expect(open).not.toHaveClass("line-through");
+    expect(skipped).not.toHaveClass("line-through");
+    // Struck is a look: the status is still spoken.
+    expect(done).toHaveTextContent("Name the site — done");
+  });
+
   it("draws a failed hint in the danger text colour", () => {
     render(
       <ol>

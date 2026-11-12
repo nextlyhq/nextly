@@ -26,6 +26,8 @@ import { toDbError } from "../database/errors";
 import {
   cachedRegistryRow,
   clearRegistryRowCache,
+  registryReadTransaction,
+  registryRowOnTransaction,
 } from "../domains/dynamic-collections/services/collection-row-cache";
 import { NextlyError } from "../errors";
 
@@ -265,8 +267,9 @@ export abstract class BaseRegistryService<
    * row comes from the registry row cache (`cachedRegistryRow`): a copy,
    * at most a second old for a change made elsewhere, and current for one made here, since every
    * registry write in this process clears it. A Single's and a component's every read looks its
-   * row up, a component's once per dynamic-zone row. Inside a transaction it is read on the
-   * transaction, uncached, so the transaction sees its own writes.
+   * row up, a component's once per dynamic-zone row. Read on a transaction, it comes from that
+   * transaction's memo (`registryRowOnTransaction`), so the transaction sees its own writes and
+   * no other transaction does; inside one but through the pool, it is read every time.
    */
   protected async getRecordBySlug(
     slug: string,
@@ -285,13 +288,29 @@ export abstract class BaseRegistryService<
           // holds its own, which can stall against a small pool.
           executor
         )) as Record<string, unknown> | undefined) ?? null;
+      // Read on a transaction, every service's lookup is held by that
+      // transaction's memo, whether or not it caches outside one: the
+      // transaction then reads each row once, and sees its own writes.
+      const transaction = registryReadTransaction(this.adapter, executor);
       const result =
-        this.readsRowsFromCache &&
-        executor === undefined &&
-        !this.adapter.transactionOpenInFlow()
-          ? // Its own key space: `getCollection` caches collection rows of another shape.
-            await cachedRegistryRow(this.adapter, `record:${table}`, slug, read)
-          : await read();
+        transaction !== undefined
+          ? await registryRowOnTransaction(
+              transaction,
+              `record:${table}`,
+              slug,
+              read
+            )
+          : this.readsRowsFromCache &&
+              executor === undefined &&
+              !this.adapter.transactionOpenInFlow()
+            ? // Its own key space: `getCollection` caches collection rows of another shape.
+              await cachedRegistryRow(
+                this.adapter,
+                `record:${table}`,
+                slug,
+                read
+              )
+            : await read();
 
       return result ? this.deserializeRecord(result) : null;
     } catch (error) {

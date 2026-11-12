@@ -35,6 +35,7 @@ import {
 import {
   type JSX,
   type KeyboardEvent,
+  type RefObject,
   useCallback,
   useEffect,
   useMemo,
@@ -56,6 +57,7 @@ import { type DateChoice, sentRange, type SentRange } from "./date-filter";
 import { ExportMenu } from "./ExportMenu";
 import { SelectionBar } from "./SelectionBar";
 import {
+  ALL_FORMS_OPTIONAL_COLUMNS,
   allFormsColumns,
   formColumns,
   type FormOption,
@@ -69,6 +71,7 @@ import {
 } from "./submission-list-scope";
 import { formIdOf, type SubmissionRow } from "./submission-row";
 import { ColumnsMenu, SubmissionsToolbar } from "./SubmissionsToolbar";
+import { useColumnsLeftOut } from "./use-columns-left-out";
 import { useStatusCounts } from "./use-status-counts";
 
 // ---------------------------------------------------------------------------
@@ -206,37 +209,46 @@ async function readRights(submissions: string): Promise<Rights> {
 /**
  * The installed collection names, the forms the list needs (one form's tab
  * that form alone, the list of every form all of them, for its picker and
- * its columns), and the person's rights.
+ * its columns), and the person's rights. `ready` once all of them are known,
+ * or known to be unreadable: until then the list cannot tell which columns
+ * and tick boxes to draw.
  */
 function useBootstrap(formId: string | undefined) {
   const [slugs, setSlugs] = useState<Slugs>();
   const [forms, setForms] = useState<FormOption[]>([]);
   const [rights, setRights] = useState<Rights>(NO_RIGHTS);
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    setReady(false);
     void (async () => {
       try {
         const resolved = await readSlugs();
         if (cancelled) return;
         setSlugs(resolved);
-        const found =
+        // Read together, since the list waits for both.
+        const [found, held] = await Promise.all([
           formId === undefined
-            ? await readAllForms(resolved.forms)
-            : await readOneForm(resolved.forms, formId);
-        if (!cancelled) setForms(found);
-        const held = await readRights(resolved.submissions);
-        if (!cancelled) setRights(held);
+            ? readAllForms(resolved.forms)
+            : readOneForm(resolved.forms, formId),
+          readRights(resolved.submissions),
+        ]);
+        if (cancelled) return;
+        setForms(found);
+        setRights(held);
       } catch {
         // Bootstrap failures degrade to the default slugs — without them
         // the list fetch would wait forever and the loading state never end.
         if (!cancelled) setSlugs(current => current ?? DEFAULT_SLUGS);
+      } finally {
+        if (!cancelled) setReady(true);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [formId]);
-  return { slugs, forms, rights };
+  return { slugs, forms, rights, ready };
 }
 
 /** One page of the list's rows for `scope`, read again on `refetch`. */
@@ -449,38 +461,71 @@ function emptyMessage(scope: SubmissionListScope): string {
 }
 
 /**
- * The fields of the chosen form whose columns start hidden: wide forms show
- * their first few, and the Columns menu toggles the rest in.
+ * The columns the list draws, fitted to its box (`useColumnsLeftOut`).
+ *
+ * The list of every form gives up its Summary, then its Form column. A form's
+ * own list shows its first few fields by default, as many of them as fit
+ * (always the first), and the Columns menu toggles any field in or out. Once
+ * the person has chosen there, their choice is drawn as made, even if the
+ * table then scrolls: they asked for those columns.
  */
-function useHiddenColumns(form: FormOption | undefined) {
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    setHidden(
-      new Set(
-        (form?.fields ?? [])
-          .slice(VISIBLE_FIELD_COLUMNS)
-          .map(field => field.name)
-      )
-    );
-  }, [form]);
-  const toggle = useCallback(
-    (name: string, shown: boolean) =>
-      setHidden(current => {
-        const next = new Set(current);
-        if (shown) next.delete(name);
-        else next.add(name);
-        return next;
-      }),
-    []
+function useFittedColumns(
+  box: RefObject<HTMLElement | null>,
+  form: FormOption | undefined,
+  formsById: ReadonlyMap<string, FormOption>,
+  content: unknown
+) {
+  const [chosen, setChosen] = useState<{
+    form: FormOption;
+    hidden: ReadonlySet<string>;
+  }>();
+  // A choice belongs to the form it was made on.
+  const chosenHidden =
+    form !== undefined && chosen?.form === form ? chosen.hidden : undefined;
+  const byDefault = Math.min(VISIBLE_FIELD_COLUMNS, form?.fields.length ?? 0);
+  const optional =
+    form === undefined
+      ? ALL_FORMS_OPTIONAL_COLUMNS
+      : chosenHidden
+        ? 0
+        : Math.max(0, byDefault - 1);
+  const leftOut = useColumnsLeftOut(
+    box,
+    optional,
+    `${form?.id ?? ""}:${chosenHidden ? "chosen" : "default"}`,
+    content
   );
-  return { hidden, toggle };
+  const hidden = useMemo<ReadonlySet<string>>(
+    () =>
+      chosenHidden ??
+      new Set(
+        (form?.fields ?? []).slice(byDefault - leftOut).map(field => field.name)
+      ),
+    [chosenHidden, form, byDefault, leftOut]
+  );
+  const toggle = useCallback(
+    (name: string, shown: boolean) => {
+      if (form === undefined) return;
+      const next = new Set(hidden);
+      if (shown) next.delete(name);
+      else next.add(name);
+      setChosen({ form, hidden: next });
+    },
+    [form, hidden]
+  );
+  const columns = useMemo(
+    () =>
+      form ? formColumns(form, hidden) : allFormsColumns(formsById, leftOut),
+    [form, hidden, formsById, leftOut]
+  );
+  return { columns, hidden, toggle };
 }
 
 export function SubmissionsView({
   collectionSlug,
   formId,
 }: SubmissionsViewProps): JSX.Element {
-  const { slugs, forms, rights } = useBootstrap(formId);
+  const { slugs, forms, rights, ready } = useBootstrap(formId);
   const [chosenFormId, setChosenFormId] = useState<string>(() => {
     // Deep links (?form=<id>) preselect the form filter.
     if (typeof window === "undefined") return "";
@@ -542,14 +587,13 @@ export function SubmissionsView({
     () => new Map(forms.map(form => [form.id, form])),
     [forms]
   );
-  const columnsShown = useHiddenColumns(selectedForm);
-  const columns = useMemo(
-    () =>
-      selectedForm
-        ? formColumns(selectedForm, columnsShown.hidden)
-        : allFormsColumns(formsById),
-    [selectedForm, formsById, columnsShown.hidden]
-  );
+  const tableBox = useRef<HTMLDivElement>(null);
+  // The rows the table draws: none until the list is ready.
+  const shownRows = ready ? rows : null;
+  const fitted = useFittedColumns(tableBox, selectedForm, formsById, shownRows);
+  // Tick boxes only for someone who can act on a ticked row: without update,
+  // delete or export a selection would open a bar with nothing in it.
+  const canAct = rights.update || rights.delete || rights.export;
 
   // --- changes ---------------------------------------------------------------
   // The form's submission count, beside the list in the form editor's bar and
@@ -706,8 +750,8 @@ export function SubmissionsView({
             {selectedForm && selectedForm.fields.length > 0 ? (
               <ColumnsMenu
                 fields={selectedForm.fields}
-                hidden={columnsShown.hidden}
-                onToggle={columnsShown.toggle}
+                hidden={fitted.hidden}
+                onToggle={fitted.toggle}
               />
             ) : null}
             {formId === undefined ? null : exportAll}
@@ -715,7 +759,7 @@ export function SubmissionsView({
         }
       />
 
-      {tickedCount > 0 ? (
+      {tickedCount > 0 && canAct ? (
         <SelectionBar
           count={tickedCount}
           rights={rights}
@@ -742,19 +786,27 @@ export function SubmissionsView({
 
       {notice.done || notice.refused ? <ChangeNotice notice={notice} /> : null}
 
-      <div onKeyDownCapture={keepKeysOnCheckboxes}>
+      <div ref={tableBox} onKeyDownCapture={keepKeysOnCheckboxes}>
+        {/* Until the forms and the person's rights are known, the list stays
+            loading, with no columns and no rows: drawn earlier, a form's tab
+            would show every form's columns, and tick boxes, for a moment
+            before its own. */}
         <DataTableView<SubmissionRow>
-          columns={columns}
-          rows={rows}
-          loading={loading}
+          columns={ready ? fitted.columns : []}
+          rows={shownRows ?? []}
+          loading={loading || !ready}
           error={error}
           emptyMessage={emptyMessage(scope)}
           ariaLabel="Submissions"
-          selection={{
-            selectedIds: selection.ids,
-            onToggle: selection.toggle,
-            onToggleAll: selection.toggleAll,
-          }}
+          selection={
+            ready && canAct
+              ? {
+                  selectedIds: selection.ids,
+                  onToggle: selection.toggle,
+                  onToggleAll: selection.toggleAll,
+                }
+              : undefined
+          }
           // A submission opens as a page of its own, carrying this list's
           // filter so its newer and older follow it.
           onRowClick={row =>
@@ -766,12 +818,15 @@ export function SubmissionsView({
 
       <Pager page={page} total={total} onPage={setPage} />
 
-      <p className="text-xs text-muted-foreground">
-        Click a row to open its page. Tick rows for bulk actions.{" "}
-        {selectedForm
-          ? "Columns use this form's labels and option names."
-          : "Pick one form to see its own columns."}
-      </p>
+      {ready ? (
+        <p className="text-xs text-muted-foreground">
+          Click a row to open its page.{" "}
+          {canAct ? "Tick rows for bulk actions. " : ""}
+          {selectedForm
+            ? "Columns use this form's labels and option names."
+            : "Pick one form to see its own columns."}
+        </p>
+      ) : null}
     </div>
   );
 }

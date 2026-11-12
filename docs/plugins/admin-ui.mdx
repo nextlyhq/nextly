@@ -181,6 +181,10 @@ import { Card, Stack, Grid, Stat } from "@nextlyhq/plugin-sdk/admin";
 </Card>;
 ```
 
+`Stat` also takes `tone` (`success`, `warning`, `destructive` or `info`), a dot in that
+status's colour before the value, and `size="compact"`, a smaller figure under a semibold
+label for one that leads a small card.
+
 **2. Use safelisted utility classes.** A curated, token-driven set of Tailwind utilities is
 always present in the admin sheet, so you can use them directly in your components with no
 build step: layout (`flex`, `grid`, `grid-cols-{1..6}`, `gap-{0..8}`, `items-*`,
@@ -421,7 +425,7 @@ copy of how they look.
 | `ListToolbar`, `ListColumnsMenu`, `ListEmptyState` | The parts of `ListView`, for a list laid out by hand.                                                                                                 |
 | `Badge`                                            | A status chip. `success`, `warning`, `destructive` and `info` draw a quiet chip with a status dot.                                                    |
 | `SegmentedChoice`                                  | A short choice kept in view, such as a View / Edit switch. `size="bordered"` for a setting in a form.                                                 |
-| `Checklist`, `ChecklistItem`                       | A setup list with a progress bar; each step is `open`, `done` or `skipped`.                                                                           |
+| `Checklist`, `ChecklistItem`                       | A setup list with a progress bar; steps are `open`, `done` or `skipped`. Takes `columns={2}` and `doneStyle="struck"`.                                |
 | `FieldShell` with `layout="row"`                   | A settings row: the label and its help on the left, the control on the right.                                                                         |
 | `SettingsRowGroup`                                 | The same row for a group of controls, named as one group.                                                                                             |
 | `ListView` with `grouping`, `rowDetail`            | Rows in groups, each under a header row with its title, a badge, a count and actions; and rows that open a region below them.                         |

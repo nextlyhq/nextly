@@ -134,7 +134,8 @@ it may reach; access-gated or member content runs fresh per request.
 
 Other options: `nextly` (above), `trustedCollections` (required with
 `overrideAccess: true`), `slugField` (default `"slug"`), `depth`, `locale`,
-`richTextFormat`, `tags` (extra cache tags for populated relations),
+`richTextFormat`, `richTextStyles` (`"none"` for class-only rich text HTML), `tags`
+(extra cache tags for populated relations),
 `revalidate` (a time-based safety net for cached reads), and `cacheScope` (a
 discriminator when distinct readers — per tenant or database — resolve the same
 slug).
@@ -548,11 +549,11 @@ structured data, without a content route or a Single route. Each function asks t
 route helpers do, and returns the route's own metadata unchanged where no plugin provides page
 metadata.
 
-| The page                         | Its head                                         | Its structured data                                  |
-| -------------------------------- | ------------------------------------------------ | ---------------------------------------------------- |
-| An entry of a collection         | `contentPageMetadata(config, entry, context, path)` | `contentPageStructuredData(config, entry, context, path)` |
-| A Single                         | `singlePageMetadata(config, document, context, path?)` | `singlePageStructuredData(config, document, context, path?)` |
-| A page built in code, no entry   | `seoMetadata(path, options)` from `@nextlyhq/plugin-seo` | `seoStructuredData(path, options)` from `@nextlyhq/plugin-seo` |
+| The page                       | Its head                                                 | Its structured data                                            |
+| ------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------- |
+| An entry of a collection       | `contentPageMetadata(config, entry, context, path)`      | `contentPageStructuredData(config, entry, context, path)`      |
+| A Single                       | `singlePageMetadata(config, document, context, path?)`   | `singlePageStructuredData(config, document, context, path?)`   |
+| A page built in code, no entry | `seoMetadata(path, options)` from `@nextlyhq/plugin-seo` | `seoStructuredData(path, options)` from `@nextlyhq/plugin-seo` |
 
 `config` holds the route's own `buildMetadata` (and optionally `derivedMetadata`, `tags` and
 `revalidate`); `context` names the entry's collection and slug, or the Single's slug, and the
