@@ -20,6 +20,7 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { readConnections } from "../connections/store";
 import { pageLanguageLinks } from "../languages/head";
 import {
   heldLanguages,
@@ -53,11 +54,13 @@ import { addressShapes, brokenLinks } from "./links";
 import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
 import {
+  connectionProblems,
   listingProblems,
   noAddressProblems,
   productionAddressProblems,
   redirectChainProblems,
   sharedValueProblems,
+  type ConnectionsReport,
   type RedirectChain,
 } from "./site-checks";
 import {
@@ -803,7 +806,37 @@ async function siteProblems(
   return [
     ...productionAddressProblems(addresses, standing),
     ...noAddressProblems(types),
+    ...connectionProblems(await connectionsReport(ctx, checks)),
   ];
+}
+
+/**
+ * What the optional connections last reported: IndexNow's last notice while
+ * it is switched on, and Search Console's last failure. A connection that
+ * cannot be read is reported as nothing, never as a failed list.
+ */
+async function connectionsReport(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<ConnectionsReport> {
+  if (ctx.settings === undefined) return {};
+  try {
+    const [rules, stored] = await Promise.all([
+      checks.readers.readRules(ctx, undefined),
+      readConnections(ctx),
+    ]);
+    return {
+      ...(rules.indexNow === true && stored.indexNowLast !== undefined
+        ? { indexNow: stored.indexNowLast }
+        : {}),
+      ...(stored.searchConsoleFailed === undefined
+        ? {}
+        : { searchConsole: { message: stored.searchConsoleFailed.message } }),
+    };
+  } catch (error) {
+    ctx.logger.warn("The optional connections could not be read", { error });
+    return {};
+  }
 }
 
 /**

@@ -1168,6 +1168,13 @@ exports[`each code, as a command ends with it > PLUGIN_COLUMN_NOT_MIGRATED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-column-not-migrated  (PLUGIN_COLUMN_NOT_MIGRATED)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_COMMAND_FROM_OLDER_RELEASE 1`] = `
+"✗ The preset roles' grants were set by Nextly 0.10.0, newer than this release (0.9.0).
+  Why:  An install sets every preset role's grants with the plugin's permissions, and a release older than the one that set them leaves them as they are, so neither command runs from it in production. Nothing was changed.
+  Next: Run this command from Nextly 0.10.0 or newer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-command-from-older-release  (PLUGIN_COMMAND_FROM_OLDER_RELEASE)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_CONFIG_NOT_EDITABLE 1`] = `
 "✗ The plugin was not added to your configuration.
   Why:  nextly.config.ts sets \`plugins\` to something other than a list written in place. The file was left as it was.

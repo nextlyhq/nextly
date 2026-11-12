@@ -49,6 +49,17 @@ import {
 } from "./handlers/one-response";
 import { refuseOneResponseFieldProblem } from "./handlers/one-response-field-check";
 import {
+  oneResponseOptions,
+  REBUILD_KEYS_JOB,
+  REBUILD_ON_SAVE_MS,
+  rebuildInSave,
+  type RebuildDeps,
+  rebuildAfterSave,
+  rebuildKeysJob,
+  rebuildResponseKeys,
+  stampOneResponseVersion,
+} from "./handlers/one-response-rebuild";
+import {
   sameSubmittedPayload,
   submissionMarks,
   type SubmissionOriginMarks,
@@ -153,6 +164,8 @@ function resolveConfig(
       enabled: options.notifications?.enabled ?? true,
     },
 
+    oneResponse: oneResponseOptions(options.oneResponse),
+
     spamProtection: {
       honeypot: options.spamProtection?.honeypot ?? true,
       ...botCheckOptions(options.spamProtection),
@@ -244,6 +257,10 @@ export function formBuilder(
   // plugin no network access.
   const outbound = botCheckHosts(resolvedConfig.spamProtection);
 
+  // What the one-response sweep reads and writes with, once `init` has the
+  // live context; until then a pass defers its work to the next.
+  let rebuildDeps: RebuildDeps | undefined;
+
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
     version: PLUGIN_VERSION,
@@ -261,6 +278,13 @@ export function formBuilder(
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
       collections: [formsCol, submissionsCol],
+      // Gives earlier submissions their one-response keys after a form
+      // changes how it tells people apart.
+      jobs: [
+        rebuildKeysJob(async deadline => {
+          if (rebuildDeps) await rebuildResponseKeys(rebuildDeps, deadline);
+        }),
+      ],
       // New form submissions, the one plugin widget core's default dashboard
       // names. Contributed, never suggested: where it goes is core's default's
       // to say, and a site's own default may leave it out.
@@ -679,6 +703,50 @@ export function formBuilder(
         return (context as { data?: unknown }).data;
       });
 
+      // One response per person after a form changes how it tells people
+      // apart: the save moves the form's version on, and once it commits the
+      // earlier submissions are given keys for it (`one-response-rebuild`).
+      rebuildDeps = {
+        collections: nextly.services.collections,
+        digests: () => nextly.security.digests,
+        formsSlug,
+        submissionsSlug: submissionSlug,
+      };
+      nextly.hooks.on("beforeChange", formsSlug, async (context: unknown) => {
+        await stampOneResponseVersion(context, async formId =>
+          keysFitInSave(
+            nextly,
+            submissionSlug,
+            formId,
+            resolvedConfig.oneResponse.keysInSave
+          )
+        );
+        return (context as { data?: unknown }).data;
+      });
+      // A form small enough is given its keys inside the save's own
+      // transaction; a larger one by the sweep, started once the save commits.
+      nextly.hooks.onInTransaction(formsSlug, write =>
+        rebuildInSave(
+          {
+            own: nextly.services.ownCollections,
+            collections: nextly.services.collections,
+            digests: () => nextly.security.digests,
+            submissionsSlug: submissionSlug,
+          },
+          write
+        )
+      );
+      nextly.hooks.on("afterUpdate", formsSlug, (context: unknown) =>
+        rebuildAfterSave(
+          context,
+          () =>
+            nextly.services.jobs.runSweepNow(REBUILD_KEYS_JOB, {
+              maxDurationMs: REBUILD_ON_SAVE_MS,
+            }),
+          (message, context) => nextly.logger.warn?.(message, context)
+        )
+      );
+
       // Each form's closing time and limit, held inside the transaction that
       // stores a submission, whatever stores it.
       registerFormClosing(nextly, {
@@ -1051,6 +1119,56 @@ function updateNeedsChecking(
   );
 }
 
+/**
+ * Whether a form has few enough non-spam submissions for a change of its
+ * one-response setting to give them keys inside the save.
+ */
+async function keysFitInSave(
+  nextly: NextlyInstance,
+  submissionsSlug: string,
+  formId: string,
+  limit: number
+): Promise<boolean> {
+  const count = await nextly.services.collections.count(
+    submissionsSlug,
+    { where: { form: { equals: formId }, status: { not_equals: "spam" } } },
+    // Elevated: every submission counts, whoever is saving the form.
+    { as: "system" }
+  );
+  return count <= limit;
+}
+
+/**
+ * A request's address as the server judged it, never one the caller posted:
+ * the collection grants public create, and a posted address would choose the
+ * network one response per person compares. A create no request produced
+ * (an import) keeps the address it was given.
+ */
+function stampRequestAddress(
+  ctx: { operation?: string; req?: { http?: { ip: string | null } } },
+  row: Record<string, unknown>
+): void {
+  if (ctx.operation === "create" && ctx.req?.http) {
+    row.ipAddress = ctx.req.http.ip ?? null;
+  }
+}
+
+/**
+ * The plugin's own write of a one-response key it made (`setKey`): the
+ * key is written and nothing else is done to the patch. Whether `row` was one.
+ */
+function pluginKeyWrite(
+  operation: string | undefined,
+  row: Record<string, unknown>,
+  stored: Record<string, unknown> | undefined
+): boolean {
+  const key = submissionMarks(row)?.setKey;
+  if (operation !== "update" || key === undefined) return false;
+  // Spam holds no key, whatever was decided before it was marked.
+  row.responseKey = stored?.status === "spam" ? null : key;
+  return true;
+}
+
 export async function prepareSubmissionForWrite(
   context: unknown,
   formsSlug: string,
@@ -1066,6 +1184,9 @@ export async function prepareSubmissionForWrite(
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
+  if (pluginKeyWrite(ctx.operation, submission, ctx.originalData)) {
+    return submission;
+  }
   // A submission's one-response key is the plugin's to write, never a
   // caller's: one posting a key could take a value's place before its owner.
   delete submission.responseKey;
@@ -1152,13 +1273,7 @@ export async function prepareSubmissionForWrite(
   if (ctx.operation !== "create" && submission.data === undefined) {
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
-  if (ctx.operation === "create" && ctx.req?.http) {
-    // A request's address as the server judged it, never one the caller
-    // posted: the collection grants public create, and a posted address
-    // would choose the network one response per person compares. A create
-    // no request produced (an import) keeps the address it was given.
-    ctx.data.ipAddress = ctx.req.http.ip ?? null;
-  }
+  stampRequestAddress(ctx, ctx.data);
   if (ctx.operation === "create") {
     // Made from what is stored, after the spam verdict: spam takes no key.
     // The browser token is the one answer the row does not keep, so it comes

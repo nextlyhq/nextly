@@ -690,6 +690,13 @@ export interface PluginOverride {
     | "plugins"
     | "users"
     | "settings";
+  /**
+   * Override where a standalone plugin's rail item goes, written as the
+   * plugin's own `admin.landing` is: one of its pages or one of its
+   * collections. The collection may be named by the slug the plugin declares
+   * or by the one this site renamed it to.
+   */
+  landing?: string;
   /** Override or extend the plugin's sidebar appearance (shallow-merged) */
   appearance?: Partial<PluginAdminAppearance>;
 }

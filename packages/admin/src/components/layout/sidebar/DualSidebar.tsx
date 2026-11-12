@@ -71,6 +71,7 @@ import {
   railAnswersPending,
   settledRailItems,
 } from "./lib/settled-rail";
+import { standalonePluginCollections } from "./lib/standalone-plugin-collections";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
 import { RailAccount } from "./RailAccount";
 import { RAIL_FOCUS_RING, RailColumn, RailGhostItems } from "./RailColumn";
@@ -449,14 +450,6 @@ export function DualSidebar({
 
   const { isActive } = useSidebarNavigation(SIDEBAR_NAVIGATION, pathname);
 
-  // Filtering logic for plugins
-  const authorizedPlugins = useMemo(() => {
-    const visible = (collectionsData?.items ?? []).filter(
-      c => !c.admin?.hidden && c.admin?.isPlugin
-    );
-    return filterCollectionItems(visible, capabilities);
-  }, [collectionsData, capabilities]);
-
   const suppressedChrome = useSuppressedChrome();
 
   const hasSubSidebarCategory = (id: string) =>
@@ -481,6 +474,12 @@ export function DualSidebar({
     resolveItemHrefHelper(
       item,
       visibleStandalonePlugins,
+      // The panel's own inputs, so a rail item opens what its panel lists.
+      {
+        collections: collectionsData?.items ?? [],
+        capabilities,
+        can: hasPermission,
+      },
       settingsHref,
       capabilities.canManageSettings,
       contentItemHref({
@@ -490,24 +489,24 @@ export function DualSidebar({
       })
     );
 
-  // Resolve collections for the active standalone plugin section
+  // Resolve collections for the active standalone plugin section, by the same
+  // function its rail item's landing reads, so the two agree on the first.
   const pluginCollectionsForSection = useMemo(() => {
     if (!selectedMain.startsWith("standalone-")) return [];
     const slug = selectedMain.replace("standalone-", "");
     const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
     if (!sp) return [];
-    const collectionSlugs = new Set(sp.collections ?? []);
-    return authorizedPlugins
-      .filter(c => collectionSlugs.has(c.name))
-      .sort((a, b) => {
-        const orderA = a.admin?.order ?? 100;
-        const orderB = b.admin?.order ?? 100;
-        if (orderA !== orderB) return orderA - orderB;
-        return (a.labels?.plural || a.label || a.name).localeCompare(
-          b.labels?.plural || b.label || b.name
-        );
-      });
-  }, [selectedMain, visibleStandalonePlugins, authorizedPlugins]);
+    return standalonePluginCollections(
+      sp,
+      collectionsData?.items ?? [],
+      capabilities
+    );
+  }, [
+    selectedMain,
+    visibleStandalonePlugins,
+    collectionsData?.items,
+    capabilities,
+  ]);
 
   // Resolve the label for the active standalone plugin
   const standaloneLabel = useMemo(
