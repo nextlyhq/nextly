@@ -97,6 +97,11 @@ describe("the fields a host adds to submissions", () => {
           text({ name: "source" }),
           // Kept out of the admin by the host: not shown.
           text({ name: "crmId", admin: { hidden: true } }),
+          // Shown only when a condition holds, which the page does not judge.
+          text({
+            name: "followUp",
+            admin: { condition: { field: "priority", equals: "high" } },
+          }),
           // Holds fields of its own, one hidden: not shown whole.
           group({
             name: "routing",

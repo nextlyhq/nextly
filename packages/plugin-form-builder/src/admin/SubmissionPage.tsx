@@ -326,7 +326,7 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
 type Save = (
   changes: Record<string, unknown>,
   basis?: Record<string, unknown>
-) => Promise<void>;
+) => Promise<SubmissionDocument | undefined>;
 
 /** The bar: where it sits in its list, newer and older, and its actions. */
 function SubmissionBar({
@@ -555,11 +555,15 @@ function useAnswerDraft(
   };
   const change = (name: string, value: unknown) =>
     setDraft(current => ({ ...current, [name]: value }));
-  const afterSave = (sent: Record<string, unknown>) => {
+  const afterSave = (
+    sent: Record<string, unknown>,
+    stored: SubmissionDocument | undefined
+  ) => {
     if (JSON.stringify(draftNow.current) === JSON.stringify(sent)) {
       setEditing(false);
     } else {
-      setBasis(sent);
+      // Later edits are now made from the answers as the server stored them.
+      setBasis(stored?.data ?? sent);
     }
   };
   const saveDraft = () => {
@@ -571,7 +575,7 @@ function useAnswerDraft(
     }
     const sent = draft;
     void save({ data: sent }, { data: basis })
-      .then(() => afterSave(sent))
+      .then(stored => afterSave(sent, stored))
       .catch(() => undefined);
   };
   return {
@@ -716,6 +720,8 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
   const [savedText, setSavedText] = useState<string | null>(null);
   const noteNow = useRef(note);
   noteNow.current = note;
+  const storedNow = useRef(stored);
+  storedNow.current = stored;
   // The stored note the textarea's text was last brought up to.
   const shown = useRef(stored);
   // The stored note once the page's own saves have landed, and how many are on their way.
@@ -772,7 +778,17 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
   useHoldPage(UNSAVED_NOTE_KEY, note !== stored && note !== savedText);
   return {
     note,
-    edit: (text: string) => setNote(text),
+    edit: (text: string) => {
+      setNote(text);
+      // Taking the note as stored now, after someone else changed it, makes
+      // it the note a further edit replaces; a draft made from the older
+      // note is still refused until then.
+      if (pending.current === 0 && text === storedNow.current) {
+        expected.current = text;
+        runBasis.current = text;
+        shown.current = text;
+      }
+    },
     saveNote,
     saved: savedText !== null && savedText === note,
   };
@@ -1200,6 +1216,9 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
     } | null;
     if (saved?.item?.id === id) queryClient.setQueryData(key, saved.item);
     await refresh();
+    // What the server stored, which may differ from what was sent: answers
+    // are trimmed and cleaned as they are saved.
+    return saved?.item?.id === id ? saved.item : undefined;
   };
   /**
    * Save a change once every change asked for before it has settled, unless

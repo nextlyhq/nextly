@@ -157,8 +157,9 @@ formSubmissionOverrides: {
 ```
 
 Fields you add show on each submission's page in the admin, under **Details**, with their
-values, except a field hidden from the admin (`admin: { hidden: true }`) and one that holds
-fields of its own (a group, array or blocks). The page shows them read-only: it draws editors
+values, except a field hidden from the admin (`admin: { hidden: true }`), one shown only
+when a condition holds (`admin.condition`), and one that holds fields of its own (a group,
+array or blocks). The page shows them read-only: it draws editors
 for a submission's answers, status and note, not for fields it does not know. Set them from your own code with the Direct API
 (`nextly.update({ collection: 'form-submissions', id, data: { priority: 'high' } })`) or the
 REST entries API.

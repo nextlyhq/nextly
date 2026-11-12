@@ -220,6 +220,8 @@ interface ServerOptions {
   offline?: boolean;
   /** Reading the submission fails. */
   failReads?: boolean;
+  /** The server trims text answers as it stores them. */
+  normalize?: boolean;
   /** Fields a host added to submissions, and the submission's values for them. */
   extension?: {
     fields: Array<{ name: string; label: string; type: string }>;
@@ -309,7 +311,16 @@ function server(options: ServerOptions) {
       }
       if (sent.status) status = sent.status;
       if (sent.notes !== undefined) store.notes = sent.notes;
-      if (sent.data) store.data = sent.data;
+      if (sent.data) {
+        store.data = options.normalize
+          ? Object.fromEntries(
+              Object.entries(sent.data).map(([name, value]) => [
+                name,
+                typeof value === "string" ? value.trim() : value,
+              ])
+            )
+          : sent.data;
+      }
       rev += 1;
       return answer(200, { item: doc() });
     }
@@ -711,6 +722,42 @@ describe("a submission's page, writing", () => {
     );
   });
 
+  it("goes on from the answers as stored after the server cleans them", async () => {
+    let release = () => undefined as void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [
+        { name: "name", label: "Full name", type: "text" },
+        { name: "email", label: "Email", type: "email" },
+      ],
+      store: { data: { ...DATA } },
+      normalize: true,
+      hold: () => held,
+    };
+    const fetchMock = server(options);
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    const name = screen.getByRole("textbox", { name: "Full name" });
+    await user.clear(name);
+    await user.type(name, " Ada ");
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    // Still editing while it is saved, and stored trimmed.
+    await user.type(screen.getByRole("textbox", { name: "Email" }), "x");
+    release();
+    await waitFor(() => expect(patches(fetchMock)).toHaveLength(1));
+    options.hold = undefined;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    await waitFor(() => expect(patches(fetchMock)).toHaveLength(2));
+    expect(screen.queryByText(/Someone changed this submission/)).toBeNull();
+  });
+
   it("hands a deleted submission with unsaved answers to the entry page", async () => {
     server({
       status: "read",
@@ -826,6 +873,16 @@ describe("a submission's page, writing", () => {
     ).toBeInTheDocument();
     expect(patches(fetchMock)).toEqual([]);
     expect(store.notes).toBe("Their note");
+    // Taking their note, then adding to it, saves.
+    await user.clear(note);
+    await user.type(note, "Their note");
+    await user.type(note, " and mine");
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "Their note and mine", _rev: "rev-7" },
+      ])
+    );
   });
 
   it("tells the leave guard while a note is not saved", async () => {

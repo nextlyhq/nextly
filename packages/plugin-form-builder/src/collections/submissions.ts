@@ -247,17 +247,19 @@ export function submissionExtensionFields(
 
 /**
  * Whether the page leaves a field out: one configured to stay out of the
- * admin, or one holding fields of its own (a group, an array, blocks), whose
+ * admin; one shown only when a condition holds, which the page does not
+ * judge; or one holding fields of its own (a group, an array, blocks), whose
  * value the page would show whole, hidden descendants included.
  */
 function hiddenFromAdmin(field: FieldConfig): boolean {
   const shape = field as {
-    admin?: { hidden?: unknown };
+    admin?: { hidden?: unknown; condition?: unknown };
     fields?: unknown;
     blocks?: unknown;
   };
   return (
     shape.admin?.hidden === true ||
+    shape.admin?.condition !== undefined ||
     shape.fields !== undefined ||
     shape.blocks !== undefined
   );
