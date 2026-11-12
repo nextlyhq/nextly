@@ -77,18 +77,18 @@ export const NEWLY_RESERVED_SLUG_NOTES: ReadonlyMap<string, string> = new Map([
       "and preset roles would silently lose access to it.",
   ],
   [
-    "email-deliveries",
-    "This name became a reserved system resource when queued email could be managed. " +
-      "An installation that already has a collection or Single with this slug must rename it: " +
-      "the manage-email-deliveries permission is seeded under this name, so a content entity " +
-      "sharing it would have its own permissions treated as system-owned and preset roles " +
-      "would silently lose access to it.",
-  ],
-  [
     "background-jobs",
     "This name became a reserved system resource when the background job runner gained its trigger. " +
       "An installation that already has a collection or Single with this slug must rename it: " +
       "the manage-background-jobs permission is seeded under this name, so a content entity " +
+      "sharing it would have its own permissions treated as system-owned and preset roles " +
+      "would silently lose access to it.",
+  ],
+  [
+    "email-deliveries",
+    "This name became a reserved system resource when queued email could be managed. " +
+      "An installation that already has a collection or Single with this slug must rename it: " +
+      "the manage-email-deliveries permission is seeded under this name, so a content entity " +
       "sharing it would have its own permissions treated as system-owned and preset roles " +
       "would silently lose access to it.",
   ],
