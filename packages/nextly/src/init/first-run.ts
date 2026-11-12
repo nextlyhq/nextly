@@ -112,6 +112,27 @@ export type EnsureFirstRunSetupResult =
 const PROBE_TABLE = "nextly_schema_events";
 
 /**
+ * In `next build`, refuse a database with no Nextly tables.
+ *
+ * The build sets up nothing: it may point at a database other deployments
+ * share, and a database with no Nextly tables is one whose deploy skipped
+ * `nextly migrate`. Saying so names the fix, where creating the schema here
+ * would race every other worker of the build without the schema lock, and
+ * reading on would fail each page with a missing table instead. Asked of the
+ * table the first start probes for, so the two agree on what "set up" means.
+ */
+export async function refuseUnmigratedDatabaseInBuild(
+  adapter: Pick<DrizzleAdapter, "tableExists">
+): Promise<void> {
+  if (await adapter.tableExists(PROBE_TABLE)) return;
+  throw new NextlyError({
+    code: "NEXTLY_DATABASE_NOT_MIGRATED",
+    publicMessage:
+      "The database has no Nextly tables. Run `nextly migrate` before `next build`.",
+  });
+}
+
+/**
  * The schema lock as a first start takes it: the one lock `migrate` and every schema change hold,
  * waited for when another process holds it (about a minute, then the start reports the holder),
  * and created when the database has no lock tables yet, which a new database never does.

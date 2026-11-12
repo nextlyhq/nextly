@@ -264,8 +264,12 @@ export async function runMigrationStatements(
   // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
   // a time, so a taker cannot start while a statement of the holder runs, and its adapter reads a
   // statement's first word.
+  // The unit's name goes with the claim, so a run refused by one of these statements names the
+  // file, never the statement's text.
   const sent = (statement: string) =>
-    dialect === "sqlite" ? statement : markedForSchemaLock(statement);
+    dialect === "sqlite"
+      ? statement
+      : markedForSchemaLock(statement, unit.source);
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
       for (const [index, statement] of statements.entries()) {

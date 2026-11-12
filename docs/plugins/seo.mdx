@@ -1097,24 +1097,84 @@ export const config = {
 };
 ```
 
-A saved redirect applies from the next request, on every server, since each request reads it. A permanent redirect answers `301`, a temporary one `302`, and the visitor's query string goes with them unless the To address has its own. Admin, API and asset requests are never redirected.
+A permanent redirect answers `301`, a temporary one `302`, and the visitor's query string goes with them unless the To address has its own. Admin, API and asset requests are never redirected.
+
+A saved redirect applies from the next request on the server that saved it, and within 15 seconds on every other server: each server keeps the addresses redirects hold in memory and reads them again in the background. Without the Proxy, redirects are saved but never served, and the not-found log stays empty. SEO › Problems then lists **Redirects saved but not served**, with the wiring to hand a developer.
+
+#### What the Proxy costs
+
+Next.js 16 runs `proxy.ts` on the Node.js runtime only, on every request its matcher matches, before a cached page is served. On a host such as Vercel, every matched request is a function call, pages the CDN would otherwise serve from its cache included. That is Next.js's cost of having a Proxy at all, and the matcher is how you keep it down: leave out every path no handler has anything to say about.
+
+What the plugin adds to each request is kept off the database:
+
+- **A page request no redirect is for reads nothing.** Each server reads the addresses redirects hold once, keeps them as a set, and reads them again in the background every 15 seconds. Only a request whose address, or a range above it, a redirect holds reads the database, to choose the redirect.
+- **The staging guard reads only the environment** when `NEXTLY_PRODUCTION_ADDRESSES` is set, which is the setting to use on a production site. Without it, the SEO settings' addresses are read by a server's first request and kept, read again in the background every 30 seconds.
+- **Each server notes once an hour that its Proxy runs**, in the background, which is how the admin knows redirects are served.
+
+Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
+
+#### A site that already has `middleware.ts`
+
+Next.js 16 refuses to build an app with both `middleware.ts` and `proxy.ts`, and `proxy.ts` cannot run on the Edge runtime. To wire the plugin, rename `middleware.ts` to `proxy.ts`, keep the site's own rules in it, and hand the rest to Nextly. The rules then run on Node.js, which runs everything the Edge runtime does:
+
+```ts
+// src/proxy.ts, formerly src/middleware.ts
+import { NextResponse, type NextRequest } from "next/server";
+import { createNextlyProxy } from "nextly/runtime";
+
+import nextlyConfig from "../nextly.config";
+
+const nextly = createNextlyProxy(nextlyConfig);
+
+// The site's own rules, as its middleware had them: a response for a
+// request they answer, such as a 410 or a redirect, and nothing otherwise.
+declare function siteRules(request: NextRequest): Response | undefined;
+
+export async function proxy(request: NextRequest) {
+  const own = siteRules(request);
+  if (own !== undefined) return own;
+  // A redirect, or the page with the headers the plugin adds.
+  const response = (await nextly(request)) ?? NextResponse.next();
+  // What the site added to every page goes on whichever response is sent.
+  response.headers.set("x-frame-options", "DENY");
+  return response;
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/).*)"],
+};
+```
+
+Keep the site's matcher, written out in the file. A request the site's own rules answer is sent as they made it, without the plugin's headers; call `nextly(request)` first instead where the staging guard's `noindex` must reach those responses too. A rewrite the site's rules make (`NextResponse.rewrite`) is answered before the plugin sees the request, as before.
+
+#### Is the Proxy running?
+
+`GET /admin/api/plugins/@nextlyhq/plugin-seo/proxy-status` answers whether it is, for someone holding `manage-seo`:
+
+```json
+{ "state": "running", "lastSeen": "2026-11-12T09:41:07.000Z" }
+```
+
+`state` is `running` where the Proxy noted a request in the last week, `quiet` where its last note is older, and `not-wired` where it never noted one. A quiet site's Proxy notes only when a request comes, so `quiet` on a site nobody visited all week is not a fault.
 
 ### Addresses not found
 
 The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, so each can be given a redirect. Admin, API and asset requests are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
 
-Log a request from the site's not-found page, with the request headers the Proxy passes on:
+Log a request from the site's not-found page, with the request headers the Proxy passes on, after the page is sent:
 
 ```tsx
 // src/app/not-found.tsx
 import { logNotFound } from "@nextlyhq/plugin-seo";
 import { headers } from "next/headers";
-import { connection } from "next/server";
+import { after, connection } from "next/server";
 import { Suspense } from "react";
 
 async function LogThisAddress() {
   await connection();
-  await logNotFound(await headers());
+  const requestHeaders = await headers();
+  // Written once the page is sent, so the visitor never waits on the log.
+  after(() => logNotFound(requestHeaders));
   return null;
 }
 
@@ -1130,7 +1190,7 @@ export default function NotFound() {
 }
 ```
 
-The log is written under a `Suspense` boundary because reading the request's headers makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted.
+The headers are read under a `Suspense` boundary because reading them makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted. `after()` runs the write once the response is finished, so a slow database never holds the page.
 
 A request is counted once, however many times Next.js renders its not-found page. `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
 
@@ -1356,6 +1416,12 @@ each entry's, each route with no variable part (`/pricing`), and each address a 
 one declares through `generateStaticParams` (`/integrations/wordpress`). Choose **Edit SEO**
 on a page built in code to set its title, description, visibility and share image. The
 screen and its saves ask `manage-seo`.
+
+The routes are read at run time from what `next build` wrote: `.next/server/app-paths-manifest.json`
+and `.next/prerender-manifest.json`. Next.js lists both among the files every server function
+needs (`.next/required-server-files.json`), so a Vercel deployment and a `standalone` build
+carry them with no setting. A deploy that copies only part of `.next` must keep both, or the
+screen lists no page built in code.
 
 What is set there reaches the page once its route adds one line, calling `seoMetadata` with
 its address:
