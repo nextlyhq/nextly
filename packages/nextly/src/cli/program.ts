@@ -55,6 +55,7 @@ import { registerWorkflowStrandedCommands } from "./commands/workflow-stranded.c
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
 import { addExitCodesHelp } from "./exit-codes";
+import { refuseHelpForUnknownCommands } from "./unknown-command-help";
 
 export {
   createContext,
@@ -174,6 +175,9 @@ ${pc.bold("Documentation:")}
   // Then end the program's help and every command's with what its exit
   // status means: last, so the block follows any help text added before it.
   addExitCodesHelp(program);
+  // `--help` after a name no command has is refused as unknown, not answered
+  // with the parent's help: once every command is attached, so all are.
+  refuseHelpForUnknownCommands(program);
 
   // Telemetry preAction/postAction hooks. We capture command_started before
   // the action runs and command_completed after it returns. The telemetry
