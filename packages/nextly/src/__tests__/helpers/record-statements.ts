@@ -12,10 +12,17 @@
  * - `better-sqlite3`: each prepared statement's `run`, `get`, `all` and
  *   `iterate`, and the database's `exec`, so a statement prepared once and run
  *   many times is recorded each time it runs, with the values it ran with.
+ *
+ * A statement is recorded as its caller wrote it (`asWritten`): the comments a
+ * run holding the schema lock puts in front of it on PostgreSQL and MySQL are
+ * left out, so a test that judges a statement by how it starts reads the same
+ * text on every dialect.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { TestDialect } from "../../plugins/test-nextly";
+
+import { asWritten } from "./statement-as-written";
 
 /** One statement as the driver was handed it. */
 export interface RecordedStatement {
@@ -147,10 +154,11 @@ export async function recordStatements(
       const original = owner[method] as (...args: unknown[]) => unknown;
       owner[method] = function (this: unknown, ...args: unknown[]): unknown {
         // A SQLite statement carries its own text; its arguments are values.
-        const text = sqlite
+        const sent = sqlite
           ? (this as { source?: string }).source
           : statementText(args[0]);
-        if (text !== undefined) {
+        if (sent !== undefined) {
+          const text = asWritten(sent);
           statements.push(text);
           calls.push({
             text,
