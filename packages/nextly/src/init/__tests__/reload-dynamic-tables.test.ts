@@ -46,6 +46,15 @@ vi.mock(
   () => ({ registerComponentSchemas })
 );
 
+// The field groups' translation tables are made by their own pass, which reads
+// the field group registry through the same loader. Stood in for here, so the
+// loader's calls are the two entity passes these tests count, and the pass is
+// observed by whether it was asked.
+const ensureFieldGroupCompanions = vi.hoisted(() =>
+  vi.fn(async () => ({ registered: 0, failures: [] }))
+);
+vi.mock("../field-group-companions", () => ({ ensureFieldGroupCompanions }));
+
 // The in-flight and queued runs are pinned to `globalThis`, so one test's
 // leftovers would otherwise be answered to the next test's callers.
 const reloadGlobals = globalThis as unknown as {
@@ -83,6 +92,8 @@ afterEach(() => {
   loadDynamicTables.mockReset();
   registerComponentSchemas.mockReset();
   registerComponentSchemas.mockResolvedValue(0);
+  ensureFieldGroupCompanions.mockReset();
+  ensureFieldGroupCompanions.mockResolvedValue({ registered: 0, failures: [] });
   registerDynamicEntitySchema.mockReset();
   registerDynamicEntitySchema.mockResolvedValue(undefined);
 });
@@ -97,6 +108,30 @@ describe("reloadDynamicTables", () => {
         "dynamic_singles",
       ]);
     });
+  });
+
+  it("makes the field groups' missing translation tables only where the reload may define structure", async () => {
+    ready();
+    loadDynamicTables.mockResolvedValue(ok());
+
+    await reloadDynamicTables("[t]");
+    expect(ensureFieldGroupCompanions).toHaveBeenCalledTimes(1);
+
+    ensureFieldGroupCompanions.mockClear();
+    await reloadDynamicTables("[t]", { createMissingCompanions: false });
+    expect(ensureFieldGroupCompanions).not.toHaveBeenCalled();
+  });
+
+  it("reports a field group translation table it could not make", async () => {
+    ready();
+    loadDynamicTables.mockResolvedValue(ok());
+    ensureFieldGroupCompanions.mockResolvedValue({
+      registered: 0,
+      failures: [{ tableName: "comp_hero", error: new Error("disk full") }],
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(false);
   });
 
   it("gives a caller arriving mid-reload a run of its OWN", async () => {
