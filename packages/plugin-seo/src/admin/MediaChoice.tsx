@@ -46,7 +46,9 @@ function MediaSummary({
           <ImageIcon className="size-5" aria-hidden="true" />
         )}
       </div>
-      <div className="grid min-w-0 flex-1 gap-0.5">
+      {/* A floor on the text's width, so on a narrow screen the buttons wrap
+          under it rather than squeezing it into a column of single words. */}
+      <div className="grid min-w-40 flex-1 gap-0.5">
         {value === null ? (
           <p className="text-xs leading-normal text-muted-foreground">
             {emptyHelp}
