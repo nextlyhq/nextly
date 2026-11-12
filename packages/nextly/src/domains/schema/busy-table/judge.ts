@@ -239,7 +239,10 @@ function tableName(
   if (typeof token === "string") {
     return WORD.test(token) ? token.toLowerCase() : undefined;
   }
-  return token.kind === "name" ? token.written.toLowerCase() : undefined;
+  // A quoted name as it was written; one the tokenizer could not give back is read as no name.
+  return token?.kind === "name" && token.written !== undefined
+    ? token.written.toLowerCase()
+    : undefined;
 }
 
 /** Whether `tokens` start with `words`. */
