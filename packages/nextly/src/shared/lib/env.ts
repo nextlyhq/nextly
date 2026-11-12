@@ -2,35 +2,15 @@ import { z } from "zod";
 
 import { consoleLogger } from "../types";
 
+import { DEFAULT_DIALECT, DIALECTS, dialectFromUrl } from "./stated-dialect";
+
 // Zod v4 schema for environment variables with conditional validation
 // for production and database dialects.
-/** The dialects this package supports. One list; the enum and the type both come from it. */
-const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
-type Dialect = (typeof DIALECTS)[number];
-
-/**
- * The dialect a connection URL implies, or undefined when it implies nothing.
- *
- * These are the rules the database factory already applied; they live here now
- * so there is one answer rather than two, and so the answer is reached before
- * anything reads it.
- */
-export function dialectFromUrl(url: unknown): Dialect | undefined {
-  if (typeof url !== "string" || url === "") return undefined;
-  if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
-    return "postgresql";
-  }
-  if (url.startsWith("mysql://")) return "mysql";
-  if (
-    url.startsWith("file:") ||
-    url.endsWith(".db") ||
-    url.endsWith(".sqlite") ||
-    url.endsWith(".sqlite3")
-  ) {
-    return "sqlite";
-  }
-  return undefined;
-}
+// The dialects, and how a connection URL implies one, live in a module that
+// imports nothing, so code that runs while Next.js loads `next.config` reads
+// the environment's dialect by the same rule; re-exported where callers have
+// always found `dialectFromUrl`.
+export { dialectFromUrl };
 
 /**
  * Fill in the dialect the operator did not state.
@@ -67,7 +47,7 @@ const _envObject = z
       .default("development"),
 
     // Database
-    DB_DIALECT: z.enum(DIALECTS).default("postgresql"),
+    DB_DIALECT: z.enum(DIALECTS).default(DEFAULT_DIALECT),
     // Optional by default to allow sqlite file paths; validated conditionally below
     DATABASE_URL: z.string().optional(),
     // SQLite-specific path (alternative to DATABASE_URL for SQLite)

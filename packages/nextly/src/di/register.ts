@@ -222,6 +222,7 @@ import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
   collectProxyHandlers,
+  markProxyHandlersReady,
   registerProxyHandlers,
   type CollectedProxyHandler,
 } from "../plugins/proxy/proxy-registry";
@@ -254,6 +255,7 @@ import {
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
 import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
+import { resealPluginDigestKeys } from "../plugins/security/keyed-digest";
 import {
   clearPluginServices,
   registerPluginService,
@@ -1226,6 +1228,10 @@ async function registerServicesOnce(
         logger: resolvedLogger,
       });
 
+      // After the boot migrations, which store a new version where they run:
+      // the database's schema version against the build's, read once.
+      await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
+
       // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
       // this boot registered are published, unless the definition keeps them. After the migrations,
       // so the review states table is there to read where it exists at all.
@@ -1271,6 +1277,13 @@ async function registerServicesOnce(
   // since rotated is sealed again under the current one while the previous
   // can still open it, so a message outlives any number of rotations.
   await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
+  // And every plugin digest key stored, a removed plugin's included, for the
+  // same reason: a digest stored beside a plugin's records must match for as
+  // long as they are kept.
+  await resealPluginDigestKeys(
+    getService("metaService"),
+    pluginSettingsSecrets(env)
+  );
 
   // In production, until the install has an administrator, setup needs a
   // token: an install with none gets one here, printed once to this output.
@@ -2600,6 +2613,39 @@ async function runBootMigrations(
       bootMigrationsArgs(config.db, transformedConfig, deferredExtends, deps)
     );
   }
+}
+
+/**
+ * Layer 6.6: the database's schema version against the build's, in
+ * production only.
+ *
+ * One read of the stored version (`reportSchemaVersionAtStart`), and a
+ * warning where the database is behind the build, naming `nextly migrate`,
+ * or a note where it is ahead. Nothing is written and nothing refused: the
+ * app serves whichever way they stand. A development start reaches its schema
+ * through the Builder and the code-first sync as they change, and compares
+ * nothing here.
+ */
+async function reportStartSchemaVersion(
+  adapter: DrizzleAdapter,
+  adapterDrizzleDb: DatabaseInstance,
+  logger: Logger
+): Promise<void> {
+  if (process.env.NODE_ENV !== "production") return;
+  const [{ reportSchemaVersionAtStart }, { buildSchemaVersion }] =
+    await Promise.all([
+      import("../domains/schema/schema-version"),
+      import("../domains/schema/build-schema-version"),
+    ]);
+  await reportSchemaVersionAtStart({
+    db: adapterDrizzleDb,
+    dialect: adapter.dialect,
+    build: buildSchemaVersion(),
+    logger: {
+      warn: message => logger.warn(message),
+      info: message => logger.info(message),
+    },
+  });
 }
 
 /**
@@ -4799,6 +4845,7 @@ async function initializePlugins(
       | JobRegistry
       | JobsPassDatabase
       | WebhookFastDrainScheduler
+      | MetaService
       | null
   > = {
     collectionService: () =>
@@ -4852,6 +4899,9 @@ async function initializePlugins(
             "webhookFastDrainScheduler"
           )
         : null,
+    // This registration's `nextly_meta`, where each plugin's sealed digest
+    // key is kept.
+    metaService: () => services.container.get<MetaService>("metaService"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
@@ -4910,6 +4960,9 @@ async function initializePlugins(
    * plugin's failure to clean up must not spare the others'.
    */
   const destroyInitializedPlugins = async (): Promise<void> => {
+    // The proxy handlers registered so far belong to plugins about to be
+    // destroyed: the Proxy must not run them against a failed boot.
+    clearProxyHandlers();
     for (let i = initialized.length - 1; i >= 0; i -= 1) {
       const { plugin, context } = initialized[i];
       if (!plugin.destroy) continue;
@@ -5122,6 +5175,9 @@ async function initializePlugins(
     }
   }
 
+  // Every plugin is ready, so the Proxy may now run their handlers; until
+  // here it lets each request through as the page alone.
+  markProxyHandlersReady();
   return teardown;
 }
 
@@ -5261,6 +5317,9 @@ async function releaseServices(opts: {
     consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
+    // The proxy handlers close over the released plugins' contexts, so they
+    // go with them; the Proxy stands aside until a start registers new ones.
+    clearProxyHandlers();
     // The recording policy is a process-global registry, so it must be cleared
     // with the container — otherwise a later instance where a slug is only
     // DB/Builder-backed inherits a prior instance's stale opt-out and silently

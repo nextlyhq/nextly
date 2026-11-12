@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeLocalization } from "./config/normalize";
 import {
+  addressFromRequest,
   languageAddressFrom,
   validateLanguageAddressRule,
 } from "./language-addresses";
@@ -185,5 +186,72 @@ describe("the declared rule is checked when the site's configuration is", () => 
         undefined
       )
     ).not.toThrow();
+  });
+});
+
+describe("the language and kept path a request asks for", () => {
+  const url = (href: string) => new URL(href);
+
+  it("reads a prefixed language and keeps the path below it", () => {
+    expect(
+      addressFromRequest(undefined, three, url("https://example.com/de/about"))
+    ).toEqual({ locale: "de", path: "/about" });
+    expect(
+      addressFromRequest(undefined, three, url("https://example.com/fr"))
+    ).toEqual({ locale: "fr", path: "/" });
+  });
+
+  it("reads an unprefixed address as the default language where the site leaves it at the root", () => {
+    const rule = { by: "prefix", defaultLanguage: "unprefixed" } as const;
+    expect(
+      addressFromRequest(rule, three, url("https://example.com/about"))
+    ).toEqual({ locale: "en", path: "/about" });
+    expect(
+      addressFromRequest(rule, three, url("https://example.com/de/about"))
+    ).toEqual({ locale: "de", path: "/about" });
+    // The default language is served at the root, so `/en/about` is its own
+    // path there, not English's prefix.
+    expect(
+      addressFromRequest(rule, three, url("https://example.com/en/about"))
+    ).toEqual({ locale: "en", path: "/en/about" });
+  });
+
+  it("answers no address where every language is prefixed and none is named", () => {
+    expect(
+      addressFromRequest(undefined, three, url("https://example.com/about"))
+    ).toBeUndefined();
+  });
+
+  it("does not take a segment that only starts with a language code for one", () => {
+    const rule = { by: "prefix", defaultLanguage: "unprefixed" } as const;
+    expect(
+      addressFromRequest(rule, three, url("https://example.com/delta"))
+    ).toEqual({ locale: "en", path: "/delta" });
+  });
+
+  it("reads the language from the domain", () => {
+    const rule = {
+      by: "domain",
+      domains: {
+        en: "https://example.com",
+        de: "https://example.de",
+        fr: "https://example.fr",
+      },
+    } as const;
+    expect(
+      addressFromRequest(rule, three, url("https://example.de/about"))
+    ).toEqual({ locale: "de", path: "/about" });
+    expect(
+      addressFromRequest(rule, three, url("https://staging.example.net/about"))
+    ).toEqual({ locale: "en", path: "/about" });
+  });
+
+  it("keeps the path whole on a site with one language or none", () => {
+    expect(
+      addressFromRequest(undefined, one, url("https://example.com/about"))
+    ).toEqual({ locale: "en", path: "/about" });
+    expect(
+      addressFromRequest(undefined, undefined, url("https://example.com/about"))
+    ).toEqual({ locale: "en", path: "/about" });
   });
 });

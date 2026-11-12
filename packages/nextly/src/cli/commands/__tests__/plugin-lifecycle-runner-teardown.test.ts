@@ -43,6 +43,18 @@ const state = vi.hoisted(() => {
 });
 const { calls, onInstall, onUninstall, registerServices } = state;
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 // The schema lock is exercised against real databases in its own suites. These drive the lifecycle hook's boot
 // through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
 vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({

@@ -56,10 +56,13 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
   recordedFieldsOf,
@@ -995,11 +998,6 @@ const COLLECTIONS_METHODS: Record<
           const acknowledgedConversions = (
             body as { acknowledgedConversions?: string[] }
           ).acknowledgedConversions;
-          // A translated collection, or one turning translation on or off,
-          // keeps its push in development, which carries values across the
-          // change; the writer writes its migration and records it once the
-          // push has run.
-          const translated = wasLocalized || isLocalized;
           const change: Parameters<typeof applyCollectionSchemaChange>[0] = {
             slug: p.collectionName,
             collection,
@@ -1020,7 +1018,27 @@ const COLLECTIONS_METHODS: Record<
             pushedSummary = (await applyCollectionSchemaChange(change)).summary;
           };
           const written = await saveThroughWriter({
-            ...(translated ? { appliedBy: push } : {}),
+            appliedBy: push,
+            // Whether the push applies the change in development, the writer recording its
+            // migration once the push has run: a translated collection, or one turning
+            // translation on or off, whose push carries its values across the change; and a change
+            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
+            // the live table, where the file alone, written from the newest snapshot, does not.
+            pushWhen: async () =>
+              wasLocalized ||
+              isLocalized ||
+              reachesRelationStorage({
+                before: collection.fields ?? [],
+                after: fields as unknown as FieldDefinition[],
+                liveTable: async () =>
+                  (
+                    await introspectLiveSnapshot(
+                      adapter.getDrizzle(),
+                      dialect,
+                      [tableName]
+                    )
+                  ).tables[0],
+              }),
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -1064,25 +1082,29 @@ const COLLECTIONS_METHODS: Record<
           const newSchemaVersion = currentVersion + 1;
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_collections",
-              {
-                fields: JSON.stringify(storedFields),
-                schema_version: newSchemaVersion,
-                // Written but not run outside development: `nextly migrate`
-                // applies it on deploy.
-                ...(written !== undefined && !written.applied
-                  ? { migration_status: "pending" }
-                  : {}),
-                // i18n: persist the state this apply actually ran with (mirrors
-                // the singles apply). The DDL above already performed any
-                // false→true transition, so leaving the stored flag behind would
-                // make the settings write that follows read another false→true
-                // transition and reconcile the companion a second time.
-                localized: isLocalized,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+            // The row and the stored schema version in one transaction, so the
+            // version's count moves with the save it records (`writeRegistryRows`).
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_collections",
+                {
+                  fields: JSON.stringify(storedFields),
+                  schema_version: newSchemaVersion,
+                  // Written but not run outside development: `nextly migrate`
+                  // applies it on deploy.
+                  ...(written !== undefined && !written.applied
+                    ? { migration_status: "pending" }
+                    : {}),
+                  // i18n: persist the state this apply actually ran with (mirrors
+                  // the singles apply). The DDL above already performed any
+                  // false→true transition, so leaving the stored flag behind would
+                  // make the settings write that follows read another false→true
+                  // transition and reconcile the companion a second time.
+                  localized: isLocalized,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+              )
             );
             // Written past the registry services, so the cached rows are cleared
             // here: a read during the save may have cached the row from before it.
@@ -1833,14 +1855,26 @@ async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
     appliedBy?: () => Promise<void>;
+    /**
+     * Whether `appliedBy` applies this change rather than the file. Asked only where the
+     * answer is used, a save the writer runs in development, so a production save or one with
+     * no writer reads nothing for it. Absent, `appliedBy` applies whenever it is given.
+     */
+    pushWhen?: () => Promise<boolean>;
   }
 ): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
+  const viaPush =
+    change.appliedBy !== undefined &&
+    prepared.deps.applies &&
+    (change.pushWhen === undefined || (await change.pushWhen()));
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
-    change.appliedBy === undefined ? {} : { appliedBy: change.appliedBy }
+    viaPush && change.appliedBy !== undefined
+      ? { appliedBy: change.appliedBy }
+      : {}
   );
   return { fields: prepared.fields, applied: result.applied };
 }

@@ -20,6 +20,8 @@ import {
 
 import { canonicalJson } from "@admin/lib/canonical-json";
 
+import { USERS_SOURCE } from "../widget-as-asked";
+
 import { filterFieldNames } from "./content-filter";
 
 /** A content setting that works over a Collection setting of the widget. */
@@ -276,8 +278,11 @@ function staleCollection(
 ): StaleContentValue | undefined {
   if (typeof value !== "string" || value === "") return undefined;
   if (sameSettingValue(value, setting.defaultValue)) return undefined;
+  // Offered as the drawer offers it (`offeredSources`), so a value the setting itself offers,
+  // such as Users, is never read as one that went away.
+  const choices = offeredSources(setting, sources);
   const offered = (slug: unknown) =>
-    sources.some(source => source.collection === slug);
+    choices.some(choice => choice.value === slug);
   if (offered(value)) return undefined;
   const label = setting.label ?? setting.name;
   return {
@@ -313,6 +318,26 @@ export function sectionOf(setting: AnyWidgetSetting): SettingSection {
 }
 
 /**
+ * What a Collection setting offers to choose: the collections the server sent, then Users where
+ * the setting offers them (the server tells the setting with the offer only to a reader who may
+ * read users). The one list both the drawer's choices and the stale check read.
+ */
+function offeredSources(
+  setting: Extract<ContentSetting, { type: "collection" }>,
+  sources: readonly PublishedContentSource[]
+): { label: string; value: string }[] {
+  return [
+    ...sources.map(source => ({
+      label: source.label,
+      value: source.collection,
+    })),
+    ...(setting.users === true
+      ? [{ label: "Users", value: USERS_SOURCE }]
+      : []),
+  ];
+}
+
+/**
  * A Collection setting's choices: the collections the server sent, and its
  * own default when that names none of them. A widget may declare a default
  * that is not a collection (one meaning every collection, say); it is what
@@ -325,10 +350,7 @@ export function collectionOptions(
   setting: Extract<ContentSetting, { type: "collection" }>,
   sources: readonly PublishedContentSource[]
 ): { label: string; value: string }[] {
-  const options = sources.map(source => ({
-    label: source.label,
-    value: source.collection,
-  }));
+  const options = offeredSources(setting, sources);
   const fallback = setting.defaultValue;
   if (
     fallback === undefined ||

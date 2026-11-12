@@ -120,7 +120,7 @@ function checkRule(where: string, rule: unknown): void {
  * a misspelled type or detail fails at start rather than describing every
  * page as nothing.
  */
-function checkedTypeRules(
+export function checkedTypeRules(
   types: unknown
 ): Record<string, StructuredDataTypeRule> {
   if (types === undefined) return {};

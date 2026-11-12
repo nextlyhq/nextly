@@ -206,7 +206,7 @@ export function OverTimeChart({
                       lines={series.map((line, index) => ({
                         key: line.key,
                         name: series.length > 1 ? line.name : undefined,
-                        slot: seriesSlot(index),
+                        mark: seriesSlot(index),
                         value: drawnValueAt(line, shownAt.key, unit),
                       }))}
                       className="static"
@@ -272,7 +272,7 @@ function configOf(series: readonly OverTimeSeries[]): ChartConfig {
   return Object.fromEntries(
     series.map((line, index) => [
       seriesKey(index),
-      { label: line.name, slot: seriesSlot(index) },
+      { label: line.name, mark: seriesSlot(index) },
     ])
   );
 }
