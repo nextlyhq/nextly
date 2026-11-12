@@ -12,6 +12,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DynamicTableLoadResult } from "../../di/load-dynamic-tables";
+
 import { reloadDynamicTables } from "../reload-dynamic-tables";
 
 /**
@@ -51,7 +53,12 @@ vi.mock(
 // loader's calls are the two entity passes these tests count, and the pass is
 // observed by whether it was asked.
 const ensureFieldGroupCompanions = vi.hoisted(() =>
-  vi.fn(async () => ({ registered: 0, failures: [] }))
+  vi.fn(
+    async (): Promise<DynamicTableLoadResult> => ({
+      registered: 0,
+      failures: [],
+    })
+  )
 );
 vi.mock("../field-group-companions", () => ({ ensureFieldGroupCompanions }));
 
@@ -127,7 +134,9 @@ describe("reloadDynamicTables", () => {
     loadDynamicTables.mockResolvedValue(ok());
     ensureFieldGroupCompanions.mockResolvedValue({
       registered: 0,
-      failures: [{ tableName: "comp_hero", error: new Error("disk full") }],
+      failures: [
+        { scope: "row", tableName: "comp_hero", error: new Error("disk full") },
+      ],
     });
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 

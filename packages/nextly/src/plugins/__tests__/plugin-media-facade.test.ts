@@ -24,14 +24,14 @@ describe("ctx.services.media reads each write's service method when it is called
   });
 
   it("runs the durable delete the service holds when delete is called", async () => {
-    const service = {} as unknown as MediaService & {
-      deleteDurably?: (...args: unknown[]) => Promise<unknown>;
-    };
-    const media = mediaForPlugin(service);
-    const deleteDurably = vi.fn(async () => ({ success: true }));
+    const service = {} as { deleteDurably?: MediaService["deleteDurably"] };
+    const media = mediaForPlugin(service as MediaService);
+    const deleteDurably = vi.fn<MediaService["deleteDurably"]>(
+      async () => undefined
+    );
     service.deleteDurably = deleteDurably;
 
-    await expect(media.delete("m1")).resolves.toEqual({ success: true });
+    await media.delete("m1");
 
     expect(deleteDurably).toHaveBeenCalledTimes(1);
     expect(deleteDurably.mock.calls[0]?.[0]).toBe("m1");
