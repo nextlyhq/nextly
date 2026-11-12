@@ -73,9 +73,23 @@ import {
   drizzle,
   type BetterSQLite3Database,
 } from "drizzle-orm/better-sqlite3";
-import { getTableConfig, type SQLiteTable } from "drizzle-orm/sqlite-core";
+import {
+  getTableConfig,
+  integer,
+  sqliteTable,
+  type SQLiteTable,
+} from "drizzle-orm/sqlite-core";
 
 import { registerSqliteFunctions } from "./sql-functions";
+
+/**
+ * A date field's column as the schema generator declares it on SQLite:
+ * `integer` in timestamp mode. Its encoder writes unix seconds, which is what
+ * a `Date` bound to an undeclared key is spelled as.
+ */
+const DATE_FIELD_COLUMN = sqliteTable("nextly_date_field", {
+  at: integer("at", { mode: "timestamp" }),
+}).at;
 
 // Re-export types for convenience
 export type {
@@ -877,6 +891,13 @@ export class SqliteAdapter extends DrizzleAdapter {
   /**
    * Creates a TransactionContext for the given database connection.
    */
+  /** A `Date` on an undeclared key is spelled as a date field's column spells it. */
+  protected override undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } {
+    return DATE_FIELD_COLUMN;
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the SQLite table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1050,16 +1071,18 @@ export class SqliteAdapter extends DrizzleAdapter {
 
       // Adapter-built, as `insert` above is; `transactionUpdate` says why.
       // A column the model does not declare binds as every other value on
-      // this path does, through `sanitizeSqliteValue`. `all` only when the
-      // statement carries RETURNING: better-sqlite3 throws on `all` for a
-      // statement that returns no rows, and on `run` for one that does.
+      // this path does, through `sanitizeSqliteValue`, with a `Date` spelled
+      // first as a date field's column spells it, as the insert's is. `all`
+      // only when the statement carries RETURNING: better-sqlite3 throws on
+      // `all` for a statement that returns no rows, and on `run` for one that
+      // does.
       update: this.transactionUpdate(
         txDb,
         (statement, returnsRows) =>
           returnsRows
             ? txDb().all<Record<string, unknown>>(statement)
             : (txDb().run(statement), undefined),
-        sanitizeSqliteValue
+        value => sanitizeSqliteValue(this.encodeUndeclaredDate(value))
       ),
 
       ...this.createTransactionForwarders(txDb),
