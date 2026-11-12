@@ -9,11 +9,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { PluginMetadata } from "@admin/types/branding";
 
 import { LayoutsList } from "../LayoutsList";
 
-const { templates } = vi.hoisted(() => ({
+const { templates, plugins } = vi.hoisted(() => ({
   templates: { list: [] as EmailTemplateRecord[] },
+  // The installed plugins the admin knows; none unless a test names some.
+  plugins: { current: undefined as PluginMetadata[] | undefined },
+}));
+
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
+  useBranding: () => ({ plugins: plugins.current }),
 }));
 
 function record(
@@ -60,6 +70,7 @@ vi.mock("../../useTemplateActions", () => ({
 }));
 
 beforeEach(() => {
+  plugins.current = undefined;
   templates.list = [
     record("default", "Default layout", {
       kind: "layout",
@@ -98,6 +109,21 @@ describe("the layouts list", () => {
     expect(
       screen.getByRole("button", { name: /Used by 1 email$/ })
     ).toBeTruthy();
+  });
+
+  it("names a plugin's layout by the plugin's name in the admin", () => {
+    plugins.current = [
+      { name: "@acme/plugin-forms", appearance: { label: "Forms" } },
+    ] as PluginMetadata[];
+    templates.list = [
+      record("forms-frame", "Forms frame", {
+        kind: "layout",
+        owner: { kind: "plugin", name: "@acme/plugin-forms", installed: true },
+      }),
+    ];
+    render(<LayoutsList />);
+    expect(screen.getByText("forms-frame · Forms")).toBeTruthy();
+    expect(screen.queryByText(/@acme\/plugin-forms/)).toBeNull();
   });
 
   it("opens each layout in the workbench", () => {
