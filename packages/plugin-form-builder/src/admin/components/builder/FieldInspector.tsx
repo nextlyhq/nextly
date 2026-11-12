@@ -12,8 +12,10 @@
  * @module admin/components/builder/FieldInspector
  */
 import { FieldSettingsPanel } from "@nextlyhq/plugin-sdk/admin";
+import { toast } from "@nextlyhq/ui";
 import { type JSX, type ReactNode, useMemo, useSyncExternalStore } from "react";
 
+import { oneResponseEditProblem } from "../../../utils/one-response-field";
 import {
   useFieldBookkeeping,
   useFormBuilder,
@@ -60,7 +62,7 @@ export function useDocked(): boolean {
  * the row itself closes it.
  */
 export function useFieldPanel(closable: boolean): ReactNode {
-  const { fields, selectedFieldId, selectField } = useFormBuilder();
+  const { fields, settings, selectedFieldId, selectField } = useFormBuilder();
   // A colleague's claim makes every setting read-only, as the provider holds it.
   const { savedFieldNames, readOnly, fieldKey, editField, restored } =
     useFieldBookkeeping();
@@ -85,7 +87,17 @@ export function useFieldPanel(closable: boolean): ReactNode {
       siblings={panelFields}
       saved={savedFieldNames.has(selected.name)}
       readOnly={readOnly}
-      onChange={next => editField(selected, fromPanelField(next), fields)}
+      onChange={next => {
+        const edited = fromPanelField(next);
+        // The Email field one response per email compares stays required,
+        // shown and an Email field: such an edit is refused, and why said.
+        const refused = oneResponseEditProblem(selected, edited, settings);
+        if (refused !== undefined) {
+          toast.error(refused);
+          return;
+        }
+        editField(selected, edited, fields);
+      }}
       onClose={closable ? () => selectField(null) : undefined}
     />
   );

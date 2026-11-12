@@ -50,6 +50,7 @@ import {
   responseKeyOf,
   touchesResponseKey,
 } from "./handlers/one-response";
+import { refuseOneResponseFieldProblem } from "./handlers/one-response-field-check";
 import {
   oneResponseOptions,
   REBUILD_KEYS_JOB,
@@ -696,6 +697,13 @@ export function formBuilder(
           ).data ?? [],
         readSettings: normalizeFormSettings,
         warn: (message, context) => nextly.logger.warn?.(message, context),
+      });
+
+      // A form saved to compare one response per email has an Email field
+      // it can compare, however it is saved.
+      nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
+        refuseOneResponseFieldProblem(context);
+        return (context as { data?: unknown }).data;
       });
 
       // One response per person after a form changes how it tells people
