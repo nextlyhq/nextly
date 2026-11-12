@@ -22,8 +22,14 @@ const INPUTS: StartInputs = {
   collections: [
     {
       slug: "posts",
-      servable: true,
-      schema: "h1",
+      claims: {
+        declared: ["blog"],
+        template: { published: true, address: null },
+        templatePaginates: false,
+        servable: true,
+        lifecycle: true,
+        locales: ["en"],
+      },
       rows: { total: 3, newest: "2026-01-01T00:00:00.000Z" },
     },
   ],
@@ -32,19 +38,37 @@ const INPUTS: StartInputs = {
   claims: 12,
 };
 
-/** The passes over `inputs`, with the mark store holding `stored`. */
+/**
+ * The passes over `inputs`, with the mark store holding `stored` (or failing
+ * to read, for an error), recording each step in `ran`.
+ */
 function deps(
-  stored: string | null,
-  over: Partial<AddressStartupDeps> = {}
+  stored: string | null | Error,
+  over: Partial<AddressStartupDeps> & {
+    readonly clear?: () => Promise<void>;
+  } = {}
 ): AddressStartupDeps & {
   readonly write: ReturnType<typeof vi.fn>;
   readonly ran: string[];
 } {
   const ran: string[] = [];
-  const write = vi.fn(async () => undefined);
+  const write = vi.fn(async () => {
+    ran.push("write");
+  });
   return {
     inputs: async () => INPUTS,
-    mark: { read: async () => stored, write },
+    mark: {
+      read: async () => {
+        if (stored instanceof Error) throw stored;
+        return stored;
+      },
+      clear:
+        over.clear ??
+        (async () => {
+          ran.push("clear");
+        }),
+      write,
+    },
     pages: async () => {
       ran.push("pages");
       return true;
@@ -71,14 +95,13 @@ describe("runAddressStartup", () => {
     const run = deps(startMark(INPUTS));
     await runAddressStartup(run);
     expect(run.ran).toEqual(["skipped"]);
-    expect(run.write).not.toHaveBeenCalled();
   });
 
   it("runs every pass on a site with no mark yet, then records one", async () => {
     const run = deps(null);
     await runAddressStartup(run);
-    expect(run.ran).toEqual(["pages", "sweep", "entries"]);
-    expect(run.write).toHaveBeenCalledWith(startMark(INPUTS), null);
+    expect(run.ran).toEqual(["pages", "sweep", "entries", "write"]);
+    expect(run.write).toHaveBeenCalledWith(startMark(INPUTS));
   });
 
   it("runs every pass when anything changed, and records the mark of the inputs as they are after", async () => {
@@ -88,14 +111,32 @@ describe("runAddressStartup", () => {
       inputs: async () => (reads++ === 0 ? INPUTS : after),
     });
     await runAddressStartup(run);
-    expect(run.ran).toEqual(["pages", "sweep", "entries"]);
-    expect(run.write).toHaveBeenCalledWith(startMark(after), "stale");
+    // The old mark goes before any pass can change a claim.
+    expect(run.ran).toEqual(["clear", "pages", "sweep", "entries", "write"]);
+    expect(run.write).toHaveBeenCalledWith(startMark(after));
+  });
+
+  it("removes a mark it cannot read before running the passes", async () => {
+    const run = deps(new Error("down"));
+    await runAddressStartup(run);
+    expect(run.ran).toEqual(["clear", "pages", "sweep", "entries", "write"]);
+  });
+
+  it("runs no pass when the old mark cannot be removed", async () => {
+    const run = deps("stale", {
+      clear: async () => {
+        throw new Error("down");
+      },
+    });
+    await runAddressStartup(run);
+    expect(run.ran).toEqual([]);
   });
 
   it("leaves the mark as it was when the pages' pass did not settle every page, and does not run the entries'", async () => {
     const run = deps("stale", { pages: async () => false });
     await runAddressStartup(run);
-    expect(run.ran).toEqual(["sweep"]);
+    // The old mark is gone, so the next start runs the passes again.
+    expect(run.ran).toEqual(["clear", "sweep"]);
     expect(run.write).not.toHaveBeenCalled();
   });
 
@@ -114,7 +155,7 @@ describe("runAddressStartup", () => {
       },
     });
     await runAddressStartup(run);
-    expect(run.ran).toEqual(["pages", "sweep", "entries"]);
+    expect(run.ran).toEqual(["clear", "pages", "sweep", "entries"]);
     expect(run.write).not.toHaveBeenCalled();
   });
 
@@ -135,14 +176,25 @@ describe("startMark", () => {
       { ...INPUTS, pagePath: "/p/{slug}" },
       { ...INPUTS, declared: [["posts", "/news"]] },
       { ...INPUTS, stored: [["articles", "/articles"]] },
-      {
+      ...(
+        [
+          { declared: null },
+          { template: { published: false, address: null } },
+          { template: { published: true, address: ["posts"] } },
+          { templatePaginates: true },
+          { servable: false },
+          { lifecycle: false },
+          { locales: ["en", "fr"] },
+        ] as const
+      ).map(change => ({
         ...INPUTS,
-        collections: [{ ...INPUTS.collections[0]!, servable: false }],
-      },
-      {
-        ...INPUTS,
-        collections: [{ ...INPUTS.collections[0]!, schema: "h2" }],
-      },
+        collections: [
+          {
+            ...INPUTS.collections[0]!,
+            claims: { ...INPUTS.collections[0]!.claims, ...change },
+          },
+        ],
+      })),
       {
         ...INPUTS,
         collections: [

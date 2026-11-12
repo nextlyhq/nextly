@@ -30,6 +30,7 @@ import {
   definePlugin,
   type PluginCollectionTransaction,
   type PluginContext,
+  type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
@@ -37,6 +38,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
+import type { CollectionConfig } from "nextly/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lockHolder, type Claims } from "../address-claims/claim-store";
@@ -77,6 +79,10 @@ type Options = NonNullable<Parameters<typeof pageBuilder>[0]>;
 interface Boot {
   readonly options?: Options;
   readonly locales?: readonly string[];
+  /** The `posts` collection as this boot declares it. */
+  readonly posts?: CollectionConfig;
+  /** Plugins booted beside the page builder. */
+  readonly plugins?: readonly PluginDefinition[];
 }
 
 /**
@@ -135,8 +141,9 @@ describe.each(getConfiguredTestDialects())(
             templates: { addresses: { [POSTS]: "/blog" } },
             ...with_.options,
           }),
+          ...(with_.plugins ?? []),
         ],
-        collections: [postsCollection()],
+        collections: [with_.posts ?? postsCollection()],
         ...(with_.locales === undefined
           ? {}
           : {
@@ -276,6 +283,64 @@ describe.each(getConfiguredTestDialects())(
         });
       }
       expect((await held(t)).filter(row => row.includes("pages:"))).toEqual([]);
+      t = await start(on);
+      expect(await held(t)).toEqual(before);
+    }, 300_000);
+
+    it("claims a collection's drafts once it stops having a Draft/Published lifecycle", async () => {
+      const on = await siteWith(1);
+      let t = await start(on);
+      const draft = idOf(
+        await t.nextly.create({
+          collection: POSTS,
+          data: { title: "Post draft", slug: "draft", status: "draft" },
+          overrideAccess: true,
+        })
+      );
+      // Settled once with the draft in place, so the mark covers it.
+      t = await start(on);
+      expect(await held(t)).not.toContain(
+        `address /blog/draft ${POSTS}:${draft}`
+      );
+      // The same fields and entries; only the lifecycle goes, so every entry
+      // is live and the draft is served.
+      t = await start(on, { posts: { ...postsCollection(), status: false } });
+      expect(await held(t)).toContain(`address /blog/draft ${POSTS}:${draft}`);
+    }, 300_000);
+
+    it("repairs claims a pass left half moved once the site goes back to how it was", async () => {
+      const on = await siteWith(2);
+      let t = await start(on);
+      const before = await held(t);
+      // A pass that moves the pages to `/p/...` and fails part way: one
+      // page's new claim is refused, so that page keeps `/page-2` while the
+      // other has moved.
+      const failing = definePlugin({
+        name: "@t/claim-fails",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init(ctx) {
+          ctx.hooks.onInTransaction(ADDRESS_CLAIMS_SLUG, async write => {
+            const data = write.data as { path?: unknown } | null;
+            if (write.operation === "create" && data?.path === "/p/page-2") {
+              throw new Error("this claim fails");
+            }
+          });
+        },
+      });
+      t = await start(on, {
+        options: { pagePreviewPath: "/p/{slug}" },
+        plugins: [failing],
+      });
+      const paths = (await claimRows(t))
+        .filter(
+          row => row.kind === "address" && row.holderCollection === "pages"
+        )
+        .map(row => String(row.path))
+        .sort();
+      expect(paths).toEqual(["/p/page-1", "/page-2"]);
+      // Back to the page path the store was last settled under: the passes
+      // run again rather than trust that mark, and every page returns.
       t = await start(on);
       expect(await held(t)).toEqual(before);
     }, 300_000);

@@ -54,6 +54,7 @@ import {
 import { entryDesignReads } from "./address-claims/design-reads";
 import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
+  collectionClaimInputs,
   registerEntryAddressClaims,
   releaseUndeclared,
   settleEntryClaimsAtStart,
@@ -3400,7 +3401,9 @@ export const pageBuilder = (
       // Where the start-up passes record that the store is settled.
       const startMarks = startMarkStore(ctx.db, ctx.dialect);
       // Each collection given a template address, as the start's mark reads
-      // it: read through the pool, before any pass's transaction opens.
+      // it: read through the pool, before any pass's transaction opens. Its
+      // entries' count and newest save are read here, the rest as the pass
+      // reads it (`collectionClaimInputs`).
       const addressedCollection = async (
         collection: string
       ): Promise<AddressedCollection> => {
@@ -3422,11 +3425,9 @@ export const pageBuilder = (
         }
         return {
           slug: collection,
-          servable:
-            templateAddresses.has(collection) ||
-            (await claimsDeps.mayHaveTemplate(collection)),
-          schema:
-            typeof record?.schemaHash === "string" ? record.schemaHash : null,
+          // Asked of the claims' own deps, as the start-up pass asks them,
+          // so whatever decides what its entries hold moves the mark.
+          claims: await collectionClaimInputs(claimsDeps, collection),
           rows,
         };
       };

@@ -20,9 +20,11 @@
  *   (`pagePreviewPath`): every page's address follows from both, and no save
  *   happens when either changes;
  * - every template address, declared in code and stored on a template, and
- *   for each collection given one, whether it may be served (its schema can
- *   change without a save of an entry), the registry's hash of its schema,
- *   and how many entries it has and when the newest was saved;
+ *   for each collection given one, everything about the collection that
+ *   decides what its entries hold, as the start-up pass itself reads it
+ *   (`collectionClaimInputs`: where it is served, its template, whether it
+ *   may be served and has a Draft/Published lifecycle), and how many entries
+ *   it has and when the newest was saved;
  * - how many pages are published, and when the newest of them was saved;
  * - how many templates and own designs there are, and when the newest was
  *   saved: a template decides where its entries are served and whether they
@@ -33,6 +35,12 @@
  * Saves keep claims current in their own transaction, so the counts and
  * newest saves are there for what bypasses them (an import, a restore). A
  * change none of these sees, the next save of the document settles.
+ *
+ * A start that is going to run the passes first removes the mark, before
+ * any pass can change a claim, and a new one is written only once every pass
+ * settled everything. So passes that stop part way leave no mark, and the
+ * next start runs them again whatever its inputs, even ones that match the
+ * mark from before the change the passes were part way through.
  *
  * @module address-claims/start-pass
  */
@@ -46,6 +54,7 @@ import { siteOptions } from "../schema/tables";
 import { readSiteOption } from "../site-option-read";
 
 import { storedKey } from "./claim-store";
+import type { CollectionClaimInputs } from "./entry-claims-hook";
 
 /**
  * The number of how a pass derives claims. Raise it with any change to what
@@ -67,10 +76,8 @@ export interface RowsState {
 /** A collection given a template address, as far as the mark reads it. */
 export interface AddressedCollection {
   readonly slug: string;
-  /** Whether its entries may be served at an address at all. */
-  readonly servable: boolean;
-  /** The registry's hash of its schema, or null where it has none. */
-  readonly schema: string | null;
+  /** What decides its entries' claims, as the start-up pass reads it. */
+  readonly claims: CollectionClaimInputs;
   /** Its entries, or null where it cannot be read (removed since). */
   readonly rows: RowsState | null;
 }
@@ -109,8 +116,10 @@ export function startMark(inputs: StartInputs): string {
 /** Where the mark is kept: one row of the plugin's options table. */
 export interface StartMarkStore {
   read(): Promise<string | null>;
-  /** Write `value`, over `previous` (what `read` answered). */
-  write(value: string, previous: string | null): Promise<void>;
+  /** Remove the mark, so no start skips the passes until one is written. */
+  clear(): Promise<void>;
+  /** Write `value`, over whatever mark is there. */
+  write(value: string): Promise<void>;
 }
 
 /** Which database, so a lost race to insert the row is recognised. */
@@ -118,16 +127,20 @@ type Dialect = Parameters<typeof isUniqueViolation>[0];
 
 /** The mark over the plugin's own database surface. */
 export function startMarkStore(
-  db: Pick<PluginDatabase, "select" | "insert" | "update" | "table">,
+  db: Pick<PluginDatabase, "select" | "insert" | "update" | "delete" | "table">,
   dialect: Dialect
 ): StartMarkStore {
   const named = () => eq(db.table(siteOptions).name, START_PASS_OPTION);
-  const update = async (value: string) =>
-    (await db.update(siteOptions, { value }).where(named())) === 1;
+  const update = async (value: string) => {
+    await db.update(siteOptions, { value }).where(named());
+  };
   return {
     read: () => readSiteOption(db, START_PASS_OPTION),
-    write: async (value, previous) => {
-      if (previous !== null && (await update(value))) return;
+    clear: async () => {
+      await db.delete(siteOptions).where(named());
+    },
+    // Inserted, since the passes removed any mark before they ran.
+    write: async value => {
       try {
         await db.insert(siteOptions, { name: START_PASS_OPTION, value });
       } catch (error) {
@@ -161,26 +174,45 @@ export interface AddressStartupDeps {
  * Run the start-up passes, pages first, unless the mark the last complete
  * run left matches what the claims follow from now. Never throws.
  *
- * The mark is written only after every pass settled everything, taken over
- * the inputs as they are then, so a save made during the passes (which keeps
- * its own claims) leaves the next start skipping rather than running again.
- * A failure anywhere leaves the mark as it was, and the next start runs the
- * passes again.
+ * A mark there is removed before the passes run, so passes that stop part
+ * way, having changed some claims, leave none behind for a later start to
+ * match. A new one is written only after every pass settled everything,
+ * taken over the inputs as they are then, so a save made during the passes
+ * (which keeps its own claims) leaves the next start skipping rather than
+ * running again. When the mark cannot be removed the passes do not run: the
+ * next start, finding the inputs still differ from it, tries again.
  */
 export async function runAddressStartup(
   deps: AddressStartupDeps
 ): Promise<void> {
+  // Undefined when it cannot be read: there may be one to remove.
   const previous = await deps.mark.read().catch((error: unknown) => {
     deps.warn("Could not read when the address store was last settled.", {
       error: String(error),
     });
-    return null;
+    return undefined;
   });
   // No mark: a site starting for the first time since it was installed or
-  // upgraded, whose store the passes must settle whatever the inputs say.
-  if (previous !== null && (await markNow(deps)) === previous) {
+  // upgraded, or one whose last passes stopped part way, whose store the
+  // passes must settle whatever the inputs say.
+  if (
+    previous !== null &&
+    previous !== undefined &&
+    (await markNow(deps)) === previous
+  ) {
     deps.skipped();
     return;
+  }
+  if (previous !== null) {
+    try {
+      await deps.mark.clear();
+    } catch (error) {
+      deps.warn(
+        "Could not clear when the address store was last settled, so its start-up passes wait for the next start.",
+        { error: String(error) }
+      );
+      return;
+    }
   }
   try {
     const complete = await deps.pages();
@@ -191,7 +223,7 @@ export async function runAddressStartup(
     const settled = complete && (await deps.entries());
     if (!(complete && swept && settled) || !deps.current()) return;
     const now = await markNow(deps);
-    if (now !== null && now !== previous) await deps.mark.write(now, previous);
+    if (now !== null) await deps.mark.write(now);
   } catch (error) {
     deps.warn("Could not record that the address store is settled.", {
       error: String(error),
