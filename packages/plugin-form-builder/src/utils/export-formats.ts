@@ -11,6 +11,8 @@
 
 import type { SubmissionDocument, FormDocument, AnyFormField } from "../types";
 
+import { isConsentAnswer } from "./consent";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -174,6 +176,14 @@ export function formatExportValue(
         return safeString(value);
 
       case "hidden":
+        return safeString(value);
+
+      case "consent":
+        // The choice with the text the visitor was shown, which is what the
+        // answer records; the form's text today may differ.
+        if (isConsentAnswer(value)) {
+          return `${value.agreed ? "Agreed" : "Not agreed"}: "${value.text}"`;
+        }
         return safeString(value);
 
       default:

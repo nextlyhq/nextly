@@ -53,13 +53,6 @@ vi.mock("@admin/components/shared/plugin-page-registrar", () => ({
   PluginPageRegistrar: () => null,
 }));
 
-// Stubbed like the plugin page registrar beside it: both only write a route
-// registry from the branding answer this suite mocks.
-vi.mock(
-  "@admin/components/features/widgets/preview/WidgetPreviewsRegistrar",
-  () => ({ WidgetPreviewsRegistrar: () => null })
-);
-
 vi.mock("@admin/components/features/schema-builder/RestartOverlay", () => ({
   RestartOverlay: () => null,
 }));
@@ -69,9 +62,12 @@ vi.mock("@admin/components/guards/PublicRoute", () => ({
 }));
 
 vi.mock("@admin/components/guards/PrivateRoute", () => ({
-  PrivateRoute: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
-  ),
+  // A confirmed session: the guard hands its frame `true`.
+  PrivateRoute: ({
+    children,
+  }: {
+    children: (confirmed: boolean) => React.ReactNode;
+  }) => <>{children(true)}</>,
 }));
 
 const guardProps = vi.fn();

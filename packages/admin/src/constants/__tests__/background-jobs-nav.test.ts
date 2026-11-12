@@ -118,30 +118,43 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
      * property that failed when the list was maintained by hand and Background
      * Jobs was added to one side only.
      *
-     * User Management is excluded because those destinations answer to their
-     * own capabilities, which the rail consults separately.
+     * People is excluded because those destinations answer to their own
+     * capabilities, which the rail consults separately. A destination several
+     * grants reach (Email) must reveal it for EACH of them.
      */
-    const gated = SETTINGS_NAV.filter(group => group.id !== "users")
-      .flatMap(group => group.items)
-      .filter(item => item.gate.kind === "permission");
+    const gated = SETTINGS_NAV.filter(group => group.id !== "people").flatMap(
+      group => group.items
+    );
+    const checked: string[] = [];
     for (const item of gated) {
-      const permission =
-        item.gate.kind === "permission" ? item.gate.permission : "";
-      expect(
-        buildCapabilities([permission], false, undefined).canViewSettings,
-        `${item.id} (${permission})`
-      ).toBe(true);
+      const permissions =
+        item.gate.kind === "permission"
+          ? [item.gate.permission]
+          : item.gate.kind === "anyOf"
+            ? item.gate.permissions
+            : [];
+      for (const permission of permissions) {
+        checked.push(permission);
+        expect(
+          buildCapabilities([permission], false, undefined).canViewSettings,
+          `${item.id} (${permission})`
+        ).toBe(true);
+      }
     }
-    // The premise: this walked real destinations, not an empty list. Two are
-    // gated by a permission (General and Background Jobs).
-    expect(gated.length).toBeGreaterThanOrEqual(2);
+    // The premise: this walked real destinations, not an empty list. General
+    // and Background Jobs name a permission, and Email names several.
+    expect(checked.length).toBeGreaterThanOrEqual(4);
   });
 
   it("keeps revealing it for the grants it always revealed for", () => {
     // Adding to this list must not narrow it. One representative grant per
-    // group it already covered. (Email left the panel for its own rail entry,
-    // so its grants no longer reveal it.)
-    for (const grant of ["read-settings", "read-api-keys"]) {
+    // group it already covered, Email's among them now that it lives in the
+    // panel again.
+    for (const grant of [
+      "read-settings",
+      "read-api-keys",
+      "read-email-templates",
+    ]) {
       expect(
         buildCapabilities([grant], false, undefined).canViewSettings,
         grant

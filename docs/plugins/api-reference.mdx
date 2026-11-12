@@ -45,6 +45,11 @@ interface PluginDefinition {
 }
 ```
 
+`name` is unique among the app's plugins, and `app` is reserved, in any letter case: the site's
+own permissions are stored under the owner `app` and a plugin's under its name, so startup and
+every CLI command refuse a plugin named `app` (`PLUGIN_RESOLUTION_ERROR`, `logContext.reason`
+`plugin-name-reserved`). Choose another name.
+
 ## `PluginContributions`
 
 ```ts
@@ -55,7 +60,7 @@ interface PluginContributions {
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[]; // { action, resource, label?, description?, group? }
   fieldTypes?: PluginFieldType[]; // custom field types — see below
-  events?: Array<{ name: string }>; // each must begin with your slug and a dot, or boot fails
+  events?: Array<{ name: string; durable?: boolean }>; // each must begin with your slug and a dot, or boot fails; `durable: true` lets you emitDurable it
   routes?: PluginRoute[]; // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore?, formatTimestamps?, mount? }
   auth?: PluginAuthContributions; // hooks, challenges, ui — see Auth extensibility
   settings?: ZodObject; // gives ctx.settings
@@ -283,6 +288,53 @@ await ctx.db.transaction(async tx => {
 Before this release `emit` delivered at once wherever it was called, even inside a
 transaction that later rolled back. A listener now hears an event emitted inside a
 transaction only after that transaction commits.
+
+### Durable events (`@experimental`)
+
+An `emit` reaches the listeners running in this process when it is delivered, and
+no further: a handler that throws, or a server that stops, loses it. A **durable**
+event is written to the database with the work that emits it, and handed to every
+subscriber until each has it.
+
+```ts
+// Declared in contributes.events with `durable: true`.
+await ctx.db.transaction(async tx => {
+  await tx.insert(orders).values(order);
+  await ctx.events.emitDurable(
+    "acme-billing.charged",
+    { orderId: order.id },
+    { tx }
+  );
+});
+
+// Any plugin, in its init: a subscriber named within the plugin.
+ctx.events.onDurable("acme-billing.charged", "award-points", async event => {
+  // May run again for one event: de-duplicate on event.id.
+  await awardPointsOnce(event.id, event.payload.orderId);
+});
+```
+
+- `emitDurable(name, payload, { tx }?)` records the event by the same rule as
+  `emit`: in the transaction `tx` names, else in the one your code is running in,
+  else in one of its own. It commits and rolls back with that work, a savepoint
+  included, and resolves with the event's `id`. Only names your plugin declares
+  `durable: true` are accepted; the payload is a JSON object of at most 64 KB.
+- `onDurable(name, subscriber, handler)` subscribes under a name unique within
+  your plugin: 1 to 64 lower-case letters, digits, dots, dashes or underscores,
+  starting with a letter or digit.
+  A delivery is owed to that name, so it reaches the same handler after a restart,
+  however subscribers were added or reordered. Each subscriber registered when an
+  event is dispatched gets one delivery. A plugin reloading in development is
+  still owed what is dispatched before it registers again. In a rolling
+  deployment, an instance still running the previous release dispatches with
+  that release's subscribers, so a subscriber you add receives the events
+  dispatched once every instance runs it.
+- Deliveries run on the `events:dispatch` job, and promptly once the emitting work
+  commits inside a request. A handler that throws is tried again with backoff,
+  across restarts, up to 10 times; a delivery whose subscriber is no longer
+  registered is held for it. `nextly events report` lists the deliveries that need
+  an operator, and `nextly events abandon` gives them up.
+- Finished events are removed 30 days after their last delivery settles.
 
 A hook that learns something true about the state a write leaves behind, rather
 than something that failed, tells the person whose write it is with
@@ -651,9 +703,14 @@ page they serve, with no change to the site's routes. `resolve` is told:
 | `code`    | The title, description and social values the route's own `buildMetadata` or `metadata` set. A route never supplies visibility or the canonical. |
 | `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                                   |
 
-It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social` and
-`languages`, each optional. The route turns the answer into Next.js `Metadata`. Whatever else the
-route's own metadata set, such as an Open Graph `type`, is kept.
+It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social`,
+`languages` and `structuredData`, each optional. The route turns the answer into Next.js
+`Metadata`. Whatever else the route's own metadata set, such as an Open Graph `type`, is kept.
+
+`structuredData` is the page's JSON-LD: a list of nodes, written without `@context`, holding plain
+JSON only. The route hands it to the page's render as `context.structuredData`, one schema.org
+graph written so that no value can end its script element. An answer whose structured data is not
+JSON is refused whole, as any answer of the wrong shape is.
 
 The answer is cached with the page: it expires when the page's document changes, and when any tag
 `tags` names is expired, so a change to the plugin's settings reaches every page without a
@@ -844,6 +901,12 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
+A contribution to another plugin's place names that plugin in `dependsOn`, or in
+`optionalDependsOn` where the contributor works without it: while the owner is absent or
+disabled, a contribution to one of its places is left out and the app starts. A place the
+running owner does not declare is still refused (`admin-place-unknown`), as is one of a plugin
+the contributor names in neither.
+
 Every core place draws what is sent to it: settings, a user's detail page, the
 account page, the entry form, the login page, both edit pages, the dashboard
 and the entry list. A plugin draws its own
@@ -852,6 +915,16 @@ place on one of its pages with `TargetSlot` and `PlaceTabs` from
 
 ```tsx
 import { PlaceTabs, TargetSlot } from "@nextlyhq/plugin-sdk/admin";
+
+// The plugin's own invoice view.
+import { Invoice } from "./Invoice";
+
+// The place's type, as declared above, so its id and context are checked.
+declare module "@nextlyhq/plugin-sdk" {
+  interface AdminPlaces {
+    "acme-billing.invoice": { context: { invoiceId: string } };
+  }
+}
 
 export function InvoicePage({ invoiceId }: { invoiceId: string }) {
   const context = { invoiceId };
@@ -1060,6 +1133,28 @@ not saved, and what it writes through `control` is stored by the bar's Save
 and Publish with everything else. The open tab is kept in the address as
 `?tab=<id>`, so a reload or a shared link opens it again.
 
+A tab on an edit page may take over fields of the document with `fields`
+(`@experimental`), a list of top-level field names. The page then draws those
+fields in the tab instead of among its own content, and draws the tab only on a
+document that has every one of them. Their values stay in the document's form,
+so Save and Publish store them, and any surface that reads the document reads
+them as before. While a past version of the document is on screen, the page
+draws its own content alone and no contributed tab, since a tab reads the live
+document. A contribution to a Single's edit page may name the Singles it
+is for with `singles`, as one on a collection's page names its `collections`:
+
+```ts
+{
+  id: "acme-seo.tab",
+  kind: "tab",
+  place: "single.edit",
+  singles: ["homepage"], // every Single's page when absent
+  label: "SEO",
+  component: "@acme/seo/admin#SeoTab",
+  fields: ["seo"], // drawn in this tab, not among the page's fields
+}
+```
+
 ```tsx
 import { useEffect } from "react";
 import { useWatch } from "react-hook-form";
@@ -1154,6 +1249,13 @@ A bulk request is refused whole when any row fails. The rows are read once per
 collection, as the caller. Hiding an action in the admin is not its access
 control; this check is.
 
+A staff route your person's-menu item runs (`header.place: "menu"` with an
+`action.run`) is bound to that item too, under the id
+`<plugin-slug>.user-menu`, and its request names no rows:
+`{ "action": "<plugin-slug>.user-menu", "rows": [] }`. No rows are accepted for
+that id alone, and only on the route the item names; a list action on the same
+route still needs its rows.
+
 Boot fails, naming the plugin and the contribution, on an id outside the
 plugin's slug (`admin-contribution-outside-namespace`), one declared twice
 (`admin-contribution-duplicate`), a place that does not exist
@@ -1166,7 +1268,8 @@ there (`contribution-replace-unknown`), replaced twice
 dashboard's `widgets` is (`contribution-replace-not-allowed`), and one that
 is malformed
 (`admin-contribution-invalid`): a key its kind does not take, no label or
-component, an action that names none of the plugin's own routes, or a route
+component, `fields` that are not top-level field names or are named away from an
+edit page, `singles` away from a Single's page, an action that names none of the plugin's own routes, or a route
 that is public, a signed-in person's, or answers `GET`, a permission
 on the login page, or a rule where there is no entry to judge.
 

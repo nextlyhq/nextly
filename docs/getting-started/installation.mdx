@@ -314,15 +314,26 @@ export default function AdminPage() {
 ```
 
 ```tsx title="src/app/admin/[[...params]]/layout.tsx"
-import { adminMetadata, getBrandingCss } from "nextly/config";
+import {
+  ADMIN_BRANDING_ELEMENT_ID,
+  adminBrandingJson,
+  adminMetadataFor,
+  getBrandingCss,
+} from "nextly/config";
 
 import config from "../../../../nextly.config";
 
 const brandingCss = getBrandingCss(config.admin?.branding);
+const brandingJson = adminBrandingJson(config.admin?.branding);
 
-// Keeps the admin out of search results: `noindex, nofollow` in the head of
-// the first HTML the server sends.
-export const metadata = adminMetadata;
+// Keeps the admin out of search results (`noindex, nofollow`), and puts the
+// configured favicon's link in the head of the first HTML the server sends.
+export const metadata = adminMetadataFor(config.admin?.branding);
+
+// `/admin` is built ahead: the same page for every visitor, served at once.
+export function generateStaticParams() {
+  return [{ params: [] }];
+}
 
 export default function AdminLayout({
   children,
@@ -334,11 +345,20 @@ export default function AdminLayout({
       {brandingCss && (
         <style dangerouslySetInnerHTML={{ __html: brandingCss }} />
       )}
+      {brandingJson && (
+        <script
+          type="application/json"
+          id={ADMIN_BRANDING_ELEMENT_ID}
+          dangerouslySetInnerHTML={{ __html: brandingJson }}
+        />
+      )}
       {children}
     </>
   );
 }
 ```
+
+The admin page is prebuilt. It holds nothing about whoever opens it, and fills in from the admin's own requests once it loads, so a CDN or the browser may keep it, and it's served even while the server is still starting Nextly. The logo, name and favicon set in `admin.branding` are written into it, so they show from the first paint. Branding set only in General settings arrives with the admin's first requests.
 
 Create the admin API catch-all route:
 
@@ -396,11 +416,14 @@ export async function register(): Promise<void> {
   // Nextly warns at start when it is off.
   await createRegister(config, {
     cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+    // The build's newest migration, which `withNextly` sets: a production
+    // start warns when the database is behind it.
+    buildSchemaVersion: process.env.NEXTLY_BUILD_SCHEMA_VERSION,
   })();
 }
 ```
 
-Next.js skips `register()` during `next build`, so this opens no database connection at build time. If the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
+Next.js skips `register()` during `next build`, so this opens no database connection at build time. `buildSchemaVersion` is what lets a production start compare the database's schema version with the build's (see [the schema version a production start checks](/docs/guides/production-migrations#the-schema-version-a-production-start-checks)); Next.js inlines it into this file, which is how it reaches Nextly on every host, Vercel and `output: "standalone"` included. If the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
 
 ### 5. Set Up Environment Variables
 
@@ -510,7 +533,7 @@ cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
 ```
 
 - **`cacheComponents` and `partialPrefetching`** turn the features on. `create-next-app` 16.4 sets both by default.
-- **Nextly's cache handlers** keep cached pages fresh after a write. Next.js's default cache serves a page's previous version once after a write expires it; Nextly's expire it at once.
+- **Nextly's cache handlers** make a request sent after a write's response read the new version. Next.js's default cache judges a stored page by when it was stored, not by when its render read the content: a render that began before a write and stored its page a few milliseconds after it is served as fresh, with the previous content, until the page's lifetime runs out. It also serves a page's previous version once after a write expires it. Nextly's handlers judge each entry by when its render began, and expire it at once. Without them, see [When the new version shows](/docs/guides/isr-caching#when-the-new-version-shows).
 - **Cached reads** go through a `"use cache"` function of the app's own, which a scaffolded blog keeps in `src/nextly/cached-read.ts`. How to add one to another app: [Cache Components](/docs/guides/isr-caching#cache-components) in the caching guide.
 
 **An app with either option off** still runs, but it is not a state Nextly supports. Nextly warns once when it starts with `cacheComponents` off, from the value `instrumentation.ts` passes to `createRegister`, which is why that hook passes `process.env.__NEXT_CACHE_COMPONENTS`; a hook that passes nothing gets a warning that Nextly can't tell. `partialPrefetching` reaches no code while the app runs, so Nextly cannot see it there: only an app whose `next.config` is wrapped in `withNextly()` from `nextly/next` is warned about it, when Next.js loads the config. Apps made by an earlier Nextly release have `cacheComponents: false`: run `create-nextly-app` in the app again, or set the lines above by hand.

@@ -49,6 +49,7 @@ import {
   withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { copyLiveness } from "./generate-down";
 import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
 import {
   buildLeavingFieldsArchiveStatements,
@@ -143,8 +144,14 @@ export async function archiveFieldsLeavingTranslation(args: {
   tableName: string;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
-  /** The language whose value becomes the shared one, and is therefore not archived. */
+  /** The language whose value becomes the shared one where it is live, and is not archived. */
   defaultLocale: string;
+  /**
+   * The site's languages in its order. With each row's own publish state, it decides the language
+   * an entry's shared value is taken from when the default language's is not what readers saw
+   * (`copyLiveness`); omitted, the default language's, else the first by code.
+   */
+  languageOrder?: readonly string[];
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
@@ -277,6 +284,7 @@ export async function archiveFieldsLeavingTranslation(args: {
       tableName: args.tableName,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
+      liveness: copyLiveness(args.languageOrder, live.has("_status")),
       // A field whose values an earlier apply already moved has none left here to ask.
       leaving: new Set(
         [...leaving].filter(
@@ -310,6 +318,8 @@ export async function archiveFieldsLeavingTranslation(args: {
       dialect,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
+      languageOrder: args.languageOrder,
+      companionHasStatus: live.has("_status"),
       // A moved field's archive rows were written by the apply that moved it.
       oldFields: oldFields.filter(f => !moved.has(f.name)),
       newFields: args.newFields,
@@ -599,6 +609,47 @@ function renamedSource(
   return live.has(from) ? renamed : undefined;
 }
 
+/** A retry of a change that made fields translated, as this preflight judges it. */
+export interface JoinRetries {
+  /** The joining fields whose values an earlier apply already moved (`movedJoiningFields`). */
+  moved: ReadonlySet<string>;
+  /** Those of `moved` whose storage the change narrows (`narrowedJoiningFields`). */
+  narrowed: ReadonlySet<string>;
+}
+
+/**
+ * The fields `newFields` makes translated whose values an earlier apply of that change already
+ * moved into the translations table, and which of them the change narrows, read from the database
+ * and judged as this preflight judges them. A writer that generates a migration before the push
+ * runs this preflight hands them to the generator, so the file it writes is judged for a retry as
+ * the push is. With no joining field the database is not read.
+ */
+export async function joinRetries(args: {
+  adapter: DrizzleAdapter;
+  /** The entity's main table; the companion is `<tableName>_locales`. */
+  tableName: string;
+  builtBy: ColumnOrigin;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+}): Promise<JoinRetries> {
+  const joining = fieldsJoiningTranslation(args.oldFields, args.newFields);
+  if (joining.length === 0) return { moved: new Set(), narrowed: new Set() };
+  const dialect = args.adapter.getCapabilities().dialect;
+  const live = new Set(
+    (await liveCompanionColumns(args.adapter, args.tableName)).map(c => c.name)
+  );
+  const moved = await movedJoiningFields(args.adapter, args.tableName, live, {
+    joining,
+    newFields: args.newFields,
+    builtBy: args.builtBy,
+    dialect,
+  });
+  return {
+    moved,
+    narrowed: new Set(narrowedJoiningFields([...moved], args, dialect)),
+  };
+}
+
 /**
  * The joining fields whose values an earlier apply of the same change already moved, the mirror of
  * `movedLeavingFields`: the field's column is among the companion's `live` columns, AND the main
@@ -762,6 +813,8 @@ export async function refuseLeavingSettingsTheValuesCannotTake(args: {
   tableName: string;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /** See `archiveFieldsLeavingTranslation`'s `languageOrder`. */
+  languageOrder?: readonly string[];
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   renamed?: FieldRename | null;
@@ -788,6 +841,7 @@ export async function refuseLeavingSettingsTheValuesCannotTake(args: {
     tableName: args.tableName,
     builtBy: args.builtBy,
     defaultLocale: args.defaultLocale,
+    liveness: copyLiveness(args.languageOrder, live.has("_status")),
     leaving,
     oldFields,
     newFields: args.newFields,

@@ -13,7 +13,7 @@ A plugin that keeps a record signs up as a participant. On every save that may c
 
 1. works out every address the saved document holds now, one per language it is published in;
 2. asks every participant, inside the save's transaction, whether another page holds any of them;
-3. refuses the save if one does, with a `DUPLICATE` error naming the address, the language and both pages;
+3. refuses the save if one does, with a `DUPLICATE` error naming the address and the language (the page holding it goes to the server log only, since the person saving may not be allowed to read it);
 4. otherwise tells every participant what the document holds now.
 
 A draft holds nothing, and neither does a working draft of a published page until it is published. A site with no participant does no address work at all.
@@ -113,6 +113,7 @@ export const withCatchUp = definePlugin({
 ```
 
 - `ctx.publicAddresses.fingerprint()` changes whenever an address template, the language list or the fallback settings do. Store it, and catch up when it differs.
-- `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents oldest first, each with every address it holds now. Pass the returned `next` as `after` for the following page.
+- `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents in id order, each with every address it holds now and when it was made (`createdAt`), so a caller settling claims oldest first sorts by that. Pass the returned `next` as `after` for the following page.
+- `ctx.publicAddresses.defaultLanguage()` is the language an address is held in where a read names none: the site's default language as it is now, one chosen in Settings included, or `"en"` on a site with no languages. Look up a page read without a language under it, rather than under the `localization` block in code.
 
 Where two documents clash after a deploy, the one already holding the address keeps it.

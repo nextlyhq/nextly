@@ -231,6 +231,7 @@ interface GrantsWriteAhead {
 const globalForGrantsExpiry = globalThis as unknown as {
   __nextly_grants_expiry_retry?: GrantsExpiryRetry;
   __nextly_grants_write_ahead?: AsyncLocalStorage<GrantsWriteAhead>;
+  __nextly_grants_expiry_required?: AsyncLocalStorage<true>;
 };
 
 function writeAheadScope(): AsyncLocalStorage<GrantsWriteAhead> {
@@ -368,7 +369,8 @@ function grantsExpiryRetry(): GrantsExpiryRetry {
  * The job is the one a gate queued ahead of the write (`aheadOfGrantsChange`), or, for a change
  * made outside every gate, one queued here, after the commit. A row queued ahead that is no
  * longer waiting when the expiry fails (a jobs run took it, or it was withdrawn) is replaced by a
- * fresh one, so a pending row always holds what is still owed.
+ * fresh one, so a pending row always holds what is still owed. Inside
+ * `withGrantsExpiryRequired` a failure is thrown instead.
  */
 export async function expireContentAfterGrantsChange(): Promise<void> {
   // Loaded here rather than at the top, for the reason `flushContentChange` gives: the permission
@@ -391,7 +393,30 @@ export async function expireContentAfterGrantsChange(): Promise<void> {
     if (job !== undefined) await withdrawGrantsExpiries([job], chains);
     return;
   }
+  // Inside a write whose transaction records the expiry with the change, a failure fails the
+  // write, rolling the change back with it, rather than leaving the expiry owed.
+  if (grantsExpiryRequiredScope().getStore() === true) throw failure.error;
   await oweAfterFailure(failure.error, job, wroteAhead, chains);
+}
+
+function grantsExpiryRequiredScope(): AsyncLocalStorage<true> {
+  globalForGrantsExpiry.__nextly_grants_expiry_required ??=
+    new AsyncLocalStorage();
+  return globalForGrantsExpiry.__nextly_grants_expiry_required;
+}
+
+/**
+ * Runs `write`, changes to grants made inside one transaction that also records their content
+ * expiry (a first `nextly migrate` run's one commit, which queues no job ahead of the change),
+ * with an expiry that cannot be recorded thrown from `expireContentAfterGrantsChange` rather than
+ * left owed: there the transaction is the only thing that could hold it, so the change rolls back
+ * with it and the write fails, to be made again whole. Everywhere else a failed expiry is owed to
+ * a queued job and this process's retry, as before.
+ */
+export function withGrantsExpiryRequired<T>(
+  write: () => Promise<T>
+): Promise<T> {
+  return grantsExpiryRequiredScope().run(true, write);
 }
 
 /**

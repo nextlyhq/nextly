@@ -28,7 +28,7 @@ export function RoleBasicInfo({
           <FieldShell
             label={
               <>
-                Name <span className="text-destructive-500">*</span>
+                Name <span className="text-danger-text">*</span>
               </>
             }
             error={fieldState.error?.message}

@@ -5,7 +5,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { toDbError } from "../../../database/errors";
-import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 // PR 4 migration: switched DB error mapping from the legacy
 // mapDbErrorToServiceError helper to NextlyError.fromDatabaseError. The
 // public method return shape (MetadataServiceResult) is preserved because
@@ -34,6 +33,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
   checkSaveHistory,
   prepareCollectionSave,
@@ -51,6 +51,7 @@ import {
 } from "../../schema/builder-save/update-save";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import type { BrowserRenameResolution } from "../../schema/pipeline/prompt-dispatcher/browser";
+import { writeRegistryRows } from "../../schema/schema-version";
 import {
   applyCollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
@@ -696,12 +697,16 @@ export class CollectionMetadataService extends BaseService {
         // A migration the writer ran carries the registry row's upsert, as
         // every deploy needs it, so the row stands already: it takes the rest
         // of the metadata. Otherwise the row is written here.
-        collection = write.rowWritten
-          ? await this.collectionService.updateCollectionMetadata(
-              artifacts.metadata.slug,
-              artifacts.metadata
-            )
-          : await this.collectionService.registerCollection(artifacts.metadata);
+        // The row and the stored schema version in one transaction, so the
+        // version's count moves with the save it records (`writeRegistryRows`).
+        collection = await writeRegistryRows(this.adapter, () =>
+          write.rowWritten
+            ? this.collectionService.updateCollectionMetadata(
+                artifacts.metadata.slug,
+                artifacts.metadata
+              )
+            : this.collectionService.registerCollection(artifacts.metadata)
+        );
       } catch (dbError: unknown) {
         return errorToMetadataResult(
           dbError,
@@ -762,6 +767,11 @@ export class CollectionMetadataService extends BaseService {
      * `total` this returns counts only rows the caller may see.
      */
     slugAllowlist?: string[];
+    /**
+     * Leave out these slugs, as a query condition the same way: the plugins'
+     * collections, on the list of the site's own.
+     */
+    slugDenylist?: string[];
   }): Promise<MetadataServiceResult> {
     try {
       // Include schema by default since the UI needs field counts
@@ -1213,9 +1223,13 @@ export class CollectionMetadataService extends BaseService {
       // cause chain.
       let updated;
       try {
-        updated = await this.collectionService.updateCollectionMetadata(
-          params.collectionName,
-          updateArtifacts.metadataUpdates
+        // The row and the stored schema version in one transaction
+        // (`writeRegistryRows`).
+        updated = await writeRegistryRows(this.adapter, () =>
+          this.collectionService.updateCollectionMetadata(
+            params.collectionName,
+            updateArtifacts.metadataUpdates
+          )
         );
       } catch (dbError: unknown) {
         return errorToMetadataResult(

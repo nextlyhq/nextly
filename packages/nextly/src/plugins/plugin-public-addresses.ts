@@ -13,10 +13,8 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import {
-  addressFingerprint,
-  heldPage,
-} from "../domains/public-addresses/held-listing";
+import { whenServicesRegistered } from "../di/service-access";
+import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
   firstHolder,
@@ -27,14 +25,30 @@ import {
   type HeldAddressUpdate,
   type ParticipantRunner,
 } from "../domains/public-addresses/participants";
-import type { PublicAddressType } from "../domains/public-addresses/public-address";
+import {
+  siteTypes,
+  type PublicAddressType,
+} from "../domains/public-addresses/public-address";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
 import {
   transactionOf,
+  withWriteTransactionToken,
   type PluginCollectionTransaction,
 } from "./service-opts";
+
+/**
+ * @experimental What a participant is handed to reach the save's transaction:
+ * `db`, the plugin's tables bound to it, and `transaction`, the token
+ * `ctx.services.collections`' in-transaction methods take, so a record kept
+ * in the plugin's own collection is written with the save. Both refuse once
+ * the call has settled.
+ */
+export interface ParticipantTransaction {
+  db: PluginTransaction;
+  transaction: PluginCollectionTransaction;
+}
 
 /**
  * @experimental A plugin's record of who holds each public address, as core
@@ -52,7 +66,7 @@ export interface PublicAddressParticipant {
     address: HeldAddress,
     asker: AddressHolder,
     batch: readonly HeldAddressUpdate[],
-    tx: { db: PluginTransaction }
+    tx: ParticipantTransaction
   ): Promise<AddressHolder | null>;
   /**
    * Replace what each holder in `batch` holds with its `holds`, keeping the
@@ -61,7 +75,7 @@ export interface PublicAddressParticipant {
    */
   record(
     batch: readonly HeldAddressUpdate[],
-    tx: { db: PluginTransaction }
+    tx: ParticipantTransaction
   ): Promise<void>;
 }
 
@@ -89,8 +103,10 @@ export interface PluginPublicAddresses {
     transaction: PluginCollectionTransaction
   ): Promise<{ refused: RefusedAddressUpdate[] }>;
   /**
-   * One page of a type's documents, oldest first, each with every address it
-   * holds now; `next` is the cursor of the following page.
+   * One page of a type's documents, in id order, each with every address it
+   * holds now and when it was made; `next` is the cursor of the following
+   * page. Paged by id, so documents deleted or made meanwhile never move one
+   * not yet read behind the cursor.
    *
    * Waits for the boot to finish, so call it from work `init` or `onReady`
    * starts without awaiting: awaited inside them, which the boot waits for,
@@ -100,12 +116,24 @@ export interface PluginPublicAddresses {
     type: PublicAddressType;
     after?: string;
     limit?: number;
-  }): Promise<{ items: HeldAddressUpdate[]; next?: string }>;
+  }): Promise<{ items: HeldDocument[]; next?: string }>;
   /**
    * Changes when any address template, the language list or the fallback
    * settings do.
    */
   fingerprint(): Promise<string>;
+  /**
+   * The site's own content types, declared in code or made in the Schema
+   * Builder, never a plugin's own or the system's: what a catch-up walks
+   * with `held`. Waits for the boot to finish, as `held` does.
+   */
+  types(): Promise<PublicAddressType[]>;
+  /**
+   * The language an address is held in where a read names none: the site's
+   * default language as it is now, one chosen in Settings included, or
+   * `"en"` on a site with no languages.
+   */
+  defaultLanguage(): Promise<string>;
 }
 
 /** What the plugin context hands this surface. */
@@ -119,6 +147,21 @@ export interface PublicAddressesDeps {
   onTeardown: (undo: () => void) => void;
 }
 
+/** Run `work` with this plugin's handles on the save's transaction `tx`. */
+function withParticipantTransaction<T>(
+  deps: PublicAddressesDeps,
+  tx: TransactionContext,
+  work: (handles: ParticipantTransaction) => Promise<T>
+): Promise<T> {
+  return deps.bindTo(tx, db =>
+    withWriteTransactionToken(
+      tx,
+      transaction => work({ db, transaction }),
+      "ctx.publicAddresses"
+    )
+  );
+}
+
 /** Build `ctx.publicAddresses` for one plugin. */
 export function pluginPublicAddresses(
   deps: PublicAddressesDeps
@@ -130,11 +173,13 @@ export function pluginPublicAddresses(
     if (known) return known;
     const runner: ParticipantRunner = {
       holderOf: (address, asker, batch, tx) =>
-        deps.bindTo(tx, db =>
-          participant.holderOf(address, asker, batch, { db })
+        withParticipantTransaction(deps, tx, handles =>
+          participant.holderOf(address, asker, batch, handles)
         ),
       record: (batch, tx) =>
-        deps.bindTo(tx, db => participant.record(batch, { db })),
+        withParticipantTransaction(deps, tx, handles =>
+          participant.record(batch, handles)
+        ),
     };
     runners.set(participant, runner);
     return runner;
@@ -165,9 +210,30 @@ export function pluginPublicAddresses(
         })
       );
     },
-    held: args => heldPage(args),
-    fingerprint: () => addressFingerprint(),
+    held: async args => (await heldListing()).heldPage(args),
+    fingerprint: async () => (await heldListing()).addressFingerprint(),
+    types: async () => {
+      await whenServicesRegistered();
+      return (await siteTypes()).map(({ type }) => type);
+    },
+    defaultLanguage: async () =>
+      (await heldAddresses()).defaultAddressLanguage(),
   };
+}
+
+/**
+ * The listing of every document's held addresses, loaded when a participant
+ * first reads it rather than imported at the top: this module is part of
+ * every plugin's context, which most of the package imports, and the listing
+ * reaches the boot entry, which loads nearly all of it.
+ */
+function heldListing() {
+  return import("../domains/public-addresses/held-listing");
+}
+
+/** The addresses each document holds, loaded when first asked, as above. */
+function heldAddresses() {
+  return import("../domains/public-addresses/held-addresses");
 }
 
 /**

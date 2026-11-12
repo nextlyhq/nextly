@@ -15,6 +15,7 @@
 
 import {
   DataTableView,
+  navigateTo,
   type NextlyColumn,
   type RowAction,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -38,6 +39,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Columns3, Download } from "lucide-react";
 import {
   type JSX,
@@ -50,28 +52,20 @@ import {
 
 import type { FormField } from "../../../types";
 import { formatExportValue } from "../../../utils/export-formats";
+import { readPermissions } from "../../use-admin-permissions";
+import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
 
-import { SubmissionSheet } from "./SubmissionSheet";
+import {
+  listWhere,
+  LIST_SORT,
+  type StatusTab,
+  submissionPageAddress,
+} from "./submission-list-scope";
+import { formIdOf, type SubmissionRow, whenText } from "./submission-row";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-export interface SubmissionRow {
-  id: string;
-  form: string | { id: string; name?: string };
-  data: Record<string, unknown>;
-  status: string;
-  spamReason?: string | null;
-  notes?: string | null;
-  ipAddress?: string | null;
-  userAgent?: string | null;
-  submittedAt?: string | null;
-  editedAt?: string | null;
-  editedBy?: string | null;
-  /** The submission's version as the list read it; see `submissionPatch`. */
-  _rev?: string;
-}
 
 /**
  * What a change to a submission sends: the change, with the version its row
@@ -91,7 +85,7 @@ export function submissionPatch(
 const SUBMISSION_CHANGED_SINCE =
   "Someone changed this submission since the list loaded. The list now shows their change; make yours again.";
 
-export interface FormOption {
+interface FormOption {
   id: string;
   name: string;
   fields: FormField[];
@@ -99,9 +93,12 @@ export interface FormOption {
 
 interface SubmissionsViewProps {
   collectionSlug?: string;
+  /**
+   * Show only this form's submissions, with no choice of form: the list as a
+   * form's own Submissions tab draws it.
+   */
+  formId?: string;
 }
-
-type StatusTab = "all" | "new" | "read" | "archived" | "spam";
 
 const STATUS_TABS: Array<{ value: StatusTab; label: string }> = [
   { value: "all", label: "All" },
@@ -120,18 +117,54 @@ const VISIBLE_FIELD_COLUMNS = 4;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formIdOf(row: SubmissionRow): string {
-  return typeof row.form === "object" ? row.form.id : row.form;
+/** A form entry as the entries API answers it. */
+type FormEntry = { id: string; name?: string; fields?: FormField[] };
+
+/** A form as the list uses it: its id, name and fields. */
+function formOptionOf(item: FormEntry): FormOption {
+  return {
+    id: item.id,
+    name: item.name ?? item.id,
+    fields: Array.isArray(item.fields) ? item.fields : [],
+  };
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+/**
+ * Every form, page by page: a capped single fetch would silently drop forms
+ * from the filter and the per-field column lookup. The entries API reads the
+ * page size from `limit` and answers its default page when that is absent, so
+ * the size goes there: under any other name the first page comes back short
+ * and the loop reads it as the last.
+ */
+async function readAllForms(formsSlug: string): Promise<FormOption[]> {
+  const allForms: FormOption[] = [];
+  const formsPageSize = 200;
+  for (let formsPage = 1; ; formsPage += 1) {
+    const formsRes = await fetch(
+      `/admin/api/collections/${formsSlug}/entries?limit=${formsPageSize}&page=${formsPage}`,
+      { credentials: "include" }
+    );
+    if (!formsRes.ok) break;
+    const json = (await formsRes.json()) as { items?: FormEntry[] };
+    const items = json.items ?? [];
+    allForms.push(...items.map(formOptionOf));
+    if (items.length < formsPageSize) break;
+  }
+  return allForms;
+}
+
+/** One form, for the list fixed to it; none if it cannot be read. */
+async function readOneForm(
+  formsSlug: string,
+  formId: string
+): Promise<FormOption[]> {
+  const response = await fetch(
+    `/admin/api/collections/${formsSlug}/entries/${encodeURIComponent(formId)}`,
+    { credentials: "include" }
+  );
+  if (!response.ok) return [];
+  const json = (await response.json()) as FormEntry & { item?: FormEntry };
+  return [formOptionOf(json.item ?? json)];
 }
 
 /** Status → badge styling. Tokens only; spam reads as a warning state. */
@@ -168,21 +201,24 @@ function summarizeData(data: Record<string, unknown>): string {
 
 export function SubmissionsView({
   collectionSlug,
+  formId,
 }: SubmissionsViewProps): JSX.Element {
   const [slugs, setSlugs] = useState<{ forms: string; submissions: string }>();
   const [forms, setForms] = useState<FormOption[]>([]);
-  const [selectedFormId, setSelectedFormId] = useState<string>(() => {
+  const [chosenFormId, setChosenFormId] = useState<string>(() => {
     // Deep links (?form=<id>) preselect the form filter.
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("form") ?? "";
   });
+  // A form's own tab names its form; the list of all submissions offers the
+  // choice.
+  const selectedFormId = formId ?? chosenFormId;
   const [statusTab, setStatusTab] = useState<StatusTab>("all");
   const [rows, setRows] = useState<SubmissionRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
   const [canUpdate, setCanUpdate] = useState(false);
   const [canDelete, setCanDelete] = useState(false);
 
@@ -210,50 +246,18 @@ export function SubmissionsView({
         if (cancelled) return;
         setSlugs(resolved);
 
-        // Page through ALL forms — a capped single fetch would silently
-        // drop forms from the filter and the per-field column lookup. The
-        // entries API reads the page size from `limit` and answers its
-        // default page when that is absent, so the size goes there: under
-        // any other name the first page comes back short and the loop below
-        // reads it as the last.
-        const allForms: FormOption[] = [];
-        const formsPageSize = 200;
-        for (let formsPage = 1; ; formsPage += 1) {
-          const formsRes = await fetch(
-            `/admin/api/collections/${resolved.forms}/entries?limit=${formsPageSize}&page=${formsPage}`,
-            { credentials: "include" }
-          );
-          if (!formsRes.ok) break;
-          const json = (await formsRes.json()) as {
-            items?: Array<{ id: string; name?: string; fields?: FormField[] }>;
-          };
-          const items = json.items ?? [];
-          allForms.push(
-            ...items.map(item => ({
-              id: item.id,
-              name: item.name ?? item.id,
-              fields: Array.isArray(item.fields) ? item.fields : [],
-            }))
-          );
-          if (items.length < formsPageSize) break;
-        }
-        if (!cancelled) setForms(allForms);
+        // One form's tab needs that form alone; the list of all
+        // submissions needs every form, for its filter and its columns.
+        const found =
+          formId === undefined
+            ? await readAllForms(resolved.forms)
+            : await readOneForm(resolved.forms, formId);
+        if (!cancelled) setForms(found);
 
-        const permsRes = await fetch("/admin/api/me/permissions", {
-          credentials: "include",
-        });
-        if (permsRes.ok) {
-          const perms = (await permsRes.json()) as {
-            permissions?: string[];
-            isSuperAdmin?: boolean;
-          };
-          const has = (slug: string) =>
-            Boolean(perms.isSuperAdmin) ||
-            (perms.permissions ?? []).includes(slug);
-          if (!cancelled) {
-            setCanUpdate(has(`update-${resolved.submissions}`));
-            setCanDelete(has(`delete-${resolved.submissions}`));
-          }
+        const has = await readPermissions().catch(() => undefined);
+        if (has !== undefined && !cancelled) {
+          setCanUpdate(has(`update-${resolved.submissions}`));
+          setCanDelete(has(`delete-${resolved.submissions}`));
         }
       } catch {
         // Bootstrap failures degrade to the default slugs — without them
@@ -269,7 +273,7 @@ export function SubmissionsView({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [formId]);
 
   // --- the list fetch ------------------------------------------------------
   // Monotonic request sequence: rapid filter changes overlap fetches, and
@@ -282,20 +286,19 @@ export function SubmissionsView({
     setLoading(true);
     setError(null);
     try {
-      const where: Record<string, unknown> = {};
-      if (selectedFormId) where.form = { equals: selectedFormId };
-      // "All" means every human status; spam only shows when asked for —
-      // the same default the export route applies.
-      if (statusTab === "all") where.status = { not_equals: "spam" };
-      else where.status = { equals: statusTab };
+      // The list's filter, built where a submission's page builds it, so
+      // its newer and older move through this same list.
+      const where = listWhere({
+        ...(selectedFormId ? { form: selectedFormId } : {}),
+        status: statusTab,
+      });
 
       // `limit`, the entries API's page size: the pager counts pages of
       // PAGE_SIZE, so a page the server cut to its default would skip rows.
       const params = new URLSearchParams({
         page: String(page),
         limit: String(PAGE_SIZE),
-        sortBy: "submittedAt",
-        sortOrder: "desc",
+        sort: LIST_SORT,
         where: JSON.stringify(where),
       });
       const res = await fetch(
@@ -372,7 +375,7 @@ export function SubmissionsView({
         {
           name: "submittedAt",
           header: "Submitted",
-          accessor: row => formatDate(row.submittedAt),
+          accessor: row => whenText(row.submittedAt),
         },
       ];
     }
@@ -396,12 +399,15 @@ export function SubmissionsView({
       {
         name: "submittedAt",
         header: "Submitted",
-        accessor: row => formatDate(row.submittedAt),
+        accessor: row => whenText(row.submittedAt),
       },
     ];
   }, [selectedForm, formNameById, hiddenFieldColumns]);
 
   // --- actions ---------------------------------------------------------------
+  // The form's submission count, beside the list in the form editor's bar and
+  // tab, is read again after any change here.
+  const queryClient = useQueryClient();
   // The rows as last read, for the version a change sends.
   const rowsNow = useRef(rows);
   rowsNow.current = rows;
@@ -434,8 +440,10 @@ export function SubmissionsView({
         throw new Error(`Update failed (${res.status})`);
       }
       await fetchRows();
+      // A status changed: the form's count leaves spam out, so it moves too.
+      void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
     },
-    [submissionsSlug, fetchRows]
+    [submissionsSlug, fetchRows, queryClient]
   );
 
   const deleteSubmission = useCallback(
@@ -445,10 +453,10 @@ export function SubmissionsView({
         { method: "DELETE", credentials: "include" }
       );
       if (!res.ok) throw new Error(`Delete failed (${res.status})`);
-      setOpenId(null);
       await fetchRows();
+      void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
     },
-    [submissionsSlug, fetchRows]
+    [submissionsSlug, fetchRows, queryClient]
   );
 
   const rowActions = useCallback(
@@ -497,47 +505,41 @@ export function SubmissionsView({
   );
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  // The open record is tracked by ID: after a save refetch the row may
-  // move or leave the filtered view entirely — index tracking would silently
-  // show a different submission, while a missing ID just closes the drawer.
-  const openIndex = openId ? rows.findIndex(row => row.id === openId) : -1;
-  const openRow = openIndex === -1 ? null : rows[openIndex];
-
   return (
     <div className="space-y-4">
       {/* Toolbar: form filter, status tabs, export */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Select
-            value={selectedFormId || "__all"}
-            onValueChange={value => {
-              setSelectedFormId(value === "__all" ? "" : value);
-              setPage(1);
-              setOpenId(null);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Filter by form"
-              className="w-full sm:w-56 bg-transparent border-input dark:bg-muted/50"
+          {formId === undefined ? (
+            <Select
+              value={selectedFormId || "__all"}
+              onValueChange={value => {
+                setChosenFormId(value === "__all" ? "" : value);
+                setPage(1);
+              }}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all">All forms</SelectItem>
-              {forms.map(form => (
-                <SelectItem key={form.id} value={form.id}>
-                  {form.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                aria-label="Filter by form"
+                className="w-full sm:w-56 bg-transparent border-input dark:bg-muted/50"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">All forms</SelectItem>
+                {forms.map(form => (
+                  <SelectItem key={form.id} value={form.id}>
+                    {form.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
 
           <Tabs
             value={statusTab}
             onValueChange={value => {
               setStatusTab(value as StatusTab);
               setPage(1);
-              setOpenId(null);
             }}
           >
             {/* No corner override: square is the primitive's guarantee, not
@@ -642,7 +644,16 @@ export function SubmissionsView({
             : "No submissions yet."
         }
         ariaLabel="Submissions"
-        onRowClick={row => setOpenId(row.id)}
+        // A submission opens as a page of its own, carrying this list's
+        // filter so its newer and older follow it.
+        onRowClick={row =>
+          navigateTo(
+            submissionPageAddress(submissionsSlug, row.id, {
+              ...(selectedFormId ? { form: selectedFormId } : {}),
+              status: statusTab,
+            })
+          )
+        }
         rowActions={rowActions}
       />
 
@@ -681,33 +692,6 @@ export function SubmissionsView({
           </Button>
         </div>
       </div>
-
-      {/* Detail drawer with prev/next over the current page */}
-      {openRow && (
-        <SubmissionSheet
-          submission={openRow}
-          form={
-            forms.find(form => form.id === formIdOf(openRow)) ?? {
-              id: formIdOf(openRow),
-              name: formNameById.get(formIdOf(openRow)) ?? "Form",
-              fields: [],
-            }
-          }
-          canUpdate={canUpdate}
-          onClose={() => setOpenId(null)}
-          onPrev={
-            openIndex > 0 ? () => setOpenId(rows[openIndex - 1].id) : undefined
-          }
-          onNext={
-            openIndex < rows.length - 1
-              ? () => setOpenId(rows[openIndex + 1].id)
-              : undefined
-          }
-          onSave={async changes => {
-            await patchSubmission(openRow.id, changes);
-          }}
-        />
-      )}
     </div>
   );
 }

@@ -154,6 +154,131 @@ export interface CodeFirstCollectionConfig {
   source?: CollectionSource;
 }
 
+/**
+ * The columns a collection's declaration gives a row it registers, before
+ * where the row came from (source, lock, config path), which each caller
+ * adds. One projection for the start's sync and `nextly migrate`'s writer.
+ */
+function declaredRegistration(
+  config: CodeFirstCollectionConfig,
+  schemaHash: string,
+  tableName: string
+): Omit<DynamicCollectionInsert, "source" | "locked" | "configPath"> {
+  return {
+    slug: config.slug,
+    labels: config.labels,
+    tableName,
+    description: config.description,
+    fields: config.fields,
+    timestamps: config.timestamps ?? true,
+    admin: config.admin,
+    // Forward Draft/Published flag so code-first collections that
+    // opt in actually write the column on first sync.
+    status: config.status === true,
+    // Forward the resolved versioning config on first sync.
+    versions: config.versions,
+    // Forward the cache-revalidation config on first sync.
+    revalidate: config.revalidate,
+    // Forward the webhook recording policy on first sync.
+    webhooks: config.webhooks,
+    localized: config.localized === true,
+    schemaHash,
+  };
+}
+
+/**
+ * The columns a collection's declaration rewrites on a schema change: its
+ * fields, the switches that change its tables, its table and its metadata.
+ * Where the row came from is the caller's to add, or to leave.
+ */
+function declaredRow(
+  config: CodeFirstCollectionConfig,
+  schemaHash: string,
+  tableName: string
+): Partial<DynamicCollectionInsert> {
+  return {
+    ...declaredMetadata(config),
+    fields: config.fields,
+    // Resolved, as a registration resolves it: a config that drops
+    // `timestamps: false` returns the collection to the default, which an
+    // undefined value would leave unwritten.
+    timestamps: config.timestamps ?? true,
+    schemaHash,
+    status: config.status === true,
+    versions: config.versions,
+    // Send explicit null (not undefined) when the config removed
+    // `revalidate`, so updateCollection actually clears the column
+    // instead of leaving the stale config persisted.
+    revalidate: config.revalidate ?? null,
+    // Send explicit null (not undefined) when the config removed
+    // `webhooks`, so updateCollection actually clears the column
+    // instead of leaving a stale opt-out suppressing the outbox.
+    webhooks: config.webhooks ?? null,
+    localized: config.localized === true,
+    tableName,
+  };
+}
+
+/** The columns a metadata-only change rewrites: labels, description and admin options. */
+function declaredMetadata(
+  config: CodeFirstCollectionConfig
+): Partial<DynamicCollectionInsert> {
+  return {
+    labels: config.labels,
+    // Resolved, because a collection may spell its description under `admin` — and
+    // compared in `codeFirstSyncStep` for the same reason: without it, editing or removing
+    // that spelling leaves the row stale until some unrelated schema change happens to
+    // trigger a write.
+    description: resolveDescription(config) ?? null,
+    // Explicit null when the config no longer declares an admin block, so
+    // `updateCollection` clears the column instead of reading `undefined` as "leave
+    // unchanged" and stranding a sidebar position the config has dropped. Same
+    // reasoning as `revalidate` and `webhooks` in `declaredRow`.
+    admin: config.admin ?? null,
+  };
+}
+
+/** How `nextly migrate`'s writer hands a recorded entity to its registry service. */
+export interface RecordedWriteOptions<TRecord> {
+  /**
+   * The row as read before this write, `null` for none, so a caller that
+   * reads the whole registry once asks for no row of its own. Absent, the
+   * service reads it.
+   */
+  existing?: TRecord | null;
+  /**
+   * A Builder record leaves what it does not say: a description or admin
+   * block it omits keeps the stored one, as the Builder's own registry upsert
+   * does, rather than clearing it.
+   */
+  leavesUnsaid?: boolean;
+}
+
+/**
+ * `config` with the description and admin block it does not say taken from
+ * `existing`, so they are neither compared nor written (`leavesUnsaid`). One
+ * rule for every kind's recorded writer.
+ */
+export function withUnsaidKept<
+  TConfig extends { description?: string; admin?: unknown },
+>(
+  config: TConfig,
+  existing: { description?: string | null; admin?: unknown } | null
+): TConfig {
+  if (existing === null) return config;
+  return {
+    ...config,
+    ...(config.description === undefined &&
+    existing.description !== null &&
+    existing.description !== undefined
+      ? { description: existing.description }
+      : {}),
+    ...(config.admin === undefined && existing.admin
+      ? { admin: existing.admin }
+      : {}),
+  };
+}
+
 /** Result of syncing code-first collections. */
 export interface SyncResult {
   created: string[];
@@ -428,7 +553,12 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   async registerCollection(
-    data: DynamicCollectionInsert
+    data: DynamicCollectionInsert,
+    /**
+     * `seedPermissions: false` leaves the collection's permissions to a seeding
+     * the caller knows follows, as a start's does (`syncCodeFirstCollections`).
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<DynamicCollectionRecord> {
     this.logger.debug("Registering collection", { slug: data.slug });
 
@@ -502,7 +632,11 @@ export class CollectionRegistryService extends BaseRegistryService<
 
       const deserializedRecord = this.deserializeRecord(result);
 
-      if (this.permissionSeedService && data.slug) {
+      if (
+        this.permissionSeedService &&
+        data.slug &&
+        options.seedPermissions !== false
+      ) {
         try {
           const permResult =
             await this.permissionSeedService.seedCollectionPermissions(
@@ -818,6 +952,26 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   /**
+   * The record the registry holds for a slug, from one read of every record
+   * rather than a read per slug, so a sync costs the same number of reads for
+   * five collections as for fifty. Where that read fails (a registry a
+   * migration has not created yet), each slug is read on its own, as before, so
+   * each failure lands on the collection it belongs to.
+   */
+  private async recordsBySlug(): Promise<
+    (slug: string) => Promise<DynamicCollectionRecord | null>
+  > {
+    try {
+      const records = new Map(
+        (await this.getAllCollections()).map(record => [record.slug, record])
+      );
+      return slug => Promise.resolve(records.get(slug) ?? null);
+    } catch {
+      return slug => this.getCollectionBySlug(slug);
+    }
+  }
+
+  /**
    * What a code-first sync does with `config`, given the record the registry holds for its slug
    * (null for none): register it (`create`), write a schema change through (`update`: fields, the
    * status switch, a declared default or the physical table changed), write only its metadata
@@ -849,8 +1003,13 @@ export class CollectionRegistryService extends BaseRegistryService<
       // their own comparison or a changed default never reaches the write.
       fieldDefaultsSignature(config.fields) !==
         fieldDefaultsSignature(existing.fields) ||
-      // A collection's physical table, which a Single has no equivalent of.
-      desiredTableName !== existing.tableName
+      // A collection's physical table: a changed `dbName` moves it.
+      desiredTableName !== existing.tableName ||
+      // The timestamp columns, which the schema hash omits: turning them on
+      // or off changes the table, so the row must follow. The stored flag
+      // may read back as 0/1, so it is compared as a boolean.
+      (config.timestamps ?? true) !==
+        (existing.timestamps == null ? true : Boolean(existing.timestamps))
     ) {
       return decided("update");
     }
@@ -891,12 +1050,74 @@ export class CollectionRegistryService extends BaseRegistryService<
     return planned;
   }
 
+  /**
+   * Brings the registry row of a collection the registry source records to
+   * that record, as `nextly migrate` does after its migrations apply, and
+   * writes nothing where the row already matches. The decision is the
+   * code-first sync's (`codeFirstSyncStep`) and the columns are the ones it
+   * writes (`declaredRow`), so migrate and a start agree on what matching
+   * means.
+   *
+   * Unlike the sync it changes only what the declaration says: never where
+   * the row came from (its source, lock or config path), never a physical
+   * table (the migrations moved it), and no permission, which is another
+   * writer's. `origin` is used only for a row it creates.
+   */
+  async writeRecordedCollection(
+    recorded: CodeFirstCollectionConfig,
+    origin: { source: CollectionSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicCollectionRecord> = {}
+  ): Promise<"created" | "updated" | "unchanged"> {
+    const existing =
+      options.existing === undefined
+        ? await this.getCollectionBySlug(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing)
+        : recorded;
+    const decision = this.codeFirstSyncStep(config, existing);
+    const { schemaHash, desiredTableName } = decision;
+    if (decision.step === "unchanged") return "unchanged";
+    if (decision.step === "create") {
+      await this.registerCollection({
+        ...declaredRegistration(config, schemaHash, desiredTableName),
+        ...origin,
+      });
+      return "created";
+    }
+    await this.updateCollection(
+      config.slug,
+      decision.step === "update"
+        ? declaredRow(config, schemaHash, desiredTableName)
+        : declaredMetadata(config),
+      // The row's own source, so a row defined in code is written as the
+      // pipeline writes it, and its source is left as it is.
+      { source: decision.existing.source }
+    );
+    return "updated";
+  }
+
   async syncCodeFirstCollections(
-    configs: CodeFirstCollectionConfig[]
+    configs: CodeFirstCollectionConfig[],
+    /**
+     * `seedPermissions: false` when a seeding of every entity's permissions
+     * follows, as at a start: the sync then leaves them to it, so each is
+     * ensured once. Every other caller has its collections' permissions seeded
+     * here, as before.
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<SyncResult> {
     this.logger.info("Syncing code-first collections", {
       count: configs.length,
     });
+    const seedPermissions = options.seedPermissions !== false;
+    // This collection's permissions, or nothing where a later seeding is left to.
+    const seedFor = (slug: string): Promise<void> =>
+      seedPermissions
+        ? this.seedPermissionsForCollection(slug)
+        : Promise.resolve();
+    const recordOf = await this.recordsBySlug();
 
     const result: SyncResult = {
       created: [],
@@ -909,36 +1130,23 @@ export class CollectionRegistryService extends BaseRegistryService<
       try {
         const decision = this.codeFirstSyncStep(
           config,
-          await this.getCollectionBySlug(config.slug)
+          await recordOf(config.slug)
         );
         const { schemaHash, desiredTableName } = decision;
 
         if (decision.step === "create") {
-          await this.registerCollection({
-            slug: config.slug,
-            labels: config.labels,
-            tableName: desiredTableName,
-            description: config.description,
-            fields: config.fields,
-            timestamps: config.timestamps ?? true,
-            admin: config.admin,
-            source: config.source ?? "code",
-            locked: true,
-            // Forward Draft/Published flag so code-first collections that
-            // opt in actually write the column on first sync.
-            status: config.status === true,
-            // Forward the resolved versioning config on first sync.
-            versions: config.versions,
-            // Forward the cache-revalidation config on first sync.
-            revalidate: config.revalidate,
-            // Forward the webhook recording policy on first sync.
-            webhooks: config.webhooks,
-            localized: config.localized === true,
-            configPath: config.configPath,
-            schemaHash,
-          });
+          await this.registerCollection(
+            {
+              ...declaredRegistration(config, schemaHash, desiredTableName),
+              source: config.source ?? "code",
+              locked: true,
+              configPath: config.configPath,
+            },
+            // Registering seeds the collection's permissions, unless a later
+            // seeding of every entity's is left to.
+            { seedPermissions }
+          );
           result.created.push(config.slug);
-          await this.seedPermissionsForCollection(config.slug);
         } else if (decision.step === "update") {
           const { existing } = decision;
           // Fields changed, status toggle flipped, or `dbName` resolved to a
@@ -954,57 +1162,23 @@ export class CollectionRegistryService extends BaseRegistryService<
           await this.updateCollection(
             config.slug,
             {
-              labels: config.labels,
-              description: resolveDescription(config) ?? null,
-              fields: config.fields,
-              timestamps: config.timestamps,
-              // Explicit null when the config no longer declares an admin block, matching the
-              // metadata-only branch below. Removing `admin` usually accompanies some other
-              // edit, and that edit selects THIS branch — so without it the common case is the
-              // one where stale placement survives.
-              admin: config.admin ?? null,
+              ...declaredRow(config, schemaHash, desiredTableName),
               configPath: config.configPath,
-              schemaHash,
               locked: true,
-              status: config.status === true,
-              versions: config.versions,
-              // Send explicit null (not undefined) when the config removed
-              // `revalidate`, so updateCollection actually clears the column
-              // instead of leaving the stale config persisted.
-              revalidate: config.revalidate ?? null,
-              // Send explicit null (not undefined) when the config removed
-              // `webhooks`, so updateCollection actually clears the column
-              // instead of leaving a stale opt-out suppressing the outbox.
-              webhooks: config.webhooks ?? null,
-              localized: config.localized === true,
-              tableName: desiredTableName,
             },
             { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForCollection(config.slug);
+          await seedFor(config.slug);
         } else if (decision.step === "metadata") {
           await this.updateCollection(
             config.slug,
-            {
-              labels: config.labels,
-              // Resolved, because a collection may spell its description under `admin` — and
-              // compared above for the same reason: without it, editing or removing that
-              // spelling leaves the row stale until some unrelated schema change happens to
-              // trigger a write.
-              description: resolveDescription(config) ?? null,
-              // Explicit null when the config no longer declares an admin block, so
-              // `updateCollection` clears the column instead of reading `undefined` as "leave
-              // unchanged" and stranding a sidebar position the config has dropped. Same
-              // reasoning as `revalidate` and `webhooks` above.
-              admin: config.admin ?? null,
-              locked: true,
-            },
+            { ...declaredMetadata(config), locked: true },
             { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
         } else {
-          await this.seedPermissionsForCollection(config.slug);
+          await seedFor(config.slug);
           result.unchanged.push(config.slug);
         }
       } catch (error) {

@@ -8,6 +8,7 @@
  * from the engine's `lockRefusal`, which judges an edit exactly as a save does.
  */
 import {
+  addressesNoNode,
   applyOp,
   findNode,
   layersLockBreak,
@@ -119,7 +120,7 @@ export function layersLockFacts(
 
 /** What an op does to the block it addresses, as a refusal of it says. */
 function verbOf(
-  op: Exclude<BuilderOp, { readonly kind: "envelope" }>
+  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" }>
 ): LockedVerb {
   switch (op.kind) {
     case "remove":
@@ -139,8 +140,9 @@ function factsOfBreak(
   op: BuilderOp,
   broken: LayersLockBreak
 ): LayersLockRefusalFacts | undefined {
-  // An envelope edit changes no block, so no lock is broken by one.
-  if (op.kind === "envelope") return undefined;
+  // An envelope or metadata edit changes no block, so no lock is broken by
+  // one.
+  if (addressesNoNode(op)) return undefined;
   const locked = findNode(document.nodes, broken.lockedId);
   if (locked === undefined) return undefined;
   if (broken.where === "destination" || op.kind === "insert") {

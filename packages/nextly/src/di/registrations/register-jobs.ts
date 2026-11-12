@@ -52,6 +52,7 @@ import {
 import type { WebhookEndpointRegistry } from "../../domains/webhooks/endpoint-registry";
 import type { RunDrainResult } from "../../domains/webhooks/run-drain";
 import { createWebhookDrainJob } from "../../domains/webhooks/webhook-drain-job";
+import { createWorkflowNoticeEmailJob } from "../../domains/workflows/workflow-notices";
 import { env } from "../../lib/env";
 import { collectJobs } from "../../plugins/jobs/collect-jobs";
 import type { Logger } from "../../services/shared";
@@ -216,16 +217,21 @@ export function registerJobServices(ctx: RegistrationContext): void {
         onOutcome: result => reportReleasesOutcome(logger, result),
       })
     );
+    // What a notice's email job reads and sends through, resolved on each run so
+    // the send service is the one registered when it runs.
+    const noticeEmailDeps = () => ({
+      db: adapter,
+      email: container.has("emailService")
+        ? container.get<EmailService>("emailService")
+        : null,
+    });
     // A release notice's email: handed on in the notice's own transaction, and
     // queued through core's queued send once that has committed.
-    registry.register(
-      createReleaseNoticeEmailJob(() => ({
-        db: adapter,
-        email: container.has("emailService")
-          ? container.get<EmailService>("emailService")
-          : null,
-      }))
-    );
+    registry.register(createReleaseNoticeEmailJob(noticeEmailDeps));
+    // A workflow notice's email, the same shared notice email under the workflows' own slug:
+    // queued in the step's or assignment's transaction where the site sends email and the
+    // trigger's switch is on, and sent once that has committed.
+    registry.register(createWorkflowNoticeEmailJob(noticeEmailDeps));
 
     // Advisory document locks. A lapsed row is already ignored by every
     // reader, so this buys space rather than correctness: without it the table

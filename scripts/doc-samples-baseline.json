@@ -1,7 +1,7 @@
 {
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
-      "samples": 7,
+      "samples": 6,
       "compiled": 1
     },
     "docs/admin/customization.mdx": {
@@ -25,7 +25,7 @@
       "compiled": 1
     },
     "docs/configuration/collections.mdx": {
-      "samples": 8,
+      "samples": 9,
       "compiled": 3
     },
     "docs/configuration/environment.mdx": {
@@ -56,9 +56,17 @@
       "samples": 25,
       "compiled": 8
     },
+    "docs/configuration/public-addresses.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
     "docs/configuration/singles.mdx": {
       "samples": 5,
       "compiled": 3
+    },
+    "docs/database/encrypted-connections.mdx": {
+      "samples": 2,
+      "compiled": 2
     },
     "docs/database/extending-the-schema.mdx": {
       "samples": 12,
@@ -125,20 +133,20 @@
       "compiled": 10
     },
     "docs/guides/production-migrations.mdx": {
-      "samples": 1,
-      "compiled": 1
+      "samples": 3,
+      "compiled": 2
     },
     "docs/guides/routing-and-seo.mdx": {
-      "samples": 11,
-      "compiled": 9
+      "samples": 15,
+      "compiled": 12
     },
     "docs/jobs/index.mdx": {
       "samples": 5,
       "compiled": 5
     },
     "docs/localization/index.mdx": {
-      "samples": 4,
-      "compiled": 4
+      "samples": 6,
+      "compiled": 5
     },
     "docs/notices/index.mdx": {
       "samples": 1,
@@ -153,7 +161,7 @@
       "compiled": 5
     },
     "docs/page-builder/editor.mdx": {
-      "samples": 1,
+      "samples": 2,
       "compiled": 0
     },
     "docs/page-builder/index.mdx": {
@@ -185,20 +193,24 @@
       "compiled": 7
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 20,
-      "compiled": 13
+      "samples": 21,
+      "compiled": 14
     },
     "docs/plugins/api-reference.mdx": {
-      "samples": 28,
-      "compiled": 3
+      "samples": 37,
+      "compiled": 7
     },
     "docs/plugins/auth.mdx": {
-      "samples": 4,
+      "samples": 5,
       "compiled": 4
     },
     "docs/plugins/author-guide.mdx": {
       "samples": 7,
       "compiled": 4
+    },
+    "docs/plugins/caching.mdx": {
+      "samples": 3,
+      "compiled": 2
     },
     "docs/plugins/commerce/index.mdx": {
       "samples": 2,
@@ -209,7 +221,7 @@
       "compiled": 1
     },
     "docs/plugins/form-builder.mdx": {
-      "samples": 21,
+      "samples": 23,
       "compiled": 17
     },
     "docs/plugins/index.mdx": {
@@ -224,28 +236,36 @@
       "samples": 3,
       "compiled": 1
     },
+    "docs/plugins/proxy.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
+    "docs/plugins/public-addresses.mdx": {
+      "samples": 3,
+      "compiled": 2
+    },
     "docs/plugins/routes.mdx": {
-      "samples": 10,
-      "compiled": 5
+      "samples": 13,
+      "compiled": 7
     },
     "docs/plugins/schema.mdx": {
-      "samples": 7,
-      "compiled": 5
+      "samples": 8,
+      "compiled": 6
     },
     "docs/plugins/security-helpers.mdx": {
-      "samples": 5,
-      "compiled": 4
+      "samples": 6,
+      "compiled": 5
     },
     "docs/plugins/security.mdx": {
       "samples": 5,
       "compiled": 3
     },
     "docs/plugins/seo.mdx": {
-      "samples": 5,
-      "compiled": 4
+      "samples": 15,
+      "compiled": 10
     },
     "docs/plugins/services.mdx": {
-      "samples": 14,
+      "samples": 15,
       "compiled": 1
     },
     "docs/plugins/signed-in-people.mdx": {
@@ -277,8 +297,8 @@
       "compiled": 1
     },
     "docs/widgets/index.mdx": {
-      "samples": 9,
-      "compiled": 7
+      "samples": 10,
+      "compiled": 8
     },
     "packages/adapter-drizzle/README.md": {
       "samples": 1,
@@ -338,7 +358,7 @@
     },
     "packages/plugin-seo/README.md": {
       "samples": 7,
-      "compiled": 4
+      "compiled": 7
     },
     "packages/storage-s3/README.md": {
       "samples": 4,
@@ -367,13 +387,11 @@
   },
   "pages": {
     "docs/getting-started/build-a-blog.mdx": 1,
-    "docs/guides/routing-and-seo.mdx": 3,
     "docs/plugins/auth.mdx": 2,
     "docs/plugins/distribution.mdx": 1,
     "docs/plugins/lifecycle.mdx": 2,
     "packages/blocks-react/README.md": 1,
     "packages/builder/README.md": 1,
-    "packages/plugin-seo/README.md": 2,
     "docs/database/mysql.mdx": 3,
     "docs/guides/isr-caching.mdx": 1,
     "docs/plugins/services.mdx": 4
@@ -390,19 +408,9 @@
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #4 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
-    "docs/guides/routing-and-seo.mdx": {
-      "#8 error TS2304: Cannot find name 'getPostBySlug'.": 1,
-      "#9 error TS2304: Cannot find name 'services'.": 1,
-      "#9 error TS18004: No value exists in scope for the shorthand property 'baseUrl'. Either declare one or provide an initializer.": 1,
-      "implicit-any #5 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
-      "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
-      "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
-      "reader-name #6 error TS2552: Cannot find name 'Page'. Did you mean 'page'?": 1,
-      "reader-name #7 error TS2304: Cannot find name 'Page'.": 1
-    },
     "docs/plugins/auth.mdx": {
-      "#3 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
-      "#3 error TS2304: Cannot find name 'verifyTotp'.": 1,
+      "#4 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
+      "#4 error TS2304: Cannot find name 'verifyTotp'.": 1,
       "uninstalled #0 error TS2307: Cannot find module '@acme/nextly-plugin-google' or its corresponding type declarations.": 1
     },
     "docs/plugins/distribution.mdx": {
@@ -422,10 +430,6 @@
       "reader-name #0 error TS2304: Cannot find name 'MyTopBar'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'MyBreadcrumb'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'MyCanvas'.": 1
-    },
-    "packages/plugin-seo/README.md": {
-      "#2 error TS7031: Binding element 'params' implicitly has an 'any' type.": 1,
-      "#2 error TS2304: Cannot find name 'getPostBySlug'.": 1
     },
     "docs/database/mysql.mdx": {
       "#6 error TS2304: Cannot find name 'orderData'.": 1,
@@ -471,14 +475,22 @@
       "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
       "reader-file #5 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
     },
+    "docs/guides/routing-and-seo.mdx": {
+      "implicit-any #7 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
+      "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
+      "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
+      "reader-name #6 error TS2304: Cannot find name 'Page'.": 1,
+      "reader-name #8 error TS2552: Cannot find name 'Page'. Did you mean 'page'?": 1,
+      "reader-name #9 error TS2304: Cannot find name 'Page'.": 1
+    },
     "docs/guides/media-storage.mdx": {
       "uninstalled #0 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1,
       "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "uninstalled #19 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "uninstalled #20 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
-      "reader-file #17 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
+      "reader-file #18 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1
@@ -569,9 +581,18 @@
     "docs/page-builder/site-code.mdx": {
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '@/nextly/cached-read'.": 1
     },
+    "docs/plugins/api-reference.mdx": {
+      "reader-file #28 error TS2307: Cannot find module './Invoice' or its corresponding type declarations.": 1
+    },
     "docs/plugins/author-guide.mdx": {
       "reader-file #1 error TS2307: Cannot find module '../package.json' or its corresponding type declarations.": 1,
       "reader-file #5 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
+    },
+    "docs/plugins/proxy.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/plugins/seo.mdx": {
+      "reader-file #10 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
@@ -585,8 +606,8 @@
       "reader-file #5 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/widgets/index.mdx": {
-      "reader-file #6 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1,
-      "reader-file #7 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1
+      "reader-file #7 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1,
+      "reader-file #8 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1
     },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
@@ -598,9 +619,9 @@
       "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'Media'.": 1,
-      "reader-name #18 error TS2304: Cannot find name 'Posts'.": 1,
-      "reader-name #18 error TS2304: Cannot find name 'Users'.": 1,
-      "reader-name #18 error TS2304: Cannot find name 'Media'.": 1
+      "reader-name #20 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #20 error TS2304: Cannot find name 'Media'.": 1
     }
   }
 }

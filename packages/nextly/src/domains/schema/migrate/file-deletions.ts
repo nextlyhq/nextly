@@ -12,7 +12,10 @@
  *   value, so it needs consent naming the column like a drop does. A string
  *   column widened (`varchar(n)` to `text` or a `varchar` at least as long,
  *   `keepsEveryStringValue`), with nothing else that converts it stated, keeps
- *   every value and deletes nothing.
+ *   every value and deletes nothing. The MySQL run `migrate:create` writes to
+ *   change a column's nullability (`mysqlLiveRunAt`) restates its live type:
+ *   it is judged as that restatement, a `column` deletion only when it makes a
+ *   nullable column NOT NULL, and its rename run as the plain rename.
  * - removes rows (`DELETE`, `TRUNCATE`, `REPLACE`, SQLite's `OR REPLACE`): a
  *   `rows` deletion, and one for each table a foreign key's `ON DELETE
  *   CASCADE` (or PostgreSQL's `TRUNCATE ... CASCADE`) reaches from it, read
@@ -56,6 +59,12 @@ import {
   type HiddenCode,
   type RelationRef,
 } from "../pipeline/live-table-facts";
+import {
+  MYSQL_LIVE_RUN_LENGTH,
+  mysqlLiveRunAt,
+  plainMysqlStatement,
+  type MysqlLiveRun,
+} from "../pipeline/sql-templates/mysql-live-restate";
 
 import type { Deletion } from "./data-loss-consent";
 import type { QuotedToken } from "./split-sql";
@@ -224,6 +233,11 @@ type Step =
        * change keeps nullability (PostgreSQL's `ALTER ... TYPE`).
        */
       notNull?: boolean;
+      /**
+       * The change restates the column's live type, character set and collation as the
+       * database has them when it runs (`mysqlLiveRunAt`): only its nullability changes.
+       */
+      typeKept?: true;
     }
   | { kind: "drop-column"; table: string; column: string }
   | { kind: "rename-table"; from: string; to: string }
@@ -1258,7 +1272,9 @@ function restated(
  * else converting it, that makes no nullable column NOT NULL (a server not in
  * strict mode turns its NULLs into empty strings), and on MySQL in its table's
  * default character set (`keepsCharacterSet`), which the restated column
- * takes. A type, nullability or character set not known keeps nothing.
+ * takes. A type, nullability or character set not known keeps nothing. A
+ * change that keeps the live type, character set and collation (`typeKept`)
+ * is judged by its nullability alone.
  */
 function keepsEveryValue(
   before: { type: string | undefined; notNull: boolean | undefined },
@@ -1266,8 +1282,9 @@ function keepsEveryValue(
   dialect: SupportedDialect,
   keepsCharacterSet: () => boolean | undefined
 ): boolean {
-  if (change.to === undefined || before.type === undefined) return false;
   if (change.notNull === true && before.notNull !== true) return false;
+  if (change.typeKept === true) return true;
+  if (change.to === undefined || before.type === undefined) return false;
   if (dialect === "mysql" && keepsCharacterSet() !== true) return false;
   return keepsEveryStringValue(before.type, change.to, dialect);
 }
@@ -1781,7 +1798,7 @@ class FileWalk {
         this.emit({ kind: "column", table, column: live });
       }
       this.changedColumns.set(`${table}\0${live}`, {
-        type: step.to,
+        type: step.typeKept === true ? before.type : step.to,
         notNull: step.notNull ?? before.notNull,
       });
     }
@@ -2264,6 +2281,34 @@ function fingerprinted(step: Step, statement: string): Step {
   };
 }
 
+/**
+ * What a MySQL run `migrate:create` writes does, named as statements name
+ * things (lower-cased): a rename renames the column and deletes nothing; a
+ * nullability change keeps the column's type, character set and collation,
+ * and is judged by its nullability (`keepsEveryValue`).
+ */
+function liveRunSteps(run: MysqlLiveRun): Step[] {
+  const table = run.tableName.toLowerCase();
+  return run.kind === "rename"
+    ? [
+        {
+          kind: "rename-column",
+          table,
+          from: run.fromColumn.toLowerCase(),
+          to: run.toColumn.toLowerCase(),
+        },
+      ]
+    : [
+        {
+          kind: "column",
+          table,
+          column: run.columnName.toLowerCase(),
+          notNull: !run.toNullable,
+          typeKept: true,
+        },
+      ];
+}
+
 /** Every step of the list, with each SQLite rebuild judged as one. */
 function walk(
   statements: readonly string[],
@@ -2289,9 +2334,20 @@ function walk(
     const rebuild = byDrop.get(at);
     if (rebuild !== undefined) file.rebuild(rebuild, statements);
     else if (!owned.has(at)) {
-      const tokens = tokensOf(statement, dialect);
+      // A MySQL run `migrate:create` writes builds its statement from the
+      // catalog when the file runs: read as what it amounts to, its later
+      // statements its own.
+      const run =
+        dialect === "mysql" ? mysqlLiveRunAt(statements, at) : undefined;
+      if (run !== undefined) {
+        for (let k = 1; k < MYSQL_LIVE_RUN_LENGTH; k++) owned.add(at + k);
+      }
+      const read = run === undefined ? statement : plainMysqlStatement(run);
+      const tokens = tokensOf(read, dialect);
       for (const step of placed(
-        readStatement(statement, dialect),
+        run === undefined
+          ? readStatement(statement, dialect)
+          : liveRunSteps(run),
         tokens,
         state
       )) {

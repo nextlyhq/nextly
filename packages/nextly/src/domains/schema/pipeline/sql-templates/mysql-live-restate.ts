@@ -124,6 +124,21 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
 }
 
 /**
+ * How a change must run while other sessions use the table, held to it by MySQL: a statement it
+ * cannot run that way is refused before it starts (MySQL 8.0 online DDL, `ALGORITHM` and `LOCK`),
+ * never run in a way that holds more.
+ *
+ * - `copy`: the table is copied, reads continue and writes wait (a type change).
+ * - `in-place`: changed in place, reads and writes continue (a nullability change).
+ */
+export type MysqlOnlineChange = "copy" | "in-place";
+
+const ONLINE_CLAUSE: Record<MysqlOnlineChange, string> = {
+  copy: ", ALGORITHM=COPY, LOCK=SHARED",
+  "in-place": ", ALGORITHM=INPLACE, LOCK=NONE",
+};
+
+/**
  * `MODIFY COLUMN` with what `change` asks for, a type or a nullability, and everything else as the
  * column has it now: its type and nullability where `change` leaves them, character set and
  * collation, a generated column's expression, its default, `AUTO_INCREMENT`, `ON UPDATE`,
@@ -142,7 +157,8 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
  *
  * `characterSet: "left-out"` writes no character set or collation, for a new type that has no place
  * for them: MySQL refuses `json CHARACTER SET ..` as a syntax error. Restated when not given, so a
- * caller that does not ask builds the statement it always has.
+ * caller that does not ask builds the statement it always has. `online` adds the algorithm and lock
+ * the change must run with (`MysqlOnlineChange`); left out, MySQL chooses.
  */
 export function restatedColumn(
   tableName: string,
@@ -151,6 +167,7 @@ export function restatedColumn(
     type?: string;
     nullable?: boolean;
     characterSet?: "restated" | "left-out";
+    online?: MysqlOnlineChange;
   }
 ): string[] {
   const definition = [
@@ -173,6 +190,9 @@ export function restatedColumn(
     "IF(EXTRA LIKE '%on update %', CONCAT(' ON UPDATE ', REGEXP_SUBSTR(EXTRA, '(?<=on update )[^ ]+')), '')",
     "IF(EXTRA LIKE '%INVISIBLE%', ' INVISIBLE', '')",
     `IF(COLUMN_COMMENT = '', '', CONCAT(' COMMENT ', ${quotedForSession("COLUMN_COMMENT")}))`,
+    ...(change.online === undefined
+      ? []
+      : [literal(ONLINE_CLAUSE[change.online])]),
   ].join(", ");
   const unwritable = `EXTRA LIKE '%DEFAULT_GENERATED%' AND ${unreadableHere(decoded("COLUMN_DEFAULT"))}`;
   return runBuilt(
@@ -243,27 +263,96 @@ const RENAME_RUN =
 const NULLABILITY_RUN =
   /^SET @nextly_ddl = COALESCE\(\(SELECT .*'ALTER TABLE `([^`]+)` MODIFY COLUMN `([^`]+)` ', .*' (NOT NULL|NULL)'/s;
 
+/** What a run this module writes amounts to, read back from its statements (`mysqlLiveRunAt`). */
+export type MysqlLiveRun =
+  | {
+      kind: "rename";
+      tableName: string;
+      fromColumn: string;
+      toColumn: string;
+    }
+  | {
+      kind: "nullability";
+      tableName: string;
+      columnName: string;
+      toNullable: boolean;
+    };
+
+/** How many statements each run is (`runBuilt`). */
+export const MYSQL_LIVE_RUN_LENGTH = 4;
+
 /**
- * `statements` with each run this module writes replaced by the one plain statement it amounts to,
- * for a reader that judges statements by their text and cannot see into a prepared one: the drop
- * guard refuses PREPARE and EXECUTE, because a statement built at run time could drop anything.
- *
- * A run is recognised only when all four of its statements are exactly what this module renders
- * for the table and columns its first one names, so a hand-written PREPARE stays unreadable and is
- * refused as before. A rename run amounts to the plain rename (the checks it drops it adds back
- * under the same names), a nullability run to a MODIFY of that column.
+ * The run that starts at `statements[at]`, for a reader that judges statements by their text and
+ * cannot see into a prepared one, or undefined when none does. A run is recognised only when all
+ * four of its statements are exactly what this module renders for the table and columns its first
+ * one names, so a hand-written PREPARE stays unreadable. A rename run amounts to the plain rename
+ * (the checks it drops it adds back under the same names); a nullability run to a change of that
+ * column's nullability alone, its type, character set, collation, default and comment kept.
+ */
+export function mysqlLiveRunAt(
+  statements: readonly string[],
+  at: number
+): MysqlLiveRun | undefined {
+  const run = statements
+    .slice(at, at + MYSQL_LIVE_RUN_LENGTH)
+    .map(statement => statement.trim());
+  const first = run[0] ?? "";
+  const rename = RENAME_RUN.exec(first);
+  if (rename !== null) {
+    const [tableName, fromColumn, toColumn] = rename.slice(1).map(unliteral);
+    return sameRun(
+      run,
+      renameKeepingChecks({ tableName, fromColumn, toColumn })
+    )
+      ? { kind: "rename", tableName, fromColumn, toColumn }
+      : undefined;
+  }
+  const nullability = NULLABILITY_RUN.exec(first);
+  if (nullability !== null) {
+    const [tableName, columnName] = nullability.slice(1, 3).map(unliteral);
+    const toNullable = nullability[3] === "NULL";
+    return sameRun(
+      run,
+      restatedNullability({
+        type: "change_column_nullable",
+        tableName,
+        columnName,
+        fromNullable: !toNullable,
+        toNullable,
+      })
+    )
+      ? { kind: "nullability", tableName, columnName, toNullable }
+      : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The one plain statement a run amounts to. A nullability run keeps the column's type, which only
+ * the database knows when the file runs; `text` stands for it, so a reader that needs the type
+ * reads the run itself (`mysqlLiveRunAt`).
+ */
+export function plainMysqlStatement(run: MysqlLiveRun): string {
+  return run.kind === "rename"
+    ? `ALTER TABLE ${q(run.tableName)} RENAME COLUMN ${q(run.fromColumn)} TO ${q(run.toColumn)}`
+    : `ALTER TABLE ${q(run.tableName)} MODIFY COLUMN ${q(run.columnName)} text ${run.toNullable ? "NULL" : "NOT NULL"}`;
+}
+
+/**
+ * `statements` with each run this module writes replaced by the one plain statement it amounts to
+ * (`mysqlLiveRunAt`, `plainMysqlStatement`): the drop guard reads them so, and refuses any other
+ * PREPARE and EXECUTE, because a statement built at run time could drop anything.
  */
 export function plainMysqlEquivalents(statements: readonly string[]): string[] {
   const out: string[] = [];
   for (let at = 0; at < statements.length; at++) {
-    const run = statements.slice(at, at + 4).map(statement => statement.trim());
-    const plain = plainEquivalentOf(run);
-    if (plain === undefined) {
+    const run = mysqlLiveRunAt(statements, at);
+    if (run === undefined) {
       out.push(statements[at]);
       continue;
     }
-    out.push(plain);
-    at += 3;
+    out.push(plainMysqlStatement(run));
+    at += MYSQL_LIVE_RUN_LENGTH - 1;
   }
   return out;
 }
@@ -276,38 +365,6 @@ export function plainMysqlEquivalents(statements: readonly string[]): string[] {
  */
 const unliteral = (spelled: string): string =>
   spelled.split(`'${BACKSLASH_PART}'`).join("\\").replace(/''/g, "'");
-
-/** The plain statement a four-statement run amounts to, when it is exactly one of this module's. */
-function plainEquivalentOf(run: readonly string[]): string | undefined {
-  const first = run[0] ?? "";
-  const rename = RENAME_RUN.exec(first);
-  if (rename !== null) {
-    const [tableName, fromColumn, toColumn] = rename.slice(1).map(unliteral);
-    return sameRun(
-      run,
-      renameKeepingChecks({ tableName, fromColumn, toColumn })
-    )
-      ? `ALTER TABLE ${q(tableName)} RENAME COLUMN ${q(fromColumn)} TO ${q(toColumn)}`
-      : undefined;
-  }
-  const nullability = NULLABILITY_RUN.exec(first);
-  if (nullability !== null) {
-    const [tableName, columnName] = nullability.slice(1, 3).map(unliteral);
-    const setting = nullability[3];
-    const toNullable = setting === "NULL";
-    const op: ChangeColumnNullableOp = {
-      type: "change_column_nullable",
-      tableName,
-      columnName,
-      fromNullable: !toNullable,
-      toNullable,
-    };
-    return sameRun(run, restatedNullability(op))
-      ? `ALTER TABLE ${q(tableName)} MODIFY COLUMN ${q(columnName)} text ${setting}`
-      : undefined;
-  }
-  return undefined;
-}
 
 function sameRun(run: readonly string[], rendered: readonly string[]): boolean {
   return (

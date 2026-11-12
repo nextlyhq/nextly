@@ -175,7 +175,7 @@ export function declarationSource(plan: WidgetPlan): string {
     ...(plan.view === "component"
       ? ["  isEmpty: data => data.notes.length === 0,"]
       : []),
-    "  // What the development preview page draws the card's ready state from.",
+    "  // What the card's test draws its ready state from, before it has data.",
     `  preview: [{ name: "Sample", data: ${source.sample} }],`,
     "});",
     "",

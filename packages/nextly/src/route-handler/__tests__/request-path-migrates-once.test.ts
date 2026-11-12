@@ -58,6 +58,10 @@ vi.mock("../../init/prod-migrations", () => ({
 }));
 vi.mock("../../init/boot-apply", () => ({
   runBootTimeApplyIfDev: vi.fn(),
+  // A development start's fingerprints: none read, so nothing is unchanged.
+  recordStartFingerprints: vi.fn(),
+  markNotInLine: vi.fn(),
+  unchangedSinceLastStart: () => false,
 }));
 vi.mock("../../runtime/hmr-listener", () => ({ ensureHmrListener: vi.fn() }));
 vi.mock("../../storage/image-processor", () => ({

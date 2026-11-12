@@ -40,6 +40,7 @@ import {
   createDatabaseError,
   isDatabaseError,
   type MySqlAdapterConfig,
+  type ConnectionInspection,
   type DatabaseCapabilities,
   type PoolStats,
   type TransactionContext,
@@ -606,6 +607,66 @@ export class MySqlAdapter extends DrizzleAdapter {
       waiting,
       active: total - idle,
     };
+  }
+
+  /**
+   * The connection as a health check reads it, on one pooled connection: the
+   * server's version, timed for the round trip, then that session's
+   * `Ssl_cipher` status, which names the cipher when the session's connection
+   * is encrypted and is empty when it is not.
+   *
+   * @remarks
+   * The status and the connection's own socket are weighed by
+   * `encryptionOf`: behind a proxy the status can describe the proxy's own
+   * connection to the server, while this connection's socket is TLS. The
+   * socket is read as it is, never inferred from the `ssl` setting.
+   *
+   * Whether the database is on this machine is judged from the configured
+   * address, which never leaves this method. Any failure answers `"unknown"`.
+   */
+  override async inspectConnection(): Promise<ConnectionInspection> {
+    const local = this.isLocalHost(this.connectionHost());
+    let connection: PoolConnection | undefined;
+    try {
+      connection = await this.ensurePool().getConnection();
+      const started = performance.now();
+      const [versionRows] = await connection.query<RowDataPacket[]>(
+        "SELECT VERSION() AS version"
+      );
+      const roundTripMs = Math.max(0, Math.round(performance.now() - started));
+      const [statusRows] = await connection.query<RowDataPacket[]>(
+        "SHOW SESSION STATUS LIKE 'Ssl_cipher'"
+      );
+      const cipher: unknown = statusRows[0]?.Value;
+      const version: unknown = versionRows[0]?.version;
+      return {
+        encryption: this.encryptionOf({
+          session: typeof cipher === "string" ? cipher !== "" : undefined,
+          ownSocketTls: this.ownSocketIsTls(connection),
+        }),
+        local,
+        roundTripMs,
+        ...(typeof version === "string" && version !== ""
+          ? { serverVersion: version.split("-")[0] }
+          : {}),
+      };
+    } catch {
+      return { encryption: "unknown", local };
+    } finally {
+      connection?.release();
+    }
+  }
+
+  /**
+   * The host this adapter connects to, as mysql2 resolves it: the connection
+   * string's when one is set, else the `host` option, else `localhost`.
+   * `undefined` when the connection string cannot be read.
+   */
+  private connectionHost(): string | undefined {
+    const configured = this.config.url
+      ? this.hostOfUrl(this.config.url)
+      : (this.config.host ?? "");
+    return configured === "" ? "localhost" : configured;
   }
 
   /**

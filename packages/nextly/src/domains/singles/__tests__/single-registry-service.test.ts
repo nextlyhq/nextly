@@ -684,6 +684,12 @@ describe("SingleRegistryService", () => {
         }
         return null;
       });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
+      });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 
       const result = await ctx.service.syncCodeFirstSingles([
@@ -750,6 +756,12 @@ describe("SingleRegistryService", () => {
           admin: JSON.stringify({ preview: { label: "Preview" } }),
         });
       });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
+      });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 
       const result = await ctx.service.syncCodeFirstSingles([
@@ -802,6 +814,12 @@ describe("SingleRegistryService", () => {
           admin: JSON.stringify({ preview: { label: "Landing preview" } }),
           description: "An older description",
         });
+      });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
       });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 

@@ -41,12 +41,22 @@ import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageStructuredDataFor,
+  type PageMetadataRequest,
 } from "../seo/page-metadata";
-import type { PageMetadataValues } from "../seo/page-metadata-contract";
+import type {
+  PageMetadataValues,
+  PageStructuredDataHints,
+} from "../seo/page-metadata-contract";
 
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
 import { triggerNotFound } from "./not-found";
+import {
+  confirmedLanguage,
+  requestLanguage,
+  type RequestLanguage,
+} from "./request-language";
 
 /** A resolved Single (loose by design — the shape is the app's own). */
 export type SingleDocument = Record<string, unknown>;
@@ -140,7 +150,10 @@ export function normalizeSingleDraftGrant(
 export interface SingleDraftRequest {
   /** The Single's slug, as configured. */
   slug: string;
-  /** The locale this route reads in, verbatim from the configuration. */
+  /**
+   * The locale this request reads in: the route's `[locale]` segment where it
+   * has one, otherwise verbatim from the configuration.
+   */
   locale?: string;
 }
 
@@ -149,7 +162,8 @@ export interface SingleContext {
   /** The Single's slug, as configured. */
   slug: string;
   /**
-   * The locale this route was configured to read in, verbatim.
+   * The locale this request is read in: the route's `[locale]` segment where
+   * it has one, otherwise the locale it was configured to read in, verbatim.
    *
    * Carried explicitly rather than read back off the document: the localized
    * overlay copies translated values ONTO the row without stamping which locale
@@ -157,6 +171,16 @@ export interface SingleContext {
    * the translated documents that need it.
    */
   locale?: string;
+  /**
+   * The page's structured data, as JSON-LD text written so that no value can
+   * end its element: place it as the body of a JSON-LD script element, as a
+   * content route's `context.structuredData` is placed. Read from the same
+   * answer as the page's head; given to `render` only, and only where a
+   * plugin provides page metadata and its answer has some.
+   *
+   * @experimental Settles with the page-metadata contract.
+   */
+  structuredData?: string;
 }
 
 /** Config for {@link createSingleRoute} and {@link createPublicSingleRoute}. */
@@ -174,8 +198,9 @@ export interface SingleRouteConfig<TNode> {
    * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
    * answer decides the page's head and this is one of its inputs: the title,
    * description and social values set here are used where nobody set them for
-   * the page, and its `robots` and canonical are not used at all. Without such
-   * a plugin, this is served as returned.
+   * the page; its `robots` may hide the page, never list one the answer hides,
+   * and its other robots directives are kept; its canonical is kept only where
+   * the answer names none. Without such a plugin, this is served as returned.
    */
   buildMetadata?: (
     document: SingleDocument,
@@ -191,6 +216,31 @@ export interface SingleRouteConfig<TNode> {
     document: SingleDocument,
     context: SingleContext
   ) => PageMetadataValues | Promise<PageMetadataValues>;
+  /**
+   * @experimental What the route knows about the Single's page for its
+   * structured data and the Single does not hold: what kind of page it is,
+   * its own name, the entries it lists, the questions it answers. Asked only
+   * where a plugin provides page metadata, and only for the structured data,
+   * never the head, as a content route's `structuredDataHints` is.
+   */
+  structuredDataHints?: (
+    document: SingleDocument,
+    context: SingleContext
+  ) =>
+    | PageStructuredDataHints
+    | undefined
+    | Promise<PageStructuredDataHints | undefined>;
+  /**
+   * The address this route serves the Single at, from `/`, where the page's
+   * head should be answered for it: a later page of the Single's list, such
+   * as `/blog/page/2` for a blog Single at `/blog`, is then its own page to
+   * search engines, with its own canonical. Given as the address, or worked
+   * out from the route's params for a route with a variable part.
+   *
+   * Left out, the page-metadata provider is asked without one and answers
+   * for the Single's own address, which is right for a route served there.
+   */
+  path?: string | ((params: SingleRouteParams) => string);
   /**
    * A booted Nextly instance. Defaults to the runtime singleton, which requires
    * services to be registered — pass one explicitly (the value from
@@ -208,6 +258,10 @@ export interface SingleRouteConfig<TNode> {
    * inferring it means reading configuration at request time and a reader may
    * defer booting until its first query, so that read answers differently on
    * the first request of a cold process than on the next one.
+   *
+   * A route under a `[locale]` segment reads the language from the segment
+   * instead, so one route serves the Single in every language: leave this out
+   * there.
    */
   locale?: string;
   /** Relation depth for the read. Defaults to the reader's own default. */
@@ -296,12 +350,148 @@ export interface SingleRouteConfig<TNode> {
   revalidate?: number | false;
 }
 
+/**
+ * The params Next hands a Single's route: none at a fixed path, `locale`
+ * under a `[locale]` segment, and whatever other variable parts the route's
+ * folder has, such as `page` in `app/blog/page/[page]/page.tsx`.
+ */
+export type SingleRouteParams = Readonly<
+  Record<string, string | string[] | undefined>
+> & { readonly locale?: string };
+
+/**
+ * What Next hands a Single's page and `generateMetadata`: no params for a
+ * route at a fixed path, `locale` for one under a `[locale]` segment, and the
+ * route's other params, which `path` may read.
+ */
+export interface SingleRouteArgs {
+  params?: Promise<SingleRouteParams> | SingleRouteParams;
+}
+
+/**
+ * The parts of a Single route's config a page's answer is asked with: what
+ * {@link singlePageMetadata} and {@link singlePageStructuredData} take.
+ */
+export type SinglePageAnswerConfig = Pick<
+  SingleRouteConfig<unknown>,
+  | "buildMetadata"
+  | "derivedMetadata"
+  | "structuredDataHints"
+  | "tags"
+  | "revalidate"
+>;
+
+/**
+ * What the page-metadata provider is asked about a Single, with the route's
+ * own metadata; null for a process known to have no provider. The head and
+ * the page's structured data are both asked with this, so they read one
+ * answer.
+ */
+async function singlePageRequest(
+  config: SinglePageAnswerConfig,
+  document: SingleDocument,
+  context: SingleContext,
+  path: string | undefined
+): Promise<{
+  code: Metadata | undefined;
+  request: PageMetadataRequest | null;
+}> {
+  const code = config.buildMetadata
+    ? await config.buildMetadata(document, context)
+    : undefined;
+  // Worked out only where a provider may be asked: with none known, the
+  // route's own metadata is served and the content is not walked for it.
+  if (knownNoPageMetadataProvider()) return { code, request: null };
+  const derived = config.derivedMetadata
+    ? await config.derivedMetadata(document, context)
+    : undefined;
+  return {
+    code,
+    request: {
+      // Without an address the provider finds the Single's own.
+      ...(path === undefined ? {} : { path }),
+      ...(context.locale === undefined ? {} : { locale: context.locale }),
+      source: { kind: "single", slug: context.slug, document },
+      code,
+      ...(derived === undefined ? {} : { derived }),
+      // The tags the document's own read carries, so a write to the Single
+      // expires its head as it expires its body.
+      tags: readTags(nextlySingleTags(context.slug), config.tags),
+      ...(config.revalidate === undefined
+        ? {}
+        : { revalidate: config.revalidate }),
+    },
+  };
+}
+
+/**
+ * The head of a Single a route read itself: the page-metadata provider's
+ * answer where a plugin provides one, otherwise the route's own
+ * `buildMetadata`, as returned. Asked exactly as a Single route asks, so a
+ * site that renders its own pages serves the head a Single route would.
+ *
+ * `context.slug` names the Single. `path` is the address the request was
+ * served at; left out, the provider answers for the Single's own address.
+ *
+ * ```ts
+ * export async function generateMetadata() {
+ *   const about = await nextly.findSingle({ slug: "about-page" });
+ *   return singlePageMetadata(
+ *     { buildMetadata: () => ({ title: "About" }) },
+ *     about,
+ *     { slug: "about-page" },
+ *     "/about"
+ *   );
+ * }
+ * ```
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function singlePageMetadata(
+  config: SinglePageAnswerConfig,
+  document: SingleDocument,
+  context: SingleContext,
+  path?: string
+): Promise<Metadata> {
+  const { code, request } = await singlePageRequest(
+    config,
+    document,
+    context,
+    path
+  );
+  return request === null ? (code ?? {}) : pageMetadataFor(request);
+}
+
+/**
+ * The structured data of a Single a route read itself, as the JSON-LD text a
+ * Single route hands its `render` as `context.structuredData`: read from the
+ * same answer as {@link singlePageMetadata} when asked with the same
+ * arguments, and nothing without a provider.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function singlePageStructuredData(
+  config: SinglePageAnswerConfig,
+  document: SingleDocument,
+  context: SingleContext,
+  path?: string
+): Promise<string | undefined> {
+  // Nobody to answer: the route's own metadata is not worked out for nothing.
+  if (knownNoPageMetadataProvider()) return undefined;
+  const { request } = await singlePageRequest(config, document, context, path);
+  if (request === null) return undefined;
+  const hints = await config.structuredDataHints?.(document, context);
+  return pageStructuredDataFor(
+    hints === undefined ? request : { ...request, structuredDataHints: hints }
+  );
+}
+
 /** What a Single route hands back for the route file to export. */
 export interface SingleRoute<TNode> {
   /** The page component. Export as default. */
-  SinglePage: () => Promise<TNode>;
+  SinglePage: (args?: SingleRouteArgs) => Promise<TNode>;
   /** Export as `generateMetadata`. */
-  generateMetadata: () => Promise<Metadata>;
+  generateMetadata: (args?: SingleRouteArgs) => Promise<Metadata>;
 }
 
 function buildSingleRoute<TNode>(
@@ -310,22 +500,57 @@ function buildSingleRoute<TNode>(
 ): SingleRoute<TNode> {
   const trusted = posture === "public";
 
-  const context: SingleContext = {
-    slug: config.slug,
-    ...(config.locale === undefined ? {} : { locale: config.locale }),
-  };
+  /** The reader, once Nextly has started. */
+  const getReader = async (): Promise<NextlySingleReader> =>
+    // Waits for a start in flight, as the start-up hook no longer holds
+    // requests until Nextly has started.
+    config.nextly ?? (await requireNextlyOnceStarted());
+
+  /**
+   * What `render`, `buildMetadata`, the draft decision and the read are told
+   * for this request: its language, from the route's `[locale]` segment where
+   * it has one. Not found where the segment names none of the site's
+   * languages.
+   */
+  async function contextFor(
+    args?: SingleRouteArgs
+  ): Promise<{ context: SingleContext; language: RequestLanguage }> {
+    const language = await requestLanguage(
+      (await args?.params)?.locale,
+      config.locale,
+      getReader
+    );
+    if (language === null) triggerNotFound();
+    return {
+      language,
+      context: {
+        slug: config.slug,
+        ...(language.locale === undefined ? {} : { locale: language.locale }),
+      },
+    };
+  }
+
+  /**
+   * The document for this request, in its language: null where there is
+   * none, or where a language read before Nextly had started turns out not
+   * to be one of the site's.
+   */
+  async function documentFor(
+    context: SingleContext,
+    language: RequestLanguage
+  ): Promise<SingleDocument | null> {
+    const document = await resolve(context);
+    return (await confirmedLanguage(language)) ? document : null;
+  }
 
   /** Whether this request was granted the working draft, and as whom. */
-  async function draftForThisRequest(): Promise<SingleDraftGrantResult> {
+  async function draftForThisRequest(
+    context: SingleContext
+  ): Promise<SingleDraftGrantResult> {
     const decision = config.draft;
     if (decision === undefined || decision === false) return null;
     if (decision === true) return {};
-    return normalizeSingleDraftGrant(
-      await decision({
-        slug: config.slug,
-        ...(config.locale === undefined ? {} : { locale: config.locale }),
-      })
-    );
+    return normalizeSingleDraftGrant(await decision({ ...context }));
   }
 
   /**
@@ -345,7 +570,7 @@ function buildSingleRoute<TNode>(
   // above: one is the bound, the other is that bound's identity.
   const trustedKey = [...trustedSet].sort().join(",");
 
-  function readArgs(grant: SingleDraftGrantResult) {
+  function readArgs(grant: SingleDraftGrantResult, context: SingleContext) {
     const draft = grant !== null;
     return {
       slug: config.slug,
@@ -376,20 +601,19 @@ function buildSingleRoute<TNode>(
       ...(grant?.readAs === undefined
         ? {}
         : { enforceFieldAccess: true, fieldAccessUser: grant.readAs }),
-      ...(config.locale === undefined ? {} : { locale: config.locale }),
+      ...(context.locale === undefined ? {} : { locale: context.locale }),
       ...(config.depth === undefined ? {} : { depth: config.depth }),
       ...(config.user === undefined ? {} : { user: config.user }),
     };
   }
 
   async function read(
-    grant: SingleDraftGrantResult
+    grant: SingleDraftGrantResult,
+    context: SingleContext
   ): Promise<SingleDocument | null> {
-    // Waits for a start in flight, as the start-up hook no longer holds
-    // requests until Nextly has started.
-    const reader = config.nextly ?? (await requireNextlyOnceStarted());
+    const reader = await getReader();
     try {
-      const document = await reader.findSingle(readArgs(grant));
+      const document = await reader.findSingle(readArgs(grant, context));
       return document ?? null;
     } catch (error) {
       if (isMissOrDenied(error)) return null;
@@ -397,8 +621,10 @@ function buildSingleRoute<TNode>(
     }
   }
 
-  async function resolve(): Promise<SingleDocument | null> {
-    const draft = await draftForThisRequest();
+  async function resolve(
+    context: SingleContext
+  ): Promise<SingleDocument | null> {
+    const draft = await draftForThisRequest(context);
 
     // A draft is per-visitor by construction, so it must reach neither the data
     // cache nor the route cache: one cached draft is served to everyone who asks
@@ -407,7 +633,7 @@ function buildSingleRoute<TNode>(
     // the route cache, which is why this waits for the request as well.
     if (draft !== null) {
       await deferToRequest();
-      return read(draft);
+      return read(draft, context);
     }
 
     if (!trusted) {
@@ -416,13 +642,13 @@ function buildSingleRoute<TNode>(
       // data cache alone does not opt out of the route cache, so this waits
       // for the request, and the read takes its clock after it.
       await deferToRequest();
-      return read(null);
+      return read(null, context);
     }
     // Bounded by the next scheduled release, exactly as the collection route
     // is. A release member names either scope, so a Single without this keeps
     // serving its pre-release document until something unrelated busts a tag.
     const cacheSeconds = await releaseBoundedRevalidate(config.revalidate);
-    return cachedFind(() => read(null), {
+    return cachedFind(() => read(null, context), {
       tags: readTags(nextlySingleTags(config.slug), config.tags),
       // The locale is part of the key: one Single serves a different document
       // per language, and a key that omitted it would serve whichever language
@@ -435,55 +661,67 @@ function buildSingleRoute<TNode>(
       // cache and the other is served its populated restricted rows, having
       // never run its own bound at all. A cache key has to name every input the
       // cached value depends on, and this is now one of them.
-      keyParts: ["nextly-single", config.slug, config.locale ?? "", trustedKey],
+      keyParts: [
+        "nextly-single",
+        config.slug,
+        context.locale ?? "",
+        trustedKey,
+      ],
       revalidate: cacheSeconds,
     });
   }
 
-  async function generateMetadata(): Promise<Metadata> {
-    const buildMetadata = config.buildMetadata;
+  /**
+   * The address the app serves this request at, where it names one: as
+   * given, or worked out from the request's params.
+   */
+  async function servedPathOf(
+    args: SingleRouteArgs | undefined
+  ): Promise<string | undefined> {
+    const { path } = config;
+    if (typeof path !== "function") return path;
+    return path((await args?.params) ?? {});
+  }
+
+  async function generateMetadata(args?: SingleRouteArgs): Promise<Metadata> {
     // Nothing of its own to serve and no provider to ask: the document is not
     // read for its head at all, as before providers existed.
-    if (!buildMetadata && knownNoPageMetadataProvider()) return {};
+    if (!config.buildMetadata && knownNoPageMetadataProvider()) return {};
     // One memo of access lookups for the resolution and the callback, so a
     // preview's draft gate, the read it grants and any read the callback makes
     // look the person up once.
+    const { context, language } = await contextFor(args);
     return runWithAccessMemo(async () => {
-      const document = await resolve();
+      const document = await documentFor(context, language);
       if (!document) return {};
-      const code = buildMetadata
-        ? await buildMetadata(document, context)
-        : undefined;
-      // Worked out only where a provider may be asked: with none known, the
-      // route's own metadata is served and the content is not walked for it.
-      const derived =
-        config.derivedMetadata && !knownNoPageMetadataProvider()
-          ? await config.derivedMetadata(document, context)
-          : undefined;
-      // A Single route is mounted by the app and never told where, so the
-      // provider is asked without a path and finds the Single's address itself.
-      return pageMetadataFor({
-        ...(context.locale === undefined ? {} : { locale: context.locale }),
-        source: { kind: "single", slug: config.slug, document },
-        code,
-        ...(derived === undefined ? {} : { derived }),
-        // The tags the document's own read carries, so a write to the Single
-        // expires its head as it expires its body.
-        tags: readTags(nextlySingleTags(config.slug), config.tags),
-        ...(config.revalidate === undefined
-          ? {}
-          : { revalidate: config.revalidate }),
-      });
+      return singlePageMetadata(
+        config,
+        document,
+        context,
+        await servedPathOf(args)
+      );
     });
   }
 
-  async function SinglePage(): Promise<TNode> {
+  async function SinglePage(args?: SingleRouteArgs): Promise<TNode> {
+    const { context, language } = await contextFor(args);
     // One memo of access lookups for the resolution and the render; see
     // `generateMetadata`.
     return runWithAccessMemo(async () => {
-      const document = await resolve();
+      const document = await documentFor(context, language);
       if (!document) triggerNotFound();
-      return config.render(document, context);
+      // Asked only where a provider may answer: a site with none renders as
+      // it always has, and works nothing out for it.
+      const structuredData = await singlePageStructuredData(
+        config,
+        document,
+        context,
+        await servedPathOf(args)
+      );
+      return config.render(
+        document,
+        structuredData === undefined ? context : { ...context, structuredData }
+      );
     });
   }
 

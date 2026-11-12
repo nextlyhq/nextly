@@ -96,12 +96,15 @@ function preview(
     widget = WIDGET,
     size,
     tier,
+    shownW,
   }: {
     widget?: DashboardWidget;
-    /** The size the card is drawn at on the dashboard. */
+    /** The size the preview draws the card at. */
     size?: { w: number; h: number };
-    /** The tier the card is drawn at, from its width on the dashboard. */
+    /** The tier the preview draws the card at, from that width. */
     tier?: "small" | "medium" | "large";
+    /** The width the card itself is drawn at on the dashboard. */
+    shownW?: number;
   } = {}
 ) {
   return renderHook(
@@ -114,6 +117,7 @@ function preview(
         shown: { slot: SHOWN, updatedAt: null, isFetching: false },
         ...(size === undefined ? {} : { size }),
         ...(tier === undefined ? {} : { tier }),
+        ...(shownW === undefined ? {} : { shownW }),
       }),
     { wrapper, initialProps: { draft: initialDraft } }
   );
@@ -210,5 +214,27 @@ describe("the settings sheet's preview", () => {
     expect(result.current.placement.settings).toMatchObject({
       density: "compact",
     });
+  });
+
+  it("asks the card's own question again at another width, which its `load` is handed", async () => {
+    // 🔴 Only the drawer's Width changed: the card's own answer was asked at its own size and
+    // tier, so a load that reads them (Count's trend, at the large tier) would preview wrong.
+    const { result } = preview(
+      {},
+      { size: { w: 12, h: 3 }, tier: "large", shownW: 4 }
+    );
+    expect(result.current.slot).not.toBe(SHOWN);
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    expect(sent()[0]?.[0]?.size).toEqual({ w: 12, h: 3, tier: "large" });
+  });
+
+  it("draws the card's own answer, asking nothing, at the card's own width", async () => {
+    const { result } = preview(
+      {},
+      { size: { w: 4, h: 3 }, tier: "medium", shownW: 4 }
+    );
+    expect(result.current.slot).toBe(SHOWN);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(sent()).toEqual([]);
   });
 });

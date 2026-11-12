@@ -30,6 +30,7 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../../database/schema-registry";
+import { pluginCollectionSources } from "./plugin-collection-sources";
 import { describeError } from "../../../../errors/describe-error";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { newestEvent, newestEventsByFilename } from "../../events/newest-event";
@@ -257,6 +258,7 @@ export async function pluginMigrationArgs(
   pluginMigrationSets: PluginMigrationSet[];
   pluginsWithMigrations: Set<string>;
   declaredPlugins: Set<string>;
+  collectionSources: Map<string, `plugin:${string}`>;
 }> {
   const sets = await pluginMigrationSetsFrom(plugins);
   return {
@@ -266,6 +268,9 @@ export async function pluginMigrationArgs(
     // check finds a module the ledger records applied for a plugin whose
     // list has since emptied, which the sets above leave out.
     declaredPlugins: new Set(plugins.map(plugin => plugin.name)),
+    // Who contributed each plugin collection, for a registry row the run
+    // creates: from the same plugin list, so the command and the boot agree.
+    collectionSources: pluginCollectionSources(plugins),
   };
 }
 
@@ -1057,6 +1062,23 @@ function assertTakesNoOwnedTable(
 }
 
 /**
+ * The tables a module leaves behind, as a run compares the database against
+ * its end: the plugin's own (`snapshot`) and the foreign tables it contributes
+ * elements to (`contributed`), before they are narrowed to its elements. The
+ * one answer `moduleSides` judges a module's end by, and that `nextly
+ * migrate`'s rename check reads for where a run may adopt a module.
+ */
+export function moduleTargetTables(
+  migration: PluginMigration,
+  dialect: SupportedDialect
+): NextlySchemaSnapshot["tables"] {
+  return [
+    ...(migration.snapshot[dialect]?.tables ?? []),
+    ...(migration.contributed?.[dialect]?.tables ?? []),
+  ];
+}
+
+/**
  * A module's start, end and the live database, scoped and narrowed the way
  * the reconcile judges them.
  */
@@ -1082,10 +1104,7 @@ async function moduleSides(
     ],
   };
   const target: NextlySchemaSnapshot = {
-    tables: [
-      ...(migration.snapshot[deps.dialect]?.tables ?? []),
-      ...(migration.contributed?.[deps.dialect]?.tables ?? []),
-    ],
+    tables: moduleTargetTables(migration, deps.dialect),
   };
   // The before side names tables an older module created, so both sides scope
   // the live read — a module dropping a table it no longer wants must still

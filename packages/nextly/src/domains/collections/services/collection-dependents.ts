@@ -408,7 +408,9 @@ function fieldsGoingWith(
 /**
  * Everything that depends on each entity, for those deleted together.
  *
- * Only entities something depends on are listed, in the order given.
+ * Only entities something depends on are listed, in the order given, each by its slug; one
+ * whose slug an entity of another kind listed before it has is listed by its slug and kind, as
+ * `seo (field group)`.
  * Throws the fail-closed refusal when any of the three records cannot be read.
  *
  * @param entities the collections, Singles and field groups being deleted, all in one operation
@@ -449,9 +451,139 @@ export async function findEntityDependents(
           : retainedKeysInto(own, records, new Set(records.tables)),
       elements: records.elements.filter(element => own.has(element.table)),
     };
-    if (hasAny(dependents)) found.set(entity.slug, dependents);
+    if (hasAny(dependents)) {
+      // Entities of different kinds may share a slug and be deleted together; a later one is
+      // named with its kind, so each is refused with its own dependents.
+      const name = found.has(entity.slug)
+        ? `${entity.slug} (${KIND_WORD[kind]})`
+        : entity.slug;
+      found.set(name, dependents);
+    }
   }
   return found;
+}
+
+/** What a refusal calls an entity's kind, beside a slug another kind of entity also has. */
+const KIND_WORD: Record<EntityKind, string> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
+};
+
+/**
+ * How many fields place each field group, as the field-group list shows it.
+ *
+ * The same answer a delete gives about one field group's fields
+ * (`findEntityDependents`), from the same walk over every stored field list,
+ * read once for the whole set. Each field group is asked about as if deleted
+ * on its own: its own fields go with it, so a reference to itself does not
+ * count, while one field group's use of another on the same page still does. Only fields are counted, not keys or
+ * other owners' elements, which a delete also weighs.
+ *
+ * Rejects when the field lists cannot be read, so the caller decides how to
+ * show a count it does not have.
+ *
+ * @param slugs the field groups to count, as fields name them
+ * @param sources where the stored field lists are read from
+ */
+export async function fieldGroupPlacementCounts(
+  slugs: readonly string[],
+  sources: Pick<DependentsSources, "fieldOwners">
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (slugs.length === 0) return counts;
+  // One walk over every field list for the whole page. Each count is the
+  // length of the list a field group's own editor shows, never a second walk
+  // that could come to disagree with it.
+  for (const [slug, placements] of placementsBySlug(
+    await sources.fieldOwners(),
+    slugs
+  )) {
+    counts.set(slug, placements.length);
+  }
+  return counts;
+}
+
+/**
+ * The fields that place one field group, read from every stored field list:
+ * each names the collection, Single or field group that holds it, and its
+ * path there. What a field group's own editor lists as using it; its length
+ * is the count the field-group list shows (`fieldGroupPlacementCounts`).
+ *
+ * Rejects when the field lists cannot be read, so the caller decides how to
+ * say it does not know, rather than this answering "used nowhere".
+ *
+ * @param slug the field group, as fields name it
+ * @param sources where the stored field lists are read from
+ */
+export async function fieldGroupUsedBy(
+  slug: string,
+  sources: Pick<DependentsSources, "fieldOwners">
+): Promise<FieldReference[]> {
+  return placementsAmong(await sources.fieldOwners(), slug);
+}
+
+/** The fields that place one field group: the walk below, for that one. */
+function placementsAmong(
+  owners: readonly FieldOwner[],
+  slug: string
+): FieldReference[] {
+  return placementsBySlug(owners, [slug]).get(slug) ?? [];
+}
+
+/**
+ * The fields that place each of `slugs`, from one walk over every field list.
+ * Each field group is asked about as a delete asks about it alone
+ * (`fieldsPlacing` over each owner, its own fields going with it), so a
+ * reference to itself does not count, while one field group's use of another
+ * does. One walk however many are asked about, so a list page costs one pass
+ * over the site's fields rather than one per row.
+ */
+function placementsBySlug(
+  owners: readonly FieldOwner[],
+  slugs: readonly string[]
+): Map<string, FieldReference[]> {
+  const bySlug = new Map<string, FieldReference[]>(
+    slugs.map(slug => [slug, []])
+  );
+  for (const { entityType, entitySlug, fields } of owners) {
+    for (const placement of fieldGroupPlacements(fields)) {
+      // A field naming one field group twice places it once.
+      for (const slug of new Set(placement.slugs)) {
+        const found = bySlug.get(slug);
+        if (!found) continue;
+        if (entityType === "fieldGroup" && entitySlug === slug) continue;
+        found.push({ entityType, entitySlug, fieldPath: placement.path });
+      }
+    }
+  }
+  return bySlug;
+}
+
+/**
+ * The slugs of the collections and Singles a reader may read, as their own
+ * lists decide; `undefined` for a kind leaves it unfiltered.
+ */
+export interface ReadableOwnerSlugs {
+  readonly collection?: readonly string[];
+  readonly single?: readonly string[];
+}
+
+/**
+ * The field lists a reader may learn about: a collection's or Single's only
+ * when the reader may read it, so where a field group is used names nothing
+ * the reader's own lists hide. Field groups carry no per-reader read rule
+ * and are all kept, as their list keeps them.
+ */
+export function ownersReadableBy(
+  owners: readonly FieldOwner[],
+  readable: ReadableOwnerSlugs
+): FieldOwner[] {
+  return owners.filter(owner => {
+    if (owner.entityType === "fieldGroup") return true;
+    const allowed = readable[owner.entityType];
+    return allowed === undefined || allowed.includes(owner.entitySlug);
+  });
 }
 
 /**

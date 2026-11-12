@@ -29,12 +29,15 @@ import {
   type ComponentPath,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import { FORM_EDITOR_VIEW } from "../form-pages";
+
 import { SubmissionsView } from "./components/submissions/SubmissionsView";
 import { FormBuilderView } from "./FormBuilderView";
+import { SubmissionPage } from "./SubmissionPage";
 
 export { FormBuilderView, type FormBuilderViewProps } from "./FormBuilderView";
 export { SubmissionsView } from "./components/submissions/SubmissionsView";
-export { SubmissionSheet } from "./components/submissions/SubmissionSheet";
+export { SubmissionPage, type SubmissionPageProps } from "./SubmissionPage";
 
 // ============================================================================
 // Dashboard Widgets
@@ -85,12 +88,15 @@ export { FormSettingsTab } from "./components/builder/FormSettingsTab";
 export { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
 
 /** Component path for FormBuilderView */
-export const FORM_BUILDER_VIEW_PATH: ComponentPath =
-  "@nextlyhq/plugin-form-builder/admin#FormBuilderView";
+export const FORM_BUILDER_VIEW_PATH: ComponentPath = FORM_EDITOR_VIEW;
 
 /** Component path for SubmissionsView */
 export const SUBMISSIONS_VIEW_PATH: ComponentPath =
   "@nextlyhq/plugin-form-builder/admin#SubmissionsView";
+
+/** Component path for SubmissionPage, a submission's own page */
+export const SUBMISSION_PAGE_PATH: ComponentPath =
+  "@nextlyhq/plugin-form-builder/admin#SubmissionPage";
 
 // ============================================================================
 // Auto-Registration with Admin
@@ -105,4 +111,5 @@ export const SUBMISSIONS_VIEW_PATH: ComponentPath =
 registerComponents({
   [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
   [SUBMISSIONS_VIEW_PATH]: SubmissionsView,
+  [SUBMISSION_PAGE_PATH]: SubmissionPage,
 });

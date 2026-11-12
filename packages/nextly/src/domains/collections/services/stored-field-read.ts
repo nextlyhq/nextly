@@ -78,6 +78,13 @@ import {
   resolveDraftOverlay,
   type DraftDocumentConfig,
 } from "../../versions/draft-overlay";
+import {
+  combinedDraft,
+  draftsKeptByPart,
+  findPartDrafts,
+  holdsPendingChange,
+  SHARED_DRAFT_SLOT,
+} from "../../versions/part-drafts";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import { VersionsRepository } from "../../versions/versions-repository";
 
@@ -1075,10 +1082,22 @@ async function pendingWorkingDraft(
   const provisional = overlay(null);
   if (!provisional.overlay) return undefined;
 
-  const draft = await new VersionsRepository(connection.db).findWorkingDraft(
-    { scopeKind: entity.kind, scopeSlug: entity.slug, entryId: id },
-    provisional.draftLocale
-  );
+  const ref = { scopeKind: entity.kind, scopeSlug: entity.slug, entryId: id };
+  const repo = new VersionsRepository(connection.db);
+  // Kept by part (`part-drafts`), the pending change is the shared draft and
+  // this language's, read as the one change they make together: a shared
+  // field's held edit lives in the shared draft whatever language asks, and a
+  // read of the language's draft alone would report the live value and no
+  // pending change.
+  const parts =
+    draftsKeptByPart() && provisional.draftLocale !== SHARED_DRAFT_SLOT
+      ? await findPartDrafts(repo, ref, provisional.draftLocale)
+      : undefined;
+  const draft = parts
+    ? holdsPendingChange(parts)
+      ? { snapshot: combinedDraft({}, parts) }
+      : undefined
+    : await repo.findWorkingDraft(ref, provisional.draftLocale);
   if (draft === undefined) return undefined;
 
   // The confirming half, against resolved schemas: a draft nothing could promote

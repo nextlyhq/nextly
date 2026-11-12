@@ -21,7 +21,11 @@ import type {
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import type { MinimalConfigEntity } from "../migrate-create/generate";
+import { settingsOf } from "../migrate-create/entity-settings";
+import type {
+  MinimalConfigEntity,
+  MinimalConfigField,
+} from "../migrate-create/generate";
 
 export interface MergeUiEntitiesArgs {
   codeCollections: MinimalConfigEntity[];
@@ -45,6 +49,14 @@ export interface MergeUiEntitiesResult {
  * column descriptor reads keys a chosen list would have to be kept in step
  * with (`virtual`, `options`, `dbType`, `validation`), and a key left out is a
  * column described differently from the one dev push builds.
+ *
+ * It carries its manifest entry as its settings, marked as the Builder's, as a
+ * code-first entity carries its config entry (`toMinimalEntities`). The mark is
+ * also what picks the Builder's column rule (`columnOriginOf` in `generate.ts`),
+ * so it is set here, where every reader reduces a manifest entry, rather than
+ * by each reader afterwards: a reader that skipped that step described a
+ * Builder table by the code-first rule, which on MySQL bounds a text column
+ * the Builder made unbounded.
  */
 export function uiToMinimal(
   entity: UiSchemaEntity,
@@ -53,9 +65,13 @@ export function uiToMinimal(
   return {
     slug: entity.slug,
     tableName: `${prefix}${entity.slug.replace(/-/g, "_")}`,
-    fields: [...entity.fields],
+    // A group with no name only lays its fields out, and the column rule reads it as the code-first
+    // config's is read (`toMinimalEntities` hands its entries over the same way): the definition's
+    // field type allows one, which the diff engine's field type does not spell.
+    fields: [...entity.fields] as MinimalConfigField[],
     status: entity.status === true,
     localized: entity.localized === true,
+    settings: { source: "builder", settings: settingsOf(entity, "builder") },
   };
 }
 

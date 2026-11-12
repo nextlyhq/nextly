@@ -10,6 +10,8 @@ import {
   stripKitDropsOfDeclaredIndexes,
   stripKitDropsOfLiveUniqueConstraints,
 } from "../filter-unsafe-statements";
+import { liveIndexesStandingInForDeclared } from "../diff/index-util";
+import type { IndexSpec, TableSpec } from "../diff/types";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -142,6 +144,75 @@ describe("stripKitDropsOfDeclaredConstraints", () => {
 });
 
 describe("stripKitDropsOfDeclaredIndexes", () => {
+  // A unique index the field holds under drizzle's own name, which the diff reads as the declared
+  // `uq_` index on the same column.
+  const promo = (indexes: IndexSpec[]): TableSpec => ({
+    name: "comp_promo",
+    columns: [
+      { name: "id", type: "varchar(36)", nullable: false },
+      { name: "code", type: "varchar(255)", nullable: false },
+    ],
+    indexes,
+  });
+  const declaredUnique: IndexSpec = {
+    name: "uq_comp_promo_code",
+    columns: ["code"],
+    unique: true,
+  };
+  const liveUnique: IndexSpec = {
+    name: "comp_promo_code_unique",
+    columns: ["code"],
+    unique: true,
+  };
+
+  it("keeps the kit's drop of a live index that stands in for a declared one under another name", () => {
+    const standingIn = liveIndexesStandingInForDeclared(
+      [promo([declaredUnique])],
+      [promo([liveUnique])]
+    );
+    expect(standingIn).toEqual([
+      { tableName: "comp_promo", indexName: "comp_promo_code_unique" },
+    ]);
+
+    const out = stripKitDropsOfDeclaredIndexes(
+      ["DROP INDEX `comp_promo_code_unique` ON `comp_promo`;"],
+      { tables: [promo([declaredUnique])] },
+      standingIn
+    );
+
+    expect(out.kept).toEqual([]);
+    expect(out.strippedCount).toBe(1);
+  });
+
+  it("leaves the kit's drop of a live index no declared index matches by key", () => {
+    // Same column, not unique: a different key, so the diff does not count it as the declared one.
+    const plain: IndexSpec = { ...liveUnique, unique: false };
+    const standingIn = liveIndexesStandingInForDeclared(
+      [promo([declaredUnique])],
+      [promo([plain])]
+    );
+    expect(standingIn).toEqual([]);
+
+    const out = stripKitDropsOfDeclaredIndexes(
+      ["DROP INDEX `comp_promo_code_unique` ON `comp_promo`;"],
+      { tables: [promo([declaredUnique])] },
+      standingIn
+    );
+
+    expect(out.kept).toEqual([
+      "DROP INDEX `comp_promo_code_unique` ON `comp_promo`;",
+    ]);
+  });
+
+  it("names no stand-in for a live index under its declared name", () => {
+    expect(
+      liveIndexesStandingInForDeclared(
+        [promo([declaredUnique])],
+        [promo([declaredUnique])]
+      )
+    ).toEqual([]);
+  });
+
   const desired = {
     tables: [
       {

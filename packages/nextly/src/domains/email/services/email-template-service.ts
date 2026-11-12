@@ -78,6 +78,7 @@ import {
   ownerOf,
   ownershipFromConfig,
   sameStoredValue,
+  sameDetails,
   sameVersion,
   storedOwner,
   versionDigest,
@@ -87,6 +88,10 @@ import {
   type RegistryInput,
   type TemplateOwnerRegistry,
 } from "../template-ownership";
+import {
+  declarationSubstance,
+  withOwnerPresentation,
+} from "../template-variables";
 import {
   SNAPSHOT_MAX_AGE_MS,
   transactionOpenInFlow,
@@ -535,7 +540,8 @@ export class EmailTemplateService extends BaseService {
       codeTemplates: input.codeTemplates,
       complete: true,
     };
-    const { registry, conflicts, refused } = buildTemplateOwnerRegistry(built);
+    const { registry, conflicts, refused, unread } =
+      buildTemplateOwnerRegistry(built);
     this.registry = registry;
     for (const refusal of refused) {
       this.logger.error(
@@ -544,6 +550,16 @@ export class EmailTemplateService extends BaseService {
           slug: refusal.slug,
           plugin: refusal.plugin,
           engine: String(refusal.engine),
+        }
+      );
+    }
+    for (const declarations of unread) {
+      this.logger.warn(
+        "Read a plugin's email template variables without their type, label and example: they don't parse",
+        {
+          slug: declarations.slug,
+          plugin: declarations.plugin,
+          reason: declarations.reason,
         }
       );
     }
@@ -575,6 +591,15 @@ export class EmailTemplateService extends BaseService {
     const entry = this.registry.owned.get(row.slug);
     return {
       ...columns,
+      // An owned template's declarations carry its owner's current
+      // presentation, overridden or not (see `withOwnerPresentation`).
+      variables:
+        owner.kind === "site"
+          ? columns.variables
+          : withOwnerPresentation(
+              columns.variables ?? null,
+              entry?.defaults.variables
+            ),
       kind: columns.kind ?? "template",
       description: columns.description ?? null,
       cc: columns.cc ?? null,
@@ -1541,11 +1566,17 @@ export class EmailTemplateService extends BaseService {
     updateData: Record<string, unknown>
   ): boolean {
     if (record.owner.kind === "site" || record.overridden) return false;
-    return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
-      field =>
-        updateData[field] !== undefined &&
-        !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
-    );
+    return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(field => {
+      if (updateData[field] === undefined) return false;
+      // A variable's type, label and example are presentation: changing only
+      // those is not the site saying something different from the owner.
+      return field === "variables"
+        ? !sameStoredValue(
+            declarationSubstance(updateData.variables),
+            declarationSubstance(existing.variables)
+          )
+        : !sameStoredValue(updateData[field] ?? null, existing[field] ?? null);
+    });
   }
 
   /**
@@ -2423,10 +2454,13 @@ export class EmailTemplateService extends BaseService {
   ): Promise<void> {
     const owners = detailsOf(entry.defaults);
     const kept = row.baseVersion?.details;
+    // Compared presentation aside: the owner's presentation reaches the
+    // site's copy when it is read (see `withOwnerPresentation`), so it alone
+    // neither counts as the site's change nor needs writing.
     // The site changed them: they stay.
-    if (kept && !sameStoredValue(detailsOf(row), kept)) return;
+    if (kept && !sameDetails(detailsOf(row), kept)) return;
     // Already the owner's, and recorded as such.
-    if (kept && sameStoredValue(kept, owners)) return;
+    if (kept && sameDetails(kept, owners)) return;
     await this.writeTemplateRow(row.id, db =>
       db
         .update(this.emailTemplates)
@@ -2470,7 +2504,21 @@ export class EmailTemplateService extends BaseService {
       kind: row.kind ?? "template",
       ...detailsOf(row),
     };
-    if (sameStoredValue(current, wanted)) {
+    // Compared presentation aside, the rule `followOwnerDetails` states: the
+    // owner's presentation reaches the row on read (withOwnerPresentation),
+    // and a presentation key the site saved alone is never the row's own
+    // version, so the owner's columns must not rewrite it away. When the
+    // owner's version HAS moved, the write is whole, presentation included,
+    // as an owner update is.
+    const followsOwner = (
+      a: typeof current | typeof wanted,
+      b: typeof current | typeof wanted
+    ) =>
+      sameStoredValue(
+        { ...a, variables: declarationSubstance(a.variables) },
+        { ...b, variables: declarationSubstance(b.variables) }
+      );
+    if (followsOwner(current, wanted)) {
       await this.settleOwnersEngine(row, entry, false);
       return;
     }

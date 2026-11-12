@@ -118,6 +118,7 @@ import {
   type NamedVerdict,
   nameVerdict,
   type PendingChange,
+  pendingChangesByLanguage,
   pendingChangesInSaveOrder,
   type PublishableShape,
   promotionBlockers,
@@ -1520,7 +1521,13 @@ export class SinglePublishAllService extends BaseService {
     );
     // The gate takes the type tags off nested components as well.
     const componentFields = await this.componentFieldsOn(tx, fieldConfigs);
-    await assertDraftsMayBePromoted(pending, {
+    // Each change judged as the language it goes live in, the shared draft's
+    // values within them, never as a language of its own.
+    const judged = pendingChangesByLanguage(
+      pending,
+      this.localization?.defaultLocale ?? null
+    );
+    await assertDraftsMayBePromoted(judged, {
       ...promoteCallerFor({
         tx,
         slug,
@@ -1740,8 +1747,14 @@ export class SinglePublishAllService extends BaseService {
   ): Promise<Set<string>> {
     const service = this.fieldGroupDataService;
     if (!service) return new Set(localizedFieldNames);
-    return perLanguageFieldNames(fieldConfigs, localizedFieldNames, slug =>
-      service.isComponentLocalized(slug, tx.getDrizzle())
+    return perLanguageFieldNames(
+      fieldConfigs,
+      localizedFieldNames,
+      slug => service.isComponentLocalized(slug, tx.getDrizzle()),
+      // The components placed directly in each, whose values are rows of their own.
+      async slug =>
+        (await service.getComponentDefinition(slug, tx.getDrizzle()))?.fields ??
+        null
     );
   }
 

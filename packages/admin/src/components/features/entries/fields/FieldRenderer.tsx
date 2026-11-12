@@ -623,7 +623,7 @@ export function FieldRenderer({
           );
         }
         return (
-          <div className="rounded-lg  border border-destructive bg-destructive/10 p-4 text-center">
+          <div className="rounded-lg  border border-danger-border bg-danger-surface p-4 text-center">
             <p className="text-sm text-destructive">
               Unknown field type: {(field as { type: string }).type}
             </p>

@@ -76,8 +76,11 @@ export function DocumentSidePanel({
       <Sheet open={shown} onOpenChange={open => (open ? null : onClose())}>
         <SheetContent
           side="bottom"
+          dragHandle
           data-document-panel="sheet"
-          className="flex max-h-[80dvh] flex-col gap-0 rounded-t-xl p-0"
+          // As tall as its content, up to 90% of the screen; beyond that the
+          // body scrolls inside, under the handle and the heading.
+          className="flex max-h-[90dvh] flex-col gap-0 rounded-t-xl p-0"
         >
           <PanelHeading
             onClose={onClose}

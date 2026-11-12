@@ -36,6 +36,9 @@
   --animate-slide-in-from-right-2: slide-in-from-right-2 0.2s ease-out;
   --animate-brand-orbit: brand-orbit 2.4s linear infinite;
   --animate-brand-pulse: brand-pulse 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  /* The thin line under the admin's bar while a screen's data is on its way:
+     a short segment crossing the full width, then again. */
+  --animate-loading-line: loading-line 1.4s ease-in-out infinite;
 
   /* ============================================
    * COLOR PALETTE (Tailwind v4.1)
@@ -190,6 +193,9 @@
    * so each can be solved for its own job. The ink that lands on it is
    * `-foreground`, which is white in light mode and black in dark. */
   --color-destructive-solid: var(--nx-destructive-solid);
+  /* The solid button's hover, set per mode beside its fill. Named, so no
+   * caller draws it from a numbered shade. */
+  --color-destructive-hover: var(--nx-destructive-hover);
   --color-destructive-foreground: var(--nx-destructive-foreground);
 
   --color-success: var(--nx-success);
@@ -641,6 +647,20 @@
   }
 }
 
+/* From fully off the left edge to fully off the right one, so the segment
+   never sits still at either end. Driven by `transform`, never by `left`: a
+   moving box counts as a layout shift, and a transform does not. The segment
+   is 30% of the line, so the line's far edge is 100 / 30 of its own widths
+   from its start. */
+@keyframes loading-line {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(333.34%);
+  }
+}
+
 @keyframes brand-pulse {
   0%,
   100% {
@@ -816,6 +836,12 @@
    * affected pairings with their measured ratios. */
   --nx-destructive: oklch(0.63 0.19 23.03);
   --nx-destructive-solid: oklch(0.63 0.19 23.03);
+  /* Hover deepens the fill toward black, which its white label reads better on. */
+  --nx-destructive-hover: color-mix(
+    in srgb,
+    var(--nx-destructive-solid),
+    black 20%
+  );
   --nx-destructive-foreground: oklch(1 0 0);
   /* white */
   /* Darkened from green-600; renders as #00852c, ~4.8:1 as text on white. */
@@ -1134,6 +1160,13 @@
   /* Same value as the base: the button fill needs no darkening here because
      its ink is black rather than white. */
   --nx-destructive-solid: oklch(0.69 0.2 23.91);
+  /* Hover lightens the fill, since its label here is black: deepening it
+     would take the label toward the fill. */
+  --nx-destructive-hover: color-mix(
+    in srgb,
+    var(--nx-destructive-solid),
+    white 15%
+  );
   /* Black, not white. The dark-mode fill is light enough that black on-color
      text reads at 6.90:1 where white would fall below the minimum. */
   --nx-destructive-foreground: oklch(0 0 0);

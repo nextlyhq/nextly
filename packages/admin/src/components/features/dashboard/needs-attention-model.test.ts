@@ -121,4 +121,30 @@ describe("attentionRows", () => {
     expect(rows.map(row => row.id)).toEqual(["a/1", "a/2"]);
     expect(rows).toHaveLength(digestTotal(items).count);
   });
+
+  it("draws a single item by its label alone, with how to fix it from Nextly's documentation only", () => {
+    const docs = "https://nextlyhq.com/docs/database/encrypted-connections";
+    const rows = attentionRows({
+      items: [
+        item({
+          id: "core/system-connection-unencrypted",
+          label: "Database connection is not encrypted",
+          count: 1,
+          single: true,
+          help: docs,
+        }),
+        item({ id: "a/2", help: "https://elsewhere.example/docs" }),
+        item({ id: "a/3", help: "http://nextlyhq.com/docs" }),
+        item({ id: "a/4", help: "javascript:alert(1)" }),
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      title: "Database connection is not encrypted",
+      spoken: "Database connection is not encrypted",
+      help: docs,
+    });
+    for (const row of rows.slice(1)) expect(row).not.toHaveProperty("help");
+    // Not single: the count is said.
+    expect(rows[1].title).toBe("Overdue releases · 2");
+  });
 });

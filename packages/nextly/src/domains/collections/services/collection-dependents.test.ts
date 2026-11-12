@@ -5,6 +5,9 @@ import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-ele
 
 import {
   assertNothingDependsOn,
+  fieldGroupPlacementCounts,
+  fieldGroupUsedBy,
+  ownersReadableBy,
   fieldsPlacing,
   fieldsPointingAt,
   findEntityDependents,
@@ -548,6 +551,22 @@ describe("a field group's and a Single's dependents", () => {
     ]);
   });
 
+  it("names a field group and a collection of the same slug deleted together each with its own dependents", async () => {
+    const found = await findEntityDependents(
+      [SEO, { slug: "seo", tables: ["dc_seo"] }],
+      sources({ owners: [pages] })
+    );
+
+    expect([...found.keys()]).toEqual(["seo", "seo (collection)"]);
+    expect(found.get("seo")?.fields.map(field => field.fieldPath)).toEqual([
+      "meta",
+      "blocks.hero.either",
+    ]);
+    expect(
+      found.get("seo (collection)")?.fields.map(field => field.fieldPath)
+    ).toEqual(["related"]);
+  });
+
   it("does not count a host deleted in the same operation, but counts a Single of the same slug that stays", async () => {
     await expect(
       findEntityDependents(
@@ -805,5 +824,247 @@ describe("keys the database holds that no configuration declares", () => {
     expect(refusal.publicMessage).toBe(
       `"seo" was not deleted, because the foreign keys the database holds into its tables could not be read, so whether anything depends on it is unknown. Nothing was removed. Fix the cause in the server log and try again.`
     );
+  });
+});
+
+describe("fieldGroupPlacementCounts", () => {
+  /** Field group "card" places "seo"; collection "pages" places both. */
+  const owners: FieldOwner[] = [
+    {
+      entityType: "fieldGroup",
+      entitySlug: "card",
+      fields: [{ name: "meta", type: "component", component: "seo" }],
+    },
+    {
+      entityType: "collection",
+      entitySlug: "pages",
+      fields: [
+        { name: "teaser", type: "component", component: "card" },
+        {
+          name: "blocks",
+          type: "repeater",
+          fields: [
+            { name: "either", type: "component", components: ["card", "seo"] },
+          ],
+        },
+        { name: "related", type: "relationship", relationTo: "seo" },
+      ],
+    },
+    { entityType: "single", entitySlug: "home", fields: [] },
+  ];
+
+  it("counts one field group's use of another when both are asked about together", async () => {
+    const counts = await fieldGroupPlacementCounts(
+      ["card", "seo", "unused"],
+      sources({ owners })
+    );
+    // card: pages.teaser and pages.blocks.either; seo: card.meta and
+    // pages.blocks.either. A delete of both together would leave card's use
+    // of seo out, as going with it; a list asks about each on its own.
+    expect(counts).toEqual(
+      new Map([
+        ["card", 2],
+        ["seo", 2],
+        ["unused", 0],
+      ])
+    );
+  });
+
+  it("gives each field group the number of fields its own delete refusal would name", async () => {
+    const counts = await fieldGroupPlacementCounts(
+      ["card", "seo"],
+      sources({ owners })
+    );
+    for (const slug of ["card", "seo"]) {
+      const alone = await findEntityDependents(
+        [{ kind: "fieldGroup", slug, tables: [] }],
+        sources({ owners })
+      );
+      expect(counts.get(slug)).toBe(alone.get(slug)?.fields.length ?? 0);
+    }
+  });
+
+  it("does not count a field group's reference to itself, as its own delete does not", async () => {
+    // "tree" places itself and is placed once by "pages"; its delete takes
+    // its own fields with it, so only the outside use refuses it.
+    const withSelf: FieldOwner[] = [
+      ...owners,
+      {
+        entityType: "fieldGroup",
+        entitySlug: "tree",
+        fields: [{ name: "children", type: "component", component: "tree" }],
+      },
+      {
+        entityType: "collection",
+        entitySlug: "menus",
+        fields: [{ name: "root", type: "component", component: "tree" }],
+      },
+    ];
+    const counts = await fieldGroupPlacementCounts(
+      ["tree"],
+      sources({ owners: withSelf })
+    );
+    const alone = await findEntityDependents(
+      [{ kind: "fieldGroup", slug: "tree", tables: [] }],
+      sources({ owners: withSelf })
+    );
+    expect(counts.get("tree")).toBe(1);
+    expect(counts.get("tree")).toBe(alone.get("tree")?.fields.length);
+  });
+
+  it("reads the field owners once, however many field groups it is asked about", async () => {
+    const fieldOwners = vi.fn(() => Promise.resolve(owners));
+    await fieldGroupPlacementCounts(["card", "seo", "unused"], {
+      ...sources({ owners }),
+      fieldOwners,
+    });
+    expect(fieldOwners).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects when the field owners cannot be read, leaving the caller to say so", async () => {
+    await expect(
+      fieldGroupPlacementCounts(
+        ["card"],
+        sources({ owners: new Error("down") })
+      )
+    ).rejects.toThrow("down");
+  });
+});
+
+describe("fieldGroupUsedBy", () => {
+  /** "card" places "seo"; "pages" places both; "home" places "seo" in a group. */
+  const owners: FieldOwner[] = [
+    {
+      entityType: "fieldGroup",
+      entitySlug: "card",
+      fields: [{ name: "meta", type: "component", component: "seo" }],
+    },
+    {
+      entityType: "collection",
+      entitySlug: "pages",
+      fields: [
+        { name: "teaser", type: "component", component: "card" },
+        {
+          name: "blocks",
+          type: "repeater",
+          fields: [
+            { name: "either", type: "component", components: ["card", "seo"] },
+          ],
+        },
+      ],
+    },
+    {
+      entityType: "single",
+      entitySlug: "home",
+      fields: [
+        {
+          name: "hero",
+          type: "group",
+          fields: [{ name: "seo", type: "component", component: "seo" }],
+        },
+      ],
+    },
+  ];
+
+  it("names each field that places a field group, and what holds it", async () => {
+    const placements = await fieldGroupUsedBy("seo", sources({ owners }));
+    expect(placements).toEqual([
+      { entityType: "fieldGroup", entitySlug: "card", fieldPath: "meta" },
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fieldPath: "blocks.either",
+      },
+      { entityType: "single", entitySlug: "home", fieldPath: "hero.seo" },
+    ]);
+  });
+
+  it("is the list the field-group list's count counts", async () => {
+    const counts = await fieldGroupPlacementCounts(
+      ["card", "seo"],
+      sources({ owners })
+    );
+    for (const slug of ["card", "seo"]) {
+      const placements = await fieldGroupUsedBy(slug, sources({ owners }));
+      expect(counts.get(slug)).toBe(placements.length);
+    }
+  });
+
+  it("leaves out a field group's reference to itself", async () => {
+    const placements = await fieldGroupUsedBy(
+      "tree",
+      sources({
+        owners: [
+          {
+            entityType: "fieldGroup",
+            entitySlug: "tree",
+            fields: [
+              { name: "children", type: "component", component: "tree" },
+            ],
+          },
+          {
+            entityType: "collection",
+            entitySlug: "menus",
+            fields: [{ name: "root", type: "component", component: "tree" }],
+          },
+        ],
+      })
+    );
+    expect(placements).toEqual([
+      { entityType: "collection", entitySlug: "menus", fieldPath: "root" },
+    ]);
+  });
+
+  it("rejects when the field owners cannot be read, rather than answering none", async () => {
+    await expect(
+      fieldGroupUsedBy("seo", sources({ owners: new Error("down") }))
+    ).rejects.toThrow("down");
+  });
+  it("walks each field list once for a whole page, however many it counts", async () => {
+    // Each owner counts the times its fields are read.
+    const reads = new Map<string, number>();
+    const counted = owners.map(owner => ({
+      entityType: owner.entityType,
+      entitySlug: owner.entitySlug,
+      get fields() {
+        reads.set(owner.entitySlug, (reads.get(owner.entitySlug) ?? 0) + 1);
+        return owner.fields;
+      },
+    }));
+    await fieldGroupPlacementCounts(
+      ["card", "seo", "other", "more"],
+      sources({ owners: counted })
+    );
+    expect([...reads.values()]).toEqual([1, 1, 1]);
+  });
+});
+
+describe("ownersReadableBy", () => {
+  const owners: FieldOwner[] = [
+    { entityType: "collection", entitySlug: "posts", fields: [] },
+    { entityType: "collection", entitySlug: "secret", fields: [] },
+    { entityType: "single", entitySlug: "home", fields: [] },
+    { entityType: "single", entitySlug: "payroll", fields: [] },
+    { entityType: "fieldGroup", entitySlug: "seo", fields: [] },
+  ];
+  const slugs = (kept: FieldOwner[]) =>
+    kept.map(owner => `${owner.entityType}:${owner.entitySlug}`);
+
+  it("keeps only the collections and Singles the reader may read, and every field group", () => {
+    expect(
+      slugs(
+        ownersReadableBy(owners, { collection: ["posts"], single: ["home"] })
+      )
+    ).toEqual(["collection:posts", "single:home", "fieldGroup:seo"]);
+  });
+
+  it("keeps no collection or Single for a reader who may read none", () => {
+    expect(
+      slugs(ownersReadableBy(owners, { collection: [], single: [] }))
+    ).toEqual(["fieldGroup:seo"]);
+  });
+
+  it("leaves a kind unfiltered only when it is given no list", () => {
+    expect(slugs(ownersReadableBy(owners, {}))).toHaveLength(5);
   });
 });

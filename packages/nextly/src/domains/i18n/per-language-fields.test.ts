@@ -22,6 +22,8 @@ const DEFINITIONS = new Map<string, FieldGroupDefinition>([
   ["inner", { localized: true, fields: [{ type: "text", name: "note" }] }],
   ["plain", { fields: [{ type: "text", name: "note" }] }],
   ["itself", { fields: [group("itself")] }],
+  // A group with no name only lays fields out: `inner` is placed directly in `laidout`.
+  ["laidout", { fields: [{ type: "group", fields: [group("inner")] }] }],
 ]);
 
 const known = (slug: string) => DEFINITIONS.get(slug) ?? null;
@@ -29,6 +31,16 @@ const known = (slug: string) => DEFINITIONS.get(slug) ?? null;
 describe("reachesLocalizedFieldGroupIn", () => {
   it("finds a localized group inside a group that is not", () => {
     expect(reachesLocalizedFieldGroupIn([group("outer")], known)).toBe(true);
+  });
+
+  it("finds a localized group placed inside a group with no name", () => {
+    expect(reachesLocalizedFieldGroupIn([group("laidout")], known)).toBe(true);
+    expect(
+      reachesLocalizedFieldGroupIn(
+        [{ type: "group", fields: [group("inner")] }],
+        known
+      )
+    ).toBe(true);
   });
 
   it("answers no for groups that are not localized at any depth", () => {

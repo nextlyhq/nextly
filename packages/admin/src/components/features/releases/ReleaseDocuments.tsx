@@ -251,10 +251,7 @@ function DocumentsBody({
 }) {
   if (membersFailed) {
     return (
-      <p
-        role="alert"
-        className="text-sm text-destructive-700 dark:text-destructive"
-      >
+      <p role="alert" className="text-sm text-danger-text">
         The documents in this release could not be loaded.
       </p>
     );
@@ -334,15 +331,13 @@ function ReadinessPanel({
         "flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center",
         headline.tone === "ready"
           ? "border-border bg-card"
-          : "border-destructive bg-destructive/5"
+          : "border-danger-border bg-danger-surface"
       )}
     >
       <Icon
         className={cn(
           "hidden size-5 shrink-0 sm:block",
-          headline.tone === "ready"
-            ? "text-success-600 dark:text-success-400"
-            : "text-destructive-700 dark:text-destructive"
+          headline.tone === "ready" ? "text-success-text" : "text-danger-text"
         )}
         aria-hidden
       />
@@ -433,7 +428,7 @@ function DocumentGroup({
             <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <span>{group.hiddenLine}</span>
               {group.hiddenNeedFix > 0 ? (
-                <span className="inline-flex items-center gap-1 font-medium text-destructive-700 dark:text-destructive">
+                <span className="inline-flex items-center gap-1 font-medium text-danger-text">
                   <AlertCircle className="size-3.5 shrink-0" aria-hidden />
                   {describeUnshownNeedFix(group.hiddenNeedFix)}
                 </span>
@@ -616,9 +611,7 @@ function ProblemList({
           key={problem.text}
           className={cn(
             "flex items-start gap-1.5 text-xs",
-            tone === "hard"
-              ? "text-destructive-700 dark:text-destructive"
-              : "text-muted-foreground"
+            tone === "hard" ? "text-danger-text" : "text-muted-foreground"
           )}
         >
           <Icon className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -693,12 +686,12 @@ function ReadinessMark({
     );
   }
   return ready ? (
-    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-success-700 dark:text-success-400">
+    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-success-text">
       <CheckCircle2 className="size-3.5" aria-hidden />
       Ready
     </span>
   ) : (
-    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-destructive-700 dark:text-destructive">
+    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-danger-text">
       <AlertCircle className="size-3.5" aria-hidden />
       Needs a fix
     </span>
@@ -774,10 +767,7 @@ function ActionControl({
         </DropdownMenuContent>
       </DropdownMenu>
       {change.isError ? (
-        <p
-          role="alert"
-          className="max-w-[16rem] text-xs text-destructive-700 dark:text-destructive"
-        >
+        <p role="alert" className="max-w-[16rem] text-xs text-danger-text">
           {releaseErrorMessage(change.error, "It was not changed.")}
         </p>
       ) : null}
@@ -856,7 +846,7 @@ function RemoveMenuItem({
         onSelect={onRemove}
         disabled={reason !== null}
         aria-describedby={reason ? reasonId : undefined}
-        className="flex-col items-start gap-0.5 text-destructive-700 dark:text-destructive"
+        className="flex-col items-start gap-0.5 text-danger-text"
       >
         {remove.cancelsRelease
           ? "Remove and cancel release…"

@@ -1,16 +1,16 @@
 /**
- * A card's settings in a browser: the quick setting on the card, saved at once for the reader
- * and announced, at each reference width; the quick popover, opened from the card's title,
- * applying a change at once with Undo; the card menu at rest, with Settings, Size, Refresh and
- * Remove; and the More settings panel, opened through the popover's More settings, beside a
- * dashboard that stays usable, with a live preview at the card's own tier, saving on Done at
- * rest (the card's own title with it), restoring on Cancel, and holding its change with the
+ * A card's settings in a browser: the quick setting on the card's header, saved at once for the
+ * reader and announced, at each reference width; a click on the card's title opening nothing;
+ * the card menu at rest, with Settings…, Refresh and Remove; and the one settings drawer, opened
+ * from Settings…, beside a dashboard that stays usable, with a live preview at the card's own
+ * tier, the card untouched until Save, saving on Save at rest (its width and its own title with
+ * it) so it stays after a reload, discarding on Cancel, and staging its change with the
  * dashboard's other unsaved changes while customising.
  *
  * Drawn with the style fixture's settings card (`style-fixture/recent`), which the suite's
- * server switches on: a list of posts with a Rows setting and one quick setting, Accent. No
- * built-in widget offers a quick setting yet. The card is placed by each test, so no other
- * spec's dashboard carries it.
+ * server switches on: a list of posts with a Rows setting (keyed `limit`, so drawn as a choice of
+ * 5, 10 or 20 beside its stored 3) and one quick setting, Accent. The card is placed by each test,
+ * so no other spec's dashboard carries it.
  */
 import {
   expect,
@@ -107,16 +107,6 @@ function rowsIn(within: Locator) {
 /** The card's own placement, as the reader's stored layout holds it now. */
 async function storedCard(page: Page) {
   return (await readLayout(page)).placements.find(p => p.id === "e2e-settings");
-}
-
-/** The card's quick popover, opened from the card's title. */
-async function openPopover(page: Page) {
-  await cell(page).getByRole("button", { name: TITLE, exact: true }).click();
-  const popover = page.getByRole("dialog", {
-    name: `Quick settings for ${TITLE}`,
-  });
-  await expect(popover).toBeVisible();
-  return popover;
 }
 
 /** The card's menu at rest, opened. */
@@ -230,51 +220,7 @@ for (const viewport of WIDTHS) {
   });
 }
 
-test.describe("the quick popover at each width", () => {
-  ownSeat(1);
-
-  for (const viewport of WIDTHS) {
-    test(`the quick popover applies a change at once, and Undo puts back the value before it (${viewport.name})`, async ({
-      page,
-    }) => {
-      await page.setViewportSize(viewport);
-      await page.reload();
-      await expect(rows(page)).toHaveCount(3);
-      const sent = watchRequests(page);
-
-      const popover = await openPopover(page);
-      const accent = popover.getByRole("combobox", { name: "Accent" });
-      await expect(accent).toHaveText(/Plain/);
-      await accent.click();
-      await page.getByRole("option", { name: "Bold" }).click();
-
-      // Written on the change itself, with the popover still open and the card in view beside it.
-      await expect.poll(() => sent.filter(isSettingsWrite).length).toBe(1);
-      await expect(popover).toBeVisible();
-      await expect(cell(page)).toBeInViewport({ ratio: 0.25 });
-      await expect
-        .poll(async () => (await storedCard(page))?.config)
-        .toEqual({
-          accent: "bold",
-        });
-
-      // Undo writes back what the card had just before the change: no setting of its own.
-      await page.getByRole("button", { name: "Undo", exact: true }).click();
-      await expect
-        .poll(async () => (await storedCard(page))?.config ?? {})
-        .toEqual({});
-      await page.reload();
-      // The header draws a choice of two as a segmented control.
-      await expect(
-        cell(page)
-          .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
-          .getByRole("radio", { name: "Plain" })
-      ).toHaveAttribute("aria-checked", "true");
-    });
-  }
-});
-
-test.describe("the quick popover and the card menu at rest", () => {
+test.describe("the card's title and the card menu at rest", () => {
   ownSeat(2);
 
   test.beforeEach(async ({ page }) => {
@@ -283,70 +229,36 @@ test.describe("the quick popover and the card menu at rest", () => {
     await expect(rows(page)).toHaveCount(3);
   });
 
-  test("Escape closes the popover, and focus goes back to the title", async ({
-    page,
-  }) => {
-    const popover = await openPopover(page);
-    // Focus moves into the popover as it opens.
-    await expect(
-      popover.getByRole("combobox", { name: "Accent" })
-    ).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(popover).toBeHidden();
-    await expect(
-      cell(page).getByRole("button", { name: TITLE, exact: true })
-    ).toBeFocused();
+  test("a click on the card's title opens nothing", async ({ page }) => {
+    const heading = cell(page).getByRole("heading", { name: TITLE });
+    await expect(heading.getByRole("button")).toHaveCount(0);
+    await heading.click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 
-  test("Settings in the card menu opens the popover, and Escape returns to the menu's button", async ({
+  test("Settings… in the card menu opens the drawer, and Escape returns to the menu's button", async ({
     page,
   }) => {
     const menu = await openCardMenu(page);
     await menu.getByRole("menuitem", { name: "Settings…" }).click();
-    const popover = page.getByRole("dialog", {
-      name: `Quick settings for ${TITLE}`,
-    });
-    await expect(popover).toBeVisible();
+    const drawer = page.getByRole("dialog", { name: TITLE });
+    await expect(drawer).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(popover).toBeHidden();
+    await expect(drawer).toBeHidden();
     await expect(
       cell(page).getByRole("button", { name: `Card menu for ${TITLE}` })
     ).toBeFocused();
   });
 
-  test("the card menu lists Settings, Size, Refresh and Remove, in that order", async ({
+  test("the card menu lists Settings…, Refresh and Remove, in that order, and no size", async ({
     page,
   }) => {
     const menu = await openCardMenu(page);
     const items = (await menu.getByRole("menuitem").allTextContents()).map(
       item => item.trim()
     );
-    // The fixture's card has one height, so its Size is its width alone.
-    expect(items).toEqual([
-      "Settings…",
-      expect.stringMatching(/^Width/),
-      "Refresh",
-      "Remove",
-    ]);
-  });
-
-  test("Size in the card menu saves the card's width at once, and Undo puts it back", async ({
-    page,
-  }) => {
-    const before = await storedCard(page);
-    const menu = await openCardMenu(page);
-    // By keyboard: a pointer travelling from the submenu's trigger to its item crosses the menu
-    // and can close the submenu under it, which no reader's pointer does.
-    await menu.getByRole("menuitem", { name: /^Width/ }).press("ArrowRight");
-    const half = page.getByRole("menuitemradio", {
-      name: "50% width",
-    });
-    await expect(half).toBeVisible();
-    await half.press("Enter");
-    await expect.poll(async () => (await storedCard(page))?.w).toBe(6);
-
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
-    await expect.poll(async () => (await storedCard(page))?.w).toBe(before?.w);
+    expect(items).toEqual(["Settings…", "Refresh", "Remove"]);
+    await expect(menu.getByRole("menuitemradio")).toHaveCount(0);
   });
 
   test("Remove in the card menu asks nothing, and Undo puts the card back", async ({
@@ -368,7 +280,7 @@ test.describe("the quick popover and the card menu at rest", () => {
   });
 });
 
-test.describe("the settings sheet", () => {
+test.describe("the settings drawer", () => {
   ownSeat(3);
 
   test.beforeEach(async ({ page }) => {
@@ -378,43 +290,49 @@ test.describe("the settings sheet", () => {
   });
 
   async function openSettings(page: Page) {
-    // Settings opens the card's quick popover, and its More settings the sheet.
     const menu = await openCardMenu(page);
     await menu.getByRole("menuitem", { name: "Settings…" }).click();
-    const popover = page.getByRole("dialog", {
-      name: `Quick settings for ${TITLE}`,
-    });
-    await popover.getByRole("button", { name: "More settings" }).click();
-    const sheet = page.getByRole("dialog", { name: `${TITLE} settings` });
-    await expect(sheet).toBeVisible();
-    return sheet;
+    const drawer = page.getByRole("dialog", { name: TITLE });
+    await expect(drawer).toBeVisible();
+    await expect(
+      drawer.getByRole("radiogroup", { name: "Width" })
+    ).toBeVisible();
+    return drawer;
   }
 
-  async function chooseRows(sheet: ReturnType<Page["getByRole"]>, n: number) {
-    const field = sheet.getByRole("spinbutton", { name: /Rows/ });
-    await field.fill(String(n));
-    await field.press("Tab");
+  /** The drawer's Rows, a choice of 5, 10 or 20 beside the card's stored 3. */
+  function rowsChoice(drawer: Locator) {
+    return drawer.getByRole("radiogroup", { name: "Rows" });
   }
 
-  test("leaves the dashboard usable beside it, and previews the card at the tier its width gives it", async ({
+  test("draws the preview, then Content, Display and Size, nothing folded, beside a dashboard that stays usable", async ({
     page,
   }) => {
-    const sheet = await openSettings(page);
-    const box = await sheet.boundingBox();
-    expect(box?.width).toBeGreaterThanOrEqual(480);
-    expect(box?.width).toBeLessThanOrEqual(560);
+    const drawer = await openSettings(page);
+    await expect(drawer).toHaveAccessibleDescription("Widget settings");
+    const box = await drawer.boundingBox();
+    expect(box?.width).toBe(440);
+    // The fixture declares no setting over its content, so Content is not drawn.
+    const headings = (await drawer.locator("section h3").allTextContents()).map(
+      heading => heading.trim()
+    );
+    expect(headings).toEqual(["Display", "Size"]);
+    await expect(drawer.getByText("Preview", { exact: true })).toBeVisible();
+    await expect(
+      rowsChoice(drawer).getByRole("radio", { name: "3" })
+    ).toHaveAttribute("aria-checked", "true");
     // The card is as wide as it may be on a 1,440 px dashboard: drawn large, scaled to fit.
     const card = cell(page).locator("[data-tier]").first();
     await expect(card).toHaveAttribute("data-tier", "large");
-    const preview = sheet.getByTestId("settings-preview");
+    const preview = drawer.getByTestId("settings-preview");
     await expect(preview.locator("[data-tier]").first()).toHaveAttribute(
       "data-tier",
       "large"
     );
     expect(Number(await preview.getAttribute("data-scale"))).toBeLessThan(1);
-    // Not modal: a card beside it can still be reached, and reaching it keeps the panel open.
-    // This card is full width, so its own menu sits under the panel: the first card menu clear
-    // of the panel's box is used, found by its test id, not its name, which follows the title.
+    // Not modal: a card beside it can still be reached, and reaching it keeps the drawer open.
+    // This card is full width, so its own menu sits under the drawer: the first card menu clear
+    // of the drawer's box is used, found by its test id, not its name, which follows the title.
     const menus = await page.getByTestId("card-menu").all();
     let reachable: (typeof menus)[number] | undefined;
     for (const menu of menus) {
@@ -425,96 +343,103 @@ test.describe("the settings sheet", () => {
       }
     }
     if (reachable === undefined)
-      throw new Error("no card menu clear of the panel");
+      throw new Error("no card menu clear of the drawer");
     await reachable.click();
     await expect(page.getByRole("menu")).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(sheet).toBeVisible();
+    await expect(drawer).toBeVisible();
   });
 
-  test("keeps the card's own title on Done, and draws the card under it", async ({
+  test("updates the preview as settings change, and leaves the card untouched until Save", async ({
     page,
   }) => {
-    const sheet = await openSettings(page);
-    await sheet.getByLabel("Title").fill("  Posts to review ");
-    await sheet.getByRole("button", { name: "Done" }).click();
-    await expect(sheet).toBeHidden();
+    const drawer = await openSettings(page);
+    const preview = drawer.getByRole("region", { name: `Preview of ${TITLE}` });
+    await expect(rowsIn(preview)).toHaveCount(3);
+    await rowsChoice(drawer).getByRole("radio", { name: "5" }).click();
+    // More rows than the card's 3: every post the card may list, up to five.
+    await expect.poll(() => rowsIn(preview).count()).toBeGreaterThan(3);
+    await drawer.getByRole("radio", { name: "50% width" }).click();
+    await expect(drawer.getByTestId("settings-preview-width")).toHaveText(
+      "At 50% of the dashboard"
+    );
+    // The card itself is unchanged until Save.
+    await expect(rows(page)).toHaveCount(3);
+    expect((await storedCard(page))?.config ?? {}).toEqual({});
+  });
+
+  test("Cancel, Escape and the close button leave the card as it was", async ({
+    page,
+  }) => {
+    for (const close of ["Cancel", "Escape", "Close"]) {
+      const drawer = await openSettings(page);
+      await rowsChoice(drawer).getByRole("radio", { name: "5" }).click();
+      if (close === "Escape") await page.keyboard.press("Escape");
+      else await drawer.getByRole("button", { name: close }).click();
+      await expect(drawer).toBeHidden();
+      await expect(rows(page)).toHaveCount(3);
+    }
+    const drawer = await openSettings(page);
+    await expect(
+      rowsChoice(drawer).getByRole("radio", { name: "3" })
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("Save at rest keeps the settings, the width and the card's own title, and they stay after a reload", async ({
+    page,
+  }) => {
+    const drawer = await openSettings(page);
+    await rowsChoice(drawer).getByRole("radio", { name: "5" }).click();
+    await drawer.getByRole("radio", { name: "50% width" }).click();
+    await drawer.getByLabel("Title").fill("  Posts to review ");
+    await drawer.getByRole("button", { name: "Save" }).click();
+    await expect(drawer).toBeHidden();
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
     // The card's own region, found within its cell, is now named by the reader's title.
     await expect(cell(page).getByRole("region").first()).toHaveAccessibleName(
       /^Posts to review/
     );
-    expect((await storedCard(page))?.title).toBe("Posts to review");
+    const stored = await storedCard(page);
+    expect(stored).toMatchObject({
+      w: 6,
+      title: "Posts to review",
+      config: { limit: 5 },
+    });
+    await page.reload();
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
+    await expect(cell(page)).toHaveClass(/col-span-6/);
   });
 
-  test("shows the card at the top of the panel, as the panel's values would draw it", async ({
+  test("is the whole width of a phone, with Save in reach while the form is taller than the screen", async ({
     page,
   }) => {
-    const sheet = await openSettings(page);
-    const preview = sheet.getByRole("region", { name: `Preview of ${TITLE}` });
-    await expect(rowsIn(preview)).toHaveCount(3);
-    await chooseRows(sheet, 2);
-    await expect(rowsIn(preview)).toHaveCount(2);
-    // The card itself is unchanged until Done.
-    await expect(rows(page)).toHaveCount(3);
-  });
-
-  test("Cancel leaves the card as it was", async ({ page }) => {
-    let sheet = await openSettings(page);
-    await chooseRows(sheet, 2);
-    await sheet.getByRole("button", { name: "Cancel" }).click();
-    await expect(sheet).toBeHidden();
-    await expect(rows(page)).toHaveCount(3);
-    sheet = await openSettings(page);
-    await expect(sheet.getByRole("spinbutton", { name: /Rows/ })).toHaveValue(
-      "3"
-    );
-  });
-
-  test("keeps Done within reach on a short phone screen, where the form is taller than it", async ({
-    page,
-  }) => {
-    // 🔴 The sheet's base is not a flex box, so the area below its header took its own height and
-    // ran past the screen with nothing to scroll: on a phone the footer, Done included, was off
-    // the bottom and out of reach. The area now scrolls inside the sheet, with Cancel and Done
-    // held at its foot, so Done is in reach however far the form runs, and pressing it keeps
-    // the change.
     await page.setViewportSize({ width: 390, height: 400 });
     await page.reload();
     await expect(rows(page)).toHaveCount(3);
-    const sheet = await openSettings(page);
-    // Guards the guard: the form must be taller than the room it is given, or Done is in reach
-    // whatever the sheet's layout does, and this test would pass on the old one.
-    const overflows = await sheet
-      .locator("form")
-      .evaluate(form => form.scrollHeight > form.clientHeight);
+    const drawer = await openSettings(page);
+    expect((await drawer.boundingBox())?.width).toBe(390);
+    // Guards the guard: the form must be taller than the room it is given, or Save is in reach
+    // whatever the drawer's layout does.
+    const overflows = await drawer
+      .locator("form > div")
+      .first()
+      .evaluate(part => part.scrollHeight > part.clientHeight);
     expect(overflows, "the form must be taller than its room").toBe(true);
-    const done = sheet.getByRole("button", { name: "Done" });
-    await expect(done).toBeInViewport();
-    await chooseRows(sheet, 2);
-    await expect(done).toBeInViewport();
-    await done.click();
-    await expect(sheet).toBeHidden();
-    await expect(rows(page)).toHaveCount(2);
+    const save = drawer.getByRole("button", { name: "Save" });
+    await expect(save).toBeInViewport();
+    await rowsChoice(drawer).getByRole("radio", { name: "5" }).click();
+    await expect(save).toBeInViewport();
+    await save.click();
+    await expect(drawer).toBeHidden();
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
   });
 
-  test("Done at rest saves the change for the reader at once", async ({
-    page,
-  }) => {
-    const sheet = await openSettings(page);
-    await chooseRows(sheet, 2);
-    await sheet.getByRole("button", { name: "Done" }).click();
-    await expect(sheet).toBeHidden();
-    await expect(rows(page)).toHaveCount(2);
-    await page.reload();
-    await expect(rows(page)).toHaveCount(2);
-  });
-
-  test("Done while customising holds the change until the dashboard is saved", async ({
+  test("Save while customising stages the change until the dashboard is saved", async ({
     page,
   }) => {
     const begin = page.getByTestId("dashboard-edit-begin");
     await begin.click();
-    const bar = page.getByRole("group", { name: "Customize your dashboard" });
+    const bar = page.getByRole("group", { name: "Customize dashboard" });
     await expect(bar).toBeVisible();
 
     const writes: Request[] = [];
@@ -529,23 +454,23 @@ test.describe("the settings sheet", () => {
     await page
       .getByRole("button", { name: `Card actions for ${TITLE}` })
       .click();
-    await page.getByRole("menuitem", { name: "Settings" }).click();
-    // Settings opens the card's quick popover, and its More settings the sheet.
-    await page
-      .getByRole("dialog", { name: `Quick settings for ${TITLE}` })
-      .getByRole("button", { name: "More settings" })
-      .click();
-    const sheet = page.getByRole("dialog", { name: `${TITLE} settings` });
-    await chooseRows(sheet, 2);
-    await sheet.getByRole("button", { name: "Done" }).click();
-    await expect(sheet).toBeHidden();
-    await expect(bar.getByText("Unsaved changes")).toBeVisible();
+    await page.getByRole("menuitem", { name: "Settings…" }).click();
+    const drawer = page.getByRole("dialog", { name: TITLE });
+    await rowsChoice(drawer).getByRole("radio", { name: "5" }).click();
+    await drawer.getByRole("radio", { name: "50% width" }).click();
+    await drawer.getByRole("button", { name: "Save" }).click();
+    await expect(drawer).toBeHidden();
+    await expect(bar.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(writes).toEqual([]);
 
     await bar.getByRole("button", { name: "Save" }).click();
     await expect(bar).toBeHidden();
     expect(writes).toHaveLength(1);
     await page.reload();
-    await expect(rows(page)).toHaveCount(2);
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(3);
+    expect(await storedCard(page)).toMatchObject({
+      w: 6,
+      config: { limit: 5 },
+    });
   });
 });
