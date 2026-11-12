@@ -513,11 +513,14 @@ describe.each(getConfiguredTestDialects())(
     it("keeps the record past the delivery log's 90 days, unchanged by an edited answer", async () => {
       const { t, owner, submit } = await boot(dialect, [visitor]);
       const cookie = await sessionOf(t, owner);
+      // The copy to the team refused, so the record holds a failure that
+      // nothing in core's records is left to explain.
+      behaviour.refuse = new Set([TEAM]);
       const id = await submit();
       const before = await groupOf(t, cookie, id, "visitor");
       expect(looks(before)).toEqual({
         "a•••@example.com": "Sent",
-        "t•••@example.com": "Sent",
+        "t•••@example.com": "Failed",
       });
 
       await t.nextly.update({
@@ -533,6 +536,7 @@ describe.each(getConfiguredTestDialects())(
       await trigger(t, 91 * 24 * 60 * 60_000);
       await t.adapter.delete("email_deliveries", {});
       await t.adapter.delete("email_queue", {});
+      expect(await t.adapter.select("email_queue", {})).toEqual([]);
 
       const after = await groupOf(t, cookie, id, "visitor");
       expect(after.recipients).toEqual(before.recipients);
