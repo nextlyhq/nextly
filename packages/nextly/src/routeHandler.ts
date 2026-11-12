@@ -50,6 +50,7 @@ import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
   getDashboardStats,
+  getDashboardContent,
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
@@ -503,6 +504,8 @@ async function handleDashboardRequest(
   switch (method) {
     case "getDashboardStats":
       return getDashboardStats(req);
+    case "getDashboardContent":
+      return getDashboardContent(req);
     case "getDashboardRecentEntries":
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
