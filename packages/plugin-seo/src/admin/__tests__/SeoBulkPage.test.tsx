@@ -742,3 +742,46 @@ describe("the bulk edit screen, Codex round 3", () => {
     });
   });
 });
+
+describe("the bulk edit screen, Codex round 4", () => {
+  it("reads as many pages of a type put away by an import as were read before", async () => {
+    twoTypes();
+    vi.mocked(readPluginRoute).mockImplementation((async (args: {
+      path: string;
+    }) => {
+      if (args.path.includes("type=pages")) {
+        return {
+          type: "pages",
+          rows: [{ ...ROWS[0]!, id: "g1", label: "About us" }],
+          total: 1,
+          more: false,
+        };
+      }
+      return args.path.includes("page=2")
+        ? { type: "posts", rows: [ROWS[1]!], total: 2, more: false }
+        : { type: "posts", rows: [ROWS[0]!], total: 2, more: true };
+    }) as unknown as typeof readPluginRoute);
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await screen.findByLabelText("Title on Google for Jasper vs Rext");
+    fireEvent.change(titleOf("Jasper vs Rext"), {
+      target: { value: "Jasper, again" },
+    });
+    chooseType("pages");
+    await screen.findByLabelText("Title on Google for About us");
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Import 2 pages, all or nothing",
+      })
+    );
+    await waitFor(() =>
+      expect(writes.some(write => write.path === "/import/apply")).toBe(true)
+    );
+    chooseType("posts");
+    await screen.findByLabelText("Title on Google for Jasper vs Rext");
+    expect(titleOf("Jasper vs Rext").value).toBe("Jasper, again");
+    expect(screen.getByText("1 change")).toBeTruthy();
+  });
+});

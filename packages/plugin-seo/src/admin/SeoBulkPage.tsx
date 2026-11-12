@@ -102,6 +102,10 @@ function useRows(type: string | undefined) {
   // The latest read asked of each type: only its answer counts, so a later
   // read of one type never puts away another's.
   const latest = useRef<Record<string, number>>({});
+  // How many pages of each type put away by an import were read: as many
+  // are read when it is chosen again, so an edit on a later page stays in
+  // the changes.
+  const putAway = useRef<Record<string, number>>({});
 
   const read = useCallback(
     async (slug: string, pages: number, keep: readonly BulkRow[]) => {
@@ -136,7 +140,9 @@ function useRows(type: string | undefined) {
 
   const known = type === undefined ? undefined : loaded[type];
   useEffect(() => {
-    if (type !== undefined && known === undefined) void read(type, 1, []);
+    if (type !== undefined && known === undefined) {
+      void read(type, putAway.current[type] ?? 1, []);
+    }
   }, [type, known, read]);
 
   return {
@@ -177,6 +183,9 @@ function useRows(type: string | undefined) {
       for (const slug of Object.keys(latest.current)) {
         if (slug !== type)
           latest.current[slug] = (latest.current[slug] ?? 0) + 1;
+      }
+      for (const [slug, each] of Object.entries(loaded)) {
+        if (slug !== type) putAway.current[slug] = each.pages;
       }
       setLoaded(current =>
         type === undefined || current[type] === undefined
