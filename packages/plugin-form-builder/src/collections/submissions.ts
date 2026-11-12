@@ -229,6 +229,16 @@ export function submissionsCollection(
       label: "One-response key",
       admin: { hidden: true },
     }),
+
+    // What the submission was asked: each field's label, type and option
+    // labels, and which fields its conditions hid, so its page reads as it
+    // was answered after the form changes. Written by the plugin at the write
+    // seam, never taken from a caller.
+    json({
+      name: "asked",
+      label: "Fields asked",
+      admin: { hidden: true },
+    }),
   ];
 
   // Process additional fields from formSubmissionOverrides

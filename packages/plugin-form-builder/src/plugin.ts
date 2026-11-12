@@ -91,6 +91,11 @@ import type {
   FormEmailNotification,
   ResolvedFormBuilderConfig,
 } from "./types";
+import {
+  askedAfterEdit,
+  askedSnapshotOf,
+  readAskedSnapshot,
+} from "./utils/asked-fields";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
@@ -1280,6 +1285,9 @@ export async function prepareSubmissionForWrite(
   // A submission's one-response key is the plugin's to write, never a
   // caller's: one posting a key could take a value's place before its owner.
   delete submission.responseKey;
+  // What it was asked is the plugin's to record, from the form, never a
+  // caller's to set.
+  delete submission.asked;
   const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
@@ -1363,6 +1371,7 @@ export async function prepareSubmissionForWrite(
   if (ctx.operation !== "create" && submission.data === undefined) {
     stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
   }
+  recordAsked(ctx, fields, formId);
   stampRequestAddress(ctx, ctx.data);
   if (ctx.operation === "create") {
     // Made from what is stored, after the spam verdict: spam takes no key.
@@ -1382,6 +1391,42 @@ export async function prepareSubmissionForWrite(
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * Keep with the submission what it was asked (`asked-fields`): the form's
+ * fields as the visitor saw them on create, or as staff edited an answer to
+ * on update. A submission moved to another form is read with that form's
+ * fields from then on; one stored before submissions kept this keeps none.
+ */
+function recordAsked(
+  ctx: {
+    operation?: string;
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+  },
+  fields: AnyFormField[],
+  formId: string
+): void {
+  const row = ctx.data;
+  if (!row) return;
+  const data = submittedPayload(row.data);
+  const stored = ctx.originalData;
+  const movedFrom = stored ? parentFormId(stored) : null;
+  if (
+    ctx.operation === "create" ||
+    (movedFrom !== null && movedFrom !== formId)
+  ) {
+    row.asked = askedSnapshotOf(fields, data);
+    return;
+  }
+  const after = askedAfterEdit(
+    readAskedSnapshot(stored?.asked),
+    fields,
+    stored?.data === undefined ? {} : submittedPayload(stored.data),
+    data
+  );
+  if (after !== undefined) row.asked = after;
 }
 
 /**
