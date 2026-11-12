@@ -78,6 +78,8 @@ import {
   type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
+import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -459,10 +461,13 @@ export class SingleMetadataService {
     // row owns the slug and refuses every retry, which is a worse state than the orphan it
     // prevents. That recovery half is the migration lock this relocation exists to unblock, and the
     // ordering changes with it rather than before it.
-    const record = await this.registry.registerSingle({
-      ...input,
-      migrationStatus,
-    });
+    // The row and the stored schema version in one transaction, so the
+    // version's count moves with the save it records (`writeRegistryRows`);
+    // the permissions are seeded once it has committed.
+    const record = await this.registry.registerSingle(
+      { ...input, migrationStatus },
+      { writeRow: write => writeRegistryRowsWith(this.adapter, write) }
+    );
 
     return { record, migrationStatus };
   }
@@ -604,6 +609,18 @@ export class SingleMetadataService {
       });
     }
     const tableName = current?.tableName ?? callerTableName;
+
+    // Before anything is dropped, inside the same exclusion as the drops: a
+    // declared key into its tables or another owner's element on them refuses
+    // the delete by name, and so does either that cannot be read. Asked of a
+    // Single whose row is already gone too, since its tables may remain.
+    if (tableName) {
+      await this.registry.assertNothingDependsOn({
+        slug,
+        tableName,
+        fields: current?.fields ?? [],
+      });
+    }
 
     const adapter = this.adapter;
     if (tableName && adapter) {
@@ -782,6 +799,11 @@ export class SingleMetadataService {
     // Asked here, from the flags this exclusion just re-derived, because the caller's reading can
     // be stale: a concurrent save that turned translation on would make this edit a field leaving
     // translation that the caller never saw as one.
+    // A field renamed onto a column that is already there is refused here, before anything
+    // changes: the archive write of a field leaving translation, just below, is the first write a
+    // save makes.
+    await this.refuseRenameOntoTakenColumn(input);
+
     await this.assertFieldsMayLeaveTranslation(input);
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
@@ -823,9 +845,11 @@ export class SingleMetadataService {
     }
 
     // 3. RECORD, with the outcome already known.
-    const record = await this.registry.updateSingle(input.slug, updateData, {
-      source: "ui",
-    });
+    // The row and the stored schema version in one transaction
+    // (`writeRegistryRows`).
+    const record = await writeRegistryRowsWith(this.adapter, () =>
+      this.registry.updateSingle(input.slug, updateData, { source: "ui" })
+    );
 
     return { record, migrationStatus, refusedSettings };
   }
@@ -848,6 +872,39 @@ export class SingleMetadataService {
    * leaves nothing to update, and a Single that became `locked` in the same window is code-first
    * now, so applying a UI edit to it would write a row the config is about to contradict.
    */
+  /**
+   * Refuse the field this save renames when the column it moves to is already there, naming the
+   * table and both columns, before anything changes.
+   *
+   * The renamed field is the one the main table's rule (`detectFieldRename`) finds on the whole
+   * field lists, as the plan finds it. Its values move from the table that holds it before the
+   * save to the one that holds it after: the companion for a translated field, the main table
+   * otherwise (`isFieldLocalized`), so a field leaving or joining translation as it is renamed is
+   * judged on both tables. The columns are the ones each spelling names (`renamedColumns`), which
+   * a companion column mirrors. A rename an earlier stopped save already made passes.
+   */
+  private async refuseRenameOntoTakenColumn(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter || input.fields === undefined) return;
+    await refuseRenamedFieldOntoTakenColumn(
+      adapter,
+      {
+        previousFields: (input.existing.fields ??
+          []) as unknown as FieldDefinition[],
+        fields: input.fields,
+        mainTable: input.existing.tableName,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        dialect: adapter.getCapabilities().dialect,
+        // A Single's table is built by the collection's generator.
+        builtBy: "collection",
+      },
+      { single: input.slug }
+    );
+  }
+
   /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no

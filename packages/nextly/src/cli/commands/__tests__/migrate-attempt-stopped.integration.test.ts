@@ -358,7 +358,7 @@ describe.each(LOCK_DIALECTS)(
     describe("a file whose second statement fails", () => {
       const one = `${P}_one`;
       // Fails on every dialect: the table it writes to does not exist.
-      const failing = `INSERT INTO ${P}_missing (id) VALUES (1)`;
+      const failing = `SELECT id FROM ${P}_missing`;
 
       /** Runs the file, and returns the error `nextly migrate` ended with. */
       async function failedRun(marked: boolean): Promise<unknown> {
@@ -529,9 +529,11 @@ describe.each(LOCK_DIALECTS)(
 
         // The lock lapses; both commands refuse as for a migration the folder
         // lacks (exit 3), naming the file a newer build tried, and change
-        // nothing.
-        for (const command of [migrate(), migrateDown()]) {
-          const refusal = await command.then(
+        // nothing. Each command starts only once the one before it has ended,
+        // so its refusal is awaited as it happens and the database is read
+        // between the two.
+        for (const command of [migrate, migrateDown]) {
+          const refusal = await command().then(
             () => undefined,
             (thrown: unknown) => thrown
           );

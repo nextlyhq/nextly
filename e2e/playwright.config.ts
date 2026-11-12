@@ -68,14 +68,18 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  *   production build turns the builder off unless the app opts in, and
  *   refuses its writes with `BUILDER_DISABLED`. The production refusal itself
  *   is `tests/production/builder-guard.spec.ts`, which runs there.
- * - `widget-preview`: the widget preview page exists only while the server
- *   runs in development; a production build answers its address as not found
+ * - `widget-preview`: the widget check's page draws from a read only a
+ *   development server serves; a production build answers that read, and the
+ *   admin's old preview address, as not found
  *   (`tests/production/widget-preview.spec.ts`).
  * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
  *   Builder's, which a production build turns off.
  * - `builder-field-gates`, `builder-runtime-collection`, `builder-nested-field`,
- *   `builder-repeater-row`: each makes its collection through the Schema
- *   Builder's own calls.
+ *   `builder-repeater-row`, `release-add-documents`, `template-addresses`:
+ *   each makes its collection through the Schema Builder's own calls.
+ * - `notification-bell`: the bell lists the Schema Builder's changes, so the
+ *   admin offers it only where the builder runs, and a production build hides
+ *   it with the builder.
  * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
  *   which only a development server may reach; a production server rightly
  *   refuses it.
@@ -90,6 +94,9 @@ const DEV_SPECS = [
   "**/builder-runtime-collection.spec.ts",
   "**/builder-nested-field.spec.ts",
   "**/builder-repeater-row.spec.ts",
+  "**/release-add-documents.spec.ts",
+  "**/template-addresses.spec.ts",
+  "**/notification-bell.spec.ts",
   "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",
@@ -283,6 +290,11 @@ export default defineConfig({
       // delays. Its card answers at once until that spec asks otherwise, so the
       // other dashboard specs see an ordinary card.
       NEXTLY_E2E_SLOW_WIDGET: "1",
+      // Registers the widget check's page, where widget-preview.spec.ts draws
+      // every widget from its preview cases and checks each state's
+      // accessibility. A test page, so off in a contributor's dev server and
+      // in the admin every site ships.
+      NEXTLY_E2E_WIDGET_CHECK: "1",
       // The builder-shell harness route, gated the same way and for the same
       // reason: a dev-only route under `src/app/` is otherwise reachable in
       // `pnpm dev:app` and indistinguishable from product.

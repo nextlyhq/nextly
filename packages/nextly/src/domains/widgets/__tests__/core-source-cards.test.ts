@@ -3,8 +3,8 @@
  * `defineWidget`: Content, Team, Continue where you left off, Upcoming
  * releases and Team activity. Each passes the checks every declaration is held
  * to; its `load` asks its source, as the caller its read services were bound
- * for, for the rows its size and density hold, at most its "Number of items",
- * and one more; and it is published as a card answered on the server, offered
+ * for, for its "Number of entries", whatever its size, and one more; and it is
+ * published as a card answered on the server, offered
  * on the condition and gate it always had.
  *
  * The sources are stood in for here, registered as core registers its own, so
@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
 import * as loggerModule from "../../../observability/logger";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { rowsThatFit } from "../card-geometry";
 import { contentTableWidget } from "../core-widgets/content-table";
 import { continueWidget } from "../core-widgets/continue";
 import { teamWidget } from "../core-widgets/team";
@@ -34,7 +33,7 @@ import {
   CONTENT_SOURCE_ID,
   CONTINUE_SOURCE_ID,
   RELEASES_SOURCE_ID,
-  TEAM_SOURCE_ID,
+  TEAM_PEOPLE_SOURCE_ID,
 } from "../system-source-ids";
 import { clearSystemResolvers, registerSystemSource } from "../system-sources";
 
@@ -57,7 +56,7 @@ function standInSources(): void {
   clearSystemResolvers();
   for (const id of [
     CONTENT_SOURCE_ID,
-    TEAM_SOURCE_ID,
+    TEAM_PEOPLE_SOURCE_ID,
     CONTINUE_SOURCE_ID,
     RELEASES_SOURCE_ID,
     ACTIVITY_SOURCE_ID,
@@ -130,7 +129,7 @@ describe("core's cards answered by a system source", () => {
     await loadCard(teamActivityWidget, {}, KEY, { size: FIVE_ROWS });
     expect(asked.map(each => each.query.source)).toEqual([
       CONTENT_SOURCE_ID,
-      TEAM_SOURCE_ID,
+      TEAM_PEOPLE_SOURCE_ID,
       CONTINUE_SOURCE_ID,
       RELEASES_SOURCE_ID,
       ACTIVITY_SOURCE_ID,
@@ -141,36 +140,52 @@ describe("core's cards answered by a system source", () => {
 });
 
 describe("the rows each list card asks for", () => {
-  it("are the rows its size holds, at most its number of items, and one more", async () => {
-    // Five rows tall at the default density hold more than three, so the
-    // reader's three is what is asked, and one more to say more exist.
+  /** Core's list cards answered by a system source: each offers a "Number of entries". */
+  const LISTS = [
+    contentTableWidget,
+    continueWidget,
+    upcomingReleasesWidget,
+    teamActivityWidget,
+  ];
+
+  it("are its number of entries, and one more", async () => {
     await loadCard(continueWidget, { limit: 3 }, KEY, { size: FIVE_ROWS });
     await loadCard(teamActivityWidget, { limit: 3 }, KEY, { size: FIVE_ROWS });
     expect(asked.map(each => each.query.limit)).toEqual([4, 4]);
   });
 
-  it("are fewer on a shorter card, and more where its rows are compact", async () => {
-    const short = { w: 6, h: 4, tier: "medium" } as const;
-    await loadCard(teamActivityWidget, { limit: 10 }, KEY, { size: short });
-    await loadCard(teamActivityWidget, { limit: 10, density: "compact" }, KEY, {
-      size: short,
-    });
-    expect(asked.map(each => each.query.limit)).toEqual([
-      rowsThatFit(short, { density: "default" }) + 1,
-      rowsThatFit(short, { density: "compact" }) + 1,
-    ]);
-    // The control: compact rows are shorter, so the two asks differ.
-    expect(asked[0]?.query.limit).toBeLessThan(asked[1]?.query.limit ?? 0);
-  });
+  it.each(LISTS.map(card => [card.id, card] as const))(
+    "%s asks its number of entries and one more, the same at every height",
+    async (_id, card) => {
+      // Two rows tall holds no whole row and eight rows holds more than ten: a load that still
+      // read its size would ask differently at the two.
+      for (const limit of [10, 20]) {
+        for (const h of [2, 8]) {
+          await loadCard(card, { limit }, KEY, {
+            size: { w: 12, h, tier: "large" },
+          });
+        }
+      }
+      expect(asked.map(each => each.query.limit)).toEqual([11, 11, 21, 21]);
+    }
+  );
 
-  it("are at most the ten a list draws for Content, and five for Upcoming releases, which offer no number", async () => {
-    const tall = { w: 12, h: 8, tier: "large" } as const;
-    await loadCard(contentTableWidget, {}, KEY, { size: tall });
-    await loadCard(upcomingReleasesWidget, {}, KEY, { size: tall });
-    expect(asked.map(each => each.query.limit)).toEqual([
-      Math.min(10, rowsThatFit(tall, { density: "default" })) + 1,
-      6,
-    ]);
+  it.each(LISTS.map(card => [card.id, card] as const))(
+    "%s asks five and one more until its reader sets a number",
+    async (_id, card) => {
+      await loadCard(card, {}, KEY, { size: { w: 12, h: 8, tier: "large" } });
+      expect(asked.map(each => each.query.limit)).toEqual([6]);
+    }
+  );
+
+  it("ignores the density for the rows it asks", async () => {
+    await loadCard(teamActivityWidget, { limit: 10 }, KEY, {
+      size: { w: 6, h: 4, tier: "medium" },
+    });
+    await loadCard(teamActivityWidget, { limit: 10, density: "compact" }, KEY, {
+      size: { w: 6, h: 4, tier: "medium" },
+    });
+    expect(asked.map(each => each.query.limit)).toEqual([11, 11]);
   });
 });
 
@@ -210,14 +225,59 @@ describe("what each card makes of its answer", () => {
     });
   });
 
-  it("hands Team the counts its source sent, and never a count it left out", async () => {
-    answers[TEAM_SOURCE_ID] = {
+  it("hands Team the people its source sent, and how many the role has in all", async () => {
+    answers[TEAM_PEOPLE_SOURCE_ID] = {
       op: "list",
-      items: [{ figure: "users", count: 12 }],
+      items: [
+        {
+          name: "Ana",
+          email: "ana@example.test",
+          role: "Editor",
+          lastActiveAt: new Date("2026-11-10T09:00:00.000Z"),
+        },
+        // No name, no role and no last active: each stays out, never drawn as a blank.
+        { email: "bo@example.test" },
+        // A row with no email names no one, and is left out.
+        { name: "Nobody" },
+      ],
+      total: 14,
     };
     await expect(
       loadCard(teamWidget, {}, KEY, { size: FIVE_ROWS })
-    ).resolves.toEqual({ users: 12 });
+    ).resolves.toEqual({
+      people: [
+        {
+          name: "Ana",
+          email: "ana@example.test",
+          role: "Editor",
+          lastActiveAt: "2026-11-10T09:00:00.000Z",
+        },
+        { email: "bo@example.test" },
+      ],
+      total: 14,
+    });
+  });
+
+  it("asks Team's source for the role its filter names, and for everyone under All roles", async () => {
+    await loadCard(teamWidget, { role: "editor", limit: 10 }, KEY, {
+      size: FIVE_ROWS,
+    });
+    await loadCard(teamWidget, {}, KEY, { size: FIVE_ROWS });
+    expect(asked.map(each => each.query)).toEqual([
+      {
+        source: TEAM_PEOPLE_SOURCE_ID,
+        op: "list",
+        select: ["name", "email", "role", "lastActiveAt"],
+        where: { role: "editor" },
+        limit: 10,
+      },
+      {
+        source: TEAM_PEOPLE_SOURCE_ID,
+        op: "list",
+        select: ["name", "email", "role", "lastActiveAt"],
+        limit: 5,
+      },
+    ]);
   });
 
   it("leaves Upcoming releases off the dashboard while its answer is empty", () => {
@@ -293,15 +353,15 @@ describe("as core publishes them", () => {
     expect(widgetGateHolds(gate, slug => slug === "read-posts")).toBe(false);
   });
 
-  it("offer Team to a reader who may read people and add or change them, and to no one else", () => {
+  it("offer Team to a reader who may read people, and to no one else", () => {
     resetWidgetRegistries([]);
     const gate = getWidget("core/team")?.requiredPermission;
     const holding = (...slugs: string[]) =>
       widgetGateHolds(gate, slug => slugs.includes(slug));
-    expect(holding("read-users", "update-users")).toBe(true);
+    expect(holding("read-users")).toBe(true);
     expect(holding("read-users", "create-users")).toBe(true);
-    // Each half alone is not enough.
-    expect(holding("read-users")).toBe(false);
+    // Adding or changing people without reading them is not enough.
     expect(holding("create-users", "update-users")).toBe(false);
+    expect(holding("read-posts")).toBe(false);
   });
 });

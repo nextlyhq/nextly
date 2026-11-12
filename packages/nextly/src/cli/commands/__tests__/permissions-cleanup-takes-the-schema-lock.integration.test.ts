@@ -39,7 +39,10 @@ import type { Logger } from "../../../shared/types";
 import { toCliError } from "../../errors";
 import { createLogger } from "../../utils/logger";
 import { migrateCore } from "../migrate";
-import { cleanupOrphanedPermissionsUnderLock } from "../permissions-cleanup";
+import {
+  cleanupOrphanedPermissionsUnderLock,
+  runPermissionsCleanup,
+} from "../permissions-cleanup";
 
 /** A collection slug the registry does not hold until a case registers it. */
 const GHOST = "pclk_ghost";
@@ -211,6 +214,37 @@ describe.each(LOCK_DIALECTS)(
         "SERVICE_UNAVAILABLE"
       );
       expect(toCliError(error).code).toBe("FIELD_GROUP_MIGRATION_IN_FLIGHT");
+      expect(await databaseState()).toEqual(before);
+    }, 90_000);
+
+    it("names a stalled field-group storage migration in a dry run as the real run's refusal, listing nothing", async () => {
+      const entries = [
+        { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
+        {
+          kind: "registry" as const,
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+      ];
+      await beginMigration(new MetaService(adapter, logger), {
+        direction: "up",
+        migrationId: "pcl-dry-stalled",
+        plan: { registryHash: "pcl", manifestHash: hashManifest(entries) },
+        appliedManifest: entries,
+      });
+      const before = await databaseState();
+      expect(await ghostPermissions()).not.toEqual([]);
+      const lines: string[] = [];
+      const printing = createLogger({ quiet: true });
+      printing.info = (message: string) => void lines.push(message);
+
+      await runPermissionsCleanup(adapter, printing, { dryRun: true });
+
+      expect(lines).toContain(
+        "A real run would refuse: The command did not run: a field-group storage migration is in flight on this database."
+      );
+      expect(lines.filter(line => line.startsWith("Would "))).toEqual([]);
+      expect(lines.at(-1)).toBe("Dry run: nothing was changed.");
       expect(await databaseState()).toEqual(before);
     }, 90_000);
 

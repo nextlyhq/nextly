@@ -23,8 +23,18 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
 import type { NextlyServiceConfig } from "../../di/register";
+import {
+  publishWithheldScopeFields,
+  scopedTypeKey,
+} from "../../domains/schema/pipeline/withheld-scope-fields";
 import { NextlyError } from "../../errors";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
+import {
+  isContentTypeScope,
+  typesReachedBy,
+  type ContentTypeCandidate,
+  type ContentTypeScope,
+} from "../content-type-scope";
 import {
   transformWithLedgers,
   type TransformContribution,
@@ -130,7 +140,8 @@ function tryExtend<T extends Fielded>(
   arr: T[],
   target: string,
   fields: FieldConfig[],
-  owner: string
+  owner: string,
+  leftAlone?: LeftAloneExtend[]
 ): boolean {
   const idx = arr.findIndex(e => e.slug === target);
   if (idx === -1) return false;
@@ -141,7 +152,15 @@ function tryExtend<T extends Fielded>(
   for (const f of fields) {
     const name = (f as { name?: string }).name;
     if (name && seen.has(name.toLowerCase())) {
-      throw extendFieldDuplicateError(target, name, owner);
+      // A scope reaches types its author never named, so one that already has
+      // a field of this name is left as it is and listed, rather than stopping
+      // the boot over a type the plugin did not choose. A slug target names
+      // the type on purpose, and still refuses.
+      if (leftAlone === undefined) {
+        throw extendFieldDuplicateError(target, name, owner);
+      }
+      leftAlone.push({ target, field: name, owner });
+      return true;
     }
     if (name) seen.add(name.toLowerCase());
   }
@@ -162,38 +181,27 @@ function applyExtends(
   collections: NextlyServiceConfig["collections"],
   singles: NextlyServiceConfig["singles"],
   fieldGroups: NextlyServiceConfig["fieldGroups"],
-  plugins: PluginDefinition[]
-): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
-  const cols = [...(collections ?? [])];
-  const sin = [...(singles ?? [])];
-  const comp = [...(fieldGroups ?? [])];
-
-  for (const plugin of plugins) {
-    for (const clause of plugin.contributes?.extend ?? []) {
-      const targets = Array.isArray(clause.target)
-        ? clause.target
-        : [clause.target];
-      for (const target of targets) {
-        const applied =
-          tryExtend(
-            cols,
-            target,
-            asDeclaredFields(clause.fields),
-            plugin.name
-          ) ||
-          tryExtend(
-            sin,
-            target,
-            asDeclaredFields(clause.fields),
-            plugin.name
-          ) ||
-          tryExtend(comp, target, asDeclaredFields(clause.fields), plugin.name);
-        if (!applied) throw extendTargetUnknownError(target, plugin.name);
-      }
-    }
-  }
-
-  return { collections: cols, singles: sin, fieldGroups: comp };
+  plugins: PluginDefinition[],
+  owners: ReadonlyMap<string, string>
+): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> & {
+  leftAlone: LeftAloneExtend[];
+  scopeAdded: Map<string, Map<string, string>>;
+} {
+  const r = applyExtendClauses(
+    collections,
+    singles,
+    fieldGroups,
+    flattenExtends(plugins),
+    "throw",
+    configuredScope(owners)
+  );
+  return {
+    collections: r.collections,
+    singles: r.singles,
+    fieldGroups: r.fieldGroups,
+    leftAlone: r.leftAlone,
+    scopeAdded: r.scopeAdded,
+  };
 }
 
 /**
@@ -203,15 +211,50 @@ function applyExtends(
  * targets, P8/R2), then resolved against the Builder set by `resolveBuilderExtends`.
  */
 export interface DeferredExtend {
-  target: string;
+  /** A slug, or a scope the Builder's types are judged by once known. */
+  target: string | ContentTypeScope;
   fields: FieldConfig[];
   owner: string;
+  /**
+   * For a scope: every slug the configuration holds, its own and plugins'.
+   * The fold has already judged those, and the registry the Builder's types
+   * are read from holds their rows too, so the Builder pass leaves them out.
+   */
+  configuredSlugs?: readonly string[];
+}
+
+/** A type a scope reached that already had a field of the same name. */
+export interface LeftAloneExtend {
+  target: string;
+  field: string;
+  owner: string;
+}
+
+/**
+ * What the boot says of each type a scope left alone, so the site's owner
+ * learns why the plugin's field is missing there and which field it kept.
+ */
+export function leftAloneWarnings(
+  leftAlone: readonly LeftAloneExtend[]
+): string[] {
+  return leftAlone.map(
+    left =>
+      `[plugins] "${left.owner}" did not add "${left.field}" to "${left.target}", ` +
+      `which already has a field of that name. The type keeps its own field; ` +
+      `rename it, or move its values across, to use the plugin's.`
+  );
 }
 
 /** Minimal shape an entity must have to be an extend target (slug + fields). */
 export interface SchemaEntityLike {
   slug: string;
   fields?: FieldConfig[];
+  /**
+   * Who made a registry row: `ui` for the Schema Builder, `code` for the
+   * configuration, `plugin:<name>` for a plugin. Absent on a ui-schema
+   * manifest's entities, which are all the Builder's.
+   */
+  source?: string;
 }
 
 /** Builder/UI-schema entities that participate in extend resolution. */
@@ -228,6 +271,8 @@ export interface FoldResult {
   deferredExtends: DeferredExtend[];
   /** The fields plugins added to entities they do not own, by the transforms' ledgers. */
   fieldsAddedByPlugins: FieldsAddedByPlugins;
+  /** Configured types a scope left as they were, having a field of that name. */
+  leftAlone: LeftAloneExtend[];
 }
 
 /** Flatten every plugin's `contributes.extend` into one clause per (target, plugin). */
@@ -249,7 +294,8 @@ function applyTransforms(
     "collections" | "singles" | "fieldGroups"
   >,
   plugins: PluginDefinition[],
-  owners: ReadonlyMap<string, string>
+  owners: ReadonlyMap<string, string>,
+  scopeAdded: ReadonlyMap<string, ReadonlyMap<string, string>>
 ): {
   entities: Pick<
     NextlyServiceConfig,
@@ -276,7 +322,15 @@ function applyTransforms(
   // so a config with no transforms is not re-created on every fold.
   if (contributions.length === 0) return { entities, fieldsAdded: new Map() };
 
+  // The fields each plugin added to each type: a slug target's, from its
+  // declaration (a duplicate there refuses the boot), and a scope's, as the
+  // fold recorded each one it added, so a clause left alone gives nothing.
   const extendedBy = extendersBySlug(plugins);
+  for (const [slug, added] of scopeAdded) {
+    const names = extendedBy.get(slug) ?? new Map<string, string>();
+    for (const [name, owner] of added) names.set(name, owner);
+    extendedBy.set(slug, names);
+  }
   const transformable =
     (kind: TransformableEntity["kind"]) =>
     (entity: unknown): TransformableEntity => {
@@ -352,16 +406,25 @@ function fieldsAddedFrom(
  * and which fields a full uninstall of that plugin takes with it.
  */
 export function extendersBySlug(
-  plugins: PluginDefinition[]
+  plugins: PluginDefinition[],
+  reach?: (scope: ContentTypeScope) => readonly string[]
 ): Map<string, Map<string, string>> {
   const bySlug = new Map<string, Map<string, string>>();
   for (const { target, fields, owner } of flattenExtends(plugins)) {
-    const names = bySlug.get(target) ?? new Map<string, string>();
-    for (const field of fields) {
+    // A scope names no slug of its own: the types it reached are the caller's
+    // to say, from the entities it holds. Without them it records nothing,
+    // so a full uninstall keeps those fields' columns rather than guessing.
+    const slugs =
+      typeof target === "string" ? [target] : (reach?.(target) ?? []);
+    const declared = fields.flatMap(field => {
       const name = (field as { name?: unknown }).name;
-      if (typeof name === "string") names.set(name, owner);
+      return typeof name === "string" ? [name] : [];
+    });
+    for (const slug of slugs) {
+      const names = bySlug.get(slug) ?? new Map<string, string>();
+      for (const name of declared) names.set(name, owner);
+      bySlug.set(slug, names);
     }
-    bySlug.set(target, names);
   }
   return bySlug;
 }
@@ -370,9 +433,10 @@ function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
   const clauses: DeferredExtend[] = [];
   for (const plugin of plugins) {
     for (const clause of plugin.contributes?.extend ?? []) {
-      const targets = Array.isArray(clause.target)
-        ? clause.target
-        : [clause.target];
+      const targets =
+        typeof clause.target === "string" || Array.isArray(clause.target)
+          ? [clause.target].flat()
+          : [clause.target];
       for (const target of targets) {
         clauses.push({
           target,
@@ -386,11 +450,313 @@ function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
 }
 
 /**
+ * Who each entity a scope may reach belongs to, for the arrays at hand.
+ *
+ * The fold reads the configuration, where a plugin's types are known by the
+ * merge's owners; the Builder pass reads registry rows or the ui-schema
+ * manifest, where the configuration's own rows sit beside the Builder's.
+ */
+export interface ScopeContext {
+  /** The plugin that contributed a type, or undefined for the site's own. */
+  pluginOf: (entity: SchemaEntityLike) => string | undefined;
+  /** Whether a scope is also kept for the Builder pass, once its types are known. */
+  defer: boolean;
+}
+
+/** The fold's view: a type's plugin is the one the merge recorded for its slug. */
+function configuredScope(owners: ReadonlyMap<string, string>): ScopeContext {
+  return { pluginOf: entity => owners.get(entity.slug), defer: false };
+}
+
+/**
+ * The Builder pass's view. Only a row the Schema Builder made is the site's to
+ * reach: the configuration's rows were judged by the fold, and a plugin's row
+ * stays its plugin's even once the plugin is gone.
+ */
+const BUILDER_SCOPE: ScopeContext = {
+  pluginOf: entity =>
+    entity.source === undefined || entity.source === "ui"
+      ? undefined
+      : entity.source,
+  defer: false,
+};
+
+/** The candidates a scope judges, from the three arrays, in their order. */
+function scopeCandidates(
+  collections: readonly SchemaEntityLike[],
+  singles: readonly SchemaEntityLike[],
+  fieldGroups: readonly SchemaEntityLike[],
+  context: ScopeContext,
+  configured: ReadonlySet<string>
+): ContentTypeCandidate[] {
+  const of = (
+    entities: readonly SchemaEntityLike[],
+    kind: ContentTypeCandidate["kind"]
+  ): ContentTypeCandidate[] =>
+    entities
+      .filter(entity => !configured.has(entity.slug))
+      .map(entity => {
+        const plugin = context.pluginOf(entity);
+        return {
+          slug: entity.slug,
+          kind,
+          ...(plugin === undefined ? {} : { plugin }),
+        };
+      });
+  return [
+    ...of(collections, "collection"),
+    ...of(singles, "single"),
+    ...of(fieldGroups, "fieldGroup"),
+  ];
+}
+
+/**
+ * One scope clause over the configured types it reaches: each type it adds
+ * its fields to is recorded as the plugin's, each it is left alone on is
+ * listed, and the clause is handed back to defer whole for the Builder's
+ * types when the context defers.
+ */
+function applyScopeClause<
+  C extends Fielded,
+  S extends Fielded,
+  P extends Fielded,
+>(
+  clause: DeferredExtend & { target: ContentTypeScope },
+  types: { cols: C[]; sin: S[]; comp: P[] },
+  context: ScopeContext,
+  leftAlone: LeftAloneExtend[],
+  scopeAdded: Map<string, Map<string, string>>
+): DeferredExtend | undefined {
+  const { target, fields, owner } = clause;
+  const { cols, sin, comp } = types;
+  const candidates = scopeCandidates(
+    cols,
+    sin,
+    comp,
+    context,
+    new Set(clause.configuredSlugs ?? [])
+  );
+  for (const reached of typesReachedBy(target, candidates)) {
+    const before = leftAlone.length;
+    if (reached.kind === "collection") {
+      tryExtend(cols, reached.slug, fields, owner, leftAlone);
+    } else {
+      tryExtend(sin, reached.slug, fields, owner, leftAlone);
+    }
+    // Added, rather than left alone for a field it already had: these fields
+    // are now the plugin's on this type.
+    if (leftAlone.length === before) {
+      recordAdded(scopeAdded, reached.slug, fields, owner);
+    }
+  }
+  if (!context.defer) return undefined;
+  return {
+    target,
+    fields,
+    owner,
+    configuredSlugs: [...cols, ...sin, ...comp].map(e => e.slug),
+  };
+}
+
+/**
+ * The fields each scope holds back from a type the site switched off: one its
+ * `except` names that its kinds would otherwise reach. Published for the
+ * schema changes that keep the column of a type switched off after it was
+ * made (`kept-scope-fields.ts`), which leave alone a type declaring a field of
+ * that name itself.
+ *
+ * A type in the configuration is held back what it would have with every
+ * `except` lifted: the same fold run again, so the fields are the ones that
+ * made its columns, after every plugin's transforms (a rename included) and
+ * with one field to a name. A type made in the Schema Builder is not in the
+ * configuration; it takes the clauses' own fields, as the Builder pass gives
+ * them to it, the first of a name.
+ */
+function publishWithheld(
+  config: NextlyServiceConfig,
+  folded: Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups">,
+  plugins: PluginDefinition[],
+  owners: ReadonlyMap<string, string>
+): void {
+  const clauses = flattenExtends(plugins).filter(
+    (clause): clause is DeferredExtend & { target: ContentTypeScope } =>
+      typeof clause.target !== "string" && clause.target.except !== undefined
+  );
+  if (clauses.length === 0) {
+    publishWithheldScopeFields(new Map());
+    return;
+  }
+  const configured = new Map(
+    scopeCandidates(
+      folded.collections ?? [],
+      folded.singles ?? [],
+      folded.fieldGroups ?? [],
+      configuredScope(owners),
+      new Set()
+    ).map(type => [type.slug, type])
+  );
+  const allOn = foldedWithEveryTypeOnIfItFolds(config, plugins);
+  const withheld = new Map<string, FieldConfig[]>();
+  for (const clause of clauses) {
+    for (const slug of clause.target.except ?? []) {
+      holdBack(withheld, clause, slug, {
+        type: configured.get(slug),
+        allOn,
+        folded,
+      });
+    }
+  }
+  publishWithheldScopeFields(withheld);
+}
+
+/**
+ * Records in `withheld` what `clause` holds back from the type `slug`. A
+ * configured type is held back what it has with every type on and lacks now.
+ * A Builder type's kind is known only once its row is read: held back under
+ * each kind the scope reaches, of which it has one, the clause's own fields.
+ * A configured type takes those too when the configuration does not fold with
+ * every type on, less what the type declares itself (`keptScopeFields`).
+ */
+function holdBack(
+  withheld: Map<string, FieldConfig[]>,
+  clause: DeferredExtend & { target: ContentTypeScope },
+  slug: string,
+  judged: {
+    type: ContentTypeCandidate | undefined;
+    allOn: Pick<NextlyServiceConfig, "collections" | "singles"> | undefined;
+    folded: Pick<NextlyServiceConfig, "collections" | "singles">;
+  }
+): void {
+  const { type, allOn, folded } = judged;
+  const { target, fields } = clause;
+  const candidates: ContentTypeCandidate[] =
+    type === undefined ? target.every.map(kind => ({ slug, kind })) : [type];
+  // Judged as the scope judges a type it adds to: an `except` naming a type
+  // of another kind, a plugin's or a system one holds nothing back from it.
+  for (const reached of typesReachedBy({ every: target.every }, candidates)) {
+    if (reached.kind === "fieldGroup") continue;
+    const key = scopedTypeKey(reached.kind, slug);
+    // A configured type: the fold's answer first, then the clause's own
+    // declaration, in case the column was made by a scope the fold with
+    // every type on passes over (`keptScopeFields` keeps the one the column
+    // matches).
+    const held =
+      withheld.get(key) ??
+      (type !== undefined && allOn !== undefined
+        ? fieldsOnlyIn(allOn, folded, reached.kind, slug)
+        : []);
+    withheld.set(key, [...held, ...fields]);
+  }
+}
+
+/**
+ * {@link foldedWithEveryTypeOn}, or undefined when that fold is refused. It is
+ * a fold the configuration never runs: lifting an `except` can give a type the
+ * same field twice, from the scope and from a clause that names the type, and
+ * the refusal is about that what-if, not about the configuration. The real
+ * fold has already accepted it, so it still loads.
+ */
+function foldedWithEveryTypeOnIfItFolds(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles"> | undefined {
+  try {
+    return foldedWithEveryTypeOn(config, plugins);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The configuration's types as they would be with no type switched off: the
+ * fold's merge, `extend` and transforms over plugins whose scopes keep their
+ * kinds and drop their `except`.
+ */
+function foldedWithEveryTypeOn(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles"> {
+  const lifted = plugins.map(plugin => {
+    const extend = plugin.contributes?.extend;
+    if (extend === undefined) return plugin;
+    return {
+      ...plugin,
+      contributes: {
+        ...plugin.contributes,
+        extend: extend.map(clause =>
+          isContentTypeScope(clause.target)
+            ? { ...clause, target: { every: clause.target.every } }
+            : clause
+        ),
+      },
+    };
+  });
+  const { collections, singles, fieldGroups, owners } = mergeRenamed(
+    config,
+    lifted
+  );
+  const r = applyExtendClauses(
+    collections,
+    singles,
+    fieldGroups,
+    flattenExtends(lifted),
+    "collect",
+    configuredScope(owners)
+  );
+  return applyTransforms(
+    {
+      collections: r.collections,
+      singles: r.singles,
+      fieldGroups: r.fieldGroups,
+    },
+    lifted,
+    owners,
+    r.scopeAdded
+  ).entities;
+}
+
+/** The fields the type has in `on` and not in `off`, by name. */
+function fieldsOnlyIn(
+  on: Pick<NextlyServiceConfig, "collections" | "singles">,
+  off: Pick<NextlyServiceConfig, "collections" | "singles">,
+  kind: "collection" | "single",
+  slug: string
+): FieldConfig[] {
+  const of = (entities: Pick<NextlyServiceConfig, "collections" | "singles">) =>
+    (
+      (kind === "collection" ? entities.collections : entities.singles) ?? []
+    ).find(entity => entity.slug === slug)?.fields ?? [];
+  const nameOf = (field: unknown) =>
+    (field as { name?: string }).name?.toLowerCase();
+  const kept = new Set(of(off).map(nameOf));
+  return of(on).filter(field => !kept.has(nameOf(field)));
+}
+
+/** Records `fields` as `owner`'s on the type `slug`, in `added`. */
+function recordAdded(
+  added: Map<string, Map<string, string>>,
+  slug: string,
+  fields: readonly FieldConfig[],
+  owner: string
+): void {
+  const names = added.get(slug) ?? new Map<string, string>();
+  for (const field of fields) {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name === "string") names.set(name, owner);
+  }
+  added.set(slug, names);
+}
+
+/**
  * Apply a flat list of extend clauses to the three entity arrays (matched by slug
  * across all three). Pure: clones touched arrays. A clause whose target is not
  * found is either thrown (`onUnknown: "throw"`, D12) or collected into `deferred`
  * (`onUnknown: "collect"`) — the latter holds a target that may be a Builder
  * entity until Builder slugs are known.
+ *
+ * A scope target is applied to every type in the arrays it reaches, judged by
+ * `context`, and is never unknown. With `context.defer` it is also returned in
+ * `deferred`, carrying the slugs judged here, for the Builder pass.
  */
 export function applyExtendClauses<
   C extends Fielded,
@@ -401,28 +767,69 @@ export function applyExtendClauses<
   singles: S[] | undefined,
   fieldGroups: P[] | undefined,
   clauses: DeferredExtend[],
-  onUnknown: "throw" | "collect"
+  onUnknown: "throw" | "collect",
+  context: ScopeContext = BUILDER_SCOPE
 ): {
   collections: C[];
   singles: S[];
   fieldGroups: P[];
-  deferred: DeferredExtend[];
+  deferred: (DeferredExtend & { target: string })[];
+  scopes: DeferredExtend[];
+  /** Every clause set aside for the Builder's types, slug or scope, in order. */
+  postponed: DeferredExtend[];
+  leftAlone: LeftAloneExtend[];
+  /**
+   * The fields each scope clause added to a configured type, by the type's
+   * slug and the field's name, to the plugin that added it: recorded as each
+   * one is added, so a clause left alone records nothing.
+   */
+  scopeAdded: Map<string, Map<string, string>>;
 } {
   const cols = [...(collections ?? [])];
   const sin = [...(singles ?? [])];
   const comp = [...(fieldGroups ?? [])];
-  const deferred: DeferredExtend[] = [];
-  for (const { target, fields, owner } of clauses) {
+  const deferred: (DeferredExtend & { target: string })[] = [];
+  const scopes: DeferredExtend[] = [];
+  const postponed: DeferredExtend[] = [];
+  const leftAlone: LeftAloneExtend[] = [];
+  const scopeAdded = new Map<string, Map<string, string>>();
+  for (const clause of clauses) {
+    const { target, fields, owner } = clause;
+    if (typeof target !== "string") {
+      const kept = applyScopeClause(
+        { ...clause, target },
+        { cols, sin, comp },
+        context,
+        leftAlone,
+        scopeAdded
+      );
+      if (kept !== undefined) {
+        scopes.push(kept);
+        postponed.push(kept);
+      }
+      continue;
+    }
     const applied =
       tryExtend(cols, target, fields, owner) ||
       tryExtend(sin, target, fields, owner) ||
       tryExtend(comp, target, fields, owner);
     if (!applied) {
       if (onUnknown === "throw") throw extendTargetUnknownError(target, owner);
-      deferred.push({ target, fields, owner });
+      const clause = { target, fields, owner };
+      deferred.push(clause);
+      postponed.push(clause);
     }
   }
-  return { collections: cols, singles: sin, fieldGroups: comp, deferred };
+  return {
+    collections: cols,
+    singles: sin,
+    fieldGroups: comp,
+    deferred,
+    scopes,
+    postponed,
+    leftAlone,
+    scopeAdded,
+  };
 }
 
 /**
@@ -741,9 +1148,23 @@ export function applyPluginSchemaContributions(
   // against the merged (post-rename) slugs and is NOT itself rewritten through a
   // rename map — a plugin extending its own renamed entity must target the
   // renamed slug. (No current plugin extends its own entity.)
-  const extended = applyExtends(collections, singles, fieldGroups, plugins);
+  const extended = applyExtends(
+    collections,
+    singles,
+    fieldGroups,
+    plugins,
+    owners
+  );
 
-  return { ...config, ...applyTransforms(extended, plugins, owners).entities };
+  const { leftAlone: _leftAlone, scopeAdded, ...entities } = extended;
+  const transformed = applyTransforms(
+    entities,
+    plugins,
+    owners,
+    scopeAdded
+  ).entities;
+  publishWithheld(config, transformed, plugins, owners);
+  return { ...config, ...transformed };
 }
 
 /**
@@ -771,7 +1192,8 @@ export function applyPluginSchemaContributionsDeferred(
     singles,
     fieldGroups,
     flattenExtends(plugins),
-    "collect"
+    "collect",
+    { ...configuredScope(owners), defer: true }
   );
   const transformed = applyTransforms(
     {
@@ -780,12 +1202,19 @@ export function applyPluginSchemaContributionsDeferred(
       fieldGroups: r.fieldGroups,
     },
     plugins,
-    owners
+    owners,
+    r.scopeAdded
   );
+  publishWithheld(config, transformed.entities, plugins, owners);
   return {
     config: { ...config, ...transformed.entities },
-    deferredExtends: r.deferred,
+    // A scope is deferred whole, beside the slugs no configured entity had:
+    // the Builder's types it reaches are known only once they are read. In
+    // the plugins' own clause order, so a Builder type receives them as a
+    // configured type does.
+    deferredExtends: r.postponed,
     fieldsAddedByPlugins: transformed.fieldsAdded,
+    leftAlone: r.leftAlone,
   };
 }
 
@@ -801,7 +1230,7 @@ export function applyPluginSchemaContributionsDeferred(
 export function resolveBuilderExtends(
   deferred: DeferredExtend[],
   builder: BuilderEntities
-): BuilderEntities {
+): BuilderEntities & { leftAlone: LeftAloneExtend[] } {
   // Tag merged fields with plugin provenance so the materialized Builder rows
   // (migrate output) carry source/owner/locked — the same tags the runtime
   // reconciler applies, so dev-push and migrate converge.
@@ -820,6 +1249,7 @@ export function resolveBuilderExtends(
     collections: r.collections,
     singles: r.singles,
     components: r.fieldGroups,
+    leftAlone: r.leftAlone,
   };
 }
 
@@ -837,6 +1267,9 @@ export function finalizeDeferredExtendTargets(
 ): void {
   const known = new Set(knownSlugs);
   for (const d of deferred) {
+    // A scope reaches whatever types exist, none included, so it is never
+    // an unknown target.
+    if (typeof d.target !== "string") continue;
     if (!known.has(d.target)) throw extendTargetUnknownError(d.target, d.owner);
   }
 }

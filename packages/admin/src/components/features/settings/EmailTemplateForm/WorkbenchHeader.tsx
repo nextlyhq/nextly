@@ -46,7 +46,8 @@ import { cn } from "@admin/lib/utils";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import type { TemplateFormValues } from "./schema";
-import { ownerName, type WorkbenchTier } from "./workbench-model";
+import { useOwnerName } from "./useOwnerName";
+import type { WorkbenchTier } from "./workbench-model";
 import type { SheetPanel } from "./WorkbenchLayout";
 
 /** The menu's acts, each present only when it can happen. */
@@ -125,6 +126,7 @@ function StateLine({
   record: EmailTemplateRecord;
   isActive: boolean;
 }) {
+  const nameOwner = useOwnerName();
   return (
     <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
       <Badge variant="outline" className="shrink-0">
@@ -136,7 +138,7 @@ function StateLine({
         </Badge>
       )}
       <span className="shrink-0" data-testid="workbench-owner">
-        {ownerName(record)}
+        {nameOwner(record)}
       </span>
       {tier === "desktop" && record.description ? (
         <span className="truncate">· {record.description}</span>
@@ -314,6 +316,7 @@ function MoreMenu({ menu, owner }: { menu: WorkbenchMenu; owner: string }) {
 
 export function WorkbenchHeader(props: WorkbenchHeaderProps): JSX.Element {
   const { tier, record, isEdit, onExit, exitLabel } = props;
+  const nameOwner = useOwnerName();
   const isPhone = tier === "phone";
   return (
     <div
@@ -344,7 +347,7 @@ export function WorkbenchHeader(props: WorkbenchHeaderProps): JSX.Element {
         </>
       )}
       {isEdit && record ? (
-        <MoreMenu menu={props.menu} owner={ownerName(record)} />
+        <MoreMenu menu={props.menu} owner={nameOwner(record)} />
       ) : null}
     </div>
   );

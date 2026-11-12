@@ -28,8 +28,17 @@ export const ACTIVITY_SOURCE_ID = "system:activity";
 /** What is waiting for someone: pending changes, releases due soon and overdue. */
 export const ATTENTION_SOURCE_ID = "system:attention";
 
-/** The Team card's figures: the number of people, and of roles for a reader who may see them. */
+/**
+ * The team's figures, for a reader the Team card is offered to: the number of
+ * people, and of roles for a reader who may see them.
+ */
 export const TEAM_SOURCE_ID = "system:team";
+
+/**
+ * The Team card's people: name, email, role and last active, most recently
+ * active first, optionally only those holding one role.
+ */
+export const TEAM_PEOPLE_SOURCE_ID = "system:team-people";
 
 /** The Content card's collections, each with its entries and how many are drafts. */
 export const CONTENT_SOURCE_ID = "system:content";
@@ -39,3 +48,9 @@ export const CONTENT_SOURCE_ID = "system:content";
  * or other people's latest saves, one row per document this caller may read.
  */
 export const CONTINUE_SOURCE_ID = "system:continue";
+
+/**
+ * How many people have an account, and when they joined, for a reader who may
+ * read users: what a Count card set to Users reads.
+ */
+export const USERS_SOURCE_ID = "system:users";

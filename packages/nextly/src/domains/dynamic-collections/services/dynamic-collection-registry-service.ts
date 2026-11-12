@@ -2,7 +2,20 @@ import { createHash } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, and, or, like, asc, desc, count, inArray, sql } from "drizzle-orm";
+import {
+  eq,
+  and,
+  or,
+  like,
+  asc,
+  desc,
+  count,
+  inArray,
+  notInArray,
+  sql,
+  type Column,
+  type SQL,
+} from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -15,6 +28,7 @@ import type {
   StoredWebhookRecording,
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
+import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { BaseService } from "../../../shared/base-service";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { Logger } from "../../../shared/types";
@@ -129,6 +143,50 @@ export interface ListCollectionsOptions {
    * differs by dialect.
    */
   slugAllowlist?: string[];
+  /**
+   * Leave out collections whose `slug` is in this list: the plugins'
+   * collections, on the list of the site's own. A condition on the query, so
+   * the count and the page agree; with an allowlist both apply, so it only
+   * ever removes rows. `undefined` or `[]` denies nothing.
+   */
+  slugDenylist?: string[];
+}
+
+/** The slug lists a collections list is limited by. */
+export type CollectionSlugLists = Pick<
+  ListCollectionsOptions,
+  "slugAllowlist" | "slugDenylist"
+>;
+
+/**
+ * The WHERE conditions a list's slug lists become, for the count and the page
+ * alike: an `IN` for the allowlist, a `NOT IN` for a denylist that names a
+ * slug, ANDed by the caller.
+ *
+ * An empty allowlist has no condition: it means nothing is visible, which
+ * the list answers before any query, so being asked for one is a caller's
+ * mistake. Refused rather than rendered as `IN ()`, whose meaning differs by
+ * dialect.
+ */
+export function collectionSlugConditions(
+  slugColumn: Column,
+  lists: CollectionSlugLists
+): SQL[] {
+  const conditions: SQL[] = [];
+  if (lists.slugAllowlist) {
+    if (lists.slugAllowlist.length === 0) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "an empty slug allowlist reached the query builder",
+        },
+      });
+    }
+    conditions.push(inArray(slugColumn, lists.slugAllowlist));
+  }
+  if (lists.slugDenylist && lists.slugDenylist.length > 0) {
+    conditions.push(notInArray(slugColumn, lists.slugDenylist));
+  }
+  return conditions;
 }
 
 export interface ListCollectionsResponse<
@@ -350,9 +408,13 @@ export class DynamicCollectionRegistryService extends BaseService {
     }
 
     const targetSlug = updates.slug ?? existing[0].slug;
-    await this.ensureGlobalSlugUniqueness(targetSlug, {
-      currentCollectionId: existing[0].id,
-    });
+    // A rename's new address is judged by the one address rule, inside the schema lock, in the
+    // rename branch below. Any other update keeps the slug it has and is checked as before.
+    if (targetSlug === existing[0].slug) {
+      await this.ensureGlobalSlugUniqueness(targetSlug, {
+        currentCollectionId: existing[0].id,
+      });
+    }
 
     const updateData: Record<string, unknown> = { ...updates };
 
@@ -393,9 +455,20 @@ export class DynamicCollectionRegistryService extends BaseService {
         // together or neither does; otherwise the renamed collection would lose
         // them and the next collection created under the old slug would inherit
         // them.
+        //
+        // The new address is judged inside the schema lock `renameEntity` holds for the rename,
+        // so a collection or Single that takes the same snake_case form while this waits is seen,
+        // and one that tries while the rename holds the lock is refused. The rule is the one
+        // every road applies (reserved names, routes, a taken slug, and a same snake_case form
+        // among collections and Singles).
         const renamed = await renameEntity(this.adapter, {
           dialect: this.dialect,
           move,
+          judgeTarget: () =>
+            assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
+              currentResourceType: "collection",
+              currentResourceId: existing[0].id,
+            }),
           writeRegistry: async tx => {
             const written = await writeRow(
               tx.drizzleWithRelations<DatabaseAdapter["db"]>(
@@ -473,6 +546,7 @@ export class DynamicCollectionRegistryService extends BaseService {
       includeSchema = true as TIncludeSchema,
       source,
       slugAllowlist,
+      slugDenylist,
     } = options || {};
 
     // An empty allowlist means the caller may see nothing. Answered here
@@ -488,14 +562,14 @@ export class DynamicCollectionRegistryService extends BaseService {
       };
     }
 
-    const conditions = [];
-
-    // 🔴 A CONDITION, not a filter over the result. Both the count below and
+    // 🔴 CONDITIONS, not a filter over the result. Both the count below and
     // the page query read `whereClause`, so the total describes exactly the
-    // rows this caller may see and `totalPages` counts pages of those.
-    if (slugAllowlist) {
-      conditions.push(inArray(this.dynamicCollections.slug, slugAllowlist));
-    }
+    // rows this caller may see and `totalPages` counts pages of those. The
+    // denylist (the plugins' collections, on the site's own list) the same.
+    const conditions: (SQL | undefined)[] = collectionSlugConditions(
+      this.dynamicCollections.slug,
+      { slugAllowlist, slugDenylist }
+    );
 
     if (search) {
       const searchPattern = `%${search}%`;

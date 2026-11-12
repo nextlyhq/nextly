@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { reloadDynamicTables } from "../../../../init/reload-dynamic-tables";
 import { registerFromMigrations } from "../../../schema/migrate/metadata-register";
 import { createApplyDesiredSchema } from "../../../schema/pipeline/apply";
@@ -85,13 +86,28 @@ describe("writes outside the registry services clear the collection row cache", 
           singles: [],
         })
       );
-      const adapter = {
-        getDrizzle: () => ({
-          select: () => ({
-            from: () => ({ where: () => ({ limit: async () => [] }) }),
-          }),
-          insert: () => ({ values: async () => undefined }),
+      // The rows are written in a transaction with the stored schema version
+      // (`writeRegistryRows`), on this one handle: its version row is created,
+      // read and written like the registry rows, and read back as absent.
+      const db = {
+        select: () => ({
+          from: () => ({ where: () => ({ limit: async () => [] }) }),
         }),
+        insert: () => ({
+          values: () =>
+            Object.assign(Promise.resolve(undefined), {
+              onConflictDoNothing: async () => undefined,
+            }),
+        }),
+        update: () => ({ set: () => ({ where: async () => undefined }) }),
+      };
+      await loadDialectTables("sqlite");
+      const adapter = {
+        getDrizzle: () => db,
+        getCapabilities: () => ({ dialect: "sqlite" }),
+        transaction: async (work: (tx: unknown) => Promise<unknown>) =>
+          work({ getDrizzle: () => db }),
+        transactionOpenInFlow: () => true,
       } as never;
       expect(
         await cachedThenRead(() =>

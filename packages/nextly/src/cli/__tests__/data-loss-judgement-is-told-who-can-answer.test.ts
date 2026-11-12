@@ -52,7 +52,9 @@ const adapter = vi.hoisted(() => ({
   getDrizzle: () => ({}),
   setTableResolver: () => {},
   listTables: () => Promise.resolve(["dc_nw_old"]),
-  tableExists: () => Promise.resolve(true),
+  // Every table but `nextly_meta`, so no registry record is read from the
+  // handle above, which holds none.
+  tableExists: (table: string) => Promise.resolve(table !== "nextly_meta"),
   disconnect: () => Promise.resolve(),
 }));
 
@@ -88,7 +90,8 @@ function configResult() {
     config: {
       collections: [],
       plugins: [],
-      db: { migrationsDir: seen.migrationsDir },
+      // A sanitized config always names its definition file; none is there.
+      db: { migrationsDir: seen.migrationsDir, uiSchemaFile: "ui-schema.json" },
     },
     appConfig: { collections: [], plugins: [], db: {} },
     projectRoot: seen.migrationsDir,
@@ -107,9 +110,20 @@ vi.mock(
       findOrphanedCollections() {
         return Promise.resolve([{ slug: "nw_old", tableName: "dc_nw_old" }]);
       }
+      // No type keeps a column for a switched-off plugin field.
+      getAllCollections() {
+        return Promise.resolve([]);
+      }
     },
   })
 );
+vi.mock("../../domains/singles/services/single-registry-service", () => ({
+  SingleRegistryService: class {
+    getAllSingles() {
+      return Promise.resolve([]);
+    }
+  },
+}));
 vi.mock(
   "../../domains/field-groups/services/register-field-group-schemas",
   () => ({ registerComponentSchemas: () => Promise.resolve() })
@@ -124,6 +138,10 @@ vi.mock("../../domains/schema/events/schema-events-repository", () => ({
     // No migration's removal is recorded.
     listFileRemovals() {
       return Promise.resolve([]);
+    }
+    // No old Schema Builder file is marked.
+    currentOldBuilderMarks() {
+      return Promise.resolve(new Map());
     }
   },
 }));
@@ -150,6 +168,15 @@ vi.mock("../commands/migrate", async importOriginal => ({
     await importOriginal<typeof import("../commands/migrate")>()
   ).migrateExitCode,
   assertAppHistoryHolds: () => Promise.resolve(),
+}));
+
+// plugins uninstall: no release has recorded the preset roles' grants on this double's
+// database, so the command is not refused for the release it runs from.
+vi.mock("../../domains/meta/preset-grants-release", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../domains/meta/preset-grants-release")
+  >()),
+  readPresetGrantsRelease: () => Promise.resolve(undefined),
 }));
 
 // plugins uninstall: what the command hands its judgement is recorded, and

@@ -368,8 +368,12 @@ export class MediaService extends BaseService {
         this.dialect
       );
 
+      // The id breaks ties: files sharing the sorted value (an upload time,
+      // which MySQL keeps to the second, or a size) are otherwise ordered as
+      // the database likes, which may differ from page to page, so one file
+      // shows on two pages and another on none.
       const orderFn = sortOrder === "asc" ? asc : desc;
-      const orderByClause = orderFn(media[sortBy]);
+      const orderByClause = [orderFn(media[sortBy]), orderFn(media.id)];
 
       const offset = (page - 1) * limit;
 
@@ -383,7 +387,7 @@ export class MediaService extends BaseService {
           query = query.where(whereClause);
         }
         const rows = await query
-          .orderBy(orderByClause)
+          .orderBy(...orderByClause)
           .limit(limit)
           .offset(offset);
         return { total: Number(countResult[0]?.value ?? 0), rows };

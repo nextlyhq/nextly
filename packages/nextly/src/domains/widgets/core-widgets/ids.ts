@@ -103,32 +103,32 @@ const FORM_SUBMISSIONS_WIDGET_ID = "form-builder/new-submissions";
  * there is one path to the default whoever wrote it. In grid order, twelve
  * columns to a row:
  *
- * 1. Set up your project, across the row;
- * 2. Needs attention (8) beside Upcoming releases (4): the near future in one
- *    band. When only one of the two is on show, the admin draws it across the
- *    whole row, never storing that width;
- * 3. Continue where you left off (6) beside Content (6);
- * 4. New form submissions (6) beside Team activity (6).
+ * 1. Set up your project (6) beside Needs attention (6);
+ * 2. Upcoming releases (6) beside Continue where you left off (6);
+ * 3. Content (6) beside New form submissions (6);
+ * 4. Team activity (6).
  *
- * Each entry states its size, so the default does not move when a widget's
- * own starting size (what the add panel places) changes. The cards that share
- * a row share a height, so the default tiles: two rows for the setup card, its
- * one row of steps, and four for every other row, the least Upcoming releases
- * and Team activity allow. Every size lies
- * within its widget's bounds, so none is clamped where it is placed.
+ * Every card is half the row, so the cards a reader does not see leave no
+ * gap: the grid lays cards out in order, two to a row, and a card left out
+ * (the setup card for anyone but a super-admin or once it is hidden or done,
+ * Needs attention and Upcoming releases while they are empty, the form
+ * submissions without their plugin) moves the next one up beside its
+ * neighbour. At most the last card stands alone. Each entry states its size,
+ * so the default does not move when a widget's own starting size (what the
+ * add panel places) changes, and every size lies within its widget's bounds,
+ * so none is clamped where it is placed. Heights are the cards' content's.
  *
  * Team is not on it: it is for the people who manage the team, who add it
- * from the add panel. Nor is a Create card: creating an entry is the
- * header's New button. A site's own `defaultLayout` takes this one's place
- * whole.
+ * from the add panel. Nor is a Create card: an entry is created from its
+ * collection. A site's own `defaultLayout` takes this one's place whole.
  *
  * Here, beside the ids and importing no widget, so the site dashboard's check
  * and the default's builder read it without loading every core card.
  */
 export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
-  { widget: CORE_WIDGET_ID.setup, w: 12, h: 2 },
-  { widget: CORE_WIDGET_ID.needsAttention, w: 8, h: 4 },
-  { widget: CORE_WIDGET_ID.upcomingReleases, w: 4, h: 4 },
+  { widget: CORE_WIDGET_ID.setup, w: 6, h: 4 },
+  { widget: CORE_WIDGET_ID.needsAttention, w: 6, h: 4 },
+  { widget: CORE_WIDGET_ID.upcomingReleases, w: 6, h: 4 },
   { widget: CORE_WIDGET_ID.continue, w: 6, h: 4 },
   { widget: CORE_WIDGET_ID.contentTable, w: 6, h: 4 },
   { widget: FORM_SUBMISSIONS_WIDGET_ID, w: 6, h: 4, optional: true },

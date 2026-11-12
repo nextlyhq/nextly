@@ -67,7 +67,7 @@ export function provideCoreSourceRead(read: CoreSourceRead): void {
 /**
  * `query`'s answer from the `system:` source it names, as the card's caller,
  * held to the op it asked (`answerAsAsked`), as the batch holds a resolver's
- * answer. Read through `readCoreList`, the one shape core's cards ask for.
+ * answer. Read through `readCoreList`, `readCoreCount` or `readCoreSeries`.
  */
 async function readCoreSource(
   query: WidgetQuery,
@@ -114,4 +114,38 @@ export async function readCoreList(
     ...(totalByKind === undefined ? {} : { totalByKind: { ...totalByKind } }),
     ...(window === undefined ? {} : { window: { days: window.days } }),
   };
+}
+
+/** How many a `count` query of a `system:` source answers, as the card's caller. */
+export async function readCoreCount(
+  query: WidgetQuery & { op: "count" },
+  input: CardReadInput
+): Promise<number> {
+  const answer = await readCoreSource(query, input);
+  if (answer.op !== "count") {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "core-source-answered-another-op",
+        source: query.source,
+      },
+    });
+  }
+  return answer.total;
+}
+
+/** The points a `timeseries` query of a `system:` source answers, as the card's caller. */
+export async function readCoreSeries(
+  query: WidgetQuery & { op: "timeseries" },
+  input: CardReadInput
+): Promise<readonly { start: string; count: number }[]> {
+  const answer = await readCoreSource(query, input);
+  if (answer.op !== "timeseries") {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "core-source-answered-another-op",
+        source: query.source,
+      },
+    });
+  }
+  return answer.points.map(({ start, count }) => ({ start, count }));
 }

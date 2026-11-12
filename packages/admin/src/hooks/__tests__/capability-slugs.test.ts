@@ -83,11 +83,11 @@ describe("an UMBRELLA grant reveals what it covers", () => {
     }
   });
 
-  // Email is its own area now, with its own rail entry, so an email grant
-  // opens nothing in the Settings panel and must not reveal it.
-  it("an email grant does not reveal settings", () => {
+  // Email is a destination in the Settings panel, so a grant that opens one
+  // of its tabs reveals the panel, which then lands on Email.
+  it("an email grant reveals settings", () => {
     for (const slug of ["read-email-providers", "read-email-templates"]) {
-      expect(from(slug).canViewSettings, slug).toBe(false);
+      expect(from(slug).canViewSettings, slug).toBe(true);
     }
   });
 

@@ -93,6 +93,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { blocksListRoute } from "./blocks-list-route";
 import { registerRemovalWriteReport } from "./breakpoint-removal/after-commit";
 import { breakpointRemovalJob } from "./breakpoint-removal/job";
 import { removalRunStore } from "./breakpoint-removal/run-store";
@@ -144,7 +145,11 @@ import {
 } from "./collections/components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
-import { PAGES_SLUG, pagesCollection } from "./collections/pages";
+import {
+  PAGES_CONTENT_FIELD,
+  PAGES_SLUG,
+  pagesCollection,
+} from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
@@ -192,6 +197,7 @@ import {
 } from "./default-layout/settings-single";
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
+import { DESIGN_SEO_SERVICE, designSeoService } from "./design-seo";
 import { entriesRoute, titleFieldIn } from "./entries-route";
 import type { BindingJudging } from "./fields/binding-judgement";
 import type {
@@ -242,6 +248,7 @@ import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
 import { pageActionsRoute } from "./page-actions-route";
+import type { PageBuilderContentDirectApi } from "./page-content";
 import { pageAddressRoute, pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -278,6 +285,7 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import { PAGE_BUILDER_SETTINGS_PLACE } from "./settings-place-contract";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
   firstReadableTitle,
@@ -3638,6 +3646,41 @@ export const pageBuilder = (
         // collection's entry under its template address. Read as committed,
         // through the store every save's collision check writes.
         [CONTENT_ADDRESS_SERVICE]: () => requireContentAddresses(),
+        // What the design drawing a page says about it (its title,
+        // description and share image), for a plugin that asks about a page
+        // outside a request: worked out by the route's own derivation, over
+        // the design the route would draw, so it answers what the published
+        // page is answered with.
+        [DESIGN_SEO_SERVICE]: ctx =>
+          designSeoService({
+            nextly: async () => {
+              const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+              return (await getCachedNextly()) as unknown as PageBuilderContentDirectApi;
+            },
+            pages: {
+              collection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+              field: PAGES_CONTENT_FIELD,
+            },
+            templatesCollection:
+              ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
+            // Loaded when first asked: the renderer's Next-coupled entry is
+            // needed only once a page is asked about.
+            derive: async args => {
+              const { designMetadataFor } = await import(
+                "@nextlyhq/blocks-react/next"
+              );
+              return designMetadataFor({
+                ...args,
+                config: {
+                  // The booted Direct API the provider read through, which
+                  // the route's reads take as their reader.
+                  nextly: args.config.nextly as NonNullable<
+                    Parameters<typeof designMetadataFor>[0]["config"]["nextly"]
+                  >,
+                },
+              });
+            },
+          }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(
@@ -3798,6 +3841,10 @@ export const pageBuilder = (
       // plugin route declares one permission, so the tier a role may read
       // without the other has to be reachable without the other's gate.
       routes: [
+        // Which registered blocks a blocks field accepts, with their props,
+        // for the Schema Builder's outline: code-defined metadata only, to
+        // any signed-in caller.
+        blocksListRoute(),
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
@@ -4258,6 +4305,16 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // The editor's Settings dialog, where other plugins may add a tab
+        // beside the page's or the design's own settings.
+        places: [
+          {
+            name: PAGE_BUILDER_SETTINGS_PLACE,
+            description:
+              "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings.",
+            accepts: ["tab"],
+          },
+        ],
         // An entry's own design, where an author meets it.
         //
         // The Design section of an entry's side panel, first, before Status:

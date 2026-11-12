@@ -1,139 +1,256 @@
 "use client";
 
-import { Card, CardContent } from "@nextlyhq/ui";
-import { ShieldCheck, Users as UsersIcon } from "lucide-react";
-import type { TeamWidgetData } from "nextly/core-widget-data";
-import type { DeclaredComponentProps } from "nextly/widget-result";
-import type React from "react";
-
-import { Link } from "@admin/components/ui/link";
-import { ROUTES } from "@admin/constants/routes";
-
-import { FrameState } from "../widgets/frame/card-state";
-import { CardFigure } from "../widgets/frame/figure";
-import { useCardTier } from "../widgets/frame/tier";
-import { WidgetFooterLink } from "../widgets/kit/footer-link";
-
 /**
- * Compact "Team" summary on the dashboard. Two cards: total Users + total
- * Roles. Each card links to its respective Settings page.
+ * The dashboard's Team card: the people on the project, most recently active first, each with
+ * their name, email, role and when they were last active.
  *
- * Each count is drawn only when the summary carries it: the server leaves out
- * a count the reader may not read, and drawing that as 0 would put back an
- * answer it withheld, and a wrong one.
+ * Drawn from what its `load` read from `system:team-people`: at most the card's "Number of
+ * people", of the role its header's filter names, and how many that role has in all. The role
+ * filter is the card's quick setting, which the frame draws in the header. The footer holds
+ * Invite, for a reader who may add people, and, as its trailing link, "View all (N)" when the
+ * list is cut or "All users" when it is not. The frame drew loading, no permission and error
+ * before this is reached.
+ *
+ * @module components/features/dashboard/TeamSummary
  */
 
-interface TeamCardProps {
-  label: string;
-  count: number;
-  href: string;
-  Icon: React.ElementType;
-}
+import type { TeamPersonData, TeamWidgetData } from "nextly/core-widget-data";
+import type { DeclaredComponentProps } from "nextly/widget-result";
+import type { JSX } from "react";
 
-function TeamCard({ label, count, href, Icon }: TeamCardProps) {
-  return (
-    <Link
-      href={href}
-      // Full-strength hover border, more visible than the resting border, not a fainter alpha.
-      className="block group h-full rounded-lg overflow-hidden border border-border bg-card transition-colors duration-200 hover-subtle-row hover:border-primary"
-    >
-      <Card
-        variant="interactive"
-        className="h-full border-0! bg-transparent! transition-colors duration-200 rounded-lg overflow-hidden relative"
-      >
-        <CardContent className="p-5 relative z-10">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              {/* The card type ramp's big number, through the one card formatter. */}
-              <span className="text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none transition-colors">
-                <CardFigure value={count} />
-              </span>
-              {/* A label, not a heading: the frame's title is the card's one heading. */}
-              <span className="block font-medium text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
-                {label}
-              </span>
-            </div>
-            <div className="text-muted-foreground group-hover:text-foreground transition-colors pt-1">
-              <Icon className="h-5 w-5 shrink-0" />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
+import { Plus } from "@admin/components/icons";
+import { Button } from "@admin/components/ui";
+import { Link } from "@admin/components/ui/link";
+import { ROUTES, withQuery } from "@admin/constants/routes";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useNowTick } from "@admin/hooks/useNowTick";
+import { formatRelativeTime } from "@admin/lib/dashboard";
+import { cn } from "@admin/lib/utils";
+
+import { FrameState } from "../widgets/frame/card-state";
+import {
+  CARD_FOOTER_LINK_CLASS,
+  CardFooterContent,
+} from "../widgets/frame/footer-slot";
+import { countSpoken, countText } from "../widgets/frame/list-card";
+import { useRowsDrawn } from "../widgets/frame/tier";
+import { WidgetList } from "../widgets/kit/list";
+
+import { STEP_BUTTON } from "./setup/step-buttons";
 
 /** What the Team card is handed: its declaration's props, with the data its `load` answers. */
 export type TeamSummaryProps = Omit<DeclaredComponentProps, "data"> & {
   data: TeamWidgetData;
 };
 
-/**
- * The dashboard's Team card, drawn from the counts its `load` read from
- * `system:team`.
- *
- * The source asks the card's gate itself, and it sends the roles figure only
- * to a reader who may see roles: a figure it did not send is not drawn, rather
- * than drawn as 0. The frame drew loading and error before this is reached.
- * "All users" sits in the card's footer, where every card's link is drawn.
- */
-export const TeamSummary: React.FC<TeamSummaryProps> = ({ data }) => {
-  const { users, roles } = data;
-  // Neither figure came: the frame's one unavailable state, rather than an empty body.
-  if (users === undefined && roles === undefined) {
-    return <FrameState state={{ kind: "no-access" }} />;
+/** The role filter's "everyone" value, as the card's declaration names it. */
+const ALL_ROLES = "all";
+
+/** What a row says for a person with no sign-in on record. */
+export const NO_RECENT_SIGN_IN = "No recent sign-in";
+
+export function TeamSummary({ data, settings }: TeamSummaryProps): JSX.Element {
+  // The clock ticks, so "5m ago" moves on as time passes.
+  const now = useNowTick();
+  const role =
+    typeof settings.role === "string" && settings.role !== ALL_ROLES
+      ? settings.role
+      : undefined;
+  const showLastActive = settings.lastActive !== false;
+  // The reader's "Number of people": the list draws that many, and the footer counts the
+  // people drawn by the same rule, so "All users" never stands under a cut list.
+  const limit = typeof settings.limit === "number" ? settings.limit : undefined;
+  const drawn = useRowsDrawn(limit);
+  const { people, total } = data;
+  const footer = (
+    <TeamFooter
+      role={role}
+      total={total}
+      shown={Math.min(people.length, drawn)}
+    />
+  );
+  if (people.length === 0) {
+    return (
+      <>
+        <FrameState
+          state={{
+            kind: "empty",
+            empty: {
+              title:
+                role === undefined
+                  ? "No one here yet"
+                  : "No one has this role yet",
+            },
+          }}
+        />
+        {footer}
+      </>
+    );
   }
   return (
     <>
-      <TeamTiles users={users} roles={roles} />
-      <WidgetFooterLink href={ROUTES.USERS} label="All users" />
+      <WidgetList<TeamPersonData>
+        rows={people}
+        {...(limit === undefined ? {} : { limit })}
+        title={nameOf}
+        meta={person => (person.name === undefined ? [] : [person.email])}
+        leading={person => <Initials person={person} />}
+        trailing={person => (
+          <RoleAndActivity
+            role={person.role}
+            lastActive={showLastActive ? lastActiveOf(person, now) : undefined}
+          />
+        )}
+        spoken={person => spokenOf(person, showLastActive, now)}
+      />
+      {footer}
     </>
   );
-};
+}
+
+/** What a person is called on the card: their name, or their email when they have none. */
+function nameOf(person: TeamPersonData): string {
+  return person.name ?? person.email;
+}
+
+/** When a person was last active, as the row says it. */
+function lastActiveOf(person: TeamPersonData, now: number): string {
+  return person.lastActiveAt === undefined
+    ? NO_RECENT_SIGN_IN
+    : formatRelativeTime(person.lastActiveAt, now);
+}
+
+/** The whole row as assistive technology reads it, each part separated by a pause. */
+function spokenOf(
+  person: TeamPersonData,
+  showLastActive: boolean,
+  now: number
+): string {
+  const active = lastActiveOf(person, now);
+  return [
+    nameOf(person),
+    person.name === undefined ? undefined : person.email,
+    person.role,
+    showLastActive
+      ? person.lastActiveAt === undefined
+        ? active
+        : `last active ${active}`
+      : undefined,
+  ]
+    .filter(part => part !== undefined)
+    .join(", ");
+}
+
+/** Up to two initials: the first letters of the first two words of the name, or the email's. */
+export function initialsOf(person: TeamPersonData): string {
+  const words = (person.name ?? "").trim().split(/\s+/).filter(Boolean);
+  const letters =
+    words.length > 0
+      ? words.slice(0, 2).map(word => Array.from(word)[0] ?? "")
+      : [Array.from(person.email)[0] ?? ""];
+  return letters.join("").toUpperCase();
+}
+
+/** A person's leading avatar: their initials in a circle, decorative beside their name. */
+function Initials({ person }: { person: TeamPersonData }): JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-full items-center justify-center rounded-full bg-secondary text-[11px] font-semibold text-foreground"
+    >
+      {initialsOf(person)}
+    </span>
+  );
+}
+
+/** A row's end: the person's role as a chip, and when they were last active under it. */
+function RoleAndActivity({
+  role,
+  lastActive,
+}: {
+  role: string | undefined;
+  lastActive: string | undefined;
+}): JSX.Element | null {
+  if (role === undefined && lastActive === undefined) return null;
+  return (
+    <span className="flex min-w-0 flex-col items-end gap-0.5">
+      {role !== undefined && (
+        // A long role name is cut short, its whole name on hover, so the person's own name keeps
+        // its room beside it.
+        <span
+          data-testid="team-role"
+          title={role}
+          className="inline-flex h-5.5 max-w-36 items-center rounded-md border border-border bg-card px-2 text-xs text-foreground"
+        >
+          <span className="truncate">{role}</span>
+        </span>
+      )}
+      {lastActive !== undefined && (
+        <span data-testid="team-last-active" className="text-[11.5px]">
+          {lastActive}
+        </span>
+      )}
+    </span>
+  );
+}
 
 /**
- * The team at the card's tier: the counts this reader may see, of which a small card draws the
- * first alone -- the number of people, when that is theirs to see. By the card's own width, never
- * the window's, so a narrow card on a wide screen does not squeeze two tiles into it.
+ * The card's footer: Invite on the left, for a reader who may add people, and the trailing
+ * link to the Users page on the right, "View all (N)" when the card holds fewer than the role
+ * has, "All users" when it holds them all.
  */
-function TeamTiles({
-  users,
-  roles,
+function TeamFooter({
+  role,
+  total,
+  shown,
 }: {
-  users: number | undefined;
-  roles: number | undefined;
-}) {
-  // Medium until the card has measured itself, which it does before its first paint.
-  const tier = useCardTier() ?? "medium";
-  const tiles = [
-    users === undefined ? null : (
-      <TeamCard
-        key="users"
-        label="Users"
-        count={users}
-        href={ROUTES.USERS}
-        Icon={UsersIcon}
-      />
-    ),
-    roles === undefined ? null : (
-      <TeamCard
-        key="roles"
-        label="Roles"
-        count={roles}
-        href={ROUTES.SECURITY_ROLES}
-        Icon={ShieldCheck}
-      />
-    ),
-  ].filter(tile => tile !== null);
-  const drawn = tier === "small" ? tiles.slice(0, 1) : tiles;
+  role: string | undefined;
+  total: number;
+  shown: number;
+}): JSX.Element {
+  const { hasPermission } = useCurrentUserPermissions();
+  const canInvite = hasPermission("create-users");
+  const cut = total > shown;
+  const href =
+    role === undefined ? ROUTES.USERS : withQuery(ROUTES.USERS, { role });
   return (
-    <div
-      data-testid="team-summary"
-      className={
-        drawn.length > 1 ? "grid grid-cols-2 gap-4" : "grid grid-cols-1 gap-4"
-      }
-    >
-      {drawn}
-    </div>
+    <CardFooterContent rank="explicit">
+      <div
+        data-testid="team-footer"
+        className="flex w-full min-w-0 items-center gap-3"
+      >
+        {canInvite && (
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className={cn(STEP_BUTTON, "gap-1.5")}
+          >
+            <Link href={ROUTES.USERS_CREATE}>
+              <Plus className="size-3.5" aria-hidden="true" />
+              Invite
+            </Link>
+          </Button>
+        )}
+        <Link
+          data-testid="team-view-all"
+          href={href}
+          className={cn(CARD_FOOTER_LINK_CLASS, "ml-auto")}
+        >
+          {cut ? (
+            <>
+              <span aria-hidden="true">
+                View all ({countText(total, false)})
+              </span>
+              <span className="sr-only">
+                View all, {countSpoken(total, false)}
+              </span>
+            </>
+          ) : (
+            "All users"
+          )}
+        </Link>
+      </div>
+    </CardFooterContent>
   );
 }

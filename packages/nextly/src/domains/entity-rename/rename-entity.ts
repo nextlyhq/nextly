@@ -53,6 +53,13 @@ import {
  * at once, before anything is read or written. It writes rows and no DDL, so
  * it creates no lock table where there is none.
  *
+ * The new slug is judged first inside that lock (`judgeTarget`), so a collection
+ * or Single created or renamed onto the same address while this rename waited
+ * is seen, and one that tries while it holds the lock is refused. Required, so
+ * no road renames without judging where it is going. The lock is released when
+ * the transaction ends, before the post-commit work below, which may wait on
+ * the cache.
+ *
  * The transaction runs inside the permissions gate, because it moves the
  * entity's permission rows: every cached answer about who may do what is
  * retired once it has finished, committed or not, as for any permission
@@ -67,10 +74,15 @@ export async function renameEntity<T>(
     dialect: SupportedDialect;
     move: EntitySlugMove;
     writeRegistry: (tx: TransactionContext) => Promise<T | null>;
+    /**
+     * Refuse the new slug (by throwing) when the address rule does: run inside
+     * the schema lock, before anything is read or written.
+     */
+    judgeTarget: () => Promise<void>;
     logger: Logger;
   }
 ): Promise<T | null> {
-  const { dialect, move, writeRegistry, logger } = input;
+  const { dialect, move, writeRegistry, judgeTarget, logger } = input;
   const written = await withSchemaChangeExcluded(
     {
       adapter,
@@ -79,6 +91,7 @@ export async function renameEntity<T>(
       issuesDdl: false,
     },
     async () => {
+      await judgeTarget();
       const present = await slugKeyedTablesPresent(adapter);
       return writingPermissions(getDialectTables(dialect).permissions, () =>
         adapter.transaction(async tx => {

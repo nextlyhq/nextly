@@ -161,6 +161,11 @@ describe("the top bar's trail", () => {
     ).toContain("@max-[37.5rem]/topbar:inline");
     // Measured against the bar itself, so a sidebar narrowing it counts.
     expect(screen.getByRole("banner").className).toContain("@container/topbar");
+    // An open document's controls measure the bar's right part, the room they have.
+    expect(
+      screen.getByRole("banner").querySelector('[data-top-bar-place="end"]')
+        ?.className
+    ).toContain("@container/toolbar");
   });
 
   it("lets a long list name shrink and truncate rather than push into the controls, keeping it whole in the tooltip", () => {
@@ -181,29 +186,26 @@ describe("the top bar's trail", () => {
     );
   });
 
-  it("takes only the width the controls leave, in the row that holds them", () => {
+  it("takes the bar's width, and shrinks within it rather than overflowing", () => {
     // jsdom lays nothing out, so the flex roles that decide the widths are read instead.
     const long = "Quarterly investor relations announcements";
     renderHeader(
       <Editor trail={{ ...ENTRY, pluralLabel: long }} title="Spring is here" />
     );
     const slot = trail().parentElement!;
-    // Grows into the free width from a basis of none, and may shrink below its content: a long
-    // label is cut short within the space left, never wider than it.
-    expect(slot.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    // Keeps its own width and may shrink below its content: a long label is cut short within
+    // the bar, never wider than it. The bar's right part is the one that grows into the rest,
+    // so an open document's state sits right after the trail.
     expect(slot.className).toMatch(/(^|\s)min-w-0(\s|$)/);
     expect(slot.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
-    // The controls follow it in the same row, which spans the bar, so their arrival takes width
-    // from the trail's right end rather than moving the row.
-    const row = slot.parentElement!;
-    const theme = screen.getByRole("button", { name: "Choose theme" });
-    expect(row.contains(theme)).toBe(true);
-    expect(slot.contains(theme)).toBe(false);
-    expect(
-      slot.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(row.parentElement).toBe(screen.getByRole("banner"));
-    expect(row.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    expect(slot.className).not.toMatch(/(^|\s)flex-1(\s|$)/);
+    const end = screen
+      .getByRole("banner")
+      .querySelector('[data-top-bar-place="end"]');
+    expect(end?.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    // The trail's row is the bar's own: the account menu and help links are no longer in the
+    // bar, so nothing beside it takes its width.
+    expect(slot.parentElement).toBe(screen.getByRole("banner"));
   });
 
   it("draws nothing where no document is open", () => {

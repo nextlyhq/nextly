@@ -335,7 +335,7 @@ export class CollectionEntryService extends BaseService {
       hookExemptRead?: HookExemptRead;
     } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
       Parameters<CollectionQueryService["listEntries"]>[0],
-      "sort" | "offset" | "unknownSort" | "hiddenFields"
+      "sort" | "offset" | "unknownSort" | "hiddenFields" | "countUpTo"
     >
   ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
@@ -828,8 +828,6 @@ export class CollectionEntryService extends BaseService {
    * What a release's write of these entries, for its action, would be
    * refused with by validation and field rules, judged without writing. See
    * the mutation service.
-   *
-   * @experimental
    */
   async releasePublishIssues(params: {
     collectionName: string;
@@ -877,8 +875,6 @@ export class CollectionEntryService extends BaseService {
   /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
-   *
-   * @experimental
    */
   async releaseGoingLiveDocuments(params: {
     collectionName: string;
@@ -891,8 +887,6 @@ export class CollectionEntryService extends BaseService {
    * Whether a release's document-wide write of this collection would meet a
    * translation table without its per-language status. See the mutation
    * service.
-   *
-   * @experimental
    */
   async releaseCompanionLacksStatus(params: {
     collectionName: string;
@@ -903,8 +897,6 @@ export class CollectionEntryService extends BaseService {
   /**
    * The languages whose unreleased work a release's document-wide write of
    * these entries would be refused over.
-   *
-   * @experimental
    */
   async releaseHeldDraftLocales(params: {
     collectionName: string;

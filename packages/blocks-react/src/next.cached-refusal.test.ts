@@ -231,10 +231,13 @@ describe("a public route over a read the public is refused", () => {
     // thrown again is answered as not found, with no time taken outside.
     clock.on = true;
     const again = await served(route, slug);
-    const metadata = await route.generateMetadata({ params: { slug } });
+    // The head answers not found too, so a crawler gets a 404.
+    const metadata = await route
+      .generateMetadata({ params: { slug } })
+      .catch((error: unknown) => error);
     clock.on = false;
     expect(again).toMatchObject(NOT_FOUND);
-    expect(metadata).toEqual({});
+    expect(metadata).toMatchObject(NOT_FOUND);
     expect(site.refusedReads).toHaveBeenCalledTimes(1);
     expect(clock.outside).toEqual([]);
   });

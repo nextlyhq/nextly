@@ -159,9 +159,10 @@ export function ContentPanel({
 
 /**
  * The segmented control: one link per part, the showing one current, and a dot
- * on the part named by `dotOn` saying it has matches too.
+ * on the part named by `dotOn` saying it has matches too. Exported for the
+ * panel drawn from what the device remembered, so it is the same control.
  */
-function ContentTypeControl({
+export function ContentTypeControl({
   shown,
   dotOn,
 }: {

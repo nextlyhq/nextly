@@ -25,7 +25,7 @@ import type {
   SchemaPreviewRenameCandidate,
 } from "@admin/services/schemaApi";
 
-import { FieldEditorSheet } from "../FieldEditorSheet";
+import { BuilderFieldSettings } from "../BuilderFieldSettings";
 import { SafeChangeConfirmDialog } from "../SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "../SchemaChangeDialog";
 import type { BuilderField } from "../types";
@@ -208,15 +208,16 @@ describe("each Builder dialog's confirming button is destructive only when it de
       admin: { width: "100%" },
     };
     render(
-      <FieldEditorSheet
-        open
-        mode="edit"
+      <BuilderFieldSettings
         kind="collection"
-        field={field}
-        siblingFields={[]}
-        onCancel={vi.fn()}
-        onApply={vi.fn()}
-        onDelete={vi.fn()}
+        fields={[field]}
+        fieldId={field.id}
+        savedFieldIds={new Set([field.id])}
+        readOnly={false}
+        docked={false}
+        onFieldChange={vi.fn()}
+        onFieldDelete={vi.fn()}
+        onClose={vi.fn()}
       />
     );
     await user.click(screen.getByRole("button", { name: /delete field/i }));

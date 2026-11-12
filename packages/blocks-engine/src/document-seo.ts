@@ -26,8 +26,10 @@ import type { CheckedBinding } from "./binding-rules";
 import type { SeoImageCandidate } from "./derive-seo";
 import {
   MAX_SEO_SEGMENTS,
+  SEO_TEXT_FIELDS,
   type BlockDocument,
   type BlockNode,
+  type SeoTextField,
 } from "./document";
 import { isPlainRecord } from "./plain-record";
 import {
@@ -42,6 +44,8 @@ import { checkSeoBinding } from "./seo-binding-check";
 export interface ResolvedDocumentSeo {
   readonly title?: string;
   readonly description?: string;
+  /** The title a shared link shows, where the document gives its own. */
+  readonly socialTitle?: string;
   readonly image?: SeoImageCandidate;
   /** What went wrong filling a binding, as a block's binding issues report it. */
   readonly issues: readonly BindingIssue[];
@@ -66,17 +70,15 @@ export function resolveDocumentSeo(
   const seo = documentSeoOf(document);
   if (seo === undefined) return { issues: [] };
   const issues: BindingIssue[] = [];
-  const title = joinedText(ownEntry(seo, "title"), "title", run, issues);
-  const description = joinedText(
-    ownEntry(seo, "description"),
-    "description",
-    run,
-    issues
-  );
+  // Every text value filled alike, by the one list of them.
+  const texts: Partial<Record<SeoTextField, string>> = {};
+  for (const field of SEO_TEXT_FIELDS) {
+    const text = joinedText(ownEntry(seo, field), field, run, issues);
+    if (text !== undefined) texts[field] = text;
+  }
   const image = imageOf(ownEntry(seo, "image"), run, issues);
   return {
-    ...(title === undefined ? {} : { title }),
-    ...(description === undefined ? {} : { description }),
+    ...texts,
     ...(image === undefined ? {} : { image }),
     issues,
   };

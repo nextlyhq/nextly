@@ -90,11 +90,15 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await t.adapter.tableExists("dc_base_path_probe")).toBe(true);
 
       expect(await filesBelow(workingDir)).toEqual([]);
-      // The save did write a migration, so the empty working directory is not
-      // merely a save that wrote nothing.
+      // The save did write a migration, into the config's migrations folder (the default
+      // `./src/db/migrations`) below the instance's own, so the empty working directory is not
+      // merely a save that wrote nothing; the old dynamic folder gets none.
+      expect(
+        await filesBelow(join(t.basePath, "src/db/migrations"))
+      ).not.toEqual([]);
       expect(
         await filesBelow(join(t.basePath, "src/db/migrations/dynamic"))
-      ).not.toEqual([]);
+      ).toEqual([]);
       expect(readdirSync(scratchTmp)).toHaveLength(1);
 
       await t.destroy();
@@ -110,9 +114,9 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(t.basePath).toBe(given);
       await builderCreate("base-path-given");
 
-      expect(
-        await filesBelow(join(given, "src/db/migrations/dynamic"))
-      ).not.toEqual([]);
+      expect(await filesBelow(join(given, "src/db/migrations"))).not.toEqual(
+        []
+      );
       expect(readdirSync(scratchTmp)).toEqual([]);
 
       await t.destroy();

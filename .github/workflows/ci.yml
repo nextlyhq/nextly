@@ -1854,12 +1854,13 @@ jobs:
     environment:
       name: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
-    # 45. On the dev server at one worker, a passing run of 402 tests was still
-    # going when 30 minutes cancelled it (job 120021242729). The suite now runs
-    # on a production server at two workers, far inside that, and the limit is
-    # kept until hosted runs have shown the new time for a while, without
-    # letting a hung run go on indefinitely.
-    timeout-minutes: 45
+    # 60. The job runs the production-server suite and then the dev server's own
+    # specs (DEV_SPECS): measured on hosted runners at about 30 to 34 minutes
+    # for the first and about 10 for the second, so a passing run takes about
+    # 45 and a slow runner went past the earlier 45-minute limit mid-way
+    # through the dev specs. 60 keeps a quarter spare, as the integration legs
+    # do, without letting a hung run go on indefinitely.
+    timeout-minutes: 60
 
     # Job-wide, so every turbo here reads the cache the Restore step put in
     # `.turbo`, including the one `pnpm dev:app` runs inside the webServer.
@@ -2196,7 +2197,7 @@ jobs:
       name: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) && 'turbo-cache' || 'turbo-cache-read' }}
       deployment: false
     # As `e2e`'s.
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
       TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}

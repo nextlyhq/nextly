@@ -10,6 +10,7 @@ import {
   Minus,
 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { BrandReach } from "@admin/services/emailBrandApi";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
@@ -42,9 +43,10 @@ export function EmailsByOwner({
   emails: EmailTemplateRecord[];
   canOpen: boolean;
 }): JSX.Element {
+  const { plugins } = useBranding();
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {groupByOwner(emails).map(({ group, rows }) => (
+      {groupByOwner(emails, plugins).map(({ group, rows }) => (
         <div key={group.key} className="min-w-0 space-y-1">
           <div className="text-xs text-muted-foreground">
             {group.label} · {rows.length}
