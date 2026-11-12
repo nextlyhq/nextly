@@ -32,20 +32,24 @@ test("creates a published form and seeds submissions through the API", async ({
   ada = `ada-${run}@example.com`;
   bot = `bot-${run}@example.com`;
   greeting = `hello there ${run}`;
-  await gotoAdmin(page, "/collections/forms/create");
-  await page.getByRole("textbox", { name: "Form Name" }).fill(formName);
-
-  for (const type of [/^Email/, /^Text Single-line/]) {
-    await page.getByRole("button", { name: "Add field" }).first().click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("radio", { name: type }).click();
-    await dialog.getByRole("button", { name: "Add field" }).click();
-  }
-
-  await page.getByRole("combobox", { name: "Status" }).click();
-  await page.getByRole("option", { name: "Published" }).click();
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page).toHaveURL(/\/collections\/forms$/, { timeout: 30_000 });
+  // The form is made through the entries API: what this file tests is its
+  // submissions, and the form editor has browser specs of its own.
+  await gotoAdmin(page, "/collections/forms");
+  const created = await page.request.post(
+    "/admin/api/collections/forms/entries",
+    {
+      data: {
+        name: formName,
+        slug: `e2e-submissions-${run}`,
+        status: "published",
+        fields: [
+          { type: "email", name: "email", label: "Email" },
+          { type: "text", name: "text", label: "Text" },
+        ],
+      },
+    }
+  );
+  expect(created.ok()).toBe(true);
 
   // Seed one clean and one spam submission via the entries API. A create made
   // over HTTP starts as `new` whatever status it names, and only the server's
@@ -166,17 +170,17 @@ test("shows per-field columns, edits in the drawer, and stamps the edit", async 
     timeout: 15_000,
   });
   await expect(
-    page.getByRole("region", { name: "Activity" }).getByText(
-      "Answers edited in the admin"
-    )
+    page
+      .getByRole("region", { name: "Activity" })
+      .getByText("Answers edited in the admin")
   ).toBeVisible();
 
   // Opened directly, by its address alone, it reads the same.
   await page.reload();
   await expect(
-    page.getByRole("region", { name: "Answers" }).getByText(
-      `${greeting} (corrected)`
-    )
+    page
+      .getByRole("region", { name: "Answers" })
+      .getByText(`${greeting} (corrected)`)
   ).toBeVisible({ timeout: 30_000 });
 });
 

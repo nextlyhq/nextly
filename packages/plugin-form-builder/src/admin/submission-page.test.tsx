@@ -141,6 +141,30 @@ describe("a submission's answers", () => {
     expect(screen.getByText("Full name")).toBeInTheDocument();
   });
 
+  it("reads a file stored as an address as a link to it", () => {
+    const fetchMock = vi.fn(() => answer(404, {}));
+    vi.stubGlobal("fetch", fetchMock);
+    wrap(
+      <SubmissionAnswers
+        asked={{
+          fields: [{ name: "cv", label: "CV", type: "file" }],
+          hidden: [],
+        }}
+        data={{ cv: "https://cdn.example.com/files/cv%20hina.pdf?v=2" }}
+      />
+    );
+    expect(screen.getByText("cv hina.pdf")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open cv hina.pdf" })
+    ).toHaveAttribute(
+      "href",
+      "https://cdn.example.com/files/cv%20hina.pdf?v=2"
+    );
+    expect(screen.queryByText("File not found")).toBeNull();
+    // Not looked up in the Media library.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps an answer the form no longer describes", () => {
     wrap(
       <SubmissionAnswers
@@ -172,6 +196,10 @@ interface ServerOptions {
   store?: { data: Record<string, unknown>; notes?: string };
   /** Whether the server refuses a save as made from an old version. */
   refuse?: (sent: Record<string, unknown>) => boolean;
+  /** Awaited before the server answers a save, to keep one on its way. */
+  hold?: () => Promise<void>;
+  /** The connection fails for every save. */
+  offline?: boolean;
 }
 
 /** The list's answer to one of the page's place queries. */
@@ -234,8 +262,12 @@ function server(options: ServerOptions) {
     ["/form-submissions/entries?", url => listAnswer(url, options)],
     ["/media/", () => answer(404, {})],
   ];
-  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH" && options.offline) {
+      throw new TypeError("Failed to fetch");
+    }
     if (init?.method === "PATCH") {
+      await options.hold?.();
       const sent = JSON.parse(String(init.body)) as {
         status?: string;
         notes?: string;
@@ -519,6 +551,57 @@ describe("a submission's page, writing", () => {
     // Their email is not written over with the draft's.
     expect(patches(fetchMock)).toHaveLength(1);
     expect(store.data.email).toBe("hina.rossi@example.com");
+  });
+
+  it("keeps a note typed while the last one is being saved", async () => {
+    let release = () => undefined as void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      hold: () => held,
+    });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    await user.type(note, "Book");
+    await user.tab();
+    // While that save is on its way, the person goes on typing.
+    await user.type(note, " a call");
+    release();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([{ notes: "Book", _rev: "rev-7" }])
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(note).toHaveValue("Book a call");
+    expect(screen.queryByText(/Saved\./)).toBeNull();
+    // Leaving it saves the rest, after the save before it.
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "Book", _rev: "rev-7" },
+        { notes: "Book a call", _rev: "rev-8" },
+      ])
+    );
+    expect(await screen.findByText(/Saved\./)).toBeInTheDocument();
+  });
+
+  it("says when a change could not be sent", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      offline: true,
+    });
+    const user = page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    const archived = within(details).getByRole("button", { name: "Archived" });
+    await waitFor(() => expect(archived).toBeEnabled());
+    await user.click(archived);
+    expect(await screen.findByText(/could not be sent/)).toBeInTheDocument();
   });
 
   it("links the form under the forms collection as the install names it", async () => {

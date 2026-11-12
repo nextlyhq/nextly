@@ -134,6 +134,58 @@ function FileAnswer({ id }: { id: string }): JSX.Element {
   );
 }
 
+/**
+ * Whether a file reference is an address rather than a Media library id. A
+ * file answer may hold either; an address is web (`https://…`, `//…`) or the
+ * site's own (`/…`), never another scheme, so it is safe to link to.
+ */
+function isFileAddress(reference: string): boolean {
+  return /^(?:https?:)?\/\//i.test(reference) || reference.startsWith("/");
+}
+
+/** The file name an address ends in, or the address itself. */
+function nameFromAddress(address: string): string {
+  const last = address.split(/[?#]/)[0].split("/").filter(Boolean).pop();
+  if (!last) return address;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+/** A file answer stored as an address: its name, and a link that opens it. */
+function LinkedFile({ address }: { address: string }): JSX.Element {
+  const name = nameFromAddress(address);
+  return (
+    <div className="flex max-w-md items-center gap-3 rounded-md border border-border bg-card px-3 py-2">
+      <span
+        aria-hidden="true"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-semibold text-muted-foreground"
+      >
+        {extensionOf(name)}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">
+          {name}
+        </span>
+        <span className="block truncate text-xs text-muted-foreground">
+          {address}
+        </span>
+      </span>
+      <a
+        href={address}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open ${name}`}
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ExternalLink className="h-4 w-4" aria-hidden="true" />
+      </a>
+    </div>
+  );
+}
+
 /** The ids a file answer holds: one, or several. */
 function fileIds(value: unknown): string[] {
   const values = Array.isArray(value) ? value : [value];
@@ -200,9 +252,13 @@ function filesAnswer(value: unknown): JSX.Element {
   if (ids.length === 0) return muted("—");
   return (
     <span className="flex flex-col gap-2">
-      {ids.map(id => (
-        <FileAnswer key={id} id={id} />
-      ))}
+      {ids.map(reference =>
+        isFileAddress(reference) ? (
+          <LinkedFile key={reference} address={reference} />
+        ) : (
+          <FileAnswer key={reference} id={reference} />
+        )
+      )}
     </span>
   );
 }

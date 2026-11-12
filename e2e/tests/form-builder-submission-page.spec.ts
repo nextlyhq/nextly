@@ -27,9 +27,13 @@ test("moves through the list it was opened from", async ({ page }) => {
       },
     })
   );
-  // Oldest first, an hour apart, so the list reads Chen, Bilal, Ana.
+  // Oldest first. The server stamps each when it arrives, to the second, so
+  // they are sent a little over a second apart and the list reads Chen,
+  // Bilal, Ana. (Rows sent within one second tie on the time and are ordered
+  // by id: the integration test of the neighbour queries covers that.)
   const names = ["Ana", "Bilal", "Chen"].map(name => `${name} ${stamp}`);
   for (const [index, name] of names.entries()) {
+    if (index > 0) await page.waitForTimeout(1_100);
     await ok(
       await page.request.post(`${API}/collections/form-submissions/entries`, {
         data: {
@@ -38,9 +42,6 @@ test("moves through the list it was opened from", async ({ page }) => {
             name,
             email: `${name.split(" ")[0]!.toLowerCase()}@example.com`,
           },
-          submittedAt: new Date(
-            Date.now() - (3 - index) * 3_600_000
-          ).toISOString(),
         },
       })
     );

@@ -609,6 +609,62 @@ function ActivityBox({
   );
 }
 
+/**
+ * The internal note as the person types it, saved when they leave it.
+ *
+ * Each save names the note it replaces: the stored note, or, while one of the
+ * page's own note saves is on its way, the text that save will store. A newer
+ * stored note replaces the textarea only while it holds nothing typed since
+ * the stored note it last showed, so text typed while a save is on its way is
+ * never wiped by that save's answer. "Saved" is said only of the text saved.
+ */
+function useNoteDraft(submission: SubmissionDocument, save: Save) {
+  const stored = submission.notes ?? "";
+  const [note, setNote] = useState(stored);
+  const [savedText, setSavedText] = useState<string | null>(null);
+  const noteNow = useRef(note);
+  noteNow.current = note;
+  // The stored note the textarea's text was last brought up to.
+  const shown = useRef(stored);
+  // The stored note once the page's own saves have landed, and how many are on their way.
+  const expected = useRef<string>(stored);
+  const pending = useRef(0);
+  const openedId = useRef(submission.id);
+  useEffect(() => {
+    // Another submission opened: its note, nothing typed, nothing saved.
+    if (openedId.current !== submission.id) {
+      openedId.current = submission.id;
+      setNote(stored);
+      shown.current = stored;
+      expected.current = stored;
+      setSavedText(null);
+      return;
+    }
+    if (noteNow.current === shown.current) setNote(stored);
+    shown.current = stored;
+    if (pending.current === 0) expected.current = stored;
+  }, [submission.id, stored]);
+  const saveNote = () => {
+    const text = noteNow.current;
+    if (text === expected.current) return;
+    const basis = expected.current;
+    expected.current = text;
+    pending.current += 1;
+    void save({ notes: text }, { notes: basis === "" ? null : basis })
+      .then(() => setSavedText(text))
+      .catch(() => undefined)
+      .finally(() => {
+        pending.current -= 1;
+      });
+  };
+  return {
+    note,
+    edit: (text: string) => setNote(text),
+    saveNote,
+    saved: savedText !== null && savedText === note,
+  };
+}
+
 /** The side panel: its status, the internal note, and its details. */
 function SidePanel({
   submission,
@@ -627,14 +683,7 @@ function SidePanel({
   formName: string;
   formsSlug: string;
 }): JSX.Element {
-  const [note, setNote] = useState(submission.notes ?? "");
-  const [noteSaved, setNoteSaved] = useState(false);
-  // The note as it was when the person began typing, which theirs replaces.
-  const noteBasis = useRef<unknown>(submission.notes ?? null);
-  useEffect(() => {
-    setNote(submission.notes ?? "");
-    setNoteSaved(false);
-  }, [submission.id, submission.notes]);
+  const { note, edit, saveNote, saved } = useNoteDraft(submission, save);
   return (
     <aside
       aria-label="Submission details"
@@ -691,23 +740,12 @@ function SidePanel({
             value={note}
             disabled={!canUpdate}
             placeholder="Only people in the admin see this."
-            onFocus={() => {
-              noteBasis.current = submission.notes ?? null;
-            }}
-            onChange={event => {
-              setNote(event.target.value);
-              setNoteSaved(false);
-            }}
-            onBlur={() => {
-              if (note === (submission.notes ?? "")) return;
-              void save({ notes: note }, { notes: noteBasis.current })
-                .then(() => setNoteSaved(true))
-                .catch(() => undefined);
-            }}
+            onChange={event => edit(event.target.value)}
+            onBlur={saveNote}
           />
           <p className="text-xs text-muted-foreground" role="status">
             Only people in the admin see notes.
-            {noteSaved ? " Saved." : ""}
+            {saved ? " Saved." : ""}
           </p>
         </section>
 
@@ -917,6 +955,10 @@ function useSubmissionForm(submission: SubmissionDocument | undefined) {
   return { formId, form, formsSlug };
 }
 
+/** What a change the server never received says; the page keeps the draft. */
+const UNSENT_MESSAGE =
+  "The change could not be sent. Check your connection and try again.";
+
 /** What a change held by a colleague's claim says. */
 const HELD_MESSAGE =
   "Someone else is editing this submission. Your change was not saved.";
@@ -986,7 +1028,7 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
       body: JSON.stringify(
         typeof rev === "string" ? { ...changes, _rev: rev } : changes
       ),
-    });
+    }).catch(() => refuse(UNSENT_MESSAGE));
     if (!response.ok) {
       const message = refusalMessage(await response.json().catch(() => null));
       await refresh();
@@ -1017,8 +1059,8 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
     const response = await fetch(address, {
       method: "DELETE",
       credentials: "include",
-    });
-    if (!response.ok) {
+    }).catch(() => null);
+    if (!response?.ok) {
       setError("The submission could not be deleted.");
       return false;
     }
