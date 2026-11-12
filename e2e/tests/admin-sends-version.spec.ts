@@ -13,7 +13,7 @@ import { expect, type Page, type Request } from "@playwright/test";
 
 import { pressSave } from "./canvas/editor-driver";
 import { uniqueTag } from "./support/accounts";
-import { gotoAdmin } from "./support/admin";
+import { gotoAdmin, tableRow } from "./support/admin";
 import { canvasFrame } from "./support/canvas-frame";
 import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
@@ -177,11 +177,7 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
 
     // A list's bulk publish.
     await gotoAdmin(page, "/collections/posts");
-    // A row that opens its entry is a button; the phone-width card drawing
-    // the same entry stays hidden.
-    const row = page
-      .getByRole("button", { name: new RegExp(`Versioned ${tag}`) })
-      .filter({ visible: true });
+    const row = tableRow(page, `Versioned ${tag}`);
     await expect(row).toBeVisible({ timeout: 30_000 });
     await row.getByRole("checkbox", { name: "Select row" }).click();
     sent = nextWrite(page, r => r.url().includes(`${POSTS}/bulk-update`));
