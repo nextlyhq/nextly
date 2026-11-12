@@ -7,6 +7,8 @@
 
 import type { AnyFormField, FormNotification, FormSettings } from "../types";
 
+import { conditionsOf } from "./notification-model";
+
 /**
  * The one spelling of a field reference this plugin recognises: `{{fieldName}}`
  * with no spaces, and `\w` names.
@@ -111,9 +113,19 @@ export function findFieldReferences(
     const referencedByTemplate = templates.some(template =>
       referencesInTemplate(template, fieldName)
     );
-    // Send-conditions name the field directly (no interpolation syntax).
-    const referencedByCondition = notification.condition?.field === fieldName;
-    if (referencedByTemplate || referencedByCondition) {
+    // Send-conditions name the field directly (no interpolation syntax),
+    // read through the notification model so one condition and several
+    // count alike; so does a file field the notification attaches by name.
+    const referencedByCondition = conditionsOf(notification).list.some(
+      condition => condition.field === fieldName
+    );
+    const referencedByAttachment =
+      notification.attachFields?.includes(fieldName) ?? false;
+    if (
+      referencedByTemplate ||
+      referencedByCondition ||
+      referencedByAttachment
+    ) {
       references.push({
         kind: "notification",
         label: notification.name || "Notification",
@@ -173,7 +185,8 @@ export function renameInFieldConditions(
 
 /**
  * The notifications with every reference to `from` naming `to` instead: the
- * addresses (`{{ from }}`) and the condition `findFieldReferences` reads.
+ * addresses (`{{ from }}`), the conditions and the attached file fields
+ * `findFieldReferences` reads.
  */
 export function renameInNotifications(
   notifications: readonly FormNotification[],
@@ -198,6 +211,19 @@ export function renameInNotifications(
     }
     if (notification.condition?.field === from) {
       next.condition = { ...notification.condition, field: to };
+    }
+    if (notification.conditions) {
+      next.conditions = {
+        ...notification.conditions,
+        list: notification.conditions.list.map(condition =>
+          condition.field === from ? { ...condition, field: to } : condition
+        ),
+      };
+    }
+    if (notification.attachFields) {
+      next.attachFields = notification.attachFields.map(name =>
+        name === from ? to : name
+      );
     }
     return next;
   });
