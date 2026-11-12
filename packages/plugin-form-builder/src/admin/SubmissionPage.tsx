@@ -311,7 +311,7 @@ function SubmissionBar({
     <TopBarPlace name="end">
       <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
         {place && place.total > 0 ? (
-          <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
+          <span className="hidden whitespace-nowrap text-xs text-muted-foreground tabular-nums lg:inline">
             {place.index + 1} of {place.total}
           </span>
         ) : null}
