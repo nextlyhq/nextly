@@ -205,6 +205,63 @@ describeEachDialect("registry rows read inside a transaction", dialect => {
     }
   );
 
+  it("keeps a read through the pool out of the transaction's memo, both ways", async () => {
+    // What the pool answers while the write is uncommitted: the committed
+    // row on PostgreSQL and MySQL, and on SQLite, whose one connection the
+    // transaction holds, the transaction's own.
+    const committedView = (written: string): string | null =>
+      dialect === "sqlite" ? written : null;
+    const written = "written in the transaction";
+    await current.adapter.transaction(async (tx: TransactionContext) => {
+      const onTransaction = tx.getDrizzle();
+      // Handed the pool's executor, as a registry service's read for a write
+      // (`findRecordForWrite`) is outside a routed read scope.
+      const pooled = current.adapter.getDrizzle();
+      expect(await descriptionOn(onTransaction)).toBeNull();
+
+      await describePosts(written);
+
+      // Read through the pool first: what it answers must not become what
+      // the transaction's own next read is answered with.
+      expect(await descriptionOn(pooled)).toBe(committedView(written));
+      expect(await descriptionOn(onTransaction)).toBe(written);
+      // And the other way: what the transaction holds must not answer the
+      // pool.
+      expect(await descriptionOn(pooled)).toBe(committedView(written));
+    });
+  });
+
+  // MySQL joins a part flat, with no savepoint: a part that fails fails the
+  // whole transaction, and nothing it wrote is undone while it runs on.
+  it.skipIf(dialect === "mysql")(
+    "forgets a row read beside a part that later rolls back to its savepoint",
+    async () => {
+      const written = signal();
+      const read = signal();
+      await current.adapter.transaction(async (tx: TransactionContext) => {
+        const executor = tx.getDrizzle();
+        // The part writes the row, then waits while the transaction's own
+        // flow reads it on the same connection, and then rolls back.
+        const part = current.adapter
+          .transaction(async () => {
+            await describePosts("undone by the part's rollback");
+            written.fire();
+            await read.promise;
+            throw new Error("roll this part back");
+          })
+          .catch(() => undefined);
+        await written.promise;
+        expect(await descriptionOn(executor)).toBe(
+          "undone by the part's rollback"
+        );
+        read.fire();
+        await part;
+
+        expect(await descriptionOn(executor)).toBeNull();
+      });
+    }
+  );
+
   // SQLite has one connection, and a second transaction waits for the first
   // to end, so there is no other transaction to read while this one is open.
   it.skipIf(dialect === "sqlite")(

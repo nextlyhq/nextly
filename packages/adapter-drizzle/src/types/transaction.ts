@@ -126,11 +126,17 @@ export interface TransactionInFlow {
    */
   readonly transaction: object;
   /**
-   * Whether the part of the transaction the call was made from, or one it
-   * runs inside, has rolled back to its savepoint since: what that part read
-   * may describe writes no longer there.
+   * Whether any part of the transaction has rolled back to its savepoint
+   * since this was asked: what was read before may describe a write the
+   * rollback took away, whichever part wrote it and whichever read it.
    */
   undone(): boolean;
+  /**
+   * Whether `executor` runs on this transaction's connection: a Drizzle
+   * handle a context of this transaction built. A handle on the pool, or on
+   * another transaction, answers false.
+   */
+  runsOn(executor: unknown): boolean;
 }
 
 /**

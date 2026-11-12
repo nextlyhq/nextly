@@ -632,6 +632,13 @@ export abstract class DrizzleAdapter {
   private readonly transactionMarks = new WeakMap<TransactionFrame, object>();
 
   /**
+   * The open transaction each Drizzle handle a transaction context built runs
+   * on (`transactionDrizzleHandles`), recorded when the handle is built inside
+   * that transaction's work. A handle on the pool is never here.
+   */
+  private readonly handleTransactions = new WeakMap<object, TransactionFrame>();
+
+  /**
    * The transaction the calling async flow is inside and that has not
    * finished, as {@link transactionOpenInFlow} finds it, or none.
    *
@@ -640,31 +647,36 @@ export abstract class DrizzleAdapter {
    * nowhere else: a read on the transaction sees its uncommitted writes,
    * which no other transaction may be answered with, and which a rollback
    * takes away. `transaction` is the same object for every call made inside
-   * it and dies with it; `undone` answers whether the part the call was made
-   * from, or one around it, has since rolled back to its savepoint. The
-   * frame itself is not handed out, so nothing outside can change it.
+   * it and dies with it. `undone` answers whether any part of it has rolled
+   * back to its savepoint since this was asked: a read made before may
+   * describe a write the rollback took away, whichever part made the write
+   * and whichever made the read. `runsOn` answers whether an executor a
+   * caller was handed runs on this transaction's connection. Neither the
+   * frame nor the transaction's executors are handed out.
    *
    * @experimental
    * @returns The open transaction, or undefined outside one
    */
   transactionInFlow(): TransactionInFlow | undefined {
-    const store = this.scope.getStore();
-    const transaction = transactionAround(store, at => !at.finished);
+    const transaction = transactionAround(
+      this.scope.getStore(),
+      at => !at.finished
+    );
     if (transaction === undefined) return undefined;
-    // The part of that transaction the flow runs in: the store itself, or,
-    // for a flow inside a finished transaction it was started from, the
-    // part of the open one that enclosed it.
-    let part: TransactionFrame | undefined = store;
-    while (part !== undefined && outermost(part) !== transaction) {
-      part = outermost(part).enclosing;
-    }
-    const at = part ?? transaction;
     let mark = this.transactionMarks.get(transaction);
     if (mark === undefined) {
       mark = Object.freeze({});
       this.transactionMarks.set(transaction, mark);
     }
-    return { transaction: mark, undone: () => undone(at, 0) };
+    const rollbacksBefore = transaction.rollbacks;
+    return {
+      transaction: mark,
+      undone: () => transaction.rollbacks !== rollbacksBefore,
+      runsOn: executor =>
+        typeof executor === "object" &&
+        executor !== null &&
+        this.handleTransactions.get(executor) === transaction,
+    };
   }
 
   /**
@@ -905,6 +917,9 @@ export abstract class DrizzleAdapter {
           root.doomed = { error };
         }
         await this.rollBackQuietly(steps);
+        // Counted once the rollback has run, so a read made at any point
+        // before it, during it included, reads as undone afterwards.
+        root.rollbacks += 1;
         throw error;
       }
     });
@@ -3614,7 +3629,23 @@ export abstract class DrizzleAdapter {
     bare: () => TBare;
     withRelations: <T = unknown>(relations: AnyRelations) => T;
   } {
-    return transactionDrizzleHandles(build);
+    // Each handle is recorded against the transaction whose work built it,
+    // so `transactionInFlow().runsOn` can tell it from a handle on the pool.
+    return transactionDrizzleHandles(relations => {
+      const handle = build(relations);
+      const transaction = transactionAround(
+        this.scope.getStore(),
+        at => !at.finished
+      );
+      if (
+        transaction !== undefined &&
+        typeof handle === "object" &&
+        handle !== null
+      ) {
+        this.handleTransactions.set(handle, transaction);
+      }
+      return handle;
+    });
   }
 
   /**

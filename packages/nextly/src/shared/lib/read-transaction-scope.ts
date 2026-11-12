@@ -194,17 +194,20 @@ export function readsOnTransaction(value: object): boolean {
 const viewTransactions = new WeakMap<object, TransactionContext>();
 
 /**
- * Whether `value` is a view whose reads run on its transaction at this call:
- * {@link readsOnTransaction}, and its scope is still the calling flow's, so a
- * read made through it now reaches that transaction's connection rather than
- * the pool, as a view kept past its scope's end does.
+ * The executor a read made through `value` runs on at this call, when
+ * `value` is a view whose reads run on its transaction
+ * ({@link readsOnTransaction}) and its scope is still the calling flow's:
+ * that transaction's own Drizzle handle. Undefined for an adapter, or a view
+ * kept past its scope's end, whose reads reach the pool.
  */
-export function readsOnTransactionNow(value: object): boolean {
+export function readExecutorOfView(value: object): unknown {
   const adapter = viewed.get(value);
-  return (
-    adapter !== undefined &&
-    readTransactionOf(adapter) === viewTransactions.get(value)
-  );
+  const tx = viewTransactions.get(value);
+  return adapter !== undefined &&
+    tx !== undefined &&
+    readTransactionOf(adapter) === tx
+    ? tx.getDrizzle()
+    : undefined;
 }
 
 /**

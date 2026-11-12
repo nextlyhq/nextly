@@ -27,8 +27,11 @@
  * - every registry write calls `clearRegistryRowCache` as it writes, inside
  *   the transaction as well as after it commits, and a clear makes every
  *   memo read again, as it does the cache;
- * - a row read by a part of the transaction that has since rolled back to its
- *   savepoint is read again, since the rollback may have taken its write;
+ * - a row read before any part of the transaction rolled back to its
+ *   savepoint is read again, since the rollback may have taken a write the
+ *   read saw, whichever part made it;
+ * - only a read on the transaction's own connection is held: one handed an
+ *   executor on the pool reads committed rows, and is read every time;
  * - a hold on registry rows (`forgetRegistryRowsOnTransaction`) reads them
  *   again, so the rows the transaction then holds are the latest committed;
  * - a missing row is never kept, as in the cache.
@@ -39,7 +42,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionInFlow } from "@nextlyhq/adapter-drizzle/types";
 
 import { isWithinLifetime, monotonicNow } from "../../../shared/lib/lifetime";
-import { readsOnTransactionNow } from "../../../shared/lib/read-transaction-scope";
+import { readExecutorOfView } from "../../../shared/lib/read-transaction-scope";
 
 /**
  * How long a cached row is served before it is read again: the bound on how
@@ -64,7 +67,7 @@ interface MemoizedRow {
   row: Promise<Record<string, unknown> | null>;
   /** The cache's generation when the read began: served only while current. */
   generation: number;
-  /** Whether the part of the transaction that read it has rolled back since. */
+  /** Whether any part of the transaction has rolled back since the read began. */
   undone: () => boolean;
 }
 
@@ -153,19 +156,22 @@ export async function cachedRegistryRow<
 
 /**
  * The open transaction a registry read made through `adapter`, on `executor`
- * where one is given, runs on, or none when it does not run on one: outside
- * any transaction, or inside one while reading through the pool. A read is on
- * the transaction when it is handed the transaction's executor, or when
- * `adapter` is a view whose reads run there (`readsOnTransactionNow`).
+ * where one is given, runs on, or none when it does not provably run on one.
+ * The read's executor is `executor`, or, for a view whose reads run on a
+ * transaction (`readExecutorOfView`), that transaction's. It runs on the open
+ * transaction only when the adapter says that executor is the transaction's
+ * own (`TransactionInFlow.runsOn`): an executor on the pool, handed in inside
+ * a transaction (a read for a write, `findRecordForWrite`, outside a routed
+ * scope), reads another connection's committed rows and is read every time.
  */
 export function registryReadTransaction(
   adapter: TransactionReporter,
   executor: unknown
 ): TransactionInFlow | undefined {
-  if (executor === undefined && !readsOnTransactionNow(adapter)) {
-    return undefined;
-  }
-  return transactionOf(adapter);
+  const on = executor ?? readExecutorOfView(adapter);
+  if (on === undefined) return undefined;
+  const transaction = transactionOf(adapter);
+  return transaction?.runsOn(on) === true ? transaction : undefined;
 }
 
 /** What the memo asks of an adapter: the transaction a call is made inside. */
@@ -200,8 +206,8 @@ function memoOf(transaction: TransactionInFlow): Map<string, MemoizedRow> {
 /**
  * The row for `slug` in the registry table `table`, as `read()` reads it on
  * `transaction`: once per transaction, then a copy of what that read
- * returned, while no clear has happened since it began and the part of the
- * transaction that made it has not rolled back. Callers asking while the read
+ * returned, while no clear has happened since it began and no part of the
+ * transaction has rolled back since. Callers asking while the read
  * is under way share it. Every caller inside one transaction is answered from
  * the same memo, and no other transaction is. `table` names the key space as
  * `cachedRegistryRow`'s does: rows of one shape share one.
