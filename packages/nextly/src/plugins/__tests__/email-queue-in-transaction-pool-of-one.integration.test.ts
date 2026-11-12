@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAdapter } from "../../database/factory";
 import { emailQueueTableFor } from "../../domains/email/queued-send";
 import { NextlyError } from "../../errors/nextly-error";
+import type { EmailPayloadFilterValue } from "../../filters";
 import { definePlugin, type PluginContext } from "../plugin-context";
 import { createTestNextly, type TestNextly } from "../test-nextly";
 
@@ -80,7 +81,7 @@ describe.skipIf(!POSTGRES_URL)(
               ctx = captured;
               captured.filters.add(
                 "email.beforeSend",
-                (value: { cc?: unknown }) => {
+                (value: EmailPayloadFilterValue) => {
                   sent.push(value);
                   return value;
                 }
