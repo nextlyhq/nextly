@@ -13,9 +13,6 @@ import { ROUTES } from "@admin/constants/routes";
 /** The rail id of the Content item. */
 export const CONTENT_RAIL_ID = "content";
 
-/** The Content overview, where the panel's title goes. */
-export const CONTENT_OVERVIEW_HREF = "/admin/content";
-
 /** The sections the Content item covers, in the order the panel lists them. */
 const CONTENT_SECTIONS = ["collections", "singles"] as const;
 

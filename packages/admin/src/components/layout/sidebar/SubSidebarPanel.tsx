@@ -21,12 +21,11 @@
 
 import type { JSX, ReactNode } from "react";
 
-import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
-import { CONTENT_OVERVIEW_HREF, isContentSection } from "./lib/content-rail";
+import { isContentSection } from "./lib/content-rail";
 import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import {
   subSidebarBorderClass,
@@ -43,37 +42,6 @@ function panelTitle(selectedMain: string, standaloneLabel: string): string {
   // Both content sections show in the one Content panel.
   if (isContentSection(selectedMain)) return "Content";
   return selectedMain;
-}
-
-const TITLE_CLASS =
-  "font-bold text-base tracking-tight capitalize text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150";
-
-/**
- * The panel's title. The Content panel's goes to the Content overview, the
- * page of every collection and Single the panel lists; the others name it.
- */
-function PanelTitle({
-  selectedMain,
-  standaloneLabel,
-}: {
-  selectedMain: string;
-  standaloneLabel: string;
-}): JSX.Element {
-  const title = panelTitle(selectedMain, standaloneLabel);
-  if (!isContentSection(selectedMain)) {
-    return <span className={TITLE_CLASS}>{title}</span>;
-  }
-  return (
-    <Link
-      href={CONTENT_OVERVIEW_HREF}
-      className={cn(
-        TITLE_CLASS,
-        "rounded-sm outline-none hover:underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring"
-      )}
-    >
-      {title}
-    </Link>
-  );
 }
 
 export function SubSidebarPanel({
@@ -151,10 +119,9 @@ export function SubSidebarPanel({
       */}
       <div className="h-(--admin-bar-height) shrink-0 px-6 flex items-center border-b border-border">
         {hasSubSidebar ? (
-          <PanelTitle
-            selectedMain={selectedMain}
-            standaloneLabel={standaloneLabel}
-          />
+          <span className="font-bold text-base tracking-tight capitalize text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
+            {panelTitle(selectedMain, standaloneLabel)}
+          </span>
         ) : null}
       </div>
 
