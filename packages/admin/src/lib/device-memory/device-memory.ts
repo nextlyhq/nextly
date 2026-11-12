@@ -64,10 +64,12 @@ const SIGN_OUT_CHANNEL = "nextly:admin:device-memory";
 /**
  * The admin's own keys in this browser's storage: everything it writes is
  * under one of these. Read by the forgetting, so a key written by an older
- * admin version, or by a hook that keeps an interface preference, is
- * forgotten with the rest.
+ * admin version, by a hook that keeps an interface preference, or by an
+ * editor a plugin mounts in the admin, is forgotten with the rest, whether or
+ * not anything on this page registered it. Every spelling of the name is
+ * read, `nextly:`, `nextly-` and `nextly.`, as each is in use.
  */
-const ADMIN_KEY_PREFIXES = ["nextly:", "nextly-"] as const;
+const ADMIN_KEY_PREFIXES = ["nextly:", "nextly-", "nextly."] as const;
 const ADMIN_KEYS = new Set(["builder.showSystemInternals"]);
 
 /**
@@ -254,11 +256,20 @@ interface PageState {
    */
   confirmedHere: boolean;
   /**
-   * Tab preferences held in memory alone: where the site turned remembering
-   * off, or the tab's session storage refused them. They last as long as the
-   * page, as this tab's own choices.
+   * Preferences held in memory alone: where the site turned remembering off,
+   * or storage refused them. They last as long as the page, as this tab's own
+   * choices, until the person is forgotten.
    */
   tabMemory: Map<string, string>;
+  /**
+   * Which of the person's sessions this page is in, counted up each time the
+   * person is forgotten. An answer, or a schema read, that was asked for in
+   * an earlier one is about someone who has left, and labels or keeps
+   * nothing.
+   */
+  session: number;
+  /** Counted up whenever the labels or the person change, for subscribers. */
+  revision: number;
 }
 
 const state: PageState = {
@@ -268,7 +279,50 @@ const state: PageState = {
   forgotten: false,
   confirmedHere: false,
   tabMemory: new Map(),
+  session: 0,
+  revision: 0,
 };
+
+/** Whoever draws from the device memory and must hear that it changed. */
+const changeListeners = new Set<() => void>();
+
+/**
+ * Tell every subscriber the device memory changed: its labels moved, so what
+ * was kept under the old ones is gone and should be kept again, or the person
+ * was forgotten, so what is drawn from their preferences returns to the
+ * defaults. Storage's own event reaches only the other tabs.
+ */
+function announceChange(): void {
+  state.revision += 1;
+  for (const listener of [...changeListeners]) listener();
+}
+
+/**
+ * Call `listener` whenever the device memory changes in this tab: its labels
+ * move, or the person is forgotten. Returns the unsubscribe. With
+ * {@link deviceMemoryRevision}, the pair `useSyncExternalStore` takes.
+ */
+export function onDeviceMemoryChange(listener: () => void): () => void {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+}
+
+/** A number that changes whenever {@link onDeviceMemoryChange} is called. */
+export function deviceMemoryRevision(): number {
+  return state.revision;
+}
+
+/**
+ * Which of the person's sessions this page is in. Read when asking the
+ * server something whose answer is labelled or kept, and handed back with
+ * the answer, so an answer that arrives after the person was forgotten is
+ * known to be about someone who has left.
+ */
+export function deviceMemorySession(): number {
+  return state.session;
+}
 
 function storage(): Storage | null {
   try {
@@ -365,13 +419,22 @@ function labelsMatch(kind: MemoryKind, labels: StoredEntry["labels"]): boolean {
  * schema read, data not of the kind's shape, or remembering turned off.
  *
  * A labelled entry learnt before the server's answer is held in memory and
- * written once the answer gives its labels.
+ * written once the answer gives its labels. One learnt in an earlier
+ * `session` (see {@link deviceMemorySession}) is about a person since
+ * forgotten and is refused; by default it is learnt in this one.
  */
-export function remember(kind: string, id: string, data: unknown): boolean {
+export function remember(
+  kind: string,
+  id: string,
+  data: unknown,
+  session: number = state.session
+): boolean {
   if (!isMemoryKind(kind)) return false;
   if (kind === "schema" ? !isRememberedSchemaPath(id) : id !== "") return false;
   if (state.remembering === "off") return false;
-  if (KINDS[kind].labelled && state.forgotten) return false;
+  if (KINDS[kind].labelled && (state.forgotten || session !== state.session)) {
+    return false;
+  }
   const parsed = KINDS[kind].schema.safeParse(data);
   if (!parsed.success) return false;
   const key = entryKey(kind, id);
@@ -424,13 +487,18 @@ export function recallSchema(path: string): RememberedSchema | undefined {
   return recall("schema", path) as RememberedSchema | undefined;
 }
 
-/** Keep the answer to the schema read at `path`, with the tag it carried. */
+/**
+ * Keep the answer to the schema read at `path`, with the tag it carried. A
+ * read sent in an earlier `session` is not kept: its answer is about a
+ * person since forgotten.
+ */
 export function rememberSchema(
   path: string,
   etag: string,
-  body: unknown
+  body: unknown,
+  session: number = state.session
 ): boolean {
-  return remember("schema", path, { etag, body });
+  return remember("schema", path, { etag, body }, session);
 }
 
 /** The remembered public branding; empty when none is kept. */
@@ -558,6 +626,34 @@ export function forgetTabPreference(key: string): void {
   }
 }
 
+/**
+ * The preference under `key`, one of the admin's own keys or a registered
+ * one: what this page holds in memory (where the device keeps nothing), else
+ * what this browser's storage keeps.
+ */
+export function recallHeldPreference(key: string): string | null {
+  if (!isPreferenceKey(key)) return null;
+  return state.tabMemory.get(key) ?? recallPreference(key);
+}
+
+/**
+ * Keep the preference under `key` in this browser's storage, or, where the
+ * site turned remembering off or storage refuses it, in this page's memory,
+ * so it holds while the page does, until the person is forgotten.
+ */
+export function keepHeldPreference(key: string, value: string): void {
+  if (!isPreferenceKey(key)) return;
+  if (rememberPreference(key, value)) state.tabMemory.delete(key);
+  else state.tabMemory.set(key, value);
+}
+
+/** Remove the preference under `key`, from storage and this page's memory. */
+export function forgetHeldPreference(key: string): void {
+  if (!isPreferenceKey(key)) return;
+  state.tabMemory.delete(key);
+  removeRaw(key);
+}
+
 // ---------------------------------------------------------------------------
 // The server's answer
 // ---------------------------------------------------------------------------
@@ -575,6 +671,7 @@ export function confirmLabels(labels: ServerLabels): void {
   const pending = [...state.pending.entries()];
   state.pending.clear();
   for (const [key, entry] of pending) writeEntry(entry.kind, key, entry.data);
+  announceChange();
 }
 
 /**
@@ -606,6 +703,10 @@ export function noteRememberedSchemaVersion(schemaVersion: string): void {
   }
   state.labels = { ...state.labels, schemaVersion };
   sweep();
+  // What was kept under the old version is gone, the menu included, though
+  // the menu as drawn may not have changed at all: told, whoever keeps it
+  // keeps it again under the new one.
+  announceChange();
 }
 
 /** Remove every kept entry whose labels no longer hold. */
@@ -657,7 +758,13 @@ export function forgetPerson(): boolean {
   // the session goes on.
   state.confirmedHere = false;
   state.tabMemory.clear();
+  // A new session begins: an answer still on its way for the one that ended
+  // labels nothing, and a read sent in it keeps nothing.
+  state.session += 1;
   forget(key => key !== REMEMBERED_BRANDING_KEY);
+  // What this tab still draws from the person's preferences (the theme
+  // among them) returns to the defaults now, not on the next visit.
+  announceChange();
   return knewSomeone;
 }
 
@@ -742,4 +849,6 @@ export function resetDeviceMemoryForTests(): void {
   state.forgotten = false;
   state.confirmedHere = false;
   state.tabMemory.clear();
+  state.session = 0;
+  state.revision = 0;
 }

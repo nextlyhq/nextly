@@ -9,13 +9,15 @@
  *
  * @module components/layout/sidebar/lib/remembered-menu
  */
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import {
   useSidebarCollectionList,
   useSidebarSingleList,
 } from "@admin/hooks/useSidebarContentLists";
 import {
+  deviceMemoryRevision,
+  onDeviceMemoryChange,
   recallMenu,
   rememberMenu,
   type RememberedContentItem,
@@ -116,6 +118,9 @@ function menuToRemember(input: {
   };
 }
 
+/** The device memory's revision while the server renders: it keeps nothing. */
+const noRevisionOnServer = () => 0;
+
 /**
  * Keep the sidebar's menu on the device: the rail's entries as drawn, once
  * every answer the rail draws from is in, with the Content
@@ -161,6 +166,15 @@ function useKeepSidebarMenu({
             ? rememberedSingles(singleList.items)
             : undefined,
         });
+  // The device memory's labels moving (the schema version advanced while the
+  // page is open) discards the menu kept under the old ones, though the menu
+  // as drawn may be exactly what it was, as after a change to a field alone:
+  // read here, that move keeps the settled menu again under the new labels.
+  const labelled = useSyncExternalStore(
+    onDeviceMemoryChange,
+    deviceMemoryRevision,
+    noRevisionOnServer
+  );
   useEffect(() => {
     if (seen === null) return;
     const parsed = JSON.parse(seen) as Omit<
@@ -169,7 +183,7 @@ function useKeepSidebarMenu({
     >;
     const menu = menuToRemember({ ...parsed, previous: recallMenu() });
     if (menu !== undefined) rememberMenu(menu);
-  }, [seen]);
+  }, [seen, labelled]);
 }
 
 /**

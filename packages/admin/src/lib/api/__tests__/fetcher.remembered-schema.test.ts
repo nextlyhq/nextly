@@ -8,11 +8,17 @@
  *
  * Observed through the shared fetcher's real calls with `fetch` stood in for,
  * so each case reads the headers that reached the network.
+ *
+ * A read belongs to the session it was sent in: its answer arriving after the
+ * person signed out and the next one signed in is not kept under the next
+ * person's labels.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   confirmLabels,
+  DEVICE_MEMORY_PREFIX,
+  forgetPerson,
   recallSchema,
   resetDeviceMemoryForTests,
 } from "../../device-memory/device-memory";
@@ -88,5 +94,28 @@ describe("any other read", () => {
 
     expect(sentTags()).toEqual([undefined, undefined]);
     expect(Object.keys(window.localStorage)).toEqual([]);
+  });
+});
+
+describe("a schema read answered after the person signed out", () => {
+  it("is not kept under the labels of the person who signed in next", async () => {
+    let answerNow: (response: Response) => void = () => {};
+    fetchSpy.mockReturnValueOnce(
+      new Promise<Response>(resolve => {
+        answerNow = resolve;
+      })
+    );
+    const reading = fetcher("/collections/posts", {}, true);
+    forgetPerson();
+    confirmLabels({ user: "u2", schemaVersion: "3", permissionVersion: "p" });
+    answerNow(tagged(SCHEMA, 'W/"one"'));
+    await reading;
+
+    expect(recallSchema("/collections/posts")).toBeUndefined();
+    expect(
+      Object.keys(window.localStorage).filter(key =>
+        key.startsWith(DEVICE_MEMORY_PREFIX)
+      )
+    ).toEqual([]);
   });
 });

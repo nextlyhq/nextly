@@ -13,6 +13,10 @@
  *   only the admin's own keys are touched.
  * - **The off switch.** What was kept is removed and nothing more is written,
  *   of any kind.
+ * - **A plugin's preference store.** The same rules reach a preference kept
+ *   under a key of the plugin's own spelling: nothing is written while
+ *   remembering is off (the choice holds for the page alone), it is forgotten
+ *   with the person, and it can never reach the admin's own records.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,9 +40,11 @@ import {
   rememberSignedInHere,
   REMEMBERED_BRANDING_KEY,
   resetDeviceMemoryForTests,
+  SIGNED_IN_HERE_KEY,
   type RememberedMenu,
   type ServerLabels,
 } from "../device-memory";
+import { devicePreferenceStore } from "../preference-store";
 
 const LABELS: ServerLabels = {
   user: "user-1",
@@ -317,6 +323,94 @@ describe("the off switch", () => {
     confirmLabels(LABELS);
     expect(rememberMenu(MENU)).toBe(true);
     expect(recallMenu()).toEqual(MENU);
+  });
+});
+
+describe("a plugin's preference store", () => {
+  /** A key of a plugin's own spelling, outside the admin's. */
+  const KEY = "acme:recent";
+
+  it("keeps a preference in this browser's storage while remembering", () => {
+    const store = devicePreferenceStore(KEY);
+    store.write("x");
+    expect(store.read()).toBe("x");
+    expect(window.localStorage.getItem(KEY)).toBe("x");
+  });
+
+  it("writes nothing while remembering is off, and holds the choice for the page", () => {
+    applyRememberingSwitch(false);
+    const store = devicePreferenceStore(KEY);
+    store.write("x");
+    expect(storedKeys()).toEqual([]);
+    expect(store.read()).toBe("x");
+  });
+
+  it("is forgotten with the person, kept or held for the page", () => {
+    devicePreferenceStore(KEY).write("x");
+    applyRememberingSwitch(false);
+    const held = devicePreferenceStore("acme:held");
+    held.write("y");
+
+    forgetPerson();
+    expect(devicePreferenceStore(KEY).read()).toBeNull();
+    expect(held.read()).toBeNull();
+    expect(storedKeys()).toEqual([]);
+  });
+
+  it("is removed by the off switch", () => {
+    devicePreferenceStore(KEY).write("x");
+    applyRememberingSwitch(false);
+    expect(storedKeys()).toEqual([]);
+  });
+
+  it("keeps a tab's preference in its session storage, and none while off", () => {
+    const store = devicePreferenceStore(KEY, { lifetime: "tab" });
+    store.write("x");
+    expect(window.sessionStorage.getItem(KEY)).toBe("x");
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+
+    applyRememberingSwitch(false);
+    store.write("y");
+    expect(storedKeys()).toEqual([]);
+    expect(store.read()).toBe("y");
+  });
+
+  it("removes what it holds", () => {
+    const store = devicePreferenceStore(KEY);
+    store.write("x");
+    store.remove();
+    expect(store.read()).toBeNull();
+    expect(storedKeys()).toEqual([]);
+  });
+
+  it("never reaches the admin's own records", () => {
+    devicePreferenceStore(SIGNED_IN_HERE_KEY).write("1");
+    devicePreferenceStore(REMEMBERED_BRANDING_KEY).write("{}");
+    devicePreferenceStore(`${DEVICE_MEMORY_PREFIX}menu`).write("{}");
+    expect(storedKeys()).toEqual([]);
+    expect(hasSignedInHere()).toBe(false);
+  });
+
+  it("holds the choice for the page when storage refuses it, and never throws", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException(
+        "The quota has been exceeded.",
+        "QuotaExceededError"
+      );
+    });
+    const store = devicePreferenceStore(KEY);
+    expect(() => store.write("x")).not.toThrow();
+    expect(store.read()).toBe("x");
+  });
+});
+
+describe("keys under the nextly name, of any spelling", () => {
+  it("are forgotten with the person though nothing on this page registered them", () => {
+    window.localStorage.setItem("nextly.builder.shell:u1", "{}");
+    window.localStorage.setItem("nextly.builder.checklist.dismissed:u1", "1");
+    window.localStorage.setItem("someone-else", "kept");
+    forgetPerson();
+    expect(storedKeys()).toEqual(["someone-else"]);
   });
 });
 

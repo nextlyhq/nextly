@@ -15,6 +15,7 @@ import { startupResponseHeaders } from "@admin/lib/api/startup-request";
 import {
   applyRememberingSwitch,
   confirmLabels,
+  deviceMemorySession,
   discardLabelledMemory,
   type ServerLabels,
 } from "./device-memory";
@@ -59,13 +60,24 @@ async function serverHeaders(): Promise<Headers | null> {
 }
 
 /**
- * The server confirmed a session for `user`: label the device memory with
- * the versions it serves, discarding whatever was kept under others. Nothing
- * labelled is written on a page that never learns the versions.
+ * The server confirmed a session for `user` (their id, or the lookup of it
+ * under way): label the device memory with the versions it serves,
+ * discarding whatever was kept under others. Nothing labelled is written on a
+ * page that never learns the versions.
+ *
+ * The session is the one this page is in when this is called. Should the
+ * person be forgotten before the id and the answer arrive (they signed out
+ * meanwhile), the answer is about someone who has left and is not applied:
+ * applied, it would label the device memory for them again and let what is
+ * still drawn for them be kept.
  */
-export async function confirmDeviceMemory(user: string): Promise<void> {
+export async function confirmDeviceMemory(
+  user: string | PromiseLike<string>
+): Promise<void> {
+  const session = deviceMemorySession();
+  const id = await user;
   const headers = await serverHeaders();
-  if (headers === null) return;
+  if (headers === null || session !== deviceMemorySession()) return;
   applyServerSwitch(headers);
   const versions = versionsOf(headers);
   // An answer without both versions cannot vouch for what was kept: it is
@@ -74,5 +86,5 @@ export async function confirmDeviceMemory(user: string): Promise<void> {
     discardLabelledMemory();
     return;
   }
-  confirmLabels({ user, ...versions });
+  confirmLabels({ user: id, ...versions });
 }

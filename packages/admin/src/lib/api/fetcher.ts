@@ -1,4 +1,5 @@
 import {
+  deviceMemorySession,
   isRememberedSchemaPath,
   noteRememberedSchemaVersion,
   recallSchema,
@@ -144,17 +145,19 @@ async function respond(
 /**
  * Keep a schema read's answer with its tag, so the next read of it, in this
  * tab or a later one, can be answered "unchanged". Any other answer, or one
- * without a tag, is not kept.
+ * without a tag, is not kept, nor one to a read sent in an earlier `session`
+ * of the device memory (the person signed out while it was on its way).
  */
 function keepSchemaAnswer(
   path: string,
   init: RequestInit,
   res: Response,
-  json: object
+  json: object,
+  session: number
 ): void {
   const etag = res.headers.get("etag");
   if (etag && isGetRequest(init) && isRememberedSchemaPath(path)) {
-    rememberSchema(path, etag, json);
+    rememberSchema(path, etag, json, session);
   }
 }
 
@@ -179,6 +182,9 @@ export async function fetcher<T = unknown>(
     },
   };
 
+  // The person this read is sent for: its answer is kept only while they are
+  // still the one signed in.
+  const session = deviceMemorySession();
   const res = await respond(path, fetchOptions, isProtected);
 
   noteSchemaVersion(res);
@@ -230,7 +236,7 @@ export async function fetcher<T = unknown>(
     return undefined as T;
   }
 
-  keepSchemaAnswer(path, fetchOptions, res, json);
+  keepSchemaAnswer(path, fetchOptions, res, json, session);
 
   // Server returns canonical shapes directly (no `{ data }` wrapper).
   // Callers type the generic with the canonical envelope

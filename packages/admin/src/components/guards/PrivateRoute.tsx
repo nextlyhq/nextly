@@ -143,11 +143,12 @@ export function PrivateRoute({
   useEffect(() => {
     if (isAuthenticated === true) {
       rememberSignedInHere();
-      void getCurrentUserId()
-        .then(confirmDeviceMemory)
-        .catch(() => {
-          // No user id after all: nothing is labelled, so nothing is written.
-        });
+      // Handed the lookup rather than its result, so the answer is tied to
+      // the session this page is in now: a sign-out before the id arrives
+      // leaves it unapplied.
+      void confirmDeviceMemory(getCurrentUserId()).catch(() => {
+        // No user id after all: nothing is labelled, so nothing is written.
+      });
     }
     if (isAuthenticated === false && forgetPerson()) announceSignedOut();
   }, [isAuthenticated]);
