@@ -27,6 +27,7 @@ import {
 } from "@nextlyhq/plugin-sdk/schema";
 
 import { siteOptions } from "../schema/tables";
+import { readSiteOption } from "../site-option-read";
 
 /** The media folder added fonts are stored in. */
 export const FONTS_FOLDER = "Fonts";
@@ -68,9 +69,8 @@ export function fontsFolderClaims(
   const named = () => eq(t().name, FONTS_FOLDER_OPTION);
   return {
     read: async () => {
-      const row = await db.select(siteOptions).where(named()).first();
-      const value = (row as { value?: unknown } | null)?.value;
-      return typeof value === "string" && value !== "" ? value : null;
+      const value = await readSiteOption(db, FONTS_FOLDER_OPTION);
+      return value === "" ? null : value;
     },
     claim: async id => {
       try {
