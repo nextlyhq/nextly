@@ -167,6 +167,12 @@ async function settle(): Promise<void> {
 
 const dryRuns = () => sent.filter(each => each.path.endsWith("/dry-run"));
 
+/**
+ * The admin's table as wide screens show it: it draws its rows as cards for
+ * a phone as well, so each value is found in the table alone.
+ */
+const table = () => screen.getByRole("table");
+
 describe("importing this site's own field group", () => {
   it("offers the group first, with what it holds, and another group beside it", () => {
     render(<SeoImportPage />);
@@ -201,9 +207,9 @@ describe("importing this site's own field group", () => {
 
     // Each field, an example of it, where it goes, and how many hold one.
     expect(screen.getByText("Field in SEO (old)")).toBeTruthy();
-    expect(screen.getByText("Nextly pricing")).toBeTruthy();
+    expect(screen.getAllByText("Nextly pricing").length).toBeGreaterThan(0);
     expect(
-      screen.getByRole("combobox", { name: "Where Meta title goes" })
+      within(table()).getByRole("combobox", { name: "Where Meta title goes" })
         .textContent
     ).toBe("Title on Google");
     expect(dryRuns().at(-1)?.body).toEqual({
@@ -221,7 +227,9 @@ describe("importing this site's own field group", () => {
 
     // A field left out is tried again at once.
     await user.click(
-      screen.getByRole("combobox", { name: "Where Meta description goes" })
+      within(table()).getByRole("combobox", {
+        name: "Where Meta description goes",
+      })
     );
     await user.click(
       await screen.findByRole("option", { name: "Don't import" })
@@ -239,10 +247,12 @@ describe("importing this site's own field group", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
     await settle();
     // The counts in values, and each page's result.
-    const set = screen.getByText("Will set").closest("div")?.parentElement;
+    const set = screen.getByText("on 2 pages").parentElement;
+    expect(set?.textContent).toContain("Will set");
     expect(set?.textContent).toContain("3 values");
-    expect(set?.textContent).toContain("on 2 pages");
-    const pricing = screen.getByText("Pricing").closest("tr") as HTMLElement;
+    const pricing = within(table())
+      .getByText("Pricing")
+      .closest("tr") as HTMLElement;
     expect(within(pricing).getAllByText("Will set")).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: "Import 3 values" }));
@@ -330,7 +340,8 @@ describe("importing this site's own field group", () => {
 describe("importing a file another tool exported", () => {
   /** Chooses `text` as the file, named `name`. */
   async function choose(name: string, text: string): Promise<void> {
-    const user = userEvent.setup();
+    // The chooser's own filter is the browser's: the screen judges the file.
+    const user = userEvent.setup({ applyAccept: false });
     const input = document.querySelector(
       'input[type="file"]'
     ) as HTMLInputElement;

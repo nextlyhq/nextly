@@ -33,3 +33,22 @@ if ("document" in globalThis && typeof Element !== "undefined") {
     proto.releasePointerCapture = () => {};
   if (!("scrollIntoView" in proto)) proto.scrollIntoView = () => {};
 }
+
+/**
+ * A file's text, which every browser reads with `Blob.text()` and jsdom
+ * lacks: read through jsdom's own `FileReader`, so a screen reading a chosen
+ * file is tested as it runs.
+ */
+if ("document" in globalThis && typeof Blob !== "undefined") {
+  const blob = Blob.prototype as unknown as Record<string, unknown>;
+  if (!("text" in blob)) {
+    blob.text = function text(this: Blob): Promise<string> {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(this);
+      });
+    };
+  }
+}

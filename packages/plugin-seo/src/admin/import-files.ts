@@ -187,7 +187,7 @@ export function parsedIn(
  * the smallest request limit common hosts set (4.5 MB on Vercel's
  * functions), with room for the rest of the request.
  */
-export const SENDABLE_LIMIT = 3.5 * 1024 * 1024;
+export const SENDABLE_LIMIT: number = 3.5 * 1024 * 1024;
 
 /** Whether what a file holds is more than one request carries. */
 export function tooMuchToSend(parsed: ParsedSource): boolean {
