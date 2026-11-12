@@ -156,6 +156,7 @@ import type { WebhookEndpointService } from "../domains/webhooks/services/webhoo
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { withdrawApprovalsUnderEarlierDefinitions } from "../domains/workflows/approval-follows-content";
+import { followWorkflowDefinitions } from "../domains/workflows/definition-sweep";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
@@ -1233,6 +1234,12 @@ async function registerServicesOnce(
       // After the boot migrations, which store a new version where they run:
       // the database's schema version against the build's, read once.
       await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
+
+      // Review state recorded under an earlier configuration follows the workflows this boot
+      // registered first: a detached collection's is removed, and renamed or mapped stages are
+      // followed. Before the approvals are judged below, so a part a rename kept is judged under the
+      // definition it now carries.
+      await followWorkflowDefinitions(adapter, workflows.values());
 
       // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
       // this boot registered are published, unless the definition keeps them. After the migrations,
