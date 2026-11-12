@@ -156,4 +156,27 @@ describe("a Single route's miss", () => {
     await expect(SinglePage()).rejects.toThrow("site: not found");
     expect(handler.calls()).toBe(1);
   });
+
+  it("is answered by the site's handler for its head too", async () => {
+    const handler = throwingHandler();
+    const { generateMetadata } = createSingleRoute({
+      slug: "homepage",
+      nextly: noSingle,
+      render: () => "rendered",
+      buildMetadata: () => ({ title: "Home" }),
+      notFound: handler.notFound,
+    });
+    await expect(generateMetadata()).rejects.toThrow("site: not found");
+    expect(handler.calls()).toBe(1);
+  });
+
+  it("keeps an empty head for a miss when the site passed no handler", async () => {
+    const { generateMetadata } = createSingleRoute({
+      slug: "homepage",
+      nextly: noSingle,
+      render: () => "rendered",
+      buildMetadata: () => ({ title: "Home" }),
+    });
+    await expect(generateMetadata()).resolves.toEqual({});
+  });
 });

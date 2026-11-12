@@ -703,7 +703,11 @@ function buildSingleRoute<TNode>(
     const { context, language } = await contextFor(args);
     return runWithAccessMemo(async () => {
       const document = await documentFor(context, language);
-      if (!document) return {};
+      // A miss is answered by the site's own handler here as on the page, so
+      // whichever of the two Next asks first answers it; without one, the
+      // head stays empty and the page answers the miss, as before.
+      if (!document)
+        return config.notFound ? answerNotFound(config.notFound) : {};
       return singlePageMetadata(
         config,
         document,
