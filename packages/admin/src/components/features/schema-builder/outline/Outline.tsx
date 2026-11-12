@@ -136,29 +136,25 @@ function useFolding(foldKey: string) {
   return { folded, setFolded, toggle };
 }
 
-export function Outline({
-  kind,
-  nodes,
-  systemFields,
-  errors,
-  foldKey,
-  selectedId,
-  readOnly,
-  callbacks,
-  renderPreview,
-}: Props): JSX.Element {
+/**
+ * What the outline keeps while it is drawn: what is folded and looked for,
+ * whether the preview is on, the rows that shows, and the actions, keys and
+ * focus over those rows.
+ */
+function useOutlineView(
+  nodes: readonly OutlineNode[],
+  callbacks: OutlineCallbacks,
+  foldKey: string
+) {
   const typeLabel = useFieldTypeLabel();
   const { folded, setFolded, toggle } = useFolding(foldKey);
   const [query, setQuery] = useState("");
   const [preview, setPreview] = useState(false);
   const state = useOutlineActions(nodes, callbacks);
-  const movesId = useId();
-
   const rows = useMemo(
     () => visibleRows(nodes, folded, query, typeLabel),
     [nodes, folded, query, typeLabel]
   );
-  const finding = query.trim() !== "";
   useRefocusAfterMove(state, rows, nodes, folded, setFolded);
   const onKeyDown = useTreeKeyDown({
     rows,
@@ -172,23 +168,53 @@ export function Outline({
     const id = rowIdOf(event.target);
     if (id !== null) state.setFocusedId(id);
   };
+  return {
+    typeLabel,
+    setFolded,
+    toggle,
+    query,
+    setQuery,
+    preview,
+    setPreview,
+    state,
+    rows,
+    finding: query.trim() !== "",
+    onKeyDown,
+    onFocus,
+  };
+}
+
+export function Outline({
+  kind,
+  nodes,
+  systemFields,
+  errors,
+  foldKey,
+  selectedId,
+  readOnly,
+  callbacks,
+  renderPreview,
+}: Props): JSX.Element {
+  const view = useOutlineView(nodes, callbacks, foldKey);
+  const { state, rows, finding, setFolded } = view;
+  const movesId = useId();
 
   const tree = (
     <OutlineTree
       rows={rows}
       addable={!readOnly && !finding}
       finding={finding}
-      typeLabel={typeLabel}
+      typeLabel={view.typeLabel}
       errors={errors}
       selectedId={selectedId}
       tabStopId={tabStopOf(rows, state.focusedId, selectedId)}
       menuFor={state.menuFor}
       actions={state.actions}
       registerRow={state.registerRow}
-      onToggle={toggle}
+      onToggle={view.toggle}
       onAddAt={callbacks.addAt}
-      onKeyDown={onKeyDown}
-      onFocus={onFocus}
+      onKeyDown={view.onKeyDown}
+      onFocus={view.onFocus}
       movesDescribedBy={movesId}
     />
   );
@@ -197,19 +223,19 @@ export function Outline({
     <div className="space-y-4 p-4">
       <SystemFieldsContainer systemFields={systemFields} />
       <OutlineToolbar
-        query={query}
-        onQueryChange={setQuery}
+        query={view.query}
+        onQueryChange={view.setQuery}
         onFoldAll={() => setFolded(() => new Set(containerPaths(nodes)))}
         onUnfoldAll={() => setFolded(() => new Set())}
-        preview={preview}
-        onPreviewChange={setPreview}
+        preview={view.preview}
+        onPreviewChange={view.setPreview}
       />
       <OutlineBody
         kind={kind}
-        preview={preview}
+        preview={view.preview}
         renderPreview={renderPreview}
         empty={nodes.length === 0}
-        noMatch={finding && rows.length === 0 ? query.trim() : null}
+        noMatch={finding && rows.length === 0 ? view.query.trim() : null}
         readOnly={readOnly}
         onAddAtEnd={() => callbacks.addAt({})}
         tree={tree}
