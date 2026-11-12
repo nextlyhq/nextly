@@ -21,7 +21,10 @@ const WHOLE: MoveContext = {
   containerChanges: true,
 };
 /** What the Builder asks today. */
-const TODAY: MoveContext = { entityReadOnly: false, topLevelReservesNames: true };
+const TODAY: MoveContext = {
+  entityReadOnly: false,
+  topLevelReservesNames: true,
+};
 
 const tree = (): BuilderField[] => [
   plain("title"),
@@ -34,7 +37,9 @@ const row = (name: string) => screen.getByTestId(`field-row-${name}`);
 /** The names at the top level and in Details, as a probe last saw them. */
 function shape(fields: readonly BuilderField[]): string[] {
   return fields.map(field =>
-    field.fields ? `${field.name}[${field.fields.map(f => f.name).join(",")}]` : field.name
+    field.fields
+      ? `${field.name}[${field.fields.map(f => f.name).join(",")}]`
+      : field.name
   );
 }
 
@@ -114,7 +119,9 @@ describe("moving a field by key", () => {
     says("Title is already at the top level. Nothing moved.");
     // Above Title is nothing at all, so there is no container to enter.
     await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
-    says("There is no container right above Title to move into. Nothing moved.");
+    says(
+      "There is no container right above Title to move into. Nothing moved."
+    );
     expect(probe.commits).toBe(0);
     expect(document.activeElement).toBe(row("title"));
   });
@@ -124,7 +131,9 @@ describe("moving a field by key", () => {
     row("body").focus();
 
     await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
-    says("Moving a field into or out of a group or repeating rows is not available yet. Nothing moved.");
+    says(
+      "Moving a field into or out of a group or repeating rows is not available yet. Nothing moved."
+    );
     expect(shape(probe.fields)).toEqual(["title", "details[subtitle]", "body"]);
 
     // Up past Details stays at the top level, so it goes ahead.

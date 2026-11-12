@@ -52,7 +52,8 @@ function heldThere(
 
 /** The positions a place offers: at its start, then after each field in it. */
 function positionsIn(siblings: readonly BuilderField[]): PlacePosition[] {
-  if (siblings.length === 0) return [{ key: "end", label: "As its only field" }];
+  if (siblings.length === 0)
+    return [{ key: "end", label: "As its only field" }];
   return [
     { key: "start", label: "At the start", beforeFieldId: siblings[0]?.id },
     ...siblings.map((sibling, at) => {
@@ -110,6 +111,152 @@ function placeLabels(
   );
 }
 
+/** The place a field starts in: its own, where it already is; else the first it may go. */
+function homeOf(
+  fields: readonly BuilderField[],
+  fieldId: string,
+  places: readonly MoveDestination[]
+): { own: string; home: string } {
+  const own = findParentContainerId([...fields], fieldId)?.containerId ?? "";
+  const ownAllowed = places.some(
+    each => (each.parentFieldId ?? "") === own && each.verdict.allowed
+  );
+  const first = places.find(each => each.verdict.allowed)?.parentFieldId;
+  return { own, home: ownAllowed ? own : (first ?? "") };
+}
+
+/** The place and position chosen, and what the rule says of a move there. */
+function useMoveToChoice(
+  fields: readonly BuilderField[],
+  fieldId: string,
+  actions: OutlineActions
+) {
+  const places = useMemo(
+    () => actions.moveDestinations(fieldId),
+    [actions, fieldId]
+  );
+  const { own, home } = useMemo(
+    () => homeOf(fields, fieldId, places),
+    [fields, fieldId, places]
+  );
+  const [chosen, setChosen] = useState<string>(home);
+  const [positionKey, setPositionKey] = useState<string | null>(null);
+  const place = places.find(each => (each.parentFieldId ?? "") === chosen);
+  const positions = place ? positionsIn(heldThere(fields, place, fieldId)) : [];
+  const now = place ? currentPosition(fields, place, fieldId, positions) : null;
+  const position =
+    positions.find(each => each.key === positionKey) ??
+    positions.find(each => each.key === now);
+  const target: FieldInsertPosition | null =
+    place?.verdict.allowed && position
+      ? {
+          ...(place.parentFieldId
+            ? { parentFieldId: place.parentFieldId }
+            : {}),
+          ...(position.beforeFieldId
+            ? { beforeFieldId: position.beforeFieldId }
+            : {}),
+        }
+      : null;
+  return {
+    places,
+    chosen,
+    choosePlace: (key: string) => {
+      setChosen(key);
+      setPositionKey(null);
+    },
+    placeAllowed: place?.verdict.allowed === true,
+    positions,
+    position,
+    setPositionKey,
+    target,
+    verdict: target ? actions.judgeMoveTo(fieldId, target) : null,
+    // Where it is already: nothing to move.
+    stays: chosen === own && position?.key === now,
+  };
+}
+
+/** One place to choose, disabled with the rule's reason when the field may not go there. */
+function PlaceOption({
+  place,
+  label,
+  name,
+  checked,
+  onChoose,
+}: {
+  place: MoveDestination;
+  label: string;
+  name: string;
+  checked: boolean;
+  onChoose: () => void;
+}): JSX.Element {
+  const inputId = useId();
+  const noteId = `${inputId}-note`;
+  const { verdict } = place;
+  const note = verdict.allowed
+    ? valuesSentence(verdict.repeatingRowsEntered)
+    : verdict.message;
+  return (
+    <div className="flex items-start gap-2">
+      <input
+        type="radio"
+        id={inputId}
+        name={name}
+        checked={checked}
+        disabled={!verdict.allowed}
+        aria-describedby={note ? noteId : undefined}
+        onChange={onChoose}
+        className="mt-1"
+      />
+      <div className="text-sm">
+        <label
+          htmlFor={inputId}
+          className={verdict.allowed ? "" : "text-muted-foreground"}
+        >
+          {label}
+        </label>
+        {note && (
+          <p id={noteId} className="text-xs text-muted-foreground">
+            {note}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The position to take in the chosen place. */
+function PositionPicker({
+  positions,
+  value,
+  onChange,
+}: {
+  positions: readonly PlacePosition[];
+  value: string;
+  onChange: (key: string) => void;
+}): JSX.Element {
+  const id = useId();
+  return (
+    <div className="space-y-1">
+      <label htmlFor={id} className="text-sm font-medium">
+        Position
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        className="block w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+      >
+        {positions.map(each => (
+          <option key={each.key} value={each.key}>
+            {each.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export function MoveToDialog({
   fieldId,
   fields,
@@ -121,47 +268,13 @@ export function MoveToDialog({
   actions: OutlineActions;
   onClose: () => void;
 }): JSX.Element {
-  const idBase = useId();
-  const places = useMemo(
-    () => actions.moveDestinations(fieldId),
-    [actions, fieldId]
+  const name = useId();
+  const choice = useMoveToChoice(fields, fieldId, actions);
+  const labels = useMemo(
+    () => placeLabels(fields, choice.places),
+    [fields, choice.places]
   );
-  const labels = useMemo(() => placeLabels(fields, places), [fields, places]);
-  // The field's own place first, where it already is; else the first place
-  // it may go.
-  const own = findParentContainerId([...fields], fieldId)?.containerId ?? "";
-  const home = places.some(
-    each => (each.parentFieldId ?? "") === own && each.verdict.allowed
-  )
-    ? own
-    : (places.find(each => each.verdict.allowed)?.parentFieldId ?? "");
-  const [chosen, setChosen] = useState<string>(home);
-  const place = places.find(each => (each.parentFieldId ?? "") === chosen);
-  const positions = place
-    ? positionsIn(heldThere(fields, place, fieldId))
-    : [];
-  const [positionKey, setPositionKey] = useState<string | null>(null);
-  const now = place
-    ? currentPosition(fields, place, fieldId, positions)
-    : null;
-  const position =
-    positions.find(each => each.key === positionKey) ??
-    positions.find(each => each.key === now);
-  // Where it is already: nothing to move.
-  const stays = chosen === own && position?.key === now;
-  const target: FieldInsertPosition | null =
-    place && place.verdict.allowed && position
-      ? {
-          ...(place.parentFieldId
-            ? { parentFieldId: place.parentFieldId }
-            : {}),
-          ...(position.beforeFieldId
-            ? { beforeFieldId: position.beforeFieldId }
-            : {}),
-        }
-      : null;
-  const verdict = target ? actions.judgeMoveTo(fieldId, target) : null;
-  const subject = spokenFieldName(findFieldById([...fields], fieldId));
+  const { target, verdict } = choice;
 
   return (
     <Dialog open onOpenChange={open => !open && onClose()}>
@@ -175,74 +288,35 @@ export function MoveToDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Move {subject} to…</DialogTitle>
+          <DialogTitle>
+            Move {spokenFieldName(findFieldById([...fields], fieldId))} to…
+          </DialogTitle>
           <DialogDescription>
-            Choose a place and a position there. A place it cannot go says
-            why.
+            Choose a place and a position there. A place it cannot go says why.
           </DialogDescription>
         </DialogHeader>
         <fieldset className="max-h-80 space-y-2 overflow-y-auto">
           <legend className="sr-only">Place</legend>
-          {places.map(each => {
-            const key = each.parentFieldId ?? "";
-            const inputId = `${idBase}-place-${key || "top"}`;
-            const noteId = `${inputId}-note`;
-            const note = each.verdict.allowed
-              ? valuesSentence(each.verdict.repeatingRowsEntered)
-              : each.verdict.message;
+          {choice.places.map(place => {
+            const key = place.parentFieldId ?? "";
             return (
-              <div key={key || "top"} className="flex items-start gap-2">
-                <input
-                  type="radio"
-                  id={inputId}
-                  name={`${idBase}-place`}
-                  value={key}
-                  checked={chosen === key}
-                  disabled={!each.verdict.allowed}
-                  aria-describedby={note ? noteId : undefined}
-                  onChange={() => {
-                    setChosen(key);
-                    setPositionKey(null);
-                  }}
-                  className="mt-1"
-                />
-                <div className="text-sm">
-                  <label
-                    htmlFor={inputId}
-                    className={
-                      each.verdict.allowed ? "" : "text-muted-foreground"
-                    }
-                  >
-                    {labels.get(key)}
-                  </label>
-                  {note && (
-                    <p id={noteId} className="text-xs text-muted-foreground">
-                      {note}
-                    </p>
-                  )}
-                </div>
-              </div>
+              <PlaceOption
+                key={key || "top"}
+                place={place}
+                label={labels.get(key) ?? ""}
+                name={name}
+                checked={choice.chosen === key}
+                onChoose={() => choice.choosePlace(key)}
+              />
             );
           })}
         </fieldset>
-        {place?.verdict.allowed && (
-          <div className="space-y-1">
-            <label htmlFor={`${idBase}-position`} className="text-sm font-medium">
-              Position
-            </label>
-            <select
-              id={`${idBase}-position`}
-              value={position?.key ?? ""}
-              onChange={event => setPositionKey(event.target.value)}
-              className="block w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-            >
-              {positions.map(each => (
-                <option key={each.key} value={each.key}>
-                  {each.label}
-                </option>
-              ))}
-            </select>
-          </div>
+        {choice.placeAllowed && (
+          <PositionPicker
+            positions={choice.positions}
+            value={choice.position?.key ?? ""}
+            onChange={choice.setPositionKey}
+          />
         )}
         {verdict && !verdict.allowed && (
           <p role="alert" className="text-sm text-destructive">
@@ -254,7 +328,7 @@ export function MoveToDialog({
             Cancel
           </Button>
           <Button
-            disabled={!target || !verdict?.allowed || stays}
+            disabled={!target || !verdict?.allowed || choice.stays}
             onClick={() => {
               if (target) actions.moveTo(fieldId, target);
             }}

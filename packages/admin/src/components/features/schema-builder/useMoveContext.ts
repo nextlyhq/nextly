@@ -16,6 +16,7 @@ import {
 } from "@admin/hooks/useFieldGroupUsedBy";
 import type { MoveContext } from "@admin/lib/builder/move-rule";
 import { heldNamesOf } from "@admin/lib/builder/move-words";
+import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
 import {
   flattenOutline,
   type LoadedFieldGroup,
@@ -66,7 +67,9 @@ export function useMoveContext({
   // Only the field groups this entity uses: a move can reach no other.
   const used = useMemo(
     () => [
-      ...new Set([...byId.values()].flatMap(node => node.fieldGroup?.slugs ?? [])),
+      ...new Set(
+        [...byId.values()].flatMap(node => node.fieldGroup?.slugs ?? [])
+      ),
     ],
     [byId]
   );
@@ -94,12 +97,6 @@ export function useMoveContext({
         usedBy: placed ? holders(placed) : [],
       };
     },
-    fieldGroupFieldHolding: rowId => {
-      let at = byId.get(rowId);
-      while (at && !at.own) {
-        at = at.parentId ? byId.get(at.parentId) : undefined;
-      }
-      return at && at.id !== rowId ? at.field : undefined;
-    },
+    fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
   };
 }

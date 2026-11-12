@@ -199,7 +199,11 @@ export function useOutlineActions(
           setAnnouncement(nowhereSentence(node, step));
           return;
         }
-        carryOut(id, target, step === "up" || step === "down" ? step : undefined);
+        carryOut(
+          id,
+          target,
+          step === "up" || step === "down" ? step : undefined
+        );
       },
       openMoveTo: id => setMoveToFor(id),
       moveDestinations: id => call().moveDestinations(id),
@@ -251,7 +255,6 @@ export function useOutlineActions(
       openFieldGroup: slug => call().openFieldGroup(slug),
     };
   }, [focusRow, siblingsOf]);
-
 
   return {
     actions,

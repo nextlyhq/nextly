@@ -29,7 +29,10 @@ const WHOLE: MoveContext = {
       : undefined,
 };
 /** What the Builder asks today. */
-const TODAY: MoveContext = { entityReadOnly: false, topLevelReservesNames: true };
+const TODAY: MoveContext = {
+  entityReadOnly: false,
+  topLevelReservesNames: true,
+};
 
 function setup(context: MoveContext) {
   const probe = newProbe();

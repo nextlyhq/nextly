@@ -175,8 +175,7 @@ describe("pending changes controls", () => {
       // Past two fields in one step. Swapping two neighbours leaves the same
       // fields whichever of them moved, and changes are read from the fields
       // alone, so that would not say which one did.
-      edit: () =>
-        builder.setFields(prev => headlineToEnd(prev)),
+      edit: () => builder.setFields(prev => headlineToEnd(prev)),
       says: "moved Headline",
       check: undone =>
         expect(names()).toEqual(
@@ -411,9 +410,7 @@ function headlineToEnd(prev: BuilderField[]): BuilderField[] {
 describe("pending changes in the outline", () => {
   it("the count and the row marks", () => {
     render(<LayoutHarness />, { wrapper: Providers });
-    act(() =>
-      builder.setFields(prev => headlineToEnd(prev))
-    );
+    act(() => builder.setFields(prev => headlineToEnd(prev)));
     act(() =>
       builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
     );

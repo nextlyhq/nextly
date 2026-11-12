@@ -35,7 +35,10 @@ function held(node: OutlineNode): boolean {
 }
 
 /** The rows a row sits among: its container's, or the top level's. */
-function siblingsOf(rows: OutlineRows, node: OutlineNode): readonly OutlineNode[] {
+function siblingsOf(
+  rows: OutlineRows,
+  node: OutlineNode
+): readonly OutlineNode[] {
   const parent = node.parentId ? rows.byId.get(node.parentId) : undefined;
   return parent ? parent.children : rows.nodes;
 }
@@ -51,6 +54,19 @@ function ownRow(rows: OutlineRows, node: OutlineNode): OutlineNode | null {
     at = at.parentId ? rows.byId.get(at.parentId) : undefined;
   }
   return at ?? null;
+}
+
+/**
+ * For a field group's own row, the entity's field using the group, which the
+ * move rule judges a move of that row as; undefined for any other row.
+ */
+export function fieldGroupFieldHolding(
+  byId: ReadonlyMap<string, OutlineNode>,
+  rowId: string
+): OutlineNode["field"] | undefined {
+  const row = byId.get(rowId);
+  const own = row ? ownRow({ nodes: [], byId }, row) : null;
+  return own && own !== row ? own.field : undefined;
 }
 
 /** The container a row's siblings belong to, as a place names it. */
@@ -112,22 +128,32 @@ export function stepTarget(
   if (!node) return null;
   const siblings = siblingsOf(rows, node);
   const at = siblings.indexOf(node);
-  const parent = parentOf(rows, node);
   const neighbour = siblings[at + (step === "up" || step === "in" ? -1 : 1)];
   if (neighbour && isPendingDelete(neighbour)) return null;
-  switch (step) {
-    case "up":
-      if (neighbour) return before(rows, neighbour);
-      return parent ? before(rows, parent) : null;
-    case "down":
-      if (neighbour) return after(rows, neighbour);
-      return parent ? after(rows, parent) : null;
-    case "out":
-      return parent ? after(rows, parent) : null;
-    case "in":
-      return neighbour?.container ? inside(rows, neighbour) : null;
-  }
+  return STEPS[step](rows, neighbour, parentOf(rows, node));
 }
+
+/** Where each step goes, from the row beside the field that way and its container's row. */
+const STEPS: Record<
+  MoveStep,
+  (
+    rows: OutlineRows,
+    neighbour: OutlineNode | undefined,
+    parent: OutlineNode | null
+  ) => FieldInsertPosition | null
+> = {
+  up: (rows, neighbour, parent) => {
+    const past = neighbour ?? parent;
+    return past ? before(rows, past) : null;
+  },
+  down: (rows, neighbour, parent) => {
+    const past = neighbour ?? parent;
+    return past ? after(rows, past) : null;
+  },
+  out: (rows, _, parent) => (parent ? after(rows, parent) : null),
+  in: (rows, neighbour) =>
+    neighbour?.container ? inside(rows, neighbour) : null,
+};
 
 /**
  * Where a drop puts the dragged field: on a row, before it when dragged up

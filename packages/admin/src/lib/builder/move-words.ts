@@ -25,7 +25,9 @@ function containerOf(
 ): BuilderField | null | undefined {
   if (!findFieldById([...fields], fieldId)) return undefined;
   const parent = findParentContainerId([...fields], fieldId);
-  return parent ? (findFieldById([...fields], parent.containerId) ?? null) : null;
+  return parent
+    ? (findFieldById([...fields], parent.containerId) ?? null)
+    : null;
 }
 
 /**

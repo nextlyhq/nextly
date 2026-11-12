@@ -74,7 +74,7 @@ export interface MoveContext {
  * every move into or out of a group or repeating rows is refused, so no gesture
  * offers a move that would lose values; reorders within a container go ahead.
  */
-export const CONTAINER_CHANGES_KEEP_VALUES = false;
+const CONTAINER_CHANGES_KEEP_VALUES = false;
 
 /** Why a move is refused. */
 export type MoveRefusalReason =

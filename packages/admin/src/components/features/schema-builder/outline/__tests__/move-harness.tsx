@@ -9,7 +9,12 @@ import type { JSX } from "react";
 import { useMemo, useState } from "react";
 import { vi } from "vitest";
 
-import { judgeMove, moveDestinations, type MoveContext } from "@admin/lib/builder/move-rule";
+import {
+  judgeMove,
+  moveDestinations,
+  type MoveContext,
+} from "@admin/lib/builder/move-rule";
+import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
 import {
   buildOutline,
   flattenOutline,
@@ -55,11 +60,7 @@ export function MoveHarness({
   // A field group's own field stands for the field using the group.
   const ctx: MoveContext = {
     ...context,
-    fieldGroupFieldHolding: rowId => {
-      let at = byId.get(rowId);
-      while (at && !at.own) at = at.parentId ? byId.get(at.parentId) : undefined;
-      return at && at.id !== rowId ? at.field : undefined;
-    },
+    fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
   };
   const callbacks: OutlineCallbacks = {
     select: vi.fn(),

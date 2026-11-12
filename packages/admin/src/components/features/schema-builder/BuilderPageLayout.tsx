@@ -20,11 +20,11 @@ import { useMemo } from "react";
 
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import type { DuplicateNaming } from "@admin/hooks/useBuilderFieldActions";
 import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
+import type { DuplicateNaming } from "@admin/lib/builder/duplicate-field";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
 import { judgeMove, moveDestinations } from "@admin/lib/builder/move-rule";
 import {

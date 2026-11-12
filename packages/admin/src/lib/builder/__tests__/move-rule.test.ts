@@ -501,9 +501,9 @@ describe("while a save cannot keep values across containers", () => {
       { parentFieldId: "f-items-cta" },
     ],
   ])("refuses a move %s, saying so", (_, id, target) => {
-    expect(refusal(judgeMove(nestedFixtureFields(), id, target, today))).toEqual(
-      { reason: "not-available-yet", message: NOT_YET }
-    );
+    expect(
+      refusal(judgeMove(nestedFixtureFields(), id, target, today))
+    ).toEqual({ reason: "not-available-yet", message: NOT_YET });
   });
 
   it("still reorders within the top level and within a nested group", () => {
@@ -538,8 +538,7 @@ describe("while a save cannot keep values across containers", () => {
     expect(answer({ parentFieldId: "f-body" })).toBe("into-blocks");
     expect(answer({ parentFieldId: "f-seo" })).toBe("into-field-group");
     expect(
-      refusal(judgeMove(nestedFixtureFields(), "f-cta-label", {}, today))
-        .reason
+      refusal(judgeMove(nestedFixtureFields(), "f-cta-label", {}, today)).reason
     ).toBe("out-of-repeating-rows");
   });
 

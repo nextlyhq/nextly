@@ -39,7 +39,10 @@ import { OutlineToolbar } from "./OutlineToolbar";
 import { OutlineTree } from "./OutlineTree";
 import { SystemFieldsContainer } from "./SystemFieldsContainer";
 import { useFieldTypeLabel } from "./useFieldTypeLabel";
-import { useOutlineActions, type OutlineActionState } from "./useOutlineActions";
+import {
+  useOutlineActions,
+  type OutlineActionState,
+} from "./useOutlineActions";
 import { useOutlineDrag } from "./useOutlineDrag";
 import { rowIdOf, useTreeKeyDown } from "./useTreeKeyDown";
 
@@ -149,7 +152,6 @@ export function Outline({
   const [query, setQuery] = useState("");
   const [preview, setPreview] = useState(false);
   const state = useOutlineActions(nodes, callbacks);
-  const refusedHere = useOutlineDrag(state.actions);
   const movesId = useId();
 
   const rows = useMemo(
@@ -212,10 +214,34 @@ export function Outline({
         onAddAtEnd={() => callbacks.addAt({})}
         tree={tree}
       />
-      {refusedHere && (
-        <p className="text-sm text-destructive">{refusedHere}</p>
-      )}
-      <p id={movesId} hidden>
+      <OutlineMoves state={state} fields={callbacks.fields} keysId={movesId} />
+      {/* Mounted from the start, so a screen reader is already watching it
+          when a move is announced. */}
+      <div aria-live="polite" className="sr-only">
+        {state.announcement}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What moving a field adds to the outline: why the place a drag is over is
+ * refused, while it is; the keys a row's description names; and Move to….
+ */
+function OutlineMoves({
+  state,
+  fields,
+  keysId,
+}: {
+  state: OutlineActionState;
+  fields: OutlineCallbacks["fields"];
+  keysId: string;
+}): JSX.Element {
+  const refusedHere = useOutlineDrag(state.actions);
+  return (
+    <>
+      {refusedHere && <p className="text-sm text-destructive">{refusedHere}</p>}
+      <p id={keysId} hidden>
         Alt+Up and Alt+Down move the field; Alt+Left moves it out of its
         container, Alt+Right into the container above it. Shift+F10 opens its
         actions, Move to… among them.
@@ -223,17 +249,12 @@ export function Outline({
       {state.moveToFor !== null && (
         <MoveToDialog
           fieldId={state.moveToFor}
-          fields={callbacks.fields}
+          fields={fields}
           actions={state.actions}
           onClose={state.closeMoveTo}
         />
       )}
-      {/* Mounted from the start, so a screen reader is already watching it
-          when a move is announced. */}
-      <div aria-live="polite" className="sr-only">
-        {state.announcement}
-      </div>
-    </div>
+    </>
   );
 }
 
