@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 import {
+  type AuthUser,
   definePlugin,
   type HookContext,
   NextlyError,
@@ -1380,6 +1381,7 @@ async function rekeyAfterUpdate(
     data?: Record<string, unknown>;
     originalData?: Record<string, unknown>;
     collection?: string;
+    user?: { id?: string };
   },
   formsSlug: string,
   formId: string,
@@ -1412,6 +1414,84 @@ async function rekeyAfterUpdate(
         { as: "system" }
       )) > 0,
   });
+  await refuseTakenAddress(ctx, formId, nextly, parent);
+}
+
+/**
+ * Refuse an edit that moves a submission onto an email address another
+ * submission of the form already holds, saying which one only to a person who
+ * may read it. The holder is found as the system, since the address is taken
+ * whoever may see it; whether to name it is the editor's own read, judged by
+ * the access gate. Anyone else is told only that the address is used, so the
+ * refusal never shows a submission they could not open. The unique index
+ * still refuses a holder that commits after this look, without the name.
+ */
+async function refuseTakenAddress(
+  ctx: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    collection?: string;
+    user?: { id?: string };
+  },
+  formId: string,
+  nextly: NextlyInstance,
+  form: Record<string, unknown>
+): Promise<void> {
+  const key = ctx.data?.responseKey;
+  const stored = ctx.originalData;
+  if (typeof key !== "string" || key === stored?.responseKey) return;
+  if (normalizeFormSettings(form.settings).oneResponse !== "email") return;
+  const collection = ctx.collection ?? "form-submissions";
+  const { data: holders } = await nextly.services.collections.listEntries(
+    collection,
+    {
+      where: {
+        form: { equals: formId },
+        responseKey: { equals: key },
+        ...(stored?.id ? { id: { not_equals: stored.id } } : {}),
+      },
+      pagination: { limit: 1 },
+    },
+    { as: "system" }
+  );
+  const id = (holders?.[0] as { id?: unknown } | undefined)?.id;
+  if (typeof id !== "string" && typeof id !== "number") return;
+  const holderId = String(id);
+  const named = await mayRead(nextly, collection, holderId, ctx.user);
+  throw NextlyError.duplicate({
+    message: named
+      ? `This email address is already used by submission ${holderId} of this form.`
+      : "This email address is already used by another submission of this form.",
+    logContext: { formId, holderId },
+  });
+}
+
+/** Whether a hook's user is a signed-in person the access gate can judge. */
+function isAuthUser(user: unknown): user is AuthUser {
+  if (!user || typeof user !== "object") return false;
+  const { id, email } = user as Record<string, unknown>;
+  return typeof id === "string" && typeof email === "string";
+}
+
+/** Whether `user` may read the submission `id`, asked of the access gate. */
+async function mayRead(
+  nextly: NextlyInstance,
+  collection: string,
+  id: string,
+  user: unknown
+): Promise<boolean> {
+  if (!isAuthUser(user)) return false;
+  try {
+    const count = await nextly.services.collections.count(
+      collection,
+      { where: { id: { equals: id } } },
+      { as: "user", user }
+    );
+    return count > 0;
+  } catch {
+    // Refused by the gate: this person may not read it.
+    return false;
+  }
 }
 
 /**
