@@ -25,7 +25,6 @@ import {
   PageFrame,
   PageHeader,
   SegmentedChoice,
-  toastMutationResult,
   type BadgeProps,
   type NextlyColumn,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -43,6 +42,7 @@ import {
   type ProblemSeverity,
 } from "../problems/contract";
 
+import { copyNote } from "./copy-note";
 import { useCheckedProblemList } from "./problem-list";
 import { checkedWords, groupsOf, type ProblemGroup } from "./problem-view";
 import { AdminLink, SeoTrail } from "./section";
@@ -63,22 +63,6 @@ const SEVERITY_TEXT: Record<
 
 /** The filter's choice: every severity, or one. */
 type Shown = ProblemSeverity | "all";
-
-/** Copies a note for a developer, or shows it where the clipboard can't be written. */
-function copyNote(note: string): void {
-  // Where the clipboard can't be written (an address that is not secure, or
-  // a policy refusing it), the note is shown to copy by hand.
-  const clipboard =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard;
-  if (clipboard === undefined) {
-    toastMutationResult(note, []);
-    return;
-  }
-  void clipboard.writeText(note).then(
-    () => toastMutationResult(`Copied: “${note}”`, []),
-    () => toastMutationResult(note, [])
-  );
-}
 
 /** A link to where a problem is fixed, or the button that copies a note. */
 function FixButton({ problem }: { problem: Problem }): JSX.Element {

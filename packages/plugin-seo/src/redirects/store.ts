@@ -44,12 +44,19 @@ export interface StoredRedirect {
   id: string;
   locale: string;
   source: string;
+  /** Empty for an address that is gone. */
   target: string;
   permanent: boolean;
+  /** The address is gone for good: it answers 410, and sends no one on. */
+  gone: boolean;
   origin: RedirectOrigin;
   addedBy: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  /** How many requests it has answered, as the Proxy counted them. */
+  hits: number;
+  /** When it last answered one, as ISO text; null before the first. */
+  lastHit: string | null;
 }
 
 /** What a redirect is saved from. */
@@ -59,6 +66,8 @@ export interface RedirectInput {
   target: string;
   /** Permanent unless a person chooses otherwise. */
   permanent?: boolean;
+  /** Gone for good: answered 410, its `target` ignored and kept empty. */
+  gone?: boolean;
   origin: RedirectOrigin;
   addedBy?: string | null;
 }
@@ -100,10 +109,15 @@ export function redirectOf(entry: unknown): StoredRedirect {
     target: text(row.target),
     // Stored as a boolean, or 0/1 where the dialect keeps one as a number.
     permanent: row.permanent !== false && row.permanent !== 0,
+    // Absent on a row kept before the column was added: not gone.
+    gone: row.gone === true || row.gone === 1,
     origin: origin === "automatic" || origin === "import" ? origin : "person",
     addedBy: typeof row.addedBy === "string" ? row.addedBy : null,
     createdAt: isoOf(row.createdAt),
     updatedAt: isoOf(row.updatedAt),
+    // A number, or numeric text where the dialect returns one as text.
+    hits: Number.isFinite(Number(row.hits)) ? Number(row.hits ?? 0) : 0,
+    lastHit: isoOf(row.lastHit),
   };
 }
 
@@ -196,12 +210,18 @@ function heldOf(
 
 type Refusal = Extract<RedirectOutcome, { refused: string }>;
 
-/** A redirect's two addresses read and checked, or why they cannot be used. */
+/**
+ * A redirect's two addresses read and checked, or why they cannot be used.
+ * An address that is gone has no To address to check.
+ */
 function checked(
   input: RedirectInput
 ): { source: string; address: { path: string; range?: true } } | Refusal {
   const parsed = parseSource(input.source);
   if (!parsed.ok) return { refused: parsed.error, reason: "invalid" };
+  if (input.gone === true) {
+    return { source: parsed.source, address: parsed.address };
+  }
   const problem = checkTarget(input.target, parsed.source);
   if (problem !== null) return { refused: problem, reason: "invalid" };
   return { source: parsed.source, address: parsed.address };
@@ -404,7 +424,8 @@ async function followRequest(
       editing
     );
     const next = id === null ? undefined : await read.byId(id);
-    if (next === undefined) return null;
+    // An address that is gone answers there, sending the request no further.
+    if (next === undefined || next.gone) return null;
     passed.push(next.source);
     sent = destinationOf(next, at);
   }
@@ -440,6 +461,9 @@ export async function putRedirect(
       logContext: { reason: "redirect-gone", id: editing },
     });
   }
+  if (input.gone === true) {
+    return putGone(ctx, transaction, input, from, edited);
+  }
   const end = await followChain(
     from.source,
     storedTarget(input.target),
@@ -454,7 +478,10 @@ export async function putRedirect(
         editing
       );
       const next = id === null ? undefined : await read.byId(id);
-      return next === undefined ? null : destinationOf(next, path);
+      // A gone address ends the chain: a visitor sent there is answered 410.
+      return next === undefined || next.gone
+        ? null
+        : destinationOf(next, path);
     }
   );
   if ("error" in end) return { refused: end.error, reason: "loop" };
@@ -472,6 +499,7 @@ export async function putRedirect(
     target: end.final,
     targetKey: targetKeyOf(locale, end.final),
     permanent: input.permanent ?? true,
+    gone: false,
   };
   const saved =
     edited === undefined
@@ -501,6 +529,44 @@ export async function putRedirect(
     );
   }
   return { saved, chain: end.path, repointed };
+}
+
+/**
+ * Save `from` as gone for good, new or in place of `edited`: it answers 410
+ * and sends no one on, so it has no To address, no chain to follow and no
+ * loop to make. A redirect that went to it is left as it is: a visitor it
+ * sends here is told the page is gone, in one hop.
+ */
+async function putGone(
+  ctx: PluginContext,
+  transaction: Transaction,
+  input: RedirectInput,
+  from: { source: string; address: { path: string; range?: true } },
+  edited: StoredRedirect | undefined
+): Promise<RedirectOutcome> {
+  const fields = { target: "", targetKey: null, permanent: true, gone: true };
+  const saved =
+    edited === undefined
+      ? await created(ctx, transaction, input, from, fields)
+      : redirectOf(
+          await ctx.services.collections.updateEntryInTransaction(
+            transaction,
+            redirectsSlug(ctx),
+            edited.id,
+            { ...fields, _overwrite: true }
+          )
+        );
+  if ("refused" in saved) return saved;
+  // The address answers now, so it leaves the not-found log.
+  if (from.address.range) {
+    await forgetNotFoundUnder(ctx, transaction, input.locale, from.address.path);
+  } else {
+    await forgetNotFound(ctx, transaction, {
+      locale: input.locale,
+      path: from.source,
+    });
+  }
+  return { saved, chain: [], repointed: 0 };
 }
 
 /** The redirect from `source`, a From address as stored, in `locale`, if any. */
