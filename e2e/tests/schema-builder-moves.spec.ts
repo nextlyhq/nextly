@@ -93,11 +93,16 @@ async function drag(
   if (drop) await page.mouse.up();
 }
 
-/** The collection's stored top-level field names, in order. */
+/**
+ * The collection's stored top-level field names, in order, less the built-in
+ * fields the server keeps ahead of them.
+ */
 async function storedOrder(page: Page, slug: string): Promise<string[]> {
   const schema = await page.request.get(`${API}/collections/schema/${slug}`);
   const body = (await schema.json()) as { fields?: { name: string }[] };
-  return (body.fields ?? []).map(field => field.name);
+  return (body.fields ?? [])
+    .map(field => field.name)
+    .filter(name => !["title", "slug"].includes(name));
 }
 
 test.describe("moving fields in the Builder outline", () => {
@@ -164,7 +169,10 @@ test.describe("moving fields in the Builder outline", () => {
     page,
   }) => {
     await gotoAdmin(page, `/builder/collections/${slug}`);
+    // Read once the outline is drawn, so it is the order a drag starts from.
+    await expect(row(page, "sections")).toBeVisible();
     const before = await topLevel(page);
+    expect(before).toHaveLength(6);
     // A level to the right of the group's row: into the group.
     await drag(page, "summary_a", "meta", { levels: 1, drop: false });
     await expect(page.getByText(NOT_YET, { exact: true })).toBeVisible();
