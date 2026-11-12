@@ -557,6 +557,14 @@ describe("Advanced", () => {
     expect(
       screen.getByText("1 thing to fix: 800 × 600, LinkedIn will crop it.")
     ).toBeVisible();
+    // The note names what every network shows, a size and a format alike.
+    expect(
+      screen
+        .getByText("1 thing to fix: 800 × 600, LinkedIn will crop it.")
+        .closest("div")
+    ).toHaveTextContent(
+      "Share images show in full on every network as a 1200 × 630 JPEG or PNG."
+    );
     expect(screen.getByText("800 × 600")).toBeVisible();
     expect(
       screen.getAllByText(/from the blog post's/).map(line => line.textContent)
@@ -671,6 +679,20 @@ describe("Advanced", () => {
     expect(hide).toBeDisabled();
     expect(
       screen.getByText(/On for every blog post page, so this switch/)
+    ).toBeVisible();
+  });
+
+  it("says a page its route's code hides stays hidden", () => {
+    render(
+      <Harness
+        context={{
+          ...CONTEXT,
+          levels: { ...LEVELS, code: { ...LEVELS.code, hidden: true } },
+        }}
+      />
+    );
+    expect(
+      screen.getByText("Hidden from search by the page's code.")
     ).toBeVisible();
   });
 

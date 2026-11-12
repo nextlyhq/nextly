@@ -498,6 +498,13 @@ anything and always keeps serving:
 - **The database is ahead of the build** (an older build is still serving, or a deploy was rolled
   back): one line at info level.
 
+"Newest" is read from the names `nextly migrate:create` writes, which start with a UTC timestamp.
+A hand-named migration without one (`get_started_only.sql`, say) counts as older than every
+timestamped migration, though it sorts after them, and that holds both for the version stored and
+for the build's. Before the release after 0.0.2-alpha.75 such a file was counted as the newest, so
+a database that applied one read as ahead of every build; the first `nextly migrate` on that
+release stores the right version.
+
 With no migrations folder, or no migration in it, the start compares nothing and says nothing.
 An `instrumentation.ts` that does not pass `buildSchemaVersion` still gets the comparison under
 `next start`, which loads `next.config` as the server starts; on Vercel or with
