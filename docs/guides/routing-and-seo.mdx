@@ -197,6 +197,21 @@ wins) and call `notFound()` on a genuine miss or a reserved path (`/admin`,
 `/api`, `/_next`, `/static`, and metadata files like `sitemap.xml`). `status`
 behaves as in `resolveContent`.
 
+To do something for each miss, such as logging the address, pass your own
+`notFound`, a function that answers it as Next.js's does. The route calls it in
+place of `notFound()` from the page and from `generateMetadata` alike, so one
+request may call it twice. A handler that returns is followed by `notFound()`,
+so the request is still answered not found. `createSingleRoute`, and the page
+builder's `createContentPage`, `createBlocksPage` and `createSinglePage`, take
+the same option. It is experimental: its name and shape may change before 1.0.
+
+Without Cache Components, `createPublicContentRoute` renders a path once, at
+build or on its first request, and keeps the answer, and Next.js refuses a
+kept render that reads the request (`headers()`, `cookies()`). Give a public
+route a handler that reads the request only with Cache Components on. The page
+builder's public forms leave the handler out themselves where their answers are
+kept.
+
 ### One route for every language
 
 On a [translated site](/docs/localization), put the catch-all under a
