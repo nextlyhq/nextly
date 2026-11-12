@@ -152,6 +152,7 @@ import {
   formatTimestamp,
   slugify,
 } from "./format-file";
+import { refuseIndexedTextWidening } from "./indexed-text-widening";
 import type { RenameDecision } from "./prompt-renames";
 import {
   scopedSettingsChanges,
@@ -968,6 +969,13 @@ export async function generateMigration(
       next: desiredSnapshot,
     });
   }
+  // A MySQL column widened into TEXT under a whole-column index cannot be altered; refused before
+  // any file is written (`refuseIndexedTextWidening`).
+  refuseIndexedTextWidening({
+    operations,
+    previous: previousSnapshot,
+    dialect: args.dialect,
+  });
   if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
     return null;
   }
@@ -1662,6 +1670,36 @@ function tablesOfSettingsChanges(
  * type to restore and is skipped: its translations stay archived rather than emitting SQL for a
  * column that has nowhere to land.
  */
+/**
+ * The fields a disable brings home and the companion columns they come from: each field whose
+ * column the previous snapshot records in the companion. The snapshot, not the config, says what
+ * the companion holds, so a field added in the disabling edit is not among them.
+ */
+function recordedCompanionFields(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevMain: TableSpec,
+  dialect: SupportedDialect
+): {
+  field: MinimalConfigEntity["fields"][number];
+  column: LocalizedColumnSpec;
+}[] {
+  const recorded = prevMain.localizedColumns ?? [];
+  const out: {
+    field: MinimalConfigEntity["fields"][number];
+    column: LocalizedColumnSpec;
+  }[] = [];
+  for (const field of entity.fields) {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(entity, kind)
+    );
+    if (column && recorded.includes(column.name)) out.push({ field, column });
+  }
+  return out;
+}
+
 function buildDisableSpec(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind,
@@ -1669,18 +1707,9 @@ function buildDisableSpec(
   dialect: SupportedDialect,
   defaultLocale: string
 ): CompanionMigrationSpec | null {
-  const recorded = prevMain.localizedColumns;
-  if (!recorded || recorded.length === 0) return null;
-
-  const columns: LocalizedColumnSpec[] = [];
-  for (const f of entity.fields) {
-    const col = fieldToLocalizedColumnSpec(
-      f,
-      dialect,
-      columnOriginOf(entity, kind)
-    );
-    if (col && recorded.includes(col.name)) columns.push(col);
-  }
+  const columns = recordedCompanionFields(entity, kind, prevMain, dialect).map(
+    r => r.column
+  );
   if (columns.length === 0) return null;
 
   return {
@@ -1931,6 +1960,25 @@ function disableEntryFor(
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
+  // Turning translation off moves every translated field out of it at once, so each is judged as
+  // a field leaving translation alone is (`refusalsForFieldsLeavingTranslation`): one whose shared
+  // column is shaped otherwise than its translated one is refused before any file is written. The
+  // fields judged are the ones the disable brings home (`recordedCompanionFields`), so a field
+  // added in the same edit, which the companion never held, is left to the main table's diff.
+  refuseMigration(
+    c,
+    refusalsForFieldsLeavingTranslation({
+      leaving: new Set(
+        recordedCompanionFields(c, entityKind, prevMain, dialect).map(
+          r => r.field.name
+        )
+      ),
+      newFields: c.fields,
+      dialect,
+      builtBy: columnOriginOf(c, entityKind),
+      surface: "code",
+    })
+  );
   // The snapshot's recorded column list is the AUTHORITATIVE description of what the
   // companion actually holds; the current config is not, because the same edit that
   // flipped the switch may also have added or unflagged fields. Restoring exactly the
@@ -2862,13 +2910,14 @@ function assertFieldsMayJoinTranslation(
 }
 
 /**
- * The column rule an entity's tables are described by: a Builder collection's
- * (`settings.source === "builder"`) is the Builder's own, which it creates its
- * main table and its translations table by; every other entity's is the
- * code-first rule. On MySQL the two read an unstated text width differently,
- * so describing a Builder table by the code-first rule wrote a column the
- * table never had. Every place a table or a translated column is described
- * asks this one question.
+ * The column rule an entity's tables are described by: a Builder entity's
+ * (`settings.source === "builder"`) is the rule of the Builder creator that
+ * builds its tables (a collection's and a Single's one, a field group's
+ * another), and every other entity's is the code-first rule. On MySQL they
+ * read an unstated text width differently, so describing a Builder table by
+ * the code-first rule wrote a column the table never had. Every place a table
+ * or a translated column is described asks this one question, and it is
+ * answered by `builtByFor`, as `nextly migrate` and the runtime answer it.
  */
 function columnOriginOf(
   entity: MinimalConfigEntity,

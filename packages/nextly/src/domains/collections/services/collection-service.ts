@@ -61,7 +61,6 @@ import { NextlyError } from "../../../errors";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type {
   RequestContext,
@@ -71,6 +70,7 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import type { WhereFilter } from "../query/query-operators";
 

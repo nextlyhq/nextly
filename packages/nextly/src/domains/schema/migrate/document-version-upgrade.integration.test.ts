@@ -15,8 +15,7 @@
  *
  * @module domains/schema/migrate/document-version-upgrade.integration.test
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -30,10 +29,7 @@ import {
 } from "vitest";
 
 import type { FreshDatabase } from "../../../__tests__/helpers/fresh-database";
-import {
-  migrateFresh,
-  noMigrationsDir,
-} from "../../../__tests__/helpers/migrate-core";
+import { noMigrationsDir } from "../../../__tests__/helpers/migrate-core";
 import {
   defineCollection,
   defineFieldGroup,
@@ -68,6 +64,9 @@ const PER_DOCUMENT_COLUMNS = [
 ];
 
 const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-docver-");
+
+/** The app's migrations folder, below the instance's base path. */
+const APP_MIGRATIONS = "migrations";
 afterAll(remove);
 
 // The Schema Builder runs the migration that creates a collection's tables
@@ -143,25 +142,23 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: COLLECTIONS,
     singles: SINGLES,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
+    // Stated, so `migrationsOf` names the folder the instance's saves write to.
+    db: { migrationsDir: APP_MIGRATIONS, uiSchemaFile: "./ui-schema.json" },
   });
   expect(current.adapter.dialect).toBe(dialect);
   return current;
 }
 
-/** `migrateCore`'s view of the test's own database. */
-function freshOf(t: TestNextly): FreshDatabase {
-  const dialect = t.adapter.dialect as FreshDatabase["dialect"];
-  return {
-    dialect,
-    db: t.adapter.getDrizzle(),
-    tables: undefined as never,
-    exec: async statement => {
-      await t.adapter.executeQuery(statement);
-    },
-    columnsOf: table => columnsOf(t, table),
-    indexesOf: async () => [],
-    indexColumnsOf: async () => [],
-  };
+/**
+ * The app's migrations folder: where a Schema Builder save of this instance
+ * writes its migration, and records it in the ledger as applied. `nextly
+ * migrate` refuses a ledger naming files its folder lacks, so the upgrade runs
+ * over this folder, as it would on the site.
+ */
+function migrationsOf(t: TestNextly): string {
+  const dir = join(t.basePath, APP_MIGRATIONS);
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 async function columnsOf(t: TestNextly, table: string): Promise<string[]> {
@@ -327,8 +324,8 @@ const silent = new Proxy(
 
 /**
  * `nextly migrate` with the app's own migration files, on the test's own
- * adapter: running a file needs the whole adapter, which `migrateFresh`'s
- * raw-statement stand-in is not.
+ * adapter: running a file needs the whole adapter. Every upgrade runs this way,
+ * since the folder always holds the migrations the Builder save wrote.
  */
 async function migrateWithFiles(t: TestNextly, dir: string): Promise<void> {
   await migrateCore({
@@ -405,7 +402,7 @@ describe.each(getConfiguredTestDialects())(
       await olderSite(t);
       const before = await contentOf(t);
 
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
 
       for (const table of ALL_TABLES) {
         expect({ [table]: await columnsOf(t, table) }).toEqual({
@@ -438,7 +435,7 @@ describe.each(getConfiguredTestDialects())(
     it("a second run changes nothing", async () => {
       const t = await boot(dialect);
       await olderSite(t);
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
       await t.adapter.executeQuery(
         `UPDATE ${quote(t, TABLES.builderSingle)} SET ${quote(t, "_revision")} = 7`
       );
@@ -452,12 +449,42 @@ describe.each(getConfiguredTestDialects())(
           })
         ).added
       ).toBe(0);
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
 
       expect(await contentOf(t)).toBe(before);
       expect(Number((await rowsOf(t, TABLES.builderSingle))[0]._revision)).toBe(
         7
       );
+    }, 240_000);
+
+    it("asked for some tables, reads and changes those and their translation tables alone", async () => {
+      const t = await boot(dialect);
+      await olderSite(t);
+
+      const { added } = await addDocumentColumns({
+        db: t.adapter.getDrizzle(),
+        dialect: t.adapter.dialect as FreshDatabase["dialect"],
+        tables: [TABLES.codeCollection],
+      });
+
+      expect(added).toBeGreaterThan(0);
+      for (const table of [
+        TABLES.codeCollection,
+        TABLES.codeCollectionLanguages,
+      ]) {
+        expect({ [table]: await columnsOf(t, table) }).toEqual({
+          [table]: expect.arrayContaining(PER_DOCUMENT_COLUMNS),
+        });
+      }
+      for (const table of ALL_TABLES.filter(
+        table =>
+          table !== TABLES.codeCollection &&
+          table !== TABLES.codeCollectionLanguages
+      )) {
+        expect({ [table]: await columnsOf(t, table) }).toEqual({
+          [table]: expect.not.arrayContaining(PER_DOCUMENT_COLUMNS),
+        });
+      }
     }, 240_000);
 
     it("a run stopped part-way finishes on the next, keeping counters already there", async () => {
@@ -477,7 +504,7 @@ describe.each(getConfiguredTestDialects())(
       }
       const before = await contentOf(t);
 
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
 
       for (const table of ALL_TABLES) {
         expect({ [table]: await columnsOf(t, table) }).toEqual({
@@ -493,7 +520,7 @@ describe.each(getConfiguredTestDialects())(
     it("an insert that names none of the columns gets version 1 and no changer", async () => {
       const t = await boot(dialect);
       await olderSite(t);
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
 
       // Code from before the upgrade, still serving while the migrate runs,
       // inserts without the new columns.
@@ -516,7 +543,7 @@ describe.each(getConfiguredTestDialects())(
       const d = t.adapter.dialect as FreshDatabase["dialect"];
       const without = await introspectLiveSnapshot(db, d, [...ALL_TABLES]);
 
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
       const withThem = await introspectLiveSnapshot(db, d, [...ALL_TABLES]);
 
       // A migration file's snapshots predate the columns while the live
@@ -536,7 +563,7 @@ describe.each(getConfiguredTestDialects())(
       await olderSite(t);
       const before = await registryState(t);
 
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
 
       const after = await registryState(t);
       expect(after).toEqual(before);
@@ -546,7 +573,7 @@ describe.each(getConfiguredTestDialects())(
     it("reads field groups, translated and not, after the upgrade", async () => {
       const t = await boot(dialect);
       await olderSite(t);
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
 
       const [post] = await rowsOf(t, TABLES.codeCollection);
       const read = (await t.nextly.findByID({
@@ -566,16 +593,14 @@ describe.each(getConfiguredTestDialects())(
       // would fail on an existing site that has not had them added yet.
       const t = await boot(dialect);
       await olderSite(t);
-      const dir = mkdtempSync(join(tmpdir(), "nextly-docver-file-"));
-      try {
-        writeFileSync(
-          join(dir, "0001_000000_reads_versions.sql"),
-          `UPDATE ${TABLES.codeCollection} SET _revision = _revision WHERE 1 = 0;\n`
-        );
-        await migrateWithFiles(t, dir);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
+      // Written beside the save's migrations, named after them, as the app's
+      // next file would be.
+      const dir = migrationsOf(t);
+      writeFileSync(
+        join(dir, "29991231_000000_000_reads_versions.sql"),
+        `UPDATE ${TABLES.codeCollection} SET _revision = _revision WHERE 1 = 0;\n`
+      );
+      await migrateWithFiles(t, dir);
       expect(await columnsOf(t, TABLES.codeCollection)).toEqual(
         expect.arrayContaining(PER_DOCUMENT_COLUMNS)
       );
@@ -586,7 +611,7 @@ describe.each(getConfiguredTestDialects())(
       // site, however it comes to read the live tables.
       const t = await boot(dialect);
       await olderSite(t);
-      await migrateFresh(freshOf(t), NO_MIGRATIONS);
+      await migrateWithFiles(t, migrationsOf(t));
 
       const entities = await readRepairEntities({
         adapter: t.adapter as never,

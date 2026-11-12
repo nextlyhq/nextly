@@ -106,9 +106,10 @@ async function seedDeclaredPermissions({
   config,
 }: PermissionSeeding): Promise<void> {
   const systemResult = await permissionSeedService.seedSystemPermissions();
-  const collectionResult =
-    await permissionSeedService.seedAllCollectionPermissions();
-  const singleResult = await permissionSeedService.seedAllSinglePermissions();
+  // Every entity's permissions against one read of the table: the start's one
+  // ensuring of them, which the registry syncs leave to it.
+  const { collections: collectionResult, singles: singleResult } =
+    await permissionSeedService.seedAllEntityPermissions();
 
   const declared = collectCustomPermissions(config, config.plugins ?? []);
   const customResult =
@@ -202,6 +203,12 @@ const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 const globalForSeeding = globalThis as unknown as {
   __nextly_seeding?: Promise<void>;
   __nextly_seedingHolds?: Set<Promise<void>>;
+  /** How many seeding runs have been asked for in this process. */
+  __nextly_seedingAsked?: number;
+  /** Each hold, with how many seeding runs had been asked for when it was taken. */
+  __nextly_seedingHeldAt?: Map<Promise<void>, number>;
+  /** How many seeding runs had been asked for when the run in flight began. */
+  __nextly_seedingBeganAt?: number;
   __nextly_publicRoleRetry?: ReturnType<typeof setTimeout>;
 };
 
@@ -234,6 +241,10 @@ const globalForSeeding = globalThis as unknown as {
  * that run, and {@link awaitBootSeeding} waits for it.
  */
 export function seedPermissionsAndRolePresets(): Promise<void> {
+  // Asked for, whatever happens next: a hold taken before this no longer has a
+  // seeding to come (`bootSeedingFollows`).
+  globalForSeeding.__nextly_seedingAsked =
+    (globalForSeeding.__nextly_seedingAsked ?? 0) + 1;
   // A production build boots Nextly too, when it prerenders a page that reads
   // through it, and it writes nothing here. It serves no request, and the first
   // runtime boot seeds before it does. It may run against a database other
@@ -247,8 +258,22 @@ export function seedPermissionsAndRolePresets(): Promise<void> {
   // A boot that arrives while another is seeding joins that run rather than
   // starting a second one over the same rows.
   const inFlight = globalForSeeding.__nextly_seeding;
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    // A boot that took its hold after the run in flight began registered what
+    // that run may already have read past, so it seeds once that run is done
+    // rather than taking it for its own.
+    const began = globalForSeeding.__nextly_seedingBeganAt ?? 0;
+    const heldSince = [
+      ...(globalForSeeding.__nextly_seedingHeldAt?.values() ?? []),
+    ].some(askedWhenHeld => askedWhenHeld >= began);
+    if (!heldSince) return inFlight;
+    return inFlight
+      .catch(() => undefined)
+      .then(() => seedPermissionsAndRolePresets());
+  }
 
+  globalForSeeding.__nextly_seedingBeganAt =
+    globalForSeeding.__nextly_seedingAsked;
   const run = seedEverything().finally(() => {
     if (globalForSeeding.__nextly_seeding === run) {
       globalForSeeding.__nextly_seeding = undefined;
@@ -276,10 +301,31 @@ export function holdBootSeeding(): () => void {
   });
   const holds = (globalForSeeding.__nextly_seedingHolds ??= new Set());
   holds.add(held);
+  const heldAt = (globalForSeeding.__nextly_seedingHeldAt ??= new Map());
+  heldAt.set(held, globalForSeeding.__nextly_seedingAsked ?? 0);
   return () => {
     holds.delete(held);
+    heldAt.delete(held);
     release();
   };
+}
+
+/**
+ * Whether a start's own seeding is still to come: a boot holds the seeding gate
+ * (`holdBootSeeding`) and no seeding run has been asked for since it took it.
+ * Work the seeding would repeat, such as a registry sync ensuring each entity's
+ * permissions, is left to it then, so a start ensures each permission once.
+ * Once a run has been asked for, the start's seeding is behind it, and work
+ * done after it (an entity the request-path boot's apply registers from a
+ * migration) seeds for itself.
+ */
+export function bootSeedingFollows(): boolean {
+  const asked = globalForSeeding.__nextly_seedingAsked ?? 0;
+  for (const askedWhenHeld of globalForSeeding.__nextly_seedingHeldAt?.values() ??
+    []) {
+    if (askedWhenHeld === asked) return true;
+  }
+  return false;
 }
 
 /**

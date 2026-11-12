@@ -9,6 +9,7 @@
  *
  * @module plugins/plugin-landing
  */
+import type { Logger } from "../shared/types";
 import type { PluginOverride } from "../shared/types/config";
 
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
@@ -212,4 +213,26 @@ function listsMenuItems(plugin: PluginDefinition): boolean {
   return items.some(
     item => item.section === undefined || item.section === "standalone"
   );
+}
+
+/**
+ * Report the landing warnings of a development start to the host's logger,
+ * where every other plugin start-up report goes; nothing elsewhere.
+ */
+export function reportPluginLandingWarnings(
+  plugins: readonly PluginDefinition[],
+  pluginOverrides: Record<string, PluginOverride> | undefined,
+  nodeEnv: string | undefined,
+  logger: Logger
+): void {
+  for (const warning of pluginLandingWarnings(
+    plugins,
+    pluginOverrides,
+    nodeEnv
+  )) {
+    logger.warn?.(warning.message, {
+      kind: warning.kind,
+      plugin: warning.plugin,
+    });
+  }
 }

@@ -54,21 +54,98 @@ export type ComponentPath = string;
 export type HeaderButtonId = "github" | "discord" | "docs" | "notifications";
 
 /**
- * @public Header customization contributed by a plugin.
+ * @experimental Where a plugin's own item goes:
  *
- * `slot` adds a component to the header (supersedes the deprecated top-level
- * `headerSlot`). `hideDefaults` / `hide` remove built-in buttons; hiding is
- * subtractive and **union-merged** across enabled plugins (a button is hidden
- * if ANY enabled plugin hides it).
+ * - `"bar"`, the top bar's right end, on every page (the default);
+ * - `"rail-foot"`, the icon rail's foot, just above the Inbox;
+ * - `"menu"`, the person's menu, under "Help and community".
+ *
+ * The bar and the rail's foot take a component and keep it mounted for as long
+ * as the bar is, so it may draw nothing and only register what a page needs.
+ * The menu takes a declared item instead, because a closed menu's contents are
+ * not mounted.
  */
-export interface PluginHeaderContributions {
-  /** Component rendered in the header, before the notifications bell. */
-  slot?: ComponentPath;
+export type PluginItemPlace = "bar" | "rail-foot" | "menu";
+
+interface PluginUserMenuItemBase {
+  /** The item's text. */
+  label: string;
+  /** Lucide icon name from the admin's icon set, e.g. `"BookOpen"`. */
+  icon: string;
+}
+
+/**
+ * @experimental An item in the person's menu that goes somewhere: an admin
+ * path (`"/admin/plugins/acme-support"`) opens in place, and an absolute URL
+ * (`"https://example.com/help"`) opens in a new tab.
+ */
+export interface PluginUserMenuLink extends PluginUserMenuItemBase {
+  to: string;
+  action?: never;
+}
+
+/**
+ * @experimental An item in the person's menu that does something: opens one of
+ * the plugin's components in a dialog, or calls one of the plugin's routes
+ * with no rows.
+ */
+export interface PluginUserMenuAction extends PluginUserMenuItemBase {
+  action: AdminContributionAction;
+  to?: never;
+}
+
+/**
+ * @experimental A declared item in the person's menu: a label, an icon, and
+ * either a link (`to`) or an action, never both.
+ */
+export type PluginUserMenuItem = PluginUserMenuLink | PluginUserMenuAction;
+
+/** What every header contribution may carry, wherever its own item goes. */
+interface PluginHeaderHideOptions {
   /** Hide all built-in header buttons (github, discord, docs, notifications). */
   hideDefaults?: boolean;
   /** Hide specific built-in header buttons. */
   hide?: HeaderButtonId[];
 }
+
+/**
+ * @experimental A header contribution whose own item, if any, is a component
+ * drawn at the bar's right end (the default) or at the rail's foot.
+ */
+export interface PluginHeaderSlotContributions extends PluginHeaderHideOptions {
+  /** Component kept mounted at `place` for as long as the top bar is. */
+  slot?: ComponentPath;
+  /** Where `slot` is drawn; the bar's right end when absent. */
+  place?: "bar" | "rail-foot";
+  item?: never;
+}
+
+/**
+ * @experimental A header contribution whose own item is a declared entry in
+ * the person's menu. It takes no component: the menu's contents are mounted
+ * only while it is open.
+ */
+export interface PluginHeaderUserMenuContributions
+  extends PluginHeaderHideOptions {
+  place: "menu";
+  /** The entry drawn under "Help and community" while the menu is open. */
+  item: PluginUserMenuItem;
+  slot?: never;
+}
+
+/**
+ * @public Header customization contributed by a plugin.
+ *
+ * `slot` adds a component to the header (supersedes the deprecated top-level
+ * `headerSlot`), drawn where `place` says. With `place: "menu"` the plugin
+ * declares an `item` for the person's menu instead of a component.
+ * `hideDefaults` / `hide` remove built-in buttons, wherever the plugin's own
+ * item goes; hiding is subtractive and **union-merged** across enabled plugins
+ * (a button is hidden if ANY enabled plugin hides it).
+ */
+export type PluginHeaderContributions =
+  | PluginHeaderSlotContributions
+  | PluginHeaderUserMenuContributions;
 
 /**
  * @public A sidebar navigation entry contributed by a plugin.
@@ -571,9 +648,12 @@ export interface PluginAdminContributions {
    */
   headerSlot?: ComponentPath;
   /**
-   * @experimental Header customization: add a component (`slot`)
-   * and/or hide built-in buttons (`hideDefaults`/`hide`). The slot self-gates
-   * on permission and renders inside the plugin boundary.
+   * @experimental Header customization: add this plugin's own item and/or
+   * hide built-in buttons (`hideDefaults`/`hide`). The item is a component
+   * (`slot`) at the bar's right end or, with `place: "rail-foot"`, at the
+   * rail's foot above the Inbox; or, with `place: "menu"`, a declared `item`
+   * in the person's menu. A slot self-gates on permission and renders inside
+   * the plugin boundary.
    */
   header?: PluginHeaderContributions;
   /**

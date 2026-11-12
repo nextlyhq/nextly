@@ -158,7 +158,7 @@ formSubmissionOverrides: {
 
 ## Field Types
 
-All 13 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
+All 14 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
 
 | Type       | Description                          | Key Options                         |
 | ---------- | ------------------------------------ | ----------------------------------- |
@@ -175,6 +175,7 @@ All 13 field types are enabled by default. Set any to `false` in the `fields` op
 | `date`     | Date picker                          | `min`, `max`                        |
 | `time`     | Time picker                          | `defaultValue` (HH:mm format)       |
 | `hidden`   | Hidden value (not shown to users)    | `defaultValue`                      |
+| `consent`  | Required box agreeing to a text      | `agreementText`                     |
 
 Every field supports these common properties: `name`, `label`, `placeholder`, `helpText`, `defaultValue`, `required`, `validation`, `conditionalLogic`, and `admin.width` (25% to 100%).
 
@@ -238,7 +239,24 @@ const contactFields = [
 
 The `option()` helper converts labels to slug values automatically (`'General Inquiry'` becomes `'general_inquiry'`). Pass a second argument for an explicit value: `option('United States', 'us')`.
 
-Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `date()`, `time()`, `hidden()`.
+Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `date()`, `time()`, `hidden()`, `consent()`.
+
+### Consent fields
+
+A consent field is a box the visitor ticks to agree to a text, such as your privacy policy. It is always required. The answer stores the choice with the text the form showed, so changing the text later leaves what earlier visitors agreed to as it was:
+
+```typescript
+import { consent } from "@nextlyhq/plugin-form-builder";
+
+consent({
+  name: "privacy",
+  label: "Privacy",
+  agreementText: "I agree to the privacy policy",
+});
+// A submission stores: { privacy: { agreed: true, text: "I agree to the privacy policy" } }
+```
+
+The text comes from the form, never from what the visitor sends. A site that renders the form can send the text it showed with the answer, `{ "agreed": true, "text": "I agree to the privacy policy" }`: if the author changed the text while the form was open, the submission is refused, asking the visitor to review it and agree again, rather than recorded as agreement to terms they never saw. A plain checkbox value (`on`, `true`) is taken as agreement to the text the form shows when it arrives. A submitted consent cannot be edited: an update that would change or drop it, from the admin or the API, is refused with a validation error, and an edit of other answers keeps it as it was.
 
 ### Utility Functions
 
@@ -429,6 +447,12 @@ If a form's setting changes while a submission is on its way, the submission is 
 
 A form's **Settings › Privacy › Store IP address and browser** (`settings.storeIpAndBrowser`, on by default) decides whether a new submission keeps the address it came from and the visitor's browser. Off, it keeps neither. One per network still works on such a form: the address's keyed digest is made before the address is dropped, and only the digest is stored. Earlier submissions keep what they stored. A form that keeps no addresses cannot count its earlier responses by network after a change of setting, since it has none to count.
 
+### Privacy: deleting old submissions
+
+**Settings › Privacy › Delete submissions after** (`settings.keepDays`: Never, 30 days, 90 days or 1 year; none keeps them) sets how long a form keeps its submissions. A pass the plugin schedules each night (the job `form-builder:retention`, on the `@daily` schedule `form-builder-retention-nightly`) deletes every submission older than its form keeps them for, and spam older than 30 days whatever the setting. Age is when the submission was stored (`createdAt`).
+
+Each one is deleted the way any deletion is, so what it sent goes with it. A pass that runs out of time queues its own continuation, and the next jobs run carries on. Like every schedule, it runs only while something calls the jobs route (`/admin/api/jobs/run` in a scaffolded app); a night missed is caught up by the next one, which deletes everything past keeping by then.
+
 ### Validation
 
 The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage, and free-text fields are sanitized by stripping HTML tags to prevent injection.
@@ -477,6 +501,12 @@ Each submission tracks its review state:
 | `archived` | Archived (hidden from default views) |
 
 Admins can also add internal notes to any submission -- these are not visible to the original submitter.
+
+### Deleting submissions
+
+Deleting a submission forgets the notifications it sent, in the same transaction: one not yet sent (waiting, retrying, or failed) is cancelled and its message cleared, so nothing goes out from data that is gone, and the delivery records of one that went out are erased. This holds for deleting one submission, deleting several at once, and deleting a form, which deletes its submissions with it.
+
+The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it.
 
 ### Statistics
 
