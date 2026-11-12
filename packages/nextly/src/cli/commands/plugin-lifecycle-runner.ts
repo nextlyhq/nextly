@@ -925,6 +925,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         await orphanOwnedPermissionsOnCommandConnection(
           drizzleAdapter,
           plugin.name,
+          config,
           context.logger
         );
       };

@@ -35,6 +35,11 @@
  * - A `nextly migrate` with an uninstalled plugin still configured leaves its
  *   permission orphaned and its grants as they were, while it still adds an
  *   installed plugin's new permission and a never-installed plugin's.
+ * - The uninstall of a plugin named `app`, the key the app's own permissions
+ *   are stored under, leaves the app's permission live with its grants.
+ * - A migration written before a plugin named `app` joined, which drops one
+ *   of the app's own permissions, orphans that permission and not the
+ *   plugin's, though both are stored under the owner key `app`.
  * - In production, an older release's install and uninstall are refused
  *   before anything is written, naming the recorded release; the recorded
  *   release's succeed. In development an older release's install goes on.
@@ -223,6 +228,25 @@ const DIGEST_NEXT = definePlugin({
   },
 });
 
+/**
+ * Plugins named `app`, the key the app's own permissions are stored under:
+ * one declaring no permission, and one declaring one of its own.
+ */
+const APP_NAMED = definePlugin({
+  name: "app",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {},
+});
+const APP_NAMED_DECLARING = definePlugin({
+  name: "app",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    permissions: [{ action: "tally", resource: "pla-app", label: "Tally" }],
+  },
+});
+
 /** A plugin configured and never installed: no lifecycle record names it. */
 const NEVER = definePlugin({
   name: "@test/pla-never",
@@ -387,13 +411,16 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** The app's first migration, written before any plugin joined the configuration. */
-    async function migrateCreate(): Promise<void> {
-      state.config = configWith();
+    async function migrateCreate(
+      name = "initial",
+      config: unknown = configWith()
+    ): Promise<void> {
+      state.config = config;
       tick();
       const { context, said } = command();
       setNonInteractive(true);
       const code = await exiting(() =>
-        runMigrateCreate("initial", { cwd: state.dir }, context)
+        runMigrateCreate(name, { cwd: state.dir }, context)
       ).finally(() => setNonInteractive(false));
       expect(code, said.join("\n")).toBeUndefined();
     }
@@ -415,10 +442,11 @@ describe.each(getConfiguredTestDialects())(
     /** `nextly plugins install` of `name` from `release`, with every plugin configured. */
     async function install(
       name: string,
-      release: Release = NEW
+      release: Release = NEW,
+      plugins: (typeof FEEDS)[] = [FEEDS, DIGEST]
     ): Promise<void> {
       runAs(release);
-      state.config = configWith(FEEDS, DIGEST);
+      state.config = configWith(...plugins);
       tick();
       await runPluginInstall(name, {}, command().context);
     }
@@ -427,10 +455,11 @@ describe.each(getConfiguredTestDialects())(
     async function uninstall(
       name: string,
       keepData: boolean,
-      release: Release = NEW
+      release: Release = NEW,
+      plugins: (typeof FEEDS)[] = [FEEDS, DIGEST]
     ): Promise<void> {
       runAs(release);
-      state.config = configWith(FEEDS, DIGEST);
+      state.config = configWith(...plugins);
       tick();
       await runPluginUninstall(
         name,
@@ -838,6 +867,78 @@ describe.each(getConfiguredTestDialects())(
       },
       240_000
     );
+
+    it.each([
+      { plugin: APP_NAMED, own: undefined },
+      { plugin: APP_NAMED_DECLARING, own: "tally-pla-app" },
+    ])(
+      "leaves the app's own permission live with its grants on the uninstall of a plugin named app (declaring $own)",
+      async ({ plugin, own }) => {
+        await migrateCreate();
+        await migrate(NEW);
+        await install(plugin.name, NEW, [plugin]);
+        // The app's own permission, stored under the same owner key.
+        expect(await permission("export-pla-posts")).toEqual({
+          owner: "app",
+          orphaned: false,
+        });
+        const grants = await grantRows();
+
+        await uninstall(plugin.name, false, NEW, [plugin]);
+
+        expect((await lifecycle()).app).toEqual({ state: "uninstalled" });
+        expect(await permission("export-pla-posts")).toEqual({
+          owner: "app",
+          orphaned: false,
+        });
+        expect(await grantRows()).toEqual(grants);
+        // The control: the plugin's own permission is orphaned by the same run.
+        if (own !== undefined) {
+          expect(await permission(own)).toEqual({
+            owner: "app",
+            orphaned: true,
+          });
+        }
+      },
+      240_000
+    );
+
+    it("orphans the app's dropped permission and not a plugin named app the migration does not record", async () => {
+      await migrateCreate();
+      await migrate(NEW);
+      await install(APP_NAMED_DECLARING.name, NEW, [APP_NAMED_DECLARING]);
+      expect(await permission("tally-pla-app")).toEqual({
+        owner: "app",
+        orphaned: false,
+      });
+
+      // The app stops declaring its own permission in a migration written
+      // without the plugin in the configuration.
+      const without = (config: unknown) => ({
+        ...(config as Record<string, unknown>),
+        permissions: [],
+      });
+      await migrateCreate("drop_export", without(configWith()));
+      const said = await migrate(NEW, without(configWith(APP_NAMED_DECLARING)));
+
+      // The control: the migration speaks for the app, and its log says so.
+      expect(await permission("export-pla-posts")).toEqual({
+        owner: "app",
+        orphaned: true,
+      });
+      expect(said.join("\n")).toContain(
+        'Permission "export-pla-posts" is no longer declared'
+      );
+      // The plugin's permission was never marked, not even for the run's
+      // own seeding to clear again.
+      expect(await permission("tally-pla-app")).toEqual({
+        owner: "app",
+        orphaned: false,
+      });
+      expect(said.join("\n")).not.toContain(
+        'Permission "tally-pla-app" is no longer declared'
+      );
+    }, 240_000);
 
     it("refuses an older release's install and uninstall in production, naming the recorded release, and the recorded release's succeed", async () => {
       await migrateCreate();

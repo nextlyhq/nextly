@@ -114,6 +114,7 @@ import {
   type OldBuilderLedger,
 } from "../../domains/schema/migrate/old-builder-ledger";
 import {
+  keepingUnrecordedPlugins,
   orphanScopeOf,
   type MigrationOrphanScope,
 } from "../../domains/schema/migrate/permission-orphans";
@@ -600,7 +601,9 @@ export async function runMigrate(
         markOrphanedPermissions: (scope, migration) =>
           markOrphansOnCommandConnection(
             adapter as unknown as DrizzleAdapter,
-            scope,
+            // A configured plugin the migration does not record keeps its permissions, even one
+            // stored under the app's own owner key.
+            keepingUnrecordedPlugins(scope, configResult.config),
             migration,
             logger
           ),

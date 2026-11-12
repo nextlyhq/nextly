@@ -28,6 +28,10 @@ import { describeError } from "../../../errors/describe-error";
 import { NextlyError } from "../../../errors/nextly-error";
 import { seedPermissionsRolesAndPresets } from "../../../init/seed-permissions";
 import { getCoreVersion } from "../../../plugins/core-version";
+import {
+  collectCustomPermissions,
+  type PermissionConfigSource,
+} from "../../../plugins/permissions/collect-permissions";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
@@ -220,6 +224,13 @@ export async function seedAccessOnCommandConnection(
  * (`logOrphanMarkChange`), at the operator's level, since a permission
  * leaving the role editor is what the operator needs to hear of.
  *
+ * Rows a permission of `config`'s other owners names are left as they are
+ * (`OrphanMarkScope.kept`): the app's own permissions are stored under the
+ * owner key `app`, and a plugin may be named `app` too, so the key alone would
+ * take the app's permissions for the plugin's. Who declares what is read from
+ * the configuration's one collection of declarations
+ * (`collectCustomPermissions`), which keeps the app's apart by their source.
+ *
  * Throws when a mark could not be written, so the state is not recorded with
  * the owner's permissions still live: the transaction rolls back, and the
  * command run again writes both.
@@ -227,14 +238,18 @@ export async function seedAccessOnCommandConnection(
 export async function orphanOwnedPermissionsOnCommandConnection(
   pooled: DrizzleAdapter,
   owner: string,
+  config: PermissionConfigSource & { plugins?: PluginDefinition[] },
   logger: Logger
 ): Promise<void> {
+  const kept = collectCustomPermissions(config, config.plugins ?? []).filter(
+    p => !(p.source === "plugin" && p.owner === owner)
+  );
   // The command's own logger, each level as it is: a mark set is the operator's to hear.
   const serviceLogger: ServiceLogger = logger;
   const result = await onCommandConnection(pooled, serviceLogger, adapter =>
     new PermissionSeedService(adapter, serviceLogger).markOrphanedPermissions(
       [],
-      { owners: new Set([owner]) }
+      { owners: new Set([owner]), kept }
     )
   );
   if (result.errors > 0) {
