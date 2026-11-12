@@ -21,7 +21,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
 import { mainColumnBox } from "./support/shell-geometry";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -191,7 +191,9 @@ test.describe("the admin's frame while the server has not answered", () => {
     // The menu is not known: neutral shapes hold the rail's places.
     await expect(page.getByTestId("rail-ghost-item").first()).toBeVisible();
     // Nothing read from the server is drawn: no screen, no reader's menu.
-    await expect(page.getByTestId("dashboard-container")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByTestId("dashboard-container")
+    ).toHaveCount(0);
     await expect(rail.locator("nav [aria-label]")).toHaveCount(0);
     // The requests really were held, or the above proves nothing.
     expect(held.held()).toBeGreaterThan(0);
