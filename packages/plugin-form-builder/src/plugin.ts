@@ -1866,12 +1866,12 @@ async function formInTransaction(
   formId: string
 ): Promise<Record<string, unknown> | null> {
   try {
-    return (await nextly.services.ownCollections.findEntryByIdInTransaction(
+    return await nextly.services.ownCollections.findEntryByIdInTransaction(
       write.transaction,
       formsSlug,
       formId,
       { lock: "none" }
-    )) as unknown as Record<string, unknown>;
+    );
   } catch (err) {
     if (!NextlyError.isNotFound(err)) throw err;
     nextly.logger.error?.("Form Builder: form not found", { formId });
