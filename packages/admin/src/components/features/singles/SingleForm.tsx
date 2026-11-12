@@ -1151,6 +1151,15 @@ export function SingleForm({
     () => autosaveScopeFor("single", schema.slug, document?.id),
     [schema.slug, document?.id]
   );
+  /*
+   * Whether this Single keeps recovery points: autosave on, and a stored row
+   * to record against. The server refuses a recording anywhere else, so where
+   * this is false the editor records nothing, offers nothing back and shows no
+   * recording status. One answer for every recorder in the editor, the page
+   * builder's included, and for keeping a refused save's edits.
+   */
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(schema);
   // Where a save and publishing every language wait for its recordings.
   const recordingsFor = documentRecordingKey(autosaveScope);
 
@@ -1336,8 +1345,6 @@ export function SingleForm({
   // the current version. When the point cannot be written, nothing is
   // replaced and the conflict stays open.
   // Whether the conflict's edits can be kept: a Single with autosave on.
-  const keepsRecoveryPoints =
-    autosaveScope !== null && autosaveEnabledFor(schema);
   lock.now.keepsEdits = keepsRecoveryPoints;
   // With `keepEdits` false, for a Single that keeps no recovery points, the
   // edits are discarded, as the conflict said they would be.
@@ -1611,8 +1618,12 @@ export function SingleForm({
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
     // Nor is a reader's form recorded, which cannot change the document, nor
-    // one whose language's answer is on its way, which may not yet.
-    enabled: !updatesHeld && mayRecordRecovery(busy, viewingVersion),
+    // one whose language's answer is on its way, which may not yet. Nor a
+    // Single that keeps no recovery points at all.
+    enabled:
+      keepsRecoveryPoints &&
+      !updatesHeld &&
+      mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
     // Each point records the version its edits began from.
@@ -1622,7 +1633,7 @@ export function SingleForm({
     useAutosaveRecovery({
       // A reader is offered no recovery point: restoring one would make the
       // read-only form dirty with work it cannot save.
-      scope: readOnlyForReader ? null : autosaveScope,
+      scope: readOnlyForReader || !keepsRecoveryPoints ? null : autosaveScope,
       form,
       // The language the form shows: a point recorded in another is never
       // taken for the document.
@@ -1678,7 +1689,7 @@ export function SingleForm({
    * header's chip, and a document view's own through the host.
    */
   const recoveryPoint: RecoveryPointState = {
-    enabled: autosaveScope !== null,
+    enabled: keepsRecoveryPoints,
     storedAt: autosave.lastSavedAt,
     // A recovery point newer than the stored document, still on offer: its
     // edits are not stored, whatever the form says.
@@ -1761,6 +1772,8 @@ export function SingleForm({
           documentStatus={editedStatus}
           // The fields, so a field inside a repeater's row has an address.
           fields={schema.fields}
+          // So a field recording its own state stays quiet where this does.
+          keepsRecoveryPoints={keepsRecoveryPoints}
         >
           <EntryLocaleProvider value={localeCtx}>
             {/* Above the header — which mounts the history panel — and above
