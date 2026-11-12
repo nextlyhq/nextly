@@ -2203,17 +2203,30 @@ export class EmailTemplateService extends BaseService {
   }
 
   /** The reconciliation `ensureBuiltInTemplates` runs. */
-  private async reconcileStoredTemplates(): Promise<void> {
-    if (!this.registry.complete) this.configureOwnershipFromConfig();
-    await this.migrateLegacyLayout();
-
-    // The `kind` column is added to existing tables as nullable; rows that
-    // predate it come back null. Backfill them to `template` (the default
-    // layout is already tagged `layout` by the migration above).
+  /**
+   * The `kind` column is added to existing tables as nullable; rows that
+   * predate it come back null. Backfill them to `template` (the default layout
+   * is already tagged `layout` by `migrateLegacyLayout`). Written only when a
+   * row needs it, so a start with nothing to backfill writes nothing.
+   */
+  private async backfillTemplateKinds(): Promise<void> {
+    const untagged = await this.db
+      .select({ id: this.emailTemplates.id })
+      .from(this.emailTemplates)
+      .where(isNull(this.emailTemplates.kind))
+      .limit(1);
+    if (untagged.length === 0) return;
     await this.db
       .update(this.emailTemplates)
       .set({ kind: "template" })
       .where(isNull(this.emailTemplates.kind));
+  }
+
+  private async reconcileStoredTemplates(): Promise<void> {
+    if (!this.registry.complete) this.configureOwnershipFromConfig();
+    await this.migrateLegacyLayout();
+
+    await this.backfillTemplateKinds();
 
     // Recorded once, at the first boot on Liquid, whether or not anything is
     // seeded, and before anything is: it judges the templates stored before

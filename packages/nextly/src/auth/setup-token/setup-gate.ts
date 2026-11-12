@@ -151,6 +151,8 @@ interface BootLogger {
 export async function issueSetupTokenAtBoot(input: {
   meta: SetupTokenMeta;
   hasAdministrator: () => Promise<boolean>;
+  /** Whether a generated token is stored; see `ensureSetupTokenAtBoot`. */
+  tokenStored?: () => Promise<boolean>;
   logger: BootLogger;
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<void> {

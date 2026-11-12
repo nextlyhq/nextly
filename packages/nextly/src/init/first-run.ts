@@ -31,6 +31,7 @@ import {
   emitDdl,
   tableConstraintOps,
 } from "../domains/schema/pipeline/ddl-emitter";
+import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
 import type {
   ForeignKeySpec,
   NextlySchemaSnapshot,
@@ -144,9 +145,11 @@ export function databaseNotSetUp(cause?: unknown): NextlyError {
  * the build.
  */
 export async function assertDatabaseSetUp(
-  adapter: Pick<AdapterLike, "tableExists">
+  adapter: Pick<AdapterLike, "tableExists"> &
+    Partial<Pick<AdapterLike, "getDrizzle">>
 ): Promise<void> {
-  if (await adapter.tableExists(PROBE_TABLE)) return;
+  // At a production start, answered from its one reading of the catalog.
+  if (await tableExistsAtStart(adapter, PROBE_TABLE)) return;
   throw databaseNotSetUp();
 }
 
@@ -727,7 +730,9 @@ export async function ensureFirstRunSetup(
   // will continue and downstream queries will surface the real issue.
   let probeExists: boolean;
   try {
-    probeExists = await adapter.tableExists(PROBE_TABLE);
+    // At a production start, answered from its one reading of the catalog, as
+    // the empty-database refusal before it was.
+    probeExists = await tableExistsAtStart(adapter, PROBE_TABLE);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(

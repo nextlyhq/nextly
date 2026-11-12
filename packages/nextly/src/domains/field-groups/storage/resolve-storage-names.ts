@@ -39,6 +39,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { listTablesAtStart } from "../../schema/pipeline/diff/start-catalog-scope";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
   indexCatalog,
@@ -375,5 +376,5 @@ async function readRegistryTable(
   adapter: StorageNameAdapter
 ): Promise<FieldGroupRegistryTable> {
   const rules = await readIdentifierCaseRules(adapter);
-  return chooseRegistryTable(await adapter.listTables(), rules);
+  return chooseRegistryTable(await listTablesAtStart(adapter), rules);
 }
