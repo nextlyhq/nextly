@@ -10053,7 +10053,13 @@ export class CollectionMutationService extends BaseService {
           if (promoted.translation) {
             translated.add(promoted.translation.writeLocale);
           }
-          await this.consumeWorkingDraft(tx, draftRef, promoted.locale);
+          // The shared draft goes with it only where the shared part moves too.
+          await this.consumeWorkingDraft(
+            tx,
+            draftRef,
+            promoted.locale,
+            movesShared(params.parts)
+          );
         }
         // A pending change the collection can no longer promote — drafts
         // turned off, or a schema the split no longer covers, such as a
@@ -10074,7 +10080,12 @@ export class CollectionMutationService extends BaseService {
             ) {
               continue;
             }
-            await this.consumeWorkingDraft(tx, draftRef, locale);
+            await this.consumeWorkingDraft(
+              tx,
+              draftRef,
+              locale,
+              movesShared(params.parts)
+            );
           }
         }
 

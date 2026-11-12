@@ -383,6 +383,35 @@ describe.each(getConfiguredTestDialects())(
       expect(Object.keys(await drafts(id))).toEqual(["en"]);
     }, 90_000);
 
+    // A publish that chooses languages and not the shared part puts only those languages' own
+    // changes live: the shared draft, and the shared values every language shows, stay as they
+    // were until the shared part is published.
+    it("publishes a chosen language's own change and leaves the shared draft pending", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: TRANSLATED,
+          entryId: id,
+          overrideAccess: true,
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["es"] }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      expect(await read(entries, TRANSLATED, id, "es")).toMatchObject({
+        title: "es 2",
+        views: 10,
+      });
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      expect(carried((await drafts(id)).shared ?? {}, SHARED)).toEqual([
+        "views",
+      ]);
+    }, 90_000);
+
     // An untranslated document is published from one language as a
     // translated one is: that language's draft with the shared draft. Another language's draft stays pending, unchanged, and is
     // published from its own language.
