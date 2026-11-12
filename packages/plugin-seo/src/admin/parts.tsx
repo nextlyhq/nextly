@@ -144,40 +144,74 @@ export function inSentence(name: string): string {
     : first.toLowerCase() + name.slice(1);
 }
 
+/**
+ * Where an automatic value comes from, decided once: the type's pattern, one
+ * of the page's own fields, its template or design, its route's code, or
+ * the site's default. Both ways a source is said, the chip's line and the
+ * "Empty uses" sentence, word this one answer.
+ */
+type SourceDescription =
+  | { kind: "pattern"; type: string; pattern: string }
+  | { kind: "field"; type: string; field: string }
+  | { kind: "template"; design: boolean }
+  | { kind: "code" }
+  | { kind: "site"; what: string };
+
+function describeSource(
+  sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">,
+  value: SourcedValue,
+  names: SourceNames
+): SourceDescription {
+  const level: SeoLevel = sourced.from;
+  if (level === "pattern" && sourced.pattern !== undefined) {
+    return { kind: "pattern", type: names.typeLabel, pattern: sourced.pattern };
+  }
+  if (level === "content" && sourced.field !== undefined) {
+    return {
+      kind: "field",
+      type: inSentence(names.typeLabel),
+      field: names.fieldLabels[sourced.field] ?? sourced.field,
+    };
+  }
+  if (level === "template") {
+    return { kind: "template", design: names.drawnBy === "design" };
+  }
+  if (level === "code") return { kind: "code" };
+  return { kind: "site", what: SITE_DEFAULT[value] };
+}
+
 /** The words after the chip, for each level that can supply a value. */
 function sourceWords(
   sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">,
   value: SourcedValue,
   names: SourceNames
 ): ReactNode {
-  const level: SeoLevel = sourced.from;
-  if (level === "pattern" && sourced.pattern !== undefined) {
-    return (
-      <>
-        from the{" "}
-        <b className="font-semibold text-foreground">{names.typeLabel}</b>{" "}
-        pattern <Code>{sourced.pattern}</Code>
-      </>
-    );
+  const source = describeSource(sourced, value, names);
+  switch (source.kind) {
+    case "pattern":
+      return (
+        <>
+          from the{" "}
+          <b className="font-semibold text-foreground">{source.type}</b> pattern{" "}
+          <Code>{source.pattern}</Code>
+        </>
+      );
+    case "field":
+      return (
+        <>
+          from the {source.type}&apos;s{" "}
+          <b className="font-semibold text-foreground">{source.field}</b>
+        </>
+      );
+    case "template":
+      return source.design
+        ? "from this page's design"
+        : "from this page's template";
+    case "code":
+      return "by this page's route. Anything you type here wins over it.";
+    case "site":
+      return source.what;
   }
-  if (level === "content" && sourced.field !== undefined) {
-    return (
-      <>
-        from the {inSentence(names.typeLabel)}&apos;s{" "}
-        <b className="font-semibold text-foreground">
-          {names.fieldLabels[sourced.field] ?? sourced.field}
-        </b>
-      </>
-    );
-  }
-  if (level === "template") {
-    return names.drawnBy === "design"
-      ? "from this page's design"
-      : "from this page's template";
-  }
-  if (level === "code")
-    return "by this page's route. Anything you type here wins over it.";
-  return SITE_DEFAULT[value];
 }
 
 /**
@@ -193,31 +227,25 @@ export function EmptyUses({
   value: SourcedValue;
   names: SourceNames;
 }): ReactNode {
-  const level: SeoLevel = sourced.from;
-  if (level === "pattern" && sourced.pattern !== undefined) {
-    return (
-      <>
-        Empty uses the {names.typeLabel} pattern: <Code>{sourced.pattern}</Code>
-      </>
-    );
+  const source = describeSource(sourced, value, names);
+  switch (source.kind) {
+    case "pattern":
+      return (
+        <>
+          Empty uses the {source.type} pattern: <Code>{source.pattern}</Code>
+        </>
+      );
+    case "field":
+      return `Empty uses the ${source.type}'s ${inSentence(source.field)}`;
+    case "template":
+      return source.design
+        ? "Empty uses this page's design"
+        : "Empty uses this page's template";
+    case "code":
+      return "Empty uses what this page's route sets. Anything you type here wins over it.";
+    case "site":
+      return `Empty uses ${source.what}`;
   }
-  if (level === "content" && sourced.field !== undefined) {
-    const field = names.fieldLabels[sourced.field] ?? sourced.field;
-    return (
-      <>
-        Empty uses the {inSentence(names.typeLabel)}&apos;s {inSentence(field)}
-      </>
-    );
-  }
-  if (level === "template") {
-    return names.drawnBy === "design"
-      ? "Empty uses this page's design"
-      : "Empty uses this page's template";
-  }
-  if (level === "code") {
-    return "Empty uses what this page's route sets. Anything you type here wins over it.";
-  }
-  return `Empty uses ${SITE_DEFAULT[value]}`;
 }
 
 /** The admin's notice each tone is drawn as. */
