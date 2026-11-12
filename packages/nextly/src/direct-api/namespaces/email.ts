@@ -42,13 +42,13 @@ import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definit
 import type { UpdateEmailTemplateInput } from "../../services/email/email-template-service";
 import type {
   ApplyEmailTemplateUpdateArgs,
-  CancelQueuedEmailArgs,
   CompareEmailTemplateArgs,
   OverrideEmailTemplateArgs,
   ResetEmailTemplateArgs,
   UndoEmailTemplateUpdateArgs,
 } from "../types/email";
 import type {
+  CancelQueuedEmailArgs,
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
   CreateUserFieldArgs,

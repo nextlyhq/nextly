@@ -145,6 +145,7 @@ import {
 } from "./send-failures";
 import {
   checkedExclusions,
+  type Excluded,
   finalRecipients,
   leaveOutExcluded,
   repeatedOutcomes,
@@ -537,6 +538,52 @@ export class EmailService extends BaseService {
     return view;
   }
 
+  /**
+   * The envelope that goes out once the recipients `exclusions` names are
+   * left out of what the filters returned, and how many `to` each message
+   * takes: copies sent alone go one message each, whatever the provider
+   * takes.
+   */
+  private async withoutExclusions(
+    filtered: SendEnvelope,
+    exclusions: ReadonlySet<string> | undefined,
+    maxToPerMessage: number | undefined
+  ): Promise<{
+    envelope: SendEnvelope;
+    excluded?: Excluded;
+    perMessage: number | undefined;
+  }> {
+    const digester = recipientDigesterOf(this.keyScope);
+    if (!exclusions || !digester) {
+      return { envelope: filtered, perMessage: maxToPerMessage };
+    }
+    const excluded = await leaveOutExcluded(filtered, exclusions, digester);
+    return {
+      envelope: excluded.envelope,
+      excluded,
+      perMessage: excluded.alone ? 1 : maxToPerMessage,
+    };
+  }
+
+  /**
+   * A send answered from its key's claim, a repeat or one still in
+   * progress, with its final recipients reported as that answer leaves them.
+   */
+  private reportedAnswer(
+    envelope: SendEnvelope,
+    answer: SendOutcome,
+    excluded: Excluded | undefined
+  ): SendOutcome {
+    this.reportRecipients(
+      envelope,
+      answer.repeat
+        ? repeatedOutcomes(envelope, answer)
+        : unknownOutcomes(envelope),
+      excluded
+    );
+    return answer;
+  }
+
   /** Hand the final recipients to the view's report, when it has one. */
   private reportRecipients(
     envelope: SendEnvelope,
@@ -840,10 +887,9 @@ export class EmailService extends BaseService {
     // A precondition, before anything is resolved or sent: a person that
     // cannot be read would leave the record unable to be erased with them.
     const person = await this.personToRecord(options.person);
-    const digester = recipientDigesterOf(this.keyScope);
     const exclusions = checkedExclusions(options.excludeRecipients, {
       namesPerson: person !== null,
-      digester,
+      digester: recipientDigesterOf(this.keyScope),
     });
 
     // The caller's recipients are a precondition too. They are checked again
@@ -963,11 +1009,11 @@ export class EmailService extends BaseService {
 
     // The recipients the caller excluded, left out of what the filters
     // returned (`send-recipient-report`). Nobody left: nothing is sent.
-    const excluded =
-      exclusions && digester
-        ? await leaveOutExcluded(filteredEnvelope, exclusions, digester)
-        : undefined;
-    const envelope = excluded?.envelope ?? filteredEnvelope;
+    const { envelope, excluded, perMessage } = await this.withoutExclusions(
+      filteredEnvelope,
+      exclusions,
+      maxToPerMessage
+    );
     if (envelope.to.length === 0) {
       this.reportRecipients(envelope, [], excluded);
       return { success: true };
@@ -981,14 +1027,7 @@ export class EmailService extends BaseService {
       person,
     });
     if (claimed && "answer" in claimed) {
-      this.reportRecipients(
-        envelope,
-        claimed.answer.repeat
-          ? repeatedOutcomes(envelope, claimed.answer)
-          : unknownOutcomes(envelope),
-        excluded
-      );
-      return claimed.answer;
+      return this.reportedAnswer(envelope, claimed.answer, excluded);
     }
 
     // A keyed retry sends only to the recipients an earlier attempt with the
@@ -997,10 +1036,9 @@ export class EmailService extends BaseService {
       claimed?.keyed.claim,
       envelope
     );
-    // Copies sent alone go one message each, whatever the provider takes.
     const messages = messagesFor(
       pendingEnvelope(envelope, previouslyAccepted),
-      excluded?.alone ? 1 : maxToPerMessage
+      perMessage
     );
 
     const runAfterSend = (value: EmailAfterSendValue) =>

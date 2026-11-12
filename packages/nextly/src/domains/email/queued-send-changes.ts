@@ -182,7 +182,7 @@ export function comparableMailbox(address: string): string {
  * A mailbox masked for a screen: its first character, then `•••`, then its
  * domain (`j•••@example.com`). A mailbox with no `@` keeps only `•••`.
  */
-export function maskedMailbox(address: string): string {
+function maskedMailbox(address: string): string {
   const mailbox = mailboxOf(address);
   const at = mailbox.lastIndexOf("@");
   if (at <= 0) return "•••";

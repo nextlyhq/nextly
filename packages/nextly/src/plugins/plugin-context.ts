@@ -661,8 +661,6 @@ const PLUGIN_EMAIL_METHODS = [
   "sendWelcomeEmail",
   "isConfigured",
   "canSendTemplate",
-  "readQueued",
-  "recipientDigest",
 ] as const satisfies readonly (keyof EmailService)[];
 
 /** @experimental `ctx.services.users`: the plugin view of the user service. */
@@ -675,7 +673,7 @@ export type { PluginMediaService } from "./plugin-media";
 /** @experimental `ctx.services.email`. */
 export type PluginEmailService = Pick<
   EmailService,
-  (typeof PLUGIN_EMAIL_METHODS)[number]
+  (typeof PLUGIN_EMAIL_METHODS)[number] | "readQueued" | "recipientDigest"
 > & {
   /**
    * @experimental Forget email this plugin sent about something it has
@@ -3080,9 +3078,14 @@ export function createPluginContext(
       // plugin and the site, never name one send with the same key.
       email: Object.freeze({
         ...methodFacade(
-          scopedSender(emailService, pluginKeyScope(pluginName)),
+          scopedSender(emailService, emailScope),
           PLUGIN_EMAIL_METHODS
         ),
+        // Its own queued emails only, and its own digests, by its scope.
+        readQueued: (ids: readonly string[]) =>
+          scopedSender(emailService, emailScope).readQueued(ids),
+        recipientDigest: (address: string) =>
+          scopedSender(emailService, emailScope).recipientDigest(address),
         // Each change of its own queued emails, in the change's transaction,
         // with this plugin's database and collection token bound to it.
         onQueuedEmailChange: (handler: QueuedEmailChangeHandler) => {
