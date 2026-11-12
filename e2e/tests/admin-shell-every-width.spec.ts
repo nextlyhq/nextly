@@ -26,7 +26,7 @@ import { gotoAdmin, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
 import { waitForShellAnswers } from "./support/shell-geometry";
-import { test } from "./support/test";
+import { ownSeat, test } from "./support/test";
 
 test.describe.configure({ lock: [LOCK.siteSettings] });
 
@@ -207,50 +207,58 @@ async function openAt(
 }
 
 test.describe("no page scrolls sideways", () => {
-  for (const target of PAGES) {
-    test(`${target.name} fits every width in both schemes`, async ({
-      page,
-    }) => {
-      test.setTimeout(240_000);
-      const opened: Opened = { postId: "", postTitle: "" };
-      if (target.needsPost) {
-        const tag = uniqueTag();
-        opened.postTitle = `Every width ${tag}`;
-        opened.postId = await createEntry(page.request, "posts", {
-          title: opened.postTitle,
-          slug: `every-width-${tag}`,
-          excerpt: "A post the shell is measured around.",
-        });
-      }
+  for (const [index, target] of PAGES.entries()) {
+    // Eight opens of one page spend a share of the REST limit's per-user
+    // budget, and through the file's one account the later pages met a 429
+    // and an admin that could not reach the server. Each page reads through
+    // a seat of its own.
+    test.describe(target.name, () => {
+      ownSeat(index + 1);
+      test("fits every width in both schemes", async ({ page }) => {
+        test.setTimeout(240_000);
+        const opened: Opened = { postId: "", postTitle: "" };
+        if (target.needsPost) {
+          const tag = uniqueTag();
+          opened.postTitle = `Every width ${tag}`;
+          opened.postId = await createEntry(page.request, "posts", {
+            title: opened.postTitle,
+            slug: `every-width-${tag}`,
+            excerpt: "A post the shell is measured around.",
+          });
+        }
 
-      for (const scheme of SCHEMES) {
-        for (const viewport of VIEWPORTS) {
-          await openAt(page, target, opened, viewport, scheme);
-          const where = `${target.name} (/admin${target.path(opened)}) at ${viewport.width}x${viewport.height}, ${scheme}`;
-          const overflow = await readOverflow(page);
-          const past = overflow.pastEdge.length
-            ? `; past the right edge: ${overflow.pastEdge.join(", ")}`
-            : "";
+        for (const scheme of SCHEMES) {
+          for (const viewport of VIEWPORTS) {
+            await openAt(page, target, opened, viewport, scheme);
+            const where = `${target.name} (/admin${target.path(opened)}) at ${viewport.width}x${viewport.height}, ${scheme}`;
+            const overflow = await readOverflow(page);
+            const past = overflow.pastEdge.length
+              ? `; past the right edge: ${overflow.pastEdge.join(", ")}`
+              : "";
 
-          // The positive control: `<main>` was found, so a page that scrolls
-          // inside it is measured, not skipped.
-          expect(overflow.main, `${where}: no <main> on screen`).not.toBeNull();
-          expect
-            .soft(
-              overflow.document.scrollWidth,
-              `${where}: the document scrolls sideways (${overflow.document.scrollWidth}px wide in a ${overflow.document.clientWidth}px window)${past}`
-            )
-            .toBeLessThanOrEqual(overflow.document.clientWidth);
-          if (overflow.main) {
+            // The positive control: `<main>` was found, so a page that scrolls
+            // inside it is measured, not skipped.
+            expect(
+              overflow.main,
+              `${where}: no <main> on screen`
+            ).not.toBeNull();
             expect
               .soft(
-                overflow.main.scrollWidth,
-                `${where}: <main> scrolls sideways (${overflow.main.scrollWidth}px of content in ${overflow.main.clientWidth}px)${past}`
+                overflow.document.scrollWidth,
+                `${where}: the document scrolls sideways (${overflow.document.scrollWidth}px wide in a ${overflow.document.clientWidth}px window)${past}`
               )
-              .toBeLessThanOrEqual(overflow.main.clientWidth);
+              .toBeLessThanOrEqual(overflow.document.clientWidth);
+            if (overflow.main) {
+              expect
+                .soft(
+                  overflow.main.scrollWidth,
+                  `${where}: <main> scrolls sideways (${overflow.main.scrollWidth}px of content in ${overflow.main.clientWidth}px)${past}`
+                )
+                .toBeLessThanOrEqual(overflow.main.clientWidth);
+            }
           }
         }
-      }
+      });
     });
   }
 });
@@ -273,7 +281,12 @@ interface Stop {
    * offset instead would compare a scrolled list's content with a box
    * outside it, in two different coordinate spaces.
    */
-  previousBox: { left: number; top: number; right: number; bottom: number } | null;
+  previousBox: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  } | null;
   inWindow: boolean;
   /** What draws its focus indicator, or `null` when nothing does. */
   indicator: string | null;
