@@ -14,6 +14,9 @@
  * one the dry run showed (`plan`, a digest of every change and each page's
  * version), then writes every page and adds every redirect in one
  * transaction: in full, or, where anything is refused part-way, not at all.
+ * A Single cannot join that transaction, so each Single's page is written
+ * first, as a step of its own, and put back as it was where any later step
+ * is refused.
  *
  * @module import/plan
  */
@@ -38,12 +41,20 @@ import {
   readStored,
   refusalAbout,
   refuseIfNotStored,
+  saveSingleSeo,
   seoWith,
   writablePages,
 } from "../bulk/route";
+import {
+  restoreSingleSeo,
+  singleAccessOf,
+  singleDeclaration,
+  type SingleAccess,
+} from "../bulk/singles";
 import { productionAddressesOf, typedCanonical } from "../canonical";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
+import { pageTypeOf } from "../problems/page-types";
 import { keptFrom, originBeside } from "../redirects/served";
 import { putRedirect } from "../redirects/store";
 import { resolveOrder } from "../resolver/order";
@@ -78,7 +89,10 @@ type Transaction = ParticipantTransaction["transaction"];
 
 /** What the import needs from the plugin. */
 export interface ImportSetup {
-  /** The collections the plugin adds SEO to. */
+  /**
+   * The content types the plugin adds SEO to, by key: each collection's
+   * slug, and `single:<slug>` for each Single.
+   */
   targets: readonly string[];
   readRules: ReadRules;
   /** The problem list's checks, run again for each changed page. */
@@ -158,25 +172,33 @@ async function readableTypes(
   const caller = ctx.caller;
   if (caller === null) throw NextlyError.authRequired();
   const readable: string[] = [];
-  for (const slug of targets) {
-    if (await caller.can("read", slug)) readable.push(slug);
+  for (const key of targets) {
+    if (await caller.can("read", pageTypeOf(key).slug)) readable.push(key);
   }
   return readable;
 }
 
-/** Every page of `types`, read as `as` in `locale`. */
+/**
+ * Every page of `types`, read as `as` in `locale`: a Single's as the same
+ * person, through the read a Single takes.
+ */
 async function everyPage(
-  ctx: PluginContext,
+  ctx: PluginRouteContext,
   types: readonly string[],
   as: ServiceOpts,
   locale: string | undefined,
   rules: SiteRules
 ): Promise<ReadPage[]> {
   const pages: ReadPage[] = [];
-  for (const slug of types) {
+  let singleAs: SingleAccess | undefined;
+  for (const key of types) {
+    if (pageTypeOf(key).kind === "single") {
+      singleAs ??= await singleAccessOf(ctx);
+    }
     pages.push(
-      ...(await readEveryPage(ctx, slug, {
+      ...(await readEveryPage(ctx, key, {
         as,
+        ...(singleAs === undefined ? {} : { singleAs }),
         ...(locale === undefined ? {} : { locale }),
         rules,
       }))
@@ -185,18 +207,41 @@ async function everyPage(
   return pages;
 }
 
-/** Each type's declared fields, read from its stored definition. */
+/**
+ * A Single's fields: as code declares them, which name the component each
+ * component field holds; else as the Singles registry lists them, which
+ * keeps each field's name and type only.
+ */
+async function singleFields(
+  ctx: PluginContext,
+  slug: string
+): Promise<unknown> {
+  const declared = singleDeclaration(ctx, slug)?.fields;
+  if (Array.isArray(declared)) return declared;
+  const { data } = await ctx.services.singles.list({ limit: 500 });
+  return data.find(single => single.slug === slug)?.fields;
+}
+
+/**
+ * Each type's declared fields: a collection's registered schema, and a
+ * Single's (`singleFields`).
+ */
 async function typeFields(
   ctx: PluginContext,
   types: readonly string[]
 ): Promise<{ slug: string; label: string; fields: unknown }[]> {
   const answer: { slug: string; label: string; fields: unknown }[] = [];
-  for (const slug of types) {
-    const collection = await ctx.services.collections.getCollection(slug, {});
+  for (const key of types) {
+    const type = pageTypeOf(key);
+    const fields =
+      type.kind === "single"
+        ? await singleFields(ctx, type.slug)
+        : (await ctx.services.collections.getCollection(type.slug, {}))
+            .schemaDefinition.fields;
     answer.push({
-      slug,
-      label: typeNamesOf(ctx, slug).label,
-      fields: collection.schemaDefinition.fields,
+      slug: key,
+      label: typeNamesOf(ctx, key).label,
+      fields: fields ?? [],
     });
   }
   return answer;
@@ -1100,6 +1145,8 @@ async function writeAll(
   as: ServiceOpts
 ): Promise<void> {
   for (const page of plan.pages) {
+    // A Single's page is written before the transaction (`writeSingles`).
+    if (pageTypeOf(page.type).kind === "single") continue;
     // Written over the group as stored, every value the person may not
     // read kept as it was.
     const group = stored.get(`${page.type}|${page.id}`)?.[SEO_GROUP];
@@ -1139,6 +1186,69 @@ async function writeAll(
   }
 }
 
+/** A Single's page as written, with its group as it was stored before. */
+interface WrittenSingle {
+  type: string;
+  before: unknown;
+  rev: string | undefined;
+}
+
+/** Put each written Single back as it was, newest first. */
+async function restoreSingles(
+  ctx: PluginContext,
+  written: readonly WrittenSingle[],
+  locale: string
+): Promise<void> {
+  for (const single of [...written].reverse()) {
+    try {
+      await restoreSingleSeo(
+        pageTypeOf(single.type).slug,
+        locale,
+        single.before,
+        single.rev
+      );
+    } catch (error) {
+      // Logged rather than thrown, so the refusal that undid the import is
+      // the one the person reads.
+      ctx.logger.error("An imported Single could not be put back", {
+        error,
+        single: single.type,
+      });
+    }
+  }
+}
+
+/**
+ * Write each Single's page of `plan` as its own step, and answer what was
+ * written; where one is refused, those already written are put back and the
+ * refusal is thrown.
+ */
+async function writeSingles(
+  ctx: PluginRouteContext,
+  plan: ImportPlan,
+  stored: ReadonlyMap<string, Record<string, unknown>>
+): Promise<WrittenSingle[]> {
+  const written: WrittenSingle[] = [];
+  for (const page of plan.pages) {
+    if (pageTypeOf(page.type).kind !== "single") continue;
+    const entry = stored.get(`${page.type}|${page.id}`) ?? {};
+    try {
+      const rev = await saveSingleSeo(
+        ctx,
+        { type: page.type, id: page.id, label: page.label, rev: page.rev },
+        entry,
+        page.writes,
+        plan.locale
+      );
+      written.push({ type: page.type, before: entry[SEO_GROUP], rev });
+    } catch (error) {
+      await restoreSingles(ctx, written, plan.locale);
+      throw error;
+    }
+  }
+  return written;
+}
+
 /**
  * Apply the import the dry run `digest` showed: in one transaction, in full
  * or not at all. Refused, with nothing changed, where the import worked out
@@ -1175,11 +1285,19 @@ export async function applyImport(
     )) {
       stored.set(`${type}|${id}`, entry);
     }
-    await ctx.services.collections.warmLocalizedReadiness(type);
+    if (pageTypeOf(type).kind === "collection") {
+      await ctx.services.collections.warmLocalizedReadiness(type);
+    }
   }
-  await ctx.services.collections.withTransaction(transaction =>
-    writeAll(ctx, transaction, plan, stored, as)
-  );
+  const singles = await writeSingles(ctx, plan, stored);
+  try {
+    await ctx.services.collections.withTransaction(transaction =>
+      writeAll(ctx, transaction, plan, stored, as)
+    );
+  } catch (error) {
+    await restoreSingles(ctx, singles, plan.locale);
+    throw error;
+  }
   // Committed: each changed page is checked again for the problem list.
   for (const page of plan.pages) {
     recheckSaved(ctx, setup.checks, page.type, page.id);

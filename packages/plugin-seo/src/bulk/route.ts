@@ -10,6 +10,11 @@
  * held as a draft where the type keeps drafts, and checked again for the
  * problem list once it is saved.
  *
+ * A Single is a content type with one page, keyed `single:<slug>`. It is
+ * read and written through the Direct API as the person asking
+ * (`bulk/singles`), since a plugin has no other way to a Single it does not
+ * own, and a save of it is its own step.
+ *
  * @module bulk/route
  */
 import {
@@ -28,6 +33,7 @@ import { idText } from "../import/records";
 import { mayChangePageSeo } from "../permissions";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
+import { pageTypeOf } from "../problems/page-types";
 import type { ReadRules } from "../resolver/provider";
 import { SEO_GROUP } from "../tab/typed";
 
@@ -50,10 +56,20 @@ import {
   typeNamesOf,
   type ReadPage,
 } from "./pages";
+import {
+  readSingle,
+  restoreSingleSeo,
+  SINGLE_AS_STORED,
+  singleAccessOf,
+  writeSingleSeo,
+} from "./singles";
 
 /** What the bulk routes need from the plugin. */
 export interface BulkSetup {
-  /** The collections the plugin adds SEO to. */
+  /**
+   * The content types the plugin adds SEO to, by key: each collection's
+   * slug, and `single:<slug>` for each Single.
+   */
   targets: readonly string[];
   readRules: ReadRules;
   /** The problem list's checks, run again for each saved page. */
@@ -108,7 +124,8 @@ function targetOf(setup: BulkSetup, slug: string): string {
 /**
  * The pages of `type` whose SEO the caller may change: where the type's SEO
  * takes its own permission, they hold it, and each page's own update, with
- * its rules and the `seo` group's field rule, would let them write it.
+ * its rules and the `seo` group's field rule, would let them write it. A
+ * Single's one page is asked of its own update.
  */
 export async function writablePages(
   ctx: PluginRouteContext,
@@ -119,7 +136,8 @@ export async function writablePages(
   const writable = new Set<string>();
   const caller = ctx.caller;
   if (caller === null) return writable;
-  if (!(await mayChangePageSeo(ctx, type, options.pagePermissions))) {
+  const { kind, slug } = pageTypeOf(type);
+  if (!(await mayChangePageSeo(ctx, slug, options.pagePermissions))) {
     return writable;
   }
   // A published page of a type keeping working drafts holds its pending
@@ -127,16 +145,41 @@ export async function writablePages(
   // own editor, where the draft is, and is read-only here.
   if (await keepsDrafts(ctx, type)) return writable;
   const identity = await caller.identity();
+  const language =
+    options.locale === undefined ? {} : { locale: options.locale };
+  if (kind === "single") {
+    const may = await mayWriteEntry(identity, {
+      single: slug,
+      fields: [SEO_GROUP],
+      ...language,
+    });
+    return may ? new Set(ids) : writable;
+  }
   for (const id of new Set(ids)) {
     const may = await mayWriteEntry(identity, {
       collection: type,
       id,
       fields: [SEO_GROUP],
-      ...(options.locale === undefined ? {} : { locale: options.locale }),
+      ...language,
     });
     if (may) writable.add(id);
   }
   return writable;
+}
+
+/** How many pages of `type` the caller may read: a Single has one or none. */
+async function pagesOfType(
+  ctx: PluginRouteContext,
+  type: string,
+  as: ServiceOpts,
+  locale: string | undefined
+): Promise<number> {
+  const { kind, slug } = pageTypeOf(type);
+  if (kind === "collection") {
+    return ctx.services.collections.count(slug, {}, as);
+  }
+  const document = await readSingle(slug, await singleAccessOf(ctx), locale);
+  return document === undefined ? 0 : 1;
 }
 
 /** A page as the table shows it. */
@@ -171,18 +214,18 @@ async function typesFor(
   const as = asCaller(ctx);
   const rules = await setup.readRules(ctx, locale);
   const types: BulkType[] = [];
-  for (const slug of setup.targets) {
-    if (!(await caller.can("read", slug))) continue;
+  for (const key of setup.targets) {
+    if (!(await caller.can("read", pageTypeOf(key).slug))) continue;
     const pattern = {
       ...rules.defaultPatterns,
-      ...rules.patterns[slug],
+      ...rules.patterns[key],
     }.title;
     types.push({
-      slug,
-      ...typeNamesOf(ctx, slug),
-      total: await ctx.services.collections.count(slug, {}, as),
+      slug: key,
+      ...typeNamesOf(ctx, key),
+      total: await pagesOfType(ctx, key, as, locale),
       ...(pattern === undefined ? {} : { titlePattern: pattern }),
-      drafts: await keepsDrafts(ctx, slug),
+      drafts: await keepsDrafts(ctx, key),
     });
   }
   if (types.length === 0) throw NextlyError.forbidden();
@@ -369,6 +412,26 @@ export async function readStored(
   as: ServiceOpts
 ): Promise<Map<string, Record<string, unknown>>> {
   const found = new Map<string, Record<string, unknown>>();
+  const pageType = pageTypeOf(type);
+  if (pageType.kind === "single") {
+    // A Single is read as stored here: its name and its group, for a
+    // refusal and a write, are the plugin's to know.
+    if (as.as !== "system") {
+      throw NextlyError.internal({
+        logContext: { reason: "seo-bulk-single-stored-as-user", type },
+      });
+    }
+    const document = await readSingle(
+      pageType.slug,
+      SINGLE_AS_STORED,
+      as.locale
+    );
+    const id = document === undefined ? undefined : String(document.id);
+    if (document !== undefined && id !== undefined && ids.includes(id)) {
+      found.set(id, document);
+    }
+    return found;
+  }
   for (let at = 0; at < ids.length; at += 100) {
     const chunk = ids.slice(at, at + 100);
     const { data } = await ctx.services.collections.listEntries(
@@ -458,6 +521,86 @@ async function storedForSave(
   return stored;
 }
 
+/**
+ * Write a Single's `seo` group with `values` set over it as the caller, and
+ * refuse, with the group put back, where its field rules kept out a value
+ * sent. Answers the Single's new version, where it keeps one.
+ */
+export async function saveSingleSeo(
+  ctx: PluginRouteContext,
+  page: { type: string; id: string; label: string; rev?: string | undefined },
+  stored: Record<string, unknown>,
+  values: Readonly<Record<string, unknown>>,
+  locale: string | undefined
+): Promise<string | undefined> {
+  const { slug } = pageTypeOf(page.type);
+  let rev: string | undefined;
+  try {
+    rev = await writeSingleSeo(
+      slug,
+      await singleAccessOf(ctx),
+      locale,
+      seoWith(stored[SEO_GROUP], values),
+      page.rev
+    );
+  } catch (error) {
+    throw refusalAbout(error, page.label);
+  }
+  const saved = await readSingle(slug, SINGLE_AS_STORED, locale);
+  try {
+    refuseDroppedValues(saved, values, page.id);
+  } catch (error) {
+    await restoreSingleSeo(slug, locale, stored[SEO_GROUP], rev);
+    throw error;
+  }
+  return rev;
+}
+
+/** Save the one page of a Single, as its own step. */
+async function saveSingle(
+  ctx: PluginRouteContext,
+  setup: BulkSetup,
+  body: SaveBody,
+  type: string,
+  locale: string | undefined
+): Promise<BulkSaveBody> {
+  const [change, ...others] = body.changes;
+  if (change === undefined || others.length > 0) {
+    throw NextlyError.invalidInput({
+      message: "A Single has one page, so a save of it names one change.",
+      logContext: { reason: "seo-bulk-single-changes", type },
+    });
+  }
+  // Asked first, so a Single the caller may not change refuses the save
+  // before anything is read or written.
+  const writable = await writablePages(ctx, type, [change.id], {
+    locale,
+    pagePermissions: setup.pagePermissions,
+  });
+  if (!writable.has(change.id)) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "seo-bulk-page-not-writable", id: change.id },
+    });
+  }
+  const stored = await storedForSave(ctx, type, body, locale);
+  const entry = stored.get(change.id) ?? {};
+  const rev = await saveSingleSeo(
+    ctx,
+    {
+      type,
+      id: change.id,
+      label: pageLabel(ctx, type, entry),
+      rev: change.rev ?? undefined,
+    },
+    entry,
+    valuesOf(change),
+    locale
+  );
+  // Saved: the page is checked again for the problem list.
+  recheckSaved(ctx, setup.checks, type, change.id);
+  return { saved: 1, revs: rev === undefined ? {} : { [change.id]: rev } };
+}
+
 /** Save every change in one transaction, or none of them. */
 async function save(
   ctx: PluginRouteContext,
@@ -466,6 +609,9 @@ async function save(
 ): Promise<BulkSaveBody> {
   const type = targetOf(setup, body.type);
   const locale = await defaultLanguageOnly(ctx, body.locale);
+  if (pageTypeOf(type).kind === "single") {
+    return saveSingle(ctx, setup, body, type, locale);
+  }
   const as: ServiceOpts = {
     ...asCaller(ctx),
     ...(locale === undefined ? {} : { locale }),
@@ -548,13 +694,16 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
       handler: async (req, ctx) => {
         const query = queryOf(req);
         const type = targetOf(setup, query.type ?? "");
-        if (!(await ctx.caller?.can("read", type))) {
+        if (!(await ctx.caller?.can("read", pageTypeOf(type).slug))) {
           throw NextlyError.forbidden();
         }
         const locale = await defaultLanguageOnly(ctx, query.locale);
         const page = query.page ?? 1;
         const read = await readPages(ctx, type, {
           as: asCaller(ctx),
+          ...(pageTypeOf(type).kind === "single"
+            ? { singleAs: await singleAccessOf(ctx) }
+            : {}),
           ...(locale === undefined ? {} : { locale }),
           rules: await setup.readRules(ctx, locale),
           page,
