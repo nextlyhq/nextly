@@ -56,6 +56,11 @@ export interface PageFacts {
   answer: SeoAnswer;
   /** The canonical the answer names is the page's own address ({@link canonicalIsOwn}). */
   canonicalIsOwn: boolean;
+  /**
+   * The person confirmed the page first appeared on another site, so a
+   * canonical naming that site is meant, not a mistake.
+   */
+  canonicalConfirmed: boolean;
   shareImage: readonly ShareImageProblem[];
   structuredData: readonly StructuredDataProblem[];
   images: readonly ImageFact[];
@@ -157,11 +162,18 @@ function textProblems(facts: PageFacts): Problem[] {
 
 /**
  * A canonical a person typed that names an address other than the page's
- * own, which tells search engines to list that one instead.
+ * own, which tells search engines to list that one instead. One the person
+ * confirmed, saying the page first appeared elsewhere, is meant: no problem.
  */
 function canonicalProblem(facts: PageFacts): Problem[] {
   const canonical = facts.answer.canonical;
-  if (canonical?.from !== "page" || facts.canonicalIsOwn) return [];
+  if (
+    canonical?.from !== "page" ||
+    facts.canonicalIsOwn ||
+    facts.canonicalConfirmed
+  ) {
+    return [];
+  }
   return [
     {
       kind: "canonical",

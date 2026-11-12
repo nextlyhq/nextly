@@ -45,6 +45,7 @@ import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
 import { structuredDataProblems } from "../structured-data/provider";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
+import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
 import { contentFacts } from "./content";
 import {
@@ -336,6 +337,9 @@ async function examine(
       productionAddresses[0] ?? NO_ORIGIN,
       ownAddress
     ),
+    // Read as the page's head reads what the person typed in its group.
+    canonicalConfirmed:
+      typedPageLevel(entry[SEO_GROUP]).canonicalElsewhere === true,
     shareImage: await shareImageProblems(ctx, input, readers),
     structuredData: await structuredDataProblems(ctx, input, readers),
     images: content.images,
@@ -663,7 +667,8 @@ async function redirectChains(ctx: PluginContext): Promise<RedirectChain[]> {
     const path = pathOf(redirect.target);
     const id = await redirectMeeting(ctx, { locale: redirect.locale, path });
     const next = id === null || id === redirect.id ? undefined : byId.get(id);
-    if (next === undefined) continue;
+    // A redirect to an address that is gone is one hop, then 410: no chain.
+    if (next === undefined || next.gone) continue;
     chains.push({
       source: redirect.source,
       target: redirect.target,

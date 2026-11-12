@@ -1,67 +1,77 @@
 /**
- * The problem list's screen: the problems the checks found, grouped by kind,
- * each with a button that goes straight to its fix. No score, and nothing
- * here stops anyone publishing.
+ * The problem list's screen: one row for each kind of problem the checks
+ * found, most serious first, saying how serious it is, where it is and on
+ * how many pages, with the way to its fix. A row that names pages opens on
+ * them, each with its own fix. No score, and nothing here stops anyone
+ * publishing.
  *
  * Opening it rechecks the whole site where the last full check is over a
- * day old or there has been none, and "Check now" does at any time.
+ * day old or there has been none, and "Check again" does at any time. The
+ * counts are the ones the Overview and the SEO menu count by
+ * (`severityCounts`), so the three always agree.
+ *
+ * Drawn only from the admin's own parts (`PageFrame`, `PageHeader`,
+ * `ListView`, `SegmentedChoice`, `Badge`, `Button`, `Alert`).
  *
  * @module admin/SeoProblemsPage
  */
 import {
+  Alert,
+  AlertDescription,
   apiErrorMessage,
+  Badge,
   Button,
-  navigateTo,
-  toastMutationResult,
+  ListView,
+  PageFrame,
+  PageHeader,
+  SegmentedChoice,
+  type BadgeProps,
+  type NextlyColumn,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useState, type JSX } from "react";
 
 import {
   fixHref,
   KIND_SEVERITY,
-  problemsHref,
   problemTotal,
+  severityCounts,
   severityIn,
+  SEVERITY_ORDER,
   type Problem,
   type ProblemListBody,
   type ProblemSeverity,
+  WHOLE_SITE,
 } from "../problems/contract";
 
+import { copyNote } from "./copy-note";
 import { useCheckedProblemList } from "./problem-list";
 import { checkedWords, groupsOf, type ProblemGroup } from "./problem-view";
-import { AdminLink } from "./section";
-import { Icon, ROOT, SeoStyles } from "./styles";
-
-/** `n problems`, `1 problem`. */
-const problemCount = (count: number) =>
-  `${count} ${count === 1 ? "problem" : "problems"}`;
+import { AdminLink, SeoTrail } from "./section";
 
 /** `n pages`, `1 page`. */
 const pageCount = (count: number) =>
   `${count} ${count === 1 ? "page" : "pages"}`;
 
+/** Each severity's name, as one problem's badge and as the filter says it. */
+const SEVERITY_TEXT: Record<
+  ProblemSeverity,
+  { one: string; many: string; badge: BadgeProps["variant"] }
+> = {
+  error: { one: "Error", many: "Errors", badge: "destructive" },
+  warning: { one: "Warning", many: "Warnings", badge: "warning" },
+  notice: { one: "Notice", many: "Notices", badge: "default" },
+};
+
+/** The filter's choice: every severity, or one. */
+type Shown = ProblemSeverity | "all";
+
 /** A link to where a problem is fixed, or the button that copies a note. */
 function FixButton({ problem }: { problem: Problem }): JSX.Element {
   const href = fixHref(problem);
-  const label = (
-    <>
-      {problem.action} <Icon name="arrow" />
-    </>
-  );
   if (href !== undefined) {
     return (
-      <Button asChild variant="outline" size="sm" className="nx-seo-sbtn">
-        <a
-          href={href}
-          onClick={event => {
-            // Within the admin, so the page is not loaded again from scratch.
-            if (event.metaKey || event.ctrlKey || event.shiftKey) return;
-            event.preventDefault();
-            navigateTo(href);
-          }}
-        >
-          {label}
-        </a>
+      <Button asChild variant="link" size="sm">
+        <AdminLink href={href}>{problem.action}</AdminLink>
       </Button>
     );
   }
@@ -69,208 +79,270 @@ function FixButton({ problem }: { problem: Problem }): JSX.Element {
   return (
     <Button
       type="button"
-      variant="outline"
+      variant="link"
       size="sm"
-      className="nx-seo-sbtn"
-      onClick={() => {
-        // Where the clipboard can't be written (an address that is not
-        // secure, or a policy refusing it), the note is shown to copy by hand.
-        const clipboard =
-          typeof navigator === "undefined" ? undefined : navigator.clipboard;
-        if (clipboard === undefined) {
-          toastMutationResult(note, []);
-          return;
-        }
-        void clipboard.writeText(note).then(
-          () => toastMutationResult(`Copied: “${note}”`, []),
-          () => toastMutationResult(note, [])
-        );
-      }}
+      onClick={() => copyNote(note)}
     >
-      {label}
+      {problem.action}
     </Button>
   );
 }
 
-/** One kind's problems: explained once, then one row per problem. */
-function Group({ group }: { group: ProblemGroup }): JSX.Element {
-  const headingId = `nx-seo-pg-${group.kind}`;
+/**
+ * Whether a kind's row opens on the pages or things it names: any with
+ * several problems, and one whose problem names more than the whole site,
+ * such as a content type or a connection, so what to fix is always seen.
+ */
+function namesSeveral(group: ProblemGroup): boolean {
   return (
-    <section className="nx-seo-pgroup" aria-labelledby={headingId}>
-      <div className="nx-seo-pg-h">
-        <span className="nx-seo-warnc">
-          <Icon name="warn" />
-        </span>
-        <div className="nx-seo-grow">
-          <h2 id={headingId}>
-            {group.title}
-            {group.problems.length > 1 ? (
-              <>
-                {" "}
-                <span className="nx-seo-cnt n">{group.problems.length}</span>
-              </>
-            ) : null}
-          </h2>
-          <p>{group.explain}</p>
-        </div>
-        {group.siteWide ? <span className="nx-seo-chip">Site-wide</span> : null}
-      </div>
-      <ul className="nx-seo-prows">
-        {group.problems.map((problem, index) => (
-          <li className="nx-seo-prow" key={index}>
-            <div className="nx-seo-where">
-              <b>{problem.subject.label}</b>
-              {problem.subject.detail === undefined ? null : (
-                <span className="nx-seo-mono">{problem.subject.detail}</span>
-              )}
-            </div>
-            <div className="nx-seo-what">{problem.what}</div>
-            <div className="nx-seo-fixes">
-              <FixButton problem={problem} />
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
+    group.problems.length > 1 ||
+    group.problems.some(problem => problem.subject.label !== WHOLE_SITE.label)
   );
 }
 
-/** The heading's line: how many problems, and when the site was last checked. */
-function Meta({
-  list,
-  checking,
-  check,
-}: {
-  list: ProblemListBody | undefined;
-  checking: boolean;
-  check: () => void;
-}): JSX.Element {
-  let when: string;
-  if (checking) {
-    when =
-      list !== undefined && list.pagesChecked > 0
-        ? `Checking ${pageCount(list.pagesChecked)}…`
-        : "Checking pages…";
-  } else if (list?.checkedAt === undefined) {
-    when = "Not checked yet";
-  } else {
-    when = `Last checked ${checkedWords(list.checkedAt, Date.now())}${
-      list.outOfDate ? ", and pages have changed since" : ""
-    }`;
-  }
-  return (
-    <div className="nx-seo-pmeta">
-      {list === undefined ? null : (
-        <>
-          <span>{problemCount(problemTotal(list.problems))}</span>
-          <span aria-hidden="true">·</span>
-        </>
-      )}
-      <span role="status">{when}</span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="nx-seo-sbtn"
-        disabled={checking}
-        onClick={check}
-      >
-        <Icon name="refresh" /> Check now
-      </Button>
-    </div>
-  );
+/** How many pages a kind is found on, counted as the Overview counts them. */
+function pagesOf(group: ProblemGroup): number {
+  return problemTotal(group.problems);
 }
 
-/** The list's body: its groups, or what to say where there are none. */
-function Body({
-  list,
-  failed,
-}: {
-  list: ProblemListBody | undefined;
-  failed: Error | null;
-}): JSX.Element {
-  if (list === undefined) {
-    return (
-      <p className="nx-seo-state">
-        {failed === null
-          ? "Reading the problem list…"
-          : apiErrorMessage(failed)}
-      </p>
-    );
-  }
-  if (list.problems.length === 0) {
-    return (
-      <p className="nx-seo-state">
-        {list.checkedAt === undefined
-          ? "No problems found so far."
-          : `No problems found in ${pageCount(list.pagesChecked)}.`}
-      </p>
-    );
-  }
+/** One row's opened region: each page or thing it names, with its own fix. */
+function Named({ group }: { group: ProblemGroup }): JSX.Element {
   return (
-    <div className="nx-seo-pgroups">
-      {groupsOf(list.problems).map(group => (
-        <Group key={group.kind} group={group} />
+    <ul className="flex max-w-2xl flex-col gap-1 text-sm">
+      {group.problems.map((problem, index) => (
+        <li key={index} className="flex flex-wrap items-center gap-x-2.5">
+          <span className="font-medium">{problem.subject.label}</span>
+          {problem.subject.detail === undefined ? null : (
+            <span className="font-mono text-muted-foreground">
+              {problem.subject.detail}
+            </span>
+          )}
+          {group.problems.length > 1 ? (
+            <span className="text-muted-foreground">{problem.what}</span>
+          ) : null}
+          <FixButton problem={problem} />
+        </li>
       ))}
-    </div>
+    </ul>
   );
+}
+
+/** The list's columns: Severity, Problem, Where, Pages, and the fix. */
+function columnsFor(
+  open: (kind: string) => void
+): NextlyColumn<ProblemGroup>[] {
+  return [
+    {
+      name: "severity",
+      header: "Severity",
+      cell: ({ row }) => {
+        const text = SEVERITY_TEXT[KIND_SEVERITY[row.kind]];
+        // The first cell names the row and its opened region, so it says
+        // the problem too, to a screen reader.
+        return (
+          <>
+            <Badge variant={text.badge}>{text.one}</Badge>
+            <span className="sr-only">: {row.title}</span>
+          </>
+        );
+      },
+    },
+    {
+      name: "problem",
+      header: "Problem",
+      cell: ({ row }) => {
+        const [only] = row.problems;
+        return (
+          // The table is as wide as its cells' text, so a long sentence is
+          // held to a readable measure and wraps within it.
+          <div className="flex max-w-md flex-col gap-0.5">
+            <span className="font-semibold">{row.title}</span>
+            <span className="text-sm text-muted-foreground">
+              {/* One problem says what is wrong; several, what they share. */}
+              {row.problems.length === 1 && only !== undefined
+                ? only.what
+                : row.explain}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      name: "where",
+      header: "Where",
+      cell: ({ row }) => (row.siteWide ? "Whole site" : "Pages"),
+    },
+    {
+      name: "pages",
+      header: "Pages",
+      cell: ({ row }) =>
+        row.siteWide ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <span className="font-semibold">{pagesOf(row)}</span>
+        ),
+    },
+    {
+      name: "fix",
+      header: <span className="sr-only">Fix</span>,
+      cell: ({ row }) => {
+        const [only] = row.problems;
+        if (row.problems.length === 1 && only !== undefined) {
+          return <FixButton problem={only} />;
+        }
+        // Several pages: their fixes are listed under the row.
+        return (
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            onClick={() => open(row.kind)}
+          >
+            {row.siteWide
+              ? `Review ${row.problems.length}`
+              : `Review ${pageCount(pagesOf(row))}`}
+          </Button>
+        );
+      },
+    },
+  ];
+}
+
+/** When the list was checked, or what is checking it now. */
+function checkedLine(
+  list: ProblemListBody | undefined,
+  checking: boolean
+): string {
+  if (checking) {
+    return list !== undefined && list.pagesChecked > 0
+      ? `Checking ${pageCount(list.pagesChecked)}…`
+      : "Checking pages…";
+  }
+  if (list?.checkedAt === undefined) return "Not checked yet";
+  const when = checkedWords(list.checkedAt, Date.now());
+  return list.outOfDate
+    ? `Checked ${when}, and pages have changed since`
+    : `Checked ${when}, and after every save`;
+}
+
+/** The filter's choices, each with its count, as the Overview counts. */
+function filterOptions(problems: readonly Problem[]) {
+  const counts = severityCounts(problems);
+  return [
+    { value: "all", label: `All ${problemTotal(problems)}` },
+    ...SEVERITY_ORDER.map(severity => ({
+      value: severity,
+      label: `${SEVERITY_TEXT[severity].many} ${counts[severity]}`,
+    })),
+  ];
 }
 
 /** The problem list's screen, as the admin mounts it. */
-/** Each severity's name, as the list says it is narrowed to it. */
-const SEVERITY_NAMES: Record<ProblemSeverity, string> = {
-  error: "errors",
-  warning: "warnings",
-  notice: "notices",
-};
-
 export function SeoProblemsPage(): JSX.Element {
-  const checked = useCheckedProblemList();
-  const { checking, failed, check } = checked;
+  const { list, checking, failed, check } = useCheckedProblemList();
   // A link from the Overview's counts narrows the list to one severity; the
   // address is read once, as the admin remounts the page when it changes.
-  const [severity] = useState(() =>
+  const [shown, setShown] = useState<Shown>(() =>
     typeof window === "undefined"
-      ? undefined
-      : severityIn(window.location.search)
+      ? "all"
+      : (severityIn(window.location.search) ?? "all")
   );
-  const list =
-    checked.list === undefined || severity === undefined
-      ? checked.list
-      : {
-          ...checked.list,
-          problems: checked.list.problems.filter(
-            problem => KIND_SEVERITY[problem.kind] === severity
-          ),
-        };
-  const site = list?.site ?? "the site";
+  const [opened, setOpened] = useState<string[]>([]);
+  const open = (kind: string) =>
+    setOpened(current =>
+      current.includes(kind) ? current : [...current, kind]
+    );
+
+  const problems = list?.problems ?? [];
+  const groups = groupsOf(
+    shown === "all"
+      ? problems
+      : problems.filter(problem => KIND_SEVERITY[problem.kind] === shown)
+  );
+  const pagesChecked = list?.pagesChecked ?? 0;
+
   return (
-    <div className={`${ROOT} nx-seo-page`}>
-      <SeoStyles />
-      <div className="nx-seo-head nx-seo-phead">
-        <div>
-          <h1>Problems</h1>
-          <p>
-            Things that affect how {site} shows up in search and when shared.
-            Each one links to its fix. Nothing here stops anyone publishing.
-          </p>
-        </div>
-        <Meta list={list} checking={checking} check={() => check()} />
-      </div>
-      {severity === undefined ? null : (
-        <p className="nx-seo-help">
-          {`Showing ${SEVERITY_NAMES[severity]} only. `}
-          <AdminLink href={problemsHref()}>Show all problems</AdminLink>
-        </p>
-      )}
-      {failed !== null && list !== undefined ? (
-        <p className="nx-seo-alert" role="alert">
-          {apiErrorMessage(failed)}
-        </p>
-      ) : null}
-      <div className="nx-seo-body">
-        <Body list={list} failed={failed} />
-      </div>
-    </div>
+    <PageFrame type="list">
+      <PageHeader
+        title="Problems"
+        description="Grouped by what to fix. The same checks run on each page's SEO tab, so the two always agree."
+        breadcrumbs={<SeoTrail steps={[{ label: "Problems" }]} />}
+      />
+      <ListView<ProblemGroup>
+        ariaLabel="Problems"
+        columns={columnsFor(open)}
+        rows={groups}
+        getRowId={group => group.kind}
+        rowDetail={{
+          render: group => <Named group={group} />,
+          hasDetail: namesSeveral,
+          toggleLabel: group => `Pages with: ${group.title}`,
+          expandedIds: opened,
+          onExpandedChange: setOpened,
+        }}
+        loading={list === undefined && failed === null}
+        error={
+          list === undefined && failed !== null ? apiErrorMessage(failed) : null
+        }
+        hasActiveFilters={shown !== "all"}
+        empty={{
+          title: "No problems found",
+          description:
+            list?.checkedAt === undefined
+              ? "None so far. The whole site hasn't been checked yet."
+              : `Checked ${pageCount(pagesChecked)}.`,
+        }}
+        emptyFiltered={{
+          title: `No ${shown === "all" ? "problems" : SEVERITY_TEXT[shown].many.toLowerCase()} found`,
+          description: `Checked ${pageCount(pagesChecked)}.`,
+          action: (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShown("all")}
+            >
+              Show all problems
+            </Button>
+          ),
+        }}
+        slots={{
+          beforeList: (
+            <div className="flex flex-wrap items-center gap-2">
+              <SegmentedChoice
+                aria-label="Show problems"
+                size="bordered"
+                options={filterOptions(problems)}
+                value={shown}
+                onSelect={next => setShown(next as Shown)}
+              />
+              <span
+                role="status"
+                className="ml-auto text-sm text-muted-foreground"
+              >
+                {checkedLine(list, checking)}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={checking}
+                onClick={() => check()}
+              >
+                Check again
+              </Button>
+            </div>
+          ),
+          beforeTable:
+            // A check or read that failed over a list already shown: the
+            // list stays, with why it may be out of date above it.
+            failed !== null && list !== undefined ? (
+              <Alert variant="destructive">
+                <AlertDescription>{apiErrorMessage(failed)}</AlertDescription>
+              </Alert>
+            ) : null,
+        }}
+      />
+    </PageFrame>
   );
 }

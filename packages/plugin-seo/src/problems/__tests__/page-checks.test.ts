@@ -30,6 +30,7 @@ function facts(over: Partial<PageFacts> = {}): PageFacts {
       robots: { value: { index: true, follow: true }, from: "site" },
     },
     canonicalIsOwn: true,
+    canonicalConfirmed: false,
     shareImage: [],
     structuredData: [],
     images: [],
@@ -131,6 +132,17 @@ describe("pageProblems", () => {
       tab: "seo",
       field: "canonical",
     });
+  });
+
+  it("reports no canonical a person confirmed, as the page first appeared elsewhere", () => {
+    const confirmed = pageProblems({
+      ...withAnswer({
+        canonical: { value: "https://first.example/harbour", from: "page" },
+      }),
+      canonicalIsOwn: false,
+      canonicalConfirmed: true,
+    });
+    expect(confirmed).toEqual([]);
   });
 
   it("reports a missing share image, and each share image problem with its fix", () => {

@@ -1042,6 +1042,21 @@ the parameter to get every field.
 ?richTextFormat=both       # { json, html }
 ```
 
+### richTextStyles
+
+How the HTML that `richTextFormat=html` or `both` returns is styled:
+
+```
+?richTextStyles=default    # Nextly's look, as inline styles (default)
+?richTextStyles=none       # classes only, for your own CSS
+```
+
+With `none`, no element carries a style Nextly adds. Each one has a class in the
+`nextly-rich-text-` namespace, alignment is a class too, and styles an author chose in the
+editor (a text colour, a button's colours) are kept. The classes are listed under
+[Styling rich text HTML](/docs/configuration/fields#styling-rich-text-html). A value other
+than these two returns the default look, as an unknown `richTextFormat` returns JSON.
+
 ### Languages
 
 On a localized collection or Single (see [Localization](/docs/localization)). How each language

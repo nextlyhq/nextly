@@ -15,7 +15,13 @@
  */
 
 import { stepFinished, type SetupStep } from "nextly/config";
-import type { JSX, LiHTMLAttributes, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  type JSX,
+  type LiHTMLAttributes,
+  type ReactNode,
+} from "react";
 
 import { Check } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -25,6 +31,19 @@ import { cn } from "@admin/lib/utils";
  * setup answer the host computes never disagree about what a step can be.
  */
 export type ChecklistStatus = SetupStep["status"];
+
+/**
+ * How a done step's name is drawn: `quiet` in the muted text colour, as every
+ * finished step is; `struck` also struck through, for a list where crossing a
+ * step off reads better than greying it.
+ */
+export type ChecklistDoneStyle = "quiet" | "struck";
+
+/**
+ * The list's done style, read by each of its items, so a list sets it once
+ * rather than on every step. `quiet` outside a `Checklist`.
+ */
+const DoneStyleContext = createContext<ChecklistDoneStyle>("quiet");
 
 /** What a screen reader hears for each status, which the mark and styling only show. */
 const STATUS_TEXT: Record<ChecklistStatus, string> = {
@@ -124,6 +143,9 @@ export function ChecklistItem({
 }: ChecklistItemProps): JSX.Element {
   // Finished is the host's own judgement of a step, not a second one here.
   const finished = stepFinished({ status });
+  // Struck through only once done: a skipped step was not done, so it stays
+  // quiet rather than reading as crossed off.
+  const struck = useContext(DoneStyleContext) === "struck" && status === "done";
   return (
     <li
       data-status={status}
@@ -138,7 +160,8 @@ export function ChecklistItem({
         <p
           className={cn(
             "text-[13.5px] leading-5 break-words",
-            finished ? "text-muted-foreground" : "font-medium text-foreground"
+            finished ? "text-muted-foreground" : "font-medium text-foreground",
+            struck && "line-through"
           )}
         >
           {label}
@@ -177,25 +200,57 @@ export interface ChecklistProps {
   total: number;
   /** One `ChecklistItem` per step, in order. */
   children: ReactNode;
+  /**
+   * `2` lays the steps in two columns, without the rule between steps, once
+   * the checklist's own box is wide enough (one column below that). Default
+   * `1`.
+   */
+  columns?: 1 | 2;
+  /** How a done step's name is drawn. Default `quiet`. */
+  doneStyle?: ChecklistDoneStyle;
   className?: string;
 }
 
 /**
- * The bar over an ordered list of steps. Narrowed to one column whatever its
- * content, so a long step name wraps rather than widening the card.
+ * The bar over an ordered list of steps. Each column is narrowed to its share
+ * whatever its content, so a long step name wraps rather than widening the
+ * card.
+ *
+ * Two columns follow the checklist's own width (a container query), not the
+ * window's: in a card beside the admin's sidebars the window promises room
+ * the card does not have. The rule between steps goes with them, since rules
+ * in two columns of uneven steps would not line up.
  */
 export function Checklist({
   label,
   done,
   total,
   children,
+  columns = 1,
+  doneStyle = "quiet",
   className,
 }: ChecklistProps): JSX.Element {
   return (
-    <div className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)]", className)}>
+    <div
+      className={cn(
+        "grid min-w-0 grid-cols-[minmax(0,1fr)]",
+        columns === 2 && "@container",
+        className
+      )}
+    >
       <ChecklistProgress done={done} total={total} />
-      <ol aria-label={label} className="grid min-w-0 grid-cols-[minmax(0,1fr)]">
-        {children}
+      <ol
+        aria-label={label}
+        className={cn(
+          "grid min-w-0",
+          columns === 2
+            ? "grid-cols-1 gap-x-6 @2xl:grid-cols-2 [&>li]:border-t-0"
+            : "grid-cols-[minmax(0,1fr)]"
+        )}
+      >
+        <DoneStyleContext.Provider value={doneStyle}>
+          {children}
+        </DoneStyleContext.Provider>
       </ol>
     </div>
   );
