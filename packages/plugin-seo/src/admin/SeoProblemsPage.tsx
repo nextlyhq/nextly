@@ -41,6 +41,7 @@ import {
   type Problem,
   type ProblemListBody,
   type ProblemSeverity,
+  WHOLE_SITE,
 } from "../problems/contract";
 
 import { useCheckedProblemList } from "./problem-list";
@@ -103,11 +104,15 @@ function FixButton({ problem }: { problem: Problem }): JSX.Element {
   );
 }
 
-/** Whether a kind's row opens on the pages or things it names. */
+/**
+ * Whether a kind's row opens on the pages or things it names: any with
+ * several problems, and one whose problem names more than the whole site,
+ * such as a content type or a connection, so what to fix is always seen.
+ */
 function namesSeveral(group: ProblemGroup): boolean {
   return (
     group.problems.length > 1 ||
-    group.problems.some(problem => problem.subject.id !== undefined)
+    group.problems.some(problem => problem.subject.label !== WHOLE_SITE.label)
   );
 }
 

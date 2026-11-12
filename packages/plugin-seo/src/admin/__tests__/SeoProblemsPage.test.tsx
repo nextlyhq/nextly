@@ -237,6 +237,19 @@ describe("SeoProblemsPage", () => {
     ).toBeTruthy();
   });
 
+  it("opens a whole-site row on the thing it names, such as the content type", () => {
+    serving(LIST);
+    render(<SeoProblemsPage />);
+    const row = rowOf("Content type with no public address");
+    fireEvent.click(within(row).getByRole("button", { expanded: false }));
+    const region = screen
+      .getAllByRole("region", { name: /Content type with no public address/ })
+      .find(element => element.closest("table") !== null);
+    expect(region).toBeDefined();
+    expect(within(region!).getByText("Case studies")).toBeTruthy();
+    expect(within(region!).getByText("3 entries")).toBeTruthy();
+  });
+
   it("copies a note for a developer where the fix is in code", async () => {
     serving(LIST);
     render(<SeoProblemsPage />);
