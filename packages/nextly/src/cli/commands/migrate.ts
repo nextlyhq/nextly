@@ -736,6 +736,25 @@ export async function runMigrate(
             `User fields: storage ready for ${formatCount(userFields, "field")}.`
           );
         }
+        // Review state follows the configuration's workflows once the schema is in step: the work
+        // a development start does at boot, which a production start leaves to this deploy step
+        // since it reads nothing of the schema.
+        const { followWorkflowsAfterMigrate } = await import(
+          "./follow-workflows"
+        );
+        await followWorkflowsAfterMigrate(
+          // Null where no configuration file was found, as the user fields beside it: a
+          // default configuration declares no workflow, and following it would detach them all.
+          configResult.configPath ? configResult.config : null,
+          configResult.configPath ?? null,
+          adapter as unknown as DrizzleAdapter,
+          {
+            debug: (message: string) => logger.debug(message),
+            info: (message: string) => logger.info(message),
+            warn: (message: string) => logger.warn(message),
+            error: (message: string) => logger.error(message),
+          }
+        );
       }
     } catch (err) {
       fail(err);

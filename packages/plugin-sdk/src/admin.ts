@@ -1157,6 +1157,16 @@ export type {
   PluginMenuItem,
   PluginPanelSection,
 } from "nextly";
+/**
+ * @experimental A standalone plugin's panel declarations, as the package root
+ * exports them: its groups, and the count or badge on a menu item.
+ */
+export type {
+  PluginAdminPanel,
+  PluginItemCount,
+  PluginMenuItemFields,
+  PluginPanelGroup,
+} from "nextly";
 
 /**
  * `WEB_FONT_FORMATS` — the web font formats the host accepts, serves and

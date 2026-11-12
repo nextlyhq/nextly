@@ -34,7 +34,10 @@ import {
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { appLocalization } from "../../domains/i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsAsFirstPushed,
@@ -770,6 +773,7 @@ export const COMPONENTS_METHODS: Record<
             renamed: companionRename,
             tableName: tableName,
             defaultLocale: appLocalization()?.defaultLocale ?? "en",
+            languageOrder: appLanguageOrder(),
             adapter,
             entity: slug,
             kind: "fieldGroup",

@@ -52,6 +52,7 @@ import type {
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
+import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
@@ -1143,6 +1144,12 @@ async function generateFor(
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
     defaultLocale: deps.config.localization?.defaultLocale,
+    // The site's order, which decides the value a field leaving translation keeps, from the same
+    // source the save's own push reads (`appLanguageOrder`: the configuration's where it declares
+    // the languages, Settings' otherwise), the configuration's where that has no answer.
+    languageOrder:
+      appLanguageOrder() ??
+      deps.config.localization?.locales.map(locale => locale.code),
     onWarning: message => deps.logger.warn(message),
     scope: {
       kind: kindOf(args.save).kind,

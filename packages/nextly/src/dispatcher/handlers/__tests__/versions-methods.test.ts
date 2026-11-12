@@ -32,6 +32,9 @@ vi.mock("../../../api/versions-access", () => ({
   // The page as read: these cases judge paging and the gate, not the
   // "last looked at" marking, which has its own tests.
   withLastViewedMarks: (rows: unknown) => Promise.resolve(rows),
+  // The rows as read: which restored fields a reader may be told about has
+  // its own tests.
+  readableFieldSources: (rows: unknown) => Promise.resolve(rows),
 }));
 
 const getAutosaveSpy = vi.fn();
