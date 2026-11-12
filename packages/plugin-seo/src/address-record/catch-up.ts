@@ -3,10 +3,11 @@
  * save: a site that had content before the plugin arrived, or whose addresses
  * a deploy moved, is recorded as its pages now stand.
  *
- * It runs only where the record is empty or the fingerprint core gives of
- * every address template differs from the one stored at the last run, and it
- * works in two passes so a deploy that moves one page off an address and
- * another onto it is no clash:
+ * It runs only where the fingerprint core gives of every address template
+ * and site type differs from the one stored at the last run, where no run has
+ * finished (a new or dropped record stores none), or where a deploy move is
+ * still owed its redirect. It works in two passes so a deploy that moves one
+ * page off an address and another onto it is no clash:
  *
  * 1. every page keeps the addresses it already holds and still resolves to,
  *    and lets go of the rest; a page that no longer exists lets go of all;
@@ -192,35 +193,42 @@ const holderKey = (holder: AddressHolder) =>
 const sameAddress = (a: HeldAddress, b: HeldAddress) =>
   a.locale === b.locale && a.path === b.path && a.range === b.range;
 
-/** The stored fingerprint row, found by its key: one row read. */
-async function storedFingerprint(
-  ctx: PluginContext
-): Promise<{ id: string; value: unknown } | undefined> {
+/**
+ * The stored fingerprint and site-types rows, found by their keys, and
+ * whether any deploy move is still owed its redirect: one read. At most two
+ * rows are meta rows, so a read of three holds a pending row whenever one
+ * exists.
+ */
+async function storedGate(ctx: PluginContext): Promise<{
+  fingerprint?: MetaRow;
+  siteTypes?: MetaRow;
+  pending: boolean;
+}> {
   const { data } = await ctx.services.ownCollections.listEntries(
     recordSlug(ctx),
     {
-      where: { claimKey: { equals: FINGERPRINT_KEY } },
-      pagination: { limit: 1, page: 1 },
+      where: {
+        or: [
+          { claimKey: { in: [FINGERPRINT_KEY, SITE_TYPES_KEY] } },
+          { kind: { equals: "pending" } },
+        ],
+      },
+      pagination: { limit: 3, page: 1 },
       depth: 0,
     }
   );
-  const [row] = data as Record<string, unknown>[];
-  return row === undefined
-    ? undefined
-    : { id: String(row.id), value: row.path };
-}
-
-/** Whether the record holds any address at all: one row read at most. */
-async function holdsAny(ctx: PluginContext): Promise<boolean> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { kind: { in: ["address", "range"] } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  return (data as unknown[]).length > 0;
+  const found: {
+    fingerprint?: MetaRow;
+    siteTypes?: MetaRow;
+    pending: boolean;
+  } = { pending: false };
+  for (const row of data as Record<string, unknown>[]) {
+    const meta = { id: String(row.id), value: row.path };
+    if (row.claimKey === FINGERPRINT_KEY) found.fingerprint = meta;
+    else if (row.claimKey === SITE_TYPES_KEY) found.siteTypes = meta;
+    else if (row.kind === "pending") found.pending = true;
+  }
+  return found;
 }
 
 /** A stored meta row: its id, and the value it keeps. */
@@ -572,13 +580,18 @@ async function runCatchUp(
   options: CatchUpOptions
 ): Promise<CatchUpReport> {
   const fingerprint = await ctx.publicAddresses.fingerprint();
-  // The stored fingerprint by its key, and whether any address is recorded:
-  // an unchanged start reads no more than that.
-  const stored = await storedFingerprint(ctx);
+  // Skipped on its inputs alone, never on what the record holds: a site none
+  // of whose pages holds an address keeps only these notes, and would
+  // otherwise walk every page at every start. The fingerprint covers every
+  // site type by kind and name, so a type added or removed changes it; the
+  // site-types row is written beside it in the same run, and one missing
+  // means that run never finished. A full uninstall drops the record with
+  // both rows, so a reinstall runs the whole catch-up again.
+  const stored = await storedGate(ctx);
   if (
-    stored?.value === fingerprint &&
-    (await holdsAny(ctx)) &&
-    (await pendingMoves(ctx)).length === 0
+    stored.fingerprint?.value === fingerprint &&
+    stored.siteTypes !== undefined &&
+    !stored.pending
   ) {
     return NOTHING;
   }
@@ -600,22 +613,28 @@ async function runCatchUp(
   await redirectOwedMoves(ctx);
   await storeMeta(
     ctx,
-    record.siteTypes?.id,
+    record.siteTypes,
     SITE_TYPES_KEY,
     JSON.stringify(siteTypes)
   );
   // Stored last: a start interrupted before this point runs it all again.
-  await storeMeta(ctx, record.fingerprint?.id, FINGERPRINT_KEY, fingerprint);
+  await storeMeta(ctx, record.fingerprint, FINGERPRINT_KEY, fingerprint);
   return { ran: true, recorded, lost };
 }
 
-/** Keep `value` in the meta row `key`, made where it is not there yet. */
+/**
+ * Keep `value` in the meta row `key`, made where it is not there yet. A row
+ * already keeping `value` is left alone: each write is a whole entry save,
+ * and a start where nothing moved has nothing to save.
+ */
 async function storeMeta(
   ctx: PluginContext,
-  id: string | undefined,
+  row: MetaRow | undefined,
   key: string,
   value: string
 ): Promise<void> {
+  if (row?.value === value) return;
+  const id = row?.id;
   if (id === undefined) {
     await ctx.services.collections.createEntry(recordSlug(ctx), {
       claimKey: key,

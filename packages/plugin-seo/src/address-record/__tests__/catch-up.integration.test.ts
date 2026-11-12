@@ -15,8 +15,9 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { statementsOf, writesAmong } from "../../__tests__/count-statements";
 import { seoPlugin } from "../../plugin";
 import { catchUp, lastCatchUp } from "../catch-up";
 import { ADDRESS_RECORD_SLUG } from "../collection";
@@ -150,6 +151,89 @@ describe.each(getConfiguredTestDialects())(
       const report = await restart();
 
       expect(report.ran).toBe(false);
+    });
+
+    it("on a site no page of which holds an address, a start where nothing changed reads a handful of rows and writes none", async () => {
+      // Nothing published: the record holds its own notes and no address.
+      await boot(dialect);
+      await restart();
+
+      let report: Awaited<ReturnType<typeof restart>> | undefined;
+      const statements = await statementsOf(dialect, async () => {
+        report = await restart();
+      });
+
+      expect(report?.ran).toBe(false);
+      expect(writesAmong(statements)).toEqual([]);
+      expect(statements.length).toBeLessThanOrEqual(4);
+    });
+
+    it("runs again once a content type is added, though no page changed", async () => {
+      const { t } = await boot(dialect);
+      await restart();
+      expect((await restart()).ran).toBe(false);
+
+      // A type made in the Schema Builder is one of the site's own. The
+      // Builder's save makes its table in development only.
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        const builder = t.nextly.collectionsHandler as unknown as {
+          createCollection(
+            data: Record<string, unknown>
+          ): Promise<{ success: boolean }>;
+        };
+        const made = await builder.createCollection({
+          name: "articles",
+          label: "Articles",
+          fields: [{ name: "title", type: "text" }],
+        });
+        expect(made.success).toBe(true);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      expect((await restart()).ran).toBe(true);
+      // The run has finished, so the start after it has nothing to do.
+      expect((await restart()).ran).toBe(false);
+    });
+
+    it("a run leaves a note that already says the same untouched", async () => {
+      const { t } = await boot(dialect);
+      await restart();
+      // As a changed template leaves it: the fingerprint differs, the site's
+      // types do not.
+      await forgetFingerprint(t);
+
+      let report: Awaited<ReturnType<typeof restart>> | undefined;
+      const statements = await statementsOf(dialect, async () => {
+        report = await restart();
+      });
+
+      expect(report?.ran).toBe(true);
+      // The fingerprint is made again; the list of types is not saved over.
+      expect(
+        writesAmong(statements).filter(sql =>
+          /^\s*update\s+\S*nx_seo_addresses/i.test(sql)
+        )
+      ).toEqual([]);
+      expect(
+        writesAmong(statements).filter(sql =>
+          /^\s*insert\s+into\s+\S*nx_seo_addresses/i.test(sql)
+        )
+      ).toHaveLength(1);
+    });
+
+    it("runs again where the record was dropped, as a full uninstall drops it", async () => {
+      const { t } = await boot(dialect);
+      const page = await publish(t, "pages", "hello");
+      await restart();
+      expect((await restart()).ran).toBe(false);
+      await forget(t);
+
+      const report = await restart();
+
+      expect(report.ran).toBe(true);
+      expect(await recorded(t)).toEqual({ "en|/hello": `pages:${page}` });
     });
 
     it("of two pages recorded by neither, the older takes the address", async () => {

@@ -1,7 +1,7 @@
 /**
- * What the bulk edit screen and its routes agree on: where the screen is,
- * where it reads a content type's pages and saves their titles and
- * descriptions, and the shapes each route answers with. Plain data only,
+ * What Pages' Edit mode and the bulk routes agree on: the old Bulk edit
+ * address, where a content type's pages are read and their titles and
+ * descriptions saved, and the shapes each route answers with. Plain data only,
  * importing nothing, so the admin's client bundle takes it without bringing
  * server code along.
  *
@@ -9,16 +9,17 @@
  */
 
 /**
- * The bulk edit screen: its path under the plugin, and its component. It
- * has no menu item of its own, and stays at its address, for whoever may
- * read a type's pages, until Pages' Edit mode takes it over.
+ * The old Bulk edit address: its path under the plugin, and the component
+ * that sends a bookmark on to Pages in Edit mode, which took it over. Its
+ * routes below are what Edit mode reads and saves a content type's pages
+ * through.
  */
 export const BULK_PAGE: {
   readonly path: "bulk";
-  readonly component: "@nextlyhq/plugin-seo/admin#SeoBulkPage";
+  readonly component: "@nextlyhq/plugin-seo/admin#SeoBulkMoved";
 } = {
   path: "bulk",
-  component: "@nextlyhq/plugin-seo/admin#SeoBulkPage",
+  component: "@nextlyhq/plugin-seo/admin#SeoBulkMoved",
 };
 
 /** Where the screen reads the content types it can edit. */

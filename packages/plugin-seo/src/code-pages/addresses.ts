@@ -75,6 +75,21 @@ function sourcesOf(answer: SeoAnswer): ValueSources {
   });
 }
 
+/**
+ * The title and description a page is served, and the pattern the title was
+ * made from where a pattern gave it, as the list shows them.
+ */
+function servedText(
+  answer: SeoAnswer
+): Pick<SiteAddress, "title" | "titlePattern" | "description"> {
+  return present({
+    title: answer.title?.value,
+    titlePattern:
+      answer.title?.from === "pattern" ? answer.title.pattern : undefined,
+    description: answer.description?.value,
+  });
+}
+
 /** An automatic value as the screen names where it came from. */
 function automatic(
   value: Sourced<string> | undefined
@@ -185,7 +200,7 @@ async function codeAddressOf(
       row?.connected === true ? standingOfAnswer(answer) : "not-connected",
     sources: sourcesOf(answer),
     ...present({
-      title: answer.title?.value,
+      ...servedText(answer),
       canonical: canonicalOf(answer, site.origin),
     }),
     seo,
@@ -265,7 +280,7 @@ async function entryAddressOf(
     standing: standingOfAnswer(answer),
     sources: sourcesOf(answer),
     ...present({
-      title: answer.title?.value,
+      ...servedText(answer),
       canonical: canonicalOf(answer, options.origin),
     }),
     entry: {
