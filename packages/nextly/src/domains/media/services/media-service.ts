@@ -869,7 +869,12 @@ export class MediaService {
     const { bootedPendingDeletes } = await import("../booted-pending-deletes");
     // Named by its type, the class whose method is called below.
     const pending: PendingMediaDeletes = bootedPendingDeletes();
-    await pending.deleteNow(mediaId, actorForWrite(actor, context.user));
+    await pending.deleteNow(
+      mediaId,
+      actorForWrite(actor, context.user),
+      // The files go once the delete is durable, as an ordinary delete's do.
+      effect => this.legacyMediaService.whenCommitted(effect)
+    );
   }
 
   /**

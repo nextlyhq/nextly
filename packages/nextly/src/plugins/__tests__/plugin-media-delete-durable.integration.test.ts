@@ -157,6 +157,30 @@ describe.each(getConfiguredTestDialects())(
       expect(await records(file.id)).toEqual([]);
     });
 
+    // On SQLite a delete made inside a collection transaction joins it, as a
+    // savepoint, so a rollback brings the row back; on PostgreSQL and MySQL
+    // the delete is its own transaction and has committed by then.
+    it.runIf(dialect === "sqlite")(
+      "keeps the files when the transaction it ran in rolls back",
+      async () => {
+        const { media, stored, rowOf } = await boot(dialect);
+        const file = await stored("rolled-back");
+
+        await expect(
+          ctx!.services.collections.withTransaction(async () => {
+            await media.delete(file.id, { as: "system" });
+            throw new Error("stopped after the delete");
+          })
+        ).rejects.toThrow("stopped after the delete");
+
+        // The row is back, and so must be its file.
+        expect(await rowOf(file.id)).toBeDefined();
+        expect(await getMediaStorage().exists(file.filename, "media")).toBe(
+          true
+        );
+      }
+    );
+
     it("removes the files and leaves no record when storage takes the delete", async () => {
       const { media, stored, records, rowOf } = await boot(dialect);
       const file = await stored("taken");

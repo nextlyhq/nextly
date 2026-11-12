@@ -549,7 +549,12 @@ export class PendingMediaDeletes {
    * remove it once it can be, so a storage failure never leaves a file
    * nothing will try again. Throws not-found for an item already gone.
    */
-  async deleteNow(mediaId: string, actor?: RequestActor): Promise<void> {
+  async deleteNow(
+    mediaId: string,
+    actor?: RequestActor,
+    whenCommitted: (effect: () => Promise<void>) => Promise<void> = effect =>
+      effect()
+  ): Promise<void> {
     await this.deps.deleteItem(mediaId, actor, async (tx, row) => {
       await tx.delete(META_TABLE, {
         and: [{ column: "key", op: "=", value: pendingDeleteKey(mediaId) }],
@@ -563,18 +568,23 @@ export class PendingMediaDeletes {
       });
       return true;
     });
-    try {
-      await this.finishRemovals([mediaId]);
-    } catch (error) {
-      // The delete has committed: what is left is the job's to finish.
-      this.deps.logger?.warn({
-        kind: "media-delete-not-finished",
-        message:
-          "A deleted media item's files could not be removed yet; they will be tried again.",
-        mediaId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // Only once the delete is durable: inside an enclosing transaction (a
+    // SQLite savepoint) the files would otherwise go before a rollback that
+    // brings the row back and cannot bring them back.
+    await whenCommitted(async () => {
+      try {
+        await this.finishRemovals([mediaId]);
+      } catch (error) {
+        // The delete has committed: what is left is the job's to finish.
+        this.deps.logger?.warn({
+          kind: "media-delete-not-finished",
+          message:
+            "A deleted media item's files could not be removed yet; they will be tried again.",
+          mediaId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   }
 
   /**
