@@ -42,7 +42,7 @@ function sidebarGroupName(
 }
 
 /** One run of collections under a sub-heading, or under none. */
-export interface CollectionGroup {
+interface CollectionGroup {
   /** The group's slug, or null for the collections that name no group. */
   slug: string | null;
   /** The sub-heading's text; empty for the collections that name no group. */
