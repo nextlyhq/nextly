@@ -1,6 +1,5 @@
 "use client";
 import type React from "react";
-import { useMemo, useCallback } from "react";
 
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import {
@@ -8,8 +7,7 @@ import {
   RemovedFromCodeMark,
   removedFromCodeMarkId,
 } from "@admin/components/features/entries/RemovedFromCodeNotice";
-import * as Icons from "@admin/components/icons";
-import { Bookmark, type LucideIcon } from "@admin/components/icons";
+import { Bookmark } from "@admin/components/icons";
 import {
   SidebarMenuAction,
   SidebarMenuButton,
@@ -19,22 +17,16 @@ import {
 import { PanelGhostRows } from "@admin/components/layout/sidebar/RailColumn";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { useSingles } from "@admin/hooks/queries/useSingles";
-import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useSidebarCollectionList } from "@admin/hooks/useSidebarContentLists";
-import {
-  filterCollectionItems,
-  filterSingleItems,
-} from "@admin/lib/permissions/authorization";
+import { collectionSidebarGroup } from "@admin/lib/content-groups";
+import { contentIcon } from "@admin/lib/content-icons";
 import {
   collectionDisplayName,
   searchSidebarCollections,
 } from "@admin/lib/sidebar-landing";
+import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
-const _iconMap = Icons as unknown as Record<string, LucideIcon>;
-const BUILTIN_GROUPS = ["collections", "singles"];
 /**
  * Props for the DynamicCollectionNav component
  */
@@ -43,6 +35,12 @@ interface DynamicCollectionNavProps {
   isActive: (href?: string) => boolean;
   /** Search query to filter collections */
   search?: string;
+  /**
+   * The `admin.sidebarGroup` whose collections to list, or null (the
+   * default) for the collections that name no group. The Content panel draws
+   * one list per group, each under its sub-heading.
+   */
+  group?: string | null;
 }
 
 /**
@@ -53,201 +51,38 @@ function CollectionSkeleton() {
   return <PanelGhostRows as="li" />;
 }
 
-/** A single sidebar entry (collection or single within a group) */
-interface SidebarEntry {
-  type: "collection" | "single";
-  key: string;
-  label: string;
-  href: string;
-  icon: string;
-  order: number;
-}
-/** A sortable section: either a standalone item or a named group */
-type SidebarSection =
-  | { kind: "item"; entry: SidebarEntry; order: number }
-  | {
-      kind: "group";
-      slug: string;
-      name: string;
-      items: SidebarEntry[];
-      order: number;
-    };
 /**
  * Dynamic Collection Navigation Component
  *
- * Renders both ungrouped collections and custom sidebar groups in a single
- * ordered list. Groups are interleaved with ungrouped items based on the
- * minimum `admin.order` of their members, so a group with order 2 can
- * appear above an ungrouped collection with order 100.
+ * Lists the collections of one sidebar group (or of none) that match the
+ * search, in the sidebar's order, each with its pin.
  */
 export function DynamicCollectionNav({
   isActive,
   search = "",
+  group = null,
 }: DynamicCollectionNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
-  const { capabilities } = useCurrentUserPermissions();
-  const branding = useBranding();
   // The listed collections, their pins and their search come from the hook and
   // helper the Content panel also reads, so its match count can't disagree.
   const {
     items: baseCollections,
-    data,
     isLoading,
     error,
     isPinned,
     togglePin,
   } = useSidebarCollectionList();
 
-  const { data: singlesData } = useSingles();
-  // Plugin-level metadata with declared placement
-  const pluginMetadata = branding?.plugins;
-  const customGroups = branding?.customGroups;
-  /**
-   * Resolve the effective sidebar placement for a plugin collection.
-   * Matches by checking if the collection's name/slug appears in a
-   * plugin's collections list, then returns that plugin's placement.
-   * Priority: 1. Plugin metadata placement  2. Plugin metadata group (deprecated)  3. undefined (stays in Plugins)
-   */
-  const getPluginPlacement = useCallback(
-    (collection: ApiCollection): string | undefined => {
-      if (!pluginMetadata) return undefined;
-      const meta = pluginMetadata.find(p =>
-        (p.collections ?? []).includes(collection.name)
-      );
-      return meta?.placement ?? meta?.group ?? undefined;
-    },
-    [pluginMetadata]
+  const collections = searchSidebarCollections(baseCollections, search).filter(
+    collection => collectionSidebarGroup(collection) === group
   );
 
-  const collections = searchSidebarCollections(baseCollections, search);
-
-  // Build the unified sorted sections list
-  const sections = useMemo(() => {
-    const allCollections = data?.items ?? [];
-    const allSingles = singlesData?.items ?? [];
-    // --- Ungrouped collections (belong to default "Collections" section) ---
-    const ungroupedVisible = allCollections.filter(collection => {
-      if (collection.admin?.hidden) return false;
-      const group = collection.admin?.sidebarGroup;
-      if (group === "collections") return true;
-      if (!group && !collection.admin?.isPlugin) return true;
-      if (collection.admin?.isPlugin) {
-        return getPluginPlacement(collection) === "collections";
-      }
-      return false;
-    });
-    const ungroupedPermitted = filterCollectionItems(
-      ungroupedVisible,
-      capabilities
-    );
-    const ungroupedSections: SidebarSection[] = ungroupedPermitted.map(c => ({
-      kind: "item",
-      order: Number(c.admin?.order) || 100,
-      entry: {
-        type: "collection",
-        key: `col-${c.id}`,
-        label: c.labels?.plural || c.label || c.name,
-        href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: c.name }),
-        icon: c.admin?.icon || "Database",
-        order: Number(c.admin?.order) || 100,
-        migrationStatus: c.migrationStatus,
-      },
-    }));
-    // --- Custom groups (derived from sidebarGroup field) ---
-    const permittedCollections = filterCollectionItems(
-      allCollections,
-      capabilities
-    );
-    const permittedSingles = filterSingleItems(allSingles, capabilities);
-    // Discover all unique custom sidebarGroup slugs
-    const discoveredSlugs = new Set<string>();
-    for (const c of permittedCollections) {
-      const sg = c.admin?.sidebarGroup;
-      if (sg && !BUILTIN_GROUPS.includes(sg)) discoveredSlugs.add(sg);
-    }
-    for (const s of permittedSingles) {
-      const sg = s.admin?.sidebarGroup;
-      if (sg && !BUILTIN_GROUPS.includes(sg)) discoveredSlugs.add(sg);
-    }
-    // Build group display name lookup from admin-meta customGroups
-    const groupOverrides = new Map<string, { name: string; icon?: string }>();
-    for (const g of customGroups ?? []) {
-      groupOverrides.set(g.slug, { name: g.name, icon: g.icon });
-    }
-    const groupSections: SidebarSection[] = Array.from(discoveredSlugs)
-      .map(slug => {
-        const override = groupOverrides.get(slug);
-        const groupName =
-          override?.name ?? slug.charAt(0).toUpperCase() + slug.slice(1);
-        const items: SidebarEntry[] = [];
-        for (const collection of permittedCollections) {
-          if (
-            collection.admin?.sidebarGroup === slug &&
-            !collection.admin?.hidden
-          ) {
-            items.push({
-              type: "collection",
-              key: `col-${collection.id}`,
-              label:
-                collection.labels?.plural ||
-                collection.label ||
-                collection.name,
-              href: buildRoute(ROUTES.COLLECTION_ENTRIES, {
-                slug: collection.name,
-              }),
-              icon: collection.admin?.icon || "Database",
-              order: Number(collection.admin?.order) || 100,
-            });
-          }
-        }
-        for (const single of permittedSingles) {
-          if (single.admin?.sidebarGroup === slug && !single.admin?.hidden) {
-            items.push({
-              type: "single",
-              key: `single-${single.slug}`,
-              label: single.label || single.slug,
-              href: buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }),
-              icon: single.admin?.icon || "",
-              order: Number(single.admin?.order) || 100,
-            });
-          }
-        }
-        // Sort items within the group
-        items.sort((a, b) => {
-          if (a.order !== b.order) return a.order - b.order;
-          return a.label.localeCompare(b.label);
-        });
-        // Group's sort order = minimum order of its members
-        const groupOrder =
-          items.length > 0 ? Math.min(...items.map(i => i.order)) : 100;
-        return {
-          kind: "group" as const,
-          slug,
-          name: groupName,
-          items,
-          order: groupOrder,
-        };
-      })
-      .filter(g => g.items.length > 0);
-    // Merge and sort all sections by order, then alphabetically
-    const allSections: SidebarSection[] = [
-      ...ungroupedSections,
-      ...groupSections,
-    ];
-    allSections.sort((a, b) => {
-      if (a.order !== b.order) return a.order - b.order;
-      const nameA = a.kind === "item" ? a.entry.label : a.name;
-      const nameB = b.kind === "item" ? b.entry.label : b.name;
-      return nameA.localeCompare(nameB);
-    });
-    return allSections;
-  }, [data, singlesData, capabilities, customGroups, getPluginPlacement]);
   if (isLoading) {
     if (isCollapsed) return null;
     return <CollectionSkeleton />;
   }
-  if (error || sections.length === 0) {
+  if (error || collections.length === 0) {
     return null;
   }
 
@@ -263,10 +98,8 @@ export function DynamicCollectionNav({
         const collectionPinned = isPinned(collection.name);
         const displayName = collectionDisplayName(collection);
 
-        const iconName = collection.admin?.icon || "Database";
-        const IconComponent =
-          (Icons as Record<string, React.ElementType>)[iconName] ||
-          Icons.Database;
+        // The icon it names, else the list that marks a collection.
+        const IconComponent = contentIcon("collection", collection.admin?.icon);
         // A collection removed from code stays listed, marked, with the step
         // that retires it as the link's description.
         const removed = isRemovedFromCode(collection)
@@ -293,7 +126,13 @@ export function DynamicCollectionNav({
                   removed ? removedFromCodeMarkId(removed.entity) : undefined
                 }
               >
-                <IconComponent className="h-4 w-4 shrink-0" />
+                <IconComponent
+                  aria-hidden="true"
+                  className={cn(
+                    "h-4 w-4 shrink-0",
+                    !isActiveItem && "text-muted-foreground"
+                  )}
+                />
                 {!isCollapsed && (
                   <>
                     {/* Truncated itself: the button truncates only its last

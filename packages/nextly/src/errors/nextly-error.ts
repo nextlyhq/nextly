@@ -832,6 +832,25 @@ export class NextlyError extends Error {
   // Accepts an optional `logMessage` override so callers (e.g. the health
   // route) can record a specific operator narrative ("Health check failed")
   // while the public message stays canonical per spec §13.8.5.
+  /**
+   * A service outside Nextly failed, such as an email provider, where trying again may help: the
+   * job queue records it as an attempt's error and tries again.
+   */
+  static externalService(opts: {
+    publicMessage: string;
+    logMessage?: string;
+    cause?: Error;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "EXTERNAL_SERVICE_ERROR",
+      publicMessage: opts.publicMessage,
+      logMessage: opts.logMessage,
+      cause: opts.cause,
+      logContext: opts.logContext,
+    });
+  }
+
   static serviceUnavailable(opts?: {
     /**
      * What the caller is told, when "try again later" is the wrong advice.

@@ -25,6 +25,7 @@ import {
   getCachedNextly,
   NextlyError,
   pluginCacheTag,
+  type PageStructuredDataHints,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 import type { contentPageMetadata } from "nextly/runtime";
@@ -63,6 +64,13 @@ export interface SeoMetadataOptions {
   name?: string;
   /** The language the route serves the page in, where it serves several. */
   locale?: string;
+  /**
+   * What the page shows that structured data cannot read elsewhere: what
+   * kind of page it is (such as `"aboutPage"`), its own name, the entries it
+   * lists and the questions it answers. Read by `seoStructuredData` only;
+   * the head is the same with or without it.
+   */
+  structuredDataHints?: PageStructuredDataHints;
 }
 
 /** The started plugin's context, starting Nextly first where nothing has. */
@@ -153,6 +161,9 @@ async function codePageAsk(
   return [
     {
       ...(own === undefined ? {} : { buildMetadata: () => own }),
+      ...(options.structuredDataHints === undefined
+        ? {}
+        : { structuredDataHints: () => options.structuredDataHints }),
       // A save on the screen expires these, so the page serves it from its
       // next visit, a page built ahead of time included.
       tags,

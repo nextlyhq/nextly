@@ -25,6 +25,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 import {
   DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_RESTORED_FROM_KEY,
   DOCUMENT_VERSION_KEY,
   MIGRATE_STEP_COLUMN_NAMES,
 } from "../../lib/system-columns";
@@ -61,7 +62,8 @@ export function encodeDocumentVersion(
 
 /**
  * Every key a request body may carry that only the server writes: the
- * published version and the per-document columns.
+ * published version, the per-document columns, and the transport keys that
+ * say how to write (`_overwrite`, `_restoredFrom`).
  *
  * The published key is not a column, so the system-column lists that close
  * columns to clients never name it; a client that saves back what it read
@@ -70,6 +72,8 @@ export function encodeDocumentVersion(
 const SERVER_ONLY_KEYS: readonly string[] = [
   DOCUMENT_VERSION_KEY,
   DOCUMENT_OVERWRITE_KEY,
+  // Which values a save restored: recorded on its version, never stored.
+  DOCUMENT_RESTORED_FROM_KEY,
   ...MIGRATE_STEP_COLUMN_NAMES,
 ];
 

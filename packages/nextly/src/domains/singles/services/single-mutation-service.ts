@@ -222,6 +222,10 @@ import { hasLifecycle } from "../../versions/recorded-status";
 import { removePendingChangeJudged } from "../../versions/remove-pending-change";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  restoredFromOf,
+  type FieldSources,
+} from "../../versions/restored-from";
+import {
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
@@ -2051,10 +2055,15 @@ export class SingleMutationService extends BaseService {
     // here, before the version and `_overwrite` are dropped below. A release
     // run's own write is exempt, and nothing a caller sends can make it so.
     let versionCheck: VersionCheck;
+    // The fields the save names as restored, read before the key is dropped
+    // with the version below: as server code stated them, or as the body's
+    // `_restoredFrom` names them. Malformed, it is refused as a version is.
+    let restoredFrom: FieldSources | undefined;
     try {
       versionCheck = versionCheckFor(data, {
         exempt: releaseRunExemptFor({ scopeKind: "single", scopeSlug: slug }),
       });
+      restoredFrom = rawOptions.restoredFrom ?? restoredFromOf(data);
     } catch (error) {
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
@@ -2072,9 +2081,12 @@ export class SingleMutationService extends BaseService {
     // body.
     data = { ...data };
     const sweepAllLocales = rawOptions.locale === EVERY_LOCALE;
-    const options: UpdateSingleOptions = sweepAllLocales
-      ? { ...rawOptions, locale: undefined }
+    const withSources: UpdateSingleOptions = restoredFrom
+      ? { ...rawOptions, restoredFrom }
       : rawOptions;
+    const options: UpdateSingleOptions = sweepAllLocales
+      ? { ...withSources, locale: undefined }
+      : withSources;
 
     // Not the options themselves: they carry the request, whose headers hold
     // the caller's credentials.
@@ -4799,6 +4811,10 @@ export class SingleMutationService extends BaseService {
                 replaces,
                 createdBy: options.user?.id ?? null,
                 sourceVersionNo: options.sourceVersionNo ?? null,
+                // Recorded per field on the save's version, where still true.
+                ...(options.restoredFrom
+                  ? { restoredFrom: options.restoredFrom }
+                  : {}),
                 maxPerDoc: singleMeta.versions?.maxPerDoc,
                 ...(singleParts && typeof singleDraftLocale === "string"
                   ? {
@@ -5183,6 +5199,10 @@ export class SingleMutationService extends BaseService {
               // default-locale write, so `snapshotLocale` is the default locale.
               locale: savedLocale,
               sourceVersionNo: options.sourceVersionNo ?? null,
+              // Recorded per field on the version, where still true of it.
+              ...(options.restoredFrom
+                ? { restoredFrom: options.restoredFrom }
+                : {}),
               maxPerDoc: versionsConfig.maxPerDoc,
             });
             await this.recordSingleSave(tx, slug, existingDoc.id, options, {

@@ -85,7 +85,8 @@ function ImageProblems({
         {thingsToFix(problems.length).replace(/ to fix$/, "")} to fix:{" "}
         {problems.map(problem => problem.message).join("; ")}.
       </b>{" "}
-      Share images show in full at 1200 × 630.
+      {/* What every network shows in full: a size and a format alike. */}
+      Share images show in full on every network as a 1200 × 630 JPEG or PNG.
       {makeable ? (
         <div className="mt-2">
           <Button

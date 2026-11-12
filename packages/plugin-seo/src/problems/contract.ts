@@ -111,12 +111,12 @@ export const KIND_TEXT: Readonly<
   },
   longTitle: {
     title: "Title longer than Google shows",
-    explain: `Google cuts a title after about ${TITLE_LIMIT} characters.`,
+    explain: `Google shows about ${TITLE_LIMIT} characters of a title and cuts the rest to fit the screen. The title is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   longDescription: {
     title: "Description longer than Google shows",
-    explain: `Google cuts a description after about ${DESCRIPTION_LIMIT} characters.`,
+    explain: `Google shows about ${DESCRIPTION_LIMIT} characters of a description and cuts the rest. The description is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   canonical: {
@@ -132,7 +132,8 @@ export const KIND_TEXT: Readonly<
   },
   shareImage: {
     title: "Share image missing or the wrong size",
-    explain: "Networks crop images that aren't about 1200 × 630.",
+    explain:
+      "Networks crop images that aren't about 1200 × 630, and not every network shows an SVG, AVIF or WebP image.",
     siteWide: false,
   },
   imageAlt: {
