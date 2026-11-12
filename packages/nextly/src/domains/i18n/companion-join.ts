@@ -22,6 +22,7 @@ import {
   type ReadingAdapter,
 } from "../../shared/lib/read-transaction-scope";
 import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
+import { draftsKeptByPart } from "../versions/part-drafts";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
@@ -1066,7 +1067,9 @@ export interface TranslationStatusArgs {
  *
  * A pending change stored under no locale belongs to the default language: that
  * is the language a document is edited in when localization is configured but
- * the document itself is not localized.
+ * the document itself is not localized. Under per-language storage it is the
+ * document's shared draft instead, which no language owns and every language
+ * is told of on its own (`_sharedChangesPending`), so it marks none.
  */
 function markPendingChanges(
   meta: Record<string, LocaleTranslationMeta>,
@@ -1078,7 +1081,10 @@ function markPendingChanges(
   for (const code of locales) {
     const entry = meta[code];
     if (!entry) continue;
-    if (pending.has(code) || (code === defaultLocale && pending.has(null))) {
+    if (
+      pending.has(code) ||
+      (code === defaultLocale && pending.has(null) && !draftsKeptByPart())
+    ) {
       entry.pendingChange = true;
     }
   }
