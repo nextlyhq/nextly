@@ -1801,6 +1801,14 @@ exports[`each code, as a command ends with it > SYNC_CONFIRMATION_REQUIRED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/sync-confirmation-required  (SYNC_CONFIRMATION_REQUIRED)"
 `;
 
+exports[`each code, as a command ends with it > TABLE_BUSY 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` stopped: table busy, nothing changed.
+  Why:  It waited for table "dc_posts" through 7 tries over 90 s, held by session 4242 (user app, from 10.0.0.5, application "worker", transaction open 3 min).
+        Applied before it in this run: \`20261019_090000_add_tags.sql\`.
+  Next: Run it again once the holder ends, end the holding session, or raise \`--lock-timeout\` / \`--lock-timeout-total\` (or \`NEXTLY_LOCK_TIMEOUT\` / \`NEXTLY_LOCK_TIMEOUT_TOTAL\`).
+  Docs: https://nextlyhq.com/docs/cli/errors/table-busy  (TABLE_BUSY)"
+`;
+
 exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
 "✗ \`nextly migrate:create\` can't tell which fields are translated, so it wrote nothing.
   Why:  The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values.
