@@ -161,8 +161,10 @@ describe("BuilderToolbar", () => {
 
   // The page's guard asks before every way out — this link, the browser's
   // back, a reload, closing the tab — so the crumb does not ask again itself:
-  // one question, not two.
+  // one question, not two. It moves through the admin's own history, the one
+  // the guard watches; a link routed any other way would leave unasked.
   it("leaves the question to the page's guard rather than asking itself", () => {
+    const start = window.location.pathname;
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(
       <BuilderToolbar
@@ -177,7 +179,9 @@ describe("BuilderToolbar", () => {
     );
     fireEvent.click(screen.getByRole("link", { name: /back to collections/i }));
     expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/admin/builder/collections");
     confirmSpy.mockRestore();
+    window.history.replaceState(null, "", start);
   });
 
   it("disables Save when no unsaved changes", () => {

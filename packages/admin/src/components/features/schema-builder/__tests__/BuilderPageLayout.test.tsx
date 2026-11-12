@@ -414,6 +414,22 @@ describe("BuilderPageLayout", () => {
       expect(window.location.pathname).toBe("/admin/somewhere-else");
     });
 
+    // The crumb back to the list is a link like the admin's others: it moves
+    // through the admin's own history, which the guard watches, so it asks
+    // as every other way out does.
+    it("asks first when the crumb back to the list is clicked", async () => {
+      const actual = await vi.importActual<
+        typeof import("@admin/lib/navigation")
+      >("@admin/lib/navigation");
+      navigateTo.mockImplementationOnce(actual.navigateTo);
+      renderLayout({ unsavedCount: 2 });
+      await userEvent.click(
+        screen.getByRole("link", { name: /back to collections/i })
+      );
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(window.location.pathname).toBe(start);
+    });
+
     it("does not ask with nothing pending", () => {
       renderLayout({ unsavedCount: 0 });
       leave();
