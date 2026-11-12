@@ -885,3 +885,33 @@ describe("the bulk edit screen, Codex round 6", () => {
     expect(screen.getByRole("button", { name: "Read again" })).toBeTruthy();
   });
 });
+
+describe("the bulk edit screen, Codex round 7", () => {
+  it("shows a page read again on the next page once, and saves its edit once", async () => {
+    vi.mocked(readPluginRoute).mockImplementation((async (args: {
+      path: string;
+    }) =>
+      args.path.includes("page=2")
+        ? { type: "posts", rows: [ROWS[1]!, ROWS[2]!], total: 3, more: false }
+        : {
+            type: "posts",
+            rows: [ROWS[0]!, ROWS[1]!],
+            total: 3,
+            more: true,
+          }) as unknown as typeof readPluginRoute);
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await screen.findByLabelText("Title on Google for Koala row");
+    expect(
+      screen.getAllByLabelText("Title on Google for Jasper vs Rext")
+    ).toHaveLength(1);
+    fireEvent.change(titleOf("Jasper vs Rext"), { target: { value: "Once" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]?.body).toEqual({
+      type: "posts",
+      changes: [{ id: "p2", rev: "1", title: "Once" }],
+    });
+  });
+});

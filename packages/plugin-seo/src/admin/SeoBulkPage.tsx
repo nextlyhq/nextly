@@ -128,7 +128,10 @@ function useRows(type: string | undefined) {
         for (let page = first; page <= pages; page++) {
           body = await readRows(slug, page);
           if (body === undefined || !current()) return;
-          rows.push(...body.rows);
+          // A page created meanwhile moves the pages along, so a row read
+          // already can come again: it is kept once.
+          const seen = new Set(rows.map(row => row.id));
+          rows.push(...body.rows.filter(row => !seen.has(row.id)));
         }
         if (body === undefined) return;
         const answer = body;
