@@ -117,6 +117,13 @@ beforeEach(() => {
 const rows = () => screen.getAllByRole("row").slice(1);
 
 describe("the list", () => {
+  it("leads to Import, which is reached from here", () => {
+    render(<SeoPagesPage />);
+    expect(
+      screen.getByRole("link", { name: "Import" }).getAttribute("href")
+    ).toBe("/admin/plugins/nextlyhq-plugin-seo/pages/import");
+  });
+
   it("counts the addresses, and narrows them by filter and by search", () => {
     render(<SeoPagesPage />);
 

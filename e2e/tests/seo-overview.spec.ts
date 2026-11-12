@@ -191,6 +191,8 @@ test("each count links to Problems narrowed to it, and Problems' badge is the er
   await expect(page).toHaveURL(
     new RegExp(`${SECTION}/problems\\?severity=notice$`)
   );
+  // Narrowed to notices, counted as the Overview counts them.
+  await expect(page.getByText("Showing notices only.")).toBeVisible();
   await expect(
     page.getByRole("heading", { level: 1, name: /Problems/ })
   ).toBeVisible();

@@ -38,7 +38,8 @@ week with a Redirect for each, and Search Console, IndexNow and the redirects ru
 First-time setup ends on the Overview.
 
 Every kind of problem now has a severity, and a problem is counted once for each page a check fails
-on and once for a check of the whole site. The SEO menu's Problems item shows the errors and
+on and once for a check of the whole site. Problems opens narrowed to one severity from the
+Overview's counts, and Pages has an Import button. The SEO menu's Problems item shows the errors and
 warnings as a badge, the same number the dashboard's SEO problems line now counts. The Bulk edit and
 What search engines received menu items are gone: bulk edit stays at its address, and the check's
 old address opens Inspect for the page it named, or Pages. Each page the Pages list answers says where its title and description

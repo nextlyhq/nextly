@@ -587,7 +587,7 @@ The plugin adds an **SEO** item to the admin's rail. It opens a section with its
 | Screen        | What it holds                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------------- |
 | **Overview**  | Where the section opens: setup, the site's search health, how its pages stand, addresses not found, connections   |
-| **Pages**     | Every public address the site knows of, with Import and Inspect reached from it                                    |
+| **Pages**     | Every public address the site knows of, with an **Import** button, and Inspect reached from it                    |
 | **Problems**  | What affects how the site shows up in search, grouped by kind; its badge counts the errors and warnings you'd find |
 | **Redirects** | The redirects, and the addresses not found                                                                        |
 | **Settings**  | The rules for the whole site                                                                                      |
@@ -1271,7 +1271,8 @@ another address. **Notices** are worth a look with nothing wrong in what is serv
 description longer than Google shows, and images with no alt text. Everything else is a
 **warning**. A problem is counted once for each page a check fails on, however many times it fails
 there, and once for a check of the whole site, however many things it names, on Problems and on
-the Overview alike.
+the Overview alike. A count on the Overview opens Problems showing that severity only, with a link
+back to every problem.
 
 A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
 checked only for broken links and alt text. The site as a
