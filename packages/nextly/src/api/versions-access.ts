@@ -1017,6 +1017,67 @@ async function resolveEnrichedFields(
   return enriched as unknown as FieldConfig[];
 }
 
+/**
+ * History rows with the restored fields each names (`fieldSources`) narrowed
+ * to the ones this reader may read.
+ *
+ * A source says a field was restored, and from which version, so naming one
+ * the reader's field rules withhold would disclose the field and its history.
+ * Each named field is judged the way a version read judges it: the row's own
+ * snapshot goes through `redactSnapshotForUser`, and a field it withholds
+ * loses its source. A field the snapshot does not hold is still judged, as an
+ * empty value, rather than passed unexamined. The rows that name no source
+ * are returned as they are; the others' snapshots are read in one query.
+ */
+export async function readableFieldSources<
+  Row extends {
+    versionNo: number;
+    fieldSources?: Readonly<Record<string, number>> | null;
+  },
+>(
+  rows: readonly Row[],
+  args: {
+    ref: VersionRef;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }
+): Promise<Row[]> {
+  const naming = rows.filter(
+    row => row.fieldSources && Object.keys(row.fieldSources).length > 0
+  );
+  if (naming.length === 0) return [...rows];
+  const snapshots = await getService("versionsService").snapshotsOf(
+    args.ref,
+    naming.map(row => row.versionNo)
+  );
+  return Promise.all(
+    rows.map(async row => {
+      const sources = row.fieldSources;
+      if (!sources || Object.keys(sources).length === 0) return row;
+      const entry = structuredClone(
+        snapshotObject(snapshots.get(row.versionNo))
+      );
+      for (const name of Object.keys(sources)) {
+        if (!(name in entry)) entry[name] = null;
+      }
+      const withheld = await redactSnapshotForUser(
+        entry,
+        args.ref.scopeKind,
+        args.ref.scopeSlug,
+        args.user,
+        args.authenticatedScope
+      );
+      const readable = Object.entries(sources).filter(
+        ([name]) => !withheld.has(name)
+      );
+      return {
+        ...row,
+        fieldSources: readable.length > 0 ? Object.fromEntries(readable) : null,
+      };
+    })
+  );
+}
+
 /** A stored snapshot as a plain object, or an empty object if it is not one. */
 function snapshotObject(snapshot: unknown): Record<string, unknown> {
   return snapshot !== null &&

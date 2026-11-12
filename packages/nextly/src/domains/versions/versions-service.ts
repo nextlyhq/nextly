@@ -216,6 +216,18 @@ export class VersionsService {
     return this.repo.findPartOfVersion(ref, versionNo);
   }
 
+  /**
+   * The snapshots of several durable versions of one document, by version
+   * number, in one read: what judging a page of history rows against the
+   * reader's field rules needs, without a read per row.
+   */
+  async snapshotsOf(
+    ref: VersionRef,
+    versionNos: readonly number[]
+  ): Promise<Map<number, unknown>> {
+    return this.repo.snapshotsByVersionNo(ref, versionNos);
+  }
+
   /** One full version, including its snapshot. */
   async get(ref: VersionRef, versionNo: number): Promise<VersionRow> {
     const row = await this.repo.findByVersionNo(ref, versionNo);

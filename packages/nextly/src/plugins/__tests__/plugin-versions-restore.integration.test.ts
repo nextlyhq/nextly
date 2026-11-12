@@ -191,6 +191,23 @@ describe.each(getConfiguredTestDialects())(
       await t?.destroy();
     });
 
+    it("is refused at once inside an open transaction, and the draft stays as it was", async () => {
+      const ref = await publishedTwice(POSTS);
+      const before = await draftOf(ref);
+
+      // The restore's update takes the document's row lock in a transaction
+      // of its own; inside one the plugin holds, it would wait on that lock.
+      const adapter = t.adapter as unknown as {
+        transaction<T>(work: () => Promise<T>): Promise<T>;
+      };
+      const refusal = await adapter
+        .transaction(() => versions.restore(ref, 1, OVERWRITE))
+        .catch((error: unknown) => error);
+
+      expect(refusal).toMatchObject({ code: "INTERNAL_ERROR" });
+      expect(await draftOf(ref)).toEqual(before);
+    });
+
     it("restores into the working draft as the plugin itself, leaving what is published", async () => {
       const ref = await publishedTwice(POSTS);
 

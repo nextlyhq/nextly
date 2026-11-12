@@ -787,6 +787,10 @@ async function dropFieldsTheWriterMayNotWrite(
       data: accessProbe,
       operation: "update",
       user: args.user,
+      // A key is judged on its own grants, as the update that follows judges
+      // it: asked of its owner, a field the key may not write would be
+      // reported as restored while the update keeps the stored value.
+      authenticatedScope: args.authenticatedScope,
       overrideAccess: false,
       // The id as stored, as the read probe is told.
       id: args.entryId,

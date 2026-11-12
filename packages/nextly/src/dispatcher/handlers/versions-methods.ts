@@ -29,6 +29,7 @@ import {
   historyListLanguages,
   parseComparisonQuery,
   hydrateVersionSnapshot,
+  readableFieldSources,
   readingPersonId,
   redactSnapshotForUser,
   resolveVersionsPolicy,
@@ -204,7 +205,19 @@ export async function listVersionsForDocument(
     }
   );
   const hasNext = window.length > limit;
-  const items = hasNext ? window.slice(0, limit) : window;
+  // Each row names only the restored fields this reader may read.
+  const items = await readableFieldSources(
+    hasNext ? window.slice(0, limit) : window,
+    {
+      ref: {
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+      },
+      user: args.user,
+      authenticatedScope: args.authenticatedScope,
+    }
+  );
 
   // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
   // so the meta describes the returned window.
@@ -303,14 +316,12 @@ export async function getVersionForDocument(
   );
 
   const versions = getService("versionsService");
-  const row = await versions.get(
-    {
-      scopeKind: args.scopeKind,
-      scopeSlug: args.slug,
-      entryId: args.entryId,
-    },
-    args.versionNo
-  );
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const row = await versions.get(ref, args.versionNo);
   // The version is of the language it records, asked about before any of it
   // is returned.
   await assertHistoryLocalesReadable(
@@ -345,7 +356,14 @@ export async function getVersionForDocument(
     row.locale
   );
 
-  return { ...row, withheld: [...withheld] };
+  // The restored fields it names, as the reader may read them: judged on the
+  // stored snapshot, by the same rules as the one returned above.
+  const [judged] = await readableFieldSources([row], {
+    ref,
+    user: args.user,
+    authenticatedScope: args.authenticatedScope,
+  });
+  return { ...row, fieldSources: judged.fieldSources, withheld: [...withheld] };
 }
 
 /**
@@ -673,7 +691,13 @@ export async function setVersionLabelForDocument(
   // renamed row comes back carrying only an author id, and an admin that
   // renders the response directly would show the version losing its author the
   // moment it is named.
-  const [withAuthor] = await attachVersionAuthors([meta]);
+  // It names only the restored fields the caller may read, as a list does.
+  const [readable] = await readableFieldSources([meta], {
+    ref,
+    user: args.user,
+    authenticatedScope: readAuthenticatedScope(),
+  });
+  const [withAuthor] = await attachVersionAuthors([readable]);
   return withAuthor as unknown as VersionRow;
 }
 
