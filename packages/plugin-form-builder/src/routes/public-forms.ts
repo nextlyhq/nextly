@@ -40,8 +40,11 @@ import {
   type PluginRouteContext,
 } from "nextly";
 
+import { publicBotCheck } from "../handlers/bot-check";
 import { submitForm } from "../handlers/submit-form";
 import type { ResolvedFormBuilderConfig } from "../types";
+import { formAvailabilityNow } from "../utils/form-closing";
+import { normalizeFormSettings } from "../utils/form-settings";
 
 /**
  * These routes read and write as the anonymous visitor on the other end.
@@ -174,6 +177,31 @@ async function listPublishedForms(
   return respondList(result.data ?? [], toPageMeta(result.pagination));
 }
 
+/**
+ * A found form's answer now: its status, then its closing time, then its
+ * limit, so a visitor reaching a form that has closed by itself is given its
+ * closed message rather than fields to fill in. The count here is a plain
+ * read: what is stored at the submission decides exactly, under its lock.
+ */
+async function availabilityNow(
+  form: FormAvailabilityInput & { id?: unknown; settings?: unknown },
+  ctx: PluginRouteContext,
+  slugs: { submissions: string }
+) {
+  const settings = normalizeFormSettings(form.settings);
+  const formId = typeof form.id === "string" ? form.id : undefined;
+  const taken =
+    settings.submissionLimit === undefined || formId === undefined
+      ? undefined
+      : await ctx.services.ownCollections.count(slugs.submissions, {
+          where: {
+            form: { equals: formId },
+            status: { not_equals: "spam" },
+          },
+        });
+  return formAvailabilityNow(form, settings, { now: new Date(), taken });
+}
+
 async function readFormBySlug(
   slug: string,
   ctx: PluginRouteContext,
@@ -191,8 +219,12 @@ async function readFormBySlug(
     PUBLIC
   );
 
-  const doc = result.data?.[0] as FormAvailabilityInput | undefined;
-  const availability = formAvailability(doc);
+  const doc = result.data?.[0] as
+    | (FormAvailabilityInput & { id?: unknown; settings?: unknown })
+    | undefined;
+  const availability = doc
+    ? await availabilityNow(doc, ctx, slugs)
+    : formAvailability(doc);
 
   if (availability.kind === "absent") {
     // The same sentence every other door gives. The canonical "Not found."
@@ -214,7 +246,13 @@ async function readFormBySlug(
     });
   }
 
-  return respondDoc(doc as unknown as Record<string, unknown>);
+  // What the visitor's form needs to render its bot check: the provider and
+  // the site key its widget runs with. The secret never leaves the server.
+  const botCheck = publicBotCheck(doc?.settings, config.spamProtection);
+  return respondDoc({
+    ...(doc as unknown as Record<string, unknown>),
+    ...(botCheck ? { botCheck } : {}),
+  });
 }
 
 /**

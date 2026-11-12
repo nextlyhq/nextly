@@ -6,6 +6,7 @@
     "mysql",
     "sqlite",
     "support",
+    "encrypted-connections",
     "extending-the-schema"
   ]
 }

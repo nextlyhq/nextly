@@ -71,6 +71,7 @@ import {
   desiredSchemaTableNames,
 } from "./desired-snapshot";
 import { diffSnapshots } from "./diff/diff";
+import { liveIndexesStandingInForDeclared } from "./diff/index-util";
 import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
@@ -90,7 +91,10 @@ import {
   stripKitDropsOfLiveUniqueConstraints,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
-import { withKeptScopeFieldsIn } from "./kept-scope-fields";
+import {
+  companionsHoldingBack,
+  withKeptScopeFieldsIn,
+} from "./kept-scope-fields";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import {
   desiredUniqueColumns,
@@ -798,7 +802,25 @@ export class PushSchemaPipeline {
       // its column while the database has it: added back here, before
       // anything reads the desired state, so neither the diff nor the tables
       // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
-      desired = withKeptScopeFieldsIn(desired, liveSnapshot, dialect);
+      // A translated one keeps its column in the type's translations table,
+      // read here for the types something is held back from only: turning
+      // translation off then brings the column back to the main table.
+      const companions = companionsHoldingBack(desired);
+      const keptFrom =
+        companions.length === 0
+          ? liveSnapshot
+          : {
+              tables: [
+                ...liveSnapshot.tables,
+                ...(
+                  await (
+                    this.testHooks._introspectSnapshotOverride ??
+                    introspectLiveSnapshot
+                  )(db, dialect, companions)
+                ).tables,
+              ],
+            };
+      desired = withKeptScopeFieldsIn(desired, keptFrom, dialect);
 
       // 🔴 Contained, and its failure means "declare NEITHER registry".
       //
@@ -1429,7 +1451,11 @@ export class PushSchemaPipeline {
           // of every managed table it did not rebuild.
           const stripped = stripKitDropsOfDeclaredIndexes(
             pushResult.sqlStatements,
-            desiredSnapshot
+            desiredSnapshot,
+            liveIndexesStandingInForDeclared(
+              desiredSnapshot.tables,
+              liveSnapshot.tables
+            )
           );
           // Likewise the declared checks and foreign keys, which the kit's
           // runtime tables do not carry on PostgreSQL and MySQL either.

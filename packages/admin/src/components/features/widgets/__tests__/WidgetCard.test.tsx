@@ -2,7 +2,13 @@
  * The card is the one anatomy every widget wears, so these assert what a user
  * or a screen reader can observe about it, not which props were forwarded.
  */
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FrameState, type CardState } from "../frame/card-state";
@@ -97,6 +103,20 @@ describe("WidgetCard", () => {
     expect(screen.getByText("Source unavailable.")).toBeInTheDocument();
     // The error REPLACES the body rather than sitting beside a stale number.
     expect(screen.queryByText("42")).not.toBeInTheDocument();
+  });
+
+  it("marks the error with the danger status's text colour, never the action colour", () => {
+    render(
+      <WidgetCard
+        title="Published posts"
+        state={{ kind: "error", message: "Source unavailable." }}
+      >
+        <p>42</p>
+      </WidgetCard>
+    );
+    const mark = screen.getByTestId("widget-card-error-mark");
+    expect(mark).toHaveClass("text-danger-text");
+    expect(mark).not.toHaveClass("text-destructive");
   });
 
   it("shows the error as ordinary content, never as its own live region", () => {
@@ -543,40 +563,43 @@ describe("a card its widget does not show for this person", () => {
 });
 
 describe("the loading card's reservation", () => {
-  // The placeholders a list or table card holds while its first answer is out: the rows its
-  // tier will draw, so the card does not jump from three placeholders to twenty rows.
+  // The placeholders a list or table card holds while its first answer is out: its "Number of
+  // entries", the rows it will draw, so the card does not jump from three placeholders to twenty
+  // rows.
   const placeholders = () =>
     [...screen.getByTestId("card-skeleton").children].filter(
       element => !element.classList.contains("sr-only")
     );
 
-  it("holds the place of the rows the card's tier draws", () => {
+  const loading = (tier: "small" | "medium" | "large", items: unknown) =>
     render(
       <WidgetCard
         title="Recent posts"
         state={{ kind: "loading" }}
         skeleton="rows"
-        skeletonItems={8}
-        tier="large"
+        skeletonItems={items}
+        tier={tier}
       >
         body
       </WidgetCard>
     );
+
+  it("holds the place of the card's Number of entries", () => {
+    loading("large", 8);
     expect(placeholders()).toHaveLength(8);
   });
 
-  it("holds three at the small tier, as the small card draws", () => {
-    render(
-      <WidgetCard
-        title="Recent posts"
-        state={{ kind: "loading" }}
-        skeleton="rows"
-        skeletonItems={8}
-        tier="small"
-      >
-        body
-      </WidgetCard>
-    );
-    expect(placeholders()).toHaveLength(3);
+  it("holds the same rows at the small tier: a card's size never counts them", () => {
+    // 🔴 Counted by the tier, a small card held three.
+    loading("small", 8);
+    expect(placeholders()).toHaveLength(8);
+  });
+
+  it("holds twenty at most, and five for a missing or garbage number", () => {
+    loading("medium", 25);
+    expect(placeholders()).toHaveLength(20);
+    cleanup();
+    loading("medium", null);
+    expect(placeholders()).toHaveLength(5);
   });
 });

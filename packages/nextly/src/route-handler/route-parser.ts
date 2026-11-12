@@ -80,9 +80,12 @@ export function requiresAuthOnly(service: string, method: string): boolean {
   // needs it), so it requires authentication but no specific permission —
   // matching the collection/single schema-list endpoints above. It must not
   // be public: unauthenticated callers must not enumerate component schemas.
+  // Where a field group is used is the same class of read: every name it
+  // answers with (collections, Singles, field groups and their field paths)
+  // is one any signed-in user already reads through those schema reads.
   if (
     service === "field-groups" &&
-    ["getComponent", "listComponents"].includes(method)
+    ["getComponent", "listComponents", "getComponentUsedBy"].includes(method)
   ) {
     return true;
   }
@@ -1578,38 +1581,76 @@ function parseComponentRoutes(
   subresource?: string,
   subId?: string
 ): ParsedRoute | null {
+  // A schema action is matched by verb and action. Any other path under
+  // `schema` matches none of the routes below, which take a bare slug only.
+  const schemaRoute =
+    id === "schema" && subresource && subId
+      ? parseComponentSchemaRoute(subresource, subId, httpMethod, routeParams)
+      : null;
+  if (schemaRoute) return schemaRoute;
+
+  // GET /api/field-groups/[slug]/used-by → the fields that place the field
+  // group, and what holds each. Matched before the bare slug routes below,
+  // which do not look at a subresource and would answer this as the field
+  // group itself.
+  if (id && subresource === "used-by" && !subId && httpMethod === "GET") {
+    routeParams.slug = id;
+    return componentRoute("single", "getComponentUsedBy", routeParams);
+  }
+
+  if (!id) {
+    const route = COMPONENT_COLLECTION_ROUTES[httpMethod];
+    return route
+      ? componentRoute(route.operation, route.method, routeParams)
+      : null;
+  }
+  // The field group itself is a bare slug. A path going further names
+  // something else, so it is no route here rather than the field group: an
+  // unmatched `DELETE /field-groups/<slug>/<anything>` must not delete it.
+  if (subresource !== undefined) return null;
+  const route = COMPONENT_ROUTES[httpMethod];
+  if (!route) return null;
+  routeParams.slug = id;
+  return componentRoute(route.operation, route.method, routeParams);
+}
+
+type ComponentRoute = { operation: ParsedRoute["operation"]; method: string };
+
+function componentRoute(
+  operation: ParsedRoute["operation"],
+  method: string,
+  routeParams: Record<string, string>
+): ParsedRoute {
+  return { service: "field-groups", operation, method, routeParams };
+}
+
+/** /api/field-groups, by verb. */
+const COMPONENT_COLLECTION_ROUTES: Readonly<Record<string, ComponentRoute>> = {
+  // GET /api/field-groups → list all components
+  GET: { operation: "list", method: "listComponents" },
+  // POST /api/field-groups → create component (Schema Builder)
+  POST: { operation: "create", method: "createComponent" },
+};
+
+/** /api/field-groups/[slug], by verb. */
+const COMPONENT_ROUTES: Readonly<Record<string, ComponentRoute>> = {
+  // GET /api/field-groups/[slug] → get component by slug
+  GET: { operation: "single", method: "getComponent" },
+  // PATCH /api/field-groups/[slug] → update component
+  PATCH: { operation: "update", method: "updateComponent" },
+  // DELETE /api/field-groups/[slug] → delete component
+  DELETE: { operation: "delete", method: "deleteComponent" },
+};
+
+/** /api/field-groups/schema/[slug]/[action], by verb and action. */
+const COMPONENT_SCHEMA_ROUTES: Readonly<Record<string, ComponentRoute>> = {
   // POST /api/field-groups/schema/[slug]/preview → preview component schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "single",
-      method: "previewComponentSchemaChanges",
-      routeParams,
-    };
-  }
-
+  "POST preview": {
+    operation: "single",
+    method: "previewComponentSchemaChanges",
+  },
   // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "update",
-      method: "applyComponentSchemaChanges",
-      routeParams,
-    };
-  }
-
+  "POST apply": { operation: "update", method: "applyComponentSchemaChanges" },
   // GET /api/field-groups/schema/[slug]/reconcile → what that repair WOULD change, changing
   // nothing. The same path as the repair below, separated by verb: GET asks, POST does.
   //
@@ -1617,96 +1658,24 @@ function parseComponentRoutes(
   // `routeHandler` is what enforces that. The plan names live columns and the drift between them
   // and the stored definition, which is not something a principal who may only read definitions
   // should be able to enumerate — and nobody who cannot perform the repair needs to preview it.
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "reconcile" &&
-    httpMethod === "GET"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "single",
-      method: "previewComponentReconcile",
-      routeParams,
-    };
-  }
-
+  "GET reconcile": { operation: "single", method: "previewComponentReconcile" },
   // POST /api/field-groups/schema/[slug]/reconcile → repair the stored definition to describe the
   // live tables. Classified as `update`: it writes the registry row, so it takes the same
   // authorization as the other definition writes — a reader must not be able to rewrite a
   // definition by way of repairing it.
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "reconcile" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "update",
-      method: "reconcileComponent",
-      routeParams,
-    };
-  }
+  "POST reconcile": { operation: "update", method: "reconcileComponent" },
+};
 
-  const slug = id;
-
-  // GET /api/field-groups → list all components
-  if (!slug && httpMethod === "GET") {
-    return {
-      service: "field-groups",
-      operation: "list",
-      method: "listComponents",
-      routeParams,
-    };
-  }
-
-  // POST /api/field-groups → create component (Schema Builder)
-  if (!slug && httpMethod === "POST") {
-    return {
-      service: "field-groups",
-      operation: "create",
-      method: "createComponent",
-      routeParams,
-    };
-  }
-
-  // GET /api/field-groups/[slug] → get component by slug
-  if (slug && httpMethod === "GET") {
-    routeParams.slug = slug;
-    return {
-      service: "field-groups",
-      operation: "single",
-      method: "getComponent",
-      routeParams,
-    };
-  }
-
-  // PATCH /api/field-groups/[slug] → update component
-  if (slug && httpMethod === "PATCH") {
-    routeParams.slug = slug;
-    return {
-      service: "field-groups",
-      operation: "update",
-      method: "updateComponent",
-      routeParams,
-    };
-  }
-
-  // DELETE /api/field-groups/[slug] → delete component
-  if (slug && httpMethod === "DELETE") {
-    routeParams.slug = slug;
-    return {
-      service: "field-groups",
-      operation: "delete",
-      method: "deleteComponent",
-      routeParams,
-    };
-  }
-
-  return null;
+function parseComponentSchemaRoute(
+  slug: string,
+  action: string,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  const route = COMPONENT_SCHEMA_ROUTES[`${httpMethod} ${action}`];
+  if (!route) return null;
+  routeParams.slug = slug;
+  return componentRoute(route.operation, route.method, routeParams);
 }
 
 // ============================================================================
@@ -2933,6 +2902,7 @@ const DASHBOARD_ROUTES: Readonly<
     summary: { operation: "list", method: "getDashboardSummary" },
     "new-types": { operation: "list", method: "getDashboardNewTypes" },
     setup: { operation: "list", method: "getDashboardSetup" },
+    diagnostics: { operation: "list", method: "getDashboardDiagnostics" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
@@ -2968,6 +2938,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   POST /api/dashboard/new-types      → postDashboardNewType
  *   GET  /api/dashboard/setup          → getDashboardSetup
  *   PUT  /api/dashboard/setup          → putDashboardSetup
+ *   GET  /api/dashboard/diagnostics    → getDashboardDiagnostics
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.

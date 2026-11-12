@@ -17,16 +17,16 @@ npm install @nextlyhq/plugin-form-builder
 
 The plugin declares these peer dependencies:
 
-| Peer | Range |
-|---|---|
-| `nextly` | the matching lockstep version, pinned exactly |
-| `@nextlyhq/admin` | the matching lockstep version, pinned exactly |
-| `@nextlyhq/plugin-sdk` | the matching lockstep version, pinned exactly |
-| `@nextlyhq/ui` | a caret range on the matching lockstep version |
-| `@tanstack/react-query` | >= 5 |
-| `lucide-react` | >= 0.400.0 |
-| `react` | the supported range in [Requirements](/docs/getting-started/installation#requirements) |
-| `next` | the supported range in [Requirements](/docs/getting-started/installation#requirements) |
+| Peer                    | Range                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| `nextly`                | the matching lockstep version, pinned exactly                                          |
+| `@nextlyhq/admin`       | the matching lockstep version, pinned exactly                                          |
+| `@nextlyhq/plugin-sdk`  | the matching lockstep version, pinned exactly                                          |
+| `@nextlyhq/ui`          | a caret range on the matching lockstep version                                         |
+| `@tanstack/react-query` | >= 5                                                                                   |
+| `lucide-react`          | >= 0.400.0                                                                             |
+| `react`                 | the supported range in [Requirements](/docs/getting-started/installation#requirements) |
+| `next`                  | the supported range in [Requirements](/docs/getting-started/installation#requirements) |
 
 While Nextly is in alpha every publishable package ships on one train, so three of the four
 Nextly peers are pinned to the exact version the plugin was built against, and `@nextlyhq/ui`
@@ -40,8 +40,8 @@ error.
 
 ```typescript
 // nextly.config.ts
-import { defineConfig } from 'nextly';
-import { formBuilder } from '@nextlyhq/plugin-form-builder';
+import { defineConfig } from "nextly";
+import { formBuilder } from "@nextlyhq/plugin-form-builder";
 
 const fb = formBuilder();
 
@@ -53,10 +53,10 @@ export default defineConfig({
 
 This creates two collections automatically:
 
-| Collection | Default Slug | Purpose |
-|------------|-------------|---------|
-| Forms | `forms` | Stores form definitions (fields, settings, notifications) |
-| Submissions | `form-submissions` | Stores submitted data with status tracking |
+| Collection  | Default Slug       | Purpose                                                   |
+| ----------- | ------------------ | --------------------------------------------------------- |
+| Forms       | `forms`            | Stores form definitions (fields, settings, notifications) |
+| Submissions | `form-submissions` | Stores submitted data with status tracking                |
 
 Both collections appear in the admin sidebar under the **Forms** group.
 
@@ -69,24 +69,24 @@ Pass an options object to `formBuilder()` to customize behavior.
 const fb = formBuilder({
   // Customize collection slugs and labels
   formOverrides: {
-    slug: 'contact-forms',
-    labels: { singular: 'Contact Form', plural: 'Contact Forms' },
+    slug: "contact-forms",
+    labels: { singular: "Contact Form", plural: "Contact Forms" },
   },
   formSubmissionOverrides: {
-    slug: 'responses',
-    labels: { singular: 'Response', plural: 'Responses' },
+    slug: "responses",
+    labels: { singular: "Response", plural: "Responses" },
   },
 
   // Enable/disable specific field types
   fields: {
-    file: false,      // Disable file uploads
-    hidden: false,    // Disable hidden fields
+    file: false, // Disable file uploads
+    hidden: false, // Disable hidden fields
   },
 
   // Email notifications
   notifications: {
-    defaultFrom: 'noreply@example.com',
-    defaultToEmail: 'submissions@example.com',
+    defaultFrom: "noreply@example.com",
+    defaultToEmail: "submissions@example.com",
     enabled: true,
   },
 
@@ -102,8 +102,8 @@ const fb = formBuilder({
   // File upload limits
   uploads: {
     maxFileSize: 10_485_760, // 10 MB
-    allowedMimeTypes: ['image/*', 'application/pdf', 'text/*'],
-    uploadCollection: 'media',
+    allowedMimeTypes: ["image/*", "application/pdf", "text/*"],
+    uploadCollection: "media",
   },
 
   // Feature flags
@@ -114,7 +114,7 @@ const fb = formBuilder({
   },
 
   // Collections that can serve as redirect targets after submission
-  redirectRelationships: ['pages'],
+  redirectRelationships: ["pages"],
 });
 ```
 
@@ -160,21 +160,21 @@ formSubmissionOverrides: {
 
 All 13 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
 
-| Type | Description | Key Options |
-|------|-------------|-------------|
-| `text` | Single-line text input | `minLength`, `maxLength`, `pattern` |
-| `email` | Email address with format validation | `pattern` |
-| `number` | Numeric input | `min`, `max`, `step` |
-| `phone` | Phone number input | `pattern` |
-| `url` | URL with format validation | `pattern` |
-| `textarea` | Multi-line text input | `rows`, `minLength`, `maxLength` |
-| `select` | Dropdown menu | `options`, `allowMultiple` |
-| `checkbox` | Single boolean toggle | `defaultValue` |
-| `radio` | Radio button group | `options` |
-| `file` | File upload | `accept`, `multiple`, `maxFileSize` |
-| `date` | Date picker | `min`, `max` |
-| `time` | Time picker | `defaultValue` (HH:mm format) |
-| `hidden` | Hidden value (not shown to users) | `defaultValue` |
+| Type       | Description                          | Key Options                         |
+| ---------- | ------------------------------------ | ----------------------------------- |
+| `text`     | Single-line text input               | `minLength`, `maxLength`, `pattern` |
+| `email`    | Email address with format validation | `pattern`                           |
+| `number`   | Numeric input                        | `min`, `max`, `step`                |
+| `phone`    | Phone number input                   | `pattern`                           |
+| `url`      | URL with format validation           | `pattern`                           |
+| `textarea` | Multi-line text input                | `rows`, `minLength`, `maxLength`    |
+| `select`   | Dropdown menu                        | `options`, `allowMultiple`          |
+| `checkbox` | Single boolean toggle                | `defaultValue`                      |
+| `radio`    | Radio button group                   | `options`                           |
+| `file`     | File upload                          | `accept`, `multiple`, `maxFileSize` |
+| `date`     | Date picker                          | `min`, `max`                        |
+| `time`     | Time picker                          | `defaultValue` (HH:mm format)       |
+| `hidden`   | Hidden value (not shown to users)    | `defaultValue`                      |
 
 Every field supports these common properties: `name`, `label`, `placeholder`, `helpText`, `defaultValue`, `required`, `validation`, `conditionalLogic`, and `admin.width` (25% to 100%).
 
@@ -192,6 +192,7 @@ Navigate to **Forms** in the admin sidebar and click **Create New**. The form bu
 - **Preview** -- see how the form will look to end users
 
 Forms have three statuses:
+
 - **Draft** -- not accepting submissions (use for building)
 - **Published** -- live and accepting submissions
 - **Closed** -- shows a configurable closed message
@@ -208,30 +209,30 @@ import {
   select,
   checkbox,
   option,
-} from '@nextlyhq/plugin-form-builder';
+} from "@nextlyhq/plugin-form-builder";
 
 const contactFields = [
-  text({ name: 'firstName', label: 'First Name', required: true }),
-  text({ name: 'lastName', label: 'Last Name', required: true }),
-  email({ name: 'email', label: 'Email Address', required: true }),
+  text({ name: "firstName", label: "First Name", required: true }),
+  text({ name: "lastName", label: "Last Name", required: true }),
+  email({ name: "email", label: "Email Address", required: true }),
   select({
-    name: 'subject',
-    label: 'Subject',
+    name: "subject",
+    label: "Subject",
     required: true,
     options: [
-      option('General Inquiry'),
-      option('Support Request'),
-      option('Feedback'),
+      option("General Inquiry"),
+      option("Support Request"),
+      option("Feedback"),
     ],
   }),
   textarea({
-    name: 'message',
-    label: 'Message',
+    name: "message",
+    label: "Message",
     required: true,
     rows: 5,
     validation: { minLength: 10, maxLength: 2000 },
   }),
-  checkbox({ name: 'subscribe', label: 'Subscribe to our newsletter' }),
+  checkbox({ name: "subscribe", label: "Subscribe to our newsletter" }),
 ];
 ```
 
@@ -244,13 +245,13 @@ Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `
 Create a complete form config with defaults applied in one call:
 
 ```typescript
-import { createFormConfig } from '@nextlyhq/plugin-form-builder';
+import { createFormConfig } from "@nextlyhq/plugin-form-builder";
 
-const contactForm = createFormConfig('contact', contactFields, {
+const contactForm = createFormConfig("contact", contactFields, {
   settings: {
-    submitButtonText: 'Send Message',
-    confirmationType: 'message',
-    successMessage: 'Thanks! We will get back to you within 24 hours.',
+    submitButtonText: "Send Message",
+    confirmationType: "message",
+    successMessage: "Thanks! We will get back to you within 24 hours.",
   },
 });
 ```
@@ -258,7 +259,10 @@ const contactForm = createFormConfig('contact', contactFields, {
 Validate a form config before saving:
 
 ```typescript
-import { validateFormConfig, assertValidFormConfig } from '@nextlyhq/plugin-form-builder';
+import {
+  validateFormConfig,
+  assertValidFormConfig,
+} from "@nextlyhq/plugin-form-builder";
 
 const result = validateFormConfig(contactForm);
 if (!result.valid) {
@@ -278,9 +282,9 @@ The handlers below take a `{ pluginContext, pluginConfig }` context. `pluginCont
 Use the `submitForm` handler to process submissions server-side. It runs the full pipeline: fetch form, validate data, check spam, store submission, and determine redirect.
 
 ```typescript
-import { submitForm } from '@nextlyhq/plugin-form-builder';
-import type { PluginContext } from '@nextlyhq/plugin-sdk';
-import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+import { submitForm } from "@nextlyhq/plugin-form-builder";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import type { ResolvedFormBuilderConfig } from "@nextlyhq/plugin-form-builder";
 
 declare const request: Request;
 declare const pluginContext: PluginContext;
@@ -288,18 +292,18 @@ declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const result = await submitForm(
   {
-    formSlug: 'contact',
-    data: { firstName: 'Jane', email: 'jane@example.com', message: 'Hello!' },
+    formSlug: "contact",
+    data: { firstName: "Jane", email: "jane@example.com", message: "Hello!" },
     // The language the visitor submitted in. A picked redirect page is read in
     // it, so a page whose slug is `thanks` in English and `merci` in French
     // sends a French visitor to `/merci`. Pass whatever you resolved for the
     // page the form was on; the built-in route reads it from `?locale=`.
-    locale: 'fr',
+    locale: "fr",
     metadata: {
       // No ipAddress here on purpose: see "Where the IP has to come from"
       // below. Reading `x-forwarded-for` straight off the request is the one
       // thing not to do.
-      userAgent: request.headers.get('user-agent') || undefined,
+      userAgent: request.headers.get("user-agent") || undefined,
     },
   },
   { pluginContext, pluginConfig }
@@ -376,16 +380,16 @@ On a localized site, post to `/admin/api/forms/:slug/submit?locale=fr` from a Fr
 You can validate data without creating a submission:
 
 ```typescript
-import { validateSubmission } from '@nextlyhq/plugin-form-builder';
-import type { PluginContext } from '@nextlyhq/plugin-sdk';
-import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+import { validateSubmission } from "@nextlyhq/plugin-form-builder";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import type { ResolvedFormBuilderConfig } from "@nextlyhq/plugin-form-builder";
 
 declare const pluginContext: PluginContext;
 declare const pluginConfig: ResolvedFormBuilderConfig;
 
 const { valid, errors } = await validateSubmission(
-  'contact',
-  { firstName: 'Jane', email: 'not-an-email' },
+  "contact",
+  { firstName: "Jane", email: "not-an-email" },
   { pluginContext, pluginConfig }
 );
 ```
@@ -394,10 +398,10 @@ const { valid, errors } = await validateSubmission(
 
 Each submission tracks its review state:
 
-| Status | Description |
-|--------|-------------|
-| `new` | Unread submission |
-| `read` | Reviewed by an admin |
+| Status     | Description                          |
+| ---------- | ------------------------------------ |
+| `new`      | Unread submission                    |
+| `read`     | Reviewed by an admin                 |
 | `archived` | Archived (hidden from default views) |
 
 Admins can also add internal notes to any submission -- these are not visible to the original submitter.
@@ -405,14 +409,17 @@ Admins can also add internal notes to any submission -- these are not visible to
 ### Statistics
 
 ```typescript
-import { getFormSubmissionStats } from '@nextlyhq/plugin-form-builder';
-import type { PluginContext } from '@nextlyhq/plugin-sdk';
-import type { ResolvedFormBuilderConfig } from '@nextlyhq/plugin-form-builder';
+import { getFormSubmissionStats } from "@nextlyhq/plugin-form-builder";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import type { ResolvedFormBuilderConfig } from "@nextlyhq/plugin-form-builder";
 
 declare const pluginContext: PluginContext;
 declare const pluginConfig: ResolvedFormBuilderConfig;
 
-const stats = await getFormSubmissionStats('contact', { pluginContext, pluginConfig });
+const stats = await getFormSubmissionStats("contact", {
+  pluginContext,
+  pluginConfig,
+});
 // { total: 42, new: 5, read: 30, archived: 7 }
 ```
 
@@ -420,15 +427,21 @@ const stats = await getFormSubmissionStats('contact', { pluginContext, pluginCon
 
 Notifications are configured per form in the admin UI under the **Notifications** tab. Each notification integration specifies:
 
-| Setting | Description |
-|---------|-------------|
-| `templateSlug` | Email template to use (from your [email configuration](/docs/guides/email)) |
-| `recipientType` | `"static"` (fixed email) or `"field"` (value from a form field) |
-| `to` | Email address, or `{{fieldName}}` reference when using field recipient |
-| `providerId` | Email provider to use (optional, falls back to system default) |
-| `cc` / `bcc` | Additional recipients |
+| Setting         | Description                                                                 |
+| --------------- | --------------------------------------------------------------------------- |
+| `templateSlug`  | Email template to use (from your [email configuration](/docs/guides/email)) |
+| `recipientType` | `"static"` (fixed email) or `"field"` (value from a form field)             |
+| `to`            | Email address, or `{{fieldName}}` reference when using field recipient      |
+| `providerId`    | Email provider to use (optional, falls back to system default)              |
+| `cc` / `bcc`    | Additional recipients                                                       |
 
 Template variables available in your email templates: all submitted field values, plus `formName` and `submissionId`.
+
+### Delivery and retries
+
+Each notification is queued once its submission is saved, then sent at once. A failure that a retry can help (the provider is down, or times out) is not dropped: it is tried again, with a growing wait between attempts, until it is sent or fails for good. Retries run when your site calls the jobs trigger (`POST /admin/api/jobs/run`, see [Jobs](/docs/jobs)), so schedule that call on any site that sends form notifications. A refusal no retry can change, such as an invalid address, fails at once.
+
+A notification that fails for good is logged twice, and the two lines share the queued email's id (`queuedId`): the Form Builder's line names the form and the notification, and the server's own `queued-email-failed` line gives the reason. Neither names a recipient.
 
 ### beforeEmail Hook
 
@@ -439,7 +452,7 @@ const fb = formBuilder({
   beforeEmail: async ({ emails, form, submission }) => {
     return emails.map(email => ({
       ...email,
-      bcc: ['archive@example.com'],
+      bcc: ["archive@example.com"],
     }));
   },
 });
@@ -447,7 +460,7 @@ const fb = formBuilder({
 
 ## Spam Protection
 
-Three layers of protection are available, all enabled by default (except reCAPTCHA).
+Three layers of protection: a honeypot and a rate limit, both on by default, and a bot check (Google reCAPTCHA v3 or Cloudflare Turnstile) once you configure its keys.
 
 ### Honeypot Fields
 
@@ -470,50 +483,80 @@ spamProtection: {
 
 The rate limit uses the deployment's shared rate-limit store, `rateLimit.store` in `defineConfig`, which falls back to memory. With several instances and no shared store, each instance counts on its own.
 
-### reCAPTCHA v3
+### Bot checks: reCAPTCHA and Turnstile
 
-Configuration is available for Google reCAPTCHA v3. Set the site key and secret key globally or per form.
+A bot check runs in the visitor's browser and gives the form a token, which the server verifies with the provider before the submission is accepted:
 
-<Callout type="warn">
-  **Not enforced yet.** The settings below are accepted and stored, and nothing
-  verifies a token against Google: submissions are accepted whether the token is
-  valid, invalid or absent. Turning it on protects nothing today. The honeypot
-  and the rate limit above are enforced.
-</Callout>
+- **Google reCAPTCHA v3** scores each visitor in the background, with no puzzle to solve. A score below `scoreThreshold` (default `0.5`) fails.
+- **Cloudflare Turnstile** checks each visitor in the background and rarely shows a puzzle.
+
+Set each provider's keys in the plugin's options. `enabled` makes a provider the site default, which forms use unless their Settings choose another check or Off (reCAPTCHA wins when both are enabled):
 
 ```typescript
 spamProtection: {
   recaptcha: {
     enabled: true,
-    siteKey: 'your-site-key',
-    secretKey: 'your-secret-key',
+    siteKey: 'your-recaptcha-site-key',
+    secretKey: 'your-recaptcha-secret-key',
     scoreThreshold: 0.5,
+  },
+  turnstile: {
+    enabled: false,
+    siteKey: 'your-turnstile-site-key',
+    secretKey: 'your-turnstile-secret-key',
   },
 }
 ```
+
+Setting a provider's `secretKey` also declares its verification host in the plugin's outbound allowlist (`www.google.com` or `challenges.cloudflare.com`). A site using neither gives the plugin no network access.
+
+**Rendering the widget.** For a form whose check is on, the public read of the form (`GET /api/forms/:slug`) includes what the widget needs:
+
+```json
+{
+  "botCheck": {
+    "provider": "turnstile",
+    "siteKey": "…",
+    "field": "cf-turnstile-response"
+  }
+}
+```
+
+Render the provider's widget with that site key, and send its token inside `data` under `field`: `g-recaptcha-response` for reCAPTCHA or `cf-turnstile-response` for Turnstile, the names each provider's widget writes by default. It is never stored with the submission.
+
+**What happens to a submission:**
+
+- **Token passes:** accepted as usual.
+- **Token fails or is missing:** stored flagged as spam (reason `recaptcha` or `turnstile`), as a honeypot hit is, so a false positive stays reviewable and the bot still sees a success.
+- **Provider unreachable or answers something unexpected:** accepted unchecked and logged, so an outage does not send every real submission to spam.
+- **Check on but the provider has no `secretKey`:** accepted unchecked, as before checks were verified. The server logs a warning at start naming the option to set, Settings says so on the form, and a check without its keys cannot be newly chosen in Settings.
+
+The check is verified where every submission is stored, so it applies to the built-in route, `submitForm`, `nextly.forms.submit()` with a request, and the generic collection create. A server-side call with no request (an import) is not checked.
+
+**Forms saved before this change** keep their protection. A form whose reCAPTCHA setting was left to the plugin follows the site default, one with reCAPTCHA on uses reCAPTCHA, and one with it off has no check. A form that stored its own reCAPTCHA site key keeps using it until the plugin's options give one, and its Settings ask to move it there.
 
 ## Conditional Logic
 
 Fields can be shown or hidden based on the values of other fields. Configure conditional logic on any field through the admin UI or in code.
 
 ```typescript
-import { text, select, option } from '@nextlyhq/plugin-form-builder';
+import { text, select, option } from "@nextlyhq/plugin-form-builder";
 
 const fields = [
   select({
-    name: 'contactMethod',
-    label: 'Preferred Contact Method',
-    options: [option('Email'), option('Phone')],
+    name: "contactMethod",
+    label: "Preferred Contact Method",
+    options: [option("Email"), option("Phone")],
   }),
   text({
-    name: 'phoneNumber',
-    label: 'Phone Number',
+    name: "phoneNumber",
+    label: "Phone Number",
     conditionalLogic: {
       enabled: true,
-      action: 'show',
-      operator: 'AND',
+      action: "show",
+      operator: "AND",
       conditions: [
-        { field: 'contactMethod', comparison: 'equals', value: 'phone' },
+        { field: "contactMethod", comparison: "equals", value: "phone" },
       ],
     },
   }),
@@ -542,30 +585,40 @@ Export submissions to CSV or JSON from code or the admin UI. The examples below 
 ### CSV Export
 
 ```typescript
-import { exportToCSV, downloadFile, generateExportFilename } from '@nextlyhq/plugin-form-builder';
-import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+import {
+  exportToCSV,
+  downloadFile,
+  generateExportFilename,
+} from "@nextlyhq/plugin-form-builder";
+import type {
+  FormDocument,
+  SubmissionDocument,
+} from "@nextlyhq/plugin-form-builder";
 
 declare const form: FormDocument;
 declare const submissions: SubmissionDocument[];
 
 const csv = exportToCSV(submissions, form, {
   includeMetadata: true,
-  delimiter: ',',
-  includeBOM: true,       // Excel compatibility
-  dateFormat: 'iso',
+  delimiter: ",",
+  includeBOM: true, // Excel compatibility
+  dateFormat: "iso",
 });
 
 // Browser download
-const filename = generateExportFilename('contact', 'csv');
+const filename = generateExportFilename("contact", "csv");
 // "contact-submissions-2026-03-20.csv"
-downloadFile(csv, filename, 'text/csv;charset=utf-8');
+downloadFile(csv, filename, "text/csv;charset=utf-8");
 ```
 
 ### JSON Export
 
 ```typescript
-import { exportToJSON } from '@nextlyhq/plugin-form-builder';
-import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+import { exportToJSON } from "@nextlyhq/plugin-form-builder";
+import type {
+  FormDocument,
+  SubmissionDocument,
+} from "@nextlyhq/plugin-form-builder";
 
 declare const form: FormDocument;
 declare const submissions: SubmissionDocument[];
@@ -580,14 +633,17 @@ const json = exportToJSON(submissions, form, {
 ### One-Step Export
 
 ```typescript
-import { exportAndDownload } from '@nextlyhq/plugin-form-builder';
-import type { FormDocument, SubmissionDocument } from '@nextlyhq/plugin-form-builder';
+import { exportAndDownload } from "@nextlyhq/plugin-form-builder";
+import type {
+  FormDocument,
+  SubmissionDocument,
+} from "@nextlyhq/plugin-form-builder";
 
 declare const form: FormDocument;
 declare const submissions: SubmissionDocument[];
 
 // In a React component
-const handleExport = (format: 'csv' | 'json') => {
+const handleExport = (format: "csv" | "json") => {
   exportAndDownload(submissions, form, format);
 };
 ```
@@ -600,12 +656,12 @@ A complete contact form setup from config to submission handling.
 
 ```typescript
 // nextly.config.ts
-import { defineConfig } from 'nextly';
-import { formBuilder } from '@nextlyhq/plugin-form-builder';
+import { defineConfig } from "nextly";
+import { formBuilder } from "@nextlyhq/plugin-form-builder";
 
 const fb = formBuilder({
   notifications: {
-    defaultFrom: 'noreply@mysite.com',
+    defaultFrom: "noreply@mysite.com",
   },
   spamProtection: {
     honeypot: true,
@@ -623,32 +679,38 @@ export default defineConfig({
 
 ```typescript
 import {
-  text, email, textarea, select, checkbox, option, hidden,
+  text,
+  email,
+  textarea,
+  select,
+  checkbox,
+  option,
+  hidden,
   createFormConfig,
-} from '@nextlyhq/plugin-form-builder';
+} from "@nextlyhq/plugin-form-builder";
 
-const contactForm = createFormConfig('contact', [
-  text({ name: 'name', label: 'Full Name', required: true }),
-  email({ name: 'email', label: 'Email', required: true }),
+const contactForm = createFormConfig("contact", [
+  text({ name: "name", label: "Full Name", required: true }),
+  email({ name: "email", label: "Email", required: true }),
   select({
-    name: 'subject',
-    label: 'Subject',
+    name: "subject",
+    label: "Subject",
     required: true,
     options: [
-      option('General Inquiry'),
-      option('Support'),
-      option('Partnership'),
+      option("General Inquiry"),
+      option("Support"),
+      option("Partnership"),
     ],
   }),
   textarea({
-    name: 'message',
-    label: 'Message',
+    name: "message",
+    label: "Message",
     required: true,
     rows: 5,
     validation: { maxLength: 5000 },
   }),
-  checkbox({ name: 'newsletter', label: 'Subscribe to updates' }),
-  hidden({ name: 'source', label: 'Source', defaultValue: 'website' }),
+  checkbox({ name: "newsletter", label: "Subscribe to updates" }),
+  hidden({ name: "source", label: "Source", defaultValue: "website" }),
 ]);
 ```
 
@@ -745,8 +807,6 @@ export default defineConfig({
 The route is mounted under the contributing plugin's namespace, so the form posts to
 `/admin/api/plugins/@acme/contact-endpoint/contact` in a scaffolded app, where `/admin/api`
 is wherever `createDynamicHandlers` is mounted.
-
-
 
 ## Next Steps
 

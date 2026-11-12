@@ -9,6 +9,7 @@
  * |---|---|
  * | `ALTER TABLE t ALTER [COLUMN] c SET NOT NULL` (PostgreSQL) | c's null rows break it |
  * | `ALTER TABLE t MODIFY [COLUMN] c <type> ... NOT NULL` (MySQL) | c's null rows break it |
+ * | The four-statement MySQL run `migrate:create` writes for a NOT NULL (`mysqlLiveRunAt`) | c's null rows break it |
  * | `ALTER TABLE t CHANGE [COLUMN] old new <type> ... NOT NULL` (MySQL) | old's null rows break it |
  * | `ALTER TABLE t ADD [COLUMN] c <type> NOT NULL`, no default and no generated value | every row breaks it |
  * | `CREATE TABLE __new_t (...)` then `INSERT INTO __new_t (...) SELECT ... FROM t` (SQLite rebuild) | for each NOT NULL column of `__new_t`: the null rows of the column of t copied into it, or every row of t when nothing is copied into it and it has no default |
@@ -32,6 +33,11 @@
  * @module domains/schema/migrate/not-null-statements
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
+import {
+  MYSQL_LIVE_RUN_LENGTH,
+  mysqlLiveRunAt,
+  plainMysqlStatement,
+} from "../pipeline/sql-templates/mysql-live-restate";
 
 import {
   cursorOf,
@@ -770,6 +776,18 @@ export function readNotNullChanges(
   dialect: SupportedDialect
 ): NotNullChange[] {
   const reader = new UnitReader(dialect);
-  statements.forEach((statement, index) => reader.read(statement, index));
+  for (let index = 0; index < statements.length; index++) {
+    // A MySQL run `migrate:create` writes builds its statement from the catalog when the file
+    // runs. It is read as the plain statement it amounts to, at its first statement, which
+    // writes no row.
+    const run =
+      dialect === "mysql" ? mysqlLiveRunAt(statements, index) : undefined;
+    if (run === undefined) {
+      reader.read(statements[index], index);
+      continue;
+    }
+    reader.read(plainMysqlStatement(run), index);
+    index += MYSQL_LIVE_RUN_LENGTH - 1;
+  }
   return reader.changes;
 }

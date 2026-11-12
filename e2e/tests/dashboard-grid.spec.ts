@@ -1,12 +1,13 @@
 /**
- * The dashboard's grid in a browser: twelve columns of rows 72 px high, each
- * card spanning its `w` columns and `h` rows, reflowed by the dashboard's own
- * width and never the window's, and never resized past its widget's bounds.
+ * The dashboard's grid in a browser: twelve columns, each card spanning its
+ * `w` columns and as tall as its content (the cards of a row as tall as the
+ * tallest of them), reflowed by the dashboard's own width and never the
+ * window's, and never resized past its widget's bounds.
  *
  * jsdom has no layout, so the component tests can say which classes and styles
  * a card is drawn with but not the box it ends up in. These measure the drawn
- * page: every card's width and height in each band, recorded on the test as an
- * attachment, the two gaps, the order in the one-column band, and a card asked
+ * page: every card's width and height in each band against its content's own
+ * height, recorded on the test as an attachment, the two gaps, the order in the one-column band, and a card asked
  * for a size past its maximum.
  *
  * The dashboard's own route draws the icon rail alone; the secondary panel
@@ -20,13 +21,9 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-// The cards that report the height their content takes, and so may stand shorter than their
-// stored rows at rest: the admin's own set, read here rather than copied.
-import { CONTENT_SIZED_WIDGETS } from "../../packages/admin/src/components/features/widgets/content-sized";
-
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
-import { cardHeightPx, sizeBoundsOf } from "./support/dashboard-sizes";
+import { sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { resetToDefault } from "./support/dashboard-layout";
 
@@ -64,6 +61,12 @@ interface DrawnCard {
   top: number;
   width: number;
   height: number;
+  /** Its content's height, unstretched by its row (`contentHeights`). */
+  natural: number;
+  /** The empty room under its body's content while unstretched: none for a card fitted to it. */
+  slack: number;
+  /** How far its content runs past its foot; nothing is clipped, so it should be none. */
+  overflowDown: number;
   overflow: number;
 }
 
@@ -146,9 +149,11 @@ async function drawnCards(page: Page, held?: Layout): Promise<DrawnCard[]> {
         width: box.width,
         height: box.height,
         overflow: cell.scrollWidth - cell.clientWidth,
+        overflowDown: cell.scrollHeight - cell.clientHeight,
       };
     })
   );
+  const natural = await contentHeights(page);
   return boxes
     .filter(box => box.width > 0 && box.height > 0)
     .map(box => {
@@ -156,13 +161,63 @@ async function drawnCards(page: Page, held?: Layout): Promise<DrawnCard[]> {
       if (stored === undefined) {
         throw new Error(`no stored placement ${box.placementId}`);
       }
-      return { ...box, widgetId: stored.widgetId, w: stored.w, h: stored.h };
+      return {
+        ...box,
+        natural: natural.get(box.placementId)?.height ?? 0,
+        slack: natural.get(box.placementId)?.slack ?? 0,
+        widgetId: stored.widgetId,
+        w: stored.w,
+        h: stored.h,
+      };
     });
+}
+
+/**
+ * Each drawn cell's content height, by placement: the height it takes when it is not stretched
+ * to its row (`align-self: start`), and the empty room left under its body's content then, which
+ * a card drawn at a stored height rather than its content's would show. Measured with every cell
+ * so and then put back in one go, so no frame is painted between.
+ */
+async function contentHeights(
+  page: Page
+): Promise<Map<string, { height: number; slack: number }>> {
+  const pairs = await page.locator(CELLS).evaluateAll(cells => {
+    const elements = cells as HTMLElement[];
+    const before = elements.map(cell => cell.style.alignSelf);
+    for (const cell of elements) cell.style.alignSelf = "start";
+    const measured = elements.map(cell => {
+      const body = cell.querySelector<HTMLElement>(
+        '[data-testid="widget-card-body"]'
+      );
+      // A wrapper laid out as if absent (`display: contents`) has no box of its own: its children
+      // are read in its place.
+      const boxed = (element: Element): Element[] =>
+        getComputedStyle(element).display === "contents"
+          ? [...element.children].flatMap(boxed)
+          : [element];
+      const bottoms = [...(body?.children ?? [])]
+        .flatMap(boxed)
+        .map(child => child.getBoundingClientRect().bottom);
+      const slack =
+        body === null || bottoms.length === 0
+          ? 0
+          : body.getBoundingClientRect().bottom - Math.max(...bottoms);
+      return [
+        cell.getAttribute("data-placement-id") ?? "",
+        { height: cell.getBoundingClientRect().height, slack },
+      ] as const;
+    });
+    elements.forEach((cell, index) => {
+      cell.style.alignSelf = before[index] ?? "";
+    });
+    return measured;
+  });
+  return new Map(pairs);
 }
 
 /** The columns a card of `w` spans on a dashboard `area` wide, as the bands state them. */
 function expectedSpan(w: number, area: number): number {
-  if (area < 640) return 12;
+  if (area < 640) return w <= 3 ? 6 : 12;
   if (area < 1024) return w <= 6 ? 6 : 12;
   return w;
 }
@@ -173,8 +228,9 @@ function expectedColumnGap(area: number): number {
 }
 
 /**
- * Every card is as wide as its band draws its `w` and as tall as its `h`, whatever the band.
- * Recorded on the test for the band it was measured in.
+ * Every card is as wide as its band draws its `w`, and as tall as its content or, beside a taller
+ * card in its row, as that card: never a stored row count, never cut. Recorded on the test for the
+ * band it was measured in.
  */
 async function expectCardsInBand(
   page: Page,
@@ -196,7 +252,8 @@ async function expectCardsInBand(
       width: Math.round(card.width * 10) / 10,
       height: Math.round(card.height * 10) / 10,
       expectedWidth: Math.round((((area + gap) * span) / 12 - gap) * 10) / 10,
-      expectedHeight: cardHeightPx(card.h),
+      contentHeight: Math.round(card.natural * 10) / 10,
+      slack: Math.round(card.slack * 10) / 10,
     };
   });
   await test.info().attach(`cards at ${label} (${Math.round(area)}px)`, {
@@ -208,31 +265,38 @@ async function expectCardsInBand(
       card.expectedWidth,
       0
     );
-    // 🔴 `h` never changes with the band: the same rows at every width. At rest a row is as tall
-    // as the tallest content among its cards, with the stored rows its cap, so a card that sizes
-    // to its content may stand shorter, never taller; every other card holds its stored height.
-    if (CONTENT_SIZED_WIDGETS.has(card.widgetId)) {
-      expect(
-        card.height,
-        `${card.widgetId} height at ${label}`
-      ).toBeLessThanOrEqual(card.expectedHeight + 0.5);
-    } else {
+  }
+  // 🔴 Each row is as tall as its tallest card's content, and every card in it as tall as the
+  // row: their bottoms meet, and the row holds the tallest whole.
+  const rows = new Map<number, DrawnCard[]>();
+  for (const card of cards) {
+    const top = Math.round(card.top);
+    rows.set(top, [...(rows.get(top) ?? []), card]);
+  }
+  for (const row of rows.values()) {
+    const tallest = Math.max(...row.map(card => card.natural));
+    for (const card of row) {
       expect(card.height, `${card.widgetId} height at ${label}`).toBeCloseTo(
-        card.expectedHeight,
+        tallest,
         0
       );
+      expect(
+        card.natural,
+        `${card.widgetId} is no taller than its row at ${label}`
+      ).toBeLessThanOrEqual(card.height + 1);
     }
   }
-  // The cards that share a row stand at one height, their bottoms aligned.
+  // Nothing inside a card is clipped or scrolls, and unstretched, no card stands taller than its
+  // content: no empty room under its body's last element.
   for (const card of cards) {
-    for (const other of cards) {
-      if (Math.abs(card.top - other.top) < 1 && card.h === other.h) {
-        expect(
-          Math.abs(card.height - other.height),
-          `${card.widgetId} and ${other.widgetId} share a row at ${label}`
-        ).toBeLessThanOrEqual(1);
-      }
-    }
+    expect(
+      card.slack,
+      `${card.widgetId} room under its content at ${label}`
+    ).toBeLessThanOrEqual(1);
+    expect(
+      card.overflowDown,
+      `${card.widgetId} cut at the foot at ${label}`
+    ).toBeLessThanOrEqual(1);
   }
   for (const card of cards) {
     expect(
@@ -256,15 +320,13 @@ async function sizeDashboard(page: Page, target: number): Promise<void> {
 }
 
 /**
- * The sizes a Width or Height submenu offers, read from each choice's test id (`card-width-6`)
- * rather than its text: a width is named by its share of the row ("½") with its columns beneath,
- * so the text is no number to read.
+ * The widths a settings drawer's Width offers, in columns, read from each choice's value
+ * (`data-value`) rather than its text: a width is named by its share of the row ("50%"), so the
+ * text is no number to read.
  */
 async function valuesOf(choices: Locator): Promise<number[]> {
   return choices.evaluateAll(items =>
-    items.map(item =>
-      Number((item.getAttribute("data-testid") ?? "").split("-").pop())
-    )
+    items.map(item => Number(item.getAttribute("data-value")))
   );
 }
 
@@ -349,6 +411,38 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
   });
 }
 
+test("pairs two quarter-width cards on one row on a 390 px phone, each half the row", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await gotoAdmin(page, "/");
+  // Two Count cards, a quarter of the row each where the dashboard is wide, placed first.
+  const layout = await readLayout(page);
+  const write = await saveLayout(page, [
+    { id: "e2e-quarter-a", widgetId: "core/count", w: 3, h: 2, removed: false },
+    { id: "e2e-quarter-b", widgetId: "core/count", w: 3, h: 2, removed: false },
+    ...layout.placements,
+  ]);
+  expect(write.ok()).toBe(true);
+  await page.reload();
+  const a = page.locator(`${CELLS}[data-placement-id="e2e-quarter-a"]`);
+  const b = page.locator(`${CELLS}[data-placement-id="e2e-quarter-b"]`);
+  await expect(a).toBeVisible();
+  await expect(b).toBeVisible();
+  const area = await areaWidth(page);
+  expect(area).toBeLessThan(640);
+  const [boxA, boxB] = await Promise.all([a.boundingBox(), b.boundingBox()]);
+  if (boxA === null || boxB === null)
+    throw new Error("[e2e] a quarter card has no box");
+  // 🔴 One row, side by side, each half the row less half the gap; every other card is full width.
+  expect(Math.abs(boxA.y - boxB.y)).toBeLessThan(1);
+  expect(boxB.x).toBeGreaterThan(boxA.x);
+  const half = (area - expectedColumnGap(area)) / 2;
+  expect(boxA.width).toBeCloseTo(half, 0);
+  expect(boxB.width).toBeCloseTo(half, 0);
+  await expectCardsInBand(page, "390px with two quarter cards");
+});
+
 test("changes band at the dashboard's own 639/640 and 1,023/1,024 px, and its gap at 1,280 px", async ({
   page,
 }) => {
@@ -369,7 +463,7 @@ test("changes band at the dashboard's own 639/640 and 1,023/1,024 px, and its ga
   }
 });
 
-test("never resizes a card past its widget's maximum, from the menu or the layout write", async ({
+test("never resizes a card past its widget's maximum, from the settings drawer or the layout write", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -386,51 +480,42 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
   await page.getByTestId("dashboard-edit-begin").click();
   const menuButton = cell.getByRole("button", { name: /^Card actions for / });
 
-  // The widths offered stop at the maximum; choosing the last draws the card at it.
-  const widthMenu = page.getByTestId("card-width-menu");
+  // The widths offered stop at the maximum and start at the minimum; choosing the last, and
+  // saving the drawer, draws the card at the maximum.
   await menuButton.click();
-  if ((await widthMenu.count()) > 0) {
-    await widthMenu.focus();
-    await page.keyboard.press("ArrowRight");
-    const widths = page.getByRole("menuitemradio");
-    const offered = await valuesOf(widths);
-    expect(Math.max(...offered)).toBe(bounds.max.w);
-    expect(Math.min(...offered)).toBe(bounds.min.w);
-    await widths.last().focus();
-    await page.keyboard.press("Enter");
-    await expect(page.getByRole("menu")).toHaveCount(0);
-  } else {
-    // A widget of one width offers no Width at all.
-    expect(bounds.min.w).toBe(bounds.max.w);
-    await page.keyboard.press("Escape");
-  }
-
-  // The heights offered stop at the maximum too.
-  await menuButton.click();
-  const heightMenu = page.getByTestId("card-height-menu");
-  if ((await heightMenu.count()) > 0) {
-    await heightMenu.focus();
-    await page.keyboard.press("ArrowRight");
-    const heights = page.getByRole("menuitemradio");
-    const offered = await valuesOf(heights);
-    expect(Math.max(...offered)).toBe(bounds.max.h);
-    await heights.last().focus();
-    await page.keyboard.press("Enter");
-  } else {
-    expect(bounds.min.h).toBe(bounds.max.h);
-    await page.keyboard.press("Escape");
-  }
-  await expect(page.getByRole("menu")).toHaveCount(0);
+  await page.getByRole("menuitem", { name: "Settings…" }).click();
+  const drawer = page.getByTestId("widget-settings-drawer");
+  const widths = drawer
+    .getByRole("radiogroup", { name: "Width" })
+    .getByRole("radio");
+  await expect(widths.first()).toBeVisible();
+  const offered = await valuesOf(widths);
+  expect(Math.max(...offered)).toBe(bounds.max.w);
+  expect(Math.min(...offered)).toBe(bounds.min.w);
+  // No Height is offered: a card is as tall as its content.
+  await expect(drawer.getByRole("radiogroup", { name: /Height/ })).toHaveCount(
+    0
+  );
+  await widths.last().click();
+  await drawer.getByRole("button", { name: "Save" }).click();
+  await expect(drawer).toBeHidden();
 
   const area = await areaWidth(page);
   const gap = expectedColumnGap(area);
   const box = await cell.boundingBox();
   expect(box?.width).toBeCloseTo(((area + gap) * bounds.max.w) / 12 - gap, 0);
-  expect(box?.height).toBeCloseTo(cardHeightPx(bounds.max.h), 0);
-  await page.getByRole("button", { name: "Cancel" }).click();
+  // Cancel asks before discarding a width that changed; the answer is to discard.
+  await page.getByTestId("dashboard-edit-cancel").click();
+  const ask = page.getByTestId("dashboard-leave-ask");
+  await expect(ask.or(page.getByTestId("dashboard-edit-begin"))).toBeVisible();
+  if ((await ask.count()) > 0) {
+    await ask.getByRole("button", { name: "Discard changes" }).click();
+  }
+  await expect(page.getByTestId("dashboard-edit-begin")).toBeVisible();
 
   // 🔴 A size past the maximum written straight to the layout is refused, or drawn at the
-  // maximum; either way the card is never drawn past it.
+  // maximum; either way the card is never drawn wider than it. A stored `h` past the maximum
+  // sets no height, as no stored `h` does: the card stays as tall as its content.
   const layout = await readLayout(page);
   const past = layout.placements.map(p =>
     p.id === first.placementId
@@ -441,9 +526,6 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
   await page.reload();
   await expect(cell).toBeVisible();
   const after = await cell.boundingBox();
-  expect(after?.height ?? 0).toBeLessThanOrEqual(
-    cardHeightPx(bounds.max.h) + 1
-  );
   expect(after?.width ?? 0).toBeLessThanOrEqual(
     ((area + gap) * bounds.max.w) / 12 - gap + 1
   );

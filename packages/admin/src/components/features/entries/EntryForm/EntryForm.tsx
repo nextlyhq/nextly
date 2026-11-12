@@ -77,7 +77,12 @@ import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
 import { pluginDocumentLock } from "./document-lock-affordances";
-import { useDocumentPanelParts, useDocumentPlace } from "./document-place";
+import {
+  topLevelFieldNames,
+  useContentFields,
+  useDocumentPanelParts,
+  useDocumentPlace,
+} from "./document-place";
 import { DocumentFormSource } from "./document-values";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
@@ -1113,6 +1118,10 @@ export function EntryForm({
     },
     entry ?? undefined
   );
+  // The fields a plugin's tab edits are drawn in that tab, not here; every
+  // field keeps its value in the form, so Save still stores them.
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
 
   /*
    * What deciding this document's actions reads. Every write handler goes
@@ -1597,6 +1606,8 @@ export function EntryForm({
                                     // held as a panel section is.
                                     form={form}
                                     documentLock={pluginLock}
+                                    fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
                                     {/* The title first and largest, then the slug
                                   on the line under it. The slug is a write,
@@ -1688,7 +1699,7 @@ export function EntryForm({
                       answers a published version through the same surface. Its
                       comparison bar is drawn among the banners under the bar. */}
                                     <ViewedVersionBody
-                                      fields={historicalFields ?? mainFields}
+                                      fields={historicalFields ?? contentFields}
                                       values={historicalValues ?? undefined}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let
@@ -1706,14 +1717,14 @@ export function EntryForm({
                                         entryId={entry?.id ?? null}
                                         {...(entry ? { entry } : {})}
                                       >
-                                        {mainFields.length > 0 && (
+                                        {contentFields.length > 0 && (
                                           <div className="@4xl/content:p-8 pt-6">
                                             {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
                                             <EntryFormContent
-                                              fields={mainFields}
+                                              fields={contentFields}
                                               disabled={savePending}
                                               readOnly={lock.readOnly}
                                               withCard

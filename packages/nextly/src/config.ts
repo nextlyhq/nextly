@@ -371,7 +371,7 @@ export {
   effectiveWidgetSettings,
   // How many fields a Fields setting may choose: the settings sheet stops at it.
   MAX_CHOSEN_FIELDS,
-  // How many settings a widget may mark quick: the card's quick popover holds that many.
+  // How many settings a widget may mark quick: the card's header draws the first it can.
   MAX_QUICK_SETTINGS,
   naturalGroupBy,
   resolveWidgetSettings,
@@ -385,7 +385,14 @@ export {
 export { isAdminRelativePath } from "./domains/widgets/admin-path";
 // The admin's robots directives, for its layout's metadata and the admin's own
 // fallback tag.
-export { ADMIN_ROBOTS, adminMetadata } from "./domains/admin-metadata";
+export {
+  ADMIN_BRANDING_ELEMENT_ID,
+  ADMIN_ROBOTS,
+  adminBrandingJson,
+  adminMetadata,
+  adminMetadataFor,
+  type AdminPageBranding,
+} from "./domains/admin-metadata";
 // The settings the sheet draws beyond field configs (a collection, and a
 // filter, sort or grouping over it), and the union every rule reads, so the
 // admin's controls and reset are typed by core's vocabulary, not a copy of it.
@@ -469,6 +476,7 @@ export {
   LIST_DENSITIES,
   type ListDensity,
   effectiveWidgetLimit,
+  listEntries,
 } from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this

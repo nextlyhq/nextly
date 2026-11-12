@@ -29,6 +29,16 @@ export function defaultSeoFields(): FieldConfig[] {
       // Search engines truncate descriptions past ~160 chars.
       maxLength: 160,
     }),
+    // The social card's own text, where a person wants it to differ from the
+    // Google title and description; empty, the card uses those.
+    text({
+      name: "socialTitle",
+      label: "Title when shared",
+    }),
+    textarea({
+      name: "socialDescription",
+      label: "Description when shared",
+    }),
     upload({
       name: "ogImage",
       label: "Social Share Image",
@@ -38,10 +48,24 @@ export function defaultSeoFields(): FieldConfig[] {
       name: "canonical",
       label: "Canonical URL",
     }),
+    // Set when the page first appeared on another site, which is the one
+    // case a typed canonical may point off this site.
+    checkbox({
+      name: "canonicalElsewhere",
+      label: "This page first appeared on another site",
+      defaultValue: false,
+    }),
     checkbox({
       name: "noindex",
       label: "Hide from search engines",
       defaultValue: false,
+    }),
+    // The structured data type this page is described as, where it differs
+    // from its content type's: one of the keys the SEO tab offers. Empty is
+    // the content type's choice, and a value naming no type is read as empty.
+    text({
+      name: "structuredDataType",
+      label: "Structured data type",
     }),
   ];
 }

@@ -91,13 +91,13 @@ export const Posts = defineCollection({
 
 A field's type decides whether it is translated when it sets no `localized` of its own:
 
-| Field types                                        | Unset `localized`                      |
-| -------------------------------------------------- | -------------------------------------- |
-| `text`, `textarea`, `richText`, `email`, `code`    | Translated                             |
-| Every other type                                   | Shared by every language               |
-| `password`, and any virtual field                  | Shared, whatever `localized` says      |
-| A many-to-many `relationship`                      | Shared, whatever `localized` says: its links are kept in one table for every language |
-| A `component` reference                            | Decided by the component's own fields, whatever `localized` says on the reference |
+| Field types                                     | Unset `localized`                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `text`, `textarea`, `richText`, `email`, `code` | Translated                                                                            |
+| Every other type                                | Shared by every language                                                              |
+| `password`, and any virtual field               | Shared, whatever `localized` says                                                     |
+| A many-to-many `relationship`                   | Shared, whatever `localized` says: its links are kept in one table for every language |
+| A `component` reference                         | Decided by the component's own fields, whatever `localized` says on the reference     |
 
 Set `localized: true` to translate a field of another type, or `localized: false` to share a text field, as `externalId` does above. On a collection or Single that is not localized, the flag does nothing.
 
@@ -255,6 +255,51 @@ it puts live, each time with `locale` set to that language and `locales` to all 
 such as `publish: ({ locale }) => locale !== "fr"` therefore refuses a publish that would put
 French live, and since the publish is one transaction, no language goes live. A publish that
 puts no French live is allowed.
+
+## Each language's address
+
+A page keeps its address per language: `/about` in English, `/ueber` in German. Declare how a
+language's address is formed, so its links to its other languages, its canonical and its sitemap
+entries name the address a visitor opens:
+
+```ts
+export default defineConfig({
+  localization: { locales: ["en", "de"], defaultLocale: "en" },
+  // Under the language's code: /de/ueber. The default language at the root: /about.
+  languageAddresses: { by: "prefix", defaultLanguage: "unprefixed" },
+});
+```
+
+```ts
+// Or each language on a domain of its own, at the same path.
+languageAddresses: {
+  by: "domain",
+  domains: { en: "https://example.com", de: "https://example.de" },
+},
+```
+
+| Rule                                              | German `/ueber` is opened at         |
+| ------------------------------------------------- | ------------------------------------ |
+| None declared, several languages                  | `/de/ueber`, and English `/en/about` |
+| `{ by: "prefix" }`                                | `/de/ueber`, and English `/en/about` |
+| `{ by: "prefix", defaultLanguage: "unprefixed" }` | `/de/ueber`, and English `/about`    |
+| `{ by: "domain", domains: { … } }`                | `https://example.de/ueber`           |
+
+- A site with one language, and no rule, keeps every address as it is.
+- Each domain is a bare origin, `https://example.de`, with no path or trailing slash, and no two
+  languages share one. Where the languages are in `nextly.config.ts`, each needs a domain; a
+  language added in Settings has no address until it is given one.
+- The rule describes your addresses; it does not route them. A
+  [route under a `[locale]` segment](/docs/guides/routing-and-seo#one-route-for-every-language)
+  serves the prefixes. Sending each domain to its language, and the default language's
+  unprefixed addresses to the route, stays with your site, for example a rewrite in
+  `next.config.ts` or a Proxy.
+- `languageAddressOf(path, locale)`, from `nextly` or `@nextlyhq/plugin-sdk`, answers the address
+  a path kept in a language is opened at: `{ status: "resolved", path, origin? }`, or
+  `{ status: "unavailable" }` for a language the site does not have.
+- `addressOfRequest(url)`, from the same two places, answers the other way round: the language
+  and the kept path a request asks for, `{ locale, path }`, or `undefined` where no language
+  serves that address. A request on a host no domain rule names is read in the default language.
 
 ## Related
 

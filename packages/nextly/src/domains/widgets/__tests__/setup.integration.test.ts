@@ -15,8 +15,8 @@
  * - the card for super-admins only: an editor's default dashboard on a new
  *   project carries no setup card;
  * - what each reader's card remembers, kept on the server per reader through
- *   `/api/dashboard/setup`: collapsed, dismissed (and the card then out of
- *   their dashboard), and skipped;
+ *   `/api/dashboard/setup`: collapsed and skipped, and a dismissal the old
+ *   control stored, which no longer takes the card off their dashboard;
  * - "You're all set" said once: the load that finds every step done records
  *   it, and the next layout read carries no setup card and offers no Resume;
  * - registries that cannot be listed make setup "not known", never a step
@@ -445,21 +445,20 @@ describe.each(getConfiguredTestDialects())(
       expect(refused.status).toBe(400);
     });
 
-    it("keeps a dismissal per reader: the card leaves their dashboard and Resume is offered, until they resume it", async () => {
+    it("shows the card again to a reader who dismissed it with the old control, while it is on their layout", async () => {
       const h = await boot(dialect);
+      expect(await dashboardOf(h.ownerId)).toContain(SETUP);
       expect(
         (await call(h.ownerId, "setup", "PUT", { dismissed: true })).status
       ).toBe(200);
 
-      expect(await setupShownTo(h.owner)).toBe(false);
-      expect(await dashboardOf(h.ownerId)).not.toContain(SETUP);
+      // The flag is still stored as it was written, and no longer hides the card: hiding it is
+      // taking it off the layout, which Add widget undoes.
       const state = (await (await call(h.ownerId, "setup", "GET")).json()) as {
         dismissed: boolean;
-        resumable: boolean;
       };
-      expect(state).toMatchObject({ dismissed: true, resumable: true });
-
-      await call(h.ownerId, "setup", "PUT", { dismissed: false });
+      expect(state.dismissed).toBe(true);
+      expect(await setupShownTo(h.owner)).toBe(true);
       expect(await dashboardOf(h.ownerId)).toContain(SETUP);
     });
 

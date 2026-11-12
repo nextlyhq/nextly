@@ -66,7 +66,7 @@ import "@nextlyhq/plugin-form-builder/admin";
 - **Admin routes:** `/admin/collections/forms` and `/admin/collections/form-submissions`
 - **Collections:** `forms`, `form-submissions`
 - **Form lifecycle states:** Draft, Published, Closed
-- **Optional integrations:** email notifications, a `form.submission.created` webhook through Nextly's own webhooks, spam protection (honeypot, rate limit, reCAPTCHA v3)
+- **Optional integrations:** email notifications, a `form.submission.created` webhook through Nextly's own webhooks, spam protection (honeypot, rate limit, and a reCAPTCHA v3 or Cloudflare Turnstile bot check verified on the server)
 
 ### Submission privacy
 

@@ -429,14 +429,29 @@ export interface FormBuilderPluginOptions {
     honeypot?: boolean;
 
     /**
-     * Enable reCAPTCHA v3.
-     * @default false
+     * Google reCAPTCHA v3: a score for each visitor, in the background.
+     * `enabled` makes it the site default for forms whose bot check is "Site
+     * default". The token is verified on the server with `secretKey`; the
+     * visitor's form renders the widget with `siteKey`.
+     * @default { enabled: false }
      */
     recaptcha?: {
       enabled: boolean;
       siteKey?: string;
       secretKey?: string;
-      scoreThreshold?: number; // 0.0 - 1.0
+      /** Below this score (0.0 to 1.0) a visitor is a bot. @default 0.5 */
+      scoreThreshold?: number;
+    };
+
+    /**
+     * Cloudflare Turnstile: a check in the background that rarely shows a
+     * puzzle. `enabled` makes it the site default when reCAPTCHA's is not.
+     * @default { enabled: false }
+     */
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
 
     /**
@@ -930,6 +945,12 @@ export interface ConditionalLogicCondition {
 // Form Settings Types
 // ============================================================
 
+/** How a form tells one person's response from another's. */
+export type OneResponseMode = "off" | "email" | "browser" | "ip";
+
+/** Which bot check a form asks for. */
+export type BotCheckMode = "default" | "off" | "recaptcha" | "turnstile";
+
 /**
  * Form settings and behavior.
  */
@@ -970,8 +991,59 @@ export interface FormSettings {
     value: string; // Document ID
   };
 
-  /** Allow multiple submissions from same IP (default true) */
+  /**
+   * Allow multiple submissions from same IP (default true).
+   * @deprecated Read as `oneResponse` (true is `"off"`, false is `"ip"`);
+   * no longer written.
+   */
   allowMultipleSubmissions?: boolean;
+
+  /**
+   * One response per person, and how a person is told apart: `"off"` allows
+   * several; `"email"` by the answer to `oneResponseField`, `"browser"` by a
+   * token the browser keeps, `"ip"` by network address.
+   *
+   * @default "off"
+   */
+  oneResponse?: OneResponseMode;
+
+  /** The email field `oneResponse: "email"` reads, by name. */
+  oneResponseField?: string;
+
+  /**
+   * Which run of one-response checks the form is on: a whole number from 0,
+   * moved on when the mode changes so earlier responses count afresh.
+   *
+   * @default 0
+   */
+  oneResponseVersion?: number;
+
+  /**
+   * The bot check: `"default"` follows the plugin's option, `"off"` none, or
+   * a named provider.
+   *
+   * @default "default"
+   */
+  botCheck?: BotCheckMode;
+
+  /** When the form stops taking submissions, as an ISO date and time. */
+  closesAt?: string;
+
+  /** How many submissions the form takes before it closes; none for no limit. */
+  submissionLimit?: number;
+
+  /**
+   * Whether a submission keeps the visitor's IP address and browser.
+   *
+   * @default true
+   */
+  storeIpAndBrowser?: boolean;
+
+  /** How many days submissions are kept; none to keep them. */
+  keepDays?: number;
+
+  /** A note about the form, for people in the admin only. */
+  internalNote?: string;
 
   /**
    * Per-form honeypot override. Unset inherits the plugin's
@@ -982,6 +1054,8 @@ export interface FormSettings {
   /**
    * Per-form reCAPTCHA override. Unset inherits the plugin's
    * `spamProtection.recaptcha.enabled`; the form wins where set.
+   * @deprecated Read as `botCheck` (unset is `"default"`, true
+   * `"recaptcha"`, false `"off"`); no longer written.
    */
   captchaEnabled?: boolean;
 
@@ -1166,6 +1240,11 @@ export interface ResolvedFormBuilderConfig {
       siteKey?: string;
       secretKey?: string;
       scoreThreshold?: number;
+    };
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
     rateLimit?: {
       maxSubmissions: number;

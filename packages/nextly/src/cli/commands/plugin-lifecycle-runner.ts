@@ -34,6 +34,7 @@ import {
   type PluginLifecycleRecord,
 } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
@@ -151,6 +152,21 @@ export function pluginModuleDownStatements(
  * registry, and `nextly migrate` creates both. Without them, an install would
  * fail on a missing table part way through, after deciding nothing useful.
  */
+/** The reason the refusal below records, which callers tell it apart by. */
+const DATABASE_NOT_MIGRATED = "database-not-migrated";
+
+/**
+ * Whether `error` is the refusal of a database `nextly migrate` has not
+ * prepared, which `nextly plugins add` reports as a step its build takes
+ * rather than as a failure.
+ */
+export function isDatabaseNotMigrated(error: unknown): boolean {
+  return (
+    error instanceof NextlyError &&
+    error.logContext?.reason === DATABASE_NOT_MIGRATED
+  );
+}
+
 async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
   const required = ["nextly_schema_events", SCHEMA_OWNERS_TABLE];
   const present = await Promise.all(
@@ -162,7 +178,7 @@ async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
     reason: "state",
     message:
       'This database has not been migrated yet. Run "nextly migrate" before installing or uninstalling a plugin.',
-    logContext: { reason: "database-not-migrated", missing },
+    logContext: { reason: DATABASE_NOT_MIGRATED, missing },
   });
 }
 
@@ -777,14 +793,19 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         dialect
       ).read()
     );
+  // The record and the stored schema version in one transaction: an install
+  // or an uninstall changes the schema the app serves, so the version's count
+  // moves with the record that says it happened (`writeRegistryRows`).
   const recordLifecycle = (
     plugin: LifecyclePlugin,
     record: PluginLifecycleRecord
   ): Promise<void> =>
-    recordPluginLifecycle(
-      new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect),
-      plugin.name,
-      record
+    writeRegistryRows(drizzleAdapter, tx =>
+      recordPluginLifecycle(
+        new SchemaEventsRepository(tx.getDrizzle(), dialect),
+        plugin.name,
+        record
+      )
     );
 
   return {

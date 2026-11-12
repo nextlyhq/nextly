@@ -78,7 +78,8 @@ import {
   type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
-import { refuseMovesOntoTakenColumns } from "../../schema/rename-target";
+import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
+import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -460,10 +461,13 @@ export class SingleMetadataService {
     // row owns the slug and refuses every retry, which is a worse state than the orphan it
     // prevents. That recovery half is the migration lock this relocation exists to unblock, and the
     // ordering changes with it rather than before it.
-    const record = await this.registry.registerSingle({
-      ...input,
-      migrationStatus,
-    });
+    // The row and the stored schema version in one transaction, so the
+    // version's count moves with the save it records (`writeRegistryRows`);
+    // the permissions are seeded once it has committed.
+    const record = await this.registry.registerSingle(
+      { ...input, migrationStatus },
+      { writeRow: write => writeRegistryRowsWith(this.adapter, write) }
+    );
 
     return { record, migrationStatus };
   }
@@ -841,9 +845,11 @@ export class SingleMetadataService {
     }
 
     // 3. RECORD, with the outcome already known.
-    const record = await this.registry.updateSingle(input.slug, updateData, {
-      source: "ui",
-    });
+    // The row and the stored schema version in one transaction
+    // (`writeRegistryRows`).
+    const record = await writeRegistryRowsWith(this.adapter, () =>
+      this.registry.updateSingle(input.slug, updateData, { source: "ui" })
+    );
 
     return { record, migrationStatus, refusedSettings };
   }
@@ -882,35 +888,19 @@ export class SingleMetadataService {
   ): Promise<void> {
     const adapter = this.adapter;
     if (!adapter || input.fields === undefined) return;
-    const previousFields = (input.existing.fields ??
-      []) as unknown as FieldDefinition[];
-    const { DynamicCollectionSchemaService } = await import(
-      "../../dynamic-collections/services/dynamic-collection-schema-service"
-    );
-    const rename = new DynamicCollectionSchemaService(
-      undefined,
-      this.dialect
-    ).detectFieldRename(previousFields, input.fields);
-    const columns = rename ? await this.renamedColumns(rename) : undefined;
-    if (!rename || !columns) return;
-    const { isFieldLocalized } = await import("../../i18n/classify-fields");
-    const mainTable = input.existing.tableName;
-    const companionTable = `${mainTable}_locales`;
-    await refuseMovesOntoTakenColumns(
+    await refuseRenamedFieldOntoTakenColumn(
       adapter,
-      [
-        {
-          field: rename.to.name,
-          fromTable: isFieldLocalized(rename.from, input.wasLocalized)
-            ? companionTable
-            : mainTable,
-          fromColumn: columns.from,
-          toTable: isFieldLocalized(rename.to, input.isLocalized)
-            ? companionTable
-            : mainTable,
-          toColumn: columns.to,
-        },
-      ],
+      {
+        previousFields: (input.existing.fields ??
+          []) as unknown as FieldDefinition[],
+        fields: input.fields,
+        mainTable: input.existing.tableName,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        dialect: adapter.getCapabilities().dialect,
+        // A Single's table is built by the collection's generator.
+        builtBy: "collection",
+      },
       { single: input.slug }
     );
   }

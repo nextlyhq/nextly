@@ -26,7 +26,7 @@ import { cn } from "@admin/lib/utils";
 import { useSuppressedChrome } from "../ChromeSuppression";
 
 import { isContentSection } from "./lib/content-rail";
-import { isSubSidebarOpen } from "./lib/has-sub-sidebar";
+import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import {
   subSidebarBorderClass,
   subSidebarHoldsWidth,
@@ -69,6 +69,10 @@ export function SubSidebarPanel({
   const layout = {
     isMobile,
     hasSubSidebar,
+    // From the selection alone, which follows the route: the track is held
+    // from the first paint on a page whose section has a panel, and absent on
+    // one whose section has none.
+    sectionHasPanel: isSubSidebarCategory(selectedMain, isFolderTreeVisible),
     released: suppressed.has("subSidebar"),
   };
 
@@ -81,9 +85,10 @@ export function SubSidebarPanel({
       className={cn(
         "flex flex-col bg-background overflow-hidden shrink-0",
         // The width is one decision (`subSidebarHoldsWidth`): on the wide
-        // layout the track keeps it whether or not a panel is showing, so the
-        // main column beside it never moves; on the narrow layout the panel
-        // overlays inside the drawer and has width only while open.
+        // layout the track has it on a page whose section owns a panel, from
+        // the first paint, and none on a page without one; on the narrow
+        // layout the panel overlays inside the drawer and has width only while
+        // open.
         subSidebarHoldsWidth(layout) ? "w-64" : "w-0",
         subSidebarBorderClass(layout),
         isMobile && "relative",
@@ -98,7 +103,7 @@ export function SubSidebarPanel({
         track's edge. What arrives in the track fades in, under motion-safe, so
         it reads as the panel opening in place rather than appearing.
       */}
-      <div className="h-16 px-6 flex items-center  border-b border-border">
+      <div className="h-(--admin-bar-height) shrink-0 px-6 flex items-center border-b border-border">
         {hasSubSidebar ? (
           <span className="font-bold text-base tracking-tight capitalize text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
             {panelTitle(selectedMain, standaloneLabel)}

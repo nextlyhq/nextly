@@ -121,6 +121,21 @@ field marked `required` is kept as optional while its type is off, so an entry s
 then needs no value for it. A type made in the Schema Builder takes the change when the
 site next starts.
 
+To let those values go, run `nextly prune`. It lists the kept columns with everything
+else it would drop, and asks first; `--accept-data-loss` (or naming each
+`table.column`) agrees without a prompt.
+
+- **A site without migration files** (it applies its schema with dev push or
+  `nextly db:sync`): the prune drops the kept columns from the database.
+- **A site with migration files:** the prune writes a migration that drops them,
+  as `nextly migrate:create` would, and every environment drops them when it next
+  runs `nextly migrate`. Dropping them from one database alone would leave its
+  next migration refusing to run, since the migration history still lists the
+  columns. The migration carries any other change your configuration has pending
+  too, as `migrate:create` does. A translated field's column in the type's translations table
+  stays: a migration never drops a translations table's column, as for any field
+  that leaves a type.
+
 `typesReachedBy(scope, types)` gives the same answer to anything else that needs to
 know which types a scope covers.
 

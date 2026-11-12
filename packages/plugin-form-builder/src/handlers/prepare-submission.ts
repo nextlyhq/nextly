@@ -23,6 +23,7 @@
 import { stripHtmlTags } from "nextly";
 
 import type { AnyFormField } from "../types";
+import { fieldsHiddenByCondition } from "../utils/condition-visibility";
 import {
   generateZodSchema,
   getValidationErrors,
@@ -30,6 +31,8 @@ import {
   type ValidationIssue,
   transformFormData,
 } from "../utils/generate-schema";
+
+import type { BotTokens } from "./bot-check";
 
 /**
  * Form field types that accept free-text string input from end users.
@@ -115,6 +118,17 @@ export interface SubmissionOriginMarks {
    * the one the row names.
    */
   form?: Record<string, unknown>;
+  /**
+   * The bot-check tokens the submission brought. The handler keeps only the
+   * form's own fields in the row, so the tokens travel here to the seam,
+   * which verifies them once: a token is spent when it is verified.
+   */
+  botTokens?: BotTokens;
+  /**
+   * The rate limit has already counted this submission, on the handler's way
+   * to judging its bot check; the seam does not count it again.
+   */
+  rateCounted?: boolean;
 }
 
 /** Mark `row` as this plugin's own write, and hand it back. */
@@ -223,7 +237,13 @@ export function prepareSubmission({
     return { data: transformed };
   }
 
-  const result = generateZodSchema(fields).safeParse(transformed);
+  // Only the fields the visitor was shown are asked for: a required field a
+  // condition hid could never be answered, and refusing over it would leave
+  // the form impossible to send. What is stored is unchanged.
+  const hidden = fieldsHiddenByCondition(fields, transformed);
+  const result = generateZodSchema(
+    fields.filter(field => !hidden.has(field.name))
+  ).safeParse(transformed);
   if (!result.success) {
     // The transformed payload comes back with the errors rather than nothing,
     // so a caller that wants to store it anyway has the same value the valid
@@ -239,5 +259,8 @@ export function prepareSubmission({
     };
   }
 
-  return { data: result.data };
+  // The answers as transformed, with the schema's parse over them: a field
+  // left out of the checks (one a condition hid) keeps the answer it was sent,
+  // since the parse only returns the fields it checked.
+  return { data: { ...transformed, ...result.data } };
 }

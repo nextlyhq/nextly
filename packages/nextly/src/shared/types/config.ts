@@ -27,6 +27,7 @@ import {
 } from "../../domains/email/retention-config";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
+  LanguageAddressRule,
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
@@ -68,6 +69,7 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
 
+import { DEFAULT_MIGRATIONS_DIR } from "./migrations-dir-default";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
 
 // ============================================================
@@ -967,6 +969,15 @@ export interface NextlyConfig {
    */
   localization?: LocalizationConfig;
 
+  /**
+   * How each language's public address is formed: under a prefix
+   * (`/de/about`) or on a domain of its own. Kept apart from `localization`
+   * so a site whose languages are managed in Settings can declare it too.
+   * Omitted, a site with several languages has every language prefixed.
+   * @experimental
+   */
+  languageAddresses?: LanguageAddressRule;
+
   /** Outbound webhook configuration. */
   webhooks?: WebhookConfig;
   /** Audit and activity trail policy. */
@@ -1121,6 +1132,9 @@ export interface SanitizedNextlyConfig {
   /** Normalized multilingual content configuration (undefined when i18n is off). */
   localization?: SanitizedLocalizationConfig;
 
+  /** How each language's public address is formed, as declared. */
+  languageAddresses?: LanguageAddressRule;
+
   /**
    * Resolved webhook retention policy, or null when retention is switched off.
    * Always present after sanitization so consumers never re-resolve it.
@@ -1179,7 +1193,8 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   // and undefined is what "public" means here.
   postgres: {},
   schemasDir: "./src/db/schemas/collections",
-  migrationsDir: "./src/db/migrations",
+  // Read from its own module, which `withNextly` reads without this one.
+  migrationsDir: DEFAULT_MIGRATIONS_DIR,
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
   // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
@@ -1486,6 +1501,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     localization: config.localization
       ? normalizeLocalization(config.localization)
       : undefined,
+    languageAddresses: config.languageAddresses,
     // Resolved once at boot so nothing downstream re-derives it. Null means the
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.

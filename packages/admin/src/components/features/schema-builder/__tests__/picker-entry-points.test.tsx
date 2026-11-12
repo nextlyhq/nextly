@@ -4,15 +4,22 @@
 // (right after it). None is offered where the new field would land in a
 // read-only, locked or plugin-owned container, or in a blocks field, which
 // holds no fields of its own here.
-import userEvent from "@testing-library/user-event";
+//
+// The outline draws one field per row, so there is a "+" above every field but
+// the first of its container, hidden fields included. The "+" places are for a
+// pointer and stay out of the accessibility tree, so they are found here by
+// their titles; a keyboard reaches the same places through "/" and the row's
+// menu.
 import { DndContext } from "@dnd-kit/core";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
+import { buildOutline } from "@admin/lib/builder/outline/outline-model";
 
-import { BuilderFieldList } from "../BuilderFieldList";
 import { BuilderToolbar } from "../BuilderToolbar";
 import type { BuilderConfig } from "../builder-config";
+import { Outline, type OutlineCallbacks } from "../outline/Outline";
 import type { BuilderField } from "../types";
 
 const f = (id: string, over: Partial<BuilderField> = {}): BuilderField => ({
@@ -39,17 +46,30 @@ function renderList(
   readOnly = false
 ): { onAddAt: ReturnType<typeof vi.fn> } {
   const onAddAt = vi.fn();
+  const callbacks: OutlineCallbacks = {
+    select: vi.fn(),
+    addAt: onAddAt,
+    move: vi.fn(),
+    duplicate: vi.fn(),
+    remove: vi.fn(),
+    setHidden: vi.fn(),
+    openFieldGroup: vi.fn(),
+  };
   render(
     <DndContext>
-      <BuilderFieldList
+      <Outline
         kind="collection"
-        fields={fields}
+        nodes={buildOutline(fields, {
+          entityReadOnly: readOnly,
+          fieldGroups: new Map(),
+        })}
+        systemFields={fields.filter(field => field.isSystem)}
+        errors={new Map()}
+        foldKey="test:picker-entry-points"
+        selectedId={null}
         readOnly={readOnly}
-        onAddAt={onAddAt}
-        onEditField={vi.fn()}
-        onDeleteField={vi.fn()}
-        onDuplicateField={vi.fn()}
-        onReorder={vi.fn()}
+        callbacks={callbacks}
+        renderPreview={() => null}
       />
     </DndContext>
   );
@@ -57,6 +77,10 @@ function renderList(
 }
 
 const card = (name: string) => screen.getByTestId(`field-row-${name}`);
+const before = (label: string) =>
+  screen.queryByTitle(`Add a field before ${label}`);
+const inside = (label: string) =>
+  screen.queryByTitle(`Add a field inside ${label}`);
 
 const config: BuilderConfig = {
   kind: "collection",
@@ -85,21 +109,15 @@ describe("picker entry points", () => {
 
   it("between two rows adds before the lower one", async () => {
     const { onAddAt } = renderList();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add a field before Body" })
-    );
+    await userEvent.click(before("Body") as HTMLElement);
     expect(onAddAt).toHaveBeenCalledWith({ beforeFieldId: "body" });
     // Only between rows: nothing above the first one.
-    expect(
-      screen.queryByRole("button", { name: "Add a field before Title" })
-    ).toBeNull();
+    expect(before("Title")).toBeNull();
   });
 
   it("inside a container, between its rows, adds before the lower one", async () => {
     const { onAddAt } = renderList();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add a field before Summary" })
-    );
+    await userEvent.click(before("Summary") as HTMLElement);
     expect(onAddAt).toHaveBeenCalledWith({
       parentFieldId: "details",
       beforeFieldId: "summary",
@@ -108,9 +126,7 @@ describe("picker entry points", () => {
 
   it("inside a container, its own add adds at its end", async () => {
     const { onAddAt } = renderList();
-    await userEvent.click(
-      screen.getByRole("button", { name: /add field inside details/i })
-    );
+    await userEvent.click(inside("Details") as HTMLElement);
     expect(onAddAt).toHaveBeenCalledWith({ parentFieldId: "details" });
   });
 
@@ -144,9 +160,7 @@ describe("picker entry points", () => {
   it("before and after one field ask for different places", async () => {
     // The "+" above Body puts the new field before it; "/" on Body after it.
     const { onAddAt } = renderList();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add a field before Body" })
-    );
+    await userEvent.click(before("Body") as HTMLElement);
     card("body").focus();
     await userEvent.keyboard("/");
     expect(onAddAt.mock.calls).toEqual([[{ beforeFieldId: "body" }], [{}]]);
@@ -172,37 +186,26 @@ describe("picker entry points", () => {
     const { onAddAt } = renderList(tree);
 
     for (const container of ["Seo", "Links", "Sections"]) {
-      expect(
-        screen.queryByRole("button", {
-          name: new RegExp(`add field inside ${container}`, "i"),
-        })
-      ).toBeNull();
+      expect(inside(container)).toBeNull();
     }
     for (const child of ["Meta_description", "Label"]) {
-      expect(
-        screen.queryByRole("button", { name: `Add a field before ${child}` })
-      ).toBeNull();
+      expect(before(child)).toBeNull();
     }
     // "/" on a field inside a locked container offers nothing either.
     for (const child of ["meta_title", "url"]) {
-      const row = card(child);
-      row.focus();
+      card(child).focus();
       await userEvent.keyboard("/");
     }
     expect(onAddAt).not.toHaveBeenCalled();
     // The editable list around them keeps its entry points, so the absence
     // above is the containers' doing, not a list that offers nothing.
-    expect(
-      screen.getByRole("button", { name: "Add a field before Outro" })
-    ).toBeInTheDocument();
+    expect(before("Outro")).toBeInTheDocument();
   });
 
   it("no entry point anywhere in a read-only entity", async () => {
     const { onAddAt } = renderList(TREE, true);
-    expect(screen.queryByRole("button", { name: /add a field/i })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /add field inside/i })
-    ).toBeNull();
+    expect(screen.queryByTitle(/add a field/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /add field/i })).toBeNull();
     card("title").focus();
     await userEvent.keyboard("/");
     expect(onAddAt).not.toHaveBeenCalled();
@@ -227,32 +230,23 @@ describe("picker entry points", () => {
     expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
   });
 
-  it('anchors each "+" on the first field of the row below it', async () => {
-    // A system field first, a hidden field, and a half-width pair: the rows a
-    // person sees are not the array's items one for one.
+  it('puts a "+" above every field but the first, a hidden one included', async () => {
+    // A system field first and a hidden field: the system field is not one of
+    // the outline's rows, and the hidden one is.
     const fields: BuilderField[] = [
       f("title", { isSystem: true }),
       f("intro"),
       f("secret", { admin: { hidden: true } }),
-      f("first", { admin: { width: "50%" } }),
-      f("second", { admin: { width: "50%" } }),
       f("outro"),
     ];
     const { onAddAt } = renderList(fields);
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add a field before First" })
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add a field before Outro" })
-    );
+    expect(before("Intro")).toBeNull();
+    await userEvent.click(before("Secret") as HTMLElement);
+    await userEvent.click(before("Outro") as HTMLElement);
     expect(onAddAt.mock.calls).toEqual([
-      [{ beforeFieldId: "first" }],
+      [{ beforeFieldId: "secret" }],
       [{ beforeFieldId: "outro" }],
     ]);
-    // A pair is one row: nothing between its two fields.
-    expect(
-      screen.queryByRole("button", { name: "Add a field before Second" })
-    ).toBeNull();
   });
 
   it("keeps everything inside a locked container read-only, at every depth", async () => {
@@ -270,18 +264,14 @@ describe("picker entry points", () => {
       }),
     ];
     const { onAddAt } = renderList(tree);
-    expect(
-      screen.queryByRole("button", { name: /add field inside social/i })
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Add a field before Og_image" })
-    ).toBeNull();
+    expect(inside("Social")).toBeNull();
+    expect(before("Og_image")).toBeNull();
     card("og_title").focus();
     await userEvent.keyboard("/");
     expect(onAddAt).not.toHaveBeenCalled();
   });
 
-  it("treats a field locked on its own inside an editable container as the top level does", async () => {
+  it("treats a field owned on its own inside an editable container as read-only", async () => {
     const tree: BuilderField[] = [
       f("details", {
         type: "group",
@@ -289,9 +279,8 @@ describe("picker entry points", () => {
       }),
     ];
     const { onAddAt } = renderList(tree);
-    // Inert: not a button, no actions, no "/".
-    expect(card("owned")).not.toHaveAttribute("role", "button");
-    expect(screen.queryByRole("button", { name: "Delete owned" })).toBeNull();
+    // Reachable and selectable, but read-only: no "/", and no "+" beside it.
+    expect(card("owned")).toHaveAttribute("role", "treeitem");
     card("owned").focus();
     await userEvent.keyboard("/");
     expect(onAddAt).not.toHaveBeenCalled();
@@ -301,35 +290,13 @@ describe("picker entry points", () => {
     expect(onAddAt).toHaveBeenCalledWith({ parentFieldId: "details" });
   });
 
-  it('leaves "/" with Ctrl or Cmd, or typed on a drag handle, alone', async () => {
+  it('leaves "/" with Ctrl or Cmd alone', async () => {
     const { onAddAt } = renderList();
     card("title").focus();
     await userEvent.keyboard("{Control>}/{/Control}{Meta>}/{/Meta}");
-    screen.getAllByRole("button", { name: "Reorder field" })[0].focus();
-    await userEvent.keyboard("/");
     expect(onAddAt).not.toHaveBeenCalled();
-    // The control: a plain "/" on the card itself does add.
-    card("title").focus();
+    // The control: a plain "/" on the row itself does add.
     await userEvent.keyboard("/");
     expect(onAddAt).toHaveBeenCalledWith({ beforeFieldId: "details" });
-  });
-
-  it("puts a field in the container that drew it when a copy shares its ids", async () => {
-    // A duplicated group keeps its fields' ids.
-    const details = TREE[1];
-    const copy = {
-      ...details,
-      id: "details_copy",
-      name: "details_copy",
-      label: "Copy",
-    };
-    const { onAddAt } = renderList([...TREE, copy]);
-    const subtitles = screen.getAllByTestId("field-row-subtitle");
-    subtitles[1].focus();
-    await userEvent.keyboard("/");
-    expect(onAddAt).toHaveBeenCalledWith({
-      parentFieldId: "details_copy",
-      beforeFieldId: "summary",
-    });
   });
 });

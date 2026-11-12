@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-import { text } from "nextly";
+import { select, text } from "nextly";
 import type { FieldConfig } from "nextly";
 import { describe, expect, it } from "vitest";
 
@@ -53,9 +53,13 @@ describe("seoPlugin", () => {
     ).toEqual([
       "metaTitle",
       "metaDescription",
+      "socialTitle",
+      "socialDescription",
       "ogImage",
       "canonical",
+      "canonicalElsewhere",
       "noindex",
+      "structuredDataType",
     ]);
   });
 
@@ -66,22 +70,89 @@ describe("seoPlugin", () => {
     expect(seoGroup(plugin).fields).toBe(custom);
   });
 
-  it("serves the sitemap route by default", () => {
-    const plugin = seoPlugin({ collections: ["pages"] });
-    expect(plugin.contributes?.routes?.[0]).toMatchObject({
-      method: "GET",
-      path: "/sitemap.xml",
-      public: true,
-    });
+  it("serves the sitemap and robots.txt at the site root by default, and the sitemap at its old address too", () => {
+    const routes = seoPlugin({ collections: ["pages"] }).contributes?.routes;
+    expect(
+      routes?.map(route => [
+        route.method,
+        route.path,
+        route.mount,
+        route.public,
+      ])
+    ).toEqual([
+      ["GET", "/sitemap.xml", "root", true],
+      ["GET", "/robots.txt", "root", true],
+      ["GET", "/sitemap.xml", undefined, true],
+      ["POST", "/share-image", undefined, undefined],
+      // The settings screen's reads, for a signed-in reader of the settings.
+      ["GET", "/settings/content-types", undefined, undefined],
+      ["GET", "/settings/document", undefined, undefined],
+      ["POST", "/resolve", undefined, undefined],
+    ]);
   });
 
-  it("omits the sitemap route when sitemap is disabled", () => {
+  it("offers making a share image to a person who may add to the media library", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    // No public enumeration route when the sitemap is turned off.
-    expect(plugin.contributes?.routes).toBeUndefined();
+    const route = plugin.contributes?.routes?.find(
+      ({ path }) => path === "/share-image"
+    );
+    expect(route).toMatchObject({
+      method: "POST",
+      requiredPermission: "create-media",
+    });
+    expect(route?.public).toBeUndefined();
+  });
+
+  it("omits the sitemap routes when sitemap is disabled, and keeps robots.txt", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      "/robots.txt",
+      "/share-image",
+      "/settings/content-types",
+      "/settings/document",
+      "/resolve",
+    ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
   });
+
+  it("serves neither file with both turned off", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      robots: false,
+    });
+    expect(plugin.contributes?.routes?.map(route => route.path)).toEqual([
+      "/share-image",
+      "/settings/content-types",
+      "/settings/document",
+      "/resolve",
+    ]);
+  });
+
+  it("rejects a sitemap file size smaller than an empty file", () => {
+    expect(() =>
+      seoPlugin({ collections: ["pages"], sitemap: { maxBytesPerFile: 100 } })
+    ).toThrow(/maxBytesPerFile must be at least/);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    "rejects a sitemap file size of %s",
+    value => {
+      expect(() =>
+        seoPlugin({
+          collections: ["pages"],
+          sitemap: { maxUrlsPerFile: value },
+        })
+      ).toThrow(/maxUrlsPerFile must be a positive whole number/);
+      expect(() =>
+        seoPlugin({
+          collections: ["pages"],
+          sitemap: { maxBytesPerFile: value },
+        })
+      ).toThrow(/maxBytesPerFile must be a positive whole number/);
+    }
+  );
 
   it("rejects a sitemap collection outside the configured collections", () => {
     // A typo'd / non-extended slug would 500 the public route at request time;
@@ -113,9 +184,13 @@ describe("seoPlugin", () => {
     expect(fieldNames(defaultSeoFields())).toEqual([
       "metaTitle",
       "metaDescription",
+      "socialTitle",
+      "socialDescription",
       "ogImage",
       "canonical",
+      "canonicalElsewhere",
       "noindex",
+      "structuredDataType",
     ]);
   });
 });
@@ -147,7 +222,12 @@ describe("the dashboard card the plugin contributes", () => {
     // `admin.widgets`, and no data source under `widgetSources`.
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
-    expect(plugin.contributes?.admin).toBeUndefined();
+    expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
+    // Its admin contributions are the SEO tab and its side panel line.
+    expect(plugin.contributes?.admin?.contributions).toEqual([
+      expect.objectContaining({ kind: "tab" }),
+      expect.objectContaining({ kind: "sidebarSection" }),
+    ]);
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
     expect(plugin.contributes).toBeDefined();
@@ -173,5 +253,128 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.nextly).toBe(`>=${plugin.version}`);
+  });
+});
+
+describe("the SEO tab the plugin contributes", () => {
+  it("adds one tab to each extended collection's and Single's page, editing the seo group", () => {
+    const plugin = seoPlugin({
+      collections: ["pages", "posts"],
+      singles: ["homepage"],
+      sitemap: false,
+    });
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual([
+      "pages",
+      "posts",
+      "homepage",
+    ]);
+    expect(plugin.contributes?.admin?.contributions).toEqual([
+      {
+        id: "nextlyhq-plugin-seo.tab",
+        kind: "tab",
+        place: "collection.edit",
+        label: "SEO",
+        component: "@nextlyhq/plugin-seo/admin#SeoTab",
+        collections: ["pages", "posts"],
+        fields: ["seo"],
+      },
+      {
+        id: "nextlyhq-plugin-seo.status",
+        kind: "sidebarSection",
+        place: "collection.edit",
+        label: "Search",
+        component: "@nextlyhq/plugin-seo/admin#SeoStatusSection",
+        after: "details",
+        collections: ["pages", "posts"],
+      },
+      {
+        id: "nextlyhq-plugin-seo.single-tab",
+        kind: "tab",
+        place: "single.edit",
+        label: "SEO",
+        component: "@nextlyhq/plugin-seo/admin#SeoTab",
+        singles: ["homepage"],
+        fields: ["seo"],
+      },
+      {
+        id: "nextlyhq-plugin-seo.single-status",
+        kind: "sidebarSection",
+        place: "single.edit",
+        label: "Search",
+        component: "@nextlyhq/plugin-seo/admin#SeoStatusSection",
+        after: "details",
+        singles: ["homepage"],
+      },
+    ]);
+  });
+
+  it("adds no Single's tab while it extends no Single", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(
+      plugin.contributes?.admin?.contributions?.map(each => each.place)
+    ).toEqual(["collection.edit", "collection.edit"]);
+  });
+});
+
+describe("the SEO tab and fields of a project's own", () => {
+  it("leaves a group the tab cannot edit whole among the page's own fields", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      fields: [
+        text({ name: "metaTitle" }),
+        text({ name: "metaDescription" }),
+        text({ name: "focusKeyword" }),
+      ],
+    });
+    expect(plugin.contributes?.admin?.contributions).toBeUndefined();
+  });
+
+  it("leaves a group whose fields say they may not be edited among the page's fields", () => {
+    for (const admin of [
+      { readOnly: true },
+      { disabled: true },
+      { hidden: true },
+      { condition: { field: "metaTitle", equals: "x" } },
+    ]) {
+      const plugin = seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        fields: [
+          text({ name: "metaTitle", admin }),
+          text({ name: "metaDescription" }),
+        ],
+      });
+      expect(
+        plugin.contributes?.admin?.contributions,
+        JSON.stringify(admin)
+      ).toBeUndefined();
+    }
+  });
+
+  it("leaves a group whose fields are of another type than the tab writes", () => {
+    for (const metaTitle of [
+      select({
+        name: "metaTitle",
+        options: [{ label: "A", value: "a" }],
+      }),
+      text({ name: "metaTitle", hasMany: true }),
+    ]) {
+      const plugin = seoPlugin({
+        collections: ["pages"],
+        sitemap: false,
+        fields: [metaTitle, text({ name: "metaDescription" })],
+      });
+      expect(plugin.contributes?.admin?.contributions).toBeUndefined();
+    }
+  });
+
+  it("draws the tab for a group of fields it edits, fewer than the defaults", () => {
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
+    });
+    expect(plugin.contributes?.admin?.contributions).toHaveLength(2);
   });
 });

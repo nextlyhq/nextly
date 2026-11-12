@@ -31,15 +31,62 @@ entirely on npm.
   "files": ["dist"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.mjs" },
-    "./admin": { "types": "./dist/admin.d.ts", "import": "./dist/admin.mjs" }
+    "./admin": { "types": "./dist/admin.d.ts", "import": "./dist/admin.mjs" },
   },
-  "peerDependencies": { "nextly": "^0.0.2-alpha.67" }
+  "peerDependencies": { "nextly": "^0.0.2-alpha.67" },
 }
 ```
 
 > **ESM-only:** first-party plugins ship ESM only. CommonJS tooling importing them gets
 > `ERR_PACKAGE_PATH_NOT_EXPORTED`. Either keep your consuming tooling ESM, or ship a
 > dual (ESM+CJS) build if you must support CJS consumers.
+
+## Declaring how a plugin is added
+
+`nextly plugins add <package>` installs a plugin and registers it in the site's config in
+one step. A package whose entry exports one plugin definition, as it is, needs nothing
+more: it is registered as `plugins: [thatExport]`. A plugin made by calling a function,
+or one whose install needs values from the site, says so in its package.json under
+`nextly.plugin`:
+
+```jsonc
+// package.json
+{
+  "nextly": {
+    "plugin": {
+      // The export that is the plugin; "default" for a default export.
+      "export": "acmePlugin",
+      // The export is a function that makes the plugin, called with the options as one object.
+      "call": true,
+      // Values the install asks for, written into the config as the call's options.
+      "options": {
+        "siteUrl": {
+          "description": "The site's production address",
+          "format": "url",
+        },
+      },
+    },
+  },
+}
+```
+
+With that, `nextly plugins add @acme/plugin --option siteUrl=https://example.com` writes
+`plugins: [acmePlugin({ siteUrl: "https://example.com" })]`. Without the option, the
+command asks for it in a terminal, and refuses in a script or CI, naming the flag.
+
+- **`export`** is required: a JavaScript name, or `default`.
+- **`call`** is `false` unless given. `call: true` with no `options` writes
+  `acmePlugin()`.
+- **`options`** need `call: true`. Each has a `description`, which the prompt shows, and
+  a `format`: `text` (the default) or `url`, a full `https://` or `http://` address. Every
+  option listed is asked for.
+
+The command makes the plugin from the declaration before it touches the site's files:
+it imports the entry, calls the export with the options, and checks it gets a plugin
+definition back. A function that throws on the options it was given refuses the run in
+its own words, with the config left as it was. The values land in the site's
+`nextly.config.ts`, which is committed, so never declare a secret as an option: read
+secrets from the environment, as below.
 
 ## Configuration & secrets
 

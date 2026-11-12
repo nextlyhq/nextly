@@ -21,6 +21,7 @@ import { EnvelopeBar } from "./EnvelopeBar";
 import { InboxStrip, shownInboxLine } from "./InboxStrip";
 import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
+import { suppliedNamesFor } from "./sample-data";
 import {
   DEFAULT_VALUES,
   EMAIL_TEMPLATE_FORM_ID,
@@ -33,6 +34,7 @@ import { SendTestDialog } from "./SendTestDialog";
 import { PreviewPane } from "./TemplatePreview";
 import { useDerivedTemplateState } from "./useDerivedTemplateState";
 import { useOwnershipActs, type OwnershipActs } from "./useOwnershipActs";
+import { useTemplateVariables } from "./useTemplateVariables";
 import { useVariableInsertion } from "./useVariableInsertion";
 import { VariableChips } from "./VariablesRail";
 import { ownsContent } from "./workbench-model";
@@ -127,6 +129,7 @@ function ContentColumn({
           isPending={isPending}
           readOnly={!owns}
           liquid={!keptOnOldEngine}
+          suppliedNames={suppliedNamesFor(isLayoutRow)}
           {...editor}
         />
       </div>
@@ -206,6 +209,7 @@ export function EmailTemplateForm({
     variables,
     layoutId,
     fromOverride,
+    replyTo,
   ] = form.watch([
     "htmlContent",
     "plainTextContent",
@@ -217,6 +221,7 @@ export function EmailTemplateForm({
     "variables",
     "layoutId",
     "fromOverride",
+    "replyTo",
   ]);
 
   useEffect(() => {
@@ -258,6 +263,31 @@ export function EmailTemplateForm({
     fromOverride,
     templateId: template?.id,
   });
+
+  // What the template uses but doesn't declare, and what would show blank.
+  const variableCheck = useTemplateVariables({
+    sources: [subject, preheader, htmlContent, plainTextContent],
+    // From address and Reply-To are always rendered by the Liquid engine,
+    // even when the body is kept on the previous one.
+    liquidSources: [fromOverride, replyTo],
+    declared: variables ?? [],
+    data: derived.sampleData,
+    isLayoutRow,
+    liquid: !keptOnOldEngine,
+  });
+  const declareVariable = useCallback(
+    (variableName: string) => {
+      form.setValue(
+        "variables",
+        [
+          ...(form.getValues("variables") ?? []),
+          { name: variableName, description: "", required: false },
+        ],
+        { shouldDirty: true }
+      );
+    },
+    [form]
+  );
 
   // What the editors complete: the declared variables, and the test data's
   // shape for their properties.
@@ -374,7 +404,8 @@ export function EmailTemplateForm({
                 onSampleChange={setSampleOverride}
                 onReset={() => setSampleOverride(null)}
                 sampleError={derived.sampleError}
-                unknownVariables={derived.unknownVariables}
+                check={variableCheck}
+                onDeclare={owns ? declareVariable : undefined}
               />
             )
           }

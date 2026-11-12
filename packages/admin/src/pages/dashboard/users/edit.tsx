@@ -4,6 +4,7 @@ import {
   Alert,
   AlertDescription,
   Button,
+  PageHeader,
   Skeleton,
   Spinner,
 } from "@nextlyhq/ui";
@@ -271,7 +272,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: Invalid user ID
   if (!userId) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription>{USER_MESSAGES.INVALID_USER_ID}</AlertDescription>
         </Alert>
@@ -287,7 +288,7 @@ export default function EditUserPage(): ReactElement {
   // Loading state: Fetching user data
   if (isLoadingUser || isLoadingRoles) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         {/* Accessibility: Announce loading state to screen readers */}
         <div className="sr-only" role="status" aria-live="polite">
           Loading user data
@@ -314,7 +315,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: Failed to fetch user
   if (userError) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription className="flex items-center justify-between">
             <span>
@@ -344,7 +345,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: User not found
   if (!user) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription>{USER_MESSAGES.USER_NOT_FOUND}</AlertDescription>
         </Alert>
@@ -366,45 +367,44 @@ export default function EditUserPage(): ReactElement {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         {/* Breadcrumbs */}
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <UserBreadcrumbs currentPage="edit" />
         </div>
 
         {/* Page Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Edit User</h1>
-            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              Update user details, change roles, or reset the password.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href={ROUTES.USERS}>
-              <Button type="button" variant="outline" disabled={isUpdating}>
-                Cancel
-              </Button>
-            </Link>
-            <Button
-              type="submit"
-              form="edit-user-form"
-              disabled={isUpdating || !!rolesError}
-            >
-              {isUpdating ? (
-                <>
-                  <Spinner size="md" className="mr-2" />
-                  Saving Changes...
-                </>
-              ) : rolesError ? (
-                "Cannot Save (Roles Failed)"
-              ) : (
-                "Save Changes"
-              )}
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="Edit User"
+          description="Update user details, change roles, or reset the password."
+          actions={
+            <>
+              <div className="flex items-center gap-3">
+                <Link href={ROUTES.USERS}>
+                  <Button type="button" variant="outline" disabled={isUpdating}>
+                    Cancel
+                  </Button>
+                </Link>
+                <Button
+                  type="submit"
+                  form="edit-user-form"
+                  disabled={isUpdating || !!rolesError}
+                >
+                  {isUpdating ? (
+                    <>
+                      <Spinner size="md" className="mr-2" />
+                      Saving Changes...
+                    </>
+                  ) : rolesError ? (
+                    "Cannot Save (Roles Failed)"
+                  ) : (
+                    "Save Changes"
+                  )}
+                </Button>
+              </div>
+            </>
+          }
+        />
 
         {/* The page's own card is the `content` built-in: plugins' blocks
             draw around it and their tabs beside it, in the order sent. */}
