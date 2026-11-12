@@ -378,7 +378,9 @@ async function applyBootMigrations(
    * closed and hang every consumer of it.
    */
   const { reloadDynamicTables } = await import("./reload-dynamic-tables");
-  await reloadDynamicTables("[Nextly]");
+  // Inside this step, which is `nextly migrate`'s: the one place a production
+  // start may create a translation table the migrations left missing.
+  await reloadDynamicTables("[Nextly]", { createMissingCompanions: true });
 
   allowBootMigrations();
 }
@@ -447,7 +449,8 @@ async function settleFailedBootMigrations(
    * safe there for the same reason: the reload cannot throw.
    */
   const { reloadDynamicTables } = await import("./reload-dynamic-tables");
-  await reloadDynamicTables("[Nextly]");
+  // Still this step's, as on the success path.
+  await reloadDynamicTables("[Nextly]", { createMissingCompanions: true });
 
   // The app continues on this path, so the gate must open — a swallowed
   // failure that left it pending would hang every consumer forever, turning a
