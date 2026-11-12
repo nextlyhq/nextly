@@ -1842,8 +1842,12 @@ export abstract class DrizzleAdapter {
    * on a UTC server the two agree and nothing is visibly wrong, which is why
    * this survives CI.
    *
-   * Only date columns are touched. A value that is not a `Date` is left as it
-   * is, so a caller that already encoded one is not encoded twice.
+   * Only date values are touched: on a declared date column, by that column's
+   * encoder; on a key the model does not declare, as this dialect's date
+   * column would encode it (`encodeUndeclaredDate`), so the same `Date`
+   * stores the same instant either way. A key declared as some other kind of
+   * column is left to its own encoding. A value that is not a `Date` is left
+   * as it is, so a caller that already encoded one is not encoded twice.
    *
    * Keys may be spelled either way at this point, so both the Drizzle property
    * name and the SQL column name resolve.
@@ -1855,25 +1859,60 @@ export abstract class DrizzleAdapter {
     if (!tableObj || typeof tableObj !== "object" || !data) return data;
 
     const dateColumns = new Map<string, DecodableColumn>();
+    const declared = new Set<string>();
     for (const [jsName, colDef] of Object.entries(
       tableObj as Record<string, unknown>
     )) {
+      const sqlName = (colDef as { name?: unknown } | null)?.name;
+      declared.add(jsName);
+      if (typeof sqlName === "string") declared.add(sqlName);
       if (!isDateColumn(colDef)) continue;
       dateColumns.set(jsName, colDef);
-      const sqlName = (colDef as { name?: unknown }).name;
       if (typeof sqlName === "string") dateColumns.set(sqlName, colDef);
     }
-    if (dateColumns.size === 0) return data;
 
     let encoded: Record<string, unknown> | undefined;
     for (const [key, value] of Object.entries(data)) {
       if (!(value instanceof Date)) continue;
       const column = dateColumns.get(key);
-      if (!column) continue;
+      if (!column && declared.has(key)) continue;
       encoded ??= { ...data };
-      encoded[key] = column.mapToDriverValue(value);
+      encoded[key] = column
+        ? column.mapToDriverValue(value)
+        : this.encodeUndeclaredDate(value);
     }
     return encoded ?? data;
+  }
+
+  /**
+   * The column this dialect declares a date field as, whose own encoder spells
+   * a `Date` written to a key the runtime model does not declare.
+   *
+   * A declared date column encodes its value before it is bound. A key the
+   * model does not know has no column to ask, and a driver handed the `Date`
+   * itself spells it in the server's zone: node-postgres sends the local wall
+   * clock with an offset, which a `timestamp` column drops, so the stored
+   * value moved with the server. Spelled as the declared column would spell
+   * it, the same instant lands whichever way a row is written.
+   *
+   * `null`, the default, leaves the value to the driver, as an adapter built
+   * on this class before the method existed did.
+   */
+  protected undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } | null {
+    return null;
+  }
+
+  /**
+   * A value for a key the runtime model does not declare, with a `Date`
+   * spelled as this dialect's date column spells one
+   * (`undeclaredDateColumn`) and anything else as it is.
+   */
+  protected encodeUndeclaredDate(value: unknown): unknown {
+    if (!(value instanceof Date)) return value;
+    const column = this.undeclaredDateColumn();
+    return column ? column.mapToDriverValue(value) : value;
   }
 
   /**
@@ -3698,12 +3737,14 @@ export abstract class DrizzleAdapter {
 
   /**
    * How a value binds to a column the model does not declare, on a driver
-   * that binds scalars, dates and binary natively: a structured value goes
-   * as JSON text, since what node-postgres and mysql2 make of a bare object
-   * or array is not JSON. For the adapters to hand `transactionUpdate`.
+   * that binds scalars and binary natively: a structured value goes as JSON
+   * text, since what node-postgres and mysql2 make of a bare object or array
+   * is not JSON, and a `Date` as this dialect's date column spells it
+   * (`encodeUndeclaredDate`), as the transactional insert binds one. For the
+   * adapters to hand `transactionUpdate`.
    */
   protected bindUnmodeledStructuredAsJson(value: unknown): unknown {
-    return bindStructuredAsJson(value);
+    return bindStructuredAsJson(this.encodeUndeclaredDate(value));
   }
 
   /**
