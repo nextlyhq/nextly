@@ -5,8 +5,11 @@
  * the comment. A move refused, for an unknown or deactivated person, a stage the workflow does not
  * have or one that allows publishing, or no comment, moves nothing.
  *
- * Driven through the two functions the commands run, `strandedReviewStates` and
- * `moveStrandedReviewStates`, on the workflows the configuration registers, as the commands hand
+ * `--dry-run` lists the documents the move would take, judged as the move judges them, and its
+ * refusals, writing nothing.
+ *
+ * Driven through the functions the commands run, `strandedReviewStates`,
+ * `moveStrandedReviewStates` and the dry run's `strandedMoveDryRun`, on the workflows the configuration registers, as the commands hand
  * them, and once through the table resolver the commands install (`installStrandedRunResolver`).
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,7 +30,10 @@ import {
   stateOf,
   workflowEvents,
 } from "../../../domains/workflows/__tests__/helpers/step-harness";
-import { installStrandedRunResolver } from "../workflow-stranded";
+import {
+  installStrandedRunResolver,
+  strandedMoveDryRun,
+} from "../workflow-stranded";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -418,6 +424,81 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await strandedReviewStates(app().adapter, { workflows })
       ).toHaveLength(4);
+    });
+    it("dry-runs a move: names the documents the move then takes, and the move's refusals, writing nothing", async () => {
+      await boot(dialect);
+      const { both, one, page } = await strandedInstall();
+      const workflows = [...registeredWorkflows()];
+      const dryRun = (
+        over: Partial<Parameters<typeof strandedMoveDryRun>[0]>
+      ) =>
+        strandedMoveDryRun({
+          adapter: app().adapter,
+          workflows,
+          collection: "posts",
+          to: "draft",
+          as: "ANN@example.test",
+          comment: "Archive was retired.",
+          ...over,
+        });
+      const byTarget = (a: { target: string }, b: { target: string }) =>
+        a.target.localeCompare(b.target);
+
+      const plan = await dryRun({});
+      expect(plan.refusals ?? []).toEqual([]);
+      // The part of `one` in `legal`, a stage the workflow has, and the unnamed page are no part of it.
+      expect([...plan.changes].sort(byTarget)).toEqual(
+        [
+          {
+            action: "move",
+            target: `collection posts ${both} (en, es) from "archive" to "draft"`,
+          },
+          {
+            action: "move",
+            target: `collection posts ${one} (en) from "archive" to "draft"`,
+          },
+        ].sort(byTarget)
+      );
+
+      // Refused where the move is refused, in the words the real run prints.
+      expect(await dryRun({ to: "approved" })).toEqual({
+        changes: [],
+        refusals: [
+          'to: "approved" allows publishing, so a move into it would approve content nobody approved. Name a stage before review.',
+        ],
+      });
+      expect(await dryRun({ as: "zed@example.test" })).toEqual({
+        changes: [],
+        refusals: [
+          'as: "zed@example.test" is deactivated, so moves cannot be recorded as theirs.',
+        ],
+      });
+
+      // Nothing was written: every part is where it was, and no move was recorded.
+      for (const [slug, id, part] of [
+        ["posts", both, "en"],
+        ["posts", both, "es"],
+        ["posts", one, "en"],
+        ["pages", page, null],
+      ] as const) {
+        expect(await stateOf(app(), partOf(slug, id, part))).toMatchObject({
+          stage: "archive",
+          revision: 1,
+        });
+        expect(await moves(slug, id)).toEqual([]);
+      }
+
+      // The real move then takes exactly the documents the dry run named.
+      const moved = await moveStrandedReviewStates(app().adapter, {
+        workflows,
+        collection: "posts",
+        to: "draft",
+        as: "ann@example.test",
+        comment: "Archive was retired.",
+      });
+      expect(moved.map(each => each.document.entryId).sort()).toEqual(
+        [both, one].sort()
+      );
     });
   }
 );
