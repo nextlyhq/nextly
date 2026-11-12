@@ -1,6 +1,6 @@
 /**
  * First-time setup: three short questions over the SEO screen, then what
- * needs attention first. Each step's answers are saved as it moves on, and
+ * needs attention first, and on to the section's Overview. Each step's answers are saved as it moves on, and
  * every answer stays editable in the settings, so closing it part-way loses
  * nothing.
  *
@@ -45,6 +45,8 @@ export interface SetupDialogProps extends TabProps {
   failure: string | null;
   /** Closes the dialog; `tab` is where to land after the last step. */
   close: (tab?: TabId) => void;
+  /** Ends setup on the SEO section's Overview, where it leads. */
+  finish: () => void;
 }
 
 const TITLES: Record<Step, { title: string; lead: string }> = {
@@ -256,14 +258,14 @@ function StepFooter({
   blocked,
   setStep,
   advance,
-  close,
+  finish,
 }: {
   step: Step;
   saving: boolean;
   blocked: boolean;
   setStep: (step: Step) => void;
   advance: (from: 1 | 2 | 3) => void;
-  close: (tab?: TabId) => void;
+  finish: () => void;
 }): JSX.Element {
   if (step === "done") {
     return (
@@ -271,8 +273,8 @@ function StepFooter({
         <Button type="button" variant="ghost" onClick={() => setStep(1)}>
           Start again
         </Button>
-        <Button type="button" onClick={() => close()}>
-          Go to SEO settings
+        <Button type="button" onClick={finish}>
+          Go to the overview
         </Button>
       </>
     );
@@ -323,6 +325,7 @@ export function SetupDialog({
   save,
   failure,
   close,
+  finish,
 }: SetupDialogProps): JSX.Element {
   const [step, setStep] = useState<Step>(firstStep);
   const [saving, setSaving] = useState(false);
@@ -399,7 +402,7 @@ export function SetupDialog({
             blocked={blocked}
             setStep={setStep}
             advance={from => void advance(from)}
-            close={close}
+            finish={finish}
           />
         </div>
       </DialogContent>

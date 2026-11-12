@@ -850,7 +850,10 @@ To open a view from inside the admin, for example from a field editor, call
 `navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path
 starting `/admin/`, and refuses anything else by throwing. Moving between a
 document's edit form and its own views doesn't prompt about unsaved
-changes, because the same form stays mounted.
+changes, because the same form stays mounted. Pass `{ replace: true }` as its
+second argument to move without leaving the current address in the history,
+such as a page at an old address sending the reader on to its new one, so
+Back doesn't land on it and move them forward again.
 
 Startup is refused, naming the plugins involved, when a view's `path`:
 

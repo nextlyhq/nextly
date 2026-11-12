@@ -2,14 +2,17 @@
  * What the bulk edit screen and its routes agree on: where the screen is,
  * where it reads a content type's pages and saves their titles and
  * descriptions, and the shapes each route answers with. Plain data only,
- * importing nothing but the settings' contract, itself import-free, so the
- * admin's client bundle takes it without bringing server code along.
+ * importing nothing, so the admin's client bundle takes it without bringing
+ * server code along.
  *
  * @module bulk/contract
  */
-import { SEO_ADMIN_SLUG } from "../settings/contract";
 
-/** The bulk edit screen: its path under the plugin, and its component. */
+/**
+ * The bulk edit screen: its path under the plugin, and its component. It
+ * has no menu item of its own, and stays at its address, for whoever may
+ * read a type's pages, until Pages' Edit mode takes it over.
+ */
 export const BULK_PAGE: {
   readonly path: "bulk";
   readonly component: "@nextlyhq/plugin-seo/admin#SeoBulkPage";
@@ -17,9 +20,6 @@ export const BULK_PAGE: {
   path: "bulk",
   component: "@nextlyhq/plugin-seo/admin#SeoBulkPage",
 };
-
-/** Where the bulk edit screen is, for a link. */
-export const BULK_PAGE_HREF: string = `/admin/plugins/${SEO_ADMIN_SLUG}/${BULK_PAGE.path}`;
 
 /** Where the screen reads the content types it can edit. */
 export const BULK_TYPES_PATH = "/bulk/types";
