@@ -291,7 +291,7 @@ function TextareaSettingControl({
           id={`${id}-left`}
           className={cn(
             "text-xs tabular-nums",
-            left < 0 ? "text-destructive" : "text-muted-foreground"
+            left < 0 ? "text-danger-text" : "text-muted-foreground"
           )}
           data-testid={`setting-left-${setting.name}`}
         >
@@ -305,7 +305,7 @@ function TextareaSettingControl({
         <p
           id={`${id}-problem`}
           role="alert"
-          className="text-xs text-destructive"
+          className="text-xs text-danger-text"
         >
           {problem}
         </p>

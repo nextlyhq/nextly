@@ -13,12 +13,79 @@
  */
 
 import { permissionSlug } from "../../../schemas/_zod/rbac";
+import {
+  WORKFLOW_PERMISSION_GROUP,
+  workflowPermissionActions,
+} from "../../workflows/permissions";
+import type { Workflow } from "../../workflows/types";
 
 /** The stored spelling of one per-entity permission. */
 export interface EntityPermissionSpelling {
   slug: string;
   name: string;
   description: string;
+}
+
+/**
+ * The actions the framework creates a permission for on every collection,
+ * and on every Single. Stated once: the seeder creates them, the check that
+ * decides whether a plugin may claim a permission reads them, and a migration
+ * snapshot records them.
+ */
+export const COLLECTION_SEEDED_ACTIONS = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+] as const;
+
+export const SINGLE_SEEDED_ACTIONS = [
+  "read",
+  "update",
+  "publish",
+  "unpublish",
+] as const;
+
+/** One permission the framework creates for an entity, as it is stored. */
+export interface EntityPermission extends EntityPermissionSpelling {
+  action: string;
+  resource: string;
+  /** Null for a built-in one; the workflow group for one a workflow adds. */
+  group: string | null;
+}
+
+/** The permissions the framework creates for every collection, or every Single, `slug`. */
+export function builtInEntityPermissions(
+  kind: "collection" | "single",
+  slug: string
+): EntityPermission[] {
+  const actions =
+    kind === "collection" ? COLLECTION_SEEDED_ACTIONS : SINGLE_SEEDED_ACTIONS;
+  return actions.map(action => ({
+    action,
+    resource: slug,
+    group: null,
+    ...entityPermissionSpelling(action, slug),
+  }));
+}
+
+/**
+ * The permissions `workflow` adds to the entity `slug` it is attached to
+ * (`workflowPermissionActions`), stored under the workflow group, which is
+ * how the presets tell a workflow's from any other.
+ */
+export function workflowEntityPermissions(
+  slug: string,
+  workflow: Workflow
+): EntityPermission[] {
+  return workflowPermissionActions(workflow).map(action => ({
+    action,
+    resource: slug,
+    group: WORKFLOW_PERMISSION_GROUP,
+    ...entityPermissionSpelling(action, slug),
+  }));
 }
 
 /** `blog-posts` reads `Blog Posts`. */

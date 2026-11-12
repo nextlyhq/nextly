@@ -172,6 +172,8 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "ListResponse (type)",
   "ModifierState (type)",
   "PageFrame (value)",
+  "PageFrameListener (value)",
+  "PageFrameListenerProps (type)",
   "PageFrameProps (type)",
   "PageHeader (value)",
   "PageHeaderProps (type)",

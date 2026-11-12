@@ -255,3 +255,53 @@ test("a field defined in code is read-only", async ({ page }) => {
     await expect(menu.getByRole("menuitem", { name: action })).toHaveCount(0);
   }
 });
+
+test.describe("a blocks field, with the Page Builder installed", () => {
+  const slug = `outline_blocks_${Date.now()}`;
+
+  test.beforeEach(async ({ page }) => {
+    await createRuntimeCollection(page.request, slug, [
+      {
+        ...plain("body", "Body"),
+        type: "blocks",
+        // One exact name, one entry no registered block answers.
+        blocks: { allow: ["core/heading", "nobody/gone"] },
+      },
+    ]);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await removeRuntimeCollection(page.request, slug);
+  });
+
+  test("unfolds a blocks field with the Page Builder installed", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await expect(page.getByRole("tree", { name: "Fields" })).toBeVisible();
+    // The accepted block, named as the editor names it, with its props, all
+    // read-only and naming the plugin that registered them.
+    const heading = row(page, "body/#core/heading");
+    await expect(heading).toContainText("Heading");
+    await expect(heading).toContainText(
+      "Defined by @nextlyhq/plugin-page-builder"
+    );
+    await expect(row(page, "body/#core/heading/#text")).toContainText("Text");
+    await expect(row(page, "body/#core/heading/#level")).toContainText("Level");
+    // The entry no registered block answers is said, not dropped.
+    await expect(row(page, "body")).toContainText(
+      "no registered block matches nobody/gone"
+    );
+    // A block has no settings to open.
+    await heading.focus();
+    await page.keyboard.press("Shift+F10");
+    await expect(
+      page.getByRole("menu").getByRole("menuitem", { name: /settings/ })
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await expectNoAxeViolations(page, { include: '[role="tree"]' });
+    }
+  });
+});

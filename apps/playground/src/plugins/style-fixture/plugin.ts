@@ -8,7 +8,11 @@
  */
 import { definePlugin, defineWidget, setting } from "@nextlyhq/plugin-sdk";
 
-import { FILL_PROBE_PATH, STYLE_FIXTURE_PATH } from "./constants";
+import {
+  FILL_PROBE_PATH,
+  FRAME_PAGE_PATHS,
+  STYLE_FIXTURE_PATH,
+} from "./constants";
 
 /**
  * A test fixture for e2e/tests/dashboard-card-settings.spec.ts: a card with
@@ -64,7 +68,15 @@ export const styleFixturePlugin = definePlugin({
       // Also expose it as a standalone plugin page at
       // /admin/plugins/style-fixture/showcase, so plugin-page-routing.spec.ts
       // can cover deep-link route resolution.
-      pages: [{ path: "/showcase", component: STYLE_FIXTURE_PATH }],
+      // And a page per page type drawn with the SDK's frame and header, and
+      // one drawn with neither, for plugin-page-frames.spec.ts.
+      pages: [
+        { path: "/showcase", component: STYLE_FIXTURE_PATH },
+        ...Object.entries(FRAME_PAGE_PATHS).map(([path, component]) => ({
+          path,
+          component,
+        })),
+      ],
       // Declared for tooling/the plugin doctor; the file is loaded by the
       // side-effect import in ./admin.
       styles: "playground/style-fixture/admin.css",

@@ -29,6 +29,16 @@ export function defaultSeoFields(): FieldConfig[] {
       // Search engines truncate descriptions past ~160 chars.
       maxLength: 160,
     }),
+    // The social card's own text, where a person wants it to differ from the
+    // Google title and description; empty, the card uses those.
+    text({
+      name: "socialTitle",
+      label: "Title when shared",
+    }),
+    textarea({
+      name: "socialDescription",
+      label: "Description when shared",
+    }),
     upload({
       name: "ogImage",
       label: "Social Share Image",
@@ -37,6 +47,13 @@ export function defaultSeoFields(): FieldConfig[] {
     text({
       name: "canonical",
       label: "Canonical URL",
+    }),
+    // Set when the page first appeared on another site, which is the one
+    // case a typed canonical may point off this site.
+    checkbox({
+      name: "canonicalElsewhere",
+      label: "This page first appeared on another site",
+      defaultValue: false,
     }),
     checkbox({
       name: "noindex",

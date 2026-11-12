@@ -206,6 +206,7 @@ export interface FormFieldToggles {
   date: boolean | Partial<FieldBlockConfig>;
   time: boolean | Partial<FieldBlockConfig>;
   hidden: boolean | Partial<FieldBlockConfig>;
+  consent: boolean | Partial<FieldBlockConfig>;
 }
 
 /** What a host may override on a collection this plugin contributes. */
@@ -421,6 +422,22 @@ export interface FormBuilderPluginOptions {
   /**
    * Spam protection configuration.
    */
+  /**
+   * One response per person.
+   */
+  oneResponse?: {
+    /**
+     * How many earlier submissions a form may have for a change of its
+     * one-response setting to give them their keys inside the save itself,
+     * so the save answers with the form as it then stands. A form with more
+     * is brought up to date by the plugin's background sweep instead, and
+     * until it is, each new submission is compared with the earlier answers.
+     * Lower it to keep saves short on a slow database.
+     * @default 200
+     */
+    keysInSave?: number;
+  };
+
   spamProtection?: {
     /**
      * Enable honeypot field for spam detection.
@@ -429,14 +446,29 @@ export interface FormBuilderPluginOptions {
     honeypot?: boolean;
 
     /**
-     * Enable reCAPTCHA v3.
-     * @default false
+     * Google reCAPTCHA v3: a score for each visitor, in the background.
+     * `enabled` makes it the site default for forms whose bot check is "Site
+     * default". The token is verified on the server with `secretKey`; the
+     * visitor's form renders the widget with `siteKey`.
+     * @default { enabled: false }
      */
     recaptcha?: {
       enabled: boolean;
       siteKey?: string;
       secretKey?: string;
-      scoreThreshold?: number; // 0.0 - 1.0
+      /** Below this score (0.0 to 1.0) a visitor is a bot. @default 0.5 */
+      scoreThreshold?: number;
+    };
+
+    /**
+     * Cloudflare Turnstile: a check in the background that rarely shows a
+     * puzzle. `enabled` makes it the site default when reCAPTCHA's is not.
+     * @default { enabled: false }
+     */
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
 
     /**
@@ -578,7 +610,8 @@ export type FormField =
   | FileFormField
   | DateFormField
   | TimeFormField
-  | HiddenFormField;
+  | HiddenFormField
+  | ConsentFormField;
 
 /**
  * A form field of a built-in type OR a plugin-contributed type. Stored form
@@ -604,7 +637,8 @@ export type FormFieldType =
   | "file"
   | "date"
   | "time"
-  | "hidden";
+  | "hidden"
+  | "consent";
 
 /**
  * A form field's type on the wire: a built-in or a plugin-contributed type id
@@ -630,6 +664,7 @@ export const BUILT_IN_FORM_FIELD_TYPES: readonly FormFieldType[] = [
   "date",
   "time",
   "hidden",
+  "consent",
 ];
 
 const BUILT_IN_FORM_FIELD_TYPES_SET = new Set<string>(
@@ -838,6 +873,27 @@ export interface HiddenFormField extends Omit<BaseFormField, "type"> {
   defaultValue?: string;
 }
 
+/**
+ * A box the visitor ticks to agree to a text, such as a privacy policy. It is
+ * always required, and its answer keeps the text the visitor was shown, so a
+ * later change to the text does not change what an earlier visitor agreed to.
+ */
+export interface ConsentFormField extends Omit<BaseFormField, "type"> {
+  type: "consent";
+  /** What the visitor agrees to, shown beside the box and stored with it. */
+  agreementText: string;
+}
+
+/**
+ * A consent field's stored answer: whether the visitor agreed, and the text
+ * the form showed them. Made by the server from the form, never taken from
+ * the visitor, and never changed by an edit of the submission.
+ */
+export interface ConsentAnswer {
+  agreed: boolean;
+  text: string;
+}
+
 // ============================================================
 // Validation Types
 // ============================================================
@@ -1002,6 +1058,14 @@ export interface FormSettings {
    * @default 0
    */
   oneResponseVersion?: number;
+
+  /**
+   * The one-response version whose earlier submissions all carry their keys.
+   * Behind `oneResponseVersion` while the plugin is still making them, after
+   * a change of mode or Email field; unset reads as up to date. Written by
+   * the plugin only.
+   */
+  oneResponseKeyedVersion?: number;
 
   /**
    * The bot check: `"default"` follows the plugin's option, `"off"` none, or
@@ -1218,6 +1282,9 @@ export interface ResolvedFormBuilderConfig {
     enabled: boolean;
   };
 
+  /** `FormBuilderPluginOptions["oneResponse"]`, every option filled. */
+  oneResponse: Required<NonNullable<FormBuilderPluginOptions["oneResponse"]>>;
+
   spamProtection: {
     honeypot: boolean;
     recaptcha?: {
@@ -1225,6 +1292,11 @@ export interface ResolvedFormBuilderConfig {
       siteKey?: string;
       secretKey?: string;
       scoreThreshold?: number;
+    };
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
     rateLimit?: {
       maxSubmissions: number;

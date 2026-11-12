@@ -17,6 +17,7 @@ import {
   Layers,
 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
@@ -143,6 +144,8 @@ function LayoutRow({
   canOpen: boolean;
   actions: React.ReactNode;
 }) {
+  // The owner is named as the admin names a plugin everywhere else.
+  const { plugins } = useBranding();
   const [open, setOpen] = useState(false);
   const listId = `layout-used-${layout.id}`;
   return (
@@ -160,7 +163,7 @@ function LayoutRow({
             </p>
           )}
           <div className="break-all font-mono text-xs text-muted-foreground">
-            {layout.slug} · {ownerGroupOf(layout.owner).label}
+            {layout.slug} · {ownerGroupOf(layout.owner, plugins).label}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -251,6 +254,7 @@ function PendingNotices({ layouts }: { layouts: EmailTemplateRecord[] }) {
  * partials layouts share. A layout opens in the same workbench as an email.
  */
 export function LayoutsList(): JSX.Element {
+  const { plugins } = useBranding();
   const {
     data: templates = [],
     isLoading,
@@ -265,10 +269,12 @@ export function LayoutsList(): JSX.Element {
         .filter(record => record.kind !== "template")
         .sort(
           (a, b) =>
-            compareGroups(ownerGroupOf(a.owner), ownerGroupOf(b.owner)) ||
-            a.name.localeCompare(b.name)
+            compareGroups(
+              ownerGroupOf(a.owner, plugins),
+              ownerGroupOf(b.owner, plugins)
+            ) || a.name.localeCompare(b.name)
         ),
-    [templates]
+    [templates, plugins]
   );
   const usage = useMemo(() => emailsByLayout(templates), [templates]);
 

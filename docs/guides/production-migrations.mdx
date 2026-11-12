@@ -297,11 +297,12 @@ Specific examples:
 1. Connects to the database via `DATABASE_URL`.
 2. Reads the `nextly_schema_events` ledger to see which `.sql` files have been applied (a `file_apply` event per file).
 3. Checks the app's history against the folder before it changes anything, core tables included. **An applied migration the folder lacks = abort with `MIGRATION_MISSING` (exit 3)**: a newer build migrated this database, or a file was removed (see [A build older than the database](#a-build-older-than-the-database)). An unresolved attempt stops it as [Recovering from a failed migration](#recovering-from-a-failed-migration) says. **A hash mismatch on an applied file = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs. `migrate:down`, `migrate:baseline` and `nextly upgrade --reconcile-core` run the same checks first, with the same exit codes.
-4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp).
+4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp). A pending file whose snapshot an earlier release's `migrate:create` wrote, without the registry metadata, is refused before anything applies when it comes after a migration that carries the metadata, or once the database has its registry record; see [The first `nextly migrate` on this release](#the-first-nextly-migrate-on-this-release).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
-6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`.
-7. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
-8. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
+6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`. Once a file is recorded, it marks as no longer declared each permission that file's snapshot drops, keeping every grant of it, and clears the mark of one it declares again; see [A permission your build no longer declares](#a-permission-your-build-no-longer-declares).
+7. Adds the permissions and roles the database lacks, and sets the preset roles' grants, under the same lock and after the registry rows are written. It adds Nextly's own permissions, each registered collection's and Single's (with the ones an attached workflow's steps add), the ones your config declares and each plugin's, and the roles your plugins declare. A declared role that bundles a permission which does not exist yet is not created until it does, and the run says so. Then it brings each preset role (Admin, Editor, Author, Viewer) to the permissions its preset grants, adding and removing only what differs, so a database set up by `nextly migrate` alone has an Admin role that holds them before the first start. It sets every preset role's grants in one transaction with a record of the Nextly release that set them, and a run from an older release leaves them as they are (see [The preset grants and the release that set them](#the-preset-grants-and-the-release-that-set-them)). When it changes a grant, it records every collection's and Single's cache tags as expired in the database, so running instances stop serving cached content that the change no longer allows. A run that finds nothing to add or change writes nothing to these tables. This step never marks a permission as no longer declared (step 6 does, from the migrations), and it keeps every grant of one already marked. If a permission can't be written, the run fails after its migrations have applied; run `nextly migrate` again to finish.
+8. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
+9. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
 
 | Exit code | Meaning                                                                  |
 | --------- | ------------------------------------------------------------------------ |
@@ -323,6 +324,133 @@ its file returns it is never run again and is checked against its recorded check
 `nextly migrate:status` lists it as `applied (file removed)`, as information, where an applied
 migration whose file is gone with no removal recorded shows as `applied (file missing)`. The
 `--json` output carries the same value in `status`.
+
+### The first `nextly migrate` on this release
+
+The registry rows of your collections, Singles and field groups come from the migrations: each
+snapshot `nextly migrate:create` writes records every entity's declaration. A snapshot written by
+an earlier release does not, and a database migrated by one has no record of where the
+migrations took over. So the first `nextly migrate` on this release, on an existing site or a
+new one, writes a **registry record** once, naming the newest applied app migration (or the point
+before any). Which first run it is depends only on what the database and the migrations folder
+hold, so a run that stopped part-way is finished by the next one:
+
+- **No migration carries the registry metadata** (every snapshot predates it, or there is no app
+  migration yet): the run applies the pending migrations, then writes the registry rows from the
+  configuration it runs with, adds the permissions and sets the preset grants, and writes the
+  record with those rows and the live permissions kept as the **registry baseline**, all in one
+  transaction. It says how many rows it wrote from the configuration. Run this first migrate from
+  your production build: the configuration it runs with becomes the baseline.
+- **A pending migration carries it, and none applied does**: the run applies the migrations
+  ordered before it, then, just before it applies, records the registry and the live permissions
+  as they stand as the baseline. Then it applies the rest, and the rows come from the newest
+  applied snapshot.
+- **An applied migration already carries it**: before anything applies, the run writes the rows
+  from the newest applied snapshot, adds the permissions and sets the preset grants, and writes
+  the record at that migration, in one transaction. That point has its snapshot, so no baseline is
+  kept.
+
+Once the record exists, the registry rows only ever come from the migrations, never again from
+the configuration: change a declaration, then run `nextly migrate:create` and `nextly migrate`.
+A pending migration written by an earlier release's `migrate:create` is refused, naming the file,
+when it comes after one that carries the metadata or after the record, since nothing would
+record the registry after it. Replace it with one written by this release's
+`nextly migrate:create`.
+
+`nextly migrate:down` stops at the point the record names: a rollback to it puts the registry back
+to the baseline, and one past it is refused. See
+[Rolling back to the registry record](#rolling-back-to-the-registry-record).
+
+### A permission your build no longer declares
+
+A permission leaves only through a recorded migration. When your app stops declaring one of its
+permissions, or a plugin's new release drops one, `nextly migrate:create` writes a migration whose
+snapshot no longer lists it. As `nextly migrate` applies that migration, under the schema lock, it
+marks the permission as no longer declared, logs it with the roles that hold it, and keeps every
+grant: the permission leaves the role editor and the preset roles' choices, and enforces nothing,
+but a role that held it still holds it. If a later migration declares it again, the mark is
+cleared as that migration applies, and the grants are as they were.
+
+A migration speaks for your app, its collections and Singles, each plugin its snapshot records,
+and each plugin the migration before it recorded (or, for the first migration after the
+[registry record](#the-first-nextly-migrate-on-this-release), each plugin whose permissions the
+registry baseline held). A permission of a plugin it knows nothing of, as when the migration was
+written before the plugin joined your build, keeps its state. Nextly's own permissions are in no
+snapshot, and no migration marks one. A migration whose snapshot an earlier release wrote, without
+the registry metadata or without the permissions, marks nothing.
+
+No server start marks a permission, in production or in development: a build that no longer
+declares a permission, an older build included, leaves it as it is. A start still adds the
+permissions its config declares, and clears the mark of one it declares again. An older
+build's `nextly migrate` marks nothing either, since it stops before writing when the database
+records a migration its folder lacks (see [A build older than the database](#a-build-older-than-the-database)).
+
+### The preset grants and the release that set them
+
+The preset roles (Admin, Editor, Author, Viewer) are rules in each Nextly release, and two
+releases can turn the same permissions into different grants with no app migration between them,
+as a preview deployment of a Nextly upgrade sharing production's database does. So `nextly
+migrate` records in the database the release that set the preset roles' grants, keeping the
+newest one recorded. It writes that record in the same transaction as every preset role's grants:
+a run that stops part-way leaves all of them, and the record, as they were. Where a preset role
+cannot be created or set (another role already has its name, say), the run warns that it set none
+of them, leaves every preset role's grants as they were, and goes on; the next `nextly migrate`
+sets them all.
+
+A `nextly migrate` from a release older than the recorded one adds and removes no preset grant,
+and says which release set them. The rest of its run is unchanged. Permissions it adds meanwhile,
+for a new collection for instance, get their preset grants at the next `nextly migrate` from the
+recorded release or a newer one. Roles your app or plugins define are not presets and are not
+affected. A start, in development or in production, still sets the preset grants by its own
+release's presets, as before, and neither reads nor writes the record.
+
+This covers `nextly migrate` from this release on. A release from before it reads no record, so
+its `nextly migrate` and its starts set the preset grants to its own presets.
+
+### The schema version a production start checks
+
+The database stores one schema version: the newest app migration whose registry rows
+(`dynamic_collections`, `dynamic_singles` and the field-group registry) `nextly migrate` has
+written. `nextly migrate` and `migrate:down` set it in the same transaction as those rows, so a run
+stopped part-way leaves it where it was. Schema Builder saves and plugin installs and uninstalls
+move a count stored beside it, also in the same transaction as what they write.
+
+`withNextly` reads the newest migration in your migrations folder when Next.js loads
+`next.config` and sets `NEXTLY_BUILD_SCHEMA_VERSION` in the build's `env`. Next.js inlines it
+into your `instrumentation.ts`, which hands it to Nextly:
+
+```ts
+// src/instrumentation.ts, inside register()
+await createRegister(config, {
+  cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+  buildSchemaVersion: process.env.NEXTLY_BUILD_SCHEMA_VERSION,
+})();
+```
+
+If you set `db.migrationsDir` to something other than `./src/db/migrations`, pass the same
+folder to `withNextly`:
+
+```ts
+// next.config.ts
+import { withNextly } from "nextly/next";
+
+export default withNextly({}, { migrationsDir: "./db/migrations" });
+```
+
+A production start reads the stored version once and compares the two. It never repairs
+anything and always keeps serving:
+
+- **The database is behind the build** (it lacks a migration the build ships): one warning naming
+  both versions. Run `nextly migrate`.
+- **The database records no version** (it was migrated before this check existed): one warning
+  saying so. Run `nextly migrate`, which records it.
+- **The database is ahead of the build** (an older build is still serving, or a deploy was rolled
+  back): one line at info level.
+
+With no migrations folder, or no migration in it, the start compares nothing and says nothing.
+An `instrumentation.ts` that does not pass `buildSchemaVersion` still gets the comparison under
+`next start`, which loads `next.config` as the server starts; on Vercel or with
+`output: "standalone"` it needs the line above.
 
 ## Where the registry and the tables disagree
 
@@ -839,6 +967,46 @@ starts from that same migration again. On MySQL each DDL statement commits as
 it runs, so part of the DOWN may have taken effect; `nextly migrate:status`
 lists every applied migration whose latest rollback failed, and flags the MySQL
 ones, so the schema can be checked before anything is run again.
+
+### Rolling back to the registry record
+
+Once the database has its [registry record](#the-first-nextly-migrate-on-this-release), every
+point a rollback can leave it at must have something recording the registry there: that point's
+own snapshot, or the registry baseline at the point the record was taken at.
+
+A rollback that brings the database back to the record's point, where the record keeps a
+baseline, undoes what the rolled-back migrations did to the registry and the permissions, and
+nothing else. It runs under the schema lock, in the same transaction as the last migration it
+rolls back, so on PostgreSQL and SQLite the tables and the bookkeeping go back together or not
+at all:
+
+- each collection, Single and field group row the baseline holds goes back to how it stood when
+  the record was written, so no row keeps a field whose column the rollback removed;
+- the row of an entity those migrations added is removed, and its permissions are marked as no
+  longer declared;
+- a permission one of them added is marked as no longer declared, keeping its grants, unless the
+  baseline holds it or a plugin still installed declares it;
+- a permission one of them marked is declared again where the point it returns to declares it:
+  your app's own, a collection's or Single's, or Nextly's, where the baseline holds it; a
+  plugin's, where the plugin is installed and its current release declares it. A plugin's
+  permission is told from your app's by what each plugin declares, never by the owner name they
+  can share, so a plugin named `app` is told apart too.
+
+Everything else keeps its state: Nextly's own permissions, whichever release added them, and
+whatever a plugin's install or uninstall wrote in the meantime. A new site's record is at the
+point before any app migration, so its first migration can be rolled back, leaving no registry
+row.
+
+A rollback that would leave the database at any other point where nothing records the registry
+is refused before it changes anything, naming that point: a migration whose snapshot an earlier
+release wrote without the registry metadata, other than the record's, or the point before any
+app migration when the record is at a migration. Write a new migration that undoes the change
+instead.
+
+On MySQL, where each schema statement commits as it runs, the bookkeeping is written after the
+last DOWN's statements and before its rollback is recorded. If it cannot be written, the
+migration stays recorded applied with a failed rollback, as any DOWN that stops part-way there,
+and `nextly migrate:status` flags it so the schema can be checked first.
 
 **In production, prefer rolling forward** (a new corrective migration) or
 restoring from a backup. `migrate:down` is a manual, CLI-only break-glass tool;

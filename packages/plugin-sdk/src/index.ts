@@ -441,7 +441,10 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   with them (see STABILITY.md). `KeyedDigests` (`ctx.security.digests`),
+ *   keyed one-way digests under the plugin's own key that survive a secret
+ *   rotation, is experimental until a first-party plugin has shipped with it.
+ *   `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
  *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
  *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
@@ -456,6 +459,7 @@ export type {
   PasswordCheck,
   BreachedPasswordsConfig,
   OpaqueSecrets,
+  KeyedDigests,
   OneTimeSecrets,
   SecretData,
   TxOption,
@@ -560,6 +564,17 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * The paths every robots.txt of a Nextly site keeps crawlers out of: the
+ * admin and the API, on a path boundary. A plugin that serves robots.txt
+ * reads them here, as `nextlyRobots` does in core, so a correction reaches
+ * every such file. Intended to become stable once the SEO plugin's robots.txt
+ * has shipped on it.
+ *
+ * @experimental
+ */
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
+
+/**
  * Where a page kept in one language is opened: `languageAddressOf(path,
  * locale)` forms the address a path kept in `locale` is served at, under the
  * language's prefix or on its own domain, as the site declares
@@ -570,6 +585,17 @@ export type { PublicAddress, PublicAddressType } from "nextly";
  */
 export { languageAddressOf } from "nextly";
 export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
+ * The other way round: `addressOfRequest(url)` answers the language and the
+ * kept path a request asks for, by the same rule, so a Proxy handler can look
+ * an address up in a record kept by language and path. Intended to become
+ * stable with `languageAddressOf`.
+ *
+ * @experimental
+ */
+export { addressOfRequest } from "nextly";
+export type { KeptAddress } from "nextly";
 
 /**
  * Keeping every public address to one page. A plugin that keeps a record of
@@ -697,6 +723,7 @@ export type {
   PluginUserService,
   PluginMediaService,
   PluginEmailService,
+  ForgetSendsInput,
   PluginVersionsService,
   PluginCollectionTransaction,
   PluginVersionPins,
@@ -945,6 +972,29 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * @experimental Where a plugin's own item goes (`contributes.admin.header`):
+ * the top bar's right end (the default), the rail's foot above the Inbox, or
+ * the person's menu.
+ *
+ * - `PluginItemPlace` is the three places: `"bar"`, `"rail-foot"`, `"menu"`.
+ * - `PluginHeaderSlotContributions` takes a component, `slot`, kept mounted at
+ *   the bar or the rail's foot for as long as the bar is.
+ * - `PluginHeaderUserMenuContributions` takes `place: "menu"` and a declared
+ *   `item`, a `PluginUserMenuItem`: a label, an icon, and either a link
+ *   (`PluginUserMenuLink`) or an action (`PluginUserMenuAction`). It takes no
+ *   component, since a closed menu's contents are not mounted.
+ */
+export type {
+  PluginHeaderContributions,
+  PluginHeaderSlotContributions,
+  PluginHeaderUserMenuContributions,
+  PluginItemPlace,
+  PluginUserMenuAction,
+  PluginUserMenuItem,
+  PluginUserMenuLink,
 } from "nextly";
 
 /**

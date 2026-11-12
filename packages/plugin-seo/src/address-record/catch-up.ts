@@ -15,6 +15,12 @@
  *
  * The page already holding an address keeps it, newer or not: content never
  * takes the site down, and visitors keep reaching what they reached before.
+ *
+ * Once every claim stands, each address a page let go of leaves a permanent
+ * redirect to the page's new one, as a save would: an old address another
+ * page now holds is refused rather than used as a step to a third page, and
+ * a page that lost its new address gets none. The route has already moved,
+ * so a redirect that cannot be saved lists the old address as a broken link.
  * The fingerprint is stored last, so a start interrupted part-way runs the
  * whole catch-up again.
  *
@@ -33,10 +39,22 @@ import {
   type HeldAddress,
   type HeldAddressUpdate,
   type HeldDocument,
+  type ParticipantTransaction,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { heldNow, recordSlug, rowOf, type RecordRow } from "./participant";
+import { redirectDeployMove } from "../redirects/moves";
+
+import { heldNow } from "./participant";
+import {
+  forgetPending,
+  keepPending,
+  pendingMoves,
+  type PendingMove,
+} from "./pending-moves";
+import { recordSlug, rowOf, type RecordRow } from "./rows";
+
+type Transaction = ParticipantTransaction["transaction"];
 
 /** A page left without an address another page holds. */
 export interface LostAddress {
@@ -85,6 +103,29 @@ export function startCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
   return run;
 }
 
+/** How many catch-ups are under way. */
+let running = 0;
+/** Whether the last catch-up to finish failed, leaving the record behind. */
+let failed = false;
+
+/**
+ * Whether the record says what each page holds: no catch-up is under way,
+ * and the last one to finish succeeded. An output that lists addresses from
+ * the record answers as not ready otherwise.
+ */
+export function addressRecordReady(): boolean {
+  return running === 0 && !failed;
+}
+
+/**
+ * Start the catch-up again, not awaited, where the last one failed and none
+ * is under way: a failure from a passing cause is not left in place until
+ * the next start.
+ */
+export function retryFailedCatchUp(): void {
+  if (failed && running === 0 && started !== undefined) void catchUp();
+}
+
 /** The last catch-up started, to wait for. */
 export function lastCatchUp(): Promise<CatchUpReport> | undefined {
   return started?.run;
@@ -97,6 +138,11 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
  */
 interface CatchUpOptions {
   afterListing?: () => Promise<void>;
+  /**
+   * Runs once every page has let go of what it no longer holds and before
+   * any claims anew: the moment a save may move a page the catch-up moved.
+   */
+  afterReleases?: () => Promise<void>;
   /**
    * How many pages one listing read takes, and what runs between reads,
    * told the pages listed so far.
@@ -124,13 +170,19 @@ async function caughtUp(
   ctx: PluginContext,
   options: CatchUpOptions = {}
 ): Promise<CatchUpReport> {
+  running += 1;
   try {
-    return await runCatchUp(ctx, options);
+    const report = await runCatchUp(ctx, options);
+    failed = false;
+    return report;
   } catch (error) {
+    failed = true;
     ctx.logger.error("The SEO address record could not be brought up to date", {
       error,
     });
     return NOTHING;
+  } finally {
+    running -= 1;
   }
 }
 
@@ -265,7 +317,8 @@ const sameHolds = (a: readonly HeldAddress[], b: readonly HeldAddress[]) =>
 async function moveIfCurrent(
   ctx: PluginContext,
   update: HeldAddressUpdate,
-  expected: Expected
+  expected: Expected,
+  alongside?: (transaction: Transaction) => Promise<void>
 ): Promise<
   { refused: { address: HeldAddress; heldBy: AddressHolder }[] } | "overtaken"
 > {
@@ -276,7 +329,9 @@ async function moveIfCurrent(
     async transaction => {
       const now = await heldNow(ctx, transaction, update.holder);
       if (!sameHolds(now, before)) return "overtaken" as const;
-      return ctx.publicAddresses.move([update], transaction);
+      const moved = await ctx.publicAddresses.move([update], transaction);
+      if (moved.refused.length === 0) await alongside?.(transaction);
+      return moved;
     }
   );
   if (outcome === "overtaken") expected.delete(key);
@@ -360,7 +415,18 @@ async function keepWhatStands(
     );
     kept.set(key, keep);
     if (keep.length !== before.length) {
-      await moveIfCurrent(ctx, { holder: page.holder, holds: keep }, expected);
+      // The route has moved with the deploy: each address let go of is kept
+      // on the same transaction, owed a redirect to the page's new one once
+      // every claim stands.
+      const released = before.filter(
+        b => !keep.some(held => sameAddress(b, held))
+      );
+      await moveIfCurrent(
+        ctx,
+        { holder: page.holder, holds: keep },
+        expected,
+        transaction => keepPending(ctx, transaction, page.holder, released)
+      );
     }
   }
   return kept;
@@ -474,6 +540,33 @@ async function claimTheNew(
   return { recorded, lost };
 }
 
+/**
+ * Make the redirects every page's move owes, this start's and any an earlier
+ * start left owing, each to where the record says the page is now. Each
+ * owed move is forgotten once its redirect is made or refused.
+ */
+async function redirectOwedMoves(ctx: PluginContext): Promise<void> {
+  const owed = new Map<string, PendingMove[]>();
+  for (const move of await pendingMoves(ctx)) {
+    const key = holderKey(move.holder);
+    owed.set(key, [...(owed.get(key) ?? []), move]);
+  }
+  for (const moves of owed.values()) {
+    const [first] = moves;
+    if (first === undefined) continue;
+    await redirectDeployMove(
+      ctx,
+      first.holder,
+      moves.map(move => move.address),
+      transaction => heldNow(ctx, transaction, first.holder)
+    );
+    await forgetPending(
+      ctx,
+      moves.map(move => move.key)
+    );
+  }
+}
+
 async function runCatchUp(
   ctx: PluginContext,
   options: CatchUpOptions
@@ -482,7 +575,13 @@ async function runCatchUp(
   // The stored fingerprint by its key, and whether any address is recorded:
   // an unchanged start reads no more than that.
   const stored = await storedFingerprint(ctx);
-  if (stored?.value === fingerprint && (await holdsAny(ctx))) return NOTHING;
+  if (
+    stored?.value === fingerprint &&
+    (await holdsAny(ctx)) &&
+    (await pendingMoves(ctx)).length === 0
+  ) {
+    return NOTHING;
+  }
   const record = await readRecord(ctx);
   const siteTypes = await siteTypeKeys(ctx);
   const pages = await everyPage(ctx, options);
@@ -496,7 +595,9 @@ async function runCatchUp(
     now: new Set(siteTypes),
     before: typesIn(record.siteTypes),
   });
+  await options.afterReleases?.();
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
+  await redirectOwedMoves(ctx);
   await storeMeta(
     ctx,
     record.siteTypes?.id,

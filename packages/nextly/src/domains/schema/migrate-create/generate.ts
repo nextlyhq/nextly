@@ -28,7 +28,9 @@ import { resolve } from "node:path";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import {
   type CompanionHistory,
   companionHistoryKey,
@@ -45,8 +47,10 @@ import {
   type LeavingTranslationRefusal,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
+  refusalsForMovedJoinsNarrowed,
   refusalsForTranslatedFieldRenamedAndReshaped,
   storageDiffers,
+  type TranslationSurface,
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { copyLiveness } from "../../i18n/migration/generate-down";
@@ -104,6 +108,7 @@ import {
 } from "../pipeline/kept-scope-fields";
 import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { builtByFor } from "../pipeline/registered-collections";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
@@ -114,6 +119,7 @@ import {
   type ColumnResolution,
 } from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
+import { schemaVersionStoreSql } from "../schema-version";
 import {
   columnsDeclaredBy,
   type ColumnOrigin,
@@ -126,6 +132,12 @@ import {
   type AppStreamTables,
 } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
+import {
+  describePermissionChange,
+  permissionsForRun,
+  type PermissionChange,
+  type PermissionRecord,
+} from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
 import {
   describeSettingsChange,
@@ -141,6 +153,7 @@ import {
   formatTimestamp,
   slugify,
 } from "./format-file";
+import { refuseIndexedTextWidening } from "./indexed-text-widening";
 import type { RenameDecision } from "./prompt-renames";
 import {
   scopedSettingsChanges,
@@ -304,6 +317,13 @@ export interface GenerateArgs {
    */
   scope?: GenerateScope;
   /**
+   * Every permission the configuration declares, by owner
+   * (`declared-permissions.ts`), which every snapshot records. A change to an
+   * app's or a plugin's alone is a migration of its own. Absent, the latest
+   * snapshot's record is carried forward (`permissionsForRun`).
+   */
+  permissions?: PermissionRecord;
+  /**
    * Tables to describe as the database has them rather than as their entity's
    * declaration maps them: a Schema Builder save adopting a table an earlier
    * version made writes a file that describes it exactly, so recording it
@@ -338,6 +358,21 @@ export interface GenerateArgs {
    * all in this file, so every database it reaches is settled the same way.
    */
   resolutions?: readonly ColumnResolution[];
+  /**
+   * How one entity's fields joining translation are judged, from a writer
+   * that knows more than the snapshots: the surface its refusals are worded
+   * for, and the retries its database shows (`joinRetries`), fields whose
+   * values an earlier apply of the same change already moved into the
+   * translations table. A retry the change narrows is refused with how to
+   * finish the earlier change; any other is written, its values copied into
+   * a column that holds them. Without it, every joining field is judged as
+   * joining for the first time, worded for code.
+   */
+  joiningJudgement?: {
+    slug: string;
+    surface: TranslationSurface;
+    retries: JoinRetries;
+  };
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -399,6 +434,8 @@ export interface GenerateResult {
    * not this migration changes its table. Empty when only tables changed.
    */
   settingsChanges: EntitySettingsChange[];
+  /** Each app's or plugin's added and removed permissions; empty when none changed. */
+  permissionChanges: PermissionChange[];
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
@@ -501,6 +538,25 @@ function streamInScope(
 }
 
 /**
+ * The one entity a scoped run saves, and whether it is still declared, as the permission record
+ * reads it (`permissionsForRun`); nothing for a run with no scope.
+ */
+function permissionScopeOf(args: GenerateArgs): {
+  scope?: { kind: GenerateScope["kind"]; slug: string; present: boolean };
+} {
+  const { scope } = args;
+  if (scope === undefined) return {};
+  const declared = [...args.collections, ...args.singles, ...args.components];
+  return {
+    scope: {
+      kind: scope.kind,
+      slug: scope.slug,
+      present: declared.some(entity => entity.slug === scope.slug),
+    },
+  };
+}
+
+/**
  * The settings record the run writes and the settings changes it names. With
  * a scope, every other entity keeps its entry in the record and is named in no
  * change: it is not among the run's entities, which would otherwise read as
@@ -513,7 +569,19 @@ function settingsInScope(
   settingsRecord: EntitySettingsRecord | undefined;
   changedSettings: EntitySettingsChange[];
 } {
-  const desired = settingsRecordOf(args);
+  // A configuration declaring no collection, Single or field group records
+  // that it declares none: an empty record, never a missing one, which reads
+  // as a snapshot written before declarations were recorded and would stop
+  // this migration applying after the database's registry record.
+  const declaresNone =
+    args.collections.length === 0 &&
+    args.singles.length === 0 &&
+    args.components.length === 0;
+  const desired =
+    settingsRecordOf(args) ??
+    (declaresNone
+      ? { collections: {}, singles: {}, fieldGroups: {} }
+      : undefined);
   const changes = settingsChangesFor(
     args,
     latest === null ? null : latest.entities
@@ -797,7 +865,8 @@ export async function generateMigration(
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en",
-    companionHistory
+    companionHistory,
+    args.joiningJudgement
   );
 
   // A file that moves existing values between a main table and its companion records the language
@@ -836,6 +905,17 @@ export async function generateMigration(
     previous?.data ?? null
   );
   const hasSettingsChanges = changedSettings.length > 0;
+  // 3f. Permissions: every one the configuration declares, by owner. A plugin release that only
+  //     adds or removes one changes no table and no setting, so it is a change of its own too.
+  const { record: permissionRecord, changes: changedPermissions } =
+    permissionsForRun({
+      given: args.permissions,
+      latest: previous === null ? null : previous.data.permissions,
+      ...permissionScopeOf(args),
+    });
+  // What a run writes a file for even when no table changes.
+  const changesBeyondTables =
+    hasSettingsChanges || changedPermissions.length > 0;
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -849,17 +929,18 @@ export async function generateMigration(
         ...fieldJoinsPlans.map(({ plan }) => plan),
       ].map(({ spec }) => spec.mainTable),
     ],
-    hasSettingsChanges,
+    hasSettingsChanges: changesBeyondTables,
     record: {
       written,
       contributions: stream.contributions,
       entities: settingsRecord,
+      permissions: permissionRecord,
       metaDir,
       now,
     },
   });
   if (recorded !== undefined) return recorded;
-  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
+  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
     return null;
   }
 
@@ -897,7 +978,14 @@ export async function generateMigration(
       next: desiredSnapshot,
     });
   }
-  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
+  // A MySQL column widened into TEXT under a whole-column index cannot be altered; refused before
+  // any file is written (`refuseIndexedTextWidening`).
+  refuseIndexedTextWidening({
+    operations,
+    previous: previousSnapshot,
+    dialect: args.dialect,
+  });
+  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
     return null;
   }
 
@@ -970,7 +1058,8 @@ export async function generateMigration(
   const rows = registryRowsFor(
     touched,
     tablesOfSettingsChanges(changedSettings, args),
-    args
+    args,
+    args.dialect
   );
   sqlStatements.push(...rows.up);
   downSqlStatements.push(...rows.down);
@@ -1051,6 +1140,7 @@ export async function generateMigration(
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
     settingsChanges: changedSettings.map(describeSettingsChange),
+    permissionChanges: changedPermissions.map(describePermissionChange),
     // A junction table the caller adds is a table this file changes.
     changesNoTable:
       operations.length === 0 &&
@@ -1065,6 +1155,7 @@ export async function generateMigration(
     written,
     contributions: stream.contributions,
     entities: settingsRecord,
+    permissions: permissionRecord,
   });
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
@@ -1220,6 +1311,7 @@ export async function generateMigration(
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
+    permissionChanges: changedPermissions,
   };
 }
 
@@ -1475,6 +1567,7 @@ async function recordSnapshot(
     operationCount: 0,
     renamesAccepted: 0,
     settingsChanges: [],
+    permissionChanges: [],
   };
 }
 
@@ -1484,6 +1577,7 @@ interface MigrationPair {
   written: NextlySchemaSnapshot;
   contributions: Parameters<typeof writeSnapshot>[4];
   entities: Parameters<typeof writeSnapshot>[5];
+  permissions: Parameters<typeof writeSnapshot>[6];
   metaDir: string;
   now: Date;
 }
@@ -1511,7 +1605,8 @@ async function writeMigrationPair(
     pair.written,
     pair.sqlContent,
     pair.contributions,
-    pair.entities
+    pair.entities,
+    pair.permissions
   );
   return { sqlPath, snapshotPath };
 }
@@ -1526,15 +1621,31 @@ async function writeMigrationPair(
 function registryRowsFor(
   touched: ReadonlySet<string>,
   settingsTables: ReadonlySet<string>,
-  args: Pick<GenerateArgs, "metadataUpserts" | "previousMetadataUpserts">
+  args: Pick<GenerateArgs, "metadataUpserts" | "previousMetadataUpserts">,
+  dialect: SupportedDialect
 ): { up: string[]; down: string[] } {
+  // A direction that writes registry rows moves the stored schema version
+  // right after them, in the file's transaction: on MySQL, where the schema
+  // statements before have committed, beside the rows rather than the DDL.
+  const withVersion = (statements: string[]): string[] =>
+    statements.length === 0
+      ? statements
+      : [...statements, schemaVersionStoreSql(dialect)];
   return {
-    up: (args.metadataUpserts ?? [])
-      .filter(m => touched.has(m.tableName) || settingsTables.has(m.tableName))
-      .map(m => m.sql),
-    down: (args.previousMetadataUpserts ?? [])
-      .filter(m => settingsTables.has(m.tableName) && !touched.has(m.tableName))
-      .map(m => m.sql),
+    up: withVersion(
+      (args.metadataUpserts ?? [])
+        .filter(
+          m => touched.has(m.tableName) || settingsTables.has(m.tableName)
+        )
+        .map(m => m.sql)
+    ),
+    down: withVersion(
+      (args.previousMetadataUpserts ?? [])
+        .filter(
+          m => settingsTables.has(m.tableName) && !touched.has(m.tableName)
+        )
+        .map(m => m.sql)
+    ),
   };
 }
 
@@ -1588,6 +1699,36 @@ function companionHadStatus(
   });
 }
 
+/**
+ * The fields a disable brings home and the companion columns they come from: each field whose
+ * column the previous snapshot records in the companion. The snapshot, not the config, says what
+ * the companion holds, so a field added in the disabling edit is not among them.
+ */
+function recordedCompanionFields(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevMain: TableSpec,
+  dialect: SupportedDialect
+): {
+  field: MinimalConfigEntity["fields"][number];
+  column: LocalizedColumnSpec;
+}[] {
+  const recorded = prevMain.localizedColumns ?? [];
+  const out: {
+    field: MinimalConfigEntity["fields"][number];
+    column: LocalizedColumnSpec;
+  }[] = [];
+  for (const field of entity.fields) {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(entity, kind)
+    );
+    if (column && recorded.includes(column.name)) out.push({ field, column });
+  }
+  return out;
+}
+
 function buildDisableSpec(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind,
@@ -1595,18 +1736,9 @@ function buildDisableSpec(
   dialect: SupportedDialect,
   defaultLocale: string
 ): CompanionMigrationSpec | null {
-  const recorded = prevMain.localizedColumns;
-  if (!recorded || recorded.length === 0) return null;
-
-  const columns: LocalizedColumnSpec[] = [];
-  for (const f of entity.fields) {
-    const col = fieldToLocalizedColumnSpec(
-      f,
-      dialect,
-      columnOriginOf(entity, kind)
-    );
-    if (col && recorded.includes(col.name)) columns.push(col);
-  }
+  const columns = recordedCompanionFields(entity, kind, prevMain, dialect).map(
+    r => r.column
+  );
   if (columns.length === 0) return null;
 
   return {
@@ -1861,6 +1993,25 @@ function disableEntryFor(
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
+  // Turning translation off moves every translated field out of it at once, so each is judged as
+  // a field leaving translation alone is (`refusalsForFieldsLeavingTranslation`): one whose shared
+  // column is shaped otherwise than its translated one is refused before any file is written. The
+  // fields judged are the ones the disable brings home (`recordedCompanionFields`), so a field
+  // added in the same edit, which the companion never held, is left to the main table's diff.
+  refuseMigration(
+    c,
+    refusalsForFieldsLeavingTranslation({
+      leaving: new Set(
+        recordedCompanionFields(c, entityKind, prevMain, dialect).map(
+          r => r.field.name
+        )
+      ),
+      newFields: c.fields,
+      dialect,
+      builtBy: columnOriginOf(c, entityKind),
+      surface: "code",
+    })
+  );
   // The snapshot's recorded column list is the AUTHORITATIVE description of what the
   // companion actually holds; the current config is not, because the same edit that
   // flipped the switch may also have added or unflagged fields. Restoring exactly the
@@ -2515,7 +2666,8 @@ function planFieldsJoiningTranslation(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string,
-  history: TranslationRecords
+  history: TranslationRecords,
+  judgement: GenerateArgs["joiningJudgement"]
 ): FieldJoinsEntry[] {
   return entities.flatMap(entry => {
     const { entity: c, kind } = entry;
@@ -2536,7 +2688,8 @@ function planFieldsJoiningTranslation(
       { entity: { ...c, fields: oldFields }, kind },
       joining,
       prevMain,
-      dialect
+      dialect,
+      judgement?.slug === c.slug ? judgement : undefined
     );
     return [
       {
@@ -2763,7 +2916,8 @@ function assertFieldsMayJoinTranslation(
   asShared: TaggedConfigEntity,
   joining: readonly LeavingField[],
   prevMain: TableSpec | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  judgement: GenerateArgs["joiningJudgement"]
 ): void {
   const { entity: c, kind } = asShared;
   const sharedMain = buildDesiredSnapshotFromConfig(
@@ -2774,34 +2928,54 @@ function assertFieldsMayJoinTranslation(
   ).tables.find(t => t.name === c.tableName);
   const typeIn = (table: TableSpec | undefined, column: string) =>
     table?.columns.find(col => col.name === column)?.type;
+  const surface = judgement?.surface ?? "code";
+  const { moved, narrowed } = judgement?.retries ?? {
+    moved: new Set<string>(),
+    narrowed: new Set<string>(),
+  };
   const reshaped = joining
-    .filter(({ column }) => {
+    .filter(({ field, column }) => {
       const before = typeIn(prevMain, column.name);
-      return before !== undefined && before !== typeIn(sharedMain, column.name);
+      return (
+        !moved.has(field.name) &&
+        before !== undefined &&
+        before !== typeIn(sharedMain, column.name)
+      );
     })
     .map(({ field }) => field.name);
-  refuseMigration(
-    c,
-    refusalsForFieldsJoiningTranslation({ reshaped, surface: "code" })
-  );
+  refuseMigration(c, [
+    ...refusalsForFieldsJoiningTranslation({ reshaped, surface }),
+    // A field an earlier apply already moved is a retry, judged as the push's
+    // preflight judges it, by the field as it was and as it is: one the
+    // change narrows is refused with how to finish the earlier change; one
+    // whose new storage holds every old value is copied whole wherever the
+    // file runs.
+    ...refusalsForMovedJoinsNarrowed({
+      narrowed: joining
+        .map(({ field }) => field.name)
+        .filter(name => moved.has(name) && narrowed.has(name)),
+      surface,
+    }),
+  ]);
 }
 
 /**
- * The column rule an entity's tables are described by: a Builder collection's
- * (`settings.source === "builder"`) is the Builder's own, which it creates its
- * main table and its translations table by; every other entity's is the
- * code-first rule. On MySQL the two read an unstated text width differently,
- * so describing a Builder table by the code-first rule wrote a column the
- * table never had. Every place a table or a translated column is described
- * asks this one question.
+ * The column rule an entity's tables are described by: a Builder entity's
+ * (`settings.source === "builder"`) is the rule of the Builder creator that
+ * builds its tables (a collection's and a Single's one, a field group's
+ * another), and every other entity's is the code-first rule. On MySQL they
+ * read an unstated text width differently, so describing a Builder table by
+ * the code-first rule wrote a column the table never had. Every place a table
+ * or a translated column is described asks this one question, and it is
+ * answered by `builtByFor`, as `nextly migrate` and the runtime answer it.
  */
 function columnOriginOf(
   entity: MinimalConfigEntity,
   kind: I18nTransitionKind
 ): ColumnOrigin {
-  return kind === "collection" && entity.settings?.source === "builder"
-    ? "collection"
-    : "codeFirst";
+  // The rule the push applies (`builtByFor`), so a Builder Single's or field group's table is
+  // described as its Builder creator made it, here too, and no file plans narrowing its columns.
+  return builtByFor(kind, entity.settings?.source === "builder");
 }
 
 /**
@@ -3216,25 +3390,62 @@ export function applyRenameDecisionsForTest(
 }
 
 /*
- * The collection tables a migration would drop. Here, beside the snapshot
- * they are read from: most runs drop none, so `migrate:create` asks this
- * first and loads the check that judges them (`removed-collections`), with
- * the readers it needs, only when there is something to judge.
+ * The entity tables a migration would drop. Here, beside the snapshot they
+ * are read from: most runs drop none, so `migrate:create` asks this first and
+ * loads the check that judges them (`removed-collections`), with the readers
+ * it needs, only when there is something to judge.
  */
 /** Every collection's table starts with this, whatever its slug or `dbName`. */
 export const COLLECTION_TABLE_PREFIX = "dc_";
+/** Every Single's table starts with this, whatever its slug or `dbName`. */
+export const SINGLE_TABLE_PREFIX = "single_";
+
+/** The tables a migration would drop, by the kind of entity each belongs to. */
+export interface RemovedEntityTables {
+  collections: string[];
+  singles: string[];
+  fieldGroups: string[];
+}
 
 /**
- * The collection tables the latest snapshot holds that the configuration no
- * longer declares: the tables the next migration would drop.
+ * The system columns every field-group table carries, all of them: its parent's id, table and
+ * field, and its order among them.
  */
-export function removedCollectionTables(input: {
+const FIELD_GROUP_SIGNATURE = [
+  STORAGE_FORMAT.columns.parentId,
+  STORAGE_FORMAT.columns.parentTable,
+  STORAGE_FORMAT.columns.parentField,
+  STORAGE_FORMAT.columns.order,
+];
+
+/**
+ * Whether a table is a field group's: carrying the whole set of system columns every field-group
+ * table has, or named with the field-group prefix. The columns are asked first: a field group
+ * named through the `dbName` it once accepted keeps the table its author chose, which may carry any
+ * prefix, a collection's or a Single's included, but no collection or Single has those columns (a
+ * field name starts with a letter), and a column a plugin or the app contributes is one name, not
+ * the whole set.
+ */
+function isFieldGroupTable(table: TableSpec): boolean {
+  const columns = new Set(table.columns.map(column => column.name));
+  if (FIELD_GROUP_SIGNATURE.every(column => columns.has(column))) return true;
+  return table.name.startsWith(STORAGE_FORMAT.tablePrefix);
+}
+
+/**
+ * The entity tables the latest snapshot holds that the configuration no
+ * longer declares: the tables the next migration would drop, each by the
+ * prefix its kind of entity names it with, and a field group's by its columns
+ * where its name has no prefix (`isFieldGroupTable`). A removed entity's
+ * translation and junction tables are among them, under the same prefix.
+ */
+export function removedEntityTables(input: {
   previous: NextlySchemaSnapshot;
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
   dialect: SupportedDialect;
-}): string[] {
+}): RemovedEntityTables {
   const desired = new Set(
     buildDesiredSnapshotFromConfig(
       input.collections,
@@ -3243,11 +3454,19 @@ export function removedCollectionTables(input: {
       input.dialect
     ).tables.map(table => table.name)
   );
-  return input.previous.tables
-    .map(table => table.name)
-    .filter(
-      name => name.startsWith(COLLECTION_TABLE_PREFIX) && !desired.has(name)
-    );
+  const removed = input.previous.tables.filter(
+    table => !desired.has(table.name)
+  );
+  const names = (tables: readonly TableSpec[]) => tables.map(t => t.name);
+  const fieldGroups = removed.filter(isFieldGroupTable);
+  const others = removed.filter(t => !fieldGroups.includes(t));
+  return {
+    collections: names(
+      others.filter(t => t.name.startsWith(COLLECTION_TABLE_PREFIX))
+    ),
+    singles: names(others.filter(t => t.name.startsWith(SINGLE_TABLE_PREFIX))),
+    fieldGroups: names(fieldGroups),
+  };
 }
 
 /**

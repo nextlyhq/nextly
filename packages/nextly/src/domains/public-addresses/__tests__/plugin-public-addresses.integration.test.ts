@@ -273,7 +273,7 @@ describe.each(getConfiguredTestDialects())(
       await expect(outcome).rejects.toThrow("second record failed");
     });
 
-    it("held pages through a type oldest first, each once", async () => {
+    it("held pages through a type in id order, each once", async () => {
       const { t, ctx } = await boot(dialect);
       const ids = [
         await publish(t, "one"),
@@ -297,16 +297,15 @@ describe.each(getConfiguredTestDialects())(
       expect(listed.map(item => item.holder.id).sort()).toEqual(
         [...ids].sort()
       );
-      // Oldest first: by creation, then id, which settles entries made in
-      // the same second (SQLite keeps seconds).
-      const created = await t.nextly.find({
-        collection: "posts",
-        sort: ["createdAt", "id"],
-      });
+      // In id order, the order the cursor pages in, so a document made or
+      // deleted while a caller pages never moves one not yet read behind it.
+      // Ids need not follow creation order, so this is not creation order.
+      const byId = await t.nextly.find({ collection: "posts", sort: "id" });
       expect(listed.map(item => item.holder.id)).toEqual(
-        created.items.map(item => String(item.id))
+        byId.items.map(item => String(item.id))
       );
-      // Each carries when it was made, for ordering across types.
+      // Each carries when it was made, for a caller to settle claims oldest
+      // first across types.
       expect(listed.every(item => typeof item.createdAt === "string")).toBe(
         true
       );

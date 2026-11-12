@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PluginDefinition } from "./plugin-context";
 import { definePlugin } from "./plugin-context";
@@ -6,7 +6,10 @@ import { definePlugin } from "./plugin-context";
 import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 
+import { setNextlyLogger } from "../observability/logger";
+
 import { buildPluginAdminMeta } from "./admin-meta";
+import { reportUserMenuItemProblems } from "./header-item";
 
 const base = {
   name: "@acme/p",
@@ -1390,5 +1393,325 @@ describe("buildPluginAdminMeta, a plugin's translations", () => {
         undefined
       )
     ).toThrow(NextlyError);
+  });
+});
+
+describe("a plugin's own item, in the place it chose", () => {
+  /** The plugin's own staff route a menu item's `run` may name. */
+  const SYNC_ROUTE = {
+    method: "POST",
+    path: "/sync",
+    handler: () => new Response(),
+  };
+  const withHeader = (header: unknown, rest: object = {}) =>
+    asPlugins([
+      {
+        ...base,
+        ...rest,
+        contributes: { routes: [SYNC_ROUTE], admin: { header } },
+      },
+    ]);
+  const headerOf = (header: unknown, rest?: object) =>
+    buildPluginAdminMeta(withHeader(header, rest), undefined)[0];
+
+  it("keeps a slot that names no place at the bar, exactly as before", () => {
+    const meta = headerOf({ slot: "@acme/p/admin#Publish" });
+    expect(meta.header).toEqual({ slot: "@acme/p/admin#Publish" });
+    expect(meta.headerSlot).toBe("@acme/p/admin#Publish");
+  });
+
+  it("serializes the bar named outright as the default, with no place", () => {
+    const meta = headerOf({ slot: "@acme/p/admin#Publish", place: "bar" });
+    expect(meta.header).toEqual({ slot: "@acme/p/admin#Publish" });
+    expect(meta.headerSlot).toBe("@acme/p/admin#Publish");
+  });
+
+  it("serializes a slot at the rail's foot, and mirrors no bar slot for it", () => {
+    const meta = headerOf({
+      slot: "@acme/p/admin#Helper",
+      place: "rail-foot",
+      hide: ["docs"],
+    });
+    expect(meta.header).toEqual({
+      slot: "@acme/p/admin#Helper",
+      place: "rail-foot",
+      hide: ["docs"],
+    });
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it("folds the deprecated headerSlot into the rail's foot when that is the place", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#Old",
+              header: { place: "rail-foot" },
+            },
+          },
+        },
+      ]),
+      undefined
+    )[0];
+    expect(meta.header).toEqual({
+      slot: "@acme/p/admin#Old",
+      place: "rail-foot",
+    });
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it("serializes a menu link with its id, and no slot", () => {
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "Support", icon: "LifeBuoy", to: "/admin/plugins/p" },
+      hideDefaults: true,
+    });
+    expect(meta.header).toEqual({
+      place: "menu",
+      item: {
+        id: "acme-p.user-menu",
+        label: "Support",
+        icon: "LifeBuoy",
+        to: "/admin/plugins/p",
+      },
+      hideDefaults: true,
+    });
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it("serializes a menu action, and only the declared fields", () => {
+    const action = { run: { method: "POST", path: "/sync" } };
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "Sync", icon: "RefreshCw", action, extra: "dropped" },
+    });
+    expect(meta.header?.item).toEqual({
+      id: "acme-p.user-menu",
+      label: "Sync",
+      icon: "RefreshCw",
+      action,
+    });
+  });
+
+  it("publishes a menu action that opens a component", () => {
+    const action = { open: "@acme/p/admin#Report" };
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "Report", icon: "BookOpen", action },
+    });
+    expect(meta.header?.item?.action).toEqual(action);
+  });
+
+  it.each([
+    ["null", null],
+    ["an empty object", {}],
+    ["a run that is not a route", { run: "x" }],
+    ["an open that names no component", { open: 5 }],
+    [
+      "both open and run",
+      { open: "@a#B", run: { method: "POST", path: "/sync" } },
+    ],
+    [
+      "a run naming no route of the plugin's",
+      { run: { method: "POST", path: "/gone" } },
+    ],
+  ])("leaves out a menu item whose action is %s", (_case, action) => {
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "X", icon: "BookOpen", action },
+    });
+    expect(meta.header).toBeUndefined();
+  });
+
+  it("never publishes a component for the menu, even a deprecated headerSlot", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            admin: {
+              headerSlot: "@acme/p/admin#Old",
+              header: {
+                place: "menu",
+                item: { label: "Help", icon: "BookOpen", to: "/x" },
+              },
+            },
+          },
+        },
+      ]),
+      undefined
+    )[0];
+    expect(meta.header?.slot).toBeUndefined();
+    expect(meta.headerSlot).toBeUndefined();
+  });
+
+  it.each([
+    ["neither a link nor an action", { label: "X", icon: "BookOpen" }],
+    [
+      "both a link and an action",
+      { label: "X", icon: "BookOpen", to: "/x", action: { open: "@a#B" } },
+    ],
+  ])("leaves out a menu item with %s", (_case, item) => {
+    const meta = headerOf({ place: "menu", item, hide: ["github"] });
+    expect(meta.header).toEqual({ hide: ["github"] });
+  });
+
+  it("publishes nothing for a disabled plugin, in any place", () => {
+    for (const header of [
+      { slot: "@acme/p/admin#Helper", place: "rail-foot" },
+      { place: "menu", item: { label: "X", icon: "BookOpen", to: "/x" } },
+    ]) {
+      const meta = headerOf(header, { enabled: false });
+      expect(meta.header).toBeUndefined();
+      expect(meta.headerSlot).toBeUndefined();
+    }
+  });
+});
+
+describe("the start-up report of a menu item left out", () => {
+  const warn = vi.fn();
+  /** The host's logger, as start-up resolves it. */
+  const logger = { error: vi.fn(), warn, info: vi.fn(), debug: vi.fn() };
+  /** Where a report would land if it went to the global logger instead. */
+  const globalWarn = vi.fn();
+  const plugins = asPlugins([
+    {
+      ...base,
+      contributes: {
+        admin: {
+          header: { place: "menu", item: { label: "X", icon: "BookOpen" } },
+        },
+      },
+    },
+    {
+      ...base,
+      name: "@acme/fine",
+      contributes: {
+        admin: {
+          header: {
+            place: "menu",
+            item: { label: "Y", icon: "BookOpen", to: "/y" },
+          },
+        },
+      },
+    },
+  ]);
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    setNextlyLogger(undefined);
+    warn.mockReset();
+    globalWarn.mockReset();
+  });
+
+  it("names the plugin and why, in development, to the logger it is handed", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    setNextlyLogger({ ...logger, warn: globalWarn });
+    reportUserMenuItemProblems(plugins, logger);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain(
+      "@acme/p: its item has neither a link nor an action"
+    );
+    expect(warn.mock.calls[0][1]).toEqual({
+      kind: "plugin-user-menu-item-left-out",
+    });
+    expect(globalWarn).not.toHaveBeenCalled();
+  });
+
+  it("reports each malformed action, by what is wrong with it", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const withAction = (name: string, action: unknown) => ({
+      ...base,
+      name,
+      contributes: {
+        admin: {
+          header: { place: "menu", item: { label: "X", icon: "I", action } },
+        },
+      },
+    });
+    reportUserMenuItemProblems(
+      asPlugins([
+        withAction("@acme/null", null),
+        withAction("@acme/empty", {}),
+        withAction("@acme/run", { run: "x" }),
+        withAction("@acme/open", { open: 5 }),
+      ]),
+      logger
+    );
+    expect(warn.mock.calls.map(call => String(call[0]))).toEqual([
+      expect.stringContaining("@acme/null: its `action` is not an action"),
+      expect.stringContaining(
+        "@acme/empty: its `action` must be exactly one of"
+      ),
+      expect.stringContaining("@acme/run: its `action.run` is not a route's"),
+      expect.stringContaining(
+        "@acme/open: its `action.open` names no component"
+      ),
+    ]);
+  });
+
+  it.each(["production", "test"])("is silent in %s", env => {
+    vi.stubEnv("NODE_ENV", env);
+    reportUserMenuItemProblems(plugins, logger);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildPluginAdminMeta, a standalone plugin's landing", () => {
+  /** A plugin owning `reports` and an `overview` page, naming `landing`. */
+  function reports(landing?: string, extra: object = {}): PluginDefinition {
+    return definePlugin({
+      ...base,
+      ...extra,
+      admin: {
+        placement: "standalone",
+        ...(landing === undefined ? {} : { landing }),
+      },
+      contributes: {
+        collections: [{ slug: "reports" } as never],
+        admin: {
+          pages: [{ path: "overview", component: "@acme/p/admin#Overview" }],
+        },
+      },
+    } as unknown as PluginDefinition);
+  }
+
+  const landingOf = (
+    plugin: PluginDefinition,
+    overrides?: Parameters<typeof buildPluginAdminMeta>[1]
+  ) => buildPluginAdminMeta([plugin], overrides)[0].landing;
+
+  it("serializes a page landing as the address the admin mounts it at", () => {
+    expect(landingOf(reports("/admin/plugins/acme-p/overview"))).toBe(
+      "/admin/plugins/acme-p/overview"
+    );
+  });
+
+  it("serializes a collection landing through the host's rename", () => {
+    const plugin = reports("/admin/collections/reports");
+    // The control: unrenamed, the declared slug is the address.
+    expect(landingOf(plugin)).toBe("/admin/collections/reports");
+    const renamed = plugin.rename?.({ reports: "acme-reports" }) ?? plugin;
+    expect(landingOf(renamed)).toBe("/admin/collections/acme-reports");
+  });
+
+  it("lets the site's override win", () => {
+    expect(
+      landingOf(reports("/admin/collections/reports"), {
+        "acme-p": { landing: "/admin/plugins/acme-p/overview" },
+      })
+    ).toBe("/admin/plugins/acme-p/overview");
+  });
+
+  it("drops a landing naming nothing the plugin owns, and any when disabled", () => {
+    // The control for both: the same plugin with a landing it owns has one.
+    expect(landingOf(reports("/admin/collections/reports"))).toBeDefined();
+    expect(landingOf(reports("/admin/collections/posts"))).toBeUndefined();
+    expect(
+      landingOf(reports("/admin/collections/reports", { enabled: false }))
+    ).toBeUndefined();
+    expect(landingOf(reports())).toBeUndefined();
   });
 });

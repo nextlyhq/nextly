@@ -580,9 +580,18 @@ function textKindFor(
       : "text";
   }
 
+  // A unique field's key needs a bounded column on MySQL, which cannot key TEXT without a prefix
+  // length, and a prefix key would make only the first characters unique. So a Builder field that
+  // states no width and is unique gets the bounded default, as `slug` does: a constraint of the
+  // column. The Builder's creators refused such a field on MySQL rather than make it, so no live
+  // column is described differently by this; the bounded `text` kind is `text` on the other
+  // dialects. The code-first rule already bounds a field that states no width.
+  const keyedUnique = field.unique === true;
+
   switch (builtBy) {
     case "collection":
       if (variant === "short") return "shortText";
+      if (keyedUnique) return "text";
       // Silence is unbounded here, which is the opposite of the code-first default and the reason
       // this argument exists: the same declaration is 65 535 characters on a Builder table and 255
       // on a code-first one, on MySQL.
@@ -598,10 +607,13 @@ function textKindFor(
       // keys are its own, and one that happens to be spelled `maxLength` must not reshape the
       // column — so it builds such a field unbounded. Reading it here bounded a column the creator
       // had just made unbounded, which reports a type change on an untouched column.
-      return isBuiltInFieldType(String(field.type)) &&
+      if (
+        isBuiltInFieldType(String(field.type)) &&
         declaredMaxLength(field, builtBy) !== undefined
-        ? "shortText"
-        : "longText";
+      ) {
+        return "shortText";
+      }
+      return keyedUnique ? "text" : "longText";
 
     case "codeFirst":
       // These four lines ARE the rule this module applied before any builder was named, and that

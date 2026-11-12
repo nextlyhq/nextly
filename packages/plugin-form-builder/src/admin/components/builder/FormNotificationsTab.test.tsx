@@ -327,7 +327,10 @@ describe("the notification's email template", () => {
     const link = await screen.findByRole("link", {
       name: /open form submitted in email/i,
     });
-    expect(link).toHaveAttribute("href", "/admin/email/messages/edit/tpl-1");
+    expect(link).toHaveAttribute(
+      "href",
+      "/admin/settings/email/messages/edit/tpl-1"
+    );
     // A new tab, so leaving the builder can't lose its unsaved changes.
     expect(link).toHaveAttribute("target", "_blank");
   });

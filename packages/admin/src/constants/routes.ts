@@ -110,16 +110,22 @@ export const ROUTES = {
   USERS_FIELDS: "/admin/users/fields",
   USERS_FIELDS_CREATE: "/admin/users/fields/create",
   USERS_FIELDS_EDIT: "/admin/users/fields/edit/[id]",
-  // The Email hub: Messages (the hub's landing page), Design, Sending and
-  // Activity, each a tab, with the editors under the tab they belong to.
-  EMAIL: "/admin/email",
-  EMAIL_DESIGN: "/admin/email/design",
-  EMAIL_SENDING: "/admin/email/sending",
-  EMAIL_ACTIVITY: "/admin/email/activity",
-  EMAIL_MESSAGES_CREATE: "/admin/email/messages/create",
-  EMAIL_MESSAGES_EDIT: "/admin/email/messages/edit/[id]",
-  EMAIL_SENDING_CREATE: "/admin/email/sending/create",
-  EMAIL_SENDING_EDIT: "/admin/email/sending/edit/[id]",
+  // The Email hub, a Settings destination: Messages (the hub's landing page),
+  // Design, Sending and Activity, each a tab, with the editors under the tab
+  // they belong to.
+  EMAIL: "/admin/settings/email",
+  EMAIL_DESIGN: "/admin/settings/email/design",
+  EMAIL_SENDING: "/admin/settings/email/sending",
+  EMAIL_ACTIVITY: "/admin/settings/email/activity",
+  EMAIL_MESSAGES_CREATE: "/admin/settings/email/messages/create",
+  EMAIL_MESSAGES_EDIT: "/admin/settings/email/messages/edit/[id]",
+  EMAIL_SENDING_CREATE: "/admin/settings/email/sending/create",
+  EMAIL_SENDING_EDIT: "/admin/settings/email/sending/edit/[id]",
+  // Where the hub lived when it had a rail entry of its own. Every address
+  // under it redirects to the same page under Settings, so bookmarks and links
+  // keep working.
+  OLD_EMAIL_HUB: "/admin/email",
+  OLD_EMAIL_HUB_PAGE: "/admin/email/[...rest]",
   // Where email lived under Settings before the hub. Each redirects to its
   // place in the hub, so bookmarks and links keep working.
   SETTINGS_EMAIL_PROVIDERS: "/admin/settings/email-providers",

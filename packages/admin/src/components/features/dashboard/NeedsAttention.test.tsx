@@ -185,6 +185,14 @@ describe("NeedsAttention", () => {
       /\/releases\?tab=attention&reason=overdue$/
     );
 
+    // Each mark in its status's text colour, never a tinted shade.
+    expect(within(overdue).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-danger-text"
+    );
+    expect(within(seo).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-warning-text"
+    );
+
     // A plugin's warning: a triangle rather than a circle, its floor capped at "99+", and no
     // reason line when the plugin gave none.
     expect(

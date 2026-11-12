@@ -11,9 +11,11 @@ import type { PluginOverride } from "../shared/types/config";
 
 import type {
   HeaderButtonId,
+  PluginAdminContributions,
   PluginAdminPage,
   PluginListFilterDeclaration,
   PluginMenuItem,
+  PluginUserMenuItem,
 } from "./admin-contributions";
 import { contributedListFilters } from "./admin-filters";
 import type { PluginTranslations } from "./contributions";
@@ -22,12 +24,22 @@ import {
   type PublishedDocumentActionOverride,
   type PublishedPanelSection,
 } from "./document-surfaces";
+import {
+  headerItemPlace,
+  headerSlotOf,
+  userMenuItemId,
+  validUserMenuItem,
+} from "./header-item";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
   PluginCategory,
   PluginDefinition,
 } from "./plugin-context";
+import {
+  resolvedPluginPlacement,
+  resolvePluginLanding,
+} from "./plugin-landing";
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginTranslations } from "./plugin-translations";
 import { collectPluginRoutes } from "./routes/collect-routes";
@@ -35,6 +47,7 @@ import { isRouteError } from "./routes/route-error";
 import {
   collectionContributors,
   renamedSlug,
+  retargetedTo,
   servedCollectionSlug,
 } from "./served-collection-slug";
 import { settingsPermissionOf } from "./settings-permission";
@@ -45,6 +58,12 @@ import {
 } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
+
+/**
+ * A plugin's person's-menu item as the admin receives it: as declared, with
+ * the id its action's route is called with, `<plugin-slug>.user-menu`.
+ */
+export type PublishedUserMenuItem = PluginUserMenuItem & { id: string };
 
 /**
  * The serialized admin-meta entry for a single plugin, consumed by the admin
@@ -78,6 +97,15 @@ export interface PluginAdminMeta {
   placement: string;
   order?: number;
   after?: PluginOverride["after"];
+  /**
+   * Where the plugin's own rail item goes, as an admin address: the site's
+   * `pluginOverrides` landing or the plugin's `admin.landing`, resolved as a
+   * menu item's `to` is (`resolvePluginLanding`). Absent when neither names
+   * one of the plugin's pages or collections, and for a disabled plugin,
+   * whose pages are not drawn; the admin then falls back to the plugin's
+   * first visible collection.
+   */
+  landing?: string;
   appearance?: PluginAdminAppearance;
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
@@ -136,9 +164,15 @@ export interface PluginAdminMeta {
   settings?: { component: string; permission: string };
   /** Admin header-slot component — present only for enabled plugins. */
   headerSlot?: string;
-  /** Header customization — present only for enabled plugins. */
+  /**
+   * Header customization — present only for enabled plugins. `place` is
+   * absent for the bar's right end, as it always was; `slot` is drawn at the
+   * bar or the rail's foot, `item` in the person's menu.
+   */
   header?: {
     slot?: string;
+    place?: "rail-foot" | "menu";
+    item?: PublishedUserMenuItem;
     hideDefaults?: boolean;
     hide?: HeaderButtonId[];
   };
@@ -199,8 +233,8 @@ export { pluginAdminSlug } from "./plugin-slug";
  */
 /**
  * Build the `plugins[]` admin-meta array from the registered plugins, applying
- * host `pluginOverrides` (placement/order/after/appearance) and folding each
- * enabled plugin's `contributes.admin` menu/pages/settings.
+ * host `pluginOverrides` (placement/order/after/landing/appearance) and
+ * folding each enabled plugin's `contributes.admin` menu/pages/settings.
  *
  * Disabled plugins (`enabled: false`) keep their entry (their schema still
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
@@ -248,35 +282,6 @@ function resolvedMenuItem(
     // from exactly the readers who can open the list.
     requiredPermission: `read-${slug}`,
   };
-}
-
-/**
- * The item's destination, pointed at the slug the host registered.
- *
- * Returns the declared `to` UNCHANGED when nothing was renamed. Naming a
- * collection is how an item opts into rename-safety and RBAC, not a request to
- * be sent somewhere canonical, so an item whose destination carries list state
- * — `?status=draft`, a hash, a sub-path — keeps it. Overwriting it made adding
- * `collection` to a working link change where that link went.
- *
- * When the slug DID move, only the collection segment is rewritten and
- * whatever followed it is carried across. A destination that does not address
- * the declared collection at all is left alone: the item named a collection so
- * its permission still moves, but a path this function does not recognise is
- * not one it should be inventing a new spelling for.
- */
-function retargetedTo(to: string, declared: string, resolved: string): string {
-  if (declared === resolved) return to;
-
-  const prefix = `/admin/collections/${declared}`;
-  const addressesTheList =
-    to === prefix ||
-    to.startsWith(`${prefix}/`) ||
-    to.startsWith(`${prefix}?`) ||
-    to.startsWith(`${prefix}#`);
-  if (!addressesTheList) return to;
-
-  return `/admin/collections/${resolved}${to.slice(prefix.length)}`;
 }
 
 /**
@@ -396,6 +401,50 @@ export function pluginEntitySlugs(plugin: PluginDefinition): PluginEntitySlugs {
   };
 }
 
+/** A plugin's own item, where it chose to put it; nothing for none. */
+function ownItemMeta(
+  plugin: PluginDefinition
+): Pick<NonNullable<PluginAdminMeta["header"]>, "slot" | "place" | "item"> {
+  const admin = plugin.contributes?.admin;
+  const place = headerItemPlace(admin);
+  if (place === "menu") {
+    const item = validUserMenuItem(plugin);
+    return item
+      ? { place, item: publishedUserMenuItem(item, plugin.name) }
+      : {};
+  }
+  const slot = headerSlotOf(admin);
+  if (!slot) return {};
+  return place === "bar" ? { slot } : { slot, place };
+}
+
+/** The declared fields alone, so nothing else a config carries is published. */
+function publishedUserMenuItem(
+  item: PluginUserMenuItem,
+  pluginName: string
+): PublishedUserMenuItem {
+  const id = userMenuItemId(pluginName);
+  const { label, icon } = item;
+  return item.action === undefined
+    ? { id, label, icon, to: item.to }
+    : { id, label, icon, action: item.action };
+}
+
+/** The header record a plugin publishes, or nothing when it says nothing. */
+function headerMeta(
+  admin: PluginAdminContributions,
+  plugin: PluginDefinition
+): PluginAdminMeta["header"] {
+  const hideDefaults = admin.header?.hideDefaults;
+  const hide = admin.header?.hide;
+  const header = {
+    ...ownItemMeta(plugin),
+    ...(hideDefaults ? { hideDefaults } : {}),
+    ...(hide && hide.length > 0 ? { hide } : {}),
+  };
+  return Object.keys(header).length > 0 ? header : undefined;
+}
+
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
   pluginOverrides: Record<string, PluginOverride> | undefined
@@ -444,8 +493,7 @@ export function buildPluginAdminMeta(
       ...(plugin.dependsOn && Object.keys(plugin.dependsOn).length > 0
         ? { dependsOn: plugin.dependsOn }
         : {}),
-      placement:
-        hostOverride?.placement ?? plugin.admin?.placement ?? "plugins",
+      placement: resolvedPluginPlacement(plugin, hostOverride),
       order: hostOverride?.order ?? plugin.admin?.order,
       after: hostOverride?.after ?? plugin.admin?.after,
       appearance: effectiveAppearance,
@@ -481,6 +529,12 @@ export function buildPluginAdminMeta(
     if (declared !== undefined) meta.translations = declared;
 
     // Behavioral admin UI only for enabled plugins.
+    // Resolved here so the admin follows the address and never re-derives it.
+    // An unknown landing is dropped in silence: this runs on every request,
+    // and start-up has already reported it (`pluginLandingWarnings`).
+    const landing = resolvePluginLanding(plugin, hostOverride);
+    if (isEnabled && landing.kind === "resolved") meta.landing = landing.href;
+
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
       if (admin.menu && admin.menu.length > 0) {
@@ -497,20 +551,14 @@ export function buildPluginAdminMeta(
           permission: settingsPermissionOf(plugin),
         };
       }
-      // Header customization. `header.slot` supersedes the
-      // deprecated top-level `headerSlot`; keep `meta.headerSlot` mirrored for
-      // back-compat.
-      const slot = admin.header?.slot ?? admin.headerSlot;
-      const hideDefaults = admin.header?.hideDefaults;
-      const hide = admin.header?.hide;
-      if (slot || hideDefaults || (hide && hide.length > 0)) {
-        meta.header = {
-          ...(slot ? { slot } : {}),
-          ...(hideDefaults ? { hideDefaults } : {}),
-          ...(hide && hide.length > 0 ? { hide } : {}),
-        };
+      // Header customization. `header.slot` supersedes the deprecated
+      // top-level `headerSlot`, which stays mirrored for a slot at the bar,
+      // the one place older admins draw it.
+      const header = headerMeta(admin, plugin);
+      if (header) meta.header = header;
+      if (header?.slot && header.place === undefined) {
+        meta.headerSlot = header.slot;
       }
-      if (slot) meta.headerSlot = slot;
       if (admin.schemaBuilderSlot)
         meta.schemaBuilderSlot = admin.schemaBuilderSlot;
       if (admin.entryFormToolbarSlot)

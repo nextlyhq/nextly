@@ -4,7 +4,7 @@ import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AlertTriangle } from "@admin/components/icons";
+import { AlertCircle, AlertTriangle } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -170,10 +170,12 @@ function lowerFirst(label: string): string {
 
 /**
  * An item's severity, told apart by shape as well as colour, so a reader who
- * cannot tell red from amber still can: critical is "!" in a filled circle,
- * warning "!" in a triangle. Its name is said in words to assistive technology.
+ * cannot tell red from amber still can: critical is "!" in a circle, warning
+ * "!" in a triangle, each in its status's text colour. Its name is said in
+ * words to assistive technology.
  */
 function SeverityMark({ severity }: { severity: AttentionSeverity }) {
+  const Icon = severity === "critical" ? AlertCircle : AlertTriangle;
   return (
     <span
       data-testid={`needs-attention-${severity}`}
@@ -182,16 +184,14 @@ function SeverityMark({ severity }: { severity: AttentionSeverity }) {
         ENTITY_LEADING_CLASS.default
       )}
     >
-      {severity === "critical" ? (
-        <span
-          aria-hidden="true"
-          className="flex size-5 items-center justify-center rounded-full bg-destructive-solid text-xs font-bold text-destructive-foreground"
-        >
-          !
-        </span>
-      ) : (
-        <AlertTriangle aria-hidden="true" className="size-5 text-warning" />
-      )}
+      <Icon
+        aria-hidden="true"
+        data-testid="needs-attention-mark"
+        className={cn(
+          "size-5",
+          severity === "critical" ? "text-danger-text" : "text-warning-text"
+        )}
+      />
       <span className="sr-only">{severityName(severity)}</span>
     </span>
   );

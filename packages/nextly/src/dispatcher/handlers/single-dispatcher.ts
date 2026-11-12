@@ -59,6 +59,7 @@ import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prom
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -1505,17 +1506,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // version the database did not persist.
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_singles",
-              {
-                fields: JSON.stringify(fields),
-                schema_hash: calculateSchemaHash(fields as FieldConfig[]),
-                migration_status: "applied",
-                localized: isLocalized,
-                schema_version: newSchemaVersion,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: slug }] }
+            // The row and the stored schema version in one transaction, so the
+            // version's count moves with the save it records (`writeRegistryRows`).
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_singles",
+                {
+                  fields: JSON.stringify(fields),
+                  schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+                  migration_status: "applied",
+                  localized: isLocalized,
+                  schema_version: newSchemaVersion,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: slug }] }
+              )
             );
             // Written past the registry service, so the cached registry row is cleared here.
             clearRegistryRowCache();

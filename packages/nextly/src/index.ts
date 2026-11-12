@@ -547,6 +547,7 @@ export {
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
@@ -676,11 +677,19 @@ export {
   type PluginListFilterOption,
   type PluginMenuItem,
   type PluginNavSection,
+  type PluginHeaderContributions,
+  type PluginHeaderSlotContributions,
+  type PluginHeaderUserMenuContributions,
+  type PluginItemPlace,
+  type PluginUserMenuAction,
+  type PluginUserMenuItem,
+  type PluginUserMenuLink,
   CORE_ADMIN_PLACES,
   type AdminPlaceId,
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins";
+export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
 
 // "Every content type except these", one answer for each reader of a scope.
 // @experimental
@@ -703,6 +712,11 @@ export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
 // @experimental
 export { nextlyTags } from "./runtime/cache/nextly-tags";
 
+// The paths every robots.txt of a Nextly site keeps crawlers out of, read
+// by `nextlyRobots` and by a plugin that serves the file.
+// @experimental
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "./shared/crawl-exclusions";
+
 // Where an entry is served, as the site declares it: one answer for every
 // reader of a page's public address.
 // @experimental
@@ -717,7 +731,9 @@ export {
 // declares it: the address a path kept in one language is opened at.
 // @experimental
 export {
+  addressOfRequest,
   languageAddressOf,
+  type KeptAddress,
   type LanguageAddress,
   type LanguageAddressRule,
 } from "./domains/i18n/language-addresses";

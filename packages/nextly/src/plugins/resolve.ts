@@ -49,6 +49,7 @@ import { topoSortPlugins } from "./topo-sort";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
+import { validatePluginNames } from "./validate-names";
 import { validatePluginSlugs } from "./validate-slugs";
 import { validatePluginVersions } from "./validate-versions";
 
@@ -302,6 +303,11 @@ export function resolvePlugins(
   plugins: PluginDefinition[],
   opts: ResolvePluginsOptions
 ): PluginDefinition[] {
+  // First, because a name is the key every later record of the plugin is
+  // stored under, and one that is the site's own permission owner (`app`)
+  // must never get as far as being stored. A `setup` transformer's list is
+  // resolved here again, so a plugin it adds or renames is refused the same.
+  validatePluginNames(plugins);
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
   // After the manifests' shape is known good, so a capability is read from a

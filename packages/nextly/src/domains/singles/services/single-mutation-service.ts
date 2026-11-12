@@ -258,6 +258,7 @@ import {
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
+import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
 import type {
   SingleDocument,
   SingleResult,
@@ -1085,6 +1086,18 @@ export class SingleMutationService extends BaseService {
               actor: actorForWrite(params.actor ?? null, params.user),
               personName: params.user?.name ?? null,
               ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+            }
+          );
+          // The discarded part has nothing unpublished left to review: its
+          // review closes with the draft, in this transaction.
+          await closeReviewOnDiscard(
+            tx,
+            { adapter: this.adapter },
+            {
+              document: discardedRef,
+              part: draftLocale,
+              actor: actorForWrite(params.actor ?? null, params.user),
+              personName: params.user?.name ?? null,
             }
           );
         }
