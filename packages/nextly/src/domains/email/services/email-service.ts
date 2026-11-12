@@ -62,10 +62,13 @@ import {
 } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
+import { cancelQueuedEmailAsPerson } from "../queued-cancel";
 import {
+  comparableMailbox,
   type FinalRecipient,
   recipientDigesterOf,
 } from "../queued-send-changes";
+import { type QueuedEmailStatus, readQueuedEmails } from "../queued-send-read";
 import {
   type QueuedEmail,
   type QueuedEmailState,
@@ -1749,6 +1752,58 @@ export class EmailService extends BaseService {
       tx,
       "email.queueWithTemplate"
     );
+  }
+
+  /**
+   * @experimental Where the queued emails among `ids` stand, those this
+   * caller queued only (a plugin's own, through its `ctx.services.email`);
+   * any other id is left out. At most 500 ids.
+   */
+  async readQueued(ids: readonly string[]): Promise<QueuedEmailStatus[]> {
+    return readQueuedEmails(this.adapter, this.keyScope, ids);
+  }
+
+  /**
+   * @experimental This caller's keyed digest of `address`'s mailbox, the
+   * same across restarts and rotations of the install's secret: what each
+   * recipient of a queued email's change carries, and what
+   * `excludeRecipients` takes. Offered to plugins; the first one is taken
+   * outside any transaction, as `ctx.security.digests` asks.
+   *
+   * @throws {NextlyError} `VALIDATION_ERROR` for a caller with no digest key.
+   */
+  async recipientDigest(address: string): Promise<string> {
+    const digester = recipientDigesterOf(this.keyScope);
+    if (!digester) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "address",
+            code: "INVALID",
+            message: "Recipient digests are offered to plugins.",
+          },
+        ],
+      });
+    }
+    return digester(comparableMailbox(address));
+  }
+
+  /**
+   * @experimental Cancel the queued email `id` as a person: one waiting, or
+   * failed with its message held, is cancelled and its message cleared; one
+   * whose attempt is with the provider is asked to stop, which takes effect
+   * if that attempt fails. The plugin that queued it is told, with who
+   * (`userId`, or null for the site's own code). Whoever calls this has been
+   * judged already: the Direct API asks `manage-email-deliveries` first.
+   *
+   * @throws {NextlyError} `NOT_FOUND` for no such email, and `CONFLICT` for
+   *   one already sent or cancelled.
+   */
+  async cancelQueued(
+    id: string,
+    by: { userId: string | null }
+  ): Promise<{ id: string; state: string }> {
+    return cancelQueuedEmailAsPerson(this.adapter, id, by.userId);
   }
 
   /**

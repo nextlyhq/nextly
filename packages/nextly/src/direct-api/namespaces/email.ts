@@ -19,7 +19,8 @@
  * for user fields (reordering them asks update). A checked call that names
  * nobody is refused as unauthenticated. A trusted call is unchanged. Sending
  * through `nextly.email.*` is the site's own code acting, with no REST
- * counterpart, so it takes no grant.
+ * counterpart, so it takes no grant; cancelling a queued email as a person
+ * (`email.cancelQueued`) asks `manage-email-deliveries`.
  *
  * @packageDocumentation
  */
@@ -41,6 +42,7 @@ import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definit
 import type { UpdateEmailTemplateInput } from "../../services/email/email-template-service";
 import type {
   ApplyEmailTemplateUpdateArgs,
+  CancelQueuedEmailArgs,
   CompareEmailTemplateArgs,
   OverrideEmailTemplateArgs,
   ResetEmailTemplateArgs,
@@ -180,6 +182,15 @@ export interface EmailNamespace {
   queue(args: QueueEmailArgs): Promise<QueuedEmail>;
   /** @experimental Queue an email made from a template, rendered at each attempt. */
   queueWithTemplate(args: QueueTemplateEmailArgs): Promise<QueuedEmail>;
+  /**
+   * @experimental Cancel a queued email as a person: one waiting, or failed
+   * with its message held, is cancelled; one being sent is asked to stop,
+   * which takes effect if that attempt fails. The plugin that queued it is
+   * told who cancelled it. A checked call needs `manage-email-deliveries`.
+   */
+  cancelQueued(
+    args: CancelQueuedEmailArgs
+  ): Promise<MutationResult<{ id: string; state: string }>>;
 }
 
 /**
@@ -216,6 +227,22 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         args.variables ?? {},
         templateOptions(args)
       );
+    },
+
+    async cancelQueued(
+      args: CancelQueuedEmailArgs
+    ): Promise<MutationResult<{ id: string; state: string }>> {
+      // A precondition: judged before anything is read or cancelled.
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailDeliveries.cancel
+      );
+      const actor = directApiActor(ctx.defaultConfig, args);
+      const item = await ctx.emailSendService.cancelQueued(args.id, {
+        userId: actor?.type === "user" ? actor.id : null,
+      });
+      return { message: "Email cancelled.", item };
     },
   };
 }
