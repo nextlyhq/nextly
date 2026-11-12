@@ -501,7 +501,11 @@ describe.each(getConfiguredTestDialects())(
         labels: { singular: "Entry", plural: "Entries" },
         admin: { group: "Content" },
         status: true,
-        fields: [text({ name: "title" }), number({ name: "rank" })],
+        fields: [
+          // A field setting the schema hash omits, which both paths store.
+          text({ name: "title", admin: { description: "The headline" } }),
+          number({ name: "rank" }),
+        ],
       });
       const single = defineSingle({
         slug: "rr_par_site",
@@ -1117,6 +1121,42 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(await collectionRow(instance!, dialect, "rr_own")).toEqual(own);
       });
+    });
+
+    // One point, two paths to it: `nextly migrate` stopping there, and
+    // `migrate:down` coming back to it from a later migration.
+    it("migrate:down to a point leaves the rows nextly migrate leaves there", async () => {
+      const first = posts("Posts");
+      await migrateCreate(first, "create_posts");
+      await migrated(first);
+      const atPoint = await registryRows(instance!, dialect);
+
+      const later = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "rr_posts",
+            description: "All posts",
+            fields: [
+              text({ name: "title", admin: { placeholder: "Title" } }),
+              text({ name: "body" }),
+            ],
+          }),
+          defineCollection({
+            slug: "rr_tags",
+            fields: [text({ name: "label" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      await migrateCreate(later, "later");
+      await migrated(later);
+      await migratedDown(later);
+
+      const back = await registryRows(instance!, dialect);
+      expect(declaredColumns(back.collections, "rr_posts")).toEqual(
+        declaredColumns(atPoint.collections, "rr_posts")
+      );
+      expect(declaredColumns(back.collections, "rr_tags")).toBeUndefined();
     });
 
     describe("an earlier release's snapshots, which record no settings", () => {
