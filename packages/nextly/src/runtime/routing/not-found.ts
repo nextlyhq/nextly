@@ -98,9 +98,22 @@ export function permanentRedirectFrom(load?: Load): (path: string) => never {
 let cachedNotFound: (() => never) | undefined;
 
 /** Trigger the App Router's not-found boundary; never returns (narrows callers). */
-export function triggerNotFound(): never {
+function triggerNotFound(): never {
   cachedNotFound ??= notFoundFrom();
   return cachedNotFound();
+}
+
+/**
+ * Answer a miss with the route's `notFound`, where it has one, then with
+ * {@link triggerNotFound}: a handler that returns rather than throws still
+ * leaves the request answered not found, and a route given none answers as
+ * it always has.
+ */
+export async function answerNotFound(
+  notFound: (() => never | Promise<never>) | undefined
+): Promise<never> {
+  if (notFound !== undefined) await notFound();
+  return triggerNotFound();
 }
 
 let cachedPermanentRedirect: ((path: string) => never) | undefined;

@@ -1,106 +1,271 @@
 /**
- * What the Pages and addresses screen shows, worked out from the list the
- * server answers: the counts above the table, which addresses a filter and
- * a search keep, and the text of Google's result. Pure, so each is tested
- * without the screen.
+ * What the Pages screen shows, worked out from the list the server answers
+ * and the shared problem list: each page's status, its type for the Type
+ * filter, which pages a search and the filters keep, and what the line under
+ * a title says about where it comes from. Pure, so each is tested without
+ * the screen.
  *
  * @module admin/pages-view
  */
-import type { AutomaticValue, SiteAddress } from "../code-pages/contract";
+import type {
+  AutomaticValue,
+  SiteAddress,
+  ValueSource as SourceLevel,
+} from "../code-pages/contract";
+import {
+  KIND_SEVERITY,
+  SEO_TAB_ID,
+  SEVERITY_ORDER,
+  type Problem,
+  type ProblemSeverity,
+} from "../problems/contract";
+import { REDIRECTS_PAGE } from "../redirects/contract";
+import { SEO_ADMIN_SLUG } from "../settings/contract";
 
-/** The filters above the table, by key, with their labels. */
-export const FILTERS = [
-  ["all", "All"],
-  ["entry", "Entries"],
-  ["code", "Built in code"],
-  ["not-connected", "Not connected"],
-] as const;
+/**
+ * How a page stands, as its Status says: the most serious problem the
+ * problem list holds for it; else, for a page built in code whose route
+ * doesn't call the plugin, not connected; else hidden from search, or good.
+ */
+export type PageStatus =
+  | ProblemSeverity
+  | "not-connected"
+  | "hidden"
+  | "good"
+  | "unknown";
 
-export type FilterKey = (typeof FILTERS)[number][0];
+/** Each status's word, as the Status column and its filter say it. */
+export const STATUS_TEXT: Readonly<Record<PageStatus, string>> = {
+  error: "Error",
+  warning: "Warning",
+  notice: "Notice",
+  "not-connected": "Not connected",
+  hidden: "Hidden",
+  good: "Good",
+  unknown: "Not checked",
+};
 
-/** How many addresses there are of each kind, for the summary row. */
-export interface AddressCounts {
-  all: number;
-  entries: number;
-  built: number;
-  dynamic: number;
-  notConnected: number;
-}
+/** The statuses in the order the Status filter offers them. */
+export const STATUS_ORDER: readonly PageStatus[] = [
+  "good",
+  ...SEVERITY_ORDER,
+  "not-connected",
+  "hidden",
+];
 
-/** The counts of `items`, read from the list itself. */
-export function countsOf(items: readonly SiteAddress[]): AddressCounts {
-  return {
-    all: items.length,
-    entries: items.filter(item => item.source === "entry").length,
-    built: items.filter(item => item.source === "built").length,
-    dynamic: items.filter(item => item.source === "dynamic").length,
-    notConnected: items.filter(item => item.standing === "not-connected")
-      .length,
-  };
-}
-
-/** Whether `item` is one `filter` keeps. */
-function kept(item: SiteAddress, filter: FilterKey): boolean {
-  switch (filter) {
-    case "all":
-      return true;
-    case "entry":
-      return item.source === "entry";
-    case "code":
-      return item.source !== "entry";
-    case "not-connected":
-      return item.standing === "not-connected";
-  }
+/** The key the problem list names a page by: its type, id and language. */
+function pageKey(type: string, id: string, locale: string | undefined): string {
+  return [type, id, locale ?? ""].join("\u0000");
 }
 
 /**
- * The addresses `filter` keeps whose address or name holds `query`, case
- * aside, in the order they came.
+ * The content type an entry's problems name it by: a collection's slug, or
+ * `single:<slug>` for a Single.
  */
-export function shownAddresses(
+export function entryTypeKey(entry: NonNullable<SiteAddress["entry"]>): string {
+  return entry.kind === "single" ? `single:${entry.slug}` : entry.slug;
+}
+
+/**
+ * The problem list as Pages reads it: its problems about each page, by the
+ * page's key, and the page types it covers for the reader, where it says.
+ */
+export interface ProblemsByPage {
+  pages: ReadonlyMap<string, readonly Problem[]>;
+  /** The types whose pages the list checked for this reader. */
+  types?: ReadonlySet<string>;
+}
+
+/**
+ * The problem list's problems grouped by the page each is about: read once
+ * for the whole list. A problem about the whole site names no page.
+ */
+export function problemsByPage(
+  problems: readonly Problem[],
+  types?: readonly string[]
+): ProblemsByPage {
+  const pages = new Map<string, Problem[]>();
+  for (const problem of problems) {
+    const { type, id, locale } = problem.subject;
+    if (type === undefined || id === undefined) continue;
+    const key = pageKey(type, id, locale);
+    pages.set(key, [...(pages.get(key) ?? []), problem]);
+  }
+  return types === undefined ? { pages } : { pages, types: new Set(types) };
+}
+
+/** The problems the list holds about `item`; none for a page built in code. */
+export function problemsOf(
+  item: SiteAddress,
+  byPage: ProblemsByPage
+): readonly Problem[] {
+  const { entry } = item;
+  if (entry === undefined) return [];
+  return (
+    byPage.pages.get(pageKey(entryTypeKey(entry), entry.id, entry.locale)) ?? []
+  );
+}
+
+/**
+ * How `item` stands, from the problem list grouped by `problemsByPage`:
+ * unknown while there is no list to read it from, since a page the list
+ * was never read for is not one with no problems.
+ */
+export function statusOf(
+  item: SiteAddress,
+  byPage: ProblemsByPage | undefined
+): PageStatus {
+  if (byPage === undefined) return "unknown";
+  // A page of a type the list doesn't cover for this reader was never
+  // checked for them: no problem listed is no evidence of none.
+  const { entry } = item;
+  if (
+    entry !== undefined &&
+    byPage.types !== undefined &&
+    !byPage.types.has(entryTypeKey(entry))
+  ) {
+    return "unknown";
+  }
+  const severities = new Set(
+    problemsOf(item, byPage).map(problem => KIND_SEVERITY[problem.kind])
+  );
+  const worst = SEVERITY_ORDER.find(severity => severities.has(severity));
+  if (worst !== undefined) return worst;
+  if (item.standing === "not-connected") return "not-connected";
+  if (item.standing === "hidden" || item.standing === "type-hidden") {
+    return "hidden";
+  }
+  return "good";
+}
+
+/** The Type filter's choice for pages built in code. */
+const CODE_TYPE = "code";
+
+/** The Type filter's choice for every Single. */
+const SINGLES_TYPE = "singles";
+
+/**
+ * The Type filter's choice `item` falls under: its collection, every Single
+ * together, or every page built in code together.
+ */
+function typeOf(item: SiteAddress): string {
+  if (item.entry === undefined) return CODE_TYPE;
+  return item.entry.kind === "single"
+    ? SINGLES_TYPE
+    : `collection:${item.entry.slug}`;
+}
+
+/** One choice of the Type filter. */
+export interface TypeChoice {
+  value: string;
+  label: string;
+}
+
+/**
+ * The Type filter's choices for `items`: each collection by its name, in the
+ * order first listed, then the Singles, then the pages built in code, each
+ * only where the list has one.
+ */
+export function typeChoices(items: readonly SiteAddress[]): TypeChoice[] {
+  const collections = new Map<string, string>();
+  let singles = false;
+  let code = false;
+  for (const item of items) {
+    const type = typeOf(item);
+    if (type === CODE_TYPE) code = true;
+    else if (type === SINGLES_TYPE) singles = true;
+    else if (!collections.has(type)) collections.set(type, item.from);
+  }
+  return [
+    ...[...collections].map(([value, label]) => ({ value, label })),
+    ...(singles ? [{ value: SINGLES_TYPE, label: "Singles" }] : []),
+    ...(code ? [{ value: CODE_TYPE, label: "Built in code" }] : []),
+  ];
+}
+
+/** What the list is narrowed to: a search, a type and a status. */
+export interface PagesFilter {
+  query: string;
+  /** A `typeOf` value, or `all`. */
+  type: string;
+  status: PageStatus | "all";
+}
+
+/**
+ * The pages `filter` keeps, in the order they came: of its type and status,
+ * with the search in their address or their name, case aside.
+ */
+export function shownPages(
   items: readonly SiteAddress[],
-  filter: FilterKey,
-  query: string
+  filter: PagesFilter,
+  statusFor: (item: SiteAddress) => PageStatus
 ): SiteAddress[] {
-  const wanted = query.trim().toLowerCase();
+  const wanted = filter.query.trim().toLowerCase();
   return items.filter(
     item =>
-      kept(item, filter) &&
+      (filter.type === "all" || typeOf(item) === filter.type) &&
+      (filter.status === "all" || statusFor(item) === filter.status) &&
       (wanted === "" ||
         item.path.toLowerCase().includes(wanted) ||
         item.name.toLowerCase().includes(wanted))
   );
 }
 
-/** `text` cut to `length` characters, as Google cuts a long one. */
-export function cut(text: string, length: number): string {
-  return text.length > length
-    ? `${text.slice(0, length - 1).trimEnd()} …`
-    : text;
+/**
+ * Where a value comes from, as the line under it says: `level` is the level
+ * of the order that gave it, and `pattern` the pattern a title was made from.
+ */
+export function sourceText(
+  level: SourceLevel | undefined,
+  pattern?: string
+): string {
+  switch (level) {
+    case "page":
+      return "Own value";
+    case "code":
+      return "From the page\u2019s code";
+    case "template":
+      return "From its design";
+    case "pattern":
+      return pattern === undefined ? "From the pattern" : `Pattern: ${pattern}`;
+    case "content":
+      return "From its content";
+    case "site":
+      return "Site default";
+    case undefined:
+      return "None";
+  }
+}
+
+/** What the line under a page's title says of where that title comes from. */
+export function titleSourceText(
+  item: Pick<SiteAddress, "sources" | "titlePattern">
+): string {
+  return sourceText(item.sources.title, item.titlePattern);
 }
 
 /**
- * The address as Google's result writes it under the site's name:
- * `https://example.com › pricing`.
+ * Where an entry is edited in the admin, in its own language: on its SEO tab
+ * where `tab` says so.
  */
-export function resultAddress(canonical: string): string {
-  try {
-    const url = new URL(canonical);
-    const parts = url.pathname.split("/").filter(part => part !== "");
-    return [`${url.protocol}//${url.host}`, ...parts].join(" › ");
-  } catch {
-    return canonical;
-  }
+export function entryHref(
+  entry: NonNullable<SiteAddress["entry"]>,
+  tab?: "seo"
+): string {
+  const page =
+    entry.kind === "single"
+      ? `/admin/singles/${encodeURIComponent(entry.slug)}`
+      : `/admin/collections/${encodeURIComponent(entry.slug)}/${encodeURIComponent(entry.id)}`;
+  const query = new URLSearchParams();
+  if (tab === "seo") query.set("tab", SEO_TAB_ID);
+  if (entry.locale !== undefined) query.set("locale", entry.locale);
+  const search = query.toString();
+  return search === "" ? page : `${page}?${search}`;
 }
 
-/** The site's host, from an address on it; nothing where there is none. */
-export function hostOf(canonical: string | undefined): string | undefined {
-  if (canonical === undefined) return undefined;
-  try {
-    return new URL(canonical).host;
-  } catch {
-    return undefined;
-  }
+/** Where a new redirect from `path` is added, its From filled in. */
+export function newRedirectHref(path: string): string {
+  return `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}?${new URLSearchParams({ from: path }).toString()}`;
 }
 
 /** The note a person copies for a developer whose route is not connected. */
