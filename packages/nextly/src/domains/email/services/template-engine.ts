@@ -180,22 +180,35 @@ const ENTITY_DECODE_MAP: Record<string, string> = {
   "&gt;": ">",
   "&quot;": '"',
   "&#39;": "'",
+  "&apos;": "'",
   "&nbsp;": " ",
   "&copy;": "©",
   "&reg;": "®",
   "&mdash;": "—",
   "&ndash;": "–",
   "&hellip;": "…",
+  "&euro;": "€",
+  "&pound;": "£",
+  "&yen;": "¥",
 };
 
 const ENTITY_DECODE_RE =
-  /&(?:amp|lt|gt|quot|#39|nbsp|copy|reg|mdash|ndash|hellip);/g;
+  /&(?:amp|lt|gt|quot|apos|#39|nbsp|copy|reg|mdash|ndash|hellip|euro|pound|yen);|&#(?:x[0-9a-fA-F]+|\d+);/g;
 
 function decodeEntities(input: string): string {
-  return input.replace(
-    ENTITY_DECODE_RE,
-    match => ENTITY_DECODE_MAP[match] ?? match
-  );
+  return input.replace(ENTITY_DECODE_RE, match => {
+    const named = ENTITY_DECODE_MAP[match];
+    if (named !== undefined) return named;
+    if (match.startsWith("&#x") || match.startsWith("&#X")) {
+      const code = parseInt(match.slice(3, -1), 16);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    }
+    if (match.startsWith("&#")) {
+      const code = parseInt(match.slice(2, -1), 10);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    }
+    return match;
+  });
 }
 
 /**

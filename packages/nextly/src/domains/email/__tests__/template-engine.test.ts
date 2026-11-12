@@ -165,6 +165,9 @@ describe("htmlToText", () => {
     expect(htmlToText("<p>Tom &amp; Jerry &copy; 2026</p>")).toBe(
       "Tom & Jerry © 2026"
     );
+    expect(
+      htmlToText("<p>&euro; 50 &apos;off&apos; &#8364;100 &#x20AC;200</p>")
+    ).toBe("€ 50 'off' €100 €200");
   });
 
   it("collapses excess whitespace and blank lines", () => {

@@ -56,10 +56,9 @@ function ReadAsLiquidConfirm({
         <DialogHeader>
           <DialogTitle>Read {name} as Liquid?</DialogTitle>
           <DialogDescription>
-            From now on its tags and filters work, as in every other email.
-            Check the preview first: what it sends changes wherever it used{" "}
-            <code>{"{% %}"}</code>, a filter, or text the previous engine sent
-            as written.
+            From now on its tags and filters work, as in every other email: what
+            it sends changes wherever it used <code>{"{% %}"}</code>, a filter,
+            or text the previous engine sent as written.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

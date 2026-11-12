@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { shownInboxLine } from "../InboxStrip";
+import { senderName, shownInboxLine } from "../InboxStrip";
 import {
   DEFAULT_VALUES,
   testDraftOf,
@@ -72,5 +72,17 @@ describe("the inbox line", () => {
 
   it("shows the text as written until the first render arrives", () => {
     expect(shownInboxLine(written, null)).toEqual(written);
+  });
+
+  describe("senderName", () => {
+    it("extracts plain and quoted sender names including those with angle brackets", () => {
+      expect(senderName("Alice <alice@example.com>")).toBe("Alice");
+      expect(senderName('"A < B" <shop@example.com>')).toBe("A < B");
+      expect(senderName('"Bob \\"The Boss\\"" <bob@example.com>')).toBe(
+        'Bob "The Boss"'
+      );
+      expect(senderName("<solo@example.com>")).toBe("<solo@example.com>");
+      expect(senderName("plain@example.com")).toBe("plain@example.com");
+    });
   });
 });

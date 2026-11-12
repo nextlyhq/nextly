@@ -9,9 +9,15 @@
 /** The display name of a From value: `Name <address>` gives the name. */
 import type { JSX } from "react";
 
-function senderName(from: string): string {
-  const named = /^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/.exec(from);
-  return (named ? named[1] : from).trim();
+export function senderName(from: string): string {
+  const trimmed = from.trim();
+  const match = /^(.*)<[^>]+>\s*$/.exec(trimmed);
+  if (!match) return trimmed;
+  let name = match[1].trim();
+  if (name.startsWith('"') && name.endsWith('"')) {
+    name = name.slice(1, -1).replace(/\\"/g, '"').trim();
+  }
+  return name || trimmed;
 }
 
 /** The three fields of the inbox line. */
