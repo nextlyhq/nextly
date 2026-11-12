@@ -25,7 +25,7 @@ import {
   Label,
 } from "@nextlyhq/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Send } from "lucide-react";
+import { RotateCcw, Send } from "lucide-react";
 import { type JSX, useState } from "react";
 
 import {
@@ -286,12 +286,15 @@ function ResendAction({
         type="button"
         variant="ghost"
         size="sm"
-        className="h-7 px-2"
+        // Pulled left by its own padding, so its icon lines up with the
+        // notification's name above it.
+        className="-ml-2 h-7 gap-1.5 px-2"
         onClick={() => {
           resend.reset();
           setOpen(true);
         }}
       >
+        <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
         Resend
       </Button>
       <ResendDialog
