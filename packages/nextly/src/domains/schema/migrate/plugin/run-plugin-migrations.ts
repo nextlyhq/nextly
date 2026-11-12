@@ -308,19 +308,13 @@ export async function runPluginMigrations(
     );
   }
   // And for what the server itself can hold: a module generated for every
-  // dialect had no one server to be judged against, so its snapshot is
-  // judged here, against the one about to run it — before any module of any
+  // dialect had no one server to be judged against, so pending modules are
+  // judged here, against the one about to run them — before any module of any
   // plugin applies a check this server ignores or an expression index it
-  // cannot build.
+  // cannot build. Already-applied modules are left alone so a pending module
+  // that removes an unsupported historical construct is not blocked by it.
   if (deps.serverConstructs !== undefined) {
-    for (const set of sets) {
-      for (const migration of orderedMigrations(set.migrations)) {
-        refuseConstructsTheServerCannotHold(
-          migration.snapshot[deps.dialect].tables,
-          deps.serverConstructs
-        );
-      }
-    }
+    refusePendingConstructsTheServerCannotHold(sets, deps);
   }
   const result: PluginMigrationRunResult = {
     applied: 0,
@@ -363,6 +357,71 @@ export function pendingPluginModules(
     }
   }
   return pending;
+}
+
+/**
+ * Refuse pending modules whose snapshot (or contributed elements) declares a
+ * check or expression index the connected server cannot hold, within `limit`.
+ */
+function refusePendingConstructsTheServerCannotHold(
+  sets: readonly PluginMigrationSet[],
+  deps: RunPluginMigrationsDeps
+): void {
+  const server = deps.serverConstructs;
+  if (server === undefined) return;
+  let remaining = moduleBudget(deps.limit);
+  for (const set of sets) {
+    const ordered = orderedMigrations(set.migrations);
+    for (const [at, migration] of ordered.entries()) {
+      if (!isPending(set, migration, deps)) continue;
+      if (remaining <= 0) return;
+      remaining -= 1;
+      refuseConstructsTheServerCannotHold(
+        tablesForServerConstructCheck(ordered, at, deps.dialect),
+        server
+      );
+    }
+  }
+}
+
+/**
+ * The tables a pending module declares or contributes to, narrowed on foreign
+ * tables to the checks and indexes this plugin owns.
+ */
+function tablesForServerConstructCheck(
+  ordered: readonly PluginMigration[],
+  at: number,
+  dialect: SupportedDialect
+): Parameters<typeof refuseConstructsTheServerCannotHold>[0] {
+  const migration = ordered[at];
+  const ownTables = migration.snapshot[dialect]?.tables ?? [];
+  const contributedRaw = migration.contributed?.[dialect]?.tables ?? [];
+  if (contributedRaw.length === 0) return ownTables;
+  const contributions = recordedContributions(
+    ordered.slice(0, at + 1),
+    dialect
+  );
+  return [
+    ...ownTables,
+    ...contributedRaw.map(table =>
+      narrowContributedConstructs(table, contributions[table.name])
+    ),
+  ];
+}
+
+/** Narrow a foreign table's checks and indexes to the ones this plugin contributed. */
+function narrowContributedConstructs(
+  table: NextlySchemaSnapshot["tables"][number],
+  own: { checks: readonly string[]; indexes: readonly string[] } | undefined
+): Parameters<typeof refuseConstructsTheServerCannotHold>[0][number] {
+  if (own === undefined) return { name: table.name };
+  const ownChecks = new Set(own.checks);
+  const ownIndexes = new Set(own.indexes);
+  return {
+    name: table.name,
+    checks: (table.checks ?? []).filter(ck => ownChecks.has(ck.name)),
+    indexes: (table.indexes ?? []).filter(ix => ownIndexes.has(ix.name)),
+  };
 }
 
 /**

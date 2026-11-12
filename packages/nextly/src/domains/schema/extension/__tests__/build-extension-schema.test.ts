@@ -1665,7 +1665,7 @@ describe("server construct gates", () => {
   );
 
   const messageOf = async (
-    tables: ReturnType<typeof tableFor>[],
+    tables: NonNullable<SchemaContribution["tables"]>,
     server: Record<string, unknown>
   ): Promise<string> => {
     try {
@@ -1720,5 +1720,89 @@ describe("server construct gates", () => {
         functionalIndexes: undefined,
       })
     ).toBe("");
+  });
+
+  const buildErrorMessage = async (
+    overrides: Partial<ExtensionSchemaInput>
+  ): Promise<string> => {
+    try {
+      await buildExtensionSchema({
+        ...base([]),
+        ...overrides,
+      });
+      return "";
+    } catch (error) {
+      if (!(error instanceof NextlyError)) throw error;
+      const data = error.publicData as { errors?: { message: string }[] };
+      return data.errors?.[0]?.message ?? "";
+    }
+  };
+
+  it("refuses an app-owned enum column's implied check on a server that will not enforce checks", async () => {
+    const withEnum = defineTable("tickets", {
+      id: col.id(),
+      status: col.enum(["open", "closed"]),
+    });
+    const message = await buildErrorMessage({
+      dialect: "mysql",
+      app: { owner: { kind: "app" }, tables: [withEnum] },
+      server: {
+        enforcesCheckConstraints: false,
+        functionalIndexes: true,
+        serverVersion: "8.0.15",
+      },
+    });
+    expect(message).toContain("8.0.15");
+    expect(message).toContain("tickets");
+    expect(message).toContain("ck_tickets_status_enum");
+  });
+
+  it("refuses a contributed enum column on an entity table when the server will not enforce checks", async () => {
+    const message = await buildErrorMessage({
+      dialect: "mysql",
+      plugins: [
+        {
+          owner: { kind: "plugin", id: "a" },
+          extend: [
+            ({ schema: draft }) => {
+              draft.extendTable("dc_posts", {
+                columns: {
+                  review_state: col.enum(["pending", "approved"], {
+                    nullable: true,
+                  }),
+                },
+              });
+            },
+          ],
+        },
+      ],
+      server: {
+        enforcesCheckConstraints: false,
+        functionalIndexes: true,
+        serverVersion: "8.0.14",
+      },
+    });
+    expect(message).toContain("8.0.14");
+    expect(message).toContain("dc_posts");
+    expect(message).toContain("ck_dc_posts_review_state_enum");
+  });
+
+  it("refuses a plugin-owned enum column's implied check on a server that will not enforce checks", async () => {
+    const withEnum = defineTable("statuses", {
+      id: col.id(),
+      state: col.enum(["pending", "done"]),
+    });
+    const message = await buildErrorMessage({
+      dialect: "mysql",
+      plugins: [{ owner: { kind: "plugin", id: "a" }, tables: [withEnum] }],
+      server: {
+        enforcesCheckConstraints: false,
+        functionalIndexes: true,
+        serverVersion: "8.0.15",
+      },
+    });
+    expect(message).toContain("8.0.15");
+    expect(message).toContain("a__statuses");
+    expect(message).toContain("ck_a__statuses_state_enum");
   });
 });

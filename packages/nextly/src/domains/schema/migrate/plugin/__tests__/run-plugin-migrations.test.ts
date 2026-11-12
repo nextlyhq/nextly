@@ -279,6 +279,153 @@ describe("runPluginMigrations", () => {
     expect(h.executed).toEqual([]);
   });
 
+  it("lets a pending module remove an unsupported check recorded in an already-applied module", async () => {
+    const withCheck: TableSpec = {
+      name: "fx__scores",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "score", type: "int", nullable: false },
+      ],
+      indexes: [],
+      checks: [{ name: "ck_fx__scores_score", sql: "score >= 0" }],
+    };
+    const withoutCheck: TableSpec = {
+      name: "fx__scores",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "score", type: "int", nullable: false },
+      ],
+      indexes: [],
+      checks: [],
+    };
+    const applied = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [withCheck],
+    });
+    const removal = module({
+      name: "002",
+      schemaVersion: 2,
+      before: [withCheck],
+      target: [withoutCheck],
+    });
+    const serverConstructs = {
+      enforcesCheckConstraints: false,
+      functionalIndexes: true,
+      serverVersion: "8.0.14",
+    };
+
+    const first = deps({
+      appliedShas: new Map([["plugin:a/001", applied.checksum]]),
+      serverConstructs,
+    });
+    first.live.set("fx__scores", [withCheck]);
+    const result = await runPluginMigrations(
+      [
+        {
+          pluginName: "a",
+          pluginVersion: "1.0.0",
+          migrations: [applied, removal],
+        },
+      ],
+      first.deps
+    );
+    expect(result).toEqual({ applied: 1, adopted: 0, skipped: 1 });
+    expect(first.started).toEqual(["plugin:a/002"]);
+
+    // Once both modules are applied, subsequent runs still pass on the same server.
+    const second = deps({
+      appliedShas: new Map([
+        ["plugin:a/001", applied.checksum],
+        ["plugin:a/002", removal.checksum],
+      ]),
+      serverConstructs,
+    });
+    const rerun = await runPluginMigrations(
+      [
+        {
+          pluginName: "a",
+          pluginVersion: "1.0.0",
+          migrations: [applied, removal],
+        },
+      ],
+      second.deps
+    );
+    expect(rerun).toEqual({ applied: 0, adopted: 0, skipped: 2 });
+  });
+
+  it("refuses a pending module's contributed check on a server that will not enforce checks", async () => {
+    const targetTable: TableSpec = {
+      name: "dep__items",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "state", type: "varchar(64)", nullable: true },
+      ],
+      indexes: [],
+      checks: [
+        { name: "ck_dep__items_state_enum", sql: "`state` IN ('a', 'b')" },
+      ],
+    };
+    const base = {
+      name: "001",
+      schemaVersion: 1,
+      dialects: {
+        postgresql: {
+          up: ['ALTER TABLE "dep__items" ADD "state" text'],
+          down: [],
+        },
+        mysql: { up: ["ALTER TABLE `dep__items` ADD `state` text"], down: [] },
+        sqlite: { up: ['ALTER TABLE "dep__items" ADD "state" text'], down: [] },
+      },
+      snapshot: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      before: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      contributed: {
+        postgresql: { tables: [targetTable] },
+        mysql: { tables: [targetTable] },
+        sqlite: { tables: [targetTable] },
+      },
+      contributedBefore: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      contributions: {
+        postgresql: {
+          dep__items: {
+            columns: ["state"],
+            indexes: [],
+            foreignKeys: [],
+            checks: ["ck_dep__items_state_enum"],
+          },
+        },
+      },
+    };
+    const m: PluginMigration = { ...base, checksum: migrationChecksum(base) };
+    const h = deps({
+      serverConstructs: {
+        enforcesCheckConstraints: false,
+        functionalIndexes: true,
+        serverVersion: "8.0.15",
+      },
+    });
+    await expect(
+      runPluginMigrations(
+        [{ pluginName: "a", pluginVersion: "1.0.0", migrations: [m] }],
+        h.deps
+      )
+    ).rejects.toThrow(NextlyError);
+    expect(h.started).toEqual([]);
+  });
+
   it("refuses before running anything when an earlier module keys to a table only a later one creates", async () => {
     // 001 keys fx__child at fx__parents; 002 is what creates fx__parents.
     // Judged after 001 ran, the database would answer for a table that does

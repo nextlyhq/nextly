@@ -27,7 +27,6 @@ import { generateStatements } from "../../pipeline/sql-templates/index";
 
 import { withCyclicForeignKeysSplit } from "../cyclic-foreign-keys";
 import { buildInverseOperations } from "../down-generator";
-import { NextlyError } from "../../../../errors/nextly-error";
 import {
   buildBlankPluginMigration,
   buildPluginMigration,

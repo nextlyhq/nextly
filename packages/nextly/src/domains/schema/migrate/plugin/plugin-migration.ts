@@ -545,54 +545,77 @@ export function assertModuleForeignKeysResolve(
 }
 
 /**
- * One dialect's walk, in run order, refusing the first key that arrives
- * before its target. What this owner's modules have created so far is the
- * running set; the tables that exist after a module are its snapshot's — a
- * table a middle module dropped leaves the set, so one a later module
- * recreates is judged by arrival again rather than remembered forever.
+ * One dialect's walk, in run order, refusing the first key whose target is
+ * owned by this chain and does not exist in the module's resulting snapshot.
+ *
+ * A target no module of this chain ever names in `snapshot` or `before` is
+ * external (core, a dependency's, or adopted) and is judged for reach at the
+ * declaration compile. Any target owned by this chain must exist in `after`:
+ * if `previous` held it and `after` lacks it, this module drops the target
+ * while retaining a key on it; if a later module creates it, the key arrived
+ * early; otherwise an earlier module dropped it and no module restores it.
  */
 function resolveChainPerDialect(
   pluginName: string,
   migrations: readonly PluginMigration[],
   dialect: (typeof DIALECTS)[number]
 ): void {
-  let created = new Set<string>();
+  const everOwned = new Set<string>(
+    migrations.flatMap(migration => [
+      ...migration.snapshot[dialect].tables.map(table => table.name),
+      ...migration.before[dialect].tables.map(table => table.name),
+    ])
+  );
+  let previous = new Set<string>();
   for (const [at, migration] of migrations.entries()) {
-    const after = migration.snapshot[dialect].tables;
-    const createdHere = new Set(
-      after.map(table => table.name).filter(name => !created.has(name))
+    const after = new Set(
+      migration.snapshot[dialect].tables.map(table => table.name)
     );
-    refuseKeysArrivingEarly(
+    refuseKeysMissingTargetAfter({
       pluginName,
       migrations,
       dialect,
       at,
-      created,
-      createdHere
-    );
-    created = new Set(after.map(table => table.name));
+      previous,
+      after,
+      everOwned,
+    });
+    previous = after;
   }
 }
 
 /**
- * Refuse this module's keys whose target neither an earlier module nor this
- * one creates, when a later module creates it — the ordering defect. A
- * target no module of the owner names is another owner's or one the database
- * already held, judged for reach at the declaration compile, not by arrival.
+ * Refuse this module's keys whose target is missing from its `after` snapshot
+ * whenever the target is owned by this plugin's migration chain.
  */
-function refuseKeysArrivingEarly(
-  pluginName: string,
-  migrations: readonly PluginMigration[],
-  dialect: (typeof DIALECTS)[number],
-  at: number,
-  created: ReadonlySet<string>,
-  createdHere: ReadonlySet<string>
-): void {
+function refuseKeysMissingTargetAfter(args: {
+  pluginName: string;
+  migrations: readonly PluginMigration[];
+  dialect: (typeof DIALECTS)[number];
+  at: number;
+  previous: ReadonlySet<string>;
+  after: ReadonlySet<string>;
+  everOwned: ReadonlySet<string>;
+}): void {
+  const { pluginName, migrations, dialect, at, previous, after, everOwned } =
+    args;
   const migration = migrations[at];
   for (const table of migration.snapshot[dialect].tables) {
     for (const key of table.foreignKeys ?? []) {
       const target = key.referencesTable;
-      if (created.has(target) || createdHere.has(target)) continue;
+      if (after.has(target) || !everOwned.has(target)) continue;
+      const path = `${migration.name}.snapshot.${dialect}.${table.name}.foreignKeys.${key.name}`;
+      if (previous.has(target)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path,
+              code: "INVALID",
+              message: `Module "${migration.name}" declares foreign key "${key.name}" on "${table.name}" referencing "${target}", which this module drops ("${target}" is absent from its snapshot). Drop the foreign key before or alongside dropping its target.`,
+            },
+          ],
+        });
+      }
       // The first later module holding the target is its creator: one that
       // merely carried it would have received it from a module before that,
       // which this walk reached first.
@@ -603,13 +626,23 @@ function refuseKeysArrivingEarly(
             laterTable => laterTable.name === target
           )
         );
-      if (later === undefined) continue;
+      if (later !== undefined) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path,
+              code: "INVALID",
+              message: `Module "${migration.name}" declares foreign key "${key.name}" on "${table.name}" referencing "${target}", which no earlier module of plugin "${pluginName}" creates (module "${later.name}" creates it later). Reorder the modules, or let the key travel with the module that creates its target.`,
+            },
+          ],
+        });
+      }
       throw NextlyError.validation({
         errors: [
           {
-            path: `${migration.name}.snapshot.${dialect}.${table.name}.foreignKeys.${key.name}`,
+            path,
             code: "INVALID",
-            message: `Module "${migration.name}" declares foreign key "${key.name}" on "${table.name}" referencing "${target}", which no earlier module of plugin "${pluginName}" creates (module "${later.name}" creates it later). Reorder the modules, or let the key travel with the module that creates its target.`,
+            message: `Module "${migration.name}" declares foreign key "${key.name}" on "${table.name}" referencing "${target}", which an earlier module of plugin "${pluginName}" dropped and no module restores.`,
           },
         ],
       });

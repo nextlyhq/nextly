@@ -150,14 +150,38 @@ describe("assertModuleForeignKeysResolve", () => {
     expect(message).toContain("004_again");
   });
 
-  it("accepts a key to a table that exists when the module runs, even if the module itself drops it after", () => {
-    // Existence is judged at the module's start: 001 created the target, so
-    // 002 may key to it while also being the module that drops it.
+  it("refuses a module that keeps or adds a key while dropping its plugin-owned target in the same module", () => {
+    // 001 created fx__parents; 002 retains/adds a key to fx__parents while
+    // dropping fx__parents from its after-snapshot, which no database can reach.
+    const message = messageOf([
+      module("001_parents", [plain("fx__parents")]),
+      module("002_key_and_drop", [keying("fx__child", "fx__parents")]),
+    ]);
+    expect(message).toContain("002_key_and_drop");
+    expect(message).toContain("fk_fx__child_ref");
+    expect(message).toContain("fx__parents");
+    expect(message).toContain("drops");
+  });
+
+  it("accepts a module that drops a plugin-owned target once its foreign keys are dropped too", () => {
     expect(
       messageOf([
-        module("001_parents", [plain("fx__parents")]),
-        module("002_key_and_drop", [keying("fx__child", "fx__parents")]),
+        module("001_both", [
+          plain("fx__parents"),
+          keying("fx__child", "fx__parents"),
+        ]),
+        module("002_drop_key_and_parent", [plain("fx__child")]),
       ])
     ).toBe("");
+  });
+
+  it("refuses a key whose plugin-owned target was dropped by an earlier module and never restored", () => {
+    const message = messageOf([
+      module("001_parents", [plain("fx__parents")]),
+      module("002_drop", [plain("fx__child")]),
+      module("003_dangling", [keying("fx__child", "fx__parents")]),
+    ]);
+    expect(message).toContain("003_dangling");
+    expect(message).toContain("fx__parents");
   });
 });

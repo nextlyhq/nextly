@@ -44,6 +44,7 @@ import {
   referenceTableStub,
   resolveIndexName,
   toDrizzleTable,
+  toIndexSpec,
   toTableSpec,
 } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
@@ -1060,12 +1061,6 @@ export async function buildExtensionSchema(
     input.dialect
   );
   assertForeignKeyTargetsExist(tables, store, input);
-  // The server's limits are judged at the declaration when the caller has a
-  // server behind it; module generation compiles for every dialect at once
-  // and leaves `server` off, its apply path judging the shipped snapshots.
-  if (input.server !== undefined) {
-    refuseConstructsTheServerCannotHold(tables, input.server);
-  }
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);
@@ -1140,6 +1135,27 @@ export async function buildExtensionSchema(
     assertDistinctIndexNames(specs, entityIndexes);
     assertDistinctCheckNamesAcrossTables(specs, entityColumns, input.dialect);
     assertSetNullColumnsNullable(specs);
+  }
+  // The server's limits are judged against the final compiled specs (including
+  // enum checks from `toTableSpec` and any constructs kept or added by hooks)
+  // together with the foreign-table contributions; module generation compiles
+  // for every dialect at once and leaves `server` off, its apply path judging
+  // the shipped snapshots instead.
+  if (input.server !== undefined) {
+    refuseConstructsTheServerCannotHold(
+      [
+        ...specs,
+        ...[...entityIndexes].map(([name, indexes]) => ({
+          name,
+          indexes: indexes.map(index => toIndexSpec(name, index)),
+        })),
+        ...[...entityColumns].map(([name, columns]) => ({
+          name,
+          checks: enumChecks(name, columns, input.dialect),
+        })),
+      ],
+      input.server
+    );
   }
 
   const { adopted, adoptedRelations } = compileAdoptedTables(
