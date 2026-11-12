@@ -82,7 +82,7 @@ import type {
   LanguageAddressRule,
   SanitizedLocalizationConfig,
 } from "../domains/i18n/config/types";
-import { LanguageRegistry } from "../domains/i18n/language-registry";
+import type { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
   publishesPerLanguage,
@@ -90,7 +90,6 @@ import {
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
-import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type {
   AnyJobDefinition,
   JobRegistry,
@@ -184,6 +183,10 @@ import {
   unchangedSinceLastStart,
 } from "../init/boot-apply";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
+import {
+  codeDefinedAccessTargets,
+  languageRegistryFor,
+} from "../init/code-rule-context";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { isProductionStart } from "../init/production-start";
 import { bootSeedingFollows } from "../init/seed-permissions";
@@ -1201,13 +1204,8 @@ async function registerServicesOnce(
         logger: resolvedLogger,
         config: transformedConfig,
         basePath: resolvedBasePath,
-        languages: new LanguageRegistry({
-          configured: transformedConfig.localization,
-          reader: storedLanguageReader(adapter),
-          // A site keeping every translatable field per language stores its values under one
-          // language even before it declares any.
-          implicitLanguage: transformedConfig.perLanguageStorage === true,
-        }),
+        // The construction a command builds for its rules too (`withRuleContextOf`).
+        languages: languageRegistryFor(adapter, transformedConfig),
         schemasDir,
         migrationsDir,
         deferredExtends,
@@ -3745,14 +3743,12 @@ function registerCodeDefinedAccess(
   const rbacService = container.get<RBACAccessControlService>(
     "rbacAccessControlService"
   );
-  for (const collection of transformedConfig.collections ?? []) {
-    if (collection.access) {
-      rbacService.registerCollectionAccess(collection.slug, collection.access);
-    }
-  }
-  for (const single of transformedConfig.singles ?? []) {
-    if (single.access) {
-      rbacService.registerSingleAccess(single.slug, single.access);
+  // The targets a command asks the same rules through (`codeDefinedAccessTargets`).
+  for (const target of codeDefinedAccessTargets(transformedConfig)) {
+    if (target.kind === "collection") {
+      rbacService.registerCollectionAccess(target.slug, target.access);
+    } else {
+      rbacService.registerSingleAccess(target.slug, target.access);
     }
   }
 }
