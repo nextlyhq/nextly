@@ -462,6 +462,33 @@ function SpamSection({
   );
 }
 
+/**
+ * What a form keeps about who sent a submission. Off, new submissions store
+ * neither their IP address nor their browser; one per network still compares
+ * the address, by the keyed digest made before it is dropped.
+ */
+function PrivacySection(): React.JSX.Element {
+  const { settings, updateSettings } = useFormBuilder();
+  return (
+    <FormSection label="Privacy">
+      <SettingRow
+        label="Store IP address and browser"
+        htmlFor="settings-store-ip"
+        description="Helps spot spam and shows where a response came from. Off, new submissions keep neither; one per network still works, from a scrambled copy."
+      >
+        <Switch
+          id="settings-store-ip"
+          aria-describedby={descriptionIdOf("settings-store-ip")}
+          checked={settings.storeIpAndBrowser !== false}
+          onCheckedChange={storeIpAndBrowser =>
+            updateSettings({ storeIpAndBrowser })
+          }
+        />
+      </SettingRow>
+    </FormSection>
+  );
+}
+
 export function FormSettingsTab({
   spamDefaults,
   redirectCollections,
@@ -477,6 +504,7 @@ export function FormSettingsTab({
       <AvailabilitySection />
       <OneResponseSection />
       <SpamSection spamDefaults={spamDefaults} />
+      <PrivacySection />
     </>
   );
 }
