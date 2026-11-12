@@ -53,22 +53,22 @@ function sameConsent(before: unknown, after: unknown): boolean {
 
 /**
  * The answers of a stored submission that are consents: each consent field
- * of the form, and any answer stored as a consent whose field the form no
- * longer has. Read from the submission as well as the form, since a form can
- * lose its consent field while its submissions keep what was agreed to.
+ * of the form, and any answer stored as a consent, whatever field now has
+ * its name. Read from the submission as well as the form, since a form can
+ * lose its consent field, or give its name to another field, while its
+ * submissions keep what was agreed to.
  */
 export function storedConsentNames(
   fields: readonly AnyFormField[],
   stored: Record<string, unknown>
 ): string[] {
-  const onForm = new Set(fields.map(field => field.name));
-  const names = fields
-    .filter(field => field.type === "consent")
-    .map(field => field.name);
+  const names = new Set(
+    fields.filter(field => field.type === "consent").map(field => field.name)
+  );
   for (const [name, value] of Object.entries(stored)) {
-    if (!onForm.has(name) && isConsentAnswer(value)) names.push(name);
+    if (isConsentAnswer(value)) names.add(name);
   }
-  return names;
+  return [...names];
 }
 
 /**
@@ -133,4 +133,33 @@ export function blankConsentFields(
         "string" ||
         (field as ConsentFormField).agreementText.trim() === "")
   );
+}
+
+/** Said when a visitor agreed to a text the form no longer shows. */
+export const CONSENT_TEXT_CHANGED =
+  "The text to agree to has changed since the form was loaded. Review it and agree again.";
+
+/**
+ * The consent fields a new submission agreed to under a text the form no
+ * longer shows. A visitor who sends the text they were shown (an answer of
+ * `{ agreed, text }`) is held to it: if the author changed it while the form
+ * was open, the submission is refused rather than recorded as agreement to
+ * terms the visitor never saw. A bare yes carries no text, so it is taken
+ * as agreement to the text the form shows now.
+ */
+export function staleConsentNames(
+  fields: readonly AnyFormField[],
+  data: Record<string, unknown>
+): string[] {
+  return fields
+    .filter((field): field is ConsentFormField => field.type === "consent")
+    .filter(field => {
+      const sent = data[field.name];
+      if (!sent || typeof sent !== "object" || Array.isArray(sent)) {
+        return false;
+      }
+      const text = (sent as { text?: unknown }).text;
+      return typeof text === "string" && text !== field.agreementText;
+    })
+    .map(field => field.name);
 }

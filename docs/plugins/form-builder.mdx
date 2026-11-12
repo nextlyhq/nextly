@@ -256,7 +256,7 @@ consent({
 // A submission stores: { privacy: { agreed: true, text: "I agree to the privacy policy" } }
 ```
 
-The text comes from the form, never from what the visitor sends. A submitted consent cannot be edited: an update that would change or drop it, from the admin or the API, is refused with a validation error, and an edit of other answers keeps it as it was.
+The text comes from the form, never from what the visitor sends. A site that renders the form can send the text it showed with the answer, `{ "agreed": true, "text": "I agree to the privacy policy" }`: if the author changed the text while the form was open, the submission is refused, asking the visitor to review it and agree again, rather than recorded as agreement to terms they never saw. A plain checkbox value (`on`, `true`) is taken as agreement to the text the form shows when it arrives. A submitted consent cannot be edited: an update that would change or drop it, from the admin or the API, is refused with a validation error, and an edit of other answers keeps it as it was.
 
 ### Utility Functions
 

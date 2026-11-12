@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Forms can ask for consent: a Consent field is a required box the visitor ticks to agree to a text, such as a privacy policy. Each submission stores the choice with the text the form showed, so a later change to the text leaves what earlier visitors agreed to as it was, and an edit of a submission can never change or drop its consent.
+Forms can ask for consent: a Consent field is a required box the visitor ticks to agree to a text, such as a privacy policy. Each submission stores the choice with the text the form showed, so a later change to the text leaves what earlier visitors agreed to as it was, and an edit of a submission can never change or drop its consent. A site that sends the text it showed is held to it: a submission agreeing to a text the form no longer shows is refused.

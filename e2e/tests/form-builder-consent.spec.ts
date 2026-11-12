@@ -83,15 +83,10 @@ test("stores the text agreed to, shows it, and never offers it for editing", asy
       },
     })
   );
-  // As a site's form sends it: the box's own value, and a text the visitor
-  // made up, which the server replaces with the form's.
+  // As a plain HTML form sends it: the box's own value, stored with the text
+  // the form shows.
   const sent = await page.request.post(`${API}/forms/consent-${stamp}/submit`, {
-    data: {
-      data: {
-        name: `Ada ${stamp}`,
-        privacy: { agreed: true, text: "I agree to nothing" },
-      },
-    },
+    data: { data: { name: `Ada ${stamp}`, privacy: "on" } },
   });
   expect(sent.ok(), await sent.text()).toBe(true);
 
@@ -107,7 +102,6 @@ test("stores the text agreed to, shows it, and never offers it for editing", asy
   const sheet = page.getByRole("dialog");
   await expect(sheet.getByText(`“${AGREEMENT}”`)).toBeVisible();
   await expect(sheet.getByText("Agreed", { exact: true })).toBeVisible();
-  await expect(sheet.getByText(/I agree to nothing/)).toHaveCount(0);
 
   await sheet.getByRole("button", { name: "Edit" }).click();
   await expect(sheet.getByRole("textbox", { name: "Name" })).toBeVisible();

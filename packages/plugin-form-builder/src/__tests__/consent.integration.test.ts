@@ -150,17 +150,65 @@ async function onlySubmission(t: TestNextly): Promise<string> {
 }
 
 describe.each(getConfiguredTestDialects())("a consent field (%s)", dialect => {
-  it("stores the choice with the form's text, not one the visitor sent", async () => {
+  it("stores the choice with the text the form shows", async () => {
     const { t, submit, answers } = await boot(dialect);
-    const sent = await submit({
-      name: "Ada",
-      privacy: { agreed: true, text: "I agree to nothing" },
-    });
-    expect(sent.success).toBe(true);
-
+    // A site that sends the text it showed, and one that sends the box's own
+    // value.
+    expect(
+      (
+        await submit({
+          name: "Ada",
+          privacy: { agreed: true, text: AGREEMENT },
+        })
+      ).success
+    ).toBe(true);
     expect((await answers(await onlySubmission(t))).privacy).toEqual({
       agreed: true,
       text: AGREEMENT,
+    });
+  });
+
+  it("refuses agreement to a text the form no longer shows", async () => {
+    const { t, submit } = await boot(dialect);
+    const sent = await submit({
+      name: "Ada",
+      privacy: { agreed: true, text: "I agree to the old policy" },
+    });
+    expect(sent.success).toBe(false);
+    const { items } = await t.nextly.find({ collection: "form-submissions" });
+    expect(items).toHaveLength(0);
+  });
+
+  it("keeps a consent through edits once another field takes its name", async () => {
+    const { t, formId, submit, answers } = await boot(dialect);
+    await submit({ name: "Ada", privacy: "on" });
+    const id = await onlySubmission(t);
+    const before = await answers(id);
+    await t.nextly.update({
+      collection: "forms",
+      id: formId,
+      data: {
+        fields: FIELDS.map(field =>
+          field.type === "consent"
+            ? { type: "checkbox", name: "privacy", label: "Privacy" }
+            : field
+        ),
+        _overwrite: true,
+      },
+    });
+    const edit = (data: Record<string, unknown>) =>
+      t.nextly.update({
+        collection: "form-submissions",
+        id,
+        data: { data, _overwrite: true },
+      });
+
+    await edit({ ...before, name: "Ada Lovelace" });
+    expect((await answers(id)).privacy).toEqual(before.privacy);
+    await expect(edit({ ...before, privacy: true })).rejects.toMatchObject({
+      publicData: {
+        errors: [{ path: "privacy", message: CONSENT_EDIT_REFUSED }],
+      },
     });
   });
 
@@ -289,6 +337,45 @@ describe.each(getConfiguredTestDialects())("a consent field (%s)", dialect => {
       id,
     })) as { status: string; editedAt?: unknown; data: { privacy: unknown } };
     expect(row.status).toBe("new");
+    expect(row.editedAt ?? null).toBeNull();
+    expect(row.data.privacy).toEqual({ agreed: true, text: AGREEMENT });
+  });
+
+  it("records no answer edit when a spam submission is restored after the text changed", async () => {
+    const { t, formId } = await boot(dialect);
+    const created = await t.nextly.create({
+      collection: "form-submissions",
+      data: {
+        form: formId,
+        status: "spam",
+        data: { name: "Ada", privacy: "on" },
+        submittedAt: new Date().toISOString(),
+      },
+    });
+    const id = String(created.item.id);
+    await t.nextly.update({
+      collection: "forms",
+      id: formId,
+      data: {
+        fields: FIELDS.map(field =>
+          field.type === "consent"
+            ? { ...field, agreementText: "I agree to the new policy" }
+            : field
+        ),
+        _overwrite: true,
+      },
+    });
+
+    await t.nextly.update({
+      collection: "form-submissions",
+      id,
+      data: { status: "new", _overwrite: true },
+    });
+
+    const row = (await t.nextly.findByID({
+      collection: "form-submissions",
+      id,
+    })) as { editedAt?: unknown; data: { privacy: unknown } };
     expect(row.editedAt ?? null).toBeNull();
     expect(row.data.privacy).toEqual({ agreed: true, text: AGREEMENT });
   });

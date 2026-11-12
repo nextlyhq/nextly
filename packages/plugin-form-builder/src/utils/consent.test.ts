@@ -11,6 +11,7 @@ import type { AnyFormField, ConsentFormField } from "../types";
 import {
   blankConsentFields,
   CONSENT_REQUIRED_REASON,
+  CONSENT_TEXT_CHANGED,
   consentFieldEdit,
   editedConsents,
   storedConsentNames,
@@ -42,10 +43,36 @@ describe("a consent's stored value", () => {
     }
   );
 
-  it("keeps the form's text when the visitor sends one of their own", () => {
+  it("is refused when the visitor agreed to a text the form no longer shows", () => {
     const result = stored({
-      privacy: { agreed: true, text: "I agree to nothing" },
+      name: "Ada",
+      privacy: { agreed: true, text: "I agree to the old policy" },
     });
+    expect(result.validationErrors).toEqual({
+      privacy: CONSENT_TEXT_CHANGED,
+    });
+  });
+
+  it("is the agreement when the visitor sends the text the form shows", () => {
+    const result = stored({
+      name: "Ada",
+      privacy: { agreed: true, text: "I agree to the privacy policy" },
+    });
+    expect(result.validationErrors).toBeUndefined();
+    expect(result.data.privacy).toEqual({
+      agreed: true,
+      text: "I agree to the privacy policy",
+    });
+  });
+
+  it("keeps the form's text, whatever the payload says, outside a new submission", () => {
+    const result = prepareSubmission({
+      data: { privacy: { agreed: true, text: "I agree to nothing" } },
+      fields: [CONSENT],
+      validate: true,
+      fresh: false,
+    });
+    expect(result.validationErrors).toBeUndefined();
     expect(result.data.privacy).toEqual({
       agreed: true,
       text: "I agree to the privacy policy",
@@ -131,7 +158,7 @@ describe("the builder's consent", () => {
 describe("the consents a stored submission holds", () => {
   const answer = { agreed: true, text: "I agree" };
 
-  it("are the form's consent fields and stored consents whose field is gone", () => {
+  it("are the form's consent fields and every answer stored as a consent", () => {
     expect(
       storedConsentNames([NAME, CONSENT], {
         name: "Ada",
@@ -139,10 +166,10 @@ describe("the consents a stored submission holds", () => {
         terms: answer,
       })
     ).toEqual(["privacy", "terms"]);
-    // A field still on the form keeps its own type's meaning.
+    // A stored consent stays one when another field takes its name.
     expect(
       storedConsentNames([{ ...NAME, name: "terms" }], { terms: answer })
-    ).toEqual([]);
+    ).toEqual(["terms"]);
   });
 
   it("are held to the stored answer once their field is gone", () => {

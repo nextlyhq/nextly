@@ -1317,6 +1317,9 @@ export async function prepareSubmissionForWrite(
   const prepared = prepareSubmission({
     data: incoming,
     fields,
+    // A new submission's consents are checked against the text shown; an
+    // update's are held to what is stored (`consentsKept`).
+    fresh: ctx.operation === "create",
     validate: marks?.keepAsEvidence !== true && spam === undefined,
   });
 
@@ -1342,7 +1345,14 @@ export async function prepareSubmissionForWrite(
     ctx.data.spamReason = spam.reason ?? null;
   }
   if (ctx.operation !== "create" && submission.data === undefined) {
-    stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
+    // Judged on what is stored, consents carried over: a consent read again
+    // with the form's current text is not an edit.
+    stampDerivedEdit(
+      ctx.data,
+      ctx.user,
+      incoming,
+      ctx.data.data as Record<string, unknown>
+    );
   }
   stampRequestAddress(ctx, ctx.data);
   if (ctx.operation === "create") {
