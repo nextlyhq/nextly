@@ -15,7 +15,11 @@
 import type { FieldConfig } from "nextly/config";
 
 import { sameFormValue } from "./same-form-value";
-import { formFieldsOf, snapshotToFormValues } from "./snapshot-to-form-values";
+import {
+  formFieldsOf,
+  snapshotToFormValues,
+  type NamedField,
+} from "./snapshot-to-form-values";
 import type { VersionChanges } from "./version-changes";
 
 /** Why a field is listed but cannot be restored. */
@@ -120,7 +124,7 @@ function disabledAs(disabled: RestoreRowDisabled): {
   return { chosen: false, disabled, reason: REASONS[disabled] };
 }
 
-function labelOf(field: FieldConfig): string {
+function labelOf(field: NamedField): string {
   const label = (field as { label?: unknown }).label;
   return typeof label === "string" && label.length > 0 ? label : field.name;
 }

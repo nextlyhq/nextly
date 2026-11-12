@@ -80,7 +80,17 @@ export function useEditorRestoreSurface<T extends FieldValues>({
     const translatable = localized
       ? new Set(
           [...named.values()]
-            .filter(field => isFieldLocalized(field, true))
+            // Classified as the form classifies it, by type and declaration.
+            .filter(field =>
+              isFieldLocalized(
+                {
+                  type: field.type,
+                  name: field.name,
+                  localized: (field as { localized?: boolean }).localized,
+                },
+                true
+              )
+            )
             .map(field => field.name)
         )
       : undefined;

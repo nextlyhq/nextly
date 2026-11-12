@@ -20,6 +20,13 @@ import type { FieldConfig } from "nextly/config";
 
 import { normalizeStoredValue } from "./value-display/normalize-stored-value";
 
+/** A field with a name of its own, under which it stores its value. */
+export type NamedField = FieldConfig & { name: string };
+
+function isNamed(field: FieldConfig): field is NamedField {
+  return typeof field.name === "string" && field.name.length > 0;
+}
+
 /** A layout container: it has children and stores them at its OWN level. */
 function presentationalChildren(field: FieldConfig): FieldConfig[] | null {
   const children = (field as { fields?: FieldConfig[] }).fields;
@@ -31,8 +38,8 @@ function presentationalChildren(field: FieldConfig): FieldConfig[] | null {
  * container's children stand in for it, since they store their values at its
  * level. One walk for every reading of a version into the form.
  */
-export function formFieldsOf(fields: FieldConfig[]): FieldConfig[] {
-  const named: FieldConfig[] = [];
+export function formFieldsOf(fields: FieldConfig[]): NamedField[] {
+  const named: NamedField[] = [];
   const visit = (list: FieldConfig[]): void => {
     for (const field of list) {
       const children = presentationalChildren(field);
@@ -40,7 +47,7 @@ export function formFieldsOf(fields: FieldConfig[]): FieldConfig[] {
         visit(children);
         continue;
       }
-      if (field.name) named.push(field);
+      if (isNamed(field)) named.push(field);
     }
   };
   visit(fields);
