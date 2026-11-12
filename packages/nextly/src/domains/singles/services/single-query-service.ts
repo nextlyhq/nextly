@@ -1947,19 +1947,19 @@ export class SingleQueryService extends BaseService {
       // Resolve the field's default (explicit defaultValue, else a required
       // field's type-default) once, regardless of whether it is localized — a
       // localized field's default must reach the companion just the same.
-      if (
-        "defaultValue" in defaultSource &&
-        defaultSource.defaultValue !== undefined
-      ) {
+      const declared = declaredDefaultOf(defaultSource);
+      if (declared !== undefined) {
         // `defaultValue` may be a function `(data) => value`; evaluate it against
         // the document built so far so the stored default is a real value, not a
         // function object. A raw function would be bound as an SQL parameter for
         // the companion/main upsert and fail or persist its stringified form —
         // localized fields now flow through this block, so it must be resolved.
         const resolved =
-          typeof defaultSource.defaultValue === "function"
-            ? defaultSource.defaultValue(logicalDefaults)
-            : defaultSource.defaultValue;
+          typeof declared === "function"
+            ? (declared as (data: Record<string, unknown>) => unknown)(
+                logicalDefaults
+              )
+            : declared;
         // Same direct-insert reasoning for passwords: this path never runs
         // `hashPasswordFieldValues`, so a resolved password default would persist
         // in plaintext. Refuse it (a password must be set explicitly to be hashed).
@@ -2870,4 +2870,16 @@ export class SingleQueryService extends BaseService {
       });
     }
   }
+}
+
+/**
+ * The default a field states: `defaultValue`, as code and the Schema Builder spell it, or else
+ * `default`, as a field saved through the REST API may. A Single's table carries neither as a
+ * column default, so its first document is given the value here or not at all.
+ */
+function declaredDefaultOf(field: object): unknown {
+  const stated = field as { defaultValue?: unknown; default?: unknown };
+  return stated.defaultValue !== undefined
+    ? stated.defaultValue
+    : stated.default;
 }

@@ -75,10 +75,11 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
     const rank = await column("rank");
     expect(rank?.nullable).toBe(false);
     expect(rank?.default ?? null).toBeNull();
-    const [row] = await exec<{ rank: number | string }>(
-      `SELECT ${dialect === "mysql" ? "`rank`" : '"rank"'} AS rank FROM ${dialect === "mysql" ? "`single_hero`" : '"single_hero"'}`
+    // `rank` is reserved on MySQL, so the value is read under an alias of its own.
+    const [row] = await exec<{ filled: number | string }>(
+      `SELECT ${dialect === "mysql" ? "`rank`" : '"rank"'} AS filled FROM ${dialect === "mysql" ? "`single_hero`" : '"single_hero"'}`
     );
-    expect(Number(row?.rank)).toBe(0);
+    expect(Number(row?.filled)).toBe(0);
     expect((await column("title"))?.name).toBe("title");
   });
 
@@ -87,6 +88,27 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
 
     await save([TITLE, { name: "tagline", type: "text", default: "hello" }]);
 
+    expect((await column("tagline"))?.default ?? null).toBeNull();
+  });
+
+  it("gives a new Single's first document the default a field states, with no column default to supply it", async () => {
+    await dispatchSingles(
+      "createSingle",
+      {},
+      {
+        slug: "hero",
+        label: "Hero",
+        fields: [TITLE, { name: "tagline", type: "text", default: "hello" }],
+      }
+    );
+    const singles: SingleEntryService =
+      current.getService("singleEntryService");
+
+    const read = await singles.get("hero", { overrideAccess: true });
+
+    expect((read.data as { tagline?: unknown } | undefined)?.tagline).toBe(
+      "hello"
+    );
     expect((await column("tagline"))?.default ?? null).toBeNull();
   });
 });
