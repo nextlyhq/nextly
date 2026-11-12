@@ -90,6 +90,7 @@ import {
   RESULT_WORDS,
   valueCounts,
 } from "./import-report";
+import { entryHref } from "./pages-view";
 import { AdminLink, PAGES_STEP, SeoTrail } from "./section";
 
 /** What was chosen on the first step. */
@@ -513,7 +514,7 @@ function SourceStep({
 }): JSX.Element {
   const fileId = useId();
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
       <SiteSources
         groups={groups}
         ownSeo={ownSeo}
@@ -787,15 +788,52 @@ function Counts({ run }: { run: DryRunBody }): JSX.Element {
   );
 }
 
+/**
+ * Where a reported page is edited, on its SEO tab; none for a record that
+ * matched no page. Types are keyed by collection slug, or `single:<slug>`.
+ */
+function reportedPageHref(row: ImportReportEntry): string | undefined {
+  if (row.type === undefined || row.id === undefined) return undefined;
+  const single = row.type.startsWith("single:");
+  return entryHref(
+    {
+      kind: single ? "single" : "collection",
+      slug: single ? row.type.slice("single:".length) : row.type,
+      id: row.id,
+    },
+    "seo"
+  );
+}
+
+/**
+ * A reported page's name, opening the page in a new tab so the dry run
+ * stays here; a record that matched no page is its name alone.
+ */
+function ReportedPage({ row }: { row: ImportReportEntry }): JSX.Element {
+  const href = reportedPageHref(row);
+  if (href === undefined) {
+    return <span className="font-medium text-foreground">{row.label}</span>;
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="font-medium text-foreground hover:underline"
+    >
+      {row.label}
+      <span className="sr-only"> (opens in a new tab)</span>
+    </a>
+  );
+}
+
 /** The last step: the dry run's counts and each page's result. */
 function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
   const columns: NextlyColumn<ImportReportEntry>[] = [
     {
       name: "page",
       header: "Page",
-      cell: ({ row }) => (
-        <span className="font-medium text-foreground">{row.label}</span>
-      ),
+      cell: ({ row }) => <ReportedPage row={row} />,
     },
     {
       name: "title",
@@ -809,7 +847,7 @@ function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
     },
   ];
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <Counts run={run} />
       <DataTableView<ImportReportEntry>
         columns={columns}
@@ -1202,7 +1240,7 @@ function MatchStep({ flow }: { flow: ImportFlow }): JSX.Element {
     matching = <FileTable run={flow.run} />;
   }
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       {matching}
       <NeverServedNote
         run={flow.run}
@@ -1265,7 +1303,9 @@ export function SeoImportPage(): JSX.Element {
         description={leadOf(flow.step, flow.name)}
         breadcrumbs={<SeoTrail steps={[PAGES_STEP, { label: "Import" }]} />}
       />
-      <div className="grid gap-6">
+      {/* One column no wider than the screen: a wide table scrolls inside
+          its own frame rather than widening every step around it. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
         {current < 3 ? (
           <Stepper
             aria-label="Steps"

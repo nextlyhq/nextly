@@ -254,6 +254,12 @@ describe("importing this site's own field group", () => {
       .getByText("Pricing")
       .closest("tr") as HTMLElement;
     expect(within(pricing).getAllByText("Will set")).toHaveLength(2);
+    // Each page opens on its SEO tab in a new tab, the dry run kept here.
+    const opens = within(pricing).getByRole("link", { name: /^Pricing/ });
+    expect(opens.getAttribute("href")).toBe(
+      "/admin/collections/pages/Pricing?tab=nextlyhq-plugin-seo.tab"
+    );
+    expect(opens.getAttribute("target")).toBe("_blank");
 
     fireEvent.click(screen.getByRole("button", { name: "Import 3 values" }));
     await settle();
