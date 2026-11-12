@@ -37,10 +37,16 @@ export function refuseOneResponseFieldProblem(context: unknown): void {
   if (!data || (data.settings === undefined && data.fields === undefined)) {
     return;
   }
+  // Only an omitted part is read as stored: a save that clears its settings
+  // with `null` turns one response off, and is judged that way.
   const settings = normalizeFormSettings(
-    decoded(data.settings ?? ctx.originalData?.settings)
+    decoded(
+      data.settings !== undefined ? data.settings : ctx.originalData?.settings
+    )
   );
-  const fields = decoded(data.fields ?? ctx.originalData?.fields);
+  const fields = decoded(
+    data.fields !== undefined ? data.fields : ctx.originalData?.fields
+  );
   const problem = oneResponseFieldProblem(
     settings,
     Array.isArray(fields) ? (fields as AnyFormField[]) : []

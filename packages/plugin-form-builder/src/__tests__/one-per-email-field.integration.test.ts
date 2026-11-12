@@ -125,5 +125,23 @@ describe.each(getConfiguredTestDialects())(
         })
       ).resolves.toBeTruthy();
     });
+
+    it("takes a save that clears the settings while changing the field", async () => {
+      const { nextly, create } = await boot();
+      const made = await create([EMAIL], byEmail("email"));
+      // Cleared settings take one response per email off, so the field the
+      // stored settings compared is free to change in the same save.
+      await expect(
+        nextly.update({
+          collection: "forms",
+          id: String(made.item.id),
+          data: {
+            settings: null,
+            fields: [{ ...EMAIL, required: false }],
+            _overwrite: true,
+          },
+        })
+      ).resolves.toBeTruthy();
+    });
   }
 );
