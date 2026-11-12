@@ -36,7 +36,7 @@ import { useServerAnswered } from "@admin/hooks/useServerAnswered";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
-import { rememberSignedInHere } from "@admin/lib/auth/signed-in-here";
+import { rememberSignedInHere } from "@admin/lib/device-memory/device-memory";
 
 import {
   AuthUiExtras,

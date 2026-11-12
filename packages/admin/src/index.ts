@@ -557,6 +557,17 @@ export type {
  */
 export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
 export { useFoldedPanel } from "./components/layout/PanelFold";
+/**
+ * A store for one of the person's interface preferences that follows the
+ * device memory's rules: nothing written while the site turns remembering
+ * off, forgotten with the person on sign-out. Exported for
+ * `plugin-sdk/admin`, so an editor a plugin mounts keeps its choices by them.
+ */
+export { devicePreferenceStore } from "./lib/device-memory/preference-store";
+export type {
+  DevicePreferenceOptions,
+  DevicePreferenceStore,
+} from "./lib/device-memory/preference-store";
 export { TopBarPlace } from "./components/layout/header/TopBarPlaces";
 export type {
   TopBarPlaceName,

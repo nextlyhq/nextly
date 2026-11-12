@@ -16,6 +16,11 @@
  */
 import React from "react";
 
+import {
+  recallPreference,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
+
 import { useSuppressAdminChrome } from "./ChromeSuppression";
 
 const STORAGE_PREFIX = "nextly:panel-open:";
@@ -23,7 +28,8 @@ const STORAGE_PREFIX = "nextly:panel-open:";
 /** Whether the reader last left `key`'s panel open; folded when never chosen. */
 function readOpen(key: string): boolean {
   try {
-    return window.localStorage.getItem(STORAGE_PREFIX + key) === "1";
+    // Through the device memory, which reads storage that throws as nothing.
+    return recallPreference(STORAGE_PREFIX + key) === "1";
   } catch {
     // Storage can be blocked (a private window, a locked-down browser). The
     // page then starts folded every time, as declared, which is still right.
@@ -33,7 +39,9 @@ function readOpen(key: string): boolean {
 
 function writeOpen(key: string, open: boolean): void {
   try {
-    window.localStorage.setItem(STORAGE_PREFIX + key, open ? "1" : "0");
+    // Kept through the device memory, which keeps nothing where the site
+    // turned remembering off.
+    rememberPreference(STORAGE_PREFIX + key, open ? "1" : "0");
   } catch {
     // As above: the choice is not remembered, and nothing else changes.
   }
