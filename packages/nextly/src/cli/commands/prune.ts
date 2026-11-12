@@ -792,6 +792,8 @@ async function writeReleaseMigration(
       cwd: options.cwd,
       config: options.config,
       releaseHeldBack: true,
+      // Its other deletions, if the config has any, are covered as prune's consent covers them.
+      acceptDataLoss: options.acceptDataLoss,
       approvedDeletions: agreed.map(({ table, column }) => ({
         kind: "column" as const,
         table,

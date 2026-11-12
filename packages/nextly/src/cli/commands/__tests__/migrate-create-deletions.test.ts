@@ -114,6 +114,9 @@ async function migrateCreate(
     acceptDataLoss?: string | boolean;
     dryRun?: boolean;
     approvedDeletions?: readonly Deletion[];
+    plugin?: string;
+    /** The positional name; `null` gives none. */
+    name?: string | null;
   } = {}
 ): Promise<number | undefined> {
   state.config = defineConfig({ collections } as Parameters<
@@ -132,7 +135,8 @@ async function migrateCreate(
   // A run that cannot ask declines every rename; one that can is asked only about deletions here.
   setNonInteractive(!state.canPrompt);
   try {
-    await runMigrateCreate("change", { cwd: dir, ...options }, context);
+    const { name = "change", ...rest } = options;
+    await runMigrateCreate(name ?? undefined, { cwd: dir, ...rest }, context);
     return undefined;
   } catch (error) {
     const match = /^exit (\d+)$/.exec((error as Error).message);
@@ -265,5 +269,57 @@ describe("migrate:create with a deletion at a terminal", () => {
     expect(await migrateCreate([pages])).toBeUndefined();
     expect(state.asked).toHaveLength(1);
     expect(migrations()).toHaveLength(2);
+  });
+});
+
+describe("migrate:create's consent, read as it was meant", () => {
+  it("lists each deletion once when the consent covers it", async () => {
+    await projectWithPostsAndPages();
+    expect(
+      await migrateCreate([pages], { acceptDataLoss: "dc_posts" })
+    ).toBeUndefined();
+    const listed = printed()
+      .split("\n")
+      .filter(line => line.includes("table dc_posts: no longer in the config"));
+    expect(listed).toHaveLength(1);
+  });
+
+  it("refuses a name the consent took as its list, saying how to write both", async () => {
+    await projectWithPostsAndPages();
+    // `--accept-data-loss remove_posts`: the option's value is the name.
+    expect(
+      await migrateCreate([pages], {
+        name: null,
+        acceptDataLoss: "remove_posts",
+      })
+    ).toBe(1);
+    expect(migrations()).toHaveLength(1);
+    expect(printed()).toContain("--accept-data-loss=");
+    expect(printed()).toContain("remove_posts");
+  });
+
+  it("says a dry run's real run refuses where a named consent leaves one out", async () => {
+    await projectWithPostsAndPages();
+    expect(
+      await migrateCreate([pagesWithoutSummary], {
+        dryRun: true,
+        acceptDataLoss: "dc_posts",
+      })
+    ).toBeUndefined();
+    expect(printed()).toContain(
+      "A real run refuses: the consent given does not cover column dc_pages.summary"
+    );
+    expect(printed()).not.toContain("A real run asks");
+  });
+
+  it("says --accept-data-loss does nothing for a plugin's module", async () => {
+    // The entry does not exist, so the run then fails loading it; the warning comes first.
+    await migrateCreate([posts], {
+      plugin: join(dir, "missing-plugin.ts"),
+      acceptDataLoss: true,
+    }).catch(() => undefined);
+    expect(printed()).toContain(
+      "--accept-data-loss has no effect with --plugin"
+    );
   });
 });

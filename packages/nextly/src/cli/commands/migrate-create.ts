@@ -103,6 +103,7 @@ import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import type { CommandContext } from "../context";
 import { projectPath, reportDryRun } from "../dry-run";
 import {
+  consentTookTheName,
   migrationCreateCancelled,
   migrationDeletionsDeclined,
   migrationNameRequired,
@@ -447,7 +448,14 @@ async function judgeMigrationDeletions(
     for (const deletion of listed) {
       logger.info(`  - ${describeDeletion(deletion)}`);
     }
-    if (listed.some(d => !consentCovers(args.consent, d))) {
+    const uncovered = listed.filter(d => !consentCovers(args.consent, d));
+    const targets = args.consent.given?.targets;
+    if (uncovered.length > 0 && targets !== undefined && targets !== "all") {
+      // A consent naming targets is refused where it leaves one out, even at a terminal.
+      logger.info(
+        `A real run refuses: the consent given does not cover ${uncovered.map(describeDeletion).join("; ")}. It needs: ${consentToCover(listed)}.`
+      );
+    } else if (uncovered.length > 0) {
       logger.info(
         `A real run asks before writing it. A real run that cannot ask needs: ${consentToCover(listed)}.`
       );
@@ -486,6 +494,15 @@ export async function runMigrateCreate(
   }
 
   if (options.plugin) {
+    // A plugin's module is never generated with a drop, so the consent has nothing to cover here.
+    if (
+      options.acceptDataLoss !== undefined &&
+      options.acceptDataLoss !== false
+    ) {
+      context.logger.warn(
+        "--accept-data-loss has no effect with --plugin: a plugin's migration module is never generated with a drop. Hand-write one that drops, and `nextly migrate` asks the consent when it runs it."
+      );
+    }
     await runMigrateCreatePlugin(nameArg ?? options.name, options, context);
     return;
   }
@@ -519,6 +536,10 @@ export async function runMigrateCreate(
     nameArg ??
     (options.recordSnapshot === true ? "record_translated_fields" : undefined);
   if (!options.blank && !name) {
+    // `--accept-data-loss` takes an optional list, so a name written after it is read as the list.
+    if (typeof options.acceptDataLoss === "string") {
+      exitWithError(logger, consentTookTheName(options.acceptDataLoss));
+    }
     exitWithError(logger, migrationNameRequired());
   }
 
@@ -768,13 +789,11 @@ export async function runMigrateCreate(
   }
   // What the file deletes, as consented to; its header names the same, and `nextly migrate` asks
   // the consent for it again on every database it runs on.
+  // Listed once already, before the file was written; this says what applying it needs.
   if (counted.length > 0) {
     logger.warn(
       `It deletes data; \`nextly migrate\` needs consent to apply it: ${consentToCover(counted)}`
     );
-    for (const deletion of counted) {
-      logger.item(`Deletes: ${describeDeletion(deletion)}`, 1);
-    }
   }
   logger.newline();
   logger.divider();

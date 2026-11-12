@@ -162,6 +162,18 @@ export function migrationNameRequired(): CliError {
   });
 }
 
+/**
+ * No name, and `--accept-data-loss` was given a value: the option takes an optional list, so a name
+ * written after it (`--accept-data-loss remove_posts`) is read as that list.
+ */
+export function consentTookTheName(value: string): CliError {
+  return new CliError("MIGRATION_NAME_REQUIRED", {
+    what: `\`nextly migrate:create\` needs a name for the migration, and \`--accept-data-loss\` read \`${value}\` as the tables and columns it covers.`,
+    why: "`--accept-data-loss` takes an optional list, so the word after it is that list, not the migration's name.",
+    next: `Put the name first (\`nextly migrate:create ${value} --accept-data-loss\`), or give the list with \`=\` (\`--accept-data-loss=dc_posts\`).`,
+  });
+}
+
 /** `--record-snapshot` writes the app's snapshot, which a blank migration and a plugin module have none of. */
 export function recordSnapshotNeedsAppMigration(): CliError {
   return new CliError("RECORD_SNAPSHOT_NEEDS_APP_MIGRATION", {
