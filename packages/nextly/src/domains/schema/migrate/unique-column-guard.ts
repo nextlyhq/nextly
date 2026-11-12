@@ -89,6 +89,10 @@ export interface RegisteredEntity {
   localized: boolean;
   /** Which builder made its table, which decides each translated column's name. */
   builtBy: ColumnOrigin;
+  /** Who defines it, as the registry records it: `ui` (the Schema Builder), `code` or `plugin`. */
+  source: string;
+  /** Whether its definition has reached the database (`applied`, `synced`) or waits (`pending`). */
+  migrationStatus: string;
 }
 
 /** A stored field list, as the registry holds it: JSON text or a parsed list. */
@@ -125,10 +129,11 @@ export async function registeredEntities(
       fields: unknown;
       localized: unknown;
       source: unknown;
+      migration_status: unknown;
     }>(
       db,
       dialect,
-      sql`SELECT ${sql.identifier("slug")} AS slug, ${sql.identifier("table_name")} AS table_name, ${sql.identifier("fields")} AS fields, ${sql.identifier("localized")} AS localized, ${sql.identifier("source")} AS source FROM ${sql.identifier(registry)}`
+      sql`SELECT ${sql.identifier("slug")} AS slug, ${sql.identifier("table_name")} AS table_name, ${sql.identifier("fields")} AS fields, ${sql.identifier("localized")} AS localized, ${sql.identifier("source")} AS source, ${sql.identifier("migration_status")} AS migration_status FROM ${sql.identifier(registry)}`
     );
     for (const row of rows) {
       entities.push({
@@ -139,6 +144,10 @@ export async function registeredEntities(
         localized: row.localized === true || Number(row.localized) === 1,
         // A code-first entity's table is the code-first builder's; any other, the Schema Builder's.
         builtBy: row.source === "code" ? "codeFirst" : "collection",
+        // Text on every driver; anything else names no source or status.
+        source: typeof row.source === "string" ? row.source : "",
+        migrationStatus:
+          typeof row.migration_status === "string" ? row.migration_status : "",
       });
     }
   }

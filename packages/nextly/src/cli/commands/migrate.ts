@@ -2130,6 +2130,27 @@ async function makeOneToOnesUniqueAfterFiles(
 }
 
 /**
+ * Each inline UNIQUE an earlier release's Builder gave a one-to-one goes once no field makes its
+ * column unique (`letGoOfEarlierInlineUniques`), judged, like the one-to-ones' uniqueness, on the
+ * definitions the run's files just left; a run `--step` stops short leaves it to one that runs
+ * every file.
+ */
+async function letGoOfEarlierInlineUniquesAfterFiles(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  if (appStepAfter(deps.step, 0) !== undefined) return;
+  const { letGoOfEarlierInlineUniques } = await import(
+    "../../domains/schema/migrate/earlier-inline-uniques"
+  );
+  await letGoOfEarlierInlineUniques({
+    db: deps.db,
+    dialect: deps.dialect,
+    executeQuery: statement => executeHoldingSchemaLock(deps, statement),
+    logger: deps.logger,
+  });
+}
+
+/**
  * Phases 1.5 and 2: the plugins' modules, then the app's files, under one
  * `--step` budget (`appStepAfter`).
  */
@@ -2619,6 +2640,9 @@ export async function migrateCore(
       // Each one-to-one an earlier release left without its uniqueness gets it
       // (`makeOneToOnesUniqueAfterFiles`).
       await makeOneToOnesUniqueAfterFiles(deps);
+      // And each inline UNIQUE an earlier release gave a one-to-one no field makes unique any more
+      // goes (`letGoOfEarlierInlineUniquesAfterFiles`).
+      await letGoOfEarlierInlineUniquesAfterFiles(deps);
 
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();
