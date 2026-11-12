@@ -227,5 +227,17 @@ describe.each(getConfiguredTestDialects())(
       });
       expect((await row(id)).title).toBe("Hina R.");
     });
+
+    it("keeps a sender longer than a title holds, titled by its start", async () => {
+      const { submit, row } = await boot(dialect);
+      // Longer than MySQL's 255-character text column: still accepted.
+      const name = `Hina ${"Rossi".repeat(60)}`;
+      const id = await submit({ name, role: "backend" });
+      const stored = await row(id);
+      expect((stored.data as { name?: string }).name).toBe(name);
+      expect(stored.title).toHaveLength(200);
+      expect(stored.title?.endsWith("…")).toBe(true);
+      expect(name.startsWith(stored.title!.slice(0, -1))).toBe(true);
+    });
   }
 );

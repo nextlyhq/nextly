@@ -168,6 +168,10 @@ interface ServerOptions {
   formsSlug?: string;
   /** The form's fields as it is now. */
   fields?: unknown[];
+  /** What the server stores, for a test to change as another editor would. */
+  store?: { data: Record<string, unknown>; notes?: string };
+  /** Whether the server refuses a save as made from an old version. */
+  refuse?: (sent: Record<string, unknown>) => boolean;
 }
 
 /** The list's answer to one of the page's place queries. */
@@ -191,6 +195,7 @@ function server(options: ServerOptions) {
   // moves its version on, as revision checking does.
   let status = options.status;
   let rev = 7;
+  const store = options.store ?? { data: DATA };
   const formsSlug = options.formsSlug ?? "forms";
   const routes: Array<
     [match: string, reply: (url: string) => Promise<Response>]
@@ -218,7 +223,8 @@ function server(options: ServerOptions) {
         answer(200, {
           id: "sub-2",
           form: "form-1",
-          data: DATA,
+          data: store.data,
+          notes: store.notes,
           asked: ASKED,
           status,
           submittedAt: "2026-11-10T14:15:00.000Z",
@@ -230,8 +236,19 @@ function server(options: ServerOptions) {
   ];
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (init?.method === "PATCH") {
-      const sent = JSON.parse(String(init.body)) as { status?: string };
+      const sent = JSON.parse(String(init.body)) as {
+        status?: string;
+        notes?: string;
+        data?: Record<string, unknown>;
+      };
+      if (options.refuse?.(sent)) {
+        return answer(409, {
+          error: { code: "STALE_VERSION", message: "Stale" },
+        });
+      }
       if (sent.status) status = sent.status;
+      if (sent.notes !== undefined) store.notes = sent.notes;
+      if (sent.data) store.data = sent.data;
       rev += 1;
       return answer(200, { item: {} });
     }
@@ -435,6 +452,73 @@ describe("a submission's page, writing", () => {
         { status: "archived", _rev: "rev-8" },
       ])
     );
+  });
+
+  it("drops the answers queued behind a refused note", async () => {
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+      refuse: sent => sent.notes !== undefined,
+    });
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    const name = screen.getByRole("textbox", { name: "Full name" });
+    await user.clear(name);
+    await user.type(name, "Hina R.");
+    await user.type(
+      screen.getByRole("textbox", { name: "Internal note" }),
+      "Book a call"
+    );
+    // The click blurs the note, whose save is refused, then asks to save
+    // the answers.
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    expect(
+      await screen.findByText(/Someone changed this submission/)
+    ).toBeInTheDocument();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(patches(fetchMock)).toEqual([
+      { notes: "Book a call", _rev: "rev-7" },
+    ]);
+    expect(screen.getByText(/Someone changed this submission/)).toBeVisible();
+  });
+
+  it("refuses an answer draft whose answers someone else changed", async () => {
+    const store = { data: { ...DATA } as Record<string, unknown> };
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+      store,
+    });
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    // Another editor changes the answers; this page's own status change
+    // then reads the newer version.
+    store.data = { ...DATA, email: "hina.rossi@example.com" };
+    const details = screen.getByRole("complementary", {
+      name: "Submission details",
+    });
+    await user.click(within(details).getByRole("button", { name: "Archived" }));
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { status: "archived", _rev: "rev-7" },
+      ])
+    );
+    const name = screen.getByRole("textbox", { name: "Full name" });
+    await user.clear(name);
+    await user.type(name, "Hina R.");
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    expect(
+      await screen.findByText(/Someone changed this submission/)
+    ).toBeInTheDocument();
+    // Their email is not written over with the draft's.
+    expect(patches(fetchMock)).toHaveLength(1);
+    expect(store.data.email).toBe("hina.rossi@example.com");
   });
 
   it("links the form under the forms collection as the install names it", async () => {

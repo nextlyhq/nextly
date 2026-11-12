@@ -204,6 +204,13 @@ function useListPlace(
 }
 
 /**
+ * What a change says when someone else changed the submission since: the
+ * server refused its version, or the values it was made from are gone.
+ */
+const CHANGED_SINCE_MESSAGE =
+  "Someone changed this submission since you opened it. It now shows their change; make yours again.";
+
+/**
  * What a refused change says: someone saved it since, the server's own
  * reason for an answer it refused, or that it could not be saved.
  */
@@ -217,9 +224,7 @@ function refusalMessage(body: unknown): string {
       };
     } | null
   )?.error;
-  if (error?.code === "STALE_VERSION") {
-    return "Someone changed this submission since you opened it. It now shows their change; make yours again.";
-  }
+  if (error?.code === "STALE_VERSION") return CHANGED_SINCE_MESSAGE;
   return (
     error?.data?.errors?.[0]?.message ??
     error?.message ??
@@ -291,7 +296,16 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-type Save = (changes: Record<string, unknown>) => Promise<void>;
+/**
+ * Save a change. `basis` names the stored values the change was made from,
+ * such as the answers as they were when editing began: if the submission no
+ * longer holds them when the change would be sent, someone else changed them
+ * since, and the change is refused rather than written over theirs.
+ */
+type Save = (
+  changes: Record<string, unknown>,
+  basis?: Record<string, unknown>
+) => Promise<void>;
 
 /** The bar: where it sits in its list, newer and older, and its actions. */
 function SubmissionBar({
@@ -475,6 +489,8 @@ function AnswersBox({
 }): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+  // The answers as they were when editing began, which the draft is made from.
+  const [draftBasis, setDraftBasis] = useState<unknown>(null);
   // Another submission opened: not editing it.
   useEffect(() => setEditing(false), [submission.id]);
   return (
@@ -488,6 +504,7 @@ function AnswersBox({
             size="sm"
             onClick={() => {
               setDraft(submission.data ?? {});
+              setDraftBasis(submission.data ?? null);
               setEditing(true);
             }}
           >
@@ -536,7 +553,7 @@ function AnswersBox({
                   setEditing(false);
                   return;
                 }
-                void save({ data: draft })
+                void save({ data: draft }, { data: draftBasis })
                   .then(() => setEditing(false))
                   .catch(() => undefined);
               }}
@@ -612,6 +629,8 @@ function SidePanel({
 }): JSX.Element {
   const [note, setNote] = useState(submission.notes ?? "");
   const [noteSaved, setNoteSaved] = useState(false);
+  // The note as it was when the person began typing, which theirs replaces.
+  const noteBasis = useRef<unknown>(submission.notes ?? null);
   useEffect(() => {
     setNote(submission.notes ?? "");
     setNoteSaved(false);
@@ -672,13 +691,16 @@ function SidePanel({
             value={note}
             disabled={!canUpdate}
             placeholder="Only people in the admin see this."
+            onFocus={() => {
+              noteBasis.current = submission.notes ?? null;
+            }}
             onChange={event => {
               setNote(event.target.value);
               setNoteSaved(false);
             }}
             onBlur={() => {
               if (note === (submission.notes ?? "")) return;
-              void save({ notes: note })
+              void save({ notes: note }, { notes: noteBasis.current })
                 .then(() => setNoteSaved(true))
                 .catch(() => undefined);
             }}
@@ -899,13 +921,33 @@ function useSubmissionForm(submission: SubmissionDocument | undefined) {
 const HELD_MESSAGE =
   "Someone else is editing this submission. Your change was not saved.";
 
+/** Whether the stored submission still holds the values a change was made from. */
+function holdsBasis(
+  stored: SubmissionDocument | undefined,
+  basis: Record<string, unknown> | undefined
+): boolean {
+  if (basis === undefined) return true;
+  const now = (stored ?? {}) as Record<string, unknown>;
+  return Object.entries(basis).every(
+    ([name, value]) =>
+      JSON.stringify(now[name] ?? null) === JSON.stringify(value ?? null)
+  );
+}
+
 /**
  * Saving and deleting this submission, and what a refusal said. Saves run one
  * at a time, each with the version the one before it left: a note saved on
  * blur and the status button clicked straight after would otherwise both send
- * the version the page was read at, and the second be refused as stale. While
- * a colleague holds the submission every write is refused here, before it is
- * sent, judged when it would run rather than when it was asked for.
+ * the version the page was read at, and the second be refused as stale.
+ *
+ * Taking the newest version is only safe for the page's own saves, so a
+ * change made from stored values (an answer draft, a note) names them, and is
+ * refused when someone else has changed them since. A refused save also drops
+ * every save queued behind it: those were asked for on a page that was
+ * already behind, and the refusal's message stays until the person acts
+ * again. While a colleague holds the submission every write is refused here,
+ * before it is sent, judged when it would run rather than when it was asked
+ * for.
  */
 function useSubmissionWrites(slug: string, id: string, held: boolean) {
   const queryClient = useQueryClient();
@@ -913,12 +955,15 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
   const heldNow = useRef(held);
   heldNow.current = held;
   const queue = useRef<Promise<unknown>>(Promise.resolve());
+  // Moves on at each refusal; a save asked for in an earlier one is dropped.
+  const generation = useRef(0);
   const address = `/admin/api/collections/${encodeURIComponent(slug)}/entries/${encodeURIComponent(id)}`;
   const key = ["form-builder", "submission", slug, id];
-  const refuseWhileHeld = () => {
-    if (!heldNow.current) return;
-    setError(HELD_MESSAGE);
-    throw new Error(HELD_MESSAGE);
+  /** Refuse with `message`, dropping every save queued behind this one. */
+  const refuse = (message: string): never => {
+    generation.current += 1;
+    setError(message);
+    throw new Error(message);
   };
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: key });
@@ -928,10 +973,12 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
     void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
   };
   /** Send a change, with the version the page holds now. */
-  const send: Save = async changes => {
-    refuseWhileHeld();
+  const send: Save = async (changes, basis) => {
+    if (heldNow.current) refuse(HELD_MESSAGE);
+    const stored = queryClient.getQueryData<SubmissionDocument>(key);
+    if (!holdsBasis(stored, basis)) refuse(CHANGED_SINCE_MESSAGE);
     setError(null);
-    const rev = queryClient.getQueryData<SubmissionDocument>(key)?._rev;
+    const rev = stored?._rev;
     const response = await fetch(address, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -943,14 +990,21 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
     if (!response.ok) {
       const message = refusalMessage(await response.json().catch(() => null));
       await refresh();
-      setError(message);
-      throw new Error(message);
+      refuse(message);
     }
     await refresh();
   };
-  /** Save a change once every change asked for before it has settled. */
-  const save: Save = changes => {
-    const run = queue.current.then(() => send(changes));
+  /**
+   * Save a change once every change asked for before it has settled, unless
+   * one of those was refused.
+   */
+  const save: Save = (changes, basis) => {
+    const asked = generation.current;
+    const run = queue.current.then(() =>
+      asked === generation.current
+        ? send(changes, basis)
+        : Promise.reject(new Error("Dropped behind a refused change."))
+    );
     queue.current = run.catch(() => undefined);
     return run;
   };

@@ -112,7 +112,7 @@ import {
   SCHEMA_ONLY_CONTEXT,
   SCHEMA_ONLY_READ,
 } from "./utils/schema-only-read";
-import { senderOf } from "./utils/submission-title";
+import { submissionTitleOf } from "./utils/submission-title";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -1469,7 +1469,7 @@ function titleFrom(
   data: Record<string, unknown>
 ): void {
   const asked = readAskedSnapshot(row.asked);
-  row.title = senderOf(asked?.fields ?? fields, data) ?? null;
+  row.title = submissionTitleOf(asked?.fields ?? fields, data) ?? null;
 }
 
 /**
