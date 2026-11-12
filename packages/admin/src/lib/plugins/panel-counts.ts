@@ -58,7 +58,8 @@ export function withPanelPlaces(
 
 /** The place `withPanelPlaces` marked on an item, if it was marked. */
 export function panelPlaceOf(item: PluginMenuItemMeta): number | undefined {
-  const place = (item as Record<string, unknown>)[PANEL_PLACE];
+  // Read by key, since the mark is not part of the item's declared shape.
+  const place: unknown = Reflect.get(item, PANEL_PLACE);
   return typeof place === "number" ? place : undefined;
 }
 
