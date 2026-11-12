@@ -413,13 +413,10 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
-      it("keeps an approval given before an upgrade through a save that changes nothing, and withdraws it on a change", async () => {
+      it("keeps an approval given before an upgrade through a save that leaves its content alone, and withdraws it on a change", async () => {
         await boot(dialect);
         const post = await entry(app(), "posts");
         await save("posts", post, { status: "published" }, { locale: "en" });
-        // A held edit after the publish, so the version approved reads the first-published time
-        // as every later one does.
-        await save("posts", post, { title: "Again" }, { locale: "en" });
         const versionNo = await shownVersion(app(), "posts", post, "en");
         // The digest an earlier release gave the approval: every top-level key but the ones it left
         // out, the first-published time among those it kept.
@@ -455,7 +452,9 @@ describe.each(getConfiguredTestDialects())(
           },
         });
 
-        await save("posts", post, { title: "Again" }, { locale: "en" });
+        // A held edit of the Spanish translation records a version, so every approved part is
+        // judged again, and English's content is what it was.
+        await save("posts", post, { title: "Hola" }, { locale: "es" });
         expect(
           (await stateOf(app(), partOf("posts", post, "en")))?.approval
         ).toMatchObject({ digest: legacy });
