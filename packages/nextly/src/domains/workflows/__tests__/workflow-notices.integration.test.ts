@@ -298,7 +298,11 @@ describe.each(getConfiguredTestDialects())(
             part: "en",
             localized: true,
             step: "Clear",
-            actor: "dave",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "dave",
           },
         }),
       ]);
@@ -340,7 +344,11 @@ describe.each(getConfiguredTestDialects())(
         expect.objectContaining({
           userId: "bob",
           kind: "workflows.assigned",
-          data: expect.objectContaining({ step: "Clear", actor: "alice" }),
+          data: expect.objectContaining({
+            step: "Clear",
+            actor: null,
+            actorUserId: "alice",
+          }),
         }),
       ]);
       expect(await emailJobNotices()).toEqual([notices[0]?.id]);
@@ -369,7 +377,11 @@ describe.each(getConfiguredTestDialects())(
             title: "Hello",
             part: "en",
             step: "Clear",
-            actor: "bob",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "bob",
           }),
         }),
       ]);
@@ -401,7 +413,11 @@ describe.each(getConfiguredTestDialects())(
           kind: "workflows.changes-requested",
           data: expect.objectContaining({
             step: "Bounce",
-            actor: "bob",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "bob",
             comment,
           }),
         }),
@@ -761,6 +777,79 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(sent[0])).not.toContain("Hello");
     });
 
+    it("withholds a title the document's own read rule hides, as a read of the whole document would", async () => {
+      await boot(dialect);
+      await person(app(), "alice", [
+        ["read", "dockets"],
+        ["update", "dockets"],
+      ]);
+      const bob = await person(app(), "bob", [
+        ["read", "dockets"],
+        ["sign-off", "dockets"],
+      ]);
+      const docket = await entry(app(), "dockets");
+      const handler = app().getService(
+        "collectionsHandler"
+      ) as CollectionsHandler;
+      await handler.updateEntry(
+        { collectionName: "dockets", entryId: docket, overrideAccess: true },
+        { level: "restricted", _overwrite: true }
+      );
+      await seedState(app(), partOf("dockets", docket, null), "legal", {
+        enteredBy: "alice",
+        definitionHash: EDITORIAL,
+      });
+
+      await take("dockets", docket, [null], "bounce", bob, "Rework it");
+
+      // The rule reads `level`, which a check of the title alone would never see.
+      const service = container.get<NoticesService>("noticesService");
+      const [shown] = (await service.find({ userId: "alice" })).rows;
+      expect(JSON.stringify(shown)).not.toContain("Hello");
+      expect(shown?.subject.link).toBe(`/admin/collections/dockets/${docket}`);
+    });
+
+    it("keeps no actor's name on a notice, so a deleted account leaves none behind", async () => {
+      await boot(dialect);
+      await person(app(), "alice", [
+        ["read", "posts"],
+        ["update", "posts"],
+      ]);
+      const bob = await person(app(), "bob", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
+      // The actor is named by the account's name, which differs from its id.
+      await app().adapter.update(
+        "users",
+        { name: "Robert Brown" },
+        { and: [{ column: "id", op: "=", value: "bob" }] }
+      );
+      const post = await postInLegal();
+      await take("posts", post, ["en"], "bounce", bob, "Rework it");
+
+      const [stored] = await workflowNotices();
+      expect(JSON.stringify(stored?.data)).not.toContain("Robert Brown");
+      const service = container.get<NoticesService>("noticesService");
+      const [named] = (await service.find({ userId: "alice" })).rows;
+      // Named while the account exists, from the account.
+      expect(named?.body).toContain("Robert Brown");
+
+      await app().nextly.users.delete({ id: "bob" });
+
+      const [after] = (await service.find({ userId: "alice" })).rows;
+      expect(JSON.stringify(after)).not.toContain("Robert Brown");
+      expect(after?.body).toContain("A former user");
+      // Nor does the email the notice queued, sent after the deletion.
+      await runJobsPass(
+        app().adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        { retentionMs: null }
+      );
+      expect(sent).toHaveLength(1);
+      expect(JSON.stringify(sent[0])).not.toContain("Robert Brown");
+    });
+
     it("judges each notice in its own part's language, and a Single as a Single", async () => {
       await boot(dialect);
       // Letters may be read in every language but Spanish; Carol may read neither entity.
@@ -799,7 +888,11 @@ describe.each(getConfiguredTestDialects())(
             part,
             localized: part !== null,
             step: "Bounce",
-            actor: "bob",
+            actor: null,
+
+            // Kept by account, named when shown.
+
+            actorUserId: "bob",
             comment: "Rework it",
           },
         });

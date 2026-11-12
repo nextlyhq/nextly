@@ -136,6 +136,24 @@ export function bootSteps(
           }),
         ],
       }),
+      // Its title is hidden wherever the document's own `level` is "restricted": a rule a read
+      // answers from the whole document, not from the title alone.
+      defineCollection({
+        slug: "dockets",
+        ...table("dockets"),
+        ...drafts,
+        workflow: editorial,
+        fields: [
+          text({
+            name: "title",
+            access: {
+              read: ({ data }: { data?: Record<string, unknown> }) =>
+                data?.level !== "restricted",
+            },
+          }),
+          text({ name: "level" }),
+        ],
+      }),
       defineCollection({
         slug: "notes",
         ...table("notes"),
