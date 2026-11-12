@@ -158,7 +158,7 @@ export interface StructuredDataType {
    * detail Google asks for is there: `false` for a type that describes the
    * page to search and answer engines without one, such as an About page,
    * or an app with no ratings, and for questions and answers, which Google
-   * shows only for a few authoritative sites.
+   * no longer shows as a rich result.
    */
   readonly richResult: boolean;
 }
@@ -258,8 +258,8 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: true,
     needs: ["questions"],
     uses: [],
-    // Google shows these only for well-known government and health sites;
-    // other search and answer engines still read them.
+    // Google stopped showing these as a rich result in May 2026; other
+    // search and answer engines still read them, so they stay valid markup.
     richResult: false,
   },
   profilePage: {

@@ -426,7 +426,9 @@ const GOOGLE: Record<string, GoogleRule> = {
     recommended: [],
     check: node => eachItem(node.itemListElement, ["position", "url"]),
   },
-  // .../structured-data/faqpage: each question's name and accepted answer.
+  // FAQPage: each question's name and accepted answer, as schema.org and
+  // Google's FAQ guide had it; Google retired the rich result in May 2026,
+  // and other engines read the same shape.
   FAQPage: {
     required: ["mainEntity"],
     recommended: [],
