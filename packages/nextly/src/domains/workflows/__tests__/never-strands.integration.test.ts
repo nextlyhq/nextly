@@ -14,7 +14,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { followWorkflowsAfterMigrate } from "../../../cli/commands/follow-workflows";
+import { defineCollection, defineConfig, text } from "../../../config";
 import { clearServices } from "../../../di/register";
 import {
   createTestNextly,
@@ -214,31 +215,39 @@ async function boot(
     adapter?: TestNextly["adapter"];
   } = {}
 ): Promise<TestNextly> {
-  const posts = options.posts === undefined ? desk : options.posts;
-  const pages = options.pages === undefined ? desk : options.pages;
   t = await createTestNextly({
     ...(options.adapter ? { adapter: options.adapter } : { dialect }),
     localization: { locales: ["en", "es"], defaultLocale: "en" },
-    collections: [
-      defineCollection({
-        slug: "posts",
-        localized: true,
-        ...drafts,
-        ...(posts ? { workflow: posts } : {}),
-        fields: [
-          text({ name: "title", localized: true }),
-          text({ name: "code", localized: false }),
-        ],
-      }),
-      defineCollection({
-        slug: "pages",
-        ...drafts,
-        ...(pages ? { workflow: pages } : {}),
-        fields: [text({ name: "title" })],
-      }),
-    ],
+    collections: collectionsOn(options),
   });
   return t;
+}
+
+/** Posts and Pages, each on `posts` and `pages` as given (`desk` when not; none detaches it). */
+function collectionsOn(options: {
+  posts?: Workflow | null;
+  pages?: Workflow | null;
+}) {
+  const posts = options.posts === undefined ? desk : options.posts;
+  const pages = options.pages === undefined ? desk : options.pages;
+  return [
+    defineCollection({
+      slug: "posts",
+      localized: true,
+      ...drafts,
+      ...(posts ? { workflow: posts } : {}),
+      fields: [
+        text({ name: "title", localized: true }),
+        text({ name: "code", localized: false }),
+      ],
+    }),
+    defineCollection({
+      slug: "pages",
+      ...drafts,
+      ...(pages ? { workflow: pages } : {}),
+      fields: [text({ name: "title" })],
+    }),
+  ];
 }
 
 /** Boots again on the same database, as a deploy does. */
@@ -358,8 +367,11 @@ async function strandedListed(slug: "posts" | "pages") {
     overrideAccess: true,
   } as never);
   return {
-    ids: (listed as { items: { id: string }[] }).items.map(item => item.id),
-    total: (counted as { total: number }).total,
+    // Each listed row's id, narrowed from the untyped row a slug the types do not know returns.
+    ids: listed.items.flatMap(item =>
+      typeof item.id === "string" ? [item.id] : []
+    ),
+    total: counted.total,
   };
 }
 
@@ -561,6 +573,36 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+
+    // A production start reads nothing of the schema, so `nextly migrate`, the deploy step, follows
+    // the workflows instead: here on the database a development start left, on every dialect.
+    describe("the deploy step", () => {
+      it("follows a renamed stage when `nextly migrate` runs it, as a production start does not", async () => {
+        await boot(dialect);
+        const parked = await entry(app(), "posts");
+        await seedState(app(), partOf("posts", parked, "en"), "hold", {
+          definitionHash: DESK,
+        });
+
+        await followWorkflowsAfterMigrate(
+          defineConfig({
+            collections: collectionsOn({
+              posts: deskRenamed,
+              pages: deskRenamed,
+            }),
+          }),
+          null,
+          app().adapter
+        );
+
+        expect(
+          await stateOf(app(), partOf("posts", parked, "en"))
+        ).toMatchObject({
+          stage: "paused",
+          definitionHash: workflowDefinitionHash(deskRenamed),
+        });
+      });
+    });
 
     describe("deleting a document", () => {
       it("removes its review state by every delete path, and no other document's", async () => {

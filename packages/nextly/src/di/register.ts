@@ -1248,19 +1248,24 @@ async function registerServicesOnce(
       // the database's schema version against the build's, read once.
       await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
 
-      // Review state recorded under an earlier configuration follows the workflows this boot
-      // registered first: a detached collection's is removed, and renamed or mapped stages are
-      // followed. Before the approvals are judged below, so a part a rename kept is judged under the
-      // definition it now carries.
-      await followWorkflowDefinitions(adapter, workflows.values());
+      // A development start brings review state into line with the workflows it registered; a
+      // production start reads nothing of the schema, so there `nextly migrate`, the deploy step,
+      // does this instead (`followWorkflowsAfterMigrate`).
+      if (!isProductionRuntime()) {
+        // Review state recorded under an earlier configuration follows the workflows this boot
+        // registered first: a detached collection's is removed, and renamed or mapped stages are
+        // followed. Before the approvals are judged below, so a part a rename kept is judged under
+        // the definition it now carries.
+        await followWorkflowDefinitions(adapter, workflows.values());
 
-      // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
-      // this boot registered are published, unless the definition keeps them. After the migrations,
-      // so the review states table is there to read where it exists at all.
-      await withdrawApprovalsUnderEarlierDefinitions(
-        adapter,
-        workflows.values()
-      );
+        // Approvals given under an earlier definition of a workflow are withdrawn now the
+        // workflows this boot registered are published, unless the definition keeps them. After
+        // the migrations, so the review states table is there to read where it exists at all.
+        await withdrawApprovalsUnderEarlierDefinitions(
+          adapter,
+          workflows.values()
+        );
+      }
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing

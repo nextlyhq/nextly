@@ -727,6 +727,17 @@ export async function runMigrate(
             `User fields: storage ready for ${formatCount(userFields, "field")}.`
           );
         }
+        // Review state follows the configuration's workflows once the schema is in step: the work
+        // a development start does at boot, which a production start leaves to this deploy step
+        // since it reads nothing of the schema.
+        const { followWorkflowsAfterMigrate } = await import(
+          "./follow-workflows"
+        );
+        await followWorkflowsAfterMigrate(
+          configResult.config,
+          configResult.configPath ?? null,
+          adapter as unknown as DrizzleAdapter
+        );
       }
     } catch (err) {
       fail(err);
