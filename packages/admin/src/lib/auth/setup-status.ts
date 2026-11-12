@@ -15,7 +15,7 @@
 import { publicApi } from "../api/publicApi";
 
 /** What setup-status answers, as the admin reads it. */
-interface SetupStatus {
+export interface SetupStatus {
   /**
    * Whether the server answered. False only on the fail-safe path below, where
    * `isSetup` and `requiresSetupToken` are defaults rather than the server's.
@@ -24,6 +24,13 @@ interface SetupStatus {
   isSetup: boolean;
   /** Whether setup needs its setup token: in production, until it is done. */
   requiresSetupToken: boolean;
+  /**
+   * Whether the app takes sign-ups (`auth.allowRegistration`), which decides
+   * whether the sign-in page offers "Sign up" and the register page its form.
+   * No unless the server says yes, as the server's own default is: an older
+   * server that does not say, and the fail-safe path, both read as no.
+   */
+  allowRegistration: boolean;
 }
 
 /**
@@ -44,7 +51,12 @@ let setupStatusCache: Promise<SetupStatus> | null = null;
 async function fetchSetupStatus(): Promise<SetupStatus> {
   try {
     const result = await publicApi.get<
-      { isSetup?: unknown; requiresSetupToken?: unknown } | undefined
+      | {
+          isSetup?: unknown;
+          requiresSetupToken?: unknown;
+          allowRegistration?: unknown;
+        }
+      | undefined
     >("/auth/setup-status");
     // Require a strict boolean; any other shape (empty body, non-JSON,
     // schema drift) takes the same fail-safe default as the catch branch
@@ -55,9 +67,15 @@ async function fetchSetupStatus(): Promise<SetupStatus> {
       answered: typeof result?.isSetup === "boolean",
       isSetup: typeof result?.isSetup === "boolean" ? result.isSetup : true,
       requiresSetupToken: result?.requiresSetupToken !== false,
+      allowRegistration: result?.allowRegistration === true,
     };
   } catch {
-    return { answered: false, isSetup: true, requiresSetupToken: true };
+    return {
+      answered: false,
+      isSetup: true,
+      requiresSetupToken: true,
+      allowRegistration: false,
+    };
   }
 }
 
@@ -80,10 +98,7 @@ function readSetupStatus(): Promise<SetupStatus> {
  * Setup status as the server gave it, with `answered: false` where it gave
  * none, for a reader that must not mistake the fail-safe for an answer.
  */
-export function readSetupState(): Promise<{
-  answered: boolean;
-  isSetup: boolean;
-}> {
+export function readSetupState(): Promise<SetupStatus> {
   return readSetupStatus();
 }
 
