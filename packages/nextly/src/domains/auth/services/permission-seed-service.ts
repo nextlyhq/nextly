@@ -71,8 +71,8 @@ export interface OrphanMarkScope {
   kept?: readonly { action: string; resource: string }[];
 }
 
-/** A permission row as the orphan pass reads it. */
-interface OrphanPassRow {
+/** A permission row as the orphan pass reads it, and as a rollback's undo of its marks is judged. */
+export interface OrphanPassRow {
   id: string;
   slug: string;
   action: string;
@@ -1166,23 +1166,13 @@ export class PermissionSeedService extends BaseService {
     scope: OrphanMarkScope
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const { permissions } = this.tables;
 
     const declaredKeys = new Set(declared.map(orphanPassKey));
     // Another owner's declarations: their rows are not this pass's to change.
     const keptKeys = new Set((scope.kept ?? []).map(orphanPassKey));
 
     try {
-      const rows = (await this.db
-        .select({
-          id: permissions.id,
-          slug: permissions.slug,
-          action: permissions.action,
-          resource: permissions.resource,
-          owner: permissions.owner,
-          orphanedAt: permissions.orphanedAt,
-        })
-        .from(permissions)) as OrphanPassRow[];
+      const rows = await this.orphanPassRows();
 
       const judged = {
         declared: declaredKeys,
@@ -1194,23 +1184,8 @@ export class PermissionSeedService extends BaseService {
         if (orphaned === undefined || row.owner === null) continue;
 
         result.total++;
-        await writingPermissions(permissions, table =>
-          this.db
-            .update(table)
-            .set({ orphanedAt: orphaned ? new Date() : null })
-            .where(eq(table.id, String(row.id)))
-        );
+        await this.writeOrphanMark(row, orphaned);
         result.created++;
-
-        // Said with the grants the permission has once the mark is written,
-        // which a mark leaves as they were.
-        await this.permissionService.logOrphanMarkChange({
-          id: String(row.id),
-          action: row.action,
-          resource: row.resource,
-          owner: row.owner,
-          orphaned,
-        });
       }
     } catch (error) {
       this.logger.warn(
@@ -1222,6 +1197,81 @@ export class PermissionSeedService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * Set or clear the orphan marks `decide` names, by permission id, and leave
+   * every other permission as it is: what a rollback to the registry record's
+   * point does with the marks the rolled-back migrations set or made needed.
+   * `decide` is handed every permission as the orphan pass reads it, so the
+   * judgement is made on the rows the writes then change. A mark already as
+   * decided is not written again.
+   *
+   * Unlike the orphan pass, a permission with no owner (an entity's built-in
+   * one) can be marked here: the rollback that removes an entity's registry
+   * row orphans its permissions with it. Every grant is kept, and each mark
+   * set or cleared is logged with the grants the permission keeps
+   * (`logOrphanMarkChange`). A write that fails throws, so the caller's
+   * transaction does not commit with some marks written and others not.
+   *
+   * @returns How many marks were set or cleared.
+   */
+  async rewriteOrphanMarks(
+    decide: (rows: readonly OrphanPassRow[]) => ReadonlyMap<string, boolean>
+  ): Promise<number> {
+    return inPermissionSweep(async () => {
+      const rows = await this.orphanPassRows();
+      const marks = decide(rows);
+      let written = 0;
+      for (const row of rows) {
+        const orphaned = marks.get(String(row.id));
+        if (orphaned === undefined || orphaned === (row.orphanedAt !== null)) {
+          continue;
+        }
+        await this.writeOrphanMark(row, orphaned);
+        written += 1;
+      }
+      return written;
+    });
+  }
+
+  /** Every permission, as the orphan pass and a rollback's undo of its marks read it. */
+  private async orphanPassRows(): Promise<OrphanPassRow[]> {
+    const { permissions } = this.tables;
+    return (await this.db
+      .select({
+        id: permissions.id,
+        slug: permissions.slug,
+        action: permissions.action,
+        resource: permissions.resource,
+        owner: permissions.owner,
+        orphanedAt: permissions.orphanedAt,
+      })
+      .from(permissions)) as OrphanPassRow[];
+  }
+
+  /**
+   * Write one permission's orphan mark, set or cleared, and log it with the
+   * grants the permission has once the mark is written, which a mark leaves
+   * as they were.
+   */
+  private async writeOrphanMark(
+    row: OrphanPassRow,
+    orphaned: boolean
+  ): Promise<void> {
+    await writingPermissions(this.tables.permissions, table =>
+      this.db
+        .update(table)
+        .set({ orphanedAt: orphaned ? new Date() : null })
+        .where(eq(table.id, String(row.id)))
+    );
+    await this.permissionService.logOrphanMarkChange({
+      id: String(row.id),
+      action: row.action,
+      resource: row.resource,
+      owner: row.owner,
+      orphaned,
+    });
   }
 
   /**

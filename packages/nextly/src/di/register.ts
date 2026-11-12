@@ -156,6 +156,7 @@ import type { WebhookEndpointService } from "../domains/webhooks/services/webhoo
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { withdrawApprovalsUnderEarlierDefinitions } from "../domains/workflows/approval-follows-content";
+import { followWorkflowDefinitions } from "../domains/workflows/definition-sweep";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
@@ -188,7 +189,6 @@ import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
-import { getNextlyLogger } from "../observability/logger";
 import { maskingServiceLogger } from "../observability/mask-emails";
 import {
   forgetCapabilityProviders,
@@ -197,6 +197,7 @@ import {
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
+import { reportUserMenuItemProblems } from "../plugins/header-item";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
   collectCustomPermissions,
@@ -224,7 +225,7 @@ import {
   clearPluginDependencies,
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
-import { pluginLandingWarnings } from "../plugins/plugin-landing";
+import { reportPluginLandingWarnings } from "../plugins/plugin-landing";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
@@ -1247,6 +1248,12 @@ async function registerServicesOnce(
       // the database's schema version against the build's, read once.
       await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
 
+      // Review state recorded under an earlier configuration follows the workflows this boot
+      // registered first: a detached collection's is removed, and renamed or mapped stages are
+      // followed. Before the approvals are judged below, so a part a rename kept is judged under the
+      // definition it now carries.
+      await followWorkflowDefinitions(adapter, workflows.values());
+
       // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
       // this boot registered are published, unless the definition keeps them. After the migrations,
       // so the review states table is there to read where it exists at all.
@@ -1689,18 +1696,20 @@ function logRegisteredPlugins(
   // plugin author's and breaks nothing, and an operator cannot fix a
   // third-party package from their own config.
   warnUndescribedPlugins(transformedConfig.plugins, logger);
+  // Beside it for the same reason: a malformed person's-menu item is left
+  // out of the menu without a word otherwise.
+  reportUserMenuItemProblems(transformedConfig.plugins, logger);
 
   // Once per start, here rather than in the admin metadata, which is built on
   // every request. Reported in development only and never thrown: the value
   // is already ignored everywhere, and a rail item that opens a menu item
   // still works.
-  for (const warning of pluginLandingWarnings(
+  reportPluginLandingWarnings(
     transformedConfig.plugins,
     transformedConfig.admin?.pluginOverrides,
-    process.env.NODE_ENV
-  )) {
-    getNextlyLogger().warn(warning);
-  }
+    process.env.NODE_ENV,
+    logger
+  );
 }
 
 /**

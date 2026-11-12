@@ -1372,7 +1372,9 @@ export interface PluginAdminConfig {
 export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   /**
    * Unique plugin name.
-   * Used for identification and error messages.
+   * Used for identification and error messages. `app`, in any letter case, is
+   * reserved: the site's own permissions are stored under that owner, and a
+   * plugin's under its name, so a plugin named `app` is refused at startup.
    */
   name: string;
 

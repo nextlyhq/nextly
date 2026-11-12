@@ -15,6 +15,7 @@ import { FieldSettingsPanel } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
 import { type JSX, type ReactNode, useMemo, useSyncExternalStore } from "react";
 
+import { consentFieldEdit } from "../../../utils/consent";
 import { oneResponseEditProblem } from "../../../utils/one-response-field";
 import {
   useFieldBookkeeping,
@@ -88,15 +89,20 @@ export function useFieldPanel(closable: boolean): ReactNode {
       saved={savedFieldNames.has(selected.name)}
       readOnly={readOnly}
       onChange={next => {
-        const edited = fromPanelField(next);
-        // The Email field one response per email compares stays required,
-        // shown and an Email field: such an edit is refused, and why said.
-        const refused = oneResponseEditProblem(selected, edited, settings);
+        // A consent stays required, and the Email field one response per
+        // email compares stays required, shown and an Email field: such an
+        // edit is refused, and why said.
+        const kept = consentFieldEdit(selected, fromPanelField(next));
+        if ("refused" in kept) {
+          toast.error(kept.refused);
+          return;
+        }
+        const refused = oneResponseEditProblem(selected, kept.field, settings);
         if (refused !== undefined) {
           toast.error(refused);
           return;
         }
-        editField(selected, edited, fields);
+        editField(selected, kept.field, fields);
       }}
       onClose={closable ? () => selectField(null) : undefined}
     />

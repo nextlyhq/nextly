@@ -60,6 +60,10 @@ import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
+import {
+  releaseNotesFixturePlugin,
+  whatsNewFixturePlugin,
+} from "./src/plugins/item-place-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { widgetCheckFixturePlugin } from "./src/plugins/widget-check-fixture/plugin";
 import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
@@ -355,6 +359,11 @@ export default defineConfig({
     formBuilder({ redirectRelationships: { pages: "/{slug}" } }).plugin,
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
+      : []),
+    // A plugin's own item at the rail's foot and in the person's menu, for the
+    // browser suite and the visual checks, which run with the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [releaseNotesFixturePlugin, whatsNewFixturePlugin]
       : []),
     // Always on, because its widgets are drawn by their own components, which
     // the committed component map must hold; offered only from the add panel,

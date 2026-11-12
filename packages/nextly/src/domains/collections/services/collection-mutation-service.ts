@@ -411,6 +411,10 @@ import {
   withdrawApprovalsOnSave,
 } from "../../workflows/approval-follows-content";
 import {
+  closeReviewOnDiscard,
+  removeDeletedDocumentReviewStates,
+} from "../../workflows/review-state-cleanup";
+import {
   localizedFilterContext,
   type FilterConditionSources,
 } from "../query/filter-condition";
@@ -5942,6 +5946,18 @@ export class CollectionMutationService extends BaseService {
               actor: actorForWrite(params.actor, params.user),
               personName: params.user?.name ?? null,
               ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+            }
+          );
+          // The discarded part has nothing unpublished left to review: its
+          // review closes with the draft, in this transaction.
+          await closeReviewOnDiscard(
+            tx,
+            { adapter: this.adapter },
+            {
+              document: discardedRef,
+              part: draftLocale,
+              actor: actorForWrite(params.actor, params.user),
+              personName: params.user?.name ?? null,
             }
           );
         }
@@ -18439,6 +18455,13 @@ export class CollectionMutationService extends BaseService {
           },
           tables
         );
+        // And its review state, every part's: counts, lists and the inbox
+        // must never show a document that is gone.
+        await removeDeletedDocumentReviewStates(tx, {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        });
 
         // The document's last history event: the whole document, every
         // language, is gone. Its history is kept for the activity log's window
@@ -21371,6 +21394,12 @@ export class CollectionMutationService extends BaseService {
           ),
         }
       );
+      // Its review state goes too; see the single-delete path.
+      await removeDeletedDocumentReviewStates(tx, {
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId,
+      });
 
       // The document's last history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {

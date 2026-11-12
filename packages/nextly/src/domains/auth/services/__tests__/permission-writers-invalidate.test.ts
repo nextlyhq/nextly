@@ -267,10 +267,10 @@ const writes = FILES.flatMap(writesIn);
  */
 const WRITES = [
   "domains/auth/services/permission-seed-service.ts:createWithGrants",
-  "domains/auth/services/permission-seed-service.ts:markOrphanedPermissionsRows",
   "domains/auth/services/permission-seed-service.ts:normalizeReversedSlugs",
   "domains/auth/services/permission-seed-service.ts:retirePermissionRow",
   "domains/auth/services/permission-seed-service.ts:returnPermissionToPresets",
+  "domains/auth/services/permission-seed-service.ts:writeOrphanMark",
   "domains/auth/services/permission-service.ts:ensureAgainst",
   "domains/auth/services/permission-service.ts:ensureAgainst",
   "domains/auth/services/permission-service.ts:removePermissionRow",

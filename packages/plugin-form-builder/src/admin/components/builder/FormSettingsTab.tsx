@@ -539,8 +539,63 @@ function PrivacySection(): React.JSX.Element {
           }
         />
       </SettingRow>
+      <SettingRow
+        label="Delete submissions after"
+        htmlFor="settings-keep-days"
+        description="Older submissions and their email records are deleted each night. Spam goes after 30 days either way."
+      >
+        <Select
+          value={keepChoiceOf(settings.keepDays)}
+          onValueChange={choice =>
+            updateSettings({
+              keepDays: choice === "never" ? undefined : Number(choice),
+            })
+          }
+        >
+          <SelectTrigger
+            id="settings-keep-days"
+            aria-describedby={descriptionIdOf("settings-keep-days")}
+            className="w-full sm:w-40 bg-transparent border-input dark:bg-muted/50"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {keepChoicesFor(settings.keepDays).map(choice => (
+              <SelectItem key={choice.value} value={choice.value}>
+                {choice.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
     </FormSection>
   );
+}
+
+/** How long a form keeps its submissions: never deleted, or after a while. */
+const KEEP_CHOICES = [
+  { value: "never", label: "Never" },
+  { value: "30", label: "30 days" },
+  { value: "90", label: "90 days" },
+  { value: "365", label: "1 year" },
+] as const;
+
+/** The choice a stored keep period reads as. */
+function keepChoiceOf(keepDays: number | undefined): string {
+  return keepDays === undefined ? "never" : String(keepDays);
+}
+
+/**
+ * The choices offered. A period set some other way (the API, code) is offered
+ * as itself, so opening Settings shows it and never changes it.
+ */
+function keepChoicesFor(
+  keepDays: number | undefined
+): ReadonlyArray<{ value: string; label: string }> {
+  const current = keepChoiceOf(keepDays);
+  return KEEP_CHOICES.some(choice => choice.value === current)
+    ? KEEP_CHOICES
+    : [...KEEP_CHOICES, { value: current, label: `${current} days` }];
 }
 
 export function FormSettingsTab({

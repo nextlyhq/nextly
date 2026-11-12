@@ -52,7 +52,9 @@ const adapter = vi.hoisted(() => ({
   getDrizzle: () => ({}),
   setTableResolver: () => {},
   listTables: () => Promise.resolve(["dc_nw_old"]),
-  tableExists: () => Promise.resolve(true),
+  // Every table but `nextly_meta`, so no registry record is read from the
+  // handle above, which holds none.
+  tableExists: (table: string) => Promise.resolve(table !== "nextly_meta"),
   disconnect: () => Promise.resolve(),
 }));
 
