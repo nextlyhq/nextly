@@ -125,6 +125,8 @@ export interface Named {
   name: string;
   /** Its own public address, where it has one. */
   url?: string;
+  /** A person's role, where their entry gives one. */
+  jobTitle?: string;
 }
 
 /** The name an entry or a group is known by. */
@@ -224,9 +226,21 @@ async function namedEntry(
     locale,
     undefined
   );
-  return address === undefined
-    ? { name }
-    : { name, url: new URL(address, `${origin}/`).href };
+  const jobTitle = jobTitleIn(entry);
+  return {
+    name,
+    ...(address === undefined
+      ? {}
+      : { url: new URL(address, `${origin}/`).href }),
+    ...(jobTitle === undefined ? {} : { jobTitle }),
+  };
+}
+
+/** A person's role, as an author's entry may hold it. */
+function jobTitleIn(record: Record<string, unknown>): string | undefined {
+  return (
+    textOf(record.jobTitle) ?? textOf(record.role) ?? textOf(record.position)
+  );
 }
 
 /** A detail's value, the first of a list where the field holds several. */
@@ -259,7 +273,9 @@ export async function namedOf(
       return namedEntry(ctx, target, value, input.locale, origin);
     }
     const name = nameIn(value);
-    return name === undefined ? undefined : { name };
+    if (name === undefined) return undefined;
+    const jobTitle = jobTitleIn(value);
+    return jobTitle === undefined ? { name } : { name, jobTitle };
   }
   const text = textOf(value);
   if (text === undefined) return undefined;
@@ -297,4 +313,79 @@ export async function pictureOf(
   read: DetailRead
 ): Promise<PageMetadataImage | undefined> {
   return imageOf(ctx, read.value);
+}
+
+/**
+ * The names a detail lists, such as a post's tags: text, entries or groups
+ * by their name, each once. A relationship read without its entries names
+ * nothing, since an id is not a name.
+ */
+export function namesOf(value: unknown): string[] {
+  const each = Array.isArray(value) ? value : [value];
+  const names = each.flatMap(item => {
+    if (isRecord(item)) {
+      const inner = isRecord(item.value) ? item.value : item;
+      return nameIn(inner) ?? [];
+    }
+    return typeof item === "string" ? (textOf(item) ?? []) : [];
+  });
+  return [...new Set(names)];
+}
+
+/**
+ * The words of a value as a reader sees them: text as it is, and rich text
+ * (a tree of nodes holding `text`) with its words in order. Nothing else.
+ */
+export function plainTextOf(value: unknown): string {
+  const words: string[] = [];
+  const walk = (node: unknown, depth: number): void => {
+    // Rich text nests a few levels deep; a deeper value is not page text.
+    if (depth > 64) return;
+    if (typeof node === "string") {
+      words.push(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child, depth + 1);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (typeof node.text === "string") words.push(node.text);
+    if (node.root !== undefined) walk(node.root, depth + 1);
+    if (node.children !== undefined) walk(node.children, depth + 1);
+  };
+  walk(value, 0);
+  return words.join(" ").replace(/\s+/g, " ").trim();
+}
+
+/** How many words a text has. */
+export function wordCountOf(text: string): number {
+  return text === "" ? 0 : text.split(" ").length;
+}
+
+/** One question a page answers, as its reader sees it. */
+export interface Question {
+  question: string;
+  answer: string;
+}
+
+/**
+ * The questions and answers a field holds: a list of items, each with its
+ * question (`question`, `q`, `name` or `title`) and its answer (`answer`,
+ * `a` or `text`, plain or rich text). An item missing either is left out.
+ */
+export function questionsOf(value: unknown): Question[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    if (!isRecord(item)) return [];
+    const question =
+      textOf(item.question) ??
+      textOf(item.q) ??
+      textOf(item.name) ??
+      textOf(item.title);
+    const answer = plainTextOf(item.answer ?? item.a ?? item.text);
+    return question === undefined || answer === ""
+      ? []
+      : [{ question, answer }];
+  });
 }

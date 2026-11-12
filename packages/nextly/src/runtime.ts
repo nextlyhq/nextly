@@ -87,6 +87,9 @@ export {
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
+  type PageListItem,
+  type PageQuestion,
+  type PageStructuredDataHints,
   type StructuredDataNode,
   type StructuredDataValue,
 } from "./runtime/seo";

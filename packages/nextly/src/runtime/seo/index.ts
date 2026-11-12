@@ -24,6 +24,9 @@ export type {
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
+  PageListItem,
+  PageQuestion,
+  PageStructuredDataHints,
   StructuredDataNode,
   StructuredDataValue,
 } from "./page-metadata-contract";

@@ -90,7 +90,7 @@ describe("a page's social card", () => {
       completeSocialCard({}, {}, { language: "en-US" }).social?.locale
     ).toBe("en_US");
     expect(completeSocialCard({}, { locale: "fr" }, {}).social?.locale).toBe(
-      "fr"
+      "fr_FR"
     );
   });
 
@@ -112,8 +112,17 @@ describe("a page's social card", () => {
 describe("cardLocale", () => {
   it("reads a language tag as Open Graph writes it", () => {
     expect(cardLocale("en-US")).toBe("en_US");
+    expect(cardLocale("en-GB")).toBe("en_GB");
     expect(cardLocale("zh-Hant-TW")).toBe("zh_TW");
-    expect(cardLocale("de")).toBe("de");
+  });
+
+  it("gives a bare language the territory it is most often written for", () => {
+    // Open Graph's og:locale is always language_TERRITORY; a site that names
+    // only its language would otherwise state a locale crawlers do not read.
+    expect(cardLocale("en")).toBe("en_US");
+    expect(cardLocale("de")).toBe("de_DE");
+    expect(cardLocale("pt")).toBe("pt_BR");
+    expect(cardLocale("ja")).toBe("ja_JP");
   });
 
   it("reads text that is no language tag as no language", () => {
@@ -195,7 +204,7 @@ describe("withSocialCard", () => {
         url: "https://example.com/uploads/2026/11/cover.jpg",
       },
       siteName: "Acme",
-      locale: "en",
+      locale: "en_US",
     });
   });
 });

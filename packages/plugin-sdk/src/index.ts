@@ -44,6 +44,9 @@ export type {
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
+  PageListItem,
+  PageQuestion,
+  PageStructuredDataHints,
 } from "nextly/runtime";
 
 /**

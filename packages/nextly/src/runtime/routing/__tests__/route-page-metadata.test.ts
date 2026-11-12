@@ -13,7 +13,9 @@
  *   a path;
  * - the page's render is handed the structured data of the same answer, as
  *   JSON-LD text that no value can break out of, and nothing without a
- *   provider.
+ *   provider;
+ * - what a route says about its page for its structured data reaches the
+ *   provider with the structured data's ask only, never the head's.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -332,6 +334,46 @@ describe("structured data handed to a page's render", () => {
 
     expect(contexts[0]).not.toHaveProperty("structuredData");
     expect(built).toBe(0);
+  });
+
+  it("tells the provider what the route says about the page, for its structured data only", async () => {
+    const asked = provide(() => ({ title: "About", structuredData: NODES }));
+    const { reader } = contentReader();
+    let hinted = 0;
+    const route = createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      locale: "en",
+      render: () => "page",
+      structuredDataHints: entry => {
+        hinted += 1;
+        return {
+          type: "aboutPage",
+          name: String(entry.title),
+          items: [{ name: "Team", url: "/about/team" }],
+          questions: [{ question: "Who?", answer: "Us." }],
+        };
+      },
+    });
+
+    await route.generateMetadata(params(["about"]));
+    expect(hinted).toBe(0);
+    await route.ContentPage(params(["about"]));
+
+    expect(hinted).toBe(1);
+    // The head is asked without them; the structured data with them, as
+    // the route gave them, and apart from the head's answer.
+    expect(asked[0]).not.toHaveProperty("structuredDataHints");
+    expect(asked[1]?.structuredDataHints).toEqual({
+      type: "aboutPage",
+      name: "About",
+      items: [{ name: "Team", url: "/about/team" }],
+      questions: [{ question: "Who?", answer: "Us." }],
+    });
+    expect({ ...asked[1], structuredDataHints: undefined }).toEqual({
+      ...asked[0],
+      structuredDataHints: undefined,
+    });
   });
 
   it("renders the page without structured data when the provider fails", async () => {
