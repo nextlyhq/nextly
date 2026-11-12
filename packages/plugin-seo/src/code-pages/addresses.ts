@@ -45,6 +45,8 @@ import type {
   CodePageSeo,
   PreviewImage,
   SiteAddress,
+  ValueSource,
+  ValueSources,
 } from "./contract";
 import type { CodeRoute } from "./routes";
 import { nameOfAddress, type CodePageRow } from "./store";
@@ -53,6 +55,24 @@ import { nameOfAddress, type CodePageRow } from "./store";
 function standingOfAnswer(answer: SeoAnswer): AddressStanding {
   if (answer.robots.value.index) return "listed";
   return answer.robots.from === "type" ? "type-hidden" : "hidden";
+}
+
+/** The level a served value came from, as the list names it. */
+function sourceOf(value: Sourced<string> | undefined): ValueSource | undefined {
+  if (value === undefined) return undefined;
+  // The two levels an answer's text cannot come from are read as the
+  // site's, the last level of the order.
+  return value.from === "address" || value.from === "type"
+    ? "site"
+    : value.from;
+}
+
+/** Where an answer's title and description come from. */
+function sourcesOf(answer: SeoAnswer): ValueSources {
+  return present({
+    title: sourceOf(answer.title),
+    description: sourceOf(answer.description),
+  });
 }
 
 /** An automatic value as the screen names where it came from. */
@@ -163,6 +183,7 @@ async function codeAddressOf(
     from: route.route,
     standing:
       row?.connected === true ? standingOfAnswer(answer) : "not-connected",
+    sources: sourcesOf(answer),
     ...present({
       title: answer.title?.value,
       canonical: canonicalOf(answer, site.origin),
@@ -242,6 +263,7 @@ async function entryAddressOf(
     source: "entry",
     from: label,
     standing: standingOfAnswer(answer),
+    sources: sourcesOf(answer),
     ...present({
       title: answer.title?.value,
       canonical: canonicalOf(answer, options.origin),

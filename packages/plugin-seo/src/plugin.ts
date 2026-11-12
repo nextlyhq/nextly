@@ -30,7 +30,7 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
-import { BULK_PAGE, BULK_PAGE_HREF } from "./bulk/contract";
+import { BULK_PAGE } from "./bulk/contract";
 import { bulkRoutes } from "./bulk/route";
 import { codePagesCollection } from "./code-pages/collection";
 import {
@@ -69,6 +69,13 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { checklistRoutes } from "./overview/checklist";
+import {
+  IMPORT_PAGE,
+  INSPECT_PAGE,
+  OVERVIEW_PAGE,
+  OVERVIEW_PAGE_HREF,
+} from "./overview/contract";
 import {
   CHECK_SEO_PERMISSION,
   holdsPageSeo,
@@ -81,7 +88,7 @@ import { watchSaves } from "./problems/hooks";
 import { singleKey } from "./problems/page-types";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
-import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
+import { RECEIVED_PAGE } from "./received/contract";
 import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE } from "./redirects/contract";
@@ -101,7 +108,12 @@ import {
   SEO_ADMIN_SLUG,
   SETTINGS_PAGE_HREF,
 } from "./settings/contract";
-import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
+import {
+  readBrandFacts,
+  readSeoRules,
+  rememberSettingsSingle,
+  setupWaiting,
+} from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
 import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
@@ -126,7 +138,11 @@ import {
 import { seoTabParts } from "./tab/install";
 import { PAGE_BUILDER_TAB } from "./template/contributions";
 import { seoTemplateRoute } from "./template/route";
-import { seoIssuesWidget, seoProblemsAttentionItem } from "./widget-card";
+import {
+  SEO_PROBLEMS_ATTENTION_ID,
+  seoIssuesWidget,
+  seoProblemsAttentionItem,
+} from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
@@ -622,6 +638,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
   };
 
+  // The SEO issues card and its Needs attention line, counting what the
+  // problem list finds as each person may read it, so the dashboard and the
+  // list never disagree; the line's count is the
+  // Problems menu item's badge too. Withheld where no collection carries SEO (see
+  // `widget-card`).
+  const issues = {
+    collections: targets,
+    problemsFor: problemsForCard(problemChecks),
+  };
+  const issuesCard = seoIssuesWidget(issues);
+  const issuesItem = seoProblemsAttentionItem(issues);
+
   // The site's sitemap and robots.txt, the action that makes a share image
   // of the right size, the settings and redirects screens' routes, the
   // check of what search engines received, the SEO tab's own and the
@@ -724,20 +752,37 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Page Builder's Settings knows a page it has a group to edit.
         tabCollections: tab.tabCollections,
       },
+      // The section's menu, in the order the section is used: where it
+      // stands, its pages, what to fix, its redirects, its rules. Each
+      // screen's other addresses (`overview/contract`) are reached from these.
       menu: [
-        // Shown to everyone in the admin: the list answers each person with
-        // the pages of the types they may read, and says so where none.
-        { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
-        // The site-wide screens, gated on the plugin's own permissions,
+        {
+          label: "Overview",
+          to: OVERVIEW_PAGE_HREF,
+          icon: "LayoutDashboard",
+          requiredPermission: MANAGE_SEO_PERMISSION,
+        },
+        // The site-wide screens are gated on the plugin's own permissions,
         // whose names no host renames. The settings also need the Single's
         // own read, which an entry can't ask beside this one: someone
         // holding `manage-seo` without it opens the screen and is refused
         // its contents by the routes.
         {
-          label: "Pages and addresses",
+          label: "Pages",
           to: PAGES_PAGE_HREF,
           icon: "FileText",
           requiredPermission: MANAGE_SEO_PERMISSION,
+        },
+        // Shown to everyone in the admin: the list answers each person with
+        // the pages of the types they may read, and says so where none. Its
+        // badge is the errors and warnings they would find there.
+        {
+          label: "Problems",
+          to: PROBLEMS_PAGE_HREF,
+          icon: "AlertTriangle",
+          ...(issuesItem === undefined
+            ? {}
+            : { badge: { attention: SEO_PROBLEMS_ATTENTION_ID } }),
         },
         {
           label: "Redirects",
@@ -745,19 +790,6 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           icon: "Route",
           requiredPermission: MANAGE_SEO_PERMISSION,
         },
-        // The check has the server fetch the site's own pages, so it is
-        // its own permission, and compares only the pages whose type the
-        // person may read.
-        {
-          label: "What search engines received",
-          to: RECEIVED_PAGE_HREF,
-          icon: "Eye",
-          requiredPermission: CHECK_SEO_PERMISSION,
-        },
-        // Shown to everyone in the admin: the table holds the pages of the
-        // types each person may read, the ones they may not change read-only,
-        // and its import asks for manage-seo itself.
-        { label: "Bulk edit", to: BULK_PAGE_HREF, icon: "Table" },
         {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
@@ -766,32 +798,37 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
-        PROBLEMS_PAGE,
-        { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
-        { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
-        { ...RECEIVED_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
+        { ...OVERVIEW_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...IMPORT_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...INSPECT_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
+        PROBLEMS_PAGE,
+        { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        // Old addresses, each sending a bookmark on to the screen that
+        // replaced it: bulk edit to Pages in Edit mode, and the check of
+        // what search engines received to Inspect, or to Pages.
         BULK_PAGE,
+        RECEIVED_PAGE,
       ],
     },
   };
 
-  // The SEO issues card and its Needs attention line, counting what the
-  // problem list finds as each person may read it, so the dashboard and the
-  // list never disagree. Withheld where no collection carries SEO (see
-  // `widget-card`).
-  const issues = {
-    collections: targets,
-    problemsFor: problemsForCard(problemChecks),
-  };
-  const issuesCard = seoIssuesWidget(issues);
-  const issuesItem = seoProblemsAttentionItem(issues);
   if (issuesCard || issuesItem) {
     contributes.dashboard = {
       ...(issuesCard ? { widgets: [issuesCard] } : {}),
       ...(issuesItem ? { attention: [issuesItem] } : {}),
     };
   }
+
+  // What an import reads and writes with, from the Import screen and the
+  // Overview's checklist alike.
+  const importSetup = {
+    targets: pageTypeKeys,
+    readRules,
+    checks: problemChecks,
+    pagePermissions,
+  };
 
   routes.push(
     // The Connections tab's reads, and Search Console's sign-in.
@@ -834,11 +871,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       checks: problemChecks,
       pagePermissions,
     }),
-    ...importRoutes({
-      targets: pageTypeKeys,
+    ...importRoutes(importSetup),
+    // The Overview's setup checklist, read from what the plugin stores.
+    ...checklistRoutes({
+      types: pageTypeKeys,
       readRules,
-      checks: problemChecks,
-      pagePermissions,
+      readBrand: ctx => readBrandFacts(ctx),
+      readSetupWaiting: setupWaiting,
+      importSetup,
     })
   );
 
@@ -875,6 +915,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // Its own place in the admin's rail, after Media, as SEO.
       placement: "standalone",
       after: "media",
+      // The section opens on its Overview; someone who may not open it
+      // lands on the first menu item they may.
+      landing: OVERVIEW_PAGE_HREF,
       appearance: { icon: "Search", label: "SEO" },
       description:
         "Add an SEO meta field group to your collections, with title, description and social preview fields",

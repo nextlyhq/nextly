@@ -34,7 +34,7 @@ import type {
   NotFoundView,
   RedirectView,
 } from "../../redirects/contract";
-import { SeoRedirectsPage } from "../SeoRedirectsPage";
+import { redirectAskedFor, SeoRedirectsPage } from "../SeoRedirectsPage";
 
 const AUTO: RedirectView = {
   id: "r1",
@@ -354,6 +354,36 @@ describe("the redirects screen", () => {
 
     expect(from().value).toBe("https://example.de/weg");
     expect(to().value).toBe("https://example.de/neu");
+  });
+
+  it("opens a new redirect from the address a link names, its To the suggested page", () => {
+    // The Overview's Redirect on an address not found links here.
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/plugins/nextlyhq-plugin-seo/redirects?from=%2Fdocs%2Finstall&to=%2Fdocs%2Fstart"
+    );
+    try {
+      render(<SeoRedirectsPage />);
+      expect(from().value).toBe("/docs/install");
+      expect(to().value).toBe("/docs/start");
+      expect(
+        screen.getByText(
+          "Suggested: /docs/start, the closest live page. Change it if it's wrong."
+        )
+      ).toBeTruthy();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("opens an empty To where the link suggests no page", () => {
+    expect(redirectAskedFor("?from=%2Fgone")).toEqual({
+      from: "/gone",
+      suggestion: null,
+    });
+    expect(redirectAskedFor("?to=%2Fnew")).toBeNull();
+    expect(redirectAskedFor("")).toBeNull();
   });
 
   it("keeps what was typed when switching tabs, and never writes the tab to the address", () => {

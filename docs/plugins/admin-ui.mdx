@@ -427,6 +427,12 @@ copy of how they look.
 | `ListView` with `grouping`, `rowDetail`            | Rows in groups, each under a header row with its title, a badge, a count and actions; and rows that open a region below them.                         |
 | `Stepper`                                          | Where a flow of a few steps is: each step done, current or to come, with a way back from a done step.                                                 |
 | `FormActions`                                      | The form's one action bar, held at the bottom of the page, saying when there are unsaved changes, or the page's own `message`.                        |
+| `Alert`, `AlertTitle`, `AlertDescription`          | A notice above the content. `variant` is `info`, `success`, `warning` or `destructive`.                                                               |
+| `Sheet` and its parts                              | A panel that slides in from an edge of the screen (`side` on `SheetContent`).                                                                         |
+| `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`   | Tabs inside a page. For tabs that are routes, use `PageTabs`.                                                                                         |
+| `Progress`                                         | A progress bar: `value` out of `max` (100 by default).                                                                                                |
+| `DropdownMenu` and its parts                       | The menu behind a button, such as a row's actions.                                                                                                    |
+| `Tooltip` and its parts                            | A hint on hover or focus. The admin provides `TooltipProvider`.                                                                                       |
 
 A list page with a trail, a search, a status filter, the columns menu and row actions:
 
@@ -850,7 +856,10 @@ To open a view from inside the admin, for example from a field editor, call
 `navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path
 starting `/admin/`, and refuses anything else by throwing. Moving between a
 document's edit form and its own views doesn't prompt about unsaved
-changes, because the same form stays mounted.
+changes, because the same form stays mounted. Pass `{ replace: true }` as its
+second argument to move without leaving the current address in the history,
+such as a page at an old address sending the reader on to its new one, so
+Back doesn't land on it and move them forward again.
 
 Startup is refused, naming the plugins involved, when a view's `path`:
 
