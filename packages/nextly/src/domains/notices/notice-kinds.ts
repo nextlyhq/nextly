@@ -96,10 +96,11 @@ export interface NoticeKind<TData = unknown> {
    */
   visible?: (userId: string) => Promise<boolean>;
   /**
-   * Which of these notices this person may be told about now, by id, for a kind whose subject is
-   * something the person reads through access rules, such as a document. Asked per notice, with
-   * its snapshot, so a kind can judge what a notice names beyond its subject, such as the
-   * language it is about. A notice not among them is listed with none of its snapshot's text and
+   * What of these notices this person may be told about now, for a kind whose subject is
+   * something the person reads through access rules, such as a document: by id, the snapshot to
+   * show them, which may withhold part of the stored one (a title a field rule hides from them,
+   * say). Asked per notice, with its snapshot, so a kind can judge what a notice names beyond
+   * its subject, such as the language it is about. A notice not among them is listed with none of its snapshot's text and
    * no link, and its email is not sent: what the person may not read, a notice does not tell
    * them. A notice whose subject `link` finds gone is withheld the same way, whoever reads it:
    * there are no rules left to ask, so it fails closed, saying only {@link goneText}. Omitted,
@@ -108,7 +109,7 @@ export interface NoticeKind<TData = unknown> {
   readable?: (
     userId: string,
     notices: readonly NoticeToJudge<TData>[]
-  ) => Promise<ReadonlySet<string>>;
+  ) => Promise<ReadonlyMap<string, TData>>;
   /**
    * What a notice of a kind with `readable` says, in place of its snapshot, once its subject is
    * gone, such as "The document has since been deleted.". Omitted, it says only that it can no

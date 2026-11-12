@@ -32,6 +32,7 @@ import {
   visibleDocuments,
 } from "../../services/lib/document-visibility";
 import { existingDocumentIds } from "../../services/lib/readable-documents";
+import { resolvedCallerGrants } from "../../shared/lib/field-level-registry";
 import { resolveRunAs } from "../../shared/lib/resolve-run-as";
 import type { JobDefinition } from "../jobs/job-registry";
 import { databaseRunAs } from "../jobs/jobs-runner";
@@ -51,6 +52,7 @@ import {
   type NoticeToJudge,
 } from "../notices/notice-kinds";
 
+import { hiddenFrom } from "./hidden-changes";
 import type { ReviewDocument } from "./review-state-repository";
 import { MAX_STEP_COMMENT_LENGTH } from "./step-comment";
 
@@ -58,8 +60,13 @@ import { MAX_STEP_COMMENT_LENGTH } from "./step-comment";
 const workflowNoticeData = z.object({
   /** The collection's singular label, as the admin names it. */
   collection: z.string(),
-  /** The document's title when the notice was written. */
-  title: z.string(),
+  /**
+   * The document's title when the notice was written; null where it is withheld from the person
+   * reading, whom a field read rule hides its field from.
+   */
+  title: z.string().nullable(),
+  /** The field the title came from, so each reader can be judged on it. */
+  titleField: z.string().optional(),
   /** The part's language, or null for the shared part. */
   part: z.string().nullable(),
   /** Whether the collection keeps translations: only then is a shared part named as such. */
@@ -126,10 +133,10 @@ function documentOf(subjectId: string): {
 async function readableDocumentNotices(
   userId: string,
   notices: readonly NoticeToJudge<WorkflowNoticeData>[]
-): Promise<Set<string>> {
+): Promise<Map<string, WorkflowNoticeData>> {
   const adapter = container.get<DrizzleAdapter>("adapter");
   const resolved = await resolveRunAs(databaseRunAs(adapter), userId);
-  if (!resolved.ok || resolved.user === null) return new Set();
+  if (!resolved.ok || resolved.user === null) return new Map();
   const user = resolved.user;
   const named = notices.flatMap(notice => {
     const document = documentOf(notice.subjectId);
@@ -137,7 +144,7 @@ async function readableDocumentNotices(
     const locale = notice.data.part;
     return [
       {
-        id: notice.id,
+        notice,
         document: locale === null ? document : { ...document, locale },
       },
     ];
@@ -150,7 +157,45 @@ async function readableDocumentNotices(
       await resolveDocumentVisibilityScope()
     )
   );
-  return new Set(visible.map(each => each.id));
+  const grants = await resolvedCallerGrants(user);
+  const shown = new Map<string, WorkflowNoticeData>();
+  for (const { notice, document } of visible) {
+    shown.set(
+      notice.id,
+      await withTitleAsRead(notice.data, document, user, grants)
+    );
+  }
+  return shown;
+}
+
+/**
+ * A notice's snapshot as `user` may read it: without its title where a field read rule hides the
+ * field the title came from, asked of the field-access evaluation every read uses.
+ */
+async function withTitleAsRead(
+  data: WorkflowNoticeData,
+  document: { kind: "collection" | "single"; slug: string; entryId: string },
+  user: Parameters<typeof hiddenFrom>[4],
+  grants: Parameters<typeof hiddenFrom>[5]
+): Promise<WorkflowNoticeData> {
+  const field = data.titleField;
+  if (field === undefined || data.title === null) return data;
+  const hidden = await runDetachedFromRequest(() =>
+    hiddenFrom(
+      {
+        scopeKind: document.kind,
+        scopeSlug: document.slug,
+        entryId: document.entryId,
+      },
+      data.part,
+      { [field]: data.title },
+      [field],
+      user,
+      grants,
+      undefined
+    )
+  );
+  return hidden.length > 0 ? { ...data, title: null } : data;
 }
 
 /**
@@ -161,30 +206,61 @@ async function readableDocumentNotices(
 async function documentNoticeLinks(
   subjectIds: readonly string[]
 ): Promise<Map<string, string>> {
-  const bySlug = new Map<string, Map<string, string>>();
-  const singles = new Map<string, Map<string, string>>();
+  const { collections, singles } = subjectsBySlug(subjectIds);
+  return new Map([
+    ...(await collectionLinks(collections)),
+    ...(await singleLinks(singles)),
+  ]);
+}
+
+/** Each kind's subjects, by slug and then entry id. */
+type SubjectsBySlug = Map<string, Map<string, string>>;
+
+/** The subjects that name a document, grouped by kind and slug; any other is left out. */
+function subjectsBySlug(subjectIds: readonly string[]): {
+  collections: SubjectsBySlug;
+  singles: SubjectsBySlug;
+} {
+  const collections: SubjectsBySlug = new Map();
+  const singles: SubjectsBySlug = new Map();
   for (const subjectId of subjectIds) {
     const document = documentOf(subjectId);
     if (document === null) continue;
-    const of = document.kind === "collection" ? bySlug : singles;
+    const of = document.kind === "collection" ? collections : singles;
     const ids = of.get(document.slug) ?? new Map<string, string>();
     ids.set(document.entryId, subjectId);
     of.set(document.slug, ids);
   }
-  const links = new Map<string, string>();
-  for (const [slug, ids] of bySlug) {
+  return { collections, singles };
+}
+
+/** The collection documents that still exist, each with its edit page. */
+async function collectionLinks(
+  collections: SubjectsBySlug
+): Promise<Array<[string, string]>> {
+  const links: Array<[string, string]> = [];
+  for (const [slug, ids] of collections) {
     for (const entryId of await stillExisting(slug, [...ids.keys()])) {
       const subjectId = ids.get(entryId);
       if (subjectId)
-        links.set(subjectId, `/admin/collections/${slug}/${entryId}`);
+        links.push([subjectId, `/admin/collections/${slug}/${entryId}`]);
     }
   }
+  return links;
+}
+
+/**
+ * The Singles that still exist, each with its page. A Single is one document: the notice names it
+ * while its id is the Single's own, and a Single deleted and made again is another document.
+ */
+async function singleLinks(
+  singles: SubjectsBySlug
+): Promise<Array<[string, string]>> {
+  const links: Array<[string, string]> = [];
   for (const [slug, ids] of singles) {
-    // A Single is one document: the notice names it while its id is the Single's own, and a
-    // Single deleted and made again is another document.
     const live = await liveSingleId(slug);
     const subjectId = live === null ? undefined : ids.get(live);
-    if (subjectId) links.set(subjectId, `/admin/singles/${slug}`);
+    if (subjectId) links.push([subjectId, `/admin/singles/${slug}`]);
   }
   return links;
 }
@@ -223,9 +299,21 @@ async function stillExisting(
 
 /** The document a notice names: its collection, its title, and the part where that tells more. */
 function documentPhrase(data: WorkflowNoticeData): string {
-  const named = `the ${data.collection} “${data.title}”`;
+  const named =
+    data.title === null
+      ? `a ${data.collection} document`
+      : `the ${data.collection} “${data.title}”`;
   if (data.part !== null) return `${named} (${data.part})`;
   return data.localized ? `${named} (shared fields)` : named;
+}
+
+/**
+ * The document as a notice's title names it: its title, quoted, or where the title is withheld
+ * from the reader, by its collection; capitalised to open a sentence.
+ */
+function titled(data: WorkflowNoticeData, opening = false): string {
+  if (data.title !== null) return `“${data.title}”`;
+  return `${opening ? "A" : "a"} ${data.collection} document`;
 }
 
 /** What a notice says of a document deleted since. */
@@ -282,7 +370,7 @@ export const WORKFLOW_ASSIGNED_NOTICE = workflowNoticeKind(
   "workflows.assigned",
   withoutCommentData,
   data => ({
-    title: `“${data.title}” was assigned to you`,
+    title: `${titled(data, true)} was assigned to you`,
     sentence: `${who(data)} assigned you ${documentPhrase(data)}${withStep(data, "for")}.`,
   })
 );
@@ -292,7 +380,7 @@ export const WORKFLOW_APPROVED_NOTICE = workflowNoticeKind(
   "workflows.approved",
   withoutCommentData,
   data => ({
-    title: `“${data.title}” was approved`,
+    title: `${titled(data, true)} was approved`,
     sentence: `${who(data)} approved ${documentPhrase(data)}${withStep(data, "with")}.`,
   })
 );
@@ -302,7 +390,7 @@ export const WORKFLOW_CHANGES_REQUESTED_NOTICE = workflowNoticeKind(
   "workflows.changes-requested",
   changesRequestedData,
   data => ({
-    title: `Changes were requested on “${data.title}”`,
+    title: `Changes were requested on ${titled(data)}`,
     sentence: `${who(data)} asked for changes to ${documentPhrase(data)}${withStep(data, "with")}.`,
   })
 );

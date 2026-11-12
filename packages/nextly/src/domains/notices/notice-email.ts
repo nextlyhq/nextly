@@ -307,9 +307,10 @@ async function stillShown(
       subjectId: notice.subjectId,
       data: parsed.data,
     };
-    if (!(await kind.readable(notice.userId, [judged])).has(notice.id)) {
-      return null;
-    }
+    const shown = (await kind.readable(notice.userId, [judged])).get(notice.id);
+    if (shown === undefined) return null;
+    // The email says what their list shows them, part of the snapshot withheld where it is.
+    return { notice: { ...notice, data: shown }, kind };
   }
   return { notice, kind };
 }
