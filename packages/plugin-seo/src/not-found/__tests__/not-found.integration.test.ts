@@ -19,7 +19,10 @@ import {
 import { createNextlyProxy } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { statementsOf } from "../../__tests__/count-statements";
+import {
+  holdNextStatement,
+  statementsOf,
+} from "../../__tests__/count-statements";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
 import { putRedirect } from "../../redirects/store";
@@ -314,24 +317,18 @@ describe.each(getConfiguredTestDialects())(
         const [logged] = await readNotFoundLog(seo);
         if (logged === undefined) throw new Error("the address was not logged");
 
-        // The move stops before it writes anything to the table. From the
-        // test's own flow, each on a transaction of its own: someone ignores
-        // the address, and a visitor arrives from a page here.
-        let parked!: () => void;
-        const writing = new Promise<void>(resolve => {
-          parked = resolve;
-        });
-        let release!: () => void;
-        const released = new Promise<void>(resolve => {
-          release = resolve;
-        });
-        const moving = moveLoggedRows(seo, {
-          beforeWrite: async () => {
-            parked();
-            await released;
-          },
-        });
-        await writing;
+        // The move's first write to the table is held back at the driver,
+        // before the database sees it: whatever the move read before it is
+        // read, and what it writes is decided. Meanwhile, from the test's own
+        // flow and each on a transaction of its own, someone ignores the
+        // address and a visitor arrives from a page here. The move holds only
+        // its earlier row's lock by then, which neither touches.
+        const write = holdNextStatement(
+          dialect,
+          /^\s*(update|insert into)\s+[`"]?seo__not_found[`"]?\s/i
+        );
+        const moving = moveLoggedRows(seo);
+        await write.reached;
         await setNotFoundIgnored(seo, logged.id, true);
         const visited = new Date();
         await recordNotFound(
@@ -340,7 +337,7 @@ describe.each(getConfiguredTestDialects())(
           "missing",
           visited
         );
-        release();
+        write.release();
         await moving;
 
         const [row] = await readNotFoundLog(seo);

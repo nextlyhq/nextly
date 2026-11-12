@@ -413,8 +413,6 @@ export async function forgetNotFoundUnder(
 interface MoveOptions {
   afterCount?: () => Promise<void>;
   afterLock?: () => Promise<void>;
-  /** Runs once the row is read, before anything is written to the table. */
-  beforeWrite?: () => Promise<void>;
 }
 
 /** A stored time read back as a date, or `fallback` where it reads as none. */
@@ -546,7 +544,6 @@ function moveOne(
     // Joins the transaction the row is read and deleted on: the row moves
     // whole or not at all.
     await ctx.db.transaction(async tx => {
-      await options.beforeWrite?.();
       await mergeEarlierRow(tx, key, row, { firstSeen, lastSeen });
     });
     await ctx.services.collections.deleteEntryInTransaction(
