@@ -802,6 +802,47 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("sends once when two resends are asked at the same time", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      behaviour.refuse = new Set([OPS]);
+      const id = await submit();
+      behaviour.refuse = new Set();
+      const before = calls.length;
+
+      const statuses = await Promise.all([
+        resend(cookie, id, { notification: "team" }).then(r => r.status),
+        resend(cookie, id, { notification: "team" }).then(r => r.status),
+      ]);
+
+      expect(statuses.sort()).toEqual([201, 409]);
+      expect(calls.slice(before).map(call => call.to)).toEqual([[OPS]]);
+    });
+
+    it("records a failed send cancelled by marking Spam, with that cause", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      behaviour.refuse = new Set([TEAM, OPS]);
+      const id = await submit();
+      behaviour.refuse = new Set();
+      expect((await groupOf(t, cookie, id)).sends[0]).toMatchObject({
+        state: "failed",
+      });
+
+      await t.nextly.update({
+        collection: SUBMISSIONS,
+        id,
+        data: { status: "spam", _overwrite: true },
+      });
+
+      const group = await groupOf(t, cookie, id);
+      expect(group.sends[0]).toMatchObject({ state: "cancelled" });
+      expect(group.recipients.map(recipient => recipient.cancel?.by)).toEqual([
+        "spam",
+        "spam",
+      ]);
+    });
+
     it("sends a copied recipient who missed it a message of its own", async () => {
       const { t, owner, submit } = await boot(dialect, [visitor]);
       const cookie = await sessionOf(t, owner);

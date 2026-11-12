@@ -351,10 +351,8 @@ async function retireFailed(
   retire: readonly string[]
 ): Promise<void> {
   if (retire.length === 0) return;
-  await ctx.services.email.forgetSends(
-    { queuedIds: [...retire] },
-    { tx: write.db }
-  );
+  // Marked first: the cancel forgetting them causes is then told apart, as
+  // a retirement that keeps the failure, from one marking Spam makes.
   for (const send of sends.filter(row => retire.includes(row.queuedId))) {
     await ctx.services.collections.updateEntryInTransaction(
       write.transaction,
@@ -363,6 +361,10 @@ async function retireFailed(
       { retiredBy: String(write.id), _overwrite: true }
     );
   }
+  await ctx.services.email.forgetSends(
+    { queuedIds: [...retire] },
+    { tx: write.db }
+  );
 }
 
 /** Queue a stored resend request, in the transaction that stores it. */
@@ -373,6 +375,20 @@ async function resendInTransaction(
 ): Promise<void> {
   if (write.operation !== "create") return;
   const request = REQUEST.parse(write.data);
+  // The submission is taken for update before its history is read, so
+  // resends of it run one after another, each reading the sends the one
+  // before it made: a read begun while another resend held the sends would
+  // not see that one's new send on PostgreSQL. A Spam mark waits for it too.
+  const submission =
+    (await ctx.services.ownCollections.findEntryByIdInTransaction(
+      write.transaction,
+      deps.submissionsSlug,
+      request.submission,
+      { lock: "update" }
+    )) as unknown as Record<string, unknown>;
+  // Marked Spam since the route looked: that cancelled its sends, and this
+  // would send again.
+  if (submission.status === "spam") throw markedSpam();
   const sends = await lockedSends(
     ctx,
     write,
@@ -390,16 +406,6 @@ async function resendInTransaction(
         "A send of this notification is in progress. Wait for it to finish before sending it again.",
     });
   }
-  const submission =
-    (await ctx.services.ownCollections.findEntryByIdInTransaction(
-      write.transaction,
-      deps.submissionsSlug,
-      request.submission
-    )) as unknown as Record<string, unknown>;
-  // Marked Spam since the route looked: that cancelled its sends, and this
-  // would send again. The read above holds the row, so a Spam mark made now
-  // waits for this transaction.
-  if (submission.status === "spam") throw markedSpam();
   await retireFailed(ctx, write, sends, request.retire);
   const form = (await ctx.services.ownCollections.findEntryByIdInTransaction(
     write.transaction,

@@ -116,12 +116,44 @@ describe("folding a change into its send", () => {
     });
   });
 
+  it("keeps the outcomes recorded when an attempt reports nobody", () => {
+    const reached = [
+      {
+        ...TEAM,
+        source: "team" as const,
+        outcome: "accepted" as const,
+        retries: 0,
+      },
+    ];
+    const patch = foldChange(
+      stored({
+        state: "retrying",
+        attempts: 1,
+        retries: 1,
+        recipients: reached,
+      }),
+      // Failed before asking the provider: a template deleted meanwhile.
+      change({ state: "failed", attempt: 2, recipients: [] })
+    );
+    expect(patch).toMatchObject({ state: "failed", attempts: 2 });
+    expect(patch).not.toHaveProperty("recipients");
+  });
+
   it("leaves a failed send failed when Resend retires it", () => {
+    expect(
+      foldChange(
+        stored({ state: "failed", retiredBy: "r1" }),
+        change({ state: "cancelled", cancel: { by: "sender" } })
+      )
+    ).toEqual({});
+  });
+
+  it("records a failed send cancelled otherwise, as marking Spam does", () => {
     expect(
       foldChange(
         stored({ state: "failed" }),
         change({ state: "cancelled", cancel: { by: "sender" } })
       )
-    ).toEqual({});
+    ).toMatchObject({ state: "cancelled", cancel: { by: "sender" } });
   });
 });

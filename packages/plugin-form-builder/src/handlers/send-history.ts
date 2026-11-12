@@ -91,9 +91,16 @@ function cancelledPatch(
   stored: StoredSend,
   change: QueuedEmailChange
 ): Record<string, unknown> {
-  // A failed send forgotten by its own plugin is being retired by Resend:
-  // it keeps its failure.
-  if (stored.state === "failed" && change.cancel?.by === "sender") return {};
+  // A failed send Resend retires (it marks the send before forgetting it)
+  // keeps its failure. Any other cancel of it, marking Spam among them, is
+  // recorded.
+  if (
+    stored.state === "failed" &&
+    stored.retiredBy &&
+    change.cancel?.by === "sender"
+  ) {
+    return {};
+  }
   const cause =
     change.cancel?.by === "request" || change.cancel === undefined
       ? (stored.cancelRequested ?? { by: "request" })
@@ -125,7 +132,9 @@ export function foldChange(
     ...(change.cancelRequested
       ? { cancelRequested: causeOf(change.cancelRequested) }
       : {}),
-    ...(change.recipients
+    // An attempt that failed before asking the provider reports nobody:
+    // the outcomes recorded before it stand.
+    ...(change.recipients && change.recipients.length > 0
       ? { recipients: foldedRecipients(stored, change) }
       : {}),
   };
