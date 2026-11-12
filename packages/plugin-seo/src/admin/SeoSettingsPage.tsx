@@ -125,7 +125,14 @@ function SettingsTabs({
     <PageTabs label="Settings">
       {TABS.map(tab => (
         <PageTab key={tab.id} asChild current={tab.id === open}>
-          <AdminLink href={tabHref(tab.id)}>
+          <AdminLink
+            href={tabHref(tab.id)}
+            onClick={event => {
+              // A save on its way finishes before another tab opens: a
+              // screen mounted again meanwhile would not see what it stored.
+              if (saveInFlight) event.preventDefault();
+            }}
+          >
             {tab.label}
             {tab.id === "types" && notPublic > 0 ? (
               <Badge
@@ -280,6 +287,9 @@ function versionOf(stored: StoredSettings): string {
  * what was typed on the tab left. Kept only for the settings and the version
  * it was made from, and let go once the screen is left for another page.
  */
+/** Whether a save of the settings is on its way, which holds the tabs still. */
+let saveInFlight = false;
+
 let heldDraft:
   | { slug: string; version: string; draft: SettingsDraft }
   | undefined;
@@ -340,6 +350,7 @@ function useSettingsSave(
       setDraft(next);
       if (sent === null) return true;
       setSaving(true);
+      saveInFlight = true;
       setFailure(null);
       try {
         // What the save stored is the new baseline, its version with it; a
@@ -361,6 +372,7 @@ function useSettingsSave(
         );
         return false;
       } finally {
+        saveInFlight = false;
         setSaving(false);
       }
     },
