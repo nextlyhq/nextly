@@ -422,7 +422,8 @@ const REASON_TEXT: Record<ConversionReasonKind, string> = {
     "values that would be cleared, where the column does not allow a null, so a value would have to be invented",
 };
 
-function describeKey(key: RowKey): string {
+/** A row as every report and question names it: by its key, never by its value. */
+export function describeKey(key: RowKey): string {
   return "id" in key
     ? `id ${key.id}`
     : `parent ${key.parent} locale ${key.locale}`;
@@ -589,7 +590,7 @@ function describeConsent(record: RepairRecord): string {
   }
   if (record.outcome === "blocked") return "";
   const notice = consent.notice === null ? "" : ` ${consent.notice}.`;
-  return `${notice} To convert it, clearing the named values, give ${consent.flag}.`;
+  return `${notice} To convert it, clearing the named values, run with --apply and ${consent.flag}.`;
 }
 
 /** One record as the text report prints it: one line, then the statements, indented. */

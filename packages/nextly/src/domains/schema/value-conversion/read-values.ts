@@ -195,8 +195,14 @@ function keyText(value: unknown): string {
   return textOf(value) ?? "";
 }
 
-/** The key a row is named by. A table keyed by nothing names no row. */
-function keyOf(row: ValueRow, keyedBy: KeyedBy): RowKey {
+/**
+ * The key a row is named by, from the text of its key columns as a query rendered them (`k1`, and
+ * `k2` for a translation table). A table keyed by nothing names no row.
+ */
+export function rowKeyOf(
+  row: { k1?: unknown; k2?: unknown },
+  keyedBy: KeyedBy
+): RowKey {
   if (keyedBy === "translation") {
     return { parent: keyText(row.k1), locale: keyText(row.k2) };
   }
@@ -210,7 +216,7 @@ function storedValue(
   dialect: SupportedDialect
 ): StoredValue {
   const value: StoredValue = {
-    key: keyOf(row, source.keyedBy),
+    key: rowKeyOf(row, source.keyedBy),
     text: textOf(row.v),
   };
   if (dialect === "sqlite" && isSqliteStorage(row.storage)) {

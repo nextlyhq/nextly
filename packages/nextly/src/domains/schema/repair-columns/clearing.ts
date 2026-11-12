@@ -73,7 +73,8 @@ export function clearingStatements(args: {
 /**
  * MySQL: the queries that read, and lock until the transaction ends, which of the rows `keys` name
  * still hold a value MySQL does not read as JSON. A row whose value was corrected since the
- * judgement is not cleared; a row the judgement did not name is not read at all.
+ * judgement is not cleared; a row the judgement did not name is not read at all. Each row's key is
+ * read back with `rowKeyOf`, as the judgement read it.
  */
 export function stillNotJsonQueries(args: {
   table: string;
@@ -91,27 +92,18 @@ export function stillNotJsonQueries(args: {
     ),
     sql`, `
   );
-  const value = sql.identifier(args.column);
   return batches(args.keys).map(
     group =>
-      sql`SELECT ${selected} FROM ${sql.identifier(args.table)} WHERE (${keysCondition(group, args.keyedBy)}) AND ${value} IS NOT NULL AND NOT JSON_VALID(${value}) FOR UPDATE`
+      sql`SELECT ${selected} FROM ${sql.identifier(args.table)} WHERE (${keysCondition(group, args.keyedBy)}) AND ${notJsonCondition(args.column)} FOR UPDATE`
   );
 }
 
-/** The key one row of {@link stillNotJsonQueries} names. */
-export function keyOfLockedRow(
-  row: { k1?: unknown; k2?: unknown },
-  keyedBy: KeyedBy
-): RowKey {
-  // Each key column is rendered as text by the query (`CAST(.. AS CHAR)`): a string, or, from
-  // mysql2 for a text in a binary character set, its bytes.
-  const text = (value: unknown): string =>
-    value instanceof Uint8Array
-      ? Buffer.from(value).toString("utf8")
-      : typeof value === "string"
-        ? value
-        : "";
-  return keyedBy === "translation"
-    ? { parent: text(row.k1), locale: text(row.k2) }
-    : { id: text(row.k1) };
+/**
+ * The rows of `column` holding a value MySQL does not read as JSON: the one condition for both
+ * which named rows a clearing still clears and whether a stopped clearing has anything left, so
+ * the two can never disagree about a value.
+ */
+export function notJsonCondition(column: string): SQL {
+  const value = sql.identifier(column);
+  return sql`${value} IS NOT NULL AND NOT JSON_VALID(${value})`;
 }

@@ -30,8 +30,8 @@ import type { Command } from "commander";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import type { ClearingQuestion } from "../../domains/schema/repair-columns/apply";
+import { describeKey } from "../../domains/schema/repair-columns/report";
 import type { RepairColumnsDocument } from "../../domains/schema/repair-columns/report-json";
-import type { RowKey } from "../../domains/schema/value-conversion/types";
 import { getCoreVersion } from "../../plugins/core-version";
 import { databaseEnvError, printCliError, toCliError } from "../errors";
 import { cliErrorDocsUrl } from "../errors/registry";
@@ -61,15 +61,10 @@ export interface RepairColumnsOptions {
   interactive?: boolean;
 }
 
-/** A row as the question names it, by its key and never by its value. */
-function describeRowKey(key: RowKey): string {
-  return "id" in key ? key.id : `${key.parent} (${key.locale})`;
-}
-
 /** The question a run that may ask puts before clearing a lossy column's values. */
 export function clearingQuestionText(question: ClearingQuestion): string {
   const values = question.count === 1 ? "1 value" : `${question.count} values`;
-  const shown = question.first.map(describeRowKey).join(", ");
+  const shown = question.first.map(describeKey).join(", ");
   const more =
     question.count > question.first.length
       ? `, and ${question.count - question.first.length} more`
@@ -225,6 +220,17 @@ export function repairColumnsAction(
     // Decided here, before anything is asked, and never by reading standard input: only an apply
     // asks, and never under `--json`.
     const interactive = options.apply === true && !json && canPrompt();
+    // A dry run clears nothing, so a consent given to it covers nothing; said once, on standard
+    // error, so a `--json` document stays whole.
+    if (
+      options.apply !== true &&
+      options.acceptDataLoss !== undefined &&
+      options.acceptDataLoss !== false
+    ) {
+      process.stderr.write(
+        "--accept-data-loss takes effect only with --apply: this run changes nothing.\n"
+      );
+    }
     // Under `--json` standard output holds the document alone: the logger, which writes to it,
     // keeps to errors, which go to standard error.
     if (json)

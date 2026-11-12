@@ -41,7 +41,7 @@ import type {
   SqlParam,
   StatementSession,
 } from "@nextlyhq/adapter-drizzle/types";
-import type { SQL } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -52,6 +52,7 @@ import { withSchemaLock } from "../pipeline/schema-lock";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import type { SupportedDialect } from "../services/field-column-descriptor";
 import { reasonClass } from "../value-conversion/judge-column";
+import { rowKeyOf } from "../value-conversion/read-values";
 import type {
   ConversionClass,
   ConversionReasonKind,
@@ -61,7 +62,6 @@ import type {
 import { classifyDifference } from "./classify";
 import {
   clearingStatements,
-  keyOfLockedRow,
   rowKeyText,
   stillNotJsonQueries,
 } from "./clearing";
@@ -430,7 +430,7 @@ class ApplyRun {
         if (!("given" in decided)) {
           return {
             finding: decided.finding,
-            facts: { ...NO_RUN_FACTS, consent: decided.withheld },
+            facts: { ...NO_RUN_FACTS, ...decided.facts },
           };
         }
         clearing = decided;
@@ -439,9 +439,18 @@ class ApplyRun {
       }
       // Made only once a column is still to convert.
       await this.ensureRepairsTable();
-      return this.dialect === "mysql"
-        ? await this.convertInSteps(fresh, clearing)
-        : await this.convertInTransaction(fresh, clearing);
+      const done =
+        this.dialect === "mysql"
+          ? await this.convertInSteps(fresh, clearing)
+          : await this.convertInTransaction(fresh, clearing);
+      // A consent given stays on the record whatever the conversion's outcome, so a failed column
+      // never reads as one no consent covered.
+      return clearing === null || done.facts.consent !== null
+        ? done
+        : {
+            ...done,
+            facts: { ...done.facts, consent: consentRan(clearing, 0) },
+          };
     } catch (error) {
       // SQLite's one writer held past its try while the record table was made: the database is
       // held, as for a conversion's own wait, so no further SQLite conversion tries this run.
@@ -470,32 +479,53 @@ class ApplyRun {
   /**
    * Whether this run may clear a lossy column's values: the consent naming the column, or a yes
    * from the person at the terminal, asked with the count and the first rows the run's judgement
-   * names now, before the column's table is closed. Otherwise the consent facts that say why not.
+   * names now, before the column's table is closed. Otherwise the facts that say why not: its
+   * consent, and, for a column this run cannot clear, its failure.
    */
-  private async consentFor(
-    finding: DiffersFinding
-  ): Promise<
-    Clearing | { finding: DiffersFinding; withheld: ColumnConsentFacts }
+  private async consentFor(finding: DiffersFinding): Promise<
+    | Clearing
+    | {
+        finding: DiffersFinding;
+        facts: Pick<ColumnRunFacts, "consent" | "failure">;
+      }
   > {
     const { table, column } = finding.location;
     const verdict = consentForColumn(this.consent, table, column);
+    const withheld = (on: DiffersFinding) => ({
+      finding: on,
+      facts: {
+        consent: consentWithheld(verdict.flag, verdict.notice),
+        failure: null,
+      },
+    });
+    // A column this run cannot clear is failed before anyone is asked about it, whatever consent
+    // names it: a yes could not be acted on.
+    const refused = this.clearingRefusal(finding);
+    if (refused !== null) {
+      return {
+        finding,
+        facts: {
+          consent: verdict.covered
+            ? {
+                given: "flag",
+                valuesCleared: 0,
+                flag: verdict.flag,
+                notice: null,
+              }
+            : consentWithheld(verdict.flag, verdict.notice),
+          failure: { reason: refused, heldStep: null },
+        },
+      };
+    }
     if (verdict.covered) {
       return { given: "flag", confirmed: null, flag: verdict.flag };
     }
     const ask = this.args.confirmClearing;
-    if (ask === undefined) {
-      return {
-        finding,
-        withheld: consentWithheld(verdict.flag, verdict.notice),
-      };
-    }
+    if (ask === undefined) return withheld(finding);
     const judged = await this.judged(this.db, finding);
     if (findingClass(judged.finding) !== "lossy") {
       // Its values changed while it was judged: nothing to ask about until a run sees them.
-      return {
-        finding: judged.finding,
-        withheld: consentWithheld(verdict.flag, verdict.notice),
-      };
+      return withheld(judged.finding);
     }
     const yes = await ask({
       table,
@@ -506,12 +536,7 @@ class ApplyRun {
         .filter(reason => reason.class === "lossy")
         .map(reason => reason.kind),
     });
-    if (!yes) {
-      return {
-        finding: judged.finding,
-        withheld: consentWithheld(verdict.flag, verdict.notice),
-      };
-    }
+    if (!yes) return withheld(judged.finding);
     return {
       given: "confirmed",
       confirmed: new Set(judged.cleared.map(rowKeyText)),
@@ -566,18 +591,14 @@ class ApplyRun {
       });
     }
     const cleared: RowKey[] = [];
-    const seen = new Set<string>();
+    // A value gives at most one reason that clears it, so each row is noted here once.
     const judgement = await classifyDifference(
       db,
       this.dialect,
       finding.judged,
       {
         noteRow: (kind, key) => {
-          if (reasonClass(kind) !== "lossy") return;
-          const text = rowKeyText(key);
-          if (seen.has(text)) return;
-          seen.add(text);
-          cleared.push(key);
+          if (reasonClass(kind) === "lossy") cleared.push(key);
         },
       }
     );
@@ -600,18 +621,14 @@ class ApplyRun {
     if (cls !== "lossy" || clearing === null) {
       return { finding: now, facts: NO_RUN_FACTS };
     }
-    const keyedBy = now.judged?.keyedBy ?? "none";
-    if (keyedBy === "none") {
-      // A table keyed by neither its id nor its parent and locale names no row to clear.
+    const refused = this.clearingRefusal(now);
+    if (refused !== null) {
       return {
         finding: now,
         facts: {
           ...NO_RUN_FACTS,
-          failure: {
-            reason:
-              "the table is keyed by neither its id nor its parent and locale, so the values to clear cannot be named by row; nothing was cleared",
-            heldStep: null,
-          },
+          failure: { reason: refused, heldStep: null },
+          consent: consentRan(clearing, 0),
         },
       };
     }
@@ -673,17 +690,16 @@ class ApplyRun {
           keyedBy: now.judged?.keyedBy ?? "none",
           keys: cleared,
         });
-        const column = quoteIdent(
-          now.judged?.liveColumn ?? now.location.column,
-          this.dialect
-        );
+        const liveColumn = now.judged?.liveColumn ?? now.location.column;
         if (this.dialect === "postgresql" && clear.length > 0) {
           // PostgreSQL's cast refuses a value the new type cannot hold, so the named values are
           // cleared before it runs; a column that does not allow a null yet (its field allows
           // one, or the clearing would be blocked) drops NOT NULL first, as its conversion would.
           if (!now.live.nullable) {
-            await tx.execute(
-              `ALTER TABLE ${table} ALTER COLUMN ${column} DROP NOT NULL`
+            await runSql(
+              tx.db,
+              this.dialect,
+              sql`ALTER TABLE ${sql.identifier(liveTable)} ALTER COLUMN ${sql.identifier(liveColumn)} DROP NOT NULL`
             );
           }
           for (const statement of clear) {
@@ -782,10 +798,6 @@ class ApplyRun {
     const cls = findingClass(now) ?? "safe";
     const statements = now.conversion?.steps ?? [];
     const clears = cls === "lossy";
-    if (clears) {
-      const refused = this.mysqlClearingRefusal(now, statements.length);
-      if (refused !== null) return refused;
-    }
     const offset = clears ? 1 : 0;
     const rowId = await insertRepair(
       this.db,
@@ -802,32 +814,26 @@ class ApplyRun {
   }
 
   /**
-   * Why MySQL cannot clear this lossy column in a step of its own, or null where it can. Its
-   * clearing reads which named rows still hold a value MySQL does not take as JSON, so it serves a
-   * column becoming JSON, converted by one statement, and nothing else: anything else fails that
-   * column, as it was, rather than run a clearing that could name the wrong rows.
+   * Why this run cannot clear a lossy column's values, or null where it can: the one check, made
+   * before anyone is asked about the column and again where it is about to change. The rows to
+   * clear are named by key, so a table keyed by neither its id nor its parent and locale has none
+   * to name. MySQL's clearing reads which named rows still hold a value it does not take as JSON,
+   * so there it serves a column becoming JSON, converted by one statement, and nothing else. A
+   * column refused is failed as it was, rather than cleared by rows that could be the wrong ones.
    */
-  private mysqlClearingRefusal(
-    finding: DiffersFinding,
-    statements: number
-  ): Converted | null {
+  private clearingRefusal(finding: DiffersFinding): string | null {
+    if ((finding.judged?.keyedBy ?? "none") === "none") {
+      return "the table is keyed by neither its id nor its parent and locale, so the values to clear cannot be named by row; nothing was cleared";
+    }
+    if (this.dialect !== "mysql") return null;
     const kinds = (finding.judgement?.reasons ?? [])
       .filter(reason => reason.class === "lossy")
       .map(reason => reason.kind);
+    const statements = finding.conversion?.steps.length ?? 0;
     if (statements === 1 && kinds.every(kind => kind === "not-json")) {
       return null;
     }
-    return {
-      finding,
-      facts: {
-        ...NO_RUN_FACTS,
-        failure: {
-          reason:
-            "MySQL clears values in a step of its own only for a column becoming JSON in one statement; nothing was cleared",
-          heldStep: null,
-        },
-      },
-    };
+    return "MySQL clears values in a step of its own only for a column becoming JSON in one statement; nothing was cleared";
   }
 
   /**
@@ -852,23 +858,23 @@ class ApplyRun {
       column: finding.judged?.liveColumn ?? finding.location.column,
       keyedBy: finding.judged?.keyedBy ?? ("none" as const),
     };
-    await session.execute("START TRANSACTION");
+    await run(sql`START TRANSACTION`);
     try {
       const still: RowKey[] = [];
       for (const query of stillNotJsonQueries({ ...subject, keys })) {
         const rows = await run<{ k1?: unknown; k2?: unknown }>(query);
-        still.push(...rows.map(row => keyOfLockedRow(row, subject.keyedBy)));
+        still.push(...rows.map(row => rowKeyOf(row, subject.keyedBy)));
       }
       for (const statement of clearingStatements({ ...subject, keys: still })) {
         await run(statement);
       }
       await run(clearedStepStatement(rowId, step, still.length));
-      await session.execute("COMMIT");
+      await run(sql`COMMIT`);
       return still.length;
     } catch (error) {
       // Undone whole: no value cleared and the record where it was. Best effort, as the
       // connection is closed after the session either way, which ends the transaction too.
-      await session.execute("ROLLBACK").catch(() => undefined);
+      await run(sql`ROLLBACK`).catch(() => undefined);
       throw error;
     }
   }
@@ -1095,7 +1101,7 @@ class ApplyRun {
       if (!("given" in decided)) {
         return {
           finding: decided.finding,
-          facts: { ...interrupted.facts, consent: decided.withheld },
+          facts: { ...interrupted.facts, ...decided.facts },
         };
       }
       clearing = decided;
@@ -1118,7 +1124,11 @@ class ApplyRun {
       if (stopped !== null) {
         return {
           finding: now,
-          facts: { ...interrupted.facts, consent: stopped.facts.consent },
+          facts: {
+            ...interrupted.facts,
+            consent: stopped.facts.consent,
+            failure: stopped.facts.failure,
+          },
         };
       }
     }

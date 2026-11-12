@@ -17,6 +17,7 @@ import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import type { SupportedDialect } from "../services/field-column-descriptor";
 import { parseColumnType } from "../value-conversion/column-type";
 
+import { notJsonCondition } from "./clearing";
 import { compareColumn } from "./column-comparison";
 import type { RecordedProgress } from "./record";
 import type {
@@ -102,12 +103,11 @@ async function everyValueIsJson(
   table: string,
   column: string
 ): Promise<boolean> {
-  const value = sql.identifier(column);
   const [row] = await querySqlRows<{ n: unknown }>(
     db,
     dialect,
     sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}
-      WHERE ${value} IS NOT NULL AND NOT JSON_VALID(${value})`
+      WHERE ${notJsonCondition(column)}`
   );
   return Number(row?.n ?? 0) === 0;
 }

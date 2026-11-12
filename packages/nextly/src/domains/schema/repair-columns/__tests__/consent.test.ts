@@ -37,10 +37,14 @@ describe("consentForColumn", () => {
     }
   });
 
-  it("matches the name as the report prints it, whatever its case", () => {
+  it("matches the name exactly as the report prints it, as every command matches the consent", () => {
+    // PostgreSQL can hold "Posts" beside "posts": a consent for one never covers the other.
     expect(
       consentForColumn(flag("DC_Posts.Meta"), "dc_posts", "meta").covered
-    ).toBe(true);
+    ).toBe(false);
+    expect(consentForColumn(flag("Posts.meta"), "Posts", "meta").covered).toBe(
+      true
+    );
   });
 
   it("a consent naming another column does not cover it, and gives no notice", () => {

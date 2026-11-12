@@ -206,7 +206,7 @@ describe("one record and one line per class", () => {
       notice: null,
     });
     expect(formatRecord(dry)).toContain(
-      "To convert it, clearing the named values, give --accept-data-loss=dc_posts.links."
+      "To convert it, clearing the named values, run with --apply and --accept-data-loss=dc_posts.links."
     );
 
     const notice =

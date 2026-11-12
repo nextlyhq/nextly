@@ -334,6 +334,28 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("a lossy column whose conversion fails under a consent naming it keeps that consent on its record", async () => {
+      const { entity, column } = await lossyTable();
+      const values = await tools.values(TABLE, column);
+      const document = await applyRepairs({
+        adapter: handle.adapter,
+        dialect,
+        entities: [entity],
+        nextlyVersion: "test",
+        consent: named(`${TABLE}.${column}`),
+        beforeStep: () => Promise.reject(new Error("the database refused")),
+      });
+      const record = recordOf(document.result?.records, column);
+      expect(record.outcome).toBe("failed");
+      // The consent was given: the record says so, and does not ask for it again.
+      expect(record.consent).toMatchObject({
+        given: "flag",
+        valuesCleared: 0,
+      });
+      expect(document.exitCode).toBe(3);
+      expect(await tools.values(TABLE, column)).toEqual(values);
+    });
+
     describe("the person at the terminal", () => {
       it("is asked once per lossy column with its count and first rows, and a yes converts it", async () => {
         const { entity, column, cleared } = await lossyTable();

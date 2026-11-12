@@ -28,7 +28,10 @@ export function consentFlagFor(table: string, column: string): string {
   return `${ACCEPT_DATA_LOSS_FLAG}=${table}.${column}`;
 }
 
-/** Whether `consent` names `table`.`column`, matched as the report prints it, ignoring case. */
+/**
+ * Whether `consent` names `table`.`column`, matched exactly as the report prints it: the same match
+ * every command makes of the one consent, so one list covers the same columns whichever reads it.
+ */
 export function consentForColumn(
   consent: DataLossConsent,
   table: string,
@@ -44,20 +47,15 @@ export function consentForColumn(
       flag,
     };
   }
-  const wanted = `${table}.${column}`.toLowerCase();
-  for (const named of given.targets.columns) {
-    if (named.toLowerCase() === wanted) {
-      return { covered: true, notice: null, flag };
-    }
+  if (given.targets.columns.has(`${table}.${column}`)) {
+    return { covered: true, notice: null, flag };
   }
-  for (const named of given.targets.tables) {
-    if (named.toLowerCase() === table.toLowerCase()) {
-      return {
-        covered: false,
-        notice: `${ACCEPT_DATA_LOSS_FLAG} names the table ${table}, not the column: a repair clears values only in a column named, ${flag}`,
-        flag,
-      };
-    }
+  if (given.targets.tables.has(table)) {
+    return {
+      covered: false,
+      notice: `${ACCEPT_DATA_LOSS_FLAG} names the table ${table}, not the column: a repair clears values only in a column named, ${flag}`,
+      flag,
+    };
   }
   return { covered: false, notice: null, flag };
 }

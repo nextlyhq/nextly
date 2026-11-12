@@ -235,7 +235,7 @@ describe("repair-columns --apply decides whether it may ask before it asks anyth
     await runWith(input.stream, true);
     // The positive control: the same run asks once, naming the column, its count and its row.
     expect(state.asked).toEqual([
-      `${TABLE}.price: 1 value the new type cannot hold would be cleared (set to null), in rows p2. Clear them and convert the column?`,
+      `${TABLE}.price: 1 value the new type cannot hold would be cleared (set to null), in rows id p2. Clear them and convert the column?`,
     ]);
     expect(await tools.values(TABLE, "price")).toEqual({ p1: 3, p2: "word" });
     expect(await tools.columnState(TABLE, "author")).toMatchObject({
