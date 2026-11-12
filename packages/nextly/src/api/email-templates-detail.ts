@@ -25,6 +25,7 @@ import {
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
 } from "../domains/auth/system-write-policy";
+import { templateVariablesSchema } from "../domains/email/template-variables";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -136,7 +137,11 @@ export const PATCH = withErrorHandler(
       updateData.htmlContent = body.htmlContent;
     if (body.plainTextContent !== undefined)
       updateData.plainTextContent = body.plainTextContent;
-    if (body.variables !== undefined) updateData.variables = body.variables;
+    if (body.variables !== undefined) {
+      const parsed = templateVariablesSchema.safeParse(body.variables);
+      if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+      updateData.variables = parsed.data;
+    }
     if (body.useLayout !== undefined) updateData.useLayout = body.useLayout;
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
     if (body.providerId !== undefined) updateData.providerId = body.providerId;

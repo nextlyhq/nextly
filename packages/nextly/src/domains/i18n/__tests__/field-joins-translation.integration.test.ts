@@ -14,6 +14,7 @@ import { dispatchCollections } from "../../../dispatcher/handlers/collection-dis
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { buildFullDesiredSchema } from "../../../dispatcher/helpers/desired-schema";
+import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { RealClassifier } from "../../schema/pipeline/classifier/classifier";
 import { RealPreCleanupExecutor } from "../../schema/pipeline/pre-cleanup/executor";
@@ -23,8 +24,10 @@ import {
   noopNotifier,
   noopPreRenameExecutor,
 } from "../../schema/pipeline/pushschema-pipeline-stubs";
+import type { PromptDispatcher } from "../../schema/pipeline/pushschema-pipeline-interfaces";
 import { RegexRenameDetector } from "../../schema/pipeline/rename-detector";
 import { DrizzleStatementExecutor } from "../../schema/services/drizzle-statement-executor";
+import { setPerLanguageStorage } from "../per-language-storage";
 import {
   createTestNextly,
   type TestDialect,
@@ -510,36 +513,53 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(await readCollection(id)).toBe("Hello");
   });
 
+  /** A developer at the prompt who confirms every drop. */
+  const confirmEveryDrop: PromptDispatcher = {
+    dispatch: ({ events }) =>
+      Promise.resolve({
+        confirmedRenames: [],
+        resolutions: events.map(event => ({
+          kind: "confirm_drop" as const,
+          eventId: event.id,
+        })),
+        proceed: true,
+      }),
+  };
+
   /**
    * A code-first apply (`next dev`, a config reload, `db:sync`) of the collection `posts` with
    * `fields`: the pipeline gets the desired schema and nothing else, and a developer confirms
-   * every drop at the prompt.
+   * every drop at the prompt. With `localized: false`, `posts` is applied as a collection that is
+   * not translated, alone, so a site-wide storage setting reaches no other entity.
    */
-  async function applyCodeFirst(fields: unknown[]) {
+  async function applyCodeFirst(
+    fields: unknown[],
+    {
+      localized = true,
+      promptDispatcher = confirmEveryDrop,
+    }: { localized?: boolean; promptDispatcher?: PromptDispatcher } = {}
+  ) {
     const desired = await buildFullDesiredSchema();
     const posts = desired.collections.posts;
     if (!posts) throw new Error("the collection posts is missing");
-    desired.collections.posts = {
+    const applied = {
       ...posts,
       fields: fields as typeof posts.fields,
-      localized: true,
+      localized,
     };
+    if (localized) {
+      desired.collections.posts = applied;
+    } else {
+      desired.collections = { posts: applied };
+      desired.singles = {};
+      desired.components = {};
+    }
     const db = current.adapter.getDrizzle();
     const pipeline = new PushSchemaPipeline({
       executor: new DrizzleStatementExecutor(dialect, db),
       renameDetector: new RegexRenameDetector(),
       classifier: new RealClassifier(),
-      promptDispatcher: {
-        dispatch: ({ events }) =>
-          Promise.resolve({
-            confirmedRenames: [],
-            resolutions: events.map(event => ({
-              kind: "confirm_drop" as const,
-              eventId: event.id,
-            })),
-            proceed: true,
-          }),
-      },
+      promptDispatcher,
       preRenameExecutor: noopPreRenameExecutor,
       preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
@@ -652,6 +672,85 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
     }
   );
+
+  /**
+   * A code-first apply of an untranslated `posts` on a site that keeps every translatable field
+   * per language (`experimental.perLanguageStorage`), at a prompt that answers nothing: every
+   * question the apply asks is recorded, and refused. The setting is put back as the harness
+   * booted it, and the cached last apply is cleared, as the setting is not part of what it keys.
+   */
+  async function applyPerLanguage(fields: unknown[]) {
+    const asked: string[] = [];
+    const refuseEveryQuestion: PromptDispatcher = {
+      dispatch: ({ candidates, events }) => {
+        asked.push(
+          ...events.map(e => `${e.kind} ${e.tableName}.${e.columnName}`),
+          ...candidates.map(c => `rename ${c.tableName}.${c.fromColumn}`)
+        );
+        return Promise.resolve({
+          confirmedRenames: [],
+          resolutions: [],
+          proceed: false,
+        });
+      },
+    };
+    clearCachedSnapshot();
+    setPerLanguageStorage(true);
+    try {
+      const applied = await applyCodeFirst(fields, {
+        localized: false,
+        promptDispatcher: refuseEveryQuestion,
+      });
+      return { applied, asked };
+    } finally {
+      setPerLanguageStorage(false);
+    }
+  }
+
+  /** An untranslated collection whose `heading` is translatable by type, with one entry. */
+  async function seedUntranslatedCollection(): Promise<string> {
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      fields: TRANSLATED,
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { heading: "Hello", views: 7 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    return String((entry.data as { id: unknown }).id);
+  }
+
+  it("moves an untranslated collection's translatable value per language under per-language storage, asking nothing", async () => {
+    // The desired main table leaves `heading` off, as the site keeps it per language; its value
+    // moves to the default language's row before the drop, so the drop is no deletion to consent to.
+    const id = await seedUntranslatedCollection();
+
+    const { applied, asked } = await applyPerLanguage(TRANSLATED);
+
+    expect(asked).toEqual([]);
+    expect(applied.success, JSON.stringify(applied)).toBe(true);
+    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    expect(await columnsOf("dc_posts")).not.toContain("heading");
+  });
+
+  it("still asks before dropping a translatable column whose field the config removed under per-language storage", async () => {
+    // Nothing moves a field the entity no longer declares, so its column's drop deletes its values
+    // and is asked about; refused, nothing changes.
+    const id = await seedUntranslatedCollection();
+
+    const { applied, asked } = await applyPerLanguage([
+      { name: "views", type: "number" },
+    ]);
+
+    expect(asked).toEqual(["destructive_drop dc_posts.heading"]);
+    expect(applied.success).toBe(false);
+    expect(await mainHeading("dc_posts", id)).toBe("Hello");
+  });
 
   /** `heading` as the main table holds it, or undefined when the column is gone. */
   async function mainHeading(table: string, id: string): Promise<unknown> {

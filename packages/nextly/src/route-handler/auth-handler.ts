@@ -12,7 +12,10 @@ import type { SanitizedNextlyConfig } from "../collections/config/define-config"
 import { isServicesRegistered, getService } from "../di";
 // Only the type: the registry itself is loaded by `initializeServicesOnce`,
 // the one place here that registers or shuts the services down.
-import type { NextlyServiceConfig } from "../di/register";
+import type {
+  NextlyServiceConfig,
+  RegisterServicesOptions,
+} from "../di/register";
 import {
   localizationKey,
   recordRegisteredLocalization,
@@ -23,6 +26,7 @@ import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "../init/build-service-config";
+import { isProductionStart } from "../init/production-start";
 import {
   awaitBootSeeding,
   holdBootSeeding,
@@ -34,6 +38,8 @@ import { ensureHmrListener } from "../runtime/hmr-listener";
 import type { ServiceDispatcher } from "../services/dispatcher";
 import { consoleLogger } from "../shared/types";
 import { getImageProcessor } from "../storage/image-processor";
+
+import { servedSchemaVersion } from "./schema-version";
 
 // Lazy-initialized shared dispatcher instance
 // This ensures the DI container has been set up before creating the dispatcher
@@ -429,6 +435,12 @@ export async function ensureServicesInitialized(): Promise<void> {
   // not start dispatching until that settles. Resolves immediately when no boot
   // opened the gate.
   await awaitBootMigrations();
+
+  // Last, once this process serves: its definitions follow the stored schema
+  // version, so a schema change another server copy (or a migration) made is
+  // loaded here before the request is served. Reads nothing while the last
+  // read is fresh (`route-handler/schema-version`).
+  await servedSchemaVersion();
 }
 
 // The in-flight recovery/registration pass concurrent callers await.
@@ -542,7 +554,10 @@ async function initializeServicesOnce(): Promise<void> {
  * steps the request path runs for a registration of its own.
  */
 async function registerFromThisRequest(
-  registerServices: (config: NextlyServiceConfig) => Promise<void>,
+  registerServices: (
+    config: NextlyServiceConfig,
+    options: RegisterServicesOptions
+  ) => Promise<void>,
   nextlyConfig: SanitizedNextlyConfig | null
 ): Promise<void> {
   // Build service config from stored nextly.config.ts
@@ -550,7 +565,10 @@ async function registerFromThisRequest(
   // config need to be registered first via registerServices(), which calls
   // initializeMediaStorage() with the correct plugins. Calling getMediaStorage()
   // before that creates a singleton with zero plugins (local fallback only).
-  await registerServices(requestPathServiceConfig(nextlyConfig));
+  // A start, so in production it writes no bookkeeping (`isProductionStart`).
+  await registerServices(requestPathServiceConfig(nextlyConfig), {
+    start: true,
+  });
   // Services now match the block this config was registered from, so that
   // is the value a later request compares against.
   recordRegisteredLocalization(nextlyConfig);
@@ -572,7 +590,9 @@ async function registerFromThisRequest(
   // permission with no row and no super-admin grant on the one boot path
   // that never runs post-init tasks. The PRESET roles were the next thing to
   // be missing from it for the same reason, so the two are now one call.
-  await seedPermissionsAndRolePresets();
+  // A production start seeds nothing, as `getNextly`'s does not: the
+  // permissions, roles and grants are `nextly migrate`'s to write.
+  if (!isProductionStart()) await seedPermissionsAndRolePresets();
 
   // Sync user extension fields and ensure user_ext table exists
   // This mirrors the init.ts flow so route handler requests work
@@ -581,7 +601,9 @@ async function registerFromThisRequest(
     const userExtSchemaService = getService("userExtSchemaService");
     await userExtSchemaService.loadMergedFields();
 
-    if (userExtSchemaService.hasMergedFields()) {
+    // Loaded only, in production: the columns are `nextly migrate`'s to add,
+    // as `provisionUserFieldsAtStart` leaves them on `getNextly`'s start.
+    if (userExtSchemaService.hasMergedFields() && !isProductionStart()) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter shape varies by driver
       const adapter = getService("adapter") as any;
       const drizzleDb = adapter.getDrizzle();

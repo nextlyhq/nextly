@@ -54,16 +54,54 @@ export type ComponentPath = string;
 export type HeaderButtonId = "github" | "discord" | "docs" | "notifications";
 
 /**
- * @public Header customization contributed by a plugin.
+ * @experimental Where a plugin's own item goes:
  *
- * `slot` adds a component to the header (supersedes the deprecated top-level
- * `headerSlot`). `hideDefaults` / `hide` remove built-in buttons; hiding is
- * subtractive and **union-merged** across enabled plugins (a button is hidden
- * if ANY enabled plugin hides it).
+ * - `"bar"`, the top bar's right end, on every page (the default);
+ * - `"rail-foot"`, the icon rail's foot, just above the Inbox;
+ * - `"menu"`, the person's menu, under "Help and community".
+ *
+ * The bar and the rail's foot take a component and keep it mounted for as long
+ * as the bar is, so it may draw nothing and only register what a page needs.
+ * The menu takes a declared item instead, because a closed menu's contents are
+ * not mounted.
  */
-export interface PluginHeaderContributions {
-  /** Component rendered in the header, before the notifications bell. */
-  slot?: ComponentPath;
+export type PluginItemPlace = "bar" | "rail-foot" | "menu";
+
+interface PluginUserMenuItemBase {
+  /** The item's text. */
+  label: string;
+  /** Lucide icon name from the admin's icon set, e.g. `"BookOpen"`. */
+  icon: string;
+}
+
+/**
+ * @experimental An item in the person's menu that goes somewhere: an admin
+ * path (`"/admin/plugins/acme-support"`) opens in place, and an absolute URL
+ * (`"https://example.com/help"`) opens in a new tab.
+ */
+export interface PluginUserMenuLink extends PluginUserMenuItemBase {
+  to: string;
+  action?: never;
+}
+
+/**
+ * @experimental An item in the person's menu that does something: opens one of
+ * the plugin's components in a dialog, or calls one of the plugin's routes
+ * with no rows.
+ */
+export interface PluginUserMenuAction extends PluginUserMenuItemBase {
+  action: AdminContributionAction;
+  to?: never;
+}
+
+/**
+ * @experimental A declared item in the person's menu: a label, an icon, and
+ * either a link (`to`) or an action, never both.
+ */
+export type PluginUserMenuItem = PluginUserMenuLink | PluginUserMenuAction;
+
+/** What every header contribution may carry, wherever its own item goes. */
+interface PluginHeaderHideOptions {
   /** Hide all built-in header buttons (github, discord, docs, notifications). */
   hideDefaults?: boolean;
   /** Hide specific built-in header buttons. */
@@ -71,13 +109,44 @@ export interface PluginHeaderContributions {
 }
 
 /**
- * @public A sidebar navigation entry contributed by a plugin.
- *
- * Declarative and introspectable — delivered to the client via `/api/admin-meta`.
- * Exactly **one** level of `children` is supported. Visibility is controlled by
- * `requiredPermission` (client-gated via `useCan`); a `visible(ctx)` callback is
- * intentionally NOT supported because menus are serialized to the client.
+ * @experimental A header contribution whose own item, if any, is a component
+ * drawn at the bar's right end (the default) or at the rail's foot.
  */
+export interface PluginHeaderSlotContributions extends PluginHeaderHideOptions {
+  /** Component kept mounted at `place` for as long as the top bar is. */
+  slot?: ComponentPath;
+  /** Where `slot` is drawn; the bar's right end when absent. */
+  place?: "bar" | "rail-foot";
+  item?: never;
+}
+
+/**
+ * @experimental A header contribution whose own item is a declared entry in
+ * the person's menu. It takes no component: the menu's contents are mounted
+ * only while it is open.
+ */
+export interface PluginHeaderUserMenuContributions
+  extends PluginHeaderHideOptions {
+  place: "menu";
+  /** The entry drawn under "Help and community" while the menu is open. */
+  item: PluginUserMenuItem;
+  slot?: never;
+}
+
+/**
+ * @public Header customization contributed by a plugin.
+ *
+ * `slot` adds a component to the header (supersedes the deprecated top-level
+ * `headerSlot`), drawn where `place` says. With `place: "menu"` the plugin
+ * declares an `item` for the person's menu instead of a component.
+ * `hideDefaults` / `hide` remove built-in buttons, wherever the plugin's own
+ * item goes; hiding is subtractive and **union-merged** across enabled plugins
+ * (a button is hidden if ANY enabled plugin hides it).
+ */
+export type PluginHeaderContributions =
+  | PluginHeaderSlotContributions
+  | PluginHeaderUserMenuContributions;
+
 /**
  * @experimental Where a plugin's admin surfaces appear in the sidebar.
  *
@@ -99,7 +168,100 @@ export type PluginNavSection =
   | "settings"
   | "standalone";
 
-export interface PluginMenuItem {
+/**
+ * @experimental A heading in a standalone plugin's own panel, which the items
+ * naming it as their `group` are listed under: see
+ * `PluginAdminContributions.panel`.
+ */
+export interface PluginPanelGroup {
+  /** What an item's `group` names it by; unique within the plugin. */
+  id: string;
+  /** The heading drawn above the group's items. */
+  label: string;
+}
+
+/**
+ * @experimental How a standalone plugin's own panel lists its menu items.
+ */
+export interface PluginAdminPanel {
+  /**
+   * The panel's headings, drawn in this order, each above the items naming it
+   * as their `group`. Items naming no group are listed first, under no
+   * heading, and a heading with no item the reader may see is not drawn.
+   */
+  groups: ReadonlyArray<PluginPanelGroup>;
+}
+
+/**
+ * @experimental The number a panel item shows beside its label, read for the
+ * person looking at the panel, in one of two forms:
+ *
+ * - `{ collection, where? }`: how many entries of one of this plugin's own
+ *   collections, named by its declared slug (a host's rename is followed),
+ *   the reader may read, narrowed by `where` when given.
+ * - `{ attention }`: the count of one of this plugin's own dashboard
+ *   attention items (`contributes.dashboard.attention`), by its id, as the
+ *   reader's Needs your attention card counts it. An item with nothing
+ *   waiting for the reader counts 0.
+ *
+ * A count naming a collection the plugin does not contribute, or an attention
+ * item it does not declare, is left out, and a development start says so. A
+ * count that cannot be read draws no number.
+ */
+export type PluginItemCount =
+  | {
+      /** The declared slug of one of this plugin's own collections. */
+      collection: string;
+      /** Narrows the entries counted, in the entry list's `where` grammar. */
+      where?: WhereFilter;
+      attention?: never;
+    }
+  | {
+      /** The id of one of this plugin's own dashboard attention items. */
+      attention: string;
+      collection?: never;
+      where?: never;
+    };
+
+/**
+ * A menu item takes a quiet count or an attention badge, never both: one
+ * number beside one label.
+ */
+type PluginMenuItemNumber =
+  | {
+      /**
+       * @experimental A quiet number beside the item's label, shown at 0 too:
+       * how many there are. Drawn in the plugin's own standalone panel, on a
+       * top-level item.
+       */
+      count?: PluginItemCount;
+      badge?: never;
+    }
+  | {
+      /**
+       * @experimental A pill beside the item's label, shown only while its
+       * number is above 0: how many need doing. Drawn in the plugin's own
+       * standalone panel, on a top-level item.
+       */
+      badge?: PluginItemCount;
+      count?: never;
+    };
+
+/**
+ * @public A sidebar navigation entry contributed by a plugin.
+ *
+ * Declarative and introspectable — delivered to the client via `/api/admin-meta`.
+ * Exactly **one** level of `children` is supported. Visibility is controlled by
+ * `requiredPermission` (client-gated via `useCan`); a `visible(ctx)` callback is
+ * intentionally NOT supported because menus are serialized to the client.
+ *
+ * Its fields are `PluginMenuItemFields`, and it takes one `count` or one
+ * `badge`, never both.
+ */
+export type PluginMenuItem = PluginMenuItemFields & PluginMenuItemNumber;
+
+/** The fields of a `PluginMenuItem`, apart from its number. */
+export interface PluginMenuItemFields {
   /** Display label. */
   label: string;
   /** Admin path to navigate to, e.g. `"/admin/collections/forms"`. */
@@ -142,6 +304,13 @@ export interface PluginMenuItem {
    * plugin's own `placement` when omitted.
    */
   section?: PluginNavSection;
+  /**
+   * @experimental The id of one of `panel.groups`, the heading the item is
+   * listed under in the plugin's own standalone panel. An item naming none is
+   * listed first, under no heading; one naming a group the plugin does not
+   * declare is listed with those, and a development start says so.
+   */
+  group?: string;
   /** One nested level of sub-items. */
   children?: PluginMenuItem[];
 }
@@ -394,6 +563,11 @@ interface AdminContributionBase {
    * slug; every collection's when absent.
    */
   collections?: string[];
+  /**
+   * On a Single's edit page, the Singles it is added to, by slug; every
+   * Single's when absent.
+   */
+  singles?: string[];
 }
 
 /**
@@ -424,6 +598,13 @@ export interface AdminTabContribution extends AdminContributionBase {
   kind: "tab";
   label: string;
   component: ComponentPath;
+  /**
+   * @experimental On an edit page, the document's top-level fields this tab
+   * edits. The page draws them in the tab instead of among its own content,
+   * and draws the tab only on a document that has every one of them. Their
+   * values stay in the document's form and are saved with it.
+   */
+  fields?: string[];
 }
 
 /**
@@ -503,6 +684,12 @@ export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
   menu?: PluginMenuItem[];
   /**
+   * @experimental How a standalone plugin's own panel lists its menu items:
+   * the headings they are grouped under. Without it the panel lists them as
+   * it always has.
+   */
+  panel?: PluginAdminPanel;
+  /**
    * @experimental Places of this plugin's own, on its pages, that plugins may
    * add to. Each name starts with this plugin's slug and a dot,
    * `"acme-billing.invoice"` for `@acme/billing`; the app refuses to start on
@@ -559,9 +746,12 @@ export interface PluginAdminContributions {
    */
   headerSlot?: ComponentPath;
   /**
-   * @experimental Header customization: add a component (`slot`)
-   * and/or hide built-in buttons (`hideDefaults`/`hide`). The slot self-gates
-   * on permission and renders inside the plugin boundary.
+   * @experimental Header customization: add this plugin's own item and/or
+   * hide built-in buttons (`hideDefaults`/`hide`). The item is a component
+   * (`slot`) at the bar's right end or, with `place: "rail-foot"`, at the
+   * rail's foot above the Inbox; or, with `place: "menu"`, a declared `item`
+   * in the person's menu. A slot self-gates on permission and renders inside
+   * the plugin boundary.
    */
   header?: PluginHeaderContributions;
   /**

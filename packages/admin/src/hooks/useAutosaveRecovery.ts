@@ -18,6 +18,11 @@ import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
+  forgetTabPreference,
+  recallTabPreference,
+  rememberTabPreference,
+} from "@admin/lib/device-memory/device-memory";
+import {
   DOCUMENT_VERSION_KEY,
   versionOf,
   type StaleVersion,
@@ -30,7 +35,8 @@ import {
 
 /**
  * Where "Not now" is remembered: this browser tab's session storage, keyed by
- * the document, holding the identity of the recovery point put off.
+ * the document, holding the identity of the recovery point put off; this
+ * page's memory alone where the site turned remembering off.
  *
  * Session storage is copied into a tab duplicated from this one or opened from
  * it, so the point stays put off there too; a tab opened on its own, or a new
@@ -52,7 +58,7 @@ interface PendingPutOff {
 /** The put-offs waiting for the account; none where storage refuses. */
 function pendingPutOffs(): PendingPutOff[] {
   try {
-    const raw = window.sessionStorage.getItem(PENDING_PUT_OFF_KEY);
+    const raw = recallTabPreference(PENDING_PUT_OFF_KEY);
     const parsed: unknown = raw === null ? [] : JSON.parse(raw);
     return Array.isArray(parsed)
       ? parsed.filter(
@@ -68,19 +74,16 @@ function pendingPutOffs(): PendingPutOff[] {
   }
 }
 
-/** Replace the waiting put-offs, ignoring storage that refuses. */
+/**
+ * Replace the waiting put-offs, through the device memory: the tab's session
+ * storage, or this page's memory alone where the site turned remembering off
+ * or the storage refuses them.
+ */
 function writePendingPutOffs(pending: readonly PendingPutOff[]): void {
-  try {
-    if (pending.length === 0) {
-      window.sessionStorage.removeItem(PENDING_PUT_OFF_KEY);
-    } else {
-      window.sessionStorage.setItem(
-        PENDING_PUT_OFF_KEY,
-        JSON.stringify(pending)
-      );
-    }
-  } catch {
-    // Storage refused: "Not now" lasts for this editor, as it did before.
+  if (pending.length === 0) {
+    forgetTabPreference(PENDING_PUT_OFF_KEY);
+  } else {
+    rememberTabPreference(PENDING_PUT_OFF_KEY, JSON.stringify(pending));
   }
 }
 
@@ -200,21 +203,15 @@ function pointIdentity(point: AutosaveDetail): string {
 
 /** Whether this tab already put off the recovery point named `at`. */
 function wasPutOff(documentKey: string, at: string): boolean {
-  try {
-    return window.sessionStorage.getItem(putOffKey(documentKey)) === at;
-  } catch {
-    // Storage refused (a private window, blocked site data): offer again.
-    return false;
-  }
+  // Through the device memory, which reads storage that refuses as nothing.
+  return recallTabPreference(putOffKey(documentKey)) === at;
 }
 
 /** Remember that this tab put off the recovery point named `at`. */
 function rememberPutOff(documentKey: string, at: string): void {
-  try {
-    window.sessionStorage.setItem(putOffKey(documentKey), at);
-  } catch {
-    // Storage refused: "Not now" lasts for this editor, as it did before.
-  }
+  // Kept through the device memory: in this page's memory alone where the
+  // site turned remembering off or the storage refuses it.
+  rememberTabPreference(putOffKey(documentKey), at);
 }
 
 export interface UseAutosaveRecoveryOptions {

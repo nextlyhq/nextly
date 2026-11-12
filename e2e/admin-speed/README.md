@@ -51,7 +51,12 @@ fixed.
   after it began listening; a start that holds the page takes about a hundred).
   The page is prebuilt and needs no database, so something made it wait: a
   `register()` that waits for Nextly to start, or the admin route doing work for
-  each request again.
+  each request again. With `--build`, the databases these start-only runs use
+  are prepared before the build, as a deploy migrates and then builds: one
+  seeded after the build has changed every page that reads it, and the
+  playground's admin reads site code in its root layout, so its build copy
+  would no longer stand and the page would be rendered while the start runs.
+  Without `--build`, those databases are newer than the build that serves them.
 - **Admin page sent different pages, or forbids keeping it**: two fetches of
   `/admin` with no session, once the start is quiet, must get the same bytes and
   headers a shared cache may keep. The admin route is no longer prebuilt.

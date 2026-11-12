@@ -17,7 +17,10 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
-import { parseSnapshotFile } from "../migrate-create/snapshot-io";
+import {
+  carriesRegistryMetadata,
+  parseSnapshotFile,
+} from "../migrate-create/snapshot-io";
 
 import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
@@ -76,15 +79,17 @@ export async function readRegistrySource(args: {
 
 /** The source one snapshot file gives: its recorded declarations, or none. */
 async function sourceIn(path: string, file: string): Promise<RegistrySource> {
-  let entities: EntitySettingsRecord | undefined;
+  let parsed: ReturnType<typeof parseSnapshotFile>;
   try {
-    entities = parseSnapshotFile(await readFile(path, "utf-8"), file).entities;
+    parsed = parseSnapshotFile(await readFile(path, "utf-8"), file);
   } catch {
     // Written from nothing is safer than written from a guess: the rows stay
     // as they are, and the run says why.
     return { kind: "none", reason: "unreadable", file };
   }
-  return entities === undefined
-    ? { kind: "none", reason: "no-record", file }
-    : { kind: "snapshot", file, entities };
+  // Judged by the one reading of "carries registry metadata", which the
+  // first run's record also asks of each migration.
+  return carriesRegistryMetadata(parsed)
+    ? { kind: "snapshot", file, entities: parsed.entities }
+    : { kind: "none", reason: "no-record", file };
 }

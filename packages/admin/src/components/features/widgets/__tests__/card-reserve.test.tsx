@@ -239,7 +239,18 @@ describe("the footer", () => {
       </WidgetCard>
     );
     const footer = screen.getByTestId("widget-card-footer");
-    expect(footer).toHaveClass("h-7");
+    expect(footer).toHaveClass("min-h-7");
     expect(footer).toHaveTextContent("");
+    expect(footer.className).not.toMatch(/:empty\]:hidden/);
+  });
+
+  it("takes no room once the answer is drawn with nothing for the footer", () => {
+    // Cards are as tall as their content: an empty footer under a drawn answer is not drawn.
+    render(<WidgetCard title="Note">body</WidgetCard>);
+    const footer = screen.getByTestId("widget-card-footer");
+    expect(footer).toHaveClass(
+      "has-[[data-testid=widget-card-footer-slot]:empty]:hidden"
+    );
+    expect(screen.getByTestId("widget-card-footer-slot")).toBeEmptyDOMElement();
   });
 });

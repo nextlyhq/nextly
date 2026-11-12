@@ -492,20 +492,98 @@ export async function fieldGroupPlacementCounts(
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (slugs.length === 0) return counts;
-  const owners = await sources.fieldOwners();
-  for (const slug of slugs) {
-    // What goes with a delete of this field group alone, as the delete
-    // decides it: its own fields, so a reference to itself does not count.
-    const goingToo = fieldsGoingWith(
-      [{ kind: "fieldGroup", slug, tables: [] }],
-      {}
-    );
-    counts.set(
-      slug,
-      referencesAmong(owners, "fieldGroup", slug, goingToo).length
-    );
+  // One walk over every field list for the whole page. Each count is the
+  // length of the list a field group's own editor shows, never a second walk
+  // that could come to disagree with it.
+  for (const [slug, placements] of placementsBySlug(
+    await sources.fieldOwners(),
+    slugs
+  )) {
+    counts.set(slug, placements.length);
   }
   return counts;
+}
+
+/**
+ * The fields that place one field group, read from every stored field list:
+ * each names the collection, Single or field group that holds it, and its
+ * path there. What a field group's own editor lists as using it; its length
+ * is the count the field-group list shows (`fieldGroupPlacementCounts`).
+ *
+ * Rejects when the field lists cannot be read, so the caller decides how to
+ * say it does not know, rather than this answering "used nowhere".
+ *
+ * @param slug the field group, as fields name it
+ * @param sources where the stored field lists are read from
+ */
+export async function fieldGroupUsedBy(
+  slug: string,
+  sources: Pick<DependentsSources, "fieldOwners">
+): Promise<FieldReference[]> {
+  return placementsAmong(await sources.fieldOwners(), slug);
+}
+
+/** The fields that place one field group: the walk below, for that one. */
+function placementsAmong(
+  owners: readonly FieldOwner[],
+  slug: string
+): FieldReference[] {
+  return placementsBySlug(owners, [slug]).get(slug) ?? [];
+}
+
+/**
+ * The fields that place each of `slugs`, from one walk over every field list.
+ * Each field group is asked about as a delete asks about it alone
+ * (`fieldsPlacing` over each owner, its own fields going with it), so a
+ * reference to itself does not count, while one field group's use of another
+ * does. One walk however many are asked about, so a list page costs one pass
+ * over the site's fields rather than one per row.
+ */
+function placementsBySlug(
+  owners: readonly FieldOwner[],
+  slugs: readonly string[]
+): Map<string, FieldReference[]> {
+  const bySlug = new Map<string, FieldReference[]>(
+    slugs.map(slug => [slug, []])
+  );
+  for (const { entityType, entitySlug, fields } of owners) {
+    for (const placement of fieldGroupPlacements(fields)) {
+      // A field naming one field group twice places it once.
+      for (const slug of new Set(placement.slugs)) {
+        const found = bySlug.get(slug);
+        if (!found) continue;
+        if (entityType === "fieldGroup" && entitySlug === slug) continue;
+        found.push({ entityType, entitySlug, fieldPath: placement.path });
+      }
+    }
+  }
+  return bySlug;
+}
+
+/**
+ * The slugs of the collections and Singles a reader may read, as their own
+ * lists decide; `undefined` for a kind leaves it unfiltered.
+ */
+export interface ReadableOwnerSlugs {
+  readonly collection?: readonly string[];
+  readonly single?: readonly string[];
+}
+
+/**
+ * The field lists a reader may learn about: a collection's or Single's only
+ * when the reader may read it, so where a field group is used names nothing
+ * the reader's own lists hide. Field groups carry no per-reader read rule
+ * and are all kept, as their list keeps them.
+ */
+export function ownersReadableBy(
+  owners: readonly FieldOwner[],
+  readable: ReadableOwnerSlugs
+): FieldOwner[] {
+  return owners.filter(owner => {
+    if (owner.entityType === "fieldGroup") return true;
+    const allowed = readable[owner.entityType];
+    return allowed === undefined || allowed.includes(owner.entitySlug);
+  });
 }
 
 /**

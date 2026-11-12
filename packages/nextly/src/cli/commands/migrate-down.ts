@@ -75,6 +75,10 @@ import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/req
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
+  planRollbackBookkeeping,
+  type RollbackBookkeeping,
+} from "../../domains/schema/migrate/rollback-to-record";
+import {
   assertRunnableStatements,
   marksNoTransaction,
   splitSqlStatements,
@@ -95,6 +99,10 @@ import {
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import {
+  storeSchemaVersion,
+  newestAppliedAppMigration,
+} from "../../domains/schema/schema-version";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { exitWithError } from "../errors";
@@ -341,6 +349,15 @@ export interface MigrateDownCoreDeps {
    */
   recordPluginSchemaVersion?: (db: unknown) => Promise<void>;
   /**
+   * Store the database's schema version after an app migration's DOWN,
+   * through `db`, the handle the DOWN and its `rolled_back` row were written
+   * on: its migration becomes the newest one still applied, so the version
+   * moves back with the registry rows the DOWN wrote, in its transaction.
+   *
+   * Optional so a caller with no schema version to keep supplies nothing.
+   */
+  recordSchemaVersion?: (db: unknown) => Promise<void>;
+  /**
    * Records a `failed` event for an errored DOWN; `transaction` false says it
    * ran outside a transaction, so part of it may have applied.
    */
@@ -451,6 +468,18 @@ export interface MigrateDownCoreDeps {
   interactive?: boolean;
   /** Asks that person a yes-or-no question; only called when `interactive`. */
   askToDelete?: (question: string) => Promise<boolean>;
+  /**
+   * What rolling back `targets` does with the database's registry record
+   * (`planRollbackBookkeeping`), read from `rows`, the ledger rows the targets
+   * were chosen from: a refusal where the point it leaves has nothing recording
+   * the registry, thrown before anything runs, or the bookkeeping to undo where
+   * that point is the record's. Asked for the app's stream only, in both plans;
+   * absent, a caller with no record to keep reads as having none.
+   */
+  registryBookkeeping?: (args: {
+    rows: readonly SchemaEventRow[];
+    targets: readonly string[];
+  }) => Promise<RollbackBookkeeping>;
 }
 
 /**
@@ -637,11 +666,24 @@ export async function rollBackOne(
     | "execDown"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
+    | "recordSchemaVersion"
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
     | "refuseRequiredColumns"
-  >
+  >,
+  /**
+   * Run in the DOWN's transaction after its statements and before its
+   * rollback is recorded: the bookkeeping a rollback to the registry record's
+   * point undoes, given only for the last target, the one that reaches that
+   * point (`RollbackBookkeeping.restore`). In a transaction it commits with
+   * the DOWN, or neither does. On MySQL, whose schema statements commit as
+   * they run, a failure here leaves the migration recorded applied with its
+   * rollback recorded failed and possibly partial, as any DOWN stopped
+   * part-way there, rather than recorded rolled back with part of its
+   * bookkeeping undone.
+   */
+  atPoint?: () => Promise<void>
 ): Promise<void> {
   // A column made required over rows that would break it: refused here, before the DOWN's first
   // statement and before the ledger records an attempt, so the migration stays applied.
@@ -661,6 +703,7 @@ export async function rollBackOne(
       p.statements,
       { source: p.filename, transaction: p.transaction, direction: "down" },
       async db => {
+        await atPoint?.();
         if (!(await deps.recordRolledBack(p.filename, db))) {
           throw concurrentRunError({
             filename: p.filename,
@@ -669,6 +712,9 @@ export async function rollBackOne(
           });
         }
         if (deps.options.plugin) await deps.recordPluginSchemaVersion?.(db);
+        // An app migration's DOWN moves the stored schema version back, after
+        // its `rolled_back` row, so the ledger it is read from is current.
+        else await deps.recordSchemaVersion?.(db);
         // The rollback is recorded, and it resolves the start row, which is
         // older: failing to remove that row never fails a DOWN whose
         // statements ran. A start row is recorded only where a failed write
@@ -821,13 +867,19 @@ async function planAndGuard(
     await planRollback(targets, deps, reads),
     (await deps.removedFiles?.()) ?? new Set()
   );
-  if (deps.options.dryRun) return { planned, agreement: new Set() };
+  const bookkeeping = await bookkeepingOf(deps, rows, targets);
+  if (deps.options.dryRun) {
+    return { planned, agreement: new Set(), bookkeeping };
+  }
 
   // Guards — evaluated up front for every target, before executing anything.
   for (const p of planned) {
     const refusal = refusalOf(p, deps);
     if (refusal !== undefined) throw refusal;
   }
+  // A point nothing records the registry at is refused before anything runs,
+  // and before the data-loss consent is asked for a rollback that cannot run.
+  if (bookkeeping?.refusal !== undefined) throw bookkeeping.refusal;
 
   // A DOWN that loses data takes the data-loss consent, judged once for
   // every target before the first runs, by the deletions their statements
@@ -862,7 +914,7 @@ async function planAndGuard(
         ? undefined
         : await eventTriggerNotice(deps.readEventTriggers),
   });
-  return { planned, agreement };
+  return { planned, agreement, bookkeeping };
 }
 
 /**
@@ -872,10 +924,12 @@ async function planAndGuard(
  */
 async function previewRollback(
   planned: readonly PlannedDown[],
-  deps: MigrateDownCoreDeps
+  deps: MigrateDownCoreDeps,
+  bookkeeping: RollbackBookkeeping | undefined
 ): Promise<void> {
-  // The refusal a real run makes under the lock, reported as the others are.
+  // The refusals a real run makes under the lock, reported as the others are.
   await reportUnresolvedRefusal(deps);
+  reportBookkeeping(bookkeeping, deps.logger);
   deps.logger.info(`Would roll back ${planned.length} migration(s):`);
   const notice =
     deps.readEventTriggers === undefined
@@ -915,6 +969,8 @@ interface GuardedPlan {
   planned: PlannedDown[];
   /** What the operator agreed the targets delete, bound to each file as it stood. */
   agreement: Agreement;
+  /** What the rollback does with the registry record (`MigrateDownCoreDeps.registryBookkeeping`). */
+  bookkeeping?: RollbackBookkeeping;
 }
 
 export async function migrateDownCore(
@@ -971,7 +1027,7 @@ export async function migrateDownCore(
   // disagree; so is what a real run would need the data-loss consent for, so
   // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
-    await previewRollback(planned, deps);
+    await previewRollback(planned, deps, guarded.bookkeeping);
     return { rolledBack: [] };
   }
 
@@ -996,13 +1052,19 @@ export async function migrateDownCore(
       if (unresolved !== undefined) throw unresolved;
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
-      const { planned: current } = await planAndGuard(held, guarded.agreement);
+      const { planned: current, bookkeeping } = await planAndGuard(
+        held,
+        guarded.agreement
+      );
       if (current.length === 0) {
         deps.logger.info("Nothing to roll back.");
         return;
       }
-      for (const p of current) {
-        await rollBackOne(p, held);
+      for (const [at, p] of current.entries()) {
+        // The last target is the one that reaches the point the rollback
+        // leaves, so the bookkeeping there commits with its DOWN.
+        const last = at === current.length - 1;
+        await rollBackOne(p, held, last ? bookkeeping?.restore : undefined);
         rolledBack.push(p.filename);
         deps.logger.success(`Rolled back ${p.filename}`);
       }
@@ -1011,6 +1073,34 @@ export async function migrateDownCore(
   );
 
   return { rolledBack };
+}
+
+/**
+ * What rolling back `targets` does with the registry record
+ * (`MigrateDownCoreDeps.registryBookkeeping`): asked of the app's stream
+ * alone, since a plugin's modules carry no registry rows.
+ */
+async function bookkeepingOf(
+  deps: Pick<MigrateDownCoreDeps, "options" | "registryBookkeeping">,
+  rows: readonly SchemaEventRow[],
+  targets: readonly string[]
+): Promise<RollbackBookkeeping | undefined> {
+  if (deps.options.plugin !== undefined) return undefined;
+  return deps.registryBookkeeping?.({ rows, targets });
+}
+
+/** A dry run's line for what a real run does with the registry record. */
+function reportBookkeeping(
+  bookkeeping: RollbackBookkeeping | undefined,
+  logger: MigrateDownCoreDeps["logger"]
+): void {
+  if (bookkeeping?.refusal !== undefined) {
+    logger.info(
+      `✖ a real run would be refused: ${describeError(bookkeeping.refusal, { context: false })}`
+    );
+  } else if (bookkeeping?.summary !== undefined) {
+    logger.info(bookkeeping.summary);
+  }
 }
 
 /** A dry run's line for the unresolved-attempt refusal a real run would make. */
@@ -1139,6 +1229,7 @@ export async function downDatabaseDeps(args: {
     | "execDown"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
+    | "recordSchemaVersion"
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
@@ -1160,6 +1251,11 @@ export async function downDatabaseDeps(args: {
     return registryExists ? await new OwnersRepo(db, dialect).read() : [];
   };
   const ownerRows = await readOwnerRows();
+  // Read once, before any DOWN opens its transaction: a database that has no
+  // `nextly_meta` table yet stores no schema version, and a DOWN's version
+  // write must not fail the DOWN there.
+  const versionTableExists =
+    plugin === undefined && (await adapter.tableExists("nextly_meta"));
   return {
     dialect,
     db,
@@ -1218,6 +1314,15 @@ export async function downDatabaseDeps(args: {
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       return true;
+    },
+    recordSchemaVersion: async handle => {
+      if (!versionTableExists) return;
+      await storeSchemaVersion(handle, dialect, {
+        wrote: false,
+        migration: newestAppliedAppMigration(
+          await repo.boundTo(handle).listFileApplies()
+        ),
+      });
     },
     recordPluginSchemaVersion: async handle => {
       if (plugin === undefined || !registryExists) return;
@@ -1416,6 +1521,16 @@ export async function runMigrateDown(
                 await repo.listFileApplies(),
                 await repo.listFileRemovals()
               ),
+            registryBookkeeping: ({ rows, targets }) =>
+              planRollbackBookkeeping({
+                adapter: adapter as unknown as DrizzleAdapter,
+                dialect,
+                migrationsDir,
+                config: configResult.config,
+                rows,
+                rolledBack: targets,
+                logger,
+              }),
           }
         : {}),
       interactive: canPrompt(),

@@ -247,7 +247,11 @@ export interface PluginLifecycleDeps {
    * again reads how it was begun from.
    */
   readLifecycle: () => Promise<ReadonlyMap<string, PluginLifecycleRecord>>;
-  /** Records a plugin's new lifecycle state (`recordPluginLifecycle`). */
+  /**
+   * Records a plugin's new lifecycle state (`recordPluginLifecycle`), with the
+   * access that state brings written in the same transaction: an install's
+   * permissions, roles and preset grants, an uninstall's orphan marks.
+   */
   recordLifecycle: (
     plugin: LifecyclePlugin,
     record: PluginLifecycleRecord

@@ -240,6 +240,13 @@ exports[`each cause a documented code covers, as a command ends with it > PLUGIN
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-resolution-error  (PLUGIN_RESOLUTION_ERROR)"
 `;
 
+exports[`each cause a documented code covers, as a command ends with it > PLUGIN_NAME_RESERVED 1`] = `
+"✗ Plugin "app" uses the name "app", which is reserved for the site's own permissions.
+  Why:  The site's own permissions are stored under the owner \`app\`, and a plugin's under its name, so a plugin named \`app\` could not be told apart from the site.
+  Next: Choose another name for the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-resolution-error  (PLUGIN_RESOLUTION_ERROR)"
+`;
+
 exports[`each cause a documented code covers, as a command ends with it > PLUGIN_NAME_TOO_LONG_FOR_SETTINGS 1`] = `
 "✗ Plugin "reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-" stores settings, and its name is longer than the 191 characters the settings storage holds.
   Why:  Settings are stored under the plugin's name, in a column of that width.
@@ -1166,6 +1173,13 @@ exports[`each code, as a command ends with it > PLUGIN_COLUMN_NOT_MIGRATED 1`] =
   Why:  The app's migrations add what a plugin contributes to the app's tables, and this one has not been applied here.
   Next: Apply the app's migration that adds it (\`nextly migrate:create\`, then \`nextly migrate\`).
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-column-not-migrated  (PLUGIN_COLUMN_NOT_MIGRATED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_COMMAND_FROM_OLDER_RELEASE 1`] = `
+"✗ The preset roles' grants were set by Nextly 0.10.0, newer than this release (0.9.0).
+  Why:  An install sets every preset role's grants with the plugin's permissions, and a release older than the one that set them leaves them as they are, so neither command runs from it in production. Nothing was changed.
+  Next: Run this command from Nextly 0.10.0 or newer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-command-from-older-release  (PLUGIN_COMMAND_FROM_OLDER_RELEASE)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_CONFIG_NOT_EDITABLE 1`] = `
