@@ -12,8 +12,10 @@
 import {
   defaultPair,
   pairEndingAt,
+  SERVER_BASELINES,
   type PairableVersion,
   type PairResolution,
+  type ServerBaseline,
 } from "./version-pairing";
 
 /**
@@ -23,18 +25,28 @@ import {
  */
 export const PREVIOUS_VERSION = "previous";
 
-/** A comparison's start: a version number, or the one before `to`. */
-export type ComparisonFrom = number | typeof PREVIOUS_VERSION;
+/**
+ * A comparison's start: a version number, the one before `to`, or a baseline
+ * the server resolves (what is published, the current draft, the version this
+ * person last looked at), named as the server names it.
+ */
+export type ComparisonFrom = number | typeof PREVIOUS_VERSION | ServerBaseline;
+
+function isServerBaseline(value: string): value is ServerBaseline {
+  return (SERVER_BASELINES as readonly string[]).includes(value);
+}
 
 /**
  * A comparison's `from`: a version number, as `readVersionParam` reads one, or
- * the named baseline `previous`. A repeated parameter takes its first value.
+ * a named baseline. A repeated parameter takes its first value.
  */
 export function readFromParam(
   value: string | string[] | undefined
 ): ComparisonFrom | undefined {
   const raw = Array.isArray(value) ? value[0] : value;
-  return raw === PREVIOUS_VERSION ? PREVIOUS_VERSION : readVersionParam(raw);
+  if (raw === PREVIOUS_VERSION) return PREVIOUS_VERSION;
+  if (raw !== undefined && isServerBaseline(raw)) return raw;
+  return readVersionParam(raw);
 }
 
 /**
@@ -96,6 +108,12 @@ export function resolvePair(
   to: number | undefined,
   hasMore: boolean
 ): PairResolution {
+  // Only the server knows what is published, drafted or last looked at.
+  if (typeof from === "string" && from !== PREVIOUS_VERSION) {
+    return to === undefined
+      ? { kind: "baseline", baseline: from }
+      : { kind: "baseline", baseline: from, to };
+  }
   if (from === PREVIOUS_VERSION && to !== undefined) {
     // The change `to` made: compared with the version before it in its own
     // language, as choosing it in the history does.
@@ -109,4 +127,15 @@ export function resolvePair(
   // and the server rejects a cross-locale pair — so a page opened with no
   // parameters would render an API error instead of the most recent change.
   return defaultPair(versions, hasMore);
+}
+
+/**
+ * How the address asks a comparison to be drawn: inline, or side by side.
+ * Anything else leaves the reader's own remembered choice in place.
+ */
+export function readViewParam(
+  value: string | string[] | undefined
+): "inline" | "side" | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw === "inline" || raw === "side" ? raw : undefined;
 }

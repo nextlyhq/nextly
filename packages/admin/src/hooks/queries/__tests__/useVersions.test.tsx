@@ -13,10 +13,11 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
-const { listSpy, getSpy, diffSpy } = vi.hoisted(() => ({
+const { listSpy, getSpy, diffSpy, baselineDiffSpy } = vi.hoisted(() => ({
   listSpy: vi.fn(),
   getSpy: vi.fn(),
   diffSpy: vi.fn(),
+  baselineDiffSpy: vi.fn(),
 }));
 
 // The API client is replaced so these tests drive query and mutation outcomes
@@ -26,10 +27,16 @@ vi.mock("@admin/services/versionApi", () => ({
     list: listSpy,
     get: getSpy,
     diff: diffSpy,
+    diffFromBaseline: baselineDiffSpy,
   },
 }));
 
-import { useVersion, useVersionDiff, useVersions } from "../useVersions";
+import {
+  useBaselineDiff,
+  useVersion,
+  useVersionDiff,
+  useVersions,
+} from "../useVersions";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
 
@@ -225,5 +232,38 @@ describe("useVersionDiff", () => {
     focusManager.setFocused(true);
 
     await waitFor(() => expect(diffSpy).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("useBaselineDiff", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("asks the server to compare a version with a baseline it resolves", async () => {
+    baselineDiffSpy.mockResolvedValue({
+      from: 3,
+      to: 5,
+      locale: null,
+      hasChanges: true,
+      fields: [],
+      baseline: { name: "published", versionNo: 3 },
+    });
+
+    const { result } = renderHook(
+      () => useBaselineDiff({ scope, baseline: "published", to: 5 }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "published", 5);
+    expect(result.current.data?.baseline).toEqual({
+      name: "published",
+      versionNo: 3,
+    });
+  });
+
+  it("asks for nothing while no baseline is named", () => {
+    renderHook(() => useBaselineDiff({ scope, baseline: null }), { wrapper });
+
+    expect(baselineDiffSpy).not.toHaveBeenCalled();
   });
 });

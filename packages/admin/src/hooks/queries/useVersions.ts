@@ -104,6 +104,19 @@ export const versionKeys = {
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
   diffs: (): readonly ["versions", "diff"] =>
     [...versionKeys.all(), "diff"] as const,
+  // A comparison with a baseline the server resolves: named by the baseline
+  // and the version compared, or none for the server's own choice.
+  baselineDiff: (
+    scope: VersionScope,
+    baseline: string,
+    to: number | undefined
+  ): readonly unknown[] =>
+    [
+      ...versionKeys.diffs(),
+      ...scopeKey(scope),
+      baseline,
+      to ?? "auto",
+    ] as const,
   // A diff is identified by the document (scope), the ordered version pair
   // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
   // The result also depends on the live schema, which the query treats as
@@ -305,6 +318,39 @@ export function useVersionDiff({
     // Toggling "Changed only" switches to a different cache entry; keep the
     // prior diff on screen while the new one loads rather than flashing a
     // skeleton over a comparison the user is already reading.
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * A version compared with a baseline the server resolves (see
+ * `versionApi.diffFromBaseline`). Null asks for nothing. Kept fresh as a pair's
+ * comparison is: the server classifies it against the live schema.
+ */
+export function useBaselineDiff({
+  scope,
+  baseline,
+  to,
+  enabled = true,
+}: {
+  scope: VersionScope;
+  baseline: string | null;
+  to?: number;
+  enabled?: boolean;
+}): UseQueryResult<VersionDiff, Error> {
+  return useQuery<VersionDiff, Error>({
+    queryKey:
+      baseline === null
+        ? ([...versionKeys.diffs(), "none"] as const)
+        : versionKeys.baselineDiff(scope, baseline, to),
+    queryFn: () => {
+      // Guarded by `enabled`; this is defence against a direct queryFn call.
+      if (baseline === null) throw new Error("A baseline is required");
+      return versionApi.diffFromBaseline(scope, baseline, to);
+    },
+    enabled: enabled && baseline !== null && isAddressable(scope),
+    staleTime: 0,
+    refetchOnWindowFocus: true,
     placeholderData: keepPreviousData,
   });
 }
