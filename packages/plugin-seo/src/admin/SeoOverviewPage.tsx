@@ -579,7 +579,9 @@ function ConnectionsCard(): JSX.Element {
     path: REDIRECT_ROUTES.proxy,
     staleTime: 0,
   });
-  const read = connections.data;
+  // A read that failed is said, even over an earlier answer it would show.
+  const read = connections.error === null ? connections.data : undefined;
+  const proxyRead = proxy.error === null ? proxy.data : undefined;
   return (
     <SmallCard
       title="Connections"
@@ -606,12 +608,12 @@ function ConnectionsCard(): JSX.Element {
             <ConnectionRow line={indexNowConnection(read.indexNow)} />
           </>
         )}
-        {proxy.data === undefined ? (
+        {proxyRead === undefined ? (
           proxy.pending ? null : (
             <UnreadRow name="Redirects on the site" />
           )
         ) : (
-          <ConnectionRow line={redirectsConnection(proxy.data)} />
+          <ConnectionRow line={redirectsConnection(proxyRead)} />
         )}
       </ul>
     </SmallCard>
@@ -649,6 +651,12 @@ export function SeoOverviewPage(): JSX.Element {
         }
       />
       <div className="flex flex-col gap-6">
+        {/* The card that says why a hide failed is not drawn while hidden. */}
+        {checklist.data?.hidden === true && visibility.error !== null ? (
+          <p className="text-sm text-danger-text" role="alert">
+            {`The setup checklist could not be shown. ${apiErrorMessage(visibility.error)}`}
+          </p>
+        ) : null}
         {checklist.data?.hidden === true ? null : (
           <SetupCard
             checklist={checklist.data}

@@ -299,6 +299,18 @@ export const PROBLEMS_PAGE_HREF: string = `${ADMIN_BASE}/${PROBLEMS_PAGE.path}`;
 /** The query parameter the problem list is narrowed to one severity by. */
 const SEVERITY_PARAM = "severity";
 
+/** The severity an address's query names, or none. */
+export function severityIn(search: string): ProblemSeverity | undefined {
+  const named = new URLSearchParams(search).get(SEVERITY_PARAM);
+  return SEVERITY_ORDER.find(severity => severity === named);
+}
+
+/** How many problems `problems` hold, counted as `severityCounts` counts them. */
+export function problemTotal(problems: readonly Problem[]): number {
+  const counts = severityCounts(problems);
+  return counts.error + counts.warning + counts.notice;
+}
+
 /** The problem list, narrowed to `severity` where one is named. */
 export function problemsHref(severity?: ProblemSeverity): string {
   return severity === undefined

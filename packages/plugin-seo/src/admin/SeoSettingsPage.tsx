@@ -497,8 +497,13 @@ function SettingsScreen({
             if (landOn !== undefined) choose(landOn);
           }}
           finish={() => {
-            setSetupOpen(false);
-            navigateTo(OVERVIEW_PAGE_HREF);
+            // An edit made while the last step saved is saved first; a
+            // failed save keeps the person here, where it is said.
+            void save(draft).then(saved => {
+              if (!saved) return;
+              setSetupOpen(false);
+              navigateTo(OVERVIEW_PAGE_HREF);
+            });
           }}
         />
       ) : null}

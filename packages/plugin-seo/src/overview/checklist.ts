@@ -15,7 +15,8 @@
  * - `import`: listed only where the site holds old SEO values to bring in, a
  *   field group other than the plugin's own with a value one of its fields
  *   maps to, or where an import has been applied; done once one has;
- * - `searchConsole`: Search Console is connected.
+ * - `searchConsole`: Search Console is connected to the site's property,
+ *   with no failure since.
  *
  * @module overview/checklist
  */
@@ -30,10 +31,18 @@ import {
 import { z } from "nextly/zod";
 
 import { productionAddressesOf } from "../canonical";
-import { readConnections, writeConnections } from "../connections/store";
+import {
+  readConnections,
+  writeConnections,
+  type ConnectionSettings,
+} from "../connections/store";
 import { callerActor } from "../import/actor";
 import type { ImportGroup } from "../import/contract";
-import { importGroups, type ImportSetup } from "../import/plan";
+import {
+  declaresOldGroups,
+  importGroups,
+  type ImportSetup,
+} from "../import/plan";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 import type { SiteRules } from "../resolver/page-levels";
 import type { BrandFacts } from "../settings/rules";
@@ -104,6 +113,19 @@ export function holdsOldValues(groups: readonly ImportGroup[]): boolean {
   );
 }
 
+/**
+ * Whether Search Console is connected to the site's property, with no
+ * failure since: a sign-in that found no property for the site is not.
+ */
+export function searchConsoleConnected(
+  stored: Pick<ConnectionSettings, "searchConsole" | "searchConsoleFailed">
+): boolean {
+  return (
+    stored.searchConsole?.property !== undefined &&
+    stored.searchConsoleFailed === undefined
+  );
+}
+
 /** What the checklist route reads with. */
 export interface ChecklistSetup {
   /** The content types SEO is added to, by key. */
@@ -134,6 +156,9 @@ async function importsOf(
     }),
     setup: setup.importSetup,
   };
+  // Pages are read only where a type declares a group other than the
+  // plugin's own, the one place old values can be.
+  if (!(await declaresOldGroups(engine))) return "none";
   return holdsOldValues(await importGroups(engine, undefined))
     ? "waiting"
     : "none";
@@ -158,7 +183,7 @@ async function readChecklist(
       productionAddresses: productionAddressesOf(rules.productionAddresses),
       brand,
       types: setup.types,
-      searchConsole: stored.searchConsole !== undefined,
+      searchConsole: searchConsoleConnected(stored),
       imports: await importsOf(ctx, setup, stored.importedAt),
     }),
   };

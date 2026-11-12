@@ -224,6 +224,9 @@ describe("first-time setup", () => {
     fireEvent.click(
       within(done).getByRole("button", { name: "Go to the overview" })
     );
+    // Anything still unsaved is saved first; nothing is, so none is sent.
+    await settle();
+    expect(sent).toHaveLength(1);
 
     expect(navigateTo).toHaveBeenCalledWith(
       "/admin/plugins/nextlyhq-plugin-seo/overview"

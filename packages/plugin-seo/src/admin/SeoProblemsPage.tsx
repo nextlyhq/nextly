@@ -14,16 +14,22 @@ import {
   navigateTo,
   toastMutationResult,
 } from "@nextlyhq/plugin-sdk/admin";
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 
 import {
   fixHref,
+  KIND_SEVERITY,
+  problemsHref,
+  problemTotal,
+  severityIn,
   type Problem,
   type ProblemListBody,
+  type ProblemSeverity,
 } from "../problems/contract";
 
 import { useCheckedProblemList } from "./problem-list";
 import { checkedWords, groupsOf, type ProblemGroup } from "./problem-view";
+import { AdminLink } from "./section";
 import { Icon, ROOT, SeoStyles } from "./styles";
 
 /** `n problems`, `1 problem`. */
@@ -156,7 +162,7 @@ function Meta({
     <div className="nx-seo-pmeta">
       {list === undefined ? null : (
         <>
-          <span>{problemCount(list.problems.length)}</span>
+          <span>{problemCount(problemTotal(list.problems))}</span>
           <span aria-hidden="true">·</span>
         </>
       )}
@@ -211,8 +217,32 @@ function Body({
 }
 
 /** The problem list's screen, as the admin mounts it. */
+/** Each severity's name, as the list says it is narrowed to it. */
+const SEVERITY_NAMES: Record<ProblemSeverity, string> = {
+  error: "errors",
+  warning: "warnings",
+  notice: "notices",
+};
+
 export function SeoProblemsPage(): JSX.Element {
-  const { list, checking, failed, check } = useCheckedProblemList();
+  const checked = useCheckedProblemList();
+  const { checking, failed, check } = checked;
+  // A link from the Overview's counts narrows the list to one severity; the
+  // address is read once, as the admin remounts the page when it changes.
+  const [severity] = useState(() =>
+    typeof window === "undefined"
+      ? undefined
+      : severityIn(window.location.search)
+  );
+  const list =
+    checked.list === undefined || severity === undefined
+      ? checked.list
+      : {
+          ...checked.list,
+          problems: checked.list.problems.filter(
+            problem => KIND_SEVERITY[problem.kind] === severity
+          ),
+        };
   const site = list?.site ?? "the site";
   return (
     <div className={`${ROOT} nx-seo-page`}>
@@ -227,6 +257,12 @@ export function SeoProblemsPage(): JSX.Element {
         </div>
         <Meta list={list} checking={checking} check={() => check()} />
       </div>
+      {severity === undefined ? null : (
+        <p className="nx-seo-help">
+          {`Showing ${SEVERITY_NAMES[severity]} only. `}
+          <AdminLink href={problemsHref()}>Show all problems</AdminLink>
+        </p>
+      )}
       {failed !== null && list !== undefined ? (
         <p className="nx-seo-alert" role="alert">
           {apiErrorMessage(failed)}

@@ -9,6 +9,7 @@ import type { ImportGroup } from "../../import/contract";
 import {
   checklistItems,
   holdsOldValues,
+  searchConsoleConnected,
   type ChecklistFacts,
 } from "../checklist";
 
@@ -156,5 +157,29 @@ describe("holdsOldValues", () => {
         ]),
       ])
     ).toBe(false);
+  });
+});
+
+describe("searchConsoleConnected", () => {
+  const token = { refreshToken: "r" };
+  it("needs the site's property, and no failure since", () => {
+    expect(
+      searchConsoleConnected({
+        searchConsole: { ...token, property: "sc-domain:acme.example" },
+      })
+    ).toBe(true);
+    // Signed in, but no property matched the site.
+    expect(searchConsoleConnected({ searchConsole: token })).toBe(false);
+    expect(
+      searchConsoleConnected({
+        searchConsole: { ...token, property: "sc-domain:acme.example" },
+        searchConsoleFailed: {
+          at: "2026-11-12T00:00:00Z",
+          result: "failed",
+          message: "x",
+        },
+      })
+    ).toBe(false);
+    expect(searchConsoleConnected({})).toBe(false);
   });
 });

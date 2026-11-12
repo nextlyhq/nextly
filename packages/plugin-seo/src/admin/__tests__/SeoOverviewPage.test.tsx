@@ -163,9 +163,20 @@ function serve(overrides: Record<string, unknown> = {}) {
     path: string;
   }) => {
     const answer = answers[path];
-    return answer instanceof Error
-      ? { data: undefined, pending: false, error: answer }
-      : { data: answer, pending: false, error: null };
+    if (answer instanceof Error) {
+      return { data: undefined, pending: false, error: answer };
+    }
+    // An earlier answer kept beside a refresh that failed.
+    if (
+      typeof answer === "object" &&
+      answer !== null &&
+      "stale" in answer &&
+      "error" in answer
+    ) {
+      const { stale, error } = answer as { stale: unknown; error: Error };
+      return { data: stale, pending: false, error };
+    }
+    return { data: answer, pending: false, error: null };
   }) as unknown as typeof usePluginRoute);
   write = vi.fn(async (body: { hidden: boolean }) => ({ ...body }));
   check = vi.fn(async () => ({ ...PROBLEMS, message: "Checked 12 pages." }));
@@ -400,6 +411,44 @@ describe("SeoOverviewPage", () => {
     });
     expect(indexNow.closest("li")?.textContent).toContain("IndexNow");
     expect(within(connections).getByText("Running")).toBeTruthy();
+  });
+
+  it("says a connection couldn't be checked when its refresh failed, over the answer before it", () => {
+    serve({
+      "/connections": {
+        stale: {
+          searchConsole: { configured: true, connected: {} },
+          indexNow: { switchedOn: true },
+        },
+        error: new Error("offline"),
+      },
+      "/proxy-status": {
+        stale: { state: "running", lastSeen: ago(0) },
+        error: new Error("offline"),
+      },
+    });
+    render(<SeoOverviewPage />);
+    const connections = card("Connections");
+    expect(within(connections).getAllByText("Couldn't check")).toHaveLength(3);
+    expect(within(connections).queryByText("Connected")).toBeNull();
+    expect(within(connections).queryByText("Running")).toBeNull();
+  });
+
+  it("says why a hidden checklist could not be shown again", () => {
+    serve({ "/overview/checklist": { ...CHECKLIST, hidden: true } });
+    vi.mocked(usePluginRouteMutation).mockImplementation((({
+      path,
+    }: {
+      path: string;
+    }) => ({
+      write: path === "/problems/check" ? check : write,
+      pending: false,
+      error: path === "/problems/check" ? null : new Error("Network down"),
+    })) as unknown as typeof usePluginRouteMutation);
+    render(<SeoOverviewPage />);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The setup checklist could not be shown."
+    );
   });
 
   it("keeps the rest of the page when one read fails", () => {

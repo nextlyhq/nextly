@@ -54,7 +54,7 @@ export const IMPORT_PAGE: {
 };
 
 /** Where Import is. */
-const IMPORT_PAGE_HREF: string = `${SECTION_BASE}/${IMPORT_PAGE.path}`;
+export const IMPORT_PAGE_HREF: string = `${SECTION_BASE}/${IMPORT_PAGE.path}`;
 
 /** Inspect, a page's row action on Pages: its path, and its component. */
 export const INSPECT_PAGE: {

@@ -73,7 +73,7 @@ import type {
   ImportTarget,
 } from "./contract";
 import { readRankMathCsv } from "./csv";
-import { groupsOf, OWN_FIELDS, readGroup } from "./group";
+import { declaresOtherGroups, groupsOf, OWN_FIELDS, readGroup } from "./group";
 import { readPayload } from "./payload";
 import {
   count,
@@ -286,6 +286,18 @@ async function typeFields(
     });
   }
   return answer;
+}
+
+/**
+ * Whether the types the actor may read declare a field group other than the
+ * plugin's own, read from their declarations without reading any page: where
+ * none does, there are no old values to import.
+ */
+export async function declaresOldGroups(
+  engine: ImportEngine
+): Promise<boolean> {
+  const types = await readableTypes(engine, undefined);
+  return declaresOtherGroups(engine.ctx, await typeFields(engine.ctx, types));
 }
 
 /**
