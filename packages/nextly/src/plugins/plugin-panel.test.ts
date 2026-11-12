@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { PluginDefinition } from "./plugin-context";
-import { pluginPanelWarnings, publishedPluginPanel } from "./plugin-panel";
+import {
+  publishedPluginPanel,
+  reportPluginPanelWarnings,
+} from "./plugin-panel";
 
 /**
  * A standalone plugin `@acme/reports` (admin slug `acme-reports`) owning the
@@ -124,7 +127,7 @@ describe("publishedPluginPanel", () => {
   });
 });
 
-describe("pluginPanelWarnings", () => {
+describe("reportPluginPanelWarnings", () => {
   const broken = reportsPlugin({
     menu: [
       { label: "Missing", to: "/admin/plugins/acme-reports/missing" },
@@ -136,28 +139,119 @@ describe("pluginPanelWarnings", () => {
     ],
   });
 
-  it("reports in development, naming the plugin, the item and the value", () => {
-    const warnings = pluginPanelWarnings([broken], "development");
-    expect(warnings.map(w => w.kind)).toEqual([
-      "panel-item-unregistered-page",
-      "panel-count-unowned-collection",
+  /** A host logger that keeps what it is told. */
+  function hostLogger() {
+    const lines: Array<{ message: string; meta?: Record<string, unknown> }> =
+      [];
+    return {
+      lines,
+      logger: {
+        warn: (message: string, meta?: Record<string, unknown>) => {
+          lines.push({ message, meta });
+        },
+      },
+    };
+  }
+
+  it("reports to the host's logger in development, naming the plugin, the item and the value", () => {
+    const { lines, logger } = hostLogger();
+    reportPluginPanelWarnings([broken], "development", logger);
+    expect(lines.map(line => line.meta)).toEqual([
+      { kind: "panel-item-unregistered-page", plugin: "@acme/reports" },
+      { kind: "panel-count-unowned-collection", plugin: "@acme/reports" },
     ]);
-    expect(warnings[0].plugin).toBe("@acme/reports");
-    expect(warnings[0].message).toContain('"Missing"');
-    expect(warnings[0].message).toContain(
-      "/admin/plugins/acme-reports/missing"
-    );
-    expect(warnings[1].message).toContain('collection "posts"');
+    expect(lines[0].message).toContain('Plugin "@acme/reports"');
+    expect(lines[0].message).toContain('"Missing"');
+    expect(lines[0].message).toContain("/admin/plugins/acme-reports/missing");
+    expect(lines[1].message).toContain('collection "posts"');
   });
 
   it("is silent outside development", () => {
-    expect(pluginPanelWarnings([broken], "production")).toEqual([]);
-    expect(pluginPanelWarnings([broken], "test")).toEqual([]);
-    expect(pluginPanelWarnings([broken], undefined)).toEqual([]);
+    const { lines, logger } = hostLogger();
+    for (const env of ["production", "test", undefined]) {
+      reportPluginPanelWarnings([broken], env, logger);
+    }
+    expect(lines).toEqual([]);
   });
 
   it("skips a disabled plugin, which draws no menu", () => {
+    const { lines, logger } = hostLogger();
     const disabled = { ...broken, enabled: false } as PluginDefinition;
-    expect(pluginPanelWarnings([disabled], "development")).toEqual([]);
+    reportPluginPanelWarnings([disabled], "development", logger);
+    expect(lines).toEqual([]);
+  });
+
+  it("reports a badge read from an attention item that counts only hidden collections", () => {
+    const plugin = reportsPlugin(
+      {
+        menu: [
+          {
+            label: "Stale",
+            to: "/admin/plugins/acme-reports/overview",
+            badge: { attention: "acme/stale" },
+          },
+        ],
+      },
+      {
+        contributes: {
+          // `internal` hides a collection as `admin.hidden` does.
+          collections: [
+            { slug: "reports", admin: { hidden: true } },
+            { slug: "drafts", internal: true },
+          ],
+          dashboard: {
+            attention: [
+              { id: "acme/stale", collections: ["reports", "drafts"] },
+            ],
+          },
+          admin: {
+            pages: [{ path: "overview", component: "@acme/reports/admin#P" }],
+            menu: [
+              {
+                label: "Stale",
+                to: "/admin/plugins/acme-reports/overview",
+                badge: { attention: "acme/stale" },
+              },
+            ],
+          },
+        },
+      }
+    );
+    const { lines, logger } = hostLogger();
+    reportPluginPanelWarnings([plugin], "development", logger);
+    expect(lines.map(line => line.meta?.kind)).toEqual([
+      "panel-count-attention-never-shown",
+    ]);
+    expect(lines[0].message).toContain('"acme/stale"');
+    // Still sent: the number is read, and draws once the item can show.
+    expect(publishedPluginPanel(plugin).menu[0].badge).toEqual({
+      attention: "acme/stale",
+    });
+  });
+
+  it("is silent for an attention item gated on a permission, or on a collection the dashboard lists", () => {
+    const { lines, logger } = hostLogger();
+    for (const gate of [
+      { permission: "read-reports" },
+      { collections: ["reports"] },
+    ]) {
+      const plugin = reportsPlugin(
+        {
+          menu: [
+            {
+              label: "Stale",
+              to: "/admin/plugins/acme-reports/overview",
+              badge: { attention: "acme/stale" },
+            },
+          ],
+        },
+        {}
+      );
+      (
+        plugin.contributes as { dashboard: { attention: unknown[] } }
+      ).dashboard.attention = [{ id: "acme/stale", ...gate }];
+      reportPluginPanelWarnings([plugin], "development", logger);
+    }
+    expect(lines).toEqual([]);
   });
 });

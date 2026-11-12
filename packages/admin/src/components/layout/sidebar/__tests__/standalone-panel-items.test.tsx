@@ -79,6 +79,17 @@ function renderPanel() {
   );
 }
 
+/**
+ * Each link's own `aria-label`, by address: the name a browser gives it as
+ * written, with nothing joined from its contents.
+ */
+const namesOf = (hrefs: readonly string[]) =>
+  hrefs.map(
+    href =>
+      document.querySelector(`a[href="${href}"]`)?.getAttribute("aria-label") ??
+      null
+  );
+
 /** The panel's links, by their accessible names, in the order drawn. */
 const linkNames = () =>
   screen.getAllByRole("link").map(link => link.textContent ?? "");
@@ -172,6 +183,11 @@ describe("a standalone plugin's panel", () => {
     expect(screen.getByRole("link", { name: "Fix: 2" })).toBeDefined();
     // A badge at 0 is not drawn, and the link keeps its plain name.
     expect(screen.getByRole("link", { name: "Quiet" })).toBeDefined();
+    // Named by the link's own label, exactly as a browser reads it: a name
+    // assembled from a visually hidden part reads "Patterns , 12" there.
+    expect(
+      namesOf(["/admin/p", "/admin/l", "/admin/d", "/admin/f", "/admin/q"])
+    ).toEqual(["Patterns, 12", "Layouts, 0", "Drafts, 5", "Fix: 2", null]);
     expect(screen.getAllByTestId("plugin-item-badge")).toHaveLength(1);
     expect(screen.getAllByTestId("plugin-item-count")).toHaveLength(3);
 
@@ -199,6 +215,8 @@ describe("a standalone plugin's panel", () => {
 
     await screen.findByRole("link", { name: "Shown, 4" });
     expect(screen.getByRole("link", { name: "Hidden" })).toBeDefined();
+    // No number, so no label of its own: the name is the label it holds.
+    expect(namesOf(["/admin/h", "/admin/s"])).toEqual([null, "Shown, 4"]);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
