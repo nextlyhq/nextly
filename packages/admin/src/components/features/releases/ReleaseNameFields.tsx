@@ -48,10 +48,7 @@ export function ReleaseNameFields({
           }
         />
         {titleProblem === undefined ? null : (
-          <p
-            id={`${ids}-title-problem`}
-            className="text-sm text-destructive-700 dark:text-destructive"
-          >
+          <p id={`${ids}-title-problem`} className="text-sm text-danger-text">
             {titleProblem}
           </p>
         )}

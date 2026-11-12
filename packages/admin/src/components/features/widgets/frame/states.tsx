@@ -311,7 +311,12 @@ export function CardError({
       className="grid justify-items-center gap-1"
       data-testid="widget-card-error"
     >
-      <XCircle className="mb-1 h-5 w-5 text-destructive" aria-hidden="true" />
+      {/* An icon is ink, so it takes the danger status's text colour; the solid one is for fills. */}
+      <XCircle
+        className="mb-1 h-5 w-5 text-danger-text"
+        aria-hidden="true"
+        data-testid="widget-card-error-mark"
+      />
       {/* A string expression rather than JSX text, so the apostrophe is written as itself. */}
       <p className="text-sm font-semibold text-foreground">
         {"This card couldn't load"}

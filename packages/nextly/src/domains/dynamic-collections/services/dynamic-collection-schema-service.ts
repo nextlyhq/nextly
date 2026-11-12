@@ -73,6 +73,7 @@ import {
 import {
   backfillDefaultForType,
   backfillValueForType,
+  storedDateValue,
 } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
@@ -1069,9 +1070,7 @@ export class DynamicCollectionSchemaService {
               ? new Date(value)
               : null;
         if (at !== null && !Number.isNaN(at.getTime())) {
-          return this.dialect === "sqlite"
-            ? Math.floor(at.getTime() / 1000)
-            : at;
+          return storedDateValue(at, this.dialect);
         }
       }
       // No driver binds an object or an array as JSON: SQLite refuses one, and PostgreSQL's

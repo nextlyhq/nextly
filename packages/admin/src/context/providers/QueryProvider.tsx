@@ -11,6 +11,8 @@ import {
 } from "@admin/constants/query";
 import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
 
+import { beginAdminStartup } from "./admin-startup";
+
 /** Whether the query devtools are drawn: unless a development build opts out of them. */
 const SHOW_QUERY_DEVTOOLS =
   process.env.NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS !== "off";
@@ -89,23 +91,25 @@ export function QueryProvider({
 }): JSX.Element {
   // Use useState with lazy initializer to ensure stable QueryClient instance
   // This prevents QueryClient recreation on re-renders (TanStack Query best practice)
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: QUERY_STALE_TIME,
-            gcTime: QUERY_GC_TIME,
-            retry: QUERY_RETRY_COUNT,
-            refetchOnWindowFocus: false, // Prevent refetch on tab switch (admin CMS UX)
-          },
-          mutations: {
-            retry: shouldRetryMutation,
-            // throwOnError: Not enabled globally - use per-mutation opt-in
-          },
+  const [queryClient] = useState(() => {
+    // The first thing the admin does in the browser: its startup request, so
+    // what every screen asks for first is on its way before any screen asks.
+    beginAdminStartup();
+    return new QueryClient({
+      defaultOptions: {
+        queries: {
+          staleTime: QUERY_STALE_TIME,
+          gcTime: QUERY_GC_TIME,
+          retry: QUERY_RETRY_COUNT,
+          refetchOnWindowFocus: false, // Prevent refetch on tab switch (admin CMS UX)
         },
-      })
-  );
+        mutations: {
+          retry: shouldRetryMutation,
+          // throwOnError: Not enabled globally - use per-mutation opt-in
+        },
+      },
+    });
+  });
 
   return (
     <QueryClientProvider client={queryClient}>

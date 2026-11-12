@@ -4,10 +4,14 @@ import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AlertTriangle } from "@admin/components/icons";
+import { AlertCircle, AlertTriangle } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
-import { EntityRow, ENTITY_LEADING_CLASS } from "../widgets/frame/entity-row";
+import {
+  EntityRow,
+  ENTITY_LEADING_CLASS,
+  type EntityRowProps,
+} from "../widgets/frame/entity-row";
 import { LIST_ROW_HEIGHT_CLASS } from "../widgets/frame/geometry";
 import { useCardTitleCount } from "../widgets/frame/title-count";
 import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
@@ -106,17 +110,34 @@ function AttentionItem({
       title={row.title}
       spoken={`${severityName(row.severity)}: ${row.spoken}`}
       meta={row.reason === undefined ? [] : [row.reason]}
-      {...(row.href === undefined
-        ? {}
-        : {
-            action: {
-              label: "Review",
-              href: row.href,
-              spoken: `Review ${lowerFirst(row.label)}`,
-            },
-          })}
+      {...rowAction(row)}
     />
   );
+}
+
+/**
+ * A row's one action: "How to fix", the documentation in a new tab, where the item names one;
+ * else Review, to the admin page its link names; else none.
+ */
+function rowAction(row: AttentionRow): Pick<EntityRowProps, "action"> {
+  if (row.help !== undefined) {
+    return {
+      action: {
+        label: "How to fix",
+        href: row.help,
+        spoken: `How to fix: ${lowerFirst(row.label)}`,
+        external: true,
+      },
+    };
+  }
+  if (row.href === undefined) return {};
+  return {
+    action: {
+      label: "Review",
+      href: row.href,
+      spoken: `Review ${lowerFirst(row.label)}`,
+    },
+  };
 }
 
 /**
@@ -149,10 +170,12 @@ function lowerFirst(label: string): string {
 
 /**
  * An item's severity, told apart by shape as well as colour, so a reader who
- * cannot tell red from amber still can: critical is "!" in a filled circle,
- * warning "!" in a triangle. Its name is said in words to assistive technology.
+ * cannot tell red from amber still can: critical is "!" in a circle, warning
+ * "!" in a triangle, each in its status's text colour. Its name is said in
+ * words to assistive technology.
  */
 function SeverityMark({ severity }: { severity: AttentionSeverity }) {
+  const Icon = severity === "critical" ? AlertCircle : AlertTriangle;
   return (
     <span
       data-testid={`needs-attention-${severity}`}
@@ -161,16 +184,14 @@ function SeverityMark({ severity }: { severity: AttentionSeverity }) {
         ENTITY_LEADING_CLASS.default
       )}
     >
-      {severity === "critical" ? (
-        <span
-          aria-hidden="true"
-          className="flex size-5 items-center justify-center rounded-full bg-destructive-solid text-xs font-bold text-destructive-foreground"
-        >
-          !
-        </span>
-      ) : (
-        <AlertTriangle aria-hidden="true" className="size-5 text-warning" />
-      )}
+      <Icon
+        aria-hidden="true"
+        data-testid="needs-attention-mark"
+        className={cn(
+          "size-5",
+          severity === "critical" ? "text-danger-text" : "text-warning-text"
+        )}
+      />
       <span className="sr-only">{severityName(severity)}</span>
     </span>
   );

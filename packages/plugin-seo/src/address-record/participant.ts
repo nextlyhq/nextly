@@ -5,15 +5,17 @@
  * holds after the save.
  *
  * Two saves of one address never both commit: an address's row has a unique
- * key, and before reading, each call takes the lock rows of every path it
- * touches and every path above them, in one sorted order, so a range and an
- * address inside it meet on the range's lock row, and two saves in several
- * languages never wait on each other in a cycle. SQLite runs one writer at a
- * time, so it takes no locks.
+ * key, and before reading, each call takes the lock row of every page it
+ * moves, then those of every path it touches and every path above them, each
+ * set in one sorted order, so a range and an address inside it meet on the
+ * range's lock row, two saves in several languages never wait on each other
+ * in a cycle, and two writes to one page's addresses (a save and the
+ * catch-up at start) take turns. SQLite runs one writer at a time, so it
+ * takes no locks.
  *
  * @module address-record/participant
  */
-import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
   NextlyError,
@@ -25,51 +27,40 @@ import {
   type PublicAddressParticipant,
 } from "@nextlyhq/plugin-sdk";
 
-import { ADDRESS_RECORD_SLUG } from "./collection";
+import { redirectsSlug } from "../redirects/collection";
+import { movedRedirect } from "../redirects/moves";
+import { dropReplacedRedirect, putRedirect } from "../redirects/store";
+import { SEO_ADMIN_SLUG } from "../settings/contract";
 
-/** What a row of the record is. */
-type RowKind = "address" | "range" | "lock";
+import {
+  claimKey,
+  keysHolding,
+  pathsAbove,
+  recordSlug,
+  rowOf,
+  sha256,
+  within,
+  type RecordRow,
+  type RowKind,
+} from "./rows";
 
-/** A row of the record, read back. */
-interface RecordRow {
-  id: string;
-  kind: RowKind;
-  address: HeldAddress | null;
-  holder: AddressHolder | null;
-}
+// Read here by the outputs and the resolver, which ask the record who holds
+// an address; kept in `rows` beside the other readers' helpers.
+export { recordSlug, rowOf } from "./rows";
 
 type Transaction = ParticipantTransaction["transaction"];
 
 /** How many rows one read takes. */
 const READ_PAGE = 200;
 
-/** The stored claim key: the SHA-256 of its text, the same on every dialect. */
-function claimKey(kind: RowKind, locale: string, path: string): string {
-  return createHash("sha256")
-    .update(`${kind}:${locale}|${path}`, "utf8")
-    .digest("hex");
+/** The claim key of a page's own lock row. */
+function holderLockKey(holder: AddressHolder): string {
+  return sha256(`lock:holder|${holder.collection}:${holder.id}`);
 }
 
 /** The kind of row an address is kept as. */
 function kindOf(address: HeldAddress): RowKind {
   return address.range === true ? "range" : "address";
-}
-
-/** Every path above `path`, root first, the root itself included. */
-function pathsAbove(path: string): string[] {
-  if (path === "/") return [];
-  const segments = path.split("/").filter(segment => segment !== "");
-  const above = ["/"];
-  for (let at = 1; at < segments.length; at++) {
-    above.push(`/${segments.slice(0, at).join("/")}`);
-  }
-  return above;
-}
-
-/** Whether `path` is `range` or below it. */
-function within(path: string, range: string): boolean {
-  if (path === range) return true;
-  return path.startsWith(range === "/" ? "/" : `${range}/`);
 }
 
 /**
@@ -87,39 +78,6 @@ function overlaps(held: HeldAddress, asked: HeldAddress): boolean {
 
 function sameHolder(a: AddressHolder, b: AddressHolder): boolean {
   return a.collection === b.collection && a.id === b.id;
-}
-
-/** A stored row read back, every column checked rather than trusted. */
-function rowOf(entry: unknown): RecordRow {
-  const row = entry as Record<string, unknown>;
-  const text = (value: unknown) => (typeof value === "string" ? value : null);
-  const locale = text(row.locale);
-  const path = text(row.path);
-  const kind: RowKind =
-    row.kind === "address" || row.kind === "range" ? row.kind : "lock";
-  const collection = text(row.holderCollection);
-  const id = text(row.holderId);
-  const label = text(row.holderLabel);
-  return {
-    id: String(row.id),
-    kind,
-    address:
-      locale === null || path === null
-        ? null
-        : { locale, path, ...(kind === "range" ? { range: true } : {}) },
-    holder:
-      collection === null || id === null
-        ? null
-        : { collection, id, ...(label ? { label } : {}) },
-  };
-}
-
-/**
- * The record's slug as this site has it: the plugin's own, or the name the
- * site renamed it to with the plugin's `rename`.
- */
-function recordSlug(ctx: PluginContext): string {
-  return ctx.self.collections[ADDRESS_RECORD_SLUG] ?? ADDRESS_RECORD_SLUG;
 }
 
 /**
@@ -159,8 +117,8 @@ export function releaseOnCollectionDelete(ctx: PluginContext): void {
   });
 }
 
-/** The participant, bound to the SEO plugin's context. */
-export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
+/** Reading and locking the record's rows on a transaction. */
+function recordRows(ctx: PluginContext) {
   const slug = recordSlug(ctx);
   const collections = ctx.services.collections;
   const reads = ctx.services.ownCollections;
@@ -192,16 +150,15 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   }
 
   /**
-   * Hold the lock row of `path` in `locale` until the save ends: read for
-   * update where it exists, made where it does not (a save making it at the
+   * Hold the lock row `key` until the transaction ends: read for update where
+   * it exists, made with `fields` where it does not (a save making it at the
    * same moment waits on the key's index), and written, which is the lock.
    */
   async function holdLock(
     transaction: Transaction,
-    locale: string,
-    path: string
+    key: string,
+    fields: { locale: string; path: string }
   ): Promise<void> {
-    const key = claimKey("lock", locale, path);
     const byKey = { claimKey: { equals: key } };
     let [row] = await rowsWhere(transaction, byKey, "update");
     if (row === undefined) {
@@ -209,8 +166,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         await collections.createEntryInTransaction(transaction, slug, {
           claimKey: key,
           kind: "lock",
-          locale,
-          path,
+          ...fields,
         });
         return;
       } catch (error) {
@@ -219,7 +175,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       [row] = await rowsWhere(transaction, byKey, "update");
       if (row === undefined) {
         throw NextlyError.internal({
-          logContext: { reason: "address-lock-vanished", locale, path },
+          logContext: { reason: "address-lock-vanished", ...fields },
         });
       }
     }
@@ -227,6 +183,269 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       kind: "lock",
       _overwrite: true,
     });
+  }
+
+  /** Hold `holder`'s own lock row until the transaction ends. */
+  function holdHolderLock(
+    transaction: Transaction,
+    holder: AddressHolder
+  ): Promise<void> {
+    return holdLock(transaction, holderLockKey(holder), {
+      locale: "",
+      path: `${holder.collection}:${holder.id}`,
+    });
+  }
+
+  /**
+   * The addresses and ranges `holder` keeps, read for update, or with no row
+   * lock (`none`) where the page's own lock already keeps them from changing.
+   */
+  async function rowsOf(
+    transaction: Transaction,
+    holder: AddressHolder,
+    lock: "update" | "none" = "update"
+  ): Promise<RecordRow[]> {
+    return rowsWhere(
+      transaction,
+      {
+        and: [
+          { kind: { in: ["address", "range"] } },
+          { holderCollection: { equals: holder.collection } },
+          { holderId: { equals: holder.id } },
+        ],
+      },
+      lock
+    );
+  }
+
+  return { slug, rowsWhere, holdLock, holdHolderLock, rowsOf };
+}
+
+/**
+ * What the record says `holder` holds now, read on `transaction` with the
+ * page's own lock held until it ends: a save of the page waits for it, so
+ * what is read cannot change before the transaction's own writes.
+ *
+ * The rows themselves are read with no row lock. Every write to a page's rows
+ * takes the page's lock first, so none can change them meanwhile, and a lock
+ * on them here, before the path locks a move takes next, would invert the
+ * order a save of another page takes them in: path locks, then the rows.
+ */
+export async function heldNow(
+  ctx: PluginContext,
+  transaction: Transaction,
+  holder: AddressHolder
+): Promise<HeldAddress[]> {
+  const rows = recordRows(ctx);
+  if (ctx.dialect !== "sqlite") await rows.holdHolderLock(transaction, holder);
+  return (await rows.rowsOf(transaction, holder, "none")).flatMap(row =>
+    row.address === null ? [] : [row.address]
+  );
+}
+
+/**
+ * Who the record says holds the address `path` in `locale`, or in the site's
+ * default language where the route named none: the page holding it exactly,
+ * or holding a range it falls in, read by the rows' unique keys, so a page
+ * that still holds `path` in another language is never taken for its holder
+ * here. None where no page holds it, as before the record has caught up with
+ * a site's content.
+ */
+/**
+ * Who holds each of `paths` in `locale`, read for all of them at once while
+ * `work` runs: `addressHolders` asked about one of them in `locale` answers
+ * from this read, so a list of pages worked through one by one costs one read
+ * of the record rather than one a page. Any other address is read as before.
+ */
+export async function withAddressHolders<T>(
+  ctx: PluginContext,
+  locale: string,
+  paths: readonly string[],
+  work: () => Promise<T>
+): Promise<T> {
+  const keysByPath = new Map(
+    paths.map(path => [path, keysHolding(locale, path)])
+  );
+  const allKeys = [...new Set([...keysByPath.values()].flat())];
+  const holderByKey = new Map<string, AddressHolder>();
+  for (let at = 0; at < allKeys.length; at += READ_PAGE) {
+    const keys = allKeys.slice(at, at + READ_PAGE);
+    const { data } = await ctx.services.ownCollections.listEntries(
+      recordSlug(ctx),
+      {
+        where: { claimKey: { in: keys } },
+        pagination: { limit: keys.length, page: 1 },
+        depth: 0,
+      }
+    );
+    for (const entry of data as unknown[]) {
+      const holder = rowOf(entry).holder;
+      const claim = (entry as { claimKey?: unknown }).claimKey;
+      if (holder !== null && typeof claim === "string") {
+        holderByKey.set(claim, holder);
+      }
+    }
+  }
+  const known = new Map<string, AddressHolder[]>();
+  for (const [path, keys] of keysByPath) {
+    known.set(
+      `${locale}|${path}`,
+      keys.flatMap(claim => holderByKey.get(claim) ?? [])
+    );
+  }
+  return holdersKnown.run(known, work);
+}
+
+/** The holders a `withAddressHolders` read found, while its work runs. */
+const holdersKnown = new AsyncLocalStorage<Map<string, AddressHolder[]>>();
+
+export async function addressHolders(
+  ctx: PluginContext,
+  path: string,
+  locale: string | undefined
+): Promise<AddressHolder[]> {
+  const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
+  const known = holdersKnown.getStore()?.get(`${language}|${path}`);
+  if (known !== undefined) return known;
+  const keys = keysHolding(language, path);
+  const { data } = await ctx.services.ownCollections.listEntries(
+    recordSlug(ctx),
+    {
+      where: { claimKey: { in: keys } },
+      pagination: { limit: keys.length, page: 1 },
+      depth: 0,
+    }
+  );
+  return (data as unknown[]).flatMap(entry => rowOf(entry).holder ?? []);
+}
+
+/** What one page's addresses became in a recorded batch. */
+export interface AddressMove {
+  /** The addresses it held before and holds no more. */
+  released: readonly HeldAddress[];
+  /** Every address it holds now. */
+  holds: readonly HeldAddress[];
+}
+
+/**
+ * The event the record announces each page's addresses on, once a batch of
+ * saves it recorded has committed: every page, never a redirect. Never for
+ * a save that was undone, since the event waits for the save's transaction.
+ */
+export const ADDRESSES_MOVED: string = `${SEO_ADMIN_SLUG}.addresses-moved`;
+
+/** The payload `ADDRESSES_MOVED` carries. */
+export interface AddressesMoved {
+  moves: readonly AddressMove[];
+}
+
+/**
+ * Announce `moves` once the save that recorded them commits. Announcing
+ * never fails the save: whatever goes wrong only costs the announcement.
+ */
+function announceMoves(
+  ctx: PluginContext,
+  moves: readonly AddressMove[]
+): void {
+  if (moves.length === 0) return;
+  try {
+    const payload: AddressesMoved = { moves };
+    ctx.events.emit(ADDRESSES_MOVED, payload);
+  } catch (error) {
+    ctx.logger.warn("The SEO plugin could not announce moved addresses", {
+      error,
+    });
+  }
+}
+
+/** The participant, bound to the SEO plugin's context. */
+export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
+  const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
+  const collections = ctx.services.collections;
+  const redirects = redirectsSlug(ctx);
+  /** Whether `holder` is a redirect, holding its From address. */
+  const isRedirect = (holder: AddressHolder) => holder.collection === redirects;
+
+  /**
+   * Whether `held`, held by `holder`, keeps `asker` from holding `asked`.
+   *
+   * A page is kept off an address another page holds, and never off one a
+   * redirect holds: it replaces that redirect. A redirect is kept off an
+   * address a page holds, exactly or in a range above it, and off another
+   * redirect's same From address; a pattern above an exact address does not
+   * keep it off, since an exact redirect answers first. A pattern is kept off
+   * only by the same pattern, or by a page's range covering all of it: a page
+   * at an address inside a pattern is served, and the pattern redirects the
+   * rest.
+   */
+  function keepsOff(
+    holder: AddressHolder,
+    held: HeldAddress,
+    asker: AddressHolder,
+    asked: HeldAddress
+  ): boolean {
+    if (!isRedirect(asker)) return !isRedirect(holder) && overlaps(held, asked);
+    return asked.range === true
+      ? keepsPatternOff(holder, held, asked)
+      : !(isRedirect(holder) && held.range === true) && overlaps(held, asked);
+  }
+
+  /** Whether `held`, held by `holder`, keeps a pattern redirect off `asked`. */
+  function keepsPatternOff(
+    holder: AddressHolder,
+    held: HeldAddress,
+    asked: HeldAddress
+  ): boolean {
+    if (held.range !== true || held.locale !== asked.locale) return false;
+    if (held.path === asked.path) return true;
+    return !isRedirect(holder) && within(asked.path, held.path);
+  }
+
+  /**
+   * Leave a permanent redirect from each address `update`'s page let go of
+   * to the address it holds now in the same language, as a save of a moved
+   * page would want. None where the page holds nothing in that language now,
+   * or where another page holds the old address once every claim stands: the
+   * redirect's own claim is refused there, which is also why two pages
+   * swapping addresses in one batch make none. A
+   * redirect that cannot be saved fails the save, naming the address, so the
+   * page keeps its old one.
+   */
+  async function redirectReleased(
+    transaction: Transaction,
+    update: HeldAddressUpdate,
+    released: readonly HeldAddress[]
+  ): Promise<void> {
+    for (const old of released) {
+      const input = movedRedirect(old, update.holds);
+      if (input === undefined) continue;
+      let outcome: Awaited<ReturnType<typeof putRedirect>>;
+      try {
+        outcome = await putRedirect(ctx, transaction, input);
+      } catch (error) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: `The old address ${old.path} (${old.locale}) could not be kept as a redirect, so the address was not changed. Try again, or remove the redirects that point to it first.`,
+          cause: error instanceof Error ? error : undefined,
+          logContext: {
+            reason: "automatic-redirect-failed",
+            old,
+            input,
+            holder: update.holder,
+          },
+        });
+      }
+      // Refused only where another page serves the old address, which then
+      // needs no redirect, or where the address cannot be one.
+      if ("refused" in outcome && outcome.reason !== "held") {
+        ctx.logger.warn("A moved page's old address was given no redirect", {
+          old,
+          input,
+          holder: update.holder,
+          refused: outcome.refused,
+        });
+      }
+    }
   }
 
   /**
@@ -238,6 +457,15 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     batch: readonly HeldAddressUpdate[]
   ): Promise<void> {
     if (ctx.dialect === "sqlite") return;
+    // Each page's own lock first, every caller in the same order, so a write
+    // holding a page's lock never waits on one holding a path's for it.
+    const holders = new Map(
+      batch.map(update => [holderLockKey(update.holder), update.holder])
+    );
+    for (const key of [...holders.keys()].sort()) {
+      const holder = holders.get(key);
+      if (holder !== undefined) await holdHolderLock(transaction, holder);
+    }
     const keys = new Map<string, { locale: string; path: string }>();
     for (const update of batch) {
       for (const held of update.holds) {
@@ -249,7 +477,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     // Plain code-unit order, the same in every process, whatever its locale.
     for (const key of [...keys.keys()].sort()) {
       const at = keys.get(key);
-      if (at !== undefined) await holdLock(transaction, at.locale, at.path);
+      if (at !== undefined) {
+        await holdLock(transaction, claimKey("lock", at.locale, at.path), at);
+      }
     }
   }
 
@@ -263,15 +493,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     // The address itself, held exactly or as a range, and every range above
     // it, found through the unique claim key's index rather than a scan of
     // the language's addresses.
-    const keys = [
-      claimKey("address", asked.locale, asked.path),
-      ...[asked.path, ...pathsAbove(asked.path)].map(path =>
-        claimKey("range", asked.locale, path)
-      ),
-    ];
     const atOrAbove = await rowsWhere(
       transaction,
-      { claimKey: { in: keys } },
+      { claimKey: { in: keysHolding(asked.locale, asked.path) } },
       "share"
     );
     if (asked.range !== true) return atOrAbove;
@@ -292,26 +516,20 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     return [...atOrAbove, ...below];
   }
 
-  /** Delete the rows `holder` keeps that `holds` no longer has; answer the rest. */
+  /**
+   * Delete the rows `holder` keeps that `holds` no longer has; answer the
+   * keys of the rest, and the addresses let go.
+   */
   async function release(
     transaction: Transaction,
     update: HeldAddressUpdate
-  ): Promise<Set<string>> {
+  ): Promise<{ still: Set<string>; released: HeldAddress[] }> {
     const wanted = new Set(
       update.holds.map(h => claimKey(kindOf(h), h.locale, h.path))
     );
-    const rows = await rowsWhere(
-      transaction,
-      {
-        and: [
-          { kind: { in: ["address", "range"] } },
-          { holderCollection: { equals: update.holder.collection } },
-          { holderId: { equals: update.holder.id } },
-        ],
-      },
-      "update"
-    );
+    const rows = await rowsOf(transaction, update.holder);
     const still = new Set<string>();
+    const released: HeldAddress[] = [];
     for (const row of rows) {
       const key = row.address
         ? claimKey(row.kind, row.address.locale, row.address.path)
@@ -321,8 +539,22 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         continue;
       }
       await collections.deleteEntryInTransaction(transaction, slug, row.id);
+      if (row.address) released.push(row.address);
     }
-    return still;
+    return { still, released };
+  }
+
+  /** Claim every address `update` holds that `kept` does not already. */
+  async function claimNew(
+    transaction: Transaction,
+    update: HeldAddressUpdate,
+    kept: ReadonlySet<string> = new Set()
+  ): Promise<void> {
+    for (const held of update.holds) {
+      if (!kept.has(claimKey(kindOf(held), held.locale, held.path))) {
+        await claim(transaction, update, held);
+      }
+    }
   }
 
   /** Write `held` for `update.holder`, refused by the key where another holds it. */
@@ -332,6 +564,19 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     held: HeldAddress
   ): Promise<void> {
     const key = claimKey(kindOf(held), held.locale, held.path);
+    if (!isRedirect(update.holder)) {
+      // A published page taking a redirect's From address replaces the
+      // redirect: the page is meant to live there now.
+      const [taken] = await rowsWhere(
+        transaction,
+        { claimKey: { equals: key } },
+        "update"
+      );
+      if (taken?.holder && isRedirect(taken.holder)) {
+        await collections.deleteEntryInTransaction(transaction, slug, taken.id);
+        await dropReplacedRedirect(ctx, transaction, taken.holder.id);
+      }
+    }
     try {
       await collections.createEntryInTransaction(transaction, slug, {
         claimKey: key,
@@ -381,7 +626,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       const found = [...stored, ...coming].find(
         candidate =>
           !sameHolder(candidate.holder, asker) &&
-          overlaps(candidate.address, asked)
+          keepsOff(candidate.holder, candidate.address, asker, asked)
       );
       return found?.holder ?? null;
     },
@@ -390,18 +635,33 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       await holdLocks(transaction, batch);
       // Every release first, so an address passing between holders in one
       // batch is free by the time it is claimed.
-      const still = new Map<HeldAddressUpdate, Set<string>>();
+      const letGo = new Map<
+        HeldAddressUpdate,
+        { still: Set<string>; released: HeldAddress[] }
+      >();
       for (const update of batch) {
-        still.set(update, await release(transaction, update));
+        letGo.set(update, await release(transaction, update));
       }
       for (const update of batch) {
-        const kept = still.get(update) ?? new Set<string>();
-        for (const held of update.holds) {
-          if (!kept.has(claimKey(kindOf(held), held.locale, held.path))) {
-            await claim(transaction, update, held);
-          }
+        await claimNew(transaction, update, letGo.get(update)?.still);
+      }
+      // Once every claim stands, so a redirect never meets an address the
+      // batch is about to take.
+      for (const update of batch) {
+        const released = letGo.get(update)?.released ?? [];
+        if (released.length > 0 && !isRedirect(update.holder)) {
+          await redirectReleased(transaction, update, released);
         }
       }
+      announceMoves(
+        ctx,
+        batch
+          .filter(update => !isRedirect(update.holder))
+          .map(update => ({
+            released: letGo.get(update)?.released ?? [],
+            holds: update.holds,
+          }))
+      );
     },
   };
 }

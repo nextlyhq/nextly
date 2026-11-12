@@ -30,6 +30,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import {
   assertComparisonRequest,
@@ -39,7 +40,10 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { appLocalization } from "../../domains/i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsAsFirstPushed,
@@ -54,6 +58,8 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -76,7 +82,6 @@ import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks"
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
-import { withSessionCacheHeaders } from "../../routeHandler";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
@@ -122,7 +127,11 @@ import {
   requireParam,
   toNumber,
 } from "../helpers/validation";
-import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
+import {
+  restoreFieldsOf,
+  versionInputOf,
+  versionInputOfQuery,
+} from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readListOffset } from "./list-offset";
@@ -283,6 +292,8 @@ export const SINGLE_VERSION_METHODS: Record<
         request,
         // The version the restore was made from, judged as its update is.
         version: versionInputOf(body),
+        // The fields chosen; every field the version holds when none are.
+        fields: restoreFieldsOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -511,7 +522,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       );
       // The site's own Singles or the plugins', as conditions on the same
       // query: the plugins' list only narrows what the reader may read.
-      const slugLists = slugListsForOwner(owner, "singles", readable);
+      const slugLists = await slugListsForOwner(owner, "singles", readable);
 
       const result = await svc.registry.listSingles({
         source: p.source as "code" | "ui" | "built-in" | undefined,
@@ -1333,6 +1344,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               tableName,
             });
           }
+          // A field renamed onto a column that is already there is refused before anything
+          // changes. In this dialog such a change is never offered as a rename, only as the old
+          // column dropped beside a field kept on the column that is there, so it is found from
+          // the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: single.fields as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: layout.wasStored,
+              isLocalized: layout.isStored,
+              dialect: adapter.dialect,
+              builtBy: "collection",
+            },
+            { single: slug }
+          );
           // The dialog's answer on a translated field's rename, refused when it does not say,
           // before anything changes. This and the preflights below ask where the values are stored
           // (`layout.wasStored`/`isStored`), not whether the Single is translated: an untranslated
@@ -1368,6 +1396,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             renamed: companionRename,
             tableName: single.tableName,
             defaultLocale: appLocalization()?.defaultLocale ?? "en",
+            languageOrder: appLanguageOrder(),
             adapter,
             entity: slug,
             kind: "single",
@@ -1483,17 +1512,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // version the database did not persist.
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_singles",
-              {
-                fields: JSON.stringify(fields),
-                schema_hash: calculateSchemaHash(fields as FieldConfig[]),
-                migration_status: "applied",
-                localized: isLocalized,
-                schema_version: newSchemaVersion,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: slug }] }
+            // The row and the stored schema version in one transaction, so the
+            // version's count moves with the save it records (`writeRegistryRows`).
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_singles",
+                {
+                  fields: JSON.stringify(fields),
+                  schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+                  migration_status: "applied",
+                  localized: isLocalized,
+                  schema_version: newSchemaVersion,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: slug }] }
+              )
             );
             // Written past the registry service, so the cached registry row is cleared here.
             clearRegistryRowCache();

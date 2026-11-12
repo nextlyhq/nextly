@@ -15,6 +15,7 @@ import { ROUTES } from "@admin/constants/routes";
 // Prose names the kind through the shared table, so the toolbar spells each
 // kind as every other builder message does.
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "./builder-config";
+import { mayLeaveBuilder } from "./leave-builder";
 
 type Props = {
   config: BuilderConfig;
@@ -70,14 +71,7 @@ export function BuilderToolbar({
   // navigation guard — a click with unsaved fields would discard them
   // silently. Blocked with a confirm while dirty.
   const handleCrumbClick = (e: { preventDefault: () => void }) => {
-    if (
-      unsavedCount > 0 &&
-      !window.confirm(
-        `You have unsaved changes to this ${BUILDER_KIND_NOUN[config.kind]}. Leave and discard them?`
-      )
-    ) {
-      e.preventDefault();
-    }
+    if (!mayLeaveBuilder(unsavedCount, config.kind)) e.preventDefault();
   };
 
   return (

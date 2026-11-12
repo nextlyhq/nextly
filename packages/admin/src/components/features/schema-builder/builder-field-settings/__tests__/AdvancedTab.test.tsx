@@ -159,6 +159,20 @@ describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
     }
   });
 
+  it("disables Localized on a password field, reads it as OFF and says why", () => {
+    // A password is one secret for the entry, never translatable: the server refuses a field
+    // marked so, so the switch must not offer it. A legacy `localized: true` reads OFF too.
+    render(
+      <Controlled
+        initial={{ ...f, type: "password", advanced: { localized: true } }}
+      />
+    );
+    const localized = screen.getByRole("switch", { name: /^localized$/i });
+    expect(localized).toBeDisabled();
+    expect(localized).not.toBeChecked();
+    expect(screen.getByText(/the same in every language/i)).toBeInTheDocument();
+  });
+
   it("points the Localized help at the setting of the kind being edited", () => {
     // A Single and a field group carry the same Internationalization setting
     // a collection does, so the help names the one the person is editing.

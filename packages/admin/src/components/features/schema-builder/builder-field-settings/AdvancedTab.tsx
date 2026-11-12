@@ -4,9 +4,11 @@
 // driven by an `isInsideRepeatingAncestor` prop computed at the page
 // level via the helper in lib/builder/is-inside-repeating-ancestor.
 import { Label, Switch } from "@nextlyhq/ui";
-import { defaultLocalizedForType } from "nextly/config";
+import { neverTranslatable } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
+
+import { fieldLocalized } from "@admin/lib/builder/field-localized";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "../builder-config";
 import type { BuilderField } from "../types";
@@ -33,6 +35,10 @@ const NESTED_UNIQUE_TOOLTIP =
 
 // Says "field group", the name the person editing it knows: "component" is
 // only the code's name for the same thing.
+// Why a password field offers no Localized switch: the server refuses one marked translatable.
+const NEVER_LOCALIZED_TOOLTIP =
+  "A password is the same in every language, so it cannot be localized.";
+
 const FIELD_GROUP_LOCALIZED_TOOLTIP =
   "A field group's localization is set by the fields inside it, not by this switch — a field group reference holds no value of its own to localize. Enable Internationalization on the field group's own settings, then toggle Localized on the inner fields that need per-language values.";
 
@@ -53,7 +59,12 @@ export function AdvancedTab({
   // change nothing, which reads as the Apply button being broken. What the
   // author wants is localized CONTENT, and that lives in the component's own
   // fields — so the switch is disabled and says where to go instead.
-  const localizedDisabled = readOnly || isFieldGroupFieldType(field.type);
+  // A password, like a virtual field, is the same in every language: the server refuses one
+  // marked translatable, so the switch does not offer it either (the same predicate as the
+  // server's).
+  const neverLocalized = neverTranslatable({ type: field.type });
+  const localizedDisabled =
+    readOnly || isFieldGroupFieldType(field.type) || neverLocalized;
 
   return (
     <div className="space-y-4">
@@ -75,9 +86,11 @@ export function AdvancedTab({
         help={
           isFieldGroupFieldType(field.type)
             ? FIELD_GROUP_LOCALIZED_TOOLTIP
-            : // Names the kind being edited: a Single and a field group have
-              // the same Internationalization setting a collection has.
-              `Store a different value per language. Text fields localize by default; toggle to override. Requires the ${BUILDER_KIND_NOUN[kind]}'s Internationalization setting and a migration to create the translations table.`
+            : neverLocalized
+              ? NEVER_LOCALIZED_TOOLTIP
+              : // Names the kind being edited: a Single and a field group have
+                // the same Internationalization setting a collection has.
+                `Store a different value per language. Text fields localize by default; toggle to override. Requires the ${BUILDER_KIND_NOUN[kind]}'s Internationalization setting and a migration to create the translations table.`
         }
         // when the author hasn't set this explicitly, reflect the backend
         // smart default (text-like fields localize by default) so the switch shows
@@ -85,11 +98,7 @@ export function AdvancedTab({
         // reference always reads OFF: the switch is disabled above, and a
         // legacy save could still carry `localized: true` on the reference —
         // displaying it would present dead metadata as an active setting.
-        checked={
-          isFieldGroupFieldType(field.type)
-            ? false
-            : (adv.localized ?? defaultLocalizedForType(field.type))
-        }
+        checked={fieldLocalized(field)}
         disabled={localizedDisabled}
         onChange={v => setAdv({ localized: v })}
       />

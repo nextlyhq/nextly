@@ -18,6 +18,7 @@ import { defineCollection, text } from "nextly";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { lastCatchUp } from "../address-record/catch-up";
 import { seoPlugin } from "../plugin";
 import { buildSitemapUrls, type SitemapServices } from "../sitemap";
 
@@ -37,6 +38,8 @@ const pages = () =>
     // sitemap filters on (`{ status: { equals: "published" } }`).
     status: true,
     fields: [text({ name: "slug" }), text({ name: "title" })],
+    // The sitemap lists a page at the address its type declares.
+    publicAddress: "/pages/{slug}",
   });
 
 let current: TestNextly | undefined;
@@ -49,6 +52,9 @@ afterEach(async () => {
 async function fetchSitemap(
   host = "localhost"
 ): Promise<{ status: number; body: string; cacheControl: string | null }> {
+  // The address record's catch-up at start, finished: the sitemap answers
+  // as not ready until it is.
+  await lastCatchUp();
   const handlers = createDynamicHandlers();
   const res = await handlers.GET(
     new Request(`http://${host}/api/plugins/@nextlyhq/plugin-seo/sitemap.xml`),
@@ -88,7 +94,7 @@ describe("seo sitemap route (integration)", () => {
   it("declares a public GET /sitemap.xml route", () => {
     const route = seoPlugin({
       collections: ["pages"],
-    }).contributes?.routes?.[0];
+    }).contributes?.routes?.find(declared => declared.path === "/sitemap.xml");
     expect(route).toMatchObject({
       method: "GET",
       path: "/sitemap.xml",
@@ -207,6 +213,7 @@ describe("seo sitemap route (integration)", () => {
       defineCollection({
         slug: "notes",
         fields: [text({ name: "slug" }), text({ name: "title" })],
+        publicAddress: "/notes/{slug}",
       });
 
     current = await createTestNextly({
@@ -231,6 +238,7 @@ describe("seo sitemap route (integration)", () => {
         slug: "posts",
         status: true,
         fields: [text({ name: "slug" }), text({ name: "title" })],
+        publicAddress: "/posts/{slug}",
       });
 
     current = await createTestNextly({

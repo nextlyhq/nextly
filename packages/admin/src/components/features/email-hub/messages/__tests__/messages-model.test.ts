@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { PluginMetadata } from "@admin/types/branding";
 
 import {
   groupByOwner,
   isDeletable,
   matchesQuery,
+  ownerGroupOf,
   stateOf,
   type MessagesQuery,
 } from "../messages-model";
@@ -71,18 +73,21 @@ describe("stateOf", () => {
 
 describe("groupByOwner", () => {
   it("puts core first, then plugins by name, then the site's own", () => {
-    const groups = groupByOwner([
-      email({ slug: "s", owner: { kind: "site" } }),
-      email({
-        slug: "shop",
-        owner: { kind: "plugin", name: "shop", installed: true },
-      }),
-      email({ slug: "c", owner: { kind: "core" } }),
-      email({
-        slug: "accounts",
-        owner: { kind: "plugin", name: "accounts", installed: true },
-      }),
-    ]);
+    const groups = groupByOwner(
+      [
+        email({ slug: "s", owner: { kind: "site" } }),
+        email({
+          slug: "shop",
+          owner: { kind: "plugin", name: "shop", installed: true },
+        }),
+        email({ slug: "c", owner: { kind: "core" } }),
+        email({
+          slug: "accounts",
+          owner: { kind: "plugin", name: "accounts", installed: true },
+        }),
+      ],
+      undefined
+    );
     expect(groups.map(g => g.group.label)).toEqual([
       "Nextly",
       "accounts",
@@ -92,11 +97,55 @@ describe("groupByOwner", () => {
   });
 
   it("orders each group's emails by name", () => {
-    const [group] = groupByOwner([
-      email({ slug: "b", name: "Welcome", owner: { kind: "core" } }),
-      email({ slug: "a", name: "Password reset", owner: { kind: "core" } }),
-    ]);
+    const [group] = groupByOwner(
+      [
+        email({ slug: "b", name: "Welcome", owner: { kind: "core" } }),
+        email({ slug: "a", name: "Password reset", owner: { kind: "core" } }),
+      ],
+      undefined
+    );
     expect(group.rows.map(r => r.name)).toEqual(["Password reset", "Welcome"]);
+  });
+});
+
+describe("a plugin's group, named as the admin names the plugin", () => {
+  // Package names that sort the other way round from the names shown.
+  const plugins = [
+    {
+      name: "@acme/plugin-zeta-forms",
+      appearance: { label: "Forms" },
+    },
+    { name: "@acme/plugin-alpha-shop", appearance: { label: "Shop" } },
+  ] as PluginMetadata[];
+  const owned = (name: string, installed = true) =>
+    email({ slug: name, owner: { kind: "plugin", name, installed } });
+
+  it("labels the group with the plugin's display name and keeps its key", () => {
+    expect(
+      ownerGroupOf(owned("@acme/plugin-zeta-forms").owner, plugins)
+    ).toEqual({ key: "plugin:@acme/plugin-zeta-forms", label: "Forms" });
+  });
+
+  it("orders plugin groups by the name shown, not the package name", () => {
+    const groups = groupByOwner(
+      [owned("@acme/plugin-alpha-shop"), owned("@acme/plugin-zeta-forms")],
+      plugins
+    );
+    expect(groups.map(g => g.group.label)).toEqual(["Forms", "Shop"]);
+  });
+
+  it("keeps the package name for a plugin the admin no longer lists", () => {
+    expect(ownerGroupOf(owned("@acme/gone", false).owner, plugins).label).toBe(
+      "@acme/gone"
+    );
+  });
+
+  it("filters by the group key whatever the label", () => {
+    const record = owned("@acme/plugin-zeta-forms");
+    expect(
+      matchesQuery(record, { ...ANY, owner: "plugin:@acme/plugin-zeta-forms" })
+    ).toBe(true);
+    expect(matchesQuery(record, { ...ANY, owner: "plugin:Forms" })).toBe(false);
   });
 });
 

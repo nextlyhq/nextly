@@ -55,6 +55,7 @@ import {
 } from "../../domains/i18n/localization-source";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
+import type { FieldSources } from "../../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { errorEnvelopeFields } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
@@ -330,7 +331,7 @@ export class CollectionEntryService extends BaseService {
       hookExemptRead?: HookExemptRead;
     } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
       Parameters<CollectionQueryService["listEntries"]>[0],
-      "sort" | "offset" | "unknownSort" | "hiddenFields"
+      "sort" | "offset" | "unknownSort" | "hiddenFields" | "countUpTo"
     >
   ): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     return (
@@ -907,6 +908,18 @@ export class CollectionEntryService extends BaseService {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The fields this write restored, and the version each came from,
+       * recorded per field on the version it captures (see `restored-from`).
+       *
+       * @experimental
+       */
+      restoredFrom?: FieldSources;
+      /**
+       * Set when this write restores a version: held as the working draft, and
+       * refused where the document cannot hold one rather than written live.
+       */
+      requireHeldDraft?: boolean;
       /**
        * The caller's authenticated scope. For a scoped API-key REST write the
        * publish/unpublish transition gate judges the key's OWN grants.

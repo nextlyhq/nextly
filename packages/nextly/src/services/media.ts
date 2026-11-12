@@ -29,7 +29,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { count, desc, asc, inArray, sql } from "drizzle-orm";
+import { and, count, desc, asc, eq, inArray, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -283,6 +283,51 @@ export class MediaService extends BaseService {
       held += Number(row?.value ?? 0);
     }
     return held;
+  }
+
+  /**
+   * Whether anything uses the item `mediaId`: a document's field, by the usage
+   * record, or a record outside content that keeps it by its address (an
+   * avatar, a logo). The `unused` view's own condition, asked of one item, so
+   * the two cannot come to answer differently.
+   *
+   * In use whenever that cannot be known: before `nextly migrate` has made
+   * the usage table, and while the record is unbuilt for content written
+   * before it existed (or a rebuild starts or ends during the read). An id
+   * no item has also reads as in use, since there is nothing to free. A
+   * caller deleting what nothing uses therefore never deletes on a guess.
+   * Asked on the pool.
+   */
+  async isInUse(mediaId: string): Promise<boolean> {
+    const unused = await this.unusedSources();
+    if (unused === null) return true;
+    const { media } = this.tables;
+    // Loaded when it is asked, not with the service.
+    const [{ notPendingDelete, unusedItem }, { readWithinOneBuild }] =
+      await Promise.all([
+        import("../domains/media/media-library-query"),
+        import("../domains/media/usage/media-usage-store"),
+      ]);
+    // How many items with this id nothing uses: one when it is free.
+    const countUnused = async (): Promise<number> => {
+      const [row] = await this.db
+        .select({ value: count() })
+        .from(media)
+        .where(
+          and(
+            eq(media.id, mediaId),
+            notPendingDelete(media),
+            unusedItem(media, unused)
+          )
+        );
+      return Number(row?.value ?? 0);
+    };
+    const { value, recorded } = await readWithinOneBuild(
+      this.adapter,
+      countUnused
+    );
+    if (!recorded) return true;
+    return value === 0;
   }
 
   /**

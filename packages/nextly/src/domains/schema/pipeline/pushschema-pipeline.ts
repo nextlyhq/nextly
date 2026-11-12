@@ -71,6 +71,7 @@ import {
   desiredSchemaTableNames,
 } from "./desired-snapshot";
 import { diffSnapshots } from "./diff/diff";
+import { liveIndexesStandingInForDeclared } from "./diff/index-util";
 import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
@@ -140,6 +141,7 @@ import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
+import { assertSchemaLockHeld } from "./schema-lock";
 import {
   refuseSeveralReferencesForOne,
   refuseSwitchesWithRename,
@@ -1460,7 +1462,11 @@ export class PushSchemaPipeline {
           // of every managed table it did not rebuild.
           const stripped = stripKitDropsOfDeclaredIndexes(
             pushResult.sqlStatements,
-            desiredSnapshot
+            desiredSnapshot,
+            liveIndexesStandingInForDeclared(
+              desiredSnapshot.tables,
+              liveSnapshot.tables
+            )
           );
           // Likewise the declared checks and foreign keys, which the kit's
           // runtime tables do not carry on PostgreSQL and MySQL either.
@@ -1688,6 +1694,13 @@ export class PushSchemaPipeline {
         // would report a mismatch on every apply that had to put an index
         // back; the pre-created CREATEs WERE planned (add_table ops) and
         // executed, so they count.
+        //
+        // On PostgreSQL the commit is what lands the apply: refused, and the
+        // transaction undone, as a statement is, so a run that lost the schema
+        // lock while its last statement ran changes nothing. MySQL's DDL has
+        // committed as it ran, and SQLite runs without a transaction, so there
+        // a refusal here would report an apply that already landed.
+        if (dialect === "postgresql") await assertSchemaLockHeld();
         return (
           safe.length +
           preCreatedStatements +

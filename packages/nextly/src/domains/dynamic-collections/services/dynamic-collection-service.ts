@@ -23,6 +23,7 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
+import { appLanguageOrder } from "../../i18n/configured-locales";
 import type { LiveLocalization } from "../../i18n/localization-source";
 import {
   archiveFieldsLeavingTranslation,
@@ -63,6 +64,7 @@ import type {
   LegacyFieldResolution,
   LegacyResolutionsBundle,
 } from "../../schema/pipeline/prompt-dispatcher/browser";
+import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   columnsThatMayHoldNull,
   fieldProducesColumn,
@@ -311,6 +313,18 @@ export class DynamicCollectionService extends BaseService {
     return typeof source === "string"
       ? source
       : (source.current()?.defaultLocale ?? "en");
+  }
+
+  /**
+   * The site's languages in its order as they are now, from the same source as the default
+   * language; where this service was handed only a default, the site's registry order
+   * (`appLanguageOrder`), so a migration file it writes keeps what this site's readers saw.
+   */
+  private get languageOrder(): string[] | undefined {
+    const source = this.defaultLocaleSource;
+    return typeof source === "string"
+      ? appLanguageOrder()
+      : source.current()?.locales.map(locale => locale.code);
   }
 
   constructor(
@@ -1231,6 +1245,8 @@ export class DynamicCollectionService extends BaseService {
       tableName: args.tableName,
       dialect: this.adapter.dialect,
       defaultLocale: this.defaultLocale,
+      // The file another database replays keeps the value this one keeps (`copyLiveness`).
+      languageOrder: this.languageOrder,
       status: args.status,
       wasLocalized: args.wasLocalized,
       isLocalized: args.isLocalized,
@@ -1575,6 +1591,25 @@ export class DynamicCollectionService extends BaseService {
         oldUserFields,
         userDefinedFields
       );
+      // A field renamed onto a column that is already there is refused before anything here is
+      // written: the archive write just below is the first.
+      await refuseRenamedFieldOntoTakenColumn(
+        this.adapter,
+        {
+          previousFields: oldUserFields,
+          fields: userDefinedFields,
+          mainTable: collection.tableName,
+          // Where its translatable values are stored, before and after: per language when it is
+          // translated, or always under per-language storage.
+          wasLocalized: storesPerLanguage({
+            localized: collectionWasLocalized,
+          }),
+          isLocalized: storesPerLanguage({ localized: collectionIsLocalized }),
+          dialect: this.adapter.getCapabilities().dialect,
+          builtBy: "collection",
+        },
+        { collection: collectionName }
+      );
       // A field leaving or joining translation has preconditions of its own, asked before anything
       // here is written or altered.
       await archiveFieldsLeavingTranslation({
@@ -1582,6 +1617,7 @@ export class DynamicCollectionService extends BaseService {
         builtBy: "collection",
         tableName: collection.tableName,
         defaultLocale: this.defaultLocale,
+        languageOrder: this.languageOrder,
         adapter: this.adapter,
         entity: collectionName,
         kind: "collection",
@@ -1892,6 +1928,7 @@ export class DynamicCollectionService extends BaseService {
         builtBy: "collection",
         tableName: collection.tableName,
         defaultLocale: this.defaultLocale,
+        languageOrder: this.languageOrder,
         adapter: this.adapter,
         entity: collectionName,
         kind: "collection",

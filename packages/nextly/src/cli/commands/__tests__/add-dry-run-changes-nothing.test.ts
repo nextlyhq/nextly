@@ -1,8 +1,9 @@
 /**
  * `nextly add --dry-run`, run as a shell runs it, never starts the package
  * manager and leaves the project folder exactly as it was, ending with exit
- * 0. The package manager here is a stand-in on PATH that records its own
- * run in the project; the same command without the flag does start it.
+ * 0, though it plans to edit the config and the build. The package manager
+ * here is a stand-in on PATH that records its own run in the project; the
+ * same command without the flag does start it.
  */
 import {
   chmodSync,
@@ -45,6 +46,30 @@ describe("nextly add --dry-run", () => {
       // `pnpm.cmd` by cmd.exe, which finds only the PATHEXT extensions, so
       // the same stand-in runs on every platform.
       writeFileSync(join(cwd, "pnpm-lock.yaml"), "");
+      // A project with a config and a build, and the plugin already in its
+      // node_modules, so the dry run plans every edit the real run makes.
+      writeFileSync(
+        join(cwd, "nextly.config.ts"),
+        'import { defineConfig } from "nextly/config";\nexport default defineConfig({ collections: [] });\n'
+      );
+      writeFileSync(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { build: "nextly migrate && next build" } })
+      );
+      const plugin = join(cwd, "node_modules", "@acme", "p");
+      mkdirSync(plugin, { recursive: true });
+      writeFileSync(
+        join(plugin, "package.json"),
+        JSON.stringify({
+          name: "@acme/p",
+          type: "module",
+          exports: "./index.js",
+        })
+      );
+      writeFileSync(
+        join(plugin, "index.js"),
+        'export const acmePlugin = { name: "@acme/p", version: "1.0.0", nextly: "*" };\n'
+      );
       writeFileSync(
         join(bin, "pnpm-stand-in.cjs"),
         'require("node:fs").writeFileSync(require("node:path").join(process.cwd(), "pnpm-ran.txt"), process.argv.slice(2).join(" ") + "\\n");\n'
@@ -65,13 +90,20 @@ describe("nextly add --dry-run", () => {
       const dry = await runNextly(["add", "@acme/p", "--dry-run"], cwd, env);
       expect(dry.status, dry.stderr).toBe(0);
       expect(dry.stdout).toContain("Would run pnpm add @acme/p");
+      expect(dry.stdout).toContain("Would edit nextly.config.ts");
+      expect(dry.stdout).toContain("Would edit package.json");
       expect(dry.stdout).toContain("Dry run: nothing was changed.");
       expect(folderSnapshot(cwd)).toEqual(before);
 
-      const real = await runNextly(["add", "@acme/p"], cwd, env);
-      expect(real.status, real.stderr).toBe(0);
+      // A package the stand-in does not put in node_modules, so the real run
+      // starts the package manager and then stops, changing nothing else.
+      const real = await runNextly(["add", "@acme/q"], cwd, env);
       expect(readFileSync(join(cwd, "pnpm-ran.txt"), "utf8")).toBe(
-        "add @acme/p\n"
+        "add @acme/q\n"
+      );
+      expect(real.status).toBe(1);
+      expect(real.stderr + real.stdout).toContain(
+        "(PLUGIN_PACKAGE_NOT_INSTALLED)"
       );
     },
     NEXTLY_RUN_TIMEOUT * 2

@@ -198,4 +198,36 @@ describe("queueing a form's notifications", () => {
     );
     expect(logged(outage.logger)).not.toContain(TO);
   });
+
+  it("queues each email with its own files, and the marked ones for an email a filter added", async () => {
+    const queueWithTemplate = vi.fn(async () => ({
+      id: "queued-1",
+      state: "sent",
+    }));
+    const { done } = run(queueWithTemplate, [
+      {
+        ...notification,
+        notificationId: "team",
+        attachments: [{ mediaId: "cv" }],
+      },
+      {
+        ...notification,
+        notificationId: "security",
+        attachments: [{ mediaId: "photo" }],
+      },
+      { ...notification, notificationId: "visitor", attachments: [] },
+      { ...notification, notificationId: undefined },
+    ]);
+    await done;
+
+    const attached = queueWithTemplate.mock.calls.map(
+      call => (call[3] as { attachments?: unknown }).attachments
+    );
+    expect(attached).toEqual([
+      [{ mediaId: "cv" }],
+      [{ mediaId: "photo" }],
+      undefined,
+      [{ mediaId: "media-1" }],
+    ]);
+  });
 });

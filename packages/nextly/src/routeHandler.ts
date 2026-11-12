@@ -53,6 +53,7 @@ import {
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import { getDashboardDiagnostics } from "./api/dashboard-diagnostics";
 import { getDashboardGallery } from "./api/dashboard-gallery";
 import {
   getDashboardNewTypes,
@@ -80,6 +81,7 @@ import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
+import { getPluginPanelNumbers } from "./api/plugin-panel-numbers";
 import {
   listPreviewLinks,
   mintPreviewLink,
@@ -93,6 +95,7 @@ import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // hand-rolled `{ data: <payload> }` envelope.
 import {
   SKIP_DATE_FORMATTING_HEADER,
+  applySessionCacheHeaders,
   withSessionCacheHeaders,
   respondData,
   respondMutation,
@@ -135,6 +138,7 @@ import {
   SYSTEM_WRITE_POLICY,
   type RouteGrant,
 } from "./domains/auth/system-write-policy";
+import { recordIfServerError } from "./domains/health/server-errors";
 import {
   appLocalization,
   withCurrentLanguages,
@@ -215,6 +219,15 @@ import {
   getHandlerConfig,
 } from "./route-handler";
 import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
+import {
+  answerConditional,
+  markConditional,
+} from "./route-handler/metadata-etag";
+import {
+  bumpSchemaVersion,
+  servedSchemaVersion,
+} from "./route-handler/schema-version";
+import { handleStartupRequest } from "./route-handler/startup-request";
 import { handleWebhookRequest } from "./route-handler/webhook-dispatch";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
@@ -236,21 +249,10 @@ import {
 // Schema Version Header
 // ============================================================================
 
-// Global schema version counter for cross-flow notification.
-// Bumped from collection-dispatcher.ts:applySchemaChanges after a
-// successful pipeline apply (F8 PR 3 — was previously SchemaChangeService).
-// The admin UI reads X-Nextly-Schema-Version from response headers
-// and invalidates caches when the version increases.
-let globalSchemaVersion = 0;
-
-export function bumpSchemaVersion(): number {
-  globalSchemaVersion++;
-  return globalSchemaVersion;
-}
-
-function getSchemaVersionHeader(): number {
-  return globalSchemaVersion;
-}
+// The schema version this copy serves lives in `route-handler/schema-version`,
+// so the collection dispatcher marks a schema apply without loading this
+// module. Re-exported here for `nextly/runtime`.
+export { bumpSchemaVersion };
 
 // ============================================================================
 // Global API Date/Time Formatting
@@ -270,6 +272,34 @@ function getSchemaVersionHeader(): number {
  * whereas a path can be matched by a plugin route that happens to end in the
  * same segment and should keep its ordinary formatting.
  */
+
+/**
+ * The response marked private to its caller where the request was signed in
+ * (it carried a session cookie or an `Authorization` header) or the response
+ * signs one in (it sets a cookie): `private, no-store` and `Vary` on the
+ * credentials, through the one definition every private answer uses.
+ *
+ * At the boundary every verb passes, rather than per route, so a route added
+ * later, a plugin's route asking for `public` caching, or a refusal, cannot
+ * reach a signed-in caller as something a shared cache may keep and replay
+ * to the next person. A request with no credential is left as its route
+ * answered it: a visitor's public read may be cached.
+ *
+ * Rebuilt over copied headers, since a handler may return a response whose
+ * headers cannot be changed.
+ */
+function privateToSignedIn(req: Request, response: Response): Response {
+  if (carriesNoCredential(req) && !response.headers.has("set-cookie")) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  applySessionCacheHeaders(headers);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 /**
  * The response without the control headers a handler used to talk to this
@@ -502,6 +532,8 @@ async function handleDashboardRequest(
       return postDashboardNewType(req);
     case "getDashboardSetup":
       return getDashboardSetup(req);
+    case "getDashboardDiagnostics":
+      return getDashboardDiagnostics(req);
     case "putDashboardSetup":
       return putDashboardSetup(req);
     default:
@@ -814,6 +846,12 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // A document's events run the same document gate, which reads roles.
   "listEntryEvents",
   "listSingleEvents",
+  // Where a field group is used, and the field-group list's use counts, name
+  // only the collections and Singles the reader may read, by the read
+  // decision that reads roles: without them a role-admitted owner is left out
+  // and the field group looks used less, or not at all.
+  "listComponents",
+  "getComponentUsedBy",
 ]);
 
 /**
@@ -1843,7 +1881,9 @@ async function serveServiceRequest(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  const schemaVersion = getSchemaVersionHeader();
+  // Asked after the dispatch, so a schema apply this request made is the
+  // version its response carries.
+  const schemaVersion = await servedSchemaVersion();
   if (schemaVersion !== undefined) {
     headers["X-Nextly-Schema-Version"] = String(schemaVersion);
   }
@@ -1935,6 +1975,9 @@ async function serveServiceRequest(
     if (schemaVersion !== undefined) {
       response.headers.set("X-Nextly-Schema-Version", String(schemaVersion));
     }
+    // A metadata read's answer, tagged by its body at the boundary, which
+    // answers "unchanged" to a caller already holding it.
+    markConditional(service, method, response);
     return response;
   }
 
@@ -1946,10 +1989,13 @@ async function serveServiceRequest(
   if (result.meta !== undefined) {
     successBody.meta = result.meta;
   }
-  return new Response(JSON.stringify(successBody), {
+  const legacy = new Response(JSON.stringify(successBody), {
     status: result.status,
     headers,
   });
+  // As on the migrated path above.
+  markConditional(service, method, legacy);
+  return legacy;
 }
 
 // ============================================================================
@@ -1973,6 +2019,7 @@ const NO_WIDGETS: WidgetAudience = {
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
   readableCollections: new Set(),
+  readsUsers: false,
 };
 
 /**
@@ -2122,13 +2169,6 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
-  // Whether the widget preview page exists, from the same comparison that
-  // gates its read below, so the admin registers the page exactly when the
-  // read it draws from answers. Its own field rather than `devReload`: each
-  // says what the admin may do with it, and a later rule for one (a config
-  // switch, say) must not move the other.
-  workspace.widgetPreviews = isDevServerRuntime();
-
   // The site's languages for the admin (present only when i18n is enabled): the language list as
   // it is now, so a language added in Settings shows without a restart.
   const localization = appLocalization() ?? config?.localization;
@@ -2217,7 +2257,11 @@ async function buildAdminMeta(
   const widgets = publishableWidgets()
     .filter(widget => audience.declared.has(widget.id))
     .map(widget =>
-      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+      collectionDefaultForReader(
+        actionsForAudience(widget, audience),
+        readable,
+        audience.readsUsers
+      )
     );
   if (widgets.length > 0) {
     workspace.widgets = widgets;
@@ -2557,7 +2601,7 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
 // CRUD Handler Wrappers
 // ============================================================================
 
-async function handleGet(req: Request, params: string[]) {
+async function handleGet(req: Request, params: string[]): Promise<Response> {
   // Matched before the bare `admin-meta` branch, which would otherwise answer
   // for every path beneath it and serve the public payload from the
   // authenticated route's URL.
@@ -2565,6 +2609,15 @@ async function handleGet(req: Request, params: string[]) {
   // passes the REST limit first, as that function's own routes do.
   if (params[0] === "admin-meta" && params[1] === "workspace") {
     return withinBuiltInLimit(() => handleAdminMetaWorkspaceRequest(req));
+  }
+  // One plugin's panel numbers, for the signed-in reader: matched here for the
+  // same reason, before the public payload's branch.
+  if (
+    params.length === 2 &&
+    params[0] === "admin-meta" &&
+    params[1] === "plugin-panel-numbers"
+  ) {
+    return withinBuiltInLimit(() => getPluginPanelNumbers(req));
   }
   if (params[0] === "admin-meta") {
     return withinBuiltInLimit(() => handleAdminMetaRequest());
@@ -2862,6 +2915,9 @@ export function createDynamicHandlers(options?: {
       response,
       effectiveRequestId
     );
+    // Every verb's server error, counted toward System health's "errors in
+    // the last 24 hours"; once per request, however many boundaries it passed.
+    recordIfServerError(req, identifiedResponse.status);
     // Imported here rather than at module scope, matching how this file already
     // reaches the logger, so the route entry point keeps its import graph.
     const { getNextlyLogger: resolveLogger } = await import(
@@ -2891,27 +2947,48 @@ export function createDynamicHandlers(options?: {
       identifiedResponse,
       req
     );
-    const corsResponse = cors.applyHeaders(req, formattedResponse);
+    // Tagged once the body is final, after the formatting above, so the tag
+    // is of the bytes the caller receives.
+    const answered = await answerConditional(req, formattedResponse);
+    const corsResponse = cors.applyHeaders(
+      req,
+      privateToSignedIn(req, answered)
+    );
     return applySecurityHeaders(corsResponse);
   }
 
-  return {
-    GET: async (
-      req: Request,
-      ctx: { params: Promise<{ params?: string[] }> }
-    ) => {
-      const resolvedParams = await ctx.params;
-      const paramsList = resolvedParams.params || [];
+  const GET = async (
+    req: Request,
+    ctx: { params: Promise<{ params?: string[] }> }
+  ): Promise<Response> => {
+    const resolvedParams = await ctx.params;
+    const paramsList = resolvedParams.params || [];
+    // The admin's startup request: several of its own GETs answered at once,
+    // each sent through this whole GET (security, limits, its own route and
+    // checks, date formatting), exactly as the admin sending it would be.
+    if (paramsList.length === 1 && paramsList[0] === "startup") {
       return withSecurity(
         req,
         limitBeforeRouting(paramsList, "GET", true),
-        async () => {
-          if (isAuthRoute(paramsList))
-            return handleAuthRequest(req, paramsList, "GET");
-          return handleGet(req, paramsList);
-        }
+        () =>
+          handleStartupRequest(req, (sub, subParams) =>
+            GET(sub, { params: Promise.resolve({ params: subParams }) })
+          )
       );
-    },
+    }
+    return withSecurity(
+      req,
+      limitBeforeRouting(paramsList, "GET", true),
+      async () => {
+        if (isAuthRoute(paramsList))
+          return handleAuthRequest(req, paramsList, "GET");
+        return handleGet(req, paramsList);
+      }
+    );
+  };
+
+  return {
+    GET,
     POST: async (
       req: Request,
       ctx: { params: Promise<{ params?: string[] }> }
@@ -3096,6 +3173,10 @@ async function requestCallerFor(
   needsRoles: boolean
 ): Promise<RequestCaller | undefined> {
   if (!authorizedUser) return undefined;
+  // The role lookup reads the app's services, which a route signed-in alone
+  // has not started yet (its gate reads none): started first, as the
+  // dispatch would only later. Idempotent where a gate already started them.
+  if (needsRoles) await ensureServicesInitialized();
   const roles = needsRoles
     ? ((await resolveRoleSlugs(authorizedUser)) ?? [])
     : undefined;

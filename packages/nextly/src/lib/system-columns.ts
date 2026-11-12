@@ -713,6 +713,18 @@ export const DOCUMENT_VERSION_KEY = "_rev";
 export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
 
 /**
+ * The key a save names to say which of its values were restored from a
+ * version, and from which: `{ field: versionNo }`. Read at the write path's
+ * boundary and recorded on the version the save captures, never stored as a
+ * value of the document (see `domains/versions/restored-from`).
+ *
+ * Declared here, beside the other keys a write never stores.
+ *
+ * @experimental
+ */
+export const DOCUMENT_RESTORED_FROM_KEY = "_restoredFrom";
+
+/**
  * The columns a step of `nextly migrate` adds to existing tables, which no snapshot comparison
  * reports (see `addedByMigrateStep`).
  */

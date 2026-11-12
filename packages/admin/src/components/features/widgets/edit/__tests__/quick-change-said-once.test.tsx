@@ -5,7 +5,7 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@nextlyhq/ui";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MAX_QUERIES_PER_REQUEST } from "nextly/config";
@@ -191,11 +191,10 @@ describe("a quick setting's change, saved at rest", () => {
   it("reaches exactly one live region, the toast's polite one", async () => {
     renderGrid();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Styled" }));
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Styled",
-    });
-    await user.click(within(popover).getByRole("combobox", { name: "Accent" }));
+    // The card's header control, the one quick change a card offers.
+    await user.click(
+      await screen.findByRole("combobox", { name: "Accent for Styled" })
+    );
     await user.click(await screen.findByRole("option", { name: "Bold" }));
 
     const sentence = "Styled: Accent set to Bold.";
@@ -215,8 +214,8 @@ describe("a quick setting's change, saved at rest", () => {
 
 describe("a quick change to a card asked in a later request than the dashboard's first", () => {
   // Past `MAX_QUERIES_PER_REQUEST` the batch is split into requests that each answer at their
-  // own time. Each card answers a count; the last card's Collection names what it counts, so a
-  // new one asks for that card again, alone, with its new settings.
+  // own time. Each card answers a count; the last card's Scope is part of what it asks, so a new
+  // one asks for that card again, alone, with its new settings.
   const others = Array.from({ length: MAX_QUERIES_PER_REQUEST }, (_, i) => ({
     id: `core/n${String(i).padStart(2, "0")}`,
     title: `Count ${i}`,
@@ -230,7 +229,21 @@ describe("a quick change to a card asked in a later request than the dashboard's
     archetype: "custom",
     size: RESIZABLE,
     component: "core#SaidOnceBody",
-    settings: [{ name: "collection", type: "collection", label: "Collection" }],
+    settings: [
+      { name: "collection", type: "collection", label: "Collection" },
+      {
+        name: "scope",
+        type: "select",
+        label: "Scope",
+        quick: true,
+        defaultValue: "all",
+        options: [
+          { label: "All", value: "all" },
+          { label: "Mine", value: "mine" },
+          { label: "Team", value: "team" },
+        ],
+      },
+    ],
   };
   const source = (collection: string, label: string) => ({
     collection,
@@ -286,22 +299,15 @@ describe("a quick change to a card asked in a later request than the dashboard's
     renderGrid();
     const user = userEvent.setup();
     await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
-    // The card is titled by the collection it counts.
-    await user.click(await screen.findByRole("button", { name: "Posts" }));
-    const popover = await screen.findByRole("dialog", {
-      name: "Quick settings for Posts",
-    });
+    // The card's header control, named for the card it changes.
+    const scope = await screen.findByRole("combobox", { name: /^Scope for / });
     // The first request answered at 1 000 and is not asked again; the card's own request
     // answers again later.
     vi.setSystemTime(5_000);
-    await user.click(
-      within(popover).getByRole("combobox", { name: "Collection" })
-    );
-    await user.click(await screen.findByRole("option", { name: "Pages" }));
+    await user.click(scope);
+    await user.click(await screen.findByRole("option", { name: "Mine" }));
 
-    expect(
-      await screen.findByText(/Collection set to Pages\.$/)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Scope set to Mine\.$/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
   });
 });

@@ -13,10 +13,8 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import {
-  addressFingerprint,
-  heldPage,
-} from "../domains/public-addresses/held-listing";
+import { whenServicesRegistered } from "../di/service-access";
+import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
   firstHolder,
@@ -27,7 +25,10 @@ import {
   type HeldAddressUpdate,
   type ParticipantRunner,
 } from "../domains/public-addresses/participants";
-import type { PublicAddressType } from "../domains/public-addresses/public-address";
+import {
+  siteTypes,
+  type PublicAddressType,
+} from "../domains/public-addresses/public-address";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
@@ -102,8 +103,10 @@ export interface PluginPublicAddresses {
     transaction: PluginCollectionTransaction
   ): Promise<{ refused: RefusedAddressUpdate[] }>;
   /**
-   * One page of a type's documents, oldest first, each with every address it
-   * holds now; `next` is the cursor of the following page.
+   * One page of a type's documents, in id order, each with every address it
+   * holds now and when it was made; `next` is the cursor of the following
+   * page. Paged by id, so documents deleted or made meanwhile never move one
+   * not yet read behind the cursor.
    *
    * Waits for the boot to finish, so call it from work `init` or `onReady`
    * starts without awaiting: awaited inside them, which the boot waits for,
@@ -113,12 +116,24 @@ export interface PluginPublicAddresses {
     type: PublicAddressType;
     after?: string;
     limit?: number;
-  }): Promise<{ items: HeldAddressUpdate[]; next?: string }>;
+  }): Promise<{ items: HeldDocument[]; next?: string }>;
   /**
    * Changes when any address template, the language list or the fallback
    * settings do.
    */
   fingerprint(): Promise<string>;
+  /**
+   * The site's own content types, declared in code or made in the Schema
+   * Builder, never a plugin's own or the system's: what a catch-up walks
+   * with `held`. Waits for the boot to finish, as `held` does.
+   */
+  types(): Promise<PublicAddressType[]>;
+  /**
+   * The language an address is held in where a read names none: the site's
+   * default language as it is now, one chosen in Settings included, or
+   * `"en"` on a site with no languages.
+   */
+  defaultLanguage(): Promise<string>;
 }
 
 /** What the plugin context hands this surface. */
@@ -195,9 +210,30 @@ export function pluginPublicAddresses(
         })
       );
     },
-    held: args => heldPage(args),
-    fingerprint: () => addressFingerprint(),
+    held: async args => (await heldListing()).heldPage(args),
+    fingerprint: async () => (await heldListing()).addressFingerprint(),
+    types: async () => {
+      await whenServicesRegistered();
+      return (await siteTypes()).map(({ type }) => type);
+    },
+    defaultLanguage: async () =>
+      (await heldAddresses()).defaultAddressLanguage(),
   };
+}
+
+/**
+ * The listing of every document's held addresses, loaded when a participant
+ * first reads it rather than imported at the top: this module is part of
+ * every plugin's context, which most of the package imports, and the listing
+ * reaches the boot entry, which loads nearly all of it.
+ */
+function heldListing() {
+  return import("../domains/public-addresses/held-listing");
+}
+
+/** The addresses each document holds, loaded when first asked, as above. */
+function heldAddresses() {
+  return import("../domains/public-addresses/held-addresses");
 }
 
 /**

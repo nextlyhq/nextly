@@ -19,6 +19,7 @@ import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-mi
 import type { DashboardContribution } from "../domains/widgets/declaration/dashboard";
 import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import type { FieldGroupConfig } from "../field-groups/config/types";
+import type { EmailTemplateVariable } from "../schemas/email-templates/types";
 import type { SingleConfig } from "../singles/config/types";
 
 import type {
@@ -30,6 +31,7 @@ import type { ContentTypeScope } from "./content-type-scope";
 import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
 import type { PrincipalKindContribution } from "./principals/types";
+import type { PluginProxyHandler } from "./proxy/proxy-types";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
@@ -209,7 +211,14 @@ export interface PluginEmailTemplate {
   /** HTML body; supports `{{variable}}` interpolation. */
   htmlContent: string;
   plainTextContent?: string;
-  variables?: Array<{ name: string; description?: string; required?: boolean }>;
+  /**
+   * The variables the template uses, as core's own are declared; a plugin
+   * may leave the description out. `type`, `label`, `example` and `fields`
+   * are `@experimental` and shape only the editor's test data.
+   */
+  variables?: Array<
+    Omit<EmailTemplateVariable, "description"> & { description?: string }
+  >;
   /** Wrap with the shared layout; default true. */
   useLayout?: boolean;
   /**
@@ -922,6 +931,15 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * app mounts the Nextly handler (`/admin/api` in a scaffolded project).
    */
   routes?: PluginRoute[];
+  /**
+   * @experimental Handlers the site's Proxy asks about every request it
+   * matches, before the page is served (`createNextlyProxy` from
+   * `nextly/runtime`, called from the app's `proxy.ts`). A handler may answer
+   * the request, as a redirect does, set headers on whatever is served, or
+   * pass headers on to the page's render. Checked at startup: each needs a
+   * name, unique within the plugin, and a `handle` function.
+   */
+  proxy?: PluginProxyHandler[];
   /**
    * @public Admin UI contributions: menu, pages + settings and per-collection
    * view overrides. Dashboard widgets are declared under `dashboard`, not

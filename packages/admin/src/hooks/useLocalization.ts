@@ -12,6 +12,7 @@
 import { useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { isMultilingual } from "@admin/lib/localization";
 
 export interface LocaleMeta {
   code: string;
@@ -41,7 +42,9 @@ export function useLocalization(): UseLocalizationResult {
     const locales = cfg?.locales ?? [];
     const byCode = new Map(locales.map(l => [l.code, l]));
     return {
-      enabled: !!cfg && locales.length > 1,
+      // The shared rule, so the editor's switcher and the rail's Translations
+      // entry appear on exactly the same sites.
+      enabled: isMultilingual(cfg),
       locales,
       defaultLocale: cfg?.defaultLocale ?? "",
       fallback: cfg?.fallback ?? true,

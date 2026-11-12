@@ -7,7 +7,8 @@
  * twice, each for its own reason: the collections under two query keys (the
  * Create card's and the navigation's), the permission list by every caller that
  * mounted after the first answer, and the layout by the Get started card, which
- * asked again as it mounted after the grid's read had answered.
+ * asked again as it mounted after the grid's read had answered. A read the admin's
+ * startup request carries counts as asked by it.
  */
 import { expect } from "@playwright/test";
 
@@ -26,9 +27,16 @@ test("one dashboard load asks for each thing it reads once", async ({
     const url = new URL(request.url());
     // GETs by path AND query: the same path asked with other parameters is a
     // different question, not a second asking of this one.
-    if (request.method() === "GET" && url.pathname.startsWith("/admin/api/")) {
-      reads.push(`${url.pathname}${url.search}`);
+    if (request.method() !== "GET" || !url.pathname.startsWith("/admin/api/"))
+      return;
+    // The admin's startup request asks for several reads at once, each named by a `path`
+    // within the admin API: each counts as one asking of that read.
+    if (url.pathname === "/admin/api/startup") {
+      for (const path of url.searchParams.getAll("path"))
+        reads.push(`/admin/api${path}`);
+      return;
     }
+    reads.push(`${url.pathname}${url.search}`);
   });
 
   await gotoAdmin(page, "/");

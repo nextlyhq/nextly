@@ -666,35 +666,33 @@ describe("keepDeniedAtStored", () => {
   });
 });
 
-  it("storedProvenance marks the restored paths, with the values the row holds", async () => {
-    const { kept, permitted } = await keepDeniedAtStored({
-      update: { meta: { label: "edited" }, rows: [{ id: "b", n: 2 }] },
-      stored: {
-        meta: { label: "kept", rating: 2.5 },
-        rows: [
-          { id: "a", n: 2.5 },
-          { id: "b", n: 2 },
-        ],
-      },
-      applyRules: document => {
-        const meta = document.meta as Record<string, unknown> | undefined;
-        if (meta) delete meta.rating;
-        const rows = document.rows as
-          | Array<Record<string, unknown>>
-          | undefined;
-        if (rows) {
-          document.rows = rows.filter(row => row.id !== "a");
-        }
-        return Promise.resolve();
-      },
-    });
-    const { paths, values } = storedProvenance(kept, permitted);
-    expect(paths.has("meta.rating")).toBe(true);
-    expect(values.get("meta.rating")).toBe(2.5);
-    // The restored row among kept ones is its own path; the kept row is
-    // not marked — it is the caller's own.
-    expect(paths.has("rows[0]")).toBe(true);
-    expect(values.get("rows[0]")).toEqual({ id: "a", n: 2.5 });
-    expect(paths.has("rows[1]")).toBe(false);
-    expect(paths.has("meta.label")).toBe(false);
+it("storedProvenance marks the restored paths, with the values the row holds", async () => {
+  const { kept, permitted } = await keepDeniedAtStored({
+    update: { meta: { label: "edited" }, rows: [{ id: "b", n: 2 }] },
+    stored: {
+      meta: { label: "kept", rating: 2.5 },
+      rows: [
+        { id: "a", n: 2.5 },
+        { id: "b", n: 2 },
+      ],
+    },
+    applyRules: document => {
+      const meta = document.meta as Record<string, unknown> | undefined;
+      if (meta) delete meta.rating;
+      const rows = document.rows as Array<Record<string, unknown>> | undefined;
+      if (rows) {
+        document.rows = rows.filter(row => row.id !== "a");
+      }
+      return Promise.resolve();
+    },
   });
+  const { paths, values } = storedProvenance(kept, permitted);
+  expect(paths.has("meta.rating")).toBe(true);
+  expect(values.get("meta.rating")).toBe(2.5);
+  // The restored row among kept ones is its own path; the kept row is
+  // not marked — it is the caller's own.
+  expect(paths.has("rows[0]")).toBe(true);
+  expect(values.get("rows[0]")).toEqual({ id: "a", n: 2.5 });
+  expect(paths.has("rows[1]")).toBe(false);
+  expect(paths.has("meta.label")).toBe(false);
+});
