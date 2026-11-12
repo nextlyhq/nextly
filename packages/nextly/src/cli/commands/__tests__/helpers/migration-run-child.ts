@@ -87,12 +87,21 @@ async function pause(): Promise<void> {
   }
 }
 
+/**
+ * The statement as its file wrote it. A run holding the schema lock sends each statement behind
+ * comments of its own (the lock's claim, and what the statement was sent for), which are not part
+ * of the text a suite watches for.
+ */
+function asWritten(statement: string): string {
+  return statement.replace(/^\s*(?:\/\*[\s\S]*?\*\/\s*)*/, "");
+}
+
 /** Runs `statement` through `run`, stopping before or after it when it is the watched one. */
 async function watch<T>(statement: unknown, run: () => Promise<T>): Promise<T> {
   const isWatched =
     !paused &&
     typeof statement === "string" &&
-    statement.trimStart().startsWith(watched as string);
+    asWritten(statement).startsWith(watched as string);
   if (isWatched && when === "before") await pause();
   const result = await run();
   if (isWatched && when === "after") await pause();
