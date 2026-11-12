@@ -942,6 +942,26 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
+   * Read the boot's marks again, whole, into the copy it decides from. For a
+   * switch another instance recorded while this boot ran: that instance
+   * wrote the templates it kept before the switch, after this boot read the
+   * marks, so the copy is missing them as well as the switch. Updated in
+   * place, since the same copy becomes the engine state renders answer from.
+   */
+  private async reloadReconcileMarks(): Promise<void> {
+    const held = this.reconcileMarks;
+    if (held === null) return;
+    const fresh = await this.readEngineMarks();
+    if (fresh === null) {
+      // No meta table to read: nothing else can be recorded either.
+      held.values.set(LIQUID_ADOPTED_KEY, true);
+      return;
+    }
+    held.values = fresh.values;
+    held.readAt = fresh.readAt;
+  }
+
+  /**
    * Take `marks` as the instance's engine state: what renders answer from.
    * Null, for a database without the meta table, reads as nothing recorded.
    */
@@ -1061,7 +1081,7 @@ export class EmailTemplateService extends BaseService {
       // Liquid templates since; its scan decided, so this one stops. Read
       // from the table, never the boot's marks, which can't show that.
       if ((await this.liquidAdoptedInTable()) === true) {
-        this.reconcileMarks?.values.set(LIQUID_ADOPTED_KEY, true);
+        await this.reloadReconcileMarks();
         return;
       }
       if (
