@@ -52,6 +52,7 @@ import {
 } from "../bulk/route";
 import { restoreSingleSeo, singleDeclaration } from "../bulk/singles";
 import { productionAddressesOf, typedCanonical } from "../canonical";
+import { writeConnections } from "../connections/store";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import { pageTypeOf } from "../problems/page-types";
@@ -1420,6 +1421,22 @@ async function writeSingles(
 }
 
 /**
+ * Notes that an import was applied, which the Overview's checklist reads.
+ * The import is already committed, so a store that is missing (a run with
+ * no plugin settings) or refuses the note leaves it as it is.
+ */
+async function recordImport(ctx: PluginContext): Promise<void> {
+  if (ctx.settings === undefined) return;
+  try {
+    await writeConnections(ctx, { importedAt: new Date().toISOString() });
+  } catch (error) {
+    ctx.logger.warn("The SEO import ran, but could not be noted.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Write what `plan` worked out: in one transaction, in full or not at all,
  * each Single's page a step of its own before it, put back where a later
  * step is refused. Each write names the version its page was read at, so a
@@ -1464,5 +1481,6 @@ export async function applyImport(
   for (const page of plan.pages) {
     recheckSaved(ctx, setup.checks, page.type, page.id);
   }
+  await recordImport(ctx);
   return { pages: plan.pages.length, redirects: plan.redirects.length };
 }

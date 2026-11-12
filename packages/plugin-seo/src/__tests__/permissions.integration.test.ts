@@ -8,7 +8,7 @@
  *   Single's own read or update permission beside it, which core asks of
  *   every Single, and redirects, their imports and addresses not found with
  *   nothing else, since the plugin keeps those itself.
- * - The Pages and addresses screen, its list and its save of a page with
+ * - The Pages screen, its list and its save of a page with
  *   no entry's SEO, needs `manage-seo` alone: the plugin keeps that SEO.
  * - The check of what search engines received needs `check-seo`.
  * - Where page SEO has its own permission, a person who may edit a page but
@@ -770,10 +770,10 @@ describe.each(getConfiguredTestDialects())(
         (admin?.menu ?? []).map(item => [item.label, item.requiredPermission])
       );
       expect(gates).toEqual({
+        Overview: "manage-seo",
+        Pages: "manage-seo",
         Problems: undefined,
-        "Pages and addresses": "manage-seo",
         Redirects: "manage-seo",
-        "What search engines received": "check-seo",
         Settings: "manage-seo",
       });
     });

@@ -292,7 +292,7 @@ never disagree. A page is listed when all of these hold:
   page that held it keeps it, and the other is left out until it is given another.
 
 A [page built in code](#pages-built-in-code) is listed too, once its route calls
-`seoMetadata` and unless it is hidden from search, on the Pages and addresses screen or by its
+`seoMetadata` and unless it is hidden from search, on the Pages screen or by its
 route's own `noindex`: its head and its sitemap entry are then built from the same answer. A
 `noindex` an entry's route sets in code hides that page's head, but the sitemap lists entries
 from what is stored for them, so hide such an entry in its SEO tab too.
@@ -580,12 +580,56 @@ language's pages, with links to the others on theirs.
 Other code can read a page's links, and the languages left out for their code, with
 `pageLanguageLinks(ctx, input)`, and check a language with `hreflangOf(code)`.
 
+## The SEO section
+
+The plugin adds an **SEO** item to the admin's rail. It opens a section with its own menu:
+
+| Screen        | What it holds                                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Overview**  | Where the section opens: setup, the site's search health, how its pages stand, addresses not found, connections   |
+| **Pages**     | Every public address the site knows of, with Import and Inspect reached from it                                    |
+| **Problems**  | What affects how the site shows up in search, grouped by kind; its badge counts the errors and warnings you'd find |
+| **Redirects** | The redirects, and the addresses not found                                                                        |
+| **Settings**  | The rules for the whole site                                                                                      |
+
+Each screen shows its place in the admin's top bar, such as SEO / Pages / Import. The addresses of
+the screens the section replaced still work: an old **Bulk edit** link opens Pages, and an old
+**What search engines received** link opens Inspect for the page it named, or Pages.
+
+### The Overview
+
+The Overview is for whoever holds `manage-seo`; someone without it lands on the first screen of
+the section they may open. It has five parts, each read on its own, so one that can't be read says
+so in its place and the rest still show:
+
+- **Set up SEO**: a checklist worked out from what the plugin stores, never ticked by hand: the
+  site's name and production address, a title pattern of its own for each content type, a default
+  share image, the organization's name and logo, bringing in old SEO values (listed only where a
+  field group other than the plugin's own holds some, and done once an import is applied), and
+  Search Console connected. Each item not done links to where it is done. **Hide** keeps the
+  checklist hidden for everyone until someone chooses **Show setup**.
+- **Search health**: the number of errors, warnings and notices on the problem list, each linking
+  to Problems narrowed to that severity, with a verdict: **Good** while there is no error or
+  warning, **Should improve** otherwise.
+- **Pages**: the number of public pages, and of those, how many are hidden from search and, of the
+  rest, how many have both their title and description set for the page (typed for it, or given
+  by its route's code), both worked out (from a template, a pattern, the page's content or the
+  site's defaults), or one of each. The groups add up to the total, and are counted from the same
+  list Pages shows.
+- **Not found, last 7 days**: the most recent addresses not found, each with **Redirect**, which
+  opens a new redirect from that address, its To the closest live page where there is one.
+- **Connections**: Search Console, IndexNow and the redirects running on the site, each connected,
+  not connected or failing, linked to where it is set up.
+
+The first time someone who may change the settings opens the section, the three questions below
+come first, and their last step leads to the Overview.
+
 ## The SEO settings
 
-The plugin adds an **SEO** item to the admin's rail. Its **Settings** page holds the rules for the
-whole site; a page's own values always win over them.
+The section's **Settings** page holds the rules for the whole site; a page's own values always win
+over them.
 
-The first time someone opens it, three short questions come first: the site's name and production
+The first time someone opens the section, three short questions come first: the site's name and production
 address, what kind of site it is and what AI tools may do, and a logo with a default share image.
 Each answer is saved as they move on, and closing the questions part-way keeps what was answered,
 with a line on the page to finish later. Every answer stays editable on the tabs:
@@ -1218,6 +1262,15 @@ it is published in and at its address there, as its head would be served, for:
 - structured data missing a detail its type needs;
 - a language the site's language links leave out, because search engines don't accept its code.
 
+Each kind of problem has one severity. **Errors** keep the site, a content type or a page out of
+search, or keep what was set from reaching it: no production address, a content type with no
+public address, redirects saved but not served, a page with no title, and a canonical that names
+another address. **Notices** are worth a look with nothing wrong in what is served: a title or
+description longer than Google shows, and images with no alt text. Everything else is a
+**warning**. A problem is counted once for each page a check fails on, however many times it fails
+there, and once for a check of the whole site, however many things it names, on Problems and on
+the Overview alike.
+
 A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
 checked only for broken links and alt text. The site as a
 whole is checked for a missing production address, a collection with no public address, a
@@ -1231,7 +1284,8 @@ than one hop is listed only for someone holding `manage-seo`, who may see the re
 ### On the dashboard
 
 The **SEO issues** card draws the list by kind, one bar for each kind of problem, and the
-**Needs attention** card has one **SEO problems** line counting the whole list, linked to it. Both
+**Needs attention** card has one **SEO problems** line counting the errors and warnings on the
+list, linked to it, the same number the Problems item in the SEO menu shows. Both
 read the list the person looking may read, from the same kept results, so their numbers are the
 list's. The card is offered to someone who may read every collection the plugin extends, the line
 to someone who may read one of them. A dashboard card can't ask for `manage-seo`, so neither counts
@@ -1270,7 +1324,7 @@ every address, so a missing one can't be told from the record alone.
 
 ## What search engines received
 
-The **What search engines received** screen, under SEO in the admin, fetches one of the
+**Inspect**, reached from Pages, fetches one of the
 site's pages as Googlebot, LinkedIn, X and Slack would, and shows what each received beside
 what Nextly holds for the page: its title, description, share image, official address
 (canonical) and whether it is listed in search. A value that differs is numbered in the
@@ -1281,8 +1335,7 @@ Where LinkedIn received something different, the explanation links its Post Insp
 which refreshes the card LinkedIn keeps for about a week.
 
 Open it from a page's SEO tab, which names the page at the address its language serves it at
-(with the language in it, on a site that puts the language in every address), or from the menu,
-where it checks the site's first listed page. Any address on the site can be typed in. What Nextly holds is the head the plugin
+(with the language in it, on a site that puts the language in every address), or from Pages. Any address on the site can be typed in. What Nextly holds is the head the plugin
 answers for the published page at that address, shown only to someone who may read that
 page's content type. Running a check, and the screen itself, need `check-seo`, since a check has
 the server fetch the site's pages.
@@ -1313,7 +1366,7 @@ With no production address set, the screen asks for one and checks nothing.
 
 ## Bulk edit and import
 
-The **Bulk edit** screen, under SEO in the admin, shows the title and description of every page
+Pages' **Import** screen holds the bulk editor beside the import. It shows the title and description of every page
 of one content type in one table. Each Single SEO is added to is a type of its own, with its one
 page. A cell left empty shows, in grey, what the page uses automatically: what its route last set
 in code, else the type's title pattern or its own content; typing in it sets the page's own.
@@ -1375,8 +1428,8 @@ The plugin declares its own permissions, which the role screen files under **SEO
 | `edit-seo-<type>` | Changing the SEO of one content type's pages, such as `edit-seo-posts`, where `pagePermissions` is on                                                                                                                                                                                        |
 
 Each is asked by the server on every request, whatever the admin shows: someone without it is
-refused and given nothing of what it guards. The admin hides the Pages and addresses, Settings, Redirects and What search
-engines received entries from someone without the screen's permission.
+refused and given nothing of what it guards. The admin hides the Overview, Pages, Settings and
+Redirects entries from someone without `manage-seo`, and Inspect asks `check-seo`.
 
 A page's SEO is part of the page. By default whoever may edit a page changes its SEO, and an SEO
 change is saved like any other change to it: held as a draft where the type has drafts, and served,
@@ -1410,8 +1463,7 @@ contents.
 ## Pages built in code
 
 A page a route renders from its own code, such as `/pricing` in `app/pricing/page.tsx`, has
-no entry to hold its SEO. Its SEO is set by address instead, on the **Pages and addresses**
-screen, under SEO in the admin. The screen lists every public address the site knows of:
+no entry to hold its SEO. Its SEO is set by address instead, on **SEO › Pages** in the admin. The screen lists every public address the site knows of:
 each entry's, each route with no variable part (`/pricing`), and each address a route with
 one declares through `generateStaticParams` (`/integrations/wordpress`). Choose **Edit SEO**
 on a page built in code to set its title, description, visibility and share image. The

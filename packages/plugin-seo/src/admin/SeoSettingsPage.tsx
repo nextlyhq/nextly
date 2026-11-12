@@ -7,6 +7,7 @@
 import {
   apiErrorMessage,
   Button,
+  navigateTo,
   toastMutationResult,
   usePluginClientConfig,
   usePluginRoute,
@@ -15,6 +16,7 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useMemo, useRef, useState, type JSX } from "react";
 
+import { OVERVIEW_PAGE_HREF } from "../overview/contract";
 import {
   AI_CRAWLER_CHOICES,
   CONTENT_TYPES_ROUTE_PATH,
@@ -493,6 +495,10 @@ function SettingsScreen({
           close={landOn => {
             setSetupOpen(false);
             if (landOn !== undefined) choose(landOn);
+          }}
+          finish={() => {
+            setSetupOpen(false);
+            navigateTo(OVERVIEW_PAGE_HREF);
           }}
         />
       ) : null}

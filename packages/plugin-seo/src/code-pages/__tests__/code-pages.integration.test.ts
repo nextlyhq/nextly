@@ -31,7 +31,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { seoPlugin } from "../../plugin";
-import type { SiteAddress } from "../contract";
+import { coverageGroupOf, coverageOf, type SiteAddress } from "../contract";
 import { seoMetadata, seoStructuredData } from "../metadata";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
@@ -202,7 +202,12 @@ describe.each(getConfiguredTestDialects())(
             labels: { singular: "Page", plural: "Pages" },
             status: true,
             access: { read: () => true },
-            fields: [text({ name: "title" }), text({ name: "slug" })],
+            // An excerpt, which a page's description is worked out from.
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              text({ name: "excerpt" }),
+            ],
             publicAddress: "/{slug}",
           }),
         ],
@@ -335,6 +340,105 @@ describe.each(getConfiguredTestDialects())(
       expect(types).toContain("AboutPage");
       expect(types).toContain("FAQPage");
       expect(text).toContain("Who are we?");
+    });
+
+    it("says where each page's title and description come from, grouped as the Overview counts them", async () => {
+      const t = await boot();
+      const owner = await personWith(t, "owner", "all");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteName: "Acme",
+          description: "Acme makes things.",
+        },
+      });
+      const entry = (slug: string, data: Record<string, unknown>) =>
+        t.nextly.create({
+          collection: PAGES,
+          data: { title: slug, slug, status: "published", ...data },
+        });
+      // Both typed for the page.
+      await entry("typed", {
+        seo: { metaTitle: "Typed", metaDescription: "Typed for it." },
+      });
+      // A typed title, and a description from the page's content.
+      await entry("half", {
+        seo: { metaTitle: "Half" },
+        excerpt: "From its content.",
+      });
+      // Nothing typed: the pattern's title, and the content's description.
+      await entry("excerpt", { excerpt: "Only an excerpt." });
+      // Hidden from search, whatever it has.
+      await entry("secret", {
+        seo: { metaTitle: "Secret", metaDescription: "Hidden.", noindex: true },
+      });
+      // Both from the route's code.
+      await seoMetadata("/contact", {
+        metadata: { title: "Contact us", description: "Write to us." },
+      });
+      // A typed title over the code's description.
+      await seoMetadata("/pricing", {
+        metadata: { description: "Plans, in code." },
+      });
+      expect(
+        await save(owner, typed("/pricing", { title: "Plans and prices" }))
+      ).toBe(200);
+
+      const { items } = await addressesFor(owner);
+      const byPath = Object.fromEntries(
+        (items ?? []).map(item => [item.path, item])
+      );
+      expect(byPath["/typed"]?.sources).toEqual({
+        title: "page",
+        description: "page",
+      });
+      expect(byPath["/half"]?.sources).toEqual({
+        title: "page",
+        description: "content",
+      });
+      expect(byPath["/about"]?.sources).toEqual({
+        title: "pattern",
+        description: "site",
+      });
+      expect(byPath["/contact"]?.sources).toEqual({
+        title: "code",
+        description: "code",
+      });
+      expect(byPath["/pricing"]?.sources).toEqual({
+        title: "page",
+        description: "code",
+      });
+      expect(
+        Object.fromEntries(
+          (items ?? []).map(item => [item.path, coverageGroupOf(item)])
+        )
+      ).toEqual({
+        "/about": "bothWorkedOut",
+        "/contact": "bothSet",
+        "/excerpt": "bothWorkedOut",
+        "/half": "oneOfEach",
+        "/integrations/webflow": "bothWorkedOut",
+        "/integrations/wordpress": "bothWorkedOut",
+        "/pricing": "bothSet",
+        "/secret": "hidden",
+        "/thank-you": "bothWorkedOut",
+        "/typed": "bothSet",
+      });
+      const coverage = coverageOf(items ?? []);
+      expect(coverage).toEqual({
+        total: 10,
+        hidden: 1,
+        bothSet: 3,
+        bothWorkedOut: 5,
+        oneOfEach: 1,
+      });
+      expect(
+        coverage.hidden +
+          coverage.bothSet +
+          coverage.bothWorkedOut +
+          coverage.oneOfEach
+      ).toBe(coverage.total);
     });
 
     it("titles a page with nothing set by the site's pattern and the page's name", async () => {

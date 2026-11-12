@@ -91,6 +91,25 @@ export interface CodePageSeo {
   siteName?: string;
 }
 
+/**
+ * Which level of the published order gave a page's title or description:
+ * typed for the page, supplied by its route's code, or worked out from its
+ * template, its content type's pattern, its content or the site's defaults.
+ */
+export type ValueSource =
+  | "page"
+  | "code"
+  | "template"
+  | "pattern"
+  | "content"
+  | "site";
+
+/** Where a page's title and description come from, where it has them. */
+export interface ValueSources {
+  title?: ValueSource;
+  description?: ValueSource;
+}
+
 /** One public address, as the screen lists it. */
 export interface SiteAddress {
   /** The address, from the site's root. */
@@ -105,6 +124,8 @@ export interface SiteAddress {
   title?: string;
   /** The page's official address, where it has one. */
   canonical?: string;
+  /** Where its served title and description come from. */
+  sources: ValueSources;
   /** The entry the address is, for an address that is one. */
   entry?: {
     kind: "collection" | "single";
@@ -127,4 +148,59 @@ export interface CodePageSeoInput {
   description: string;
   hidden: boolean;
   image?: string | null;
+}
+
+/**
+ * How the site's public pages stand, each page counted in exactly one of
+ * `hidden`, `bothSet`, `bothWorkedOut` and `oneOfEach`, so the four add up to
+ * `total`:
+ *
+ * - `hidden`: kept out of search, on its own or with its whole type;
+ * - of the rest, by where the title and description they are served come
+ *   from: `bothSet` where both are set for the page (typed for it, or
+ *   supplied by its route's code), `bothWorkedOut` where neither is (each
+ *   worked out from a template, a pattern, the content or the site's
+ *   defaults, or missing), and `oneOfEach` otherwise.
+ */
+export interface PageCoverage {
+  total: number;
+  hidden: number;
+  bothSet: number;
+  bothWorkedOut: number;
+  oneOfEach: number;
+}
+
+/** The levels that set a value for the page itself. */
+const SET_FOR_PAGE: ReadonlySet<ValueSource | undefined> = new Set([
+  "page",
+  "code",
+]);
+
+/** Which coverage group one listed address falls in. */
+export function coverageGroupOf(
+  address: Pick<SiteAddress, "standing" | "sources">
+): Exclude<keyof PageCoverage, "total"> {
+  if (address.standing === "hidden" || address.standing === "type-hidden") {
+    return "hidden";
+  }
+  const title = SET_FOR_PAGE.has(address.sources.title);
+  const description = SET_FOR_PAGE.has(address.sources.description);
+  if (title && description) return "bothSet";
+  if (!title && !description) return "bothWorkedOut";
+  return "oneOfEach";
+}
+
+/** The coverage of the addresses the Pages screen lists. */
+export function coverageOf(
+  addresses: readonly Pick<SiteAddress, "standing" | "sources">[]
+): PageCoverage {
+  const coverage: PageCoverage = {
+    total: addresses.length,
+    hidden: 0,
+    bothSet: 0,
+    bothWorkedOut: 0,
+    oneOfEach: 0,
+  };
+  for (const address of addresses) coverage[coverageGroupOf(address)] += 1;
+  return coverage;
 }
