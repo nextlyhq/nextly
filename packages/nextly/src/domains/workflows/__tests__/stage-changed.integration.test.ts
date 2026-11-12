@@ -25,8 +25,14 @@ import {
 import { webhookTables } from "../../../schemas/webhooks";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { DeliverTransport } from "../../webhooks/deliver";
-import { runWebhookDrain } from "../../webhooks/drain-runner";
-import { WebhookEndpointRegistry } from "../../webhooks/endpoint-registry";
+import {
+  runWebhookDrain,
+  type WebhookDrainDatabase,
+} from "../../webhooks/drain-runner";
+import {
+  WebhookEndpointRegistry,
+  type WebhookEndpointReader,
+} from "../../webhooks/endpoint-registry";
 import { refreshEndpointPresence } from "../../webhooks/recording-activation";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -282,9 +288,12 @@ async function delivered(): Promise<Record<string, unknown>[]> {
     bodies.push(JSON.parse(options.body) as Record<string, unknown>);
     return Promise.resolve(new Response("ok", { status: 200 }));
   };
+  // The drain and the registry read the adapter through narrower surfaces of their own, which
+  // the test harness's adapter type does not spell out; the container hands them the same object.
+  const raw: unknown = app().adapter;
   await runWebhookDrain(
-    app().adapter,
-    new WebhookEndpointRegistry(app().adapter),
+    raw as WebhookDrainDatabase,
+    new WebhookEndpointRegistry(raw as WebhookEndpointReader),
     {
       transport,
       decryptSecret: ciphertext => ciphertext,
