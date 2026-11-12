@@ -10,6 +10,8 @@
  *
  * @module plugins/plugin-panel
  */
+import type { Logger } from "../shared/types";
+
 import type {
   PluginItemCount,
   PluginMenuItem,
@@ -21,7 +23,10 @@ import type { PluginDefinition } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
 import { renamedSlug } from "./served-collection-slug";
 
-/** Something a plugin's panel declares that the admin is not sent. */
+/**
+ * Something a plugin's panel declares that the admin is not sent, or that it
+ * is sent but can never draw.
+ */
 export interface PluginPanelProblem {
   readonly kind:
     | "panel-item-unregistered-page"
@@ -29,6 +34,7 @@ export interface PluginPanelProblem {
     | "panel-group-duplicate"
     | "panel-count-unowned-collection"
     | "panel-count-undeclared-attention"
+    | "panel-count-attention-never-shown"
     | "panel-count-malformed"
     | "panel-item-count-and-badge"
     | "panel-child-panel-fields";
@@ -253,10 +259,46 @@ function resolvedCount(
       });
       return undefined;
     }
+    if (readsOnlyHiddenCollections(plugin, attention)) {
+      problems.push({
+        kind: "panel-count-attention-never-shown",
+        subject: label,
+        declared: attention,
+      });
+    }
     return { attention };
   }
   problems.push({ kind: "panel-count-malformed", subject: label });
   return undefined;
+}
+
+/**
+ * Whether the plugin's attention item `id` is gated on its collections and
+ * every one is one of the plugin's own hidden from the navigation. Needs your
+ * attention shows an item gated on collections only to a reader of one of
+ * them as the dashboard lists them, and the dashboard leaves out a collection
+ * hidden from the navigation, so such an item is shown to nobody and the
+ * number read from it is always 0.
+ */
+function readsOnlyHiddenCollections(
+  plugin: PluginDefinition,
+  id: string
+): boolean {
+  const item = (plugin.contributes?.dashboard?.attention ?? []).find(
+    candidate => candidate.id === id
+  );
+  const gated = item?.collections ?? [];
+  if (gated.length === 0) return false;
+  const hidden = new Set(
+    [...(plugin.contributes?.collections ?? []), ...(plugin.collections ?? [])]
+      .filter(
+        collection =>
+          collection.admin?.hidden === true ||
+          (collection as { internal?: unknown }).internal === true
+      )
+      .map(collection => collection.slug)
+  );
+  return gated.every(slug => hidden.has(slug));
 }
 
 /** The ids of the plugin's own dashboard attention items. */
@@ -273,11 +315,12 @@ export interface PluginPanelWarning {
 
 /**
  * What a development start says about the plugins' panels, and nothing
- * anywhere else: everything it reports is already left out of the admin in
- * every environment, so a production log would gain a line nobody there can
- * act on. Disabled plugins are skipped: they draw no menu items.
+ * anywhere else: everything it reports is already left out of the admin, or
+ * can never draw there, in every environment, so a production log would gain
+ * a line nobody there can act on. Disabled plugins are skipped: they draw no
+ * menu items.
  */
-export function pluginPanelWarnings(
+function pluginPanelWarnings(
   plugins: readonly PluginDefinition[],
   nodeEnv: string | undefined
 ): PluginPanelWarning[] {
@@ -290,6 +333,24 @@ export function pluginPanelWarnings(
       message: `Plugin "${plugin.name}": ${problemSentence(plugin, problem)}`,
     }));
   });
+}
+
+/**
+ * Writes the development start's report about the plugins' panels to
+ * `logger`, the host's own, one warning per line, each with its kind and
+ * plugin beside it; nothing outside development.
+ */
+export function reportPluginPanelWarnings(
+  plugins: readonly PluginDefinition[],
+  nodeEnv: string | undefined,
+  logger: Pick<Logger, "warn">
+): void {
+  for (const warning of pluginPanelWarnings(plugins, nodeEnv)) {
+    logger.warn(warning.message, {
+      kind: warning.kind,
+      plugin: warning.plugin,
+    });
+  }
 }
 
 /** The report's sentence for one problem, after the plugin's name. */
@@ -323,6 +384,12 @@ function problemSentence(
         `${item} counts attention item "${declared}", which ` +
         `contributes.dashboard.attention does not declare. It is drawn ` +
         `without a number.`
+      );
+    case "panel-count-attention-never-shown":
+      return (
+        `${item} reads attention item "${declared}", which counts only ` +
+        `collections hidden from the navigation. Needs your attention leaves ` +
+        `those out, so the item is shown to nobody and its number is always 0.`
       );
     case "panel-count-malformed":
       return (

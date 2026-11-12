@@ -220,7 +220,7 @@ import {
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
 import { pluginLandingWarnings } from "../plugins/plugin-landing";
-import { pluginPanelWarnings } from "../plugins/plugin-panel";
+import { reportPluginPanelWarnings } from "../plugins/plugin-panel";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
@@ -1690,16 +1690,15 @@ function logRegisteredPlugins(
   )) {
     getNextlyLogger().warn(warning);
   }
-  // And what a plugin's panel declares that the admin is not sent: a menu
-  // item for a page it does not register, a group, count or badge naming
-  // nothing it declares or owns. Reported as the landing is, for the same
-  // reasons.
-  for (const warning of pluginPanelWarnings(
+  // And what a plugin's panel declares that the admin is not sent or can
+  // never draw: a menu item for a page it does not register, a group, count
+  // or badge naming nothing it declares or owns. Reported as the landing is,
+  // for the same reasons, through the host's own logger.
+  reportPluginPanelWarnings(
     transformedConfig.plugins,
-    process.env.NODE_ENV
-  )) {
-    getNextlyLogger().warn(warning);
-  }
+    process.env.NODE_ENV,
+    logger
+  );
 }
 
 /**
