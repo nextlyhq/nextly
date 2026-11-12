@@ -3957,8 +3957,10 @@ function blocksRouteConfig(
     resolveEntryPath: _resolveEntryPath,
     layouts: _layouts,
     timeZone: _timeZone,
+    notFound,
     ...routeConfig
   } = config;
+  const missHandler = perRequestNotFound(notFound, isPublic);
   if (data !== undefined && typeof data !== "function") {
     throw new Error(
       "createBlocksPage: `data` takes a function from the route's public reader " +
@@ -4068,6 +4070,7 @@ function blocksRouteConfig(
 
   return {
     ...routeConfig,
+    ...(missHandler === undefined ? {} : { notFound: missHandler }),
     // The page is tagged for the records its BLOCKS read, not only for the
     // collection it was resolved from. The media and entry-path resolvers read
     // through plain `findByID`, which contributes no tag, so without this a
@@ -4539,7 +4542,8 @@ export interface BlocksSinglePageConfig
  * absent key, because the route's own defaults are what an absent key selects.
  */
 function singlePassthrough(
-  config: BlocksSinglePageConfig
+  config: BlocksSinglePageConfig,
+  isPublic: boolean
 ): Partial<SingleRouteConfig<ReactElement>> {
   const {
     locale,
@@ -4560,7 +4564,9 @@ function singlePassthrough(
     // `createPublicSinglePage` inherits that rather than restating it.
     ...(draft === undefined ? {} : { draft }),
     ...(trustedCollections === undefined ? {} : { trustedCollections }),
-    ...(notFound === undefined ? {} : { notFound }),
+    ...(perRequestNotFound(notFound, isPublic) === undefined
+      ? {}
+      : { notFound }),
   };
 }
 
@@ -4625,7 +4631,7 @@ function blocksSingleConfig(
 
   return {
     slug,
-    ...singlePassthrough(config),
+    ...singlePassthrough(config, isPublic),
     // The media tag comes from the page route's own tag set, which is computed
     // for a collection this route does not have. Taking it from there rather
     // than recomputing keeps one answer to "what does a blocks page depend on".
@@ -4661,6 +4667,21 @@ function blocksSingleConfig(
  */
 function underCacheComponents(): boolean {
   return cacheComponentsEnabled(process.env.__NEXT_CACHE_COMPONENTS);
+}
+
+/**
+ * The site's `notFound` for a route, where the route answers its misses per
+ * request: always for an access-enforced route, and for a public one only
+ * under Cache Components. Without them a public route renders a path once
+ * (at build, or on its first request) and keeps the answer, and Next.js
+ * refuses a render it keeps that reads the request, so the handler, which
+ * may read it, is left out there and the miss is answered by `notFound()`.
+ */
+function perRequestNotFound<H>(
+  handler: H | undefined,
+  isPublic: boolean
+): H | undefined {
+  return isPublic && !underCacheComponents() ? undefined : handler;
 }
 
 /**
@@ -5019,8 +5040,14 @@ function buildContentRoute(
 ): StaticContentRoute<ReactElement> {
   const { templates } = config;
   const entryPath = config.entryPath;
-  /** How the route answers a miss: the site's handler, where it passed one. */
-  const notFound = config.notFound ?? config.pages.notFound;
+  /**
+   * How the route answers a miss: the site's handler, where it passed one
+   * and the route answers misses per request.
+   */
+  const notFound = perRequestNotFound(
+    config.notFound ?? config.pages.notFound,
+    isPublic
+  );
   /**
    * The tags a cached read of the address store carries: every collection
    * whose writes change who holds an address (the pages', the templates', and

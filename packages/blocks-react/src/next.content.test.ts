@@ -114,7 +114,9 @@ import { coreBlocks } from "./blocks";
 import {
   createBlocksPage,
   createContentPage,
+  createPublicBlocksPage,
   createPublicContentPage,
+  createPublicSinglePage,
   createSinglePage,
   type ContentAddressHolder,
   type ContentPageConfig,
@@ -1106,23 +1108,53 @@ describe("a site's own not-found handler", () => {
     }
   );
 
-  it.each([
-    ["an access-enforced route", createContentPage],
-    ["a public route", createPublicContentPage],
-  ] as const)(
-    "answers a miss for the page and its head alike (%s)",
-    async (_name, factory) => {
+  it("answers a miss for the page and its head alike", async () => {
+    const site = handler();
+    const route = createContentPage(config({ notFound: site.notFound }));
+    await expect(route.ContentPage(missing)).rejects.toThrow("site: not found");
+    await expect(route.generateMetadata(missing)).rejects.toThrow(
+      "site: not found"
+    );
+    expect(site.calls()).toBe(2);
+  });
+
+  it("answers a public route's miss under Cache Components, where the route answers it per request", async () => {
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    try {
       const site = handler();
-      const route = factory(config({ notFound: site.notFound }));
-      await expect(route.ContentPage(missing)).rejects.toThrow(
+      const route = createPublicContentPage(
+        config({ notFound: site.notFound })
+      );
+      await expect(throughBoundary(route.ContentPage(missing))).rejects.toThrow(
         "site: not found"
       );
       await expect(route.generateMetadata(missing)).rejects.toThrow(
         "site: not found"
       );
       expect(site.calls()).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
     }
-  );
+  });
+
+  it("leaves a public route's miss to Next's notFound() without Cache Components, where the answer is kept", async () => {
+    // Rendered once and kept, a render that read the request would be
+    // refused at runtime, so the handler, which may read it, is not called.
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "false");
+    try {
+      const site = handler();
+      const route = createPublicContentPage(
+        config({ notFound: site.notFound })
+      );
+      await expect(route.ContentPage(missing)).rejects.toMatchObject(NOT_FOUND);
+      await expect(route.generateMetadata(missing)).rejects.toMatchObject(
+        NOT_FOUND
+      );
+      expect(site.calls()).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("answers a miss the pages route decides, given on the route or on its pages", async () => {
     // A path the runtime keeps is refused by the pages route itself.
@@ -1188,5 +1220,29 @@ describe("a site's own not-found handler", () => {
       }).SinglePage()
     ).rejects.toThrow("site: not found");
     expect(single.calls()).toBe(1);
+
+    // The public forms keep their answers without Cache Components.
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "false");
+    try {
+      const kept = handler();
+      await expect(
+        createPublicBlocksPage({
+          ...config().pages,
+          notFound: kept.notFound,
+        }).ContentPage({ params: { slug: ["admin"] } })
+      ).rejects.toMatchObject(NOT_FOUND);
+      await expect(
+        createPublicSinglePage({
+          slug: "home",
+          field: "content",
+          blocks,
+          nextly: instance(POSTS) as never,
+          notFound: kept.notFound,
+        }).SinglePage()
+      ).rejects.toMatchObject(NOT_FOUND);
+      expect(kept.calls()).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
