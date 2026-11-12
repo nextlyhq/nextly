@@ -65,6 +65,7 @@ import {
 import type { FormField } from "../types";
 import { type AskedSnapshot, askedFieldsOf } from "../utils/asked-fields";
 import { formatExportValue } from "../utils/export-formats";
+import { pageFromReferer } from "../utils/sent-from";
 import { senderOf } from "../utils/submission-title";
 
 import { SUBMISSION_COUNT_KEY } from "./components/editor/useSubmissionCount";
@@ -818,6 +819,33 @@ function ExtensionDetails({
   );
 }
 
+/**
+ * The page a submission was sent from, by its path, linking to it. Read again
+ * through the rule that kept it, so a value written some other way (the API)
+ * is linked only when it is a web page.
+ */
+function SentFrom({
+  page,
+}: {
+  page: string | null | undefined;
+}): JSX.Element | null {
+  const address = pageFromReferer(page);
+  if (!address) return null;
+  return (
+    <Detail label="Page">
+      <a
+        href={address}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={address}
+        className="underline decoration-border underline-offset-4 hover:decoration-foreground"
+      >
+        {new URL(address).pathname}
+      </a>
+    </Detail>
+  );
+}
+
 /** The side panel: its status, the internal note, and its details. */
 function SidePanel({
   submission,
@@ -924,6 +952,7 @@ function SidePanel({
             <Detail label="Submitted">
               {whenText(submission.submittedAt ?? submission.createdAt)}
             </Detail>
+            <SentFrom page={submission.page} />
             {submission.userAgent ? (
               <Detail label="Browser">
                 {browserLabel(submission.userAgent)}

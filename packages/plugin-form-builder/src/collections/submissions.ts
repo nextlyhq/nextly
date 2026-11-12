@@ -158,6 +158,15 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
       },
     }),
 
+    // The page it was sent from (`utils/sent-from`): origin and path, as the
+    // visitor's browser reported it. Long text, since a page's address may
+    // exceed what a short text column holds on MySQL.
+    textarea({
+      name: "page",
+      label: "Page",
+      admin: { hidden: true },
+    }),
+
     date({
       name: "submittedAt",
       label: "Submitted At",

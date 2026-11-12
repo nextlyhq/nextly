@@ -79,6 +79,10 @@ const ENV_SPELLINGS: ReadonlySet<EarlierSpelling> = new Set([
  * cover what it does not name, so only consent without targets covers it.
  * Its `fingerprint` names the statements it was judged from, so agreeing to it
  * does not agree to different statements under the same description.
+ *
+ * `reason` says why it goes, where the command knows (`no longer in the
+ * config`, `rename to excerpt declined`), so the person asked can tell a
+ * deletion they meant from one they did not.
  */
 export type Deletion =
   | {
@@ -87,6 +91,7 @@ export type Deletion =
       core?: boolean;
       count?: number;
       alongside?: string;
+      reason?: string;
     }
   | {
       kind: "column";
@@ -94,8 +99,15 @@ export type Deletion =
       column: string;
       core?: boolean;
       count?: number;
+      reason?: string;
     }
-  | { kind: "rows"; table: string; core?: boolean; count?: number }
+  | {
+      kind: "rows";
+      table: string;
+      core?: boolean;
+      count?: number;
+      reason?: string;
+    }
   | {
       kind: "unnamed";
       description: string;
@@ -314,8 +326,19 @@ function plural(count: number, one: string, many: string): string {
   return `${String(count)} ${count === 1 ? one : many}`;
 }
 
-/** One line of a listing: what is deleted, and how much of it when counted. */
+/**
+ * One line of a listing: what is deleted, how much of it when counted, and
+ * why it goes when the command said.
+ */
 export function describeDeletion(deletion: Deletion): string {
+  const what = describeWhat(deletion);
+  return deletion.kind === "unnamed" || deletion.reason === undefined
+    ? what
+    : `${what}: ${deletion.reason}`;
+}
+
+/** What is deleted, and how much of it when counted. */
+function describeWhat(deletion: Deletion): string {
   switch (deletion.kind) {
     case "table": {
       const counted =
