@@ -80,7 +80,9 @@ function serving(
   single = "seo-settings",
   serverAddresses: string[] = []
 ): void {
-  stored = { id: "s1", updatedAt: "", ...document };
+  // The document differs per test, so a draft one test leaves held, kept for
+  // the settings at that version, never reaches another test.
+  stored = { id: `s${tests}`, updatedAt: "", ...document };
   sent = [];
   answerSave = () => Promise.resolve();
   const refetch = vi.fn(async () => ({ data: stored }));
@@ -139,8 +141,12 @@ async function settle(): Promise<void> {
 
 const SETTINGS = "/admin/plugins/nextlyhq-plugin-seo/settings";
 
+/** How many tests have run: each serves the settings at its own version. */
+let tests = 0;
+
 beforeEach(() => {
   window.history.replaceState(null, "", SETTINGS);
+  tests += 1;
 });
 
 /** Opens one of the screen's tabs by its link. */
@@ -951,5 +957,97 @@ describe("the content types tab", () => {
         _rev: "5",
       },
     ]);
+  });
+});
+
+describe("what review asked of the tabs", () => {
+  it("offers a type's optional details where it needs none", async () => {
+    serving({ _rev: "5", setupStep: 3 });
+    window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
+    render(<SeoSettingsPage />);
+    await choose("Structured data for Blog posts", "Software app");
+    expect(screen.getByRole("button", { name: "Map details" })).toBeTruthy();
+  });
+
+  it("lists the types without SEO where no type has it", () => {
+    serving({ _rev: "5", setupStep: 3 });
+    vi.mocked(usePluginRoute).mockImplementation(
+      request =>
+        ({
+          data: request.path.endsWith("/document")
+            ? { single: "seo-settings", serverAddresses: [] }
+            : {
+                items: [
+                  { key: "events", label: "Events", public: true, seo: false },
+                ],
+              },
+          pending: false,
+          error: null,
+          refetch: () => {},
+          fetching: false,
+        }) as ReturnType<typeof usePluginRoute>
+    );
+    window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
+    render(<SeoSettingsPage />);
+    expect(screen.getByText(/No content type has SEO yet/)).toBeTruthy();
+    expect(
+      within(screen.getByRole("group", { name: "Without SEO" })).getByText(
+        "Events"
+      )
+    ).toBeTruthy();
+  });
+
+  it("holds up no save for a saved address the server's address replaces", async () => {
+    serving(
+      {
+        _rev: "5",
+        setupStep: 3,
+        siteName: "Acme",
+        productionAddresses: ["https://acme.com/"],
+      },
+      "seo-settings",
+      ["https://acme.com"]
+    );
+    render(<SeoSettingsPage />);
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      false
+    );
+  });
+
+  it("keeps setup closed on a screen mounted again after it was closed", async () => {
+    serving({ _rev: "5" });
+    answerSave = () => Promise.reject(new Error("offline"));
+    const { unmount } = render(<SeoSettingsPage />);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Site name"), {
+      target: { value: "Acme" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await settle();
+    unmount();
+    render(<SeoSettingsPage />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("Finish setting up SEO.")).toBeTruthy();
+  });
+
+  it("takes a newer copy of the settings read since as the baseline a save names", async () => {
+    serving({ _rev: "5", siteName: "Acme", setupStep: 3 });
+    const { rerender } = render(<SeoSettingsPage />);
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "Things." },
+    });
+    // A save made on the screen this one replaced lands: the read moves on.
+    stored = { ...stored, siteName: "Acme Ltd", _rev: "6" };
+    rerender(<SeoSettingsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect(sent).toEqual([{ description: "Things.", _rev: "6" }]);
   });
 });

@@ -18,7 +18,7 @@ import {
   Textarea,
 } from "@nextlyhq/plugin-sdk/admin";
 import { EyeOff, Lock } from "lucide-react";
-import { useId, type ReactNode, type Ref } from "react";
+import { useId, useState, type ReactNode, type Ref } from "react";
 
 import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
@@ -96,6 +96,8 @@ const ADVANCED_VALUES: readonly string[] = ["structuredData", "image"];
 
 export function SeoPanel(props: SeoPanelProps): ReactNode {
   const { context, answers, problems, values, writable, errors, onSet } = props;
+  // Whether the last share image copy asked for from the notices failed.
+  const [makeFailed, setMakeFailed] = useState(false);
   const names: SourceNames = {
     typeLabel: context?.typeLabel ?? "page",
     fieldLabels: context?.fieldLabels ?? {},
@@ -121,7 +123,11 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         </Note>
       ) : null}
       <PreviewCard answer={answer} site={context?.site} status={props.status} />
-      <ProblemNotices problems={problems} onMake={makerOf(props)} />
+      <ProblemNotices
+        problems={problems}
+        onMake={makerOf(props, setMakeFailed)}
+        makeFailed={makeFailed}
+      />
       <PageTextField
         label="Title on Google"
         help="The blue link people click in Google's results. Google shows about 60 characters."
@@ -188,22 +194,33 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
  * What makes a share image of the right size from the notices, where the
  * page's image is one a copy fixes and the person may change the page.
  */
-function makerOf(props: SeoPanelProps): (() => void) | undefined {
+function makerOf(
+  props: SeoPanelProps,
+  failed: (didFail: boolean) => void
+): (() => void) | undefined {
   const make = props.onMakeShareImage;
   const fixable = (props.context?.shareImage?.problems ?? []).some(
     problem => problem.fix === "make"
   );
   if (!props.writable || make === undefined || !fixable) return undefined;
-  return () => void make();
+  // A copy that could not be made answers with no image: said beside the
+  // notice, so trying again is a choice rather than a silent repeat.
+  return () => {
+    failed(false);
+    void make().then(id => failed(id === undefined));
+  };
 }
 
 function ProblemNotices({
   problems,
   onMake,
+  makeFailed,
 }: {
   problems: readonly SeoProblem[];
   /** Makes a share image networks can show, where one would fix it. */
   onMake: (() => void) | undefined;
+  /** Whether the last copy asked for could not be made. */
+  makeFailed: boolean;
 }): ReactNode {
   if (problems.length === 0) return null;
   return (
@@ -219,6 +236,12 @@ function ProblemNotices({
             <span>{problem.text}</span>
             {problem.id === "share-image" && onMake !== undefined ? (
               <LinkAction onClick={onMake}>Make a share image</LinkAction>
+            ) : null}
+            {problem.id === "share-image" && makeFailed ? (
+              <span className="basis-full font-medium text-danger-text">
+                The share image couldn&apos;t be made. Try again, or choose
+                another image under Advanced.
+              </span>
             ) : null}
           </AlertDescription>
         </Alert>

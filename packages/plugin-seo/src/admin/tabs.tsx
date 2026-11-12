@@ -531,9 +531,14 @@ export function isTabId(value: unknown): value is TabId {
 /** Any problem that stops the draft being saved, said beside Save. */
 export function draftProblem(
   draft: SettingsDraft,
-  types: readonly SeoContentType[]
+  types: readonly SeoContentType[],
+  /** The addresses the server sets, which the saved ones then give way to. */
+  serverAddresses: readonly string[] = []
 ): string | null {
-  for (const address of draft.productionAddresses) {
+  // Where the server sets them the saved ones are neither shown nor used,
+  // so they hold nothing up.
+  const saved = serverAddresses.length > 0 ? [] : draft.productionAddresses;
+  for (const address of saved) {
     if (address.trim() !== "" && productionAddressProblem(address) !== null) {
       return "Fix the production address first.";
     }
