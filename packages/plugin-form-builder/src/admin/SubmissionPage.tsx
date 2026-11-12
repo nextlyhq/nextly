@@ -92,6 +92,7 @@ import {
   AnswerValue,
   SubmissionAnswers,
 } from "./components/submissions/SubmissionAnswers";
+import { SubmissionEmails } from "./components/submissions/SubmissionEmails";
 import { readPermissions } from "./use-admin-permissions";
 import { useBuilderConfig } from "./use-builder-config";
 import {
@@ -1115,6 +1116,11 @@ function useSubmissionRights(slug: string, held: boolean) {
     known: has !== undefined,
     canUpdate: !held && has?.(`update-${slug}`) === true,
     canDelete: !held && has?.(`delete-${slug}`) === true,
+    // Resend asks both: updating submissions and managing email deliveries.
+    canResend:
+      !held &&
+      has?.(`update-${slug}`) === true &&
+      has?.("manage-email-deliveries") === true,
   };
 }
 
@@ -1372,7 +1378,10 @@ export function SubmissionPage({
   const { formId, form, formsSlug } = useSubmissionForm(submission);
   const extensionFields = useSubmissionFields();
   const held = heldBy(documentLock);
-  const { known, canUpdate, canDelete } = useSubmissionRights(slug, held);
+  const { known, canUpdate, canDelete, canResend } = useSubmissionRights(
+    slug,
+    held
+  );
   const { data: place } = useListPlace(slug, submission, scope);
   const { save, remove, error } = useSubmissionWrites(slug, id, held);
   useReadOnOpen(submission, known, canUpdate, save);
@@ -1421,6 +1430,14 @@ export function SubmissionPage({
               canUpdate={canUpdate}
               save={save}
             />
+
+            <Box title="Emails">
+              <SubmissionEmails
+                submissionId={submission.id}
+                status={status}
+                canResend={canResend}
+              />
+            </Box>
 
             <ActivityBox submission={submission} status={status} />
           </div>
