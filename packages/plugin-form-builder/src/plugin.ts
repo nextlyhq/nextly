@@ -25,6 +25,10 @@ import type { CollectionConfig } from "nextly";
 import { formsCollection } from "./collections/forms";
 import { submissionSendsCollection } from "./collections/sends";
 import { submissionsCollection } from "./collections/submissions";
+import {
+  FORM_UPLOADS_SLUG,
+  formUploadsCollection,
+} from "./collections/uploads";
 import { newSubmissionsWidget } from "./dashboard/widget";
 import {
   asFormDocument,
@@ -83,6 +87,15 @@ import {
   runRetention,
 } from "./handlers/retention";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
+import {
+  markUploadClaims,
+  registerUploadClaims,
+} from "./handlers/upload-claims";
+import {
+  registerUploadCleanup,
+  type UploadCleanupDeps,
+} from "./handlers/upload-cleanup";
+import { formUploadRoute } from "./routes/form-upload";
 import { publicFormRoutes } from "./routes/public-forms";
 import type {
   AnyFormField,
@@ -265,6 +278,7 @@ export function formBuilder(
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
   const sendsCol = submissionSendsCollection();
+  const uploadsCol = formUploadsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
   // until `init` reads the slug the site installed it under.
@@ -304,7 +318,7 @@ export function formBuilder(
     // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
-      collections: [formsCol, submissionsCol, sendsCol],
+      collections: [formsCol, submissionsCol, sendsCol, uploadsCol],
       // Gives earlier submissions their one-response keys after a form
       // changes how it tells people apart.
       jobs: [
@@ -380,6 +394,9 @@ export function formBuilder(
         // before this plugin took them over. Root-mounted, so no caller's URL
         // changes; see `routes/public-forms`.
         ...publicFormRoutes(resolvedConfig),
+        // A visitor's file, uploaded before the form is submitted; see
+        // `routes/form-upload`.
+        formUploadRoute(resolvedConfig),
         {
           method: "GET",
           path: "/submissions/export",
@@ -749,11 +766,22 @@ export function formBuilder(
         formsSlug,
         submissionsSlug: submissionSlug,
       };
+      // The uploads collection as this install has it, and what its files
+      // are freed with once the deletion releasing them commits.
+      const uploadsSlug =
+        nextly.self.collections[FORM_UPLOADS_SLUG] ?? FORM_UPLOADS_SLUG;
+      const uploadCleanup: UploadCleanupDeps = {
+        own: nextly.services.ownCollections,
+        collections: nextly.services.collections,
+        media: nextly.services.media,
+        uploadsSlug,
+      };
       retentionDeps = {
         collections: nextly.services.collections,
         jobs: nextly.services.jobs,
         formsSlug,
         submissionsSlug: submissionSlug,
+        uploads: uploadCleanup,
       };
       nextly.hooks.on("beforeChange", formsSlug, async (context: unknown) => {
         await stampOneResponseVersion(context, async formId =>
@@ -804,6 +832,20 @@ export function formBuilder(
         submissions: submissionSlug,
       });
 
+      // The uploads a submission names, claimed in the transaction storing
+      // it, and released in the one deleting it (or its form). After the
+      // closing hold, so the form's row is locked before an upload's.
+      registerUploadClaims(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
+        uploads: uploadsSlug,
+      });
+      // And their files deleted once that deletion has committed.
+      registerUploadCleanup(nextly, uploadCleanup, {
+        forms: formsSlug,
+        submissions: submissionSlug,
+      });
+
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").
       nextly.hooks.on("afterRead", formsSlug, (context: unknown) =>
@@ -814,7 +856,7 @@ export function formBuilder(
 
   return {
     plugin,
-    collections: [formsCol, submissionsCol, sendsCol],
+    collections: [formsCol, submissionsCol, sendsCol, uploadsCol],
     config: resolvedConfig,
   };
 }
@@ -1281,9 +1323,13 @@ export async function prepareSubmissionForWrite(
     collection?: string;
     user?: { id?: string };
     req?: { http?: { ip: string | null; method: string } };
+    context?: Record<string, unknown>;
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
+  // Whether a request produced this write, for the transaction that claims
+  // the uploads its file answers name (`upload-claims`).
+  markUploadClaims(ctx);
   if (pluginKeyWrite(ctx.operation, submission, ctx.originalData)) {
     return submission;
   }
@@ -1312,6 +1358,8 @@ export async function prepareSubmissionForWrite(
   const marks = submissionMarks(submission);
 
   const form = await formToCheckAgainst(marks, formsSlug, formId, nextly);
+  // And which of the form's fields hold files.
+  markUploadClaims(ctx, form);
   // What the visitor sent, as stored, which an update's consents are held to.
   const storedAnswers =
     ctx.operation === "create" || stored?.data === undefined

@@ -451,7 +451,67 @@ A form's **Settings › Privacy › Store IP address and browser** (`settings.st
 
 **Settings › Privacy › Delete submissions after** (`settings.keepDays`: Never, 30 days, 90 days or 1 year; none keeps them) sets how long a form keeps its submissions. A pass the plugin schedules each night (the job `form-builder:retention`, on the `@daily` schedule `form-builder-retention-nightly`) deletes every submission older than its form keeps them for, and spam older than 30 days whatever the setting. Age is when the submission was stored (`createdAt`).
 
-Each one is deleted the way any deletion is, so what it sent goes with it. A pass that runs out of time queues its own continuation, and the next jobs run carries on. Like every schedule, it runs only while something calls the jobs route (`/admin/api/jobs/run` in a scaffolded app); a night missed is caught up by the next one, which deletes everything past keeping by then.
+Each one is deleted the way any deletion is, so what it sent goes with it, and so do the files it holds (see [File uploads](#file-uploads)). The pass also deletes the uploads no submission claimed within a day, and finishes any file an earlier deletion could not remove. A pass that runs out of time queues its own continuation, and the next jobs run carries on. Like every schedule, it runs only while something calls the jobs route (`/admin/api/jobs/run` in a scaffolded app); a night missed is caught up by the next one, which deletes everything past keeping by then.
+
+### File uploads
+
+A `file` field's answer is a media id, or a list of them for a field with `multiple`. The visitor's browser uploads each file first, through a route the plugin contributes, and puts the id it answers with in the submission:
+
+```
+POST /admin/api/forms/:slug/upload
+Content-Type: multipart/form-data
+```
+
+| Part    | What it is                                         |
+| ------- | -------------------------------------------------- |
+| `field` | The name of one of the form's `file` fields.       |
+| `file`  | The file. One per request; upload several in turn. |
+
+It answers `201` with `{ message, mediaId, field, filename, mimeType, size }`. The file is refused unless:
+
+- the form exists and takes submissions now: a form that is not published, or one that has closed, answers as submitting to it would (`404`, or `409` with its closed message);
+- `field` names one of the form's file fields (`400`, error path `field`), and file uploads are enabled (`features.fileUploads` and `fields.file`);
+- the file is one the field takes (`400`, error path `file`): a type its `accept` lists (`.pdf`, `image/*`, `application/pdf`; the plugin's `uploads.allowedMimeTypes` when it lists none), no larger than its `maxFileSize`, which can never exceed the plugin's `uploads.maxFileSize` (10 MB by default) and is that when the field sets none. A body larger than the limit is refused without being read whole;
+- the visitor is within the rate limit: five uploads per submission `spamProtection.rateLimit` allows, per visitor and form, in the same window (`429`). As with submissions, a visitor whose address cannot be trusted is not limited.
+
+The file is stored in the media library as the plugin, and is judged there as every upload is: its contents against its type, blocked types, and its name. Its type is checked against the field again on what the library stored.
+
+The plugin records each upload, and a submission's file answer may only name uploads made through this route for the same form and field that no other submission has claimed. Anything else, such as another form's upload, an upload already part of another submission, or the id of a file the site uses, refuses the submission with a validation error on that field ("This file was not uploaded for this field. Please upload it again."). This holds for a visitor submitting and for staff writing through the API. An edit keeps the files a submission already holds: an update may send a field's stored ids back unchanged. A submission flagged as spam is stored without the refusal, as it is stored without validation.
+
+A write no request produced (the Direct API from your own server code, an import, a job) is trusted, as it was before uploads were recorded: nothing it names is refused, and an upload it names for the same form and field that no submission has claimed is claimed for it, so the file stays with that submission.
+
+Deleting a submission deletes the files it holds, whichever way it is deleted: one at a time, in bulk, by the nightly pass, or with its form. The file is deleted once the deletion has committed, and only if nothing else uses it (a document's field, an avatar, a logo); a file in use is kept, and checked again each night. An upload no submission claims within a day is deleted by the nightly pass. A file the submission names without holding it (one a trusted write named that was not uploaded through the route, or was already another submission's, and any file a submission stored before uploads were recorded names) is not deleted with it.
+
+The plugin ships no front-end form of its own, so your site's form does the upload. For example:
+
+```typescript
+async function uploadThenSubmit(form: HTMLFormElement, slug: string) {
+  const answers: Record<string, unknown> = {};
+  for (const [name, value] of new FormData(form)) {
+    if (!(value instanceof File)) {
+      answers[name] = value;
+      continue;
+    }
+    if (value.size === 0) continue;
+    const body = new FormData();
+    body.append("field", name);
+    body.append("file", value);
+    const res = await fetch(`/admin/api/forms/${slug}/upload`, {
+      method: "POST",
+      body,
+    });
+    if (!res.ok) throw new Error((await res.json()).error.message);
+    const { mediaId } = (await res.json()) as { mediaId: string };
+    // A field with `multiple` answers with a list of ids.
+    answers[name] = mediaId;
+  }
+  await fetch(`/admin/api/forms/${slug}/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: answers }),
+  });
+}
+```
 
 ### Validation
 
@@ -506,7 +566,9 @@ Admins can also add internal notes to any submission -- these are not visible to
 
 Deleting a submission forgets the notifications it sent, in the same transaction: one not yet sent (waiting, retrying, or failed) is cancelled and its message cleared, so nothing goes out from data that is gone, and the delivery records of one that went out are erased. This holds for deleting one submission, deleting several at once, and deleting a form, which deletes its submissions with it.
 
-The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it.
+It also deletes the files the submission holds, once the deletion has committed (see [File uploads](#file-uploads)).
+
+The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it. The uploads made through the upload route are kept the same way, in an internal `form-uploads` collection, which existing installations receive through the same migration.
 
 ### Statistics
 

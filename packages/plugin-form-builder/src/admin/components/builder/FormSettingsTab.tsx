@@ -519,7 +519,9 @@ function SpamSection({
 /**
  * What a form keeps about who sent a submission. Off, new submissions store
  * neither their IP address nor their browser; one per network still compares
- * the address, by the keyed digest made before it is dropped.
+ * the address, by the keyed digest made before it is dropped. And how long it
+ * keeps submissions: the nightly pass deletes older ones with the files they
+ * hold and their email records.
  */
 function PrivacySection(): React.JSX.Element {
   const { settings, updateSettings } = useFormBuilder();
@@ -542,7 +544,7 @@ function PrivacySection(): React.JSX.Element {
       <SettingRow
         label="Delete submissions after"
         htmlFor="settings-keep-days"
-        description="Older submissions and their email records are deleted each night. Spam goes after 30 days either way."
+        description="Older submissions, their files and their email records are deleted each night. Spam goes after 30 days either way."
       >
         <Select
           value={keepChoiceOf(settings.keepDays)}

@@ -11,6 +11,11 @@
  * (`forget-sends`) and its one-response key is handed on. Age is read from
  * `createdAt`, which the system sets, never from what a caller sent.
  *
+ * Deleting a submission releases the uploads it held, and their files are
+ * deleted once the deletion commits (`upload-claims`, `upload-cleanup`).
+ * Last, the pass frees what an earlier deletion could not (a storage error,
+ * a file then in use) and the uploads no submission claimed within a day.
+ *
  * A pass stops at the deadline its jobs run gives it and queues a
  * continuation, so a large backlog is worked through on the next runs rather
  * than waiting a day.
@@ -26,6 +31,8 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { normalizeFormSettings } from "../utils/form-settings";
+
+import { sweepUploads, type UploadCleanupDeps } from "./upload-cleanup";
 
 /** The retention job's slug. */
 export const RETENTION_JOB = "form-builder:retention";
@@ -51,6 +58,8 @@ export interface RetentionDeps {
   jobs: Pick<PluginContext["services"]["jobs"], "queue">;
   formsSlug: string;
   submissionsSlug: string;
+  /** What the uploads' files are freed with; none frees no files. */
+  uploads?: UploadCleanupDeps;
   /** The time the pass judges ages against; the clock when absent. */
   now?: () => Date;
 }
@@ -82,22 +91,24 @@ function pastDeadline(deadline: Date): boolean {
 }
 
 /**
- * Where a run carries on from: past the spam, and past the forms already
- * done, by id. Handed to the continuation, so a run that stops partway does
- * not spend the next one re-reading the forms it finished.
+ * Where a run carries on from: past the spam, past the forms already done,
+ * by id, and past every form. Handed to the continuation, so a run that
+ * stops partway does not spend the next one re-reading what it finished.
  */
 export interface RetentionCursor {
   spamDone?: boolean;
   afterForm?: string;
+  formsDone?: boolean;
 }
 
 /** A continuation's cursor, read from its job input; none starts afresh. */
 export function retentionCursorOf(input: unknown): RetentionCursor {
   if (!input || typeof input !== "object") return {};
-  const { spamDone, afterForm } = input as Record<string, unknown>;
+  const { spamDone, afterForm, formsDone } = input as Record<string, unknown>;
   return {
     ...(spamDone === true ? { spamDone } : {}),
     ...(typeof afterForm === "string" ? { afterForm } : {}),
+    ...(formsDone === true ? { formsDone } : {}),
   };
 }
 
@@ -122,9 +133,16 @@ export async function runRetention(
       return continueFrom(deps, {});
     }
   }
-  const stoppedAt = await deleteAgedPerForm(deps, now, deadline, cursor);
-  if (stoppedAt === "done") return "done";
-  return continueFrom(deps, { spamDone: true, ...stoppedAt });
+  if (!cursor.formsDone) {
+    const stoppedAt = await deleteAgedPerForm(deps, now, deadline, cursor);
+    if (stoppedAt !== "done") {
+      return continueFrom(deps, { spamDone: true, ...stoppedAt });
+    }
+  }
+  if (deps.uploads && !(await sweepUploads(deps.uploads, now, deadline))) {
+    return continueFrom(deps, { spamDone: true, formsDone: true });
+  }
+  return "done";
 }
 
 /** Queue the continuation, with where this run stopped. */
