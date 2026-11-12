@@ -382,6 +382,33 @@ describe("the tabs", () => {
     );
   });
 
+  it("moves what was typed onto a newer version read when the screen is mounted again", () => {
+    serving({
+      _rev: "5",
+      siteName: "Rext AI",
+      description: "Old words.",
+      setupStep: 3,
+    });
+    const { unmount } = render(<SeoSettingsPage />);
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme" },
+    });
+    openTab(/Content types/);
+    unmount();
+
+    // Someone else saves before the screen is mounted for the new address.
+    stored = { ...stored, description: "Their words.", _rev: "6" };
+    render(<SeoSettingsPage />);
+    openTab("General");
+    expect((screen.getByLabelText("Site name") as HTMLInputElement).value).toBe(
+      "Acme"
+    );
+    expect(
+      (screen.getByLabelText("Default description") as HTMLTextAreaElement)
+        .value
+    ).toBe("Their words.");
+  });
+
   it("lets go of what was typed once the screen is left for another page", () => {
     serving({ _rev: "5", siteName: "Rext AI", setupStep: 3 });
     const { unmount } = render(<SeoSettingsPage />);
