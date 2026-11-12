@@ -216,11 +216,11 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
+import { pluginLandingWarnings } from "../plugins/plugin-landing";
 import {
   clearPluginDependencies,
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
-import { pluginLandingWarnings } from "../plugins/plugin-landing";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
