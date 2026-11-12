@@ -870,6 +870,21 @@ async function startAttempt(
  * its plugin. One whose message a cancel cleared while this attempt was with
  * the provider is cancelled instead, with no attempt to follow.
  */
+/** Whether a cancel cleared the email's message while its attempt ran. */
+async function messageCleared(
+  adapter: DrizzleAdapter,
+  id: string
+): Promise<boolean> {
+  const db = adapter.getDrizzle<QueueDb>();
+  const table = emailQueueTableFor(adapter.getCapabilities().dialect);
+  const [held] = (await db
+    .select({ message: table.message })
+    .from(table)
+    .where(eq(table.id, id))
+    .limit(1)) as Array<{ message: string | null }>;
+  return held !== undefined && held.message === null;
+}
+
 async function awaitRetry(
   adapter: DrizzleAdapter,
   row: { id: string; scope: string },
@@ -949,11 +964,17 @@ export async function attemptQueuedEmail(
     return;
   }
   if (!failure.retryable || context.attempt >= QUEUED_EMAIL_MAX_ATTEMPTS) {
-    await settleRow(deps.adapter, row, facts, {
-      state: "failed",
-      failure,
-      ...told,
-    });
+    // A cancel that reached this attempt while it was with the provider
+    // cleared its message: the email ends cancelled, as a retryable failure
+    // of it does in `awaitRetry`, not failed.
+    await settleRow(
+      deps.adapter,
+      row,
+      facts,
+      (await messageCleared(deps.adapter, row.id))
+        ? { state: "cancelled", failure, ...told, cancel: { by: "request" } }
+        : { state: "failed", failure, ...told }
+    );
     return;
   }
   if (!(await awaitRetry(deps.adapter, row, facts, { failure, ...told }))) {

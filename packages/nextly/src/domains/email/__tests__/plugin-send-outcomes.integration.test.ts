@@ -328,6 +328,33 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("ends a cancelled attempt cancelled when the provider refuses it for good", async () => {
+      await boot(dialect);
+      const arrived = latch();
+      const held = latch();
+      behaviour.gate = held.promise;
+      behaviour.reached = arrived.open;
+      const queuing = plugin().services.email.queue({ ...message, to: ADA });
+      await arrived.promise;
+      const id = changes.at(-1)!.queuedId;
+
+      await plugin().services.email.forgetSends({ queuedIds: [id] });
+
+      // A refusal no retry can help, for the attempt the cancel reached.
+      behaviour.refusals = 1;
+      behaviour.gate = undefined;
+      held.open();
+      await queuing;
+
+      expect(lastOf(id)).toMatchObject({
+        state: "cancelled",
+        cancel: { by: "request" },
+      });
+      expect(await plugin().services.email.readQueued([id])).toEqual([
+        expect.objectContaining({ state: "cancelled" }),
+      ]);
+    });
+
     it("tells a failure no retry can help as failed", async () => {
       await boot(dialect);
       behaviour.refusals = 1;
