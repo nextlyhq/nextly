@@ -600,9 +600,15 @@ Admins can also add internal notes to any submission -- these are not visible to
 
 Deleting a submission forgets the notifications it sent, in the same transaction: one not yet sent (waiting, retrying, or failed) is cancelled and its message cleared, so nothing goes out from data that is gone, and the delivery records of one that went out are erased. This holds for deleting one submission, deleting several at once, and deleting a form, which deletes its submissions with it.
 
+<<<<<<< HEAD
 It also deletes the files the submission holds, once the deletion has committed (see [File uploads](#file-uploads)).
 
 The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it. The uploads made through the upload route are kept the same way, in an internal `form-uploads` collection, which existing installations receive through the same migration.
+=======
+Marking a submission as spam calls off its notifications the same way, in the transaction that marks it: one waiting to be sent or retried, or one that failed and could still be retried, is cancelled and its message cleared, so it is not sent and cannot be retried later. One that the provider is sending at that moment finishes: it ends sent if the provider takes it, and cancelled if that attempt fails. The delivery records of what already went out are kept until the submission is deleted.
+
+The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it.
+>>>>>>> origin/dev
 
 ### Statistics
 
@@ -645,13 +651,15 @@ A notification saved before `recipients`, `conditions` and `attachFields` existe
 
 ### Delivery and retries
 
-Each notification is queued once its submission is saved, then sent at once. A failure that a retry can help (the provider is down, or times out) is not dropped: it is tried again, with a growing wait between attempts, until it is sent or fails for good. Retries run when your site calls the jobs trigger (`POST /admin/api/jobs/run`, see [Jobs](/docs/jobs)), so schedule that call on any site that sends form notifications. A refusal no retry can change, such as an invalid address, fails at once.
+Each notification is queued in the same transaction that saves its submission, then sent as soon as that transaction commits. The submission and its queued notifications are kept together or not at all: a save that fails or is rolled back queues nothing, and a server that stops just after the save still sends them on the next jobs run. Only active notifications whose conditions the answers meet are queued. A submission flagged as spam queues none, and marking it "Not spam" later does not send them either.
+
+A failure that a retry can help (the provider is down, or times out) is not dropped: it is tried again, with a growing wait between attempts, until it is sent or fails for good. Retries run when your site calls the jobs trigger (`POST /admin/api/jobs/run`, see [Jobs](/docs/jobs)), so schedule that call on any site that sends form notifications. A refusal no retry can change, such as an invalid address, fails at once.
 
 A notification that fails for good is logged twice, and the two lines share the queued email's id (`queuedId`): the Form Builder's line names the form and the notification, and the server's own `queued-email-failed` line gives the reason. Neither names a recipient.
 
 ### beforeEmail Hook
 
-Modify or filter outgoing emails before they are sent:
+Modify or filter outgoing emails before they are queued. The hook runs inside the transaction that saves the submission: a hook that throws refuses the submission, and the hook may run again if that transaction is retried, so keep it to changing the emails and do no other work in it.
 
 ```typescript
 const fb = formBuilder({

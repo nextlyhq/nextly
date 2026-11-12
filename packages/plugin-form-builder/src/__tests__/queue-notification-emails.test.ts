@@ -36,7 +36,10 @@ const notification: FormEmailNotification = {
 
 function run(
   queueWithTemplate: ReturnType<typeof vi.fn>,
-  emails: FormEmailNotification[] = [notification]
+  emails: FormEmailNotification[] = [notification],
+  inTransaction:
+    | { tx: object; record: ReturnType<typeof vi.fn> }
+    | undefined = undefined
 ) {
   const logger = { info: vi.fn(), error: vi.fn() };
   const done = queueNotificationEmails({
@@ -46,6 +49,9 @@ function run(
     formSlug: "contact",
     submissionId: "sub-1",
     fileAttachments: [{ mediaId: "media-1" }],
+    ...(inTransaction
+      ? { tx: inTransaction.tx as never, record: inTransaction.record }
+      : {}),
   });
   return { logger, done };
 }
@@ -197,6 +203,49 @@ describe("queueing a form's notifications", () => {
       expect.objectContaining({ retryable: true })
     );
     expect(logged(outage.logger)).not.toContain(TO);
+  });
+
+  it("in a transaction, queues in it and throws what is not a refusal, so the submission rolls back with it", async () => {
+    const tx = {};
+    const record = vi.fn().mockResolvedValue(undefined);
+    const queued = vi.fn().mockResolvedValue({ id: "q-1", state: "waiting" });
+    await run(queued, [notification], { tx, record }).done;
+    expect(queued.mock.calls[0]![3]).toMatchObject({ tx });
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ queuedId: "q-1" })
+    );
+
+    const outage = new Error("storage read timed out");
+    await expect(
+      run(vi.fn().mockRejectedValue(outage), [notification], { tx, record })
+        .done
+    ).rejects.toBe(outage);
+
+    const unrecorded = new Error("record write failed");
+    await expect(
+      run(queued, [notification], {
+        tx,
+        record: vi.fn().mockRejectedValue(unrecorded),
+      }).done
+    ).rejects.toBe(unrecorded);
+
+    // A refusal of the email itself would be refused again: the others are
+    // still queued, and the submission is kept.
+    const refusedThenQueued = vi
+      .fn()
+      .mockRejectedValueOnce(
+        NextlyError.validation({
+          errors: [
+            { path: "to", code: "INVALID", message: "Invalid address." },
+          ],
+        })
+      )
+      .mockResolvedValueOnce({ id: "q-2", state: "waiting" });
+    await run(refusedThenQueued, [notification, notification], {
+      tx,
+      record,
+    }).done;
+    expect(refusedThenQueued).toHaveBeenCalledTimes(2);
   });
 
   it("queues each email with its own files, and the marked ones for an email a filter added", async () => {
