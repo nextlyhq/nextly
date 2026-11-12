@@ -542,7 +542,7 @@ function PrivacySection(): React.JSX.Element {
       <SettingRow
         label="Delete submissions after"
         htmlFor="settings-keep-days"
-        description="Older submissions and their email records are deleted each night. Spam goes after 30 days either way."
+        description="Older submissions, their files and their email records are deleted each night. Spam goes after 30 days either way."
       >
         <Select
           value={keepChoiceOf(settings.keepDays)}

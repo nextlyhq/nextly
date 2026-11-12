@@ -742,6 +742,7 @@ export function formBuilder(
       retentionDeps = {
         collections: nextly.services.collections,
         jobs: nextly.services.jobs,
+        media: nextly.services.media,
         formsSlug,
         submissionsSlug: submissionSlug,
       };

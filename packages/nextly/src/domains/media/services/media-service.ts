@@ -716,6 +716,19 @@ export class MediaService {
   }
 
   /**
+   * @experimental Whether anything uses the item: a document's field, or an
+   * avatar or logo that keeps its address. In use whenever that cannot be
+   * known yet (no usage record, or one not built for older content), so a
+   * caller deleting unused items never deletes on a guess.
+   */
+  // Reached through the plugin facade's read list (`PLUGIN_MEDIA_READS`),
+  // picked by name, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async isInUse(mediaId: string): Promise<boolean> {
+    return this.legacyMediaService.isInUse(mediaId);
+  }
+
+  /**
    * Update media file metadata
    *
    * @param mediaId - Media file ID

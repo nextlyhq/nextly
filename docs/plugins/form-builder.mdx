@@ -433,7 +433,7 @@ A form's **Settings › Privacy › Store IP address and browser** (`settings.st
 
 **Settings › Privacy › Delete submissions after** (`settings.keepDays`: Never, 30 days, 90 days or 1 year; none keeps them) sets how long a form keeps its submissions. A pass the plugin schedules each night (the job `form-builder:retention`, on the `@daily` schedule `form-builder-retention-nightly`) deletes every submission older than its form keeps them for, and spam older than 30 days whatever the setting. Age is when the submission was stored (`createdAt`).
 
-Each one is deleted the way any deletion is, so what it sent goes with it. A pass that runs out of time queues its own continuation, and the next jobs run carries on. Like every schedule, it runs only while something calls the jobs route (`/admin/api/jobs/run` in a scaffolded app); a night missed is caught up by the next one, which deletes everything past keeping by then.
+Each one is deleted the way any deletion is, so what it sent goes with it. Then the files those submissions answered with are deleted, each once no remaining submission names it and nothing else on the site uses it (a document's field, an avatar or a logo, as the media library's **Unused** view judges it); until core's media usage record is built (`nextly media reindex-usage`), no file is deleted. A pass that runs out of time queues its own continuation, and the next jobs run carries on. Like every schedule, it runs only while something calls the jobs route (`/admin/api/jobs/run` in a scaffolded app); a night missed is caught up by the next one, which deletes everything past keeping by then.
 
 ### Validation
 
