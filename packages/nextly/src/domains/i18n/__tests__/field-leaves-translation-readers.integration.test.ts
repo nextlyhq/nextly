@@ -151,9 +151,10 @@ describeEachDialect(
 
       await makeShared(handler);
 
+      // French is kept and archived as its own too, so a later restore can put it back.
       expect(await sharedAndArchived(id)).toEqual({
         shared: "Bonjour",
-        archived: ["de"],
+        archived: ["de", "fr"],
       });
     });
 
@@ -165,9 +166,10 @@ describeEachDialect(
 
       await makeShared(handler);
 
+      // French is kept and archived as its own too, so a later restore can put it back.
       expect(await sharedAndArchived(id)).toEqual({
         shared: "Bonjour",
-        archived: ["de"],
+        archived: ["de", "fr"],
       });
     });
   }

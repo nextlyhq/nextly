@@ -191,7 +191,7 @@ export function copyLiveness(
  * as a reader is shown the next language that has it: a blank live row still ranks before any row
  * no reader reaches.
  */
-export function chosenRowOrder(
+function chosenRowOrder(
   spec: Pick<CompanionCopyRef, "dialect" | "defaultLocale" | "liveness">,
   row: string,
   value?: string
@@ -220,10 +220,15 @@ export function chosenRowOrder(
           .map((code, index) => `WHEN ${lit(code)} THEN ${index}`)
           .join(" ")} ELSE ${liveness.languageOrder.length} END, `
       : "";
-  // Reachable rows first, and a blank one only within them: a published row whose field is empty
-  // showed its readers nothing, which is kept rather than a draft's value no reader saw.
+  // Reachable rows first, then drafts of a language the site has, then a removed language's rows,
+  // and a blank one only within its tier: a published row whose field is empty showed its readers
+  // nothing, which is kept rather than a value no reader saw.
+  const listed =
+    liveness.languageOrder.length > 0
+      ? `${locale} IN (${liveness.languageOrder.map(lit).join(", ")})`
+      : "1 = 1";
   return (
-    `CASE WHEN ${isLive} THEN 0 ELSE 1 END, ` +
+    `CASE WHEN ${isLive} THEN 0 WHEN ${listed} THEN 1 ELSE 2 END, ` +
     blankLast +
     `CASE WHEN ${isDefault} THEN 0 ELSE 1 END, ${siteOrder}${locale} ASC`
   );
@@ -327,9 +332,15 @@ function buildArchiveNonDefaultStatement(
   const keptLocale = ref.liveness
     ? chosenLocaleOf(ref, `${source}.${q("_parent", dialect)}`, columnName)
     : lit(defaultLocale);
+  // Every row but the default language's where the default is the one kept: its value stays on the
+  // main table, which is where turning translation on again takes the default language's from. A
+  // kept language other than the default is archived too, so a restore can put it back as its own.
+  const rowLocale = `${source}.${q("_locale", dialect)}`;
   const archivedLanguages = everyLanguage
     ? "1 = 1"
-    : `${source}.${q("_locale", dialect)} <> ${keptLocale}`;
+    : ref.liveness
+      ? `(${rowLocale} <> ${lit(defaultLocale)} OR ${rowLocale} <> ${keptLocale})`
+      : `${rowLocale} <> ${keptLocale}`;
   // The value archived last for this entry, language and field, or NULL when there is none.
   const newest =
     `(SELECT ${archived}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${archived} ` +

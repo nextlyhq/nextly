@@ -146,6 +146,14 @@ const CASES: {
     keeps: { locale: "en", value: null },
   },
   {
+    name: "nothing published: a blank draft of a listed language over a removed language's value",
+    rows: [
+      ["en", "draft", null],
+      ["it", "published", "Ciao"],
+    ],
+    keeps: { locale: "en", value: null },
+  },
+  {
     name: "only a removed language's row",
     rows: [["it", "published", "Ciao"]],
     keeps: { locale: "it", value: "Ciao" },

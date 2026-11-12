@@ -172,7 +172,7 @@ describeEachDialect(
 
       expect(await kept(id)).toEqual({
         shared: "Hallo",
-        archived: ["fr", "it"],
+        archived: ["de", "fr", "it"],
       });
     });
 
@@ -186,7 +186,7 @@ describeEachDialect(
 
       await makeHeadingShared(handler);
 
-      expect(await kept(id)).toEqual({ shared: "Bonjour", archived: [] });
+      expect(await kept(id)).toEqual({ shared: "Bonjour", archived: ["fr"] });
     });
 
     // Readers of a published row whose field is empty saw nothing there; a draft with a value is
@@ -217,7 +217,10 @@ describeEachDialect(
       );
 
       expect(saved.success, saved.message).toBe(true);
-      expect(await kept(id)).toEqual({ shared: "Bonjour", archived: ["de"] });
+      expect(await kept(id)).toEqual({
+        shared: "Bonjour",
+        archived: ["de", "fr"],
+      });
     });
 
     it("judges a Required field leaving translation on the French it keeps, and applies it", async () => {
@@ -229,7 +232,10 @@ describeEachDialect(
       );
 
       expect(saved.success, saved.message).toBe(true);
-      expect(await kept(id)).toEqual({ shared: "Bonjour", archived: ["de"] });
+      expect(await kept(id)).toEqual({
+        shared: "Bonjour",
+        archived: ["de", "fr"],
+      });
     });
 
     it("previews no refusal for the Required field the apply accepts", async () => {

@@ -251,7 +251,7 @@ async function countsOf(
 }
 
 /** One field becoming translated, as the preview reports it. */
-export interface JoiningTranslationPreview {
+interface JoiningTranslationPreview {
   /** The field's name. */
   name: string;
   /** Its column on the main table, which its values leave for the translations table. */
@@ -271,7 +271,7 @@ export interface JoiningTranslationPreview {
  * fields leaving it. A count that cannot be read is reported as unknown rather than failing the
  * preview: the counts inform, and the apply moves every value whatever they say.
  */
-export async function previewFieldsJoiningTranslation(
+async function previewFieldsJoiningTranslation(
   args: PreviewLeavingArgs
 ): Promise<JoiningTranslationPreview[]> {
   if (!args.wasLocalized || !args.isLocalized) return [];

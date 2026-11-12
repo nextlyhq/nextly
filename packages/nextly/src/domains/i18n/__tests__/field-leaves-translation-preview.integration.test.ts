@@ -278,8 +278,9 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     const [leaving] = (await previewShared()).leavingTranslation ?? [];
 
     expect(leaving?.sharedFrom).toEqual({ es: 1 });
-    // "Dos" becomes the shared value, so only "Uno" and "واحد" go to the archive.
-    expect(leaving?.byLocale).toEqual({ es: 1, ar: 1 });
+    // "Dos" becomes the shared value and is archived as Spanish's own too, so the language can
+    // be restored; "Uno" and "واحد" go to the archive as well.
+    expect(leaving?.byLocale).toEqual({ es: 2, ar: 1 });
   });
 
   // The other direction says what it does too: a shared field becoming translated keeps each

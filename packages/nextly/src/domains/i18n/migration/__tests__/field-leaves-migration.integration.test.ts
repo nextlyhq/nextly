@@ -478,9 +478,10 @@ for (const entry of DIALECTS) {
         );
         await migrate();
 
+        // French, kept though it is not the default language, is archived as its own too.
         expect(await keptAndArchived()).toEqual({
           shared: "Bonjour",
-          archived: ["de"],
+          archived: ["de", "fr"],
         });
       });
 

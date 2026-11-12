@@ -265,13 +265,15 @@ export async function countValuesByLocale(
   const tbl = quoteIdent(companionTable, dialect);
   const locale = quoteIdent("_locale", dialect);
   const parent = `${tbl}.${quoteIdent("_parent", dialect)}`;
-  // Each column counts the rows of every language but the one its value is kept from, which may
-  // differ by column, so the language is asked inside each count rather than of the whole row.
+  const defaultLiteral = `'${excludeLocale.replace(/'/g, "''")}'`;
+  // Each column counts what the archive takes: every row but the default language's where the
+  // default is the language its value is kept from. That language may differ by column, so it is
+  // asked inside each count rather than of the whole row.
   const perColumn = columns
     .map((c, i) =>
       keptLocaleOf === undefined
         ? `COUNT(${quoteIdent(c, dialect)}) AS n${i}`
-        : `COUNT(CASE WHEN ${tbl}.${locale} <> ${keptLocaleOf(parent, c)} THEN ${tbl}.${quoteIdent(c, dialect)} END) AS n${i}`
+        : `COUNT(CASE WHEN ${tbl}.${locale} <> ${defaultLiteral} OR ${tbl}.${locale} <> ${keptLocaleOf(parent, c)} THEN ${tbl}.${quoteIdent(c, dialect)} END) AS n${i}`
     )
     .join(", ");
   const query =

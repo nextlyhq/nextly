@@ -48,7 +48,11 @@ import {
   storesPerLanguage,
 } from "../per-language-storage";
 
-import { companionColumnNames, liveCompanionShape } from "./companion-io";
+import {
+  companionColumnNames,
+  companionHasStatusColumn,
+  liveCompanionShape,
+} from "./companion-io";
 import {
   localizableConfigEntities,
   type LocalizableEntity,
@@ -56,7 +60,10 @@ import {
 
 /** The reloaded config, as far as these fields go. */
 type ReloadConfig = Parameters<typeof localizableConfigEntities>[0] & {
-  localization?: { defaultLocale?: string };
+  localization?: {
+    defaultLocale?: string;
+    locales?: readonly (string | { code: string })[];
+  };
 };
 
 /** One entity's fields leaving translation in a reload. */
@@ -134,11 +141,7 @@ export async function prepareFieldsLeavingOnReload(
   }
   const refusals = [
     ...renamed,
-    ...(await leavingRefusalsOnReload(
-      adapter,
-      entries,
-      defaultLocaleOf(config)
-    )),
+    ...(await leavingRefusalsOnReload(adapter, entries, siteOf(config))),
   ];
   for (const r of refusals) report(r.message);
   return { entries, refused: [...new Set(refusals.map(r => r.slug))] };
@@ -147,6 +150,26 @@ export async function prepareFieldsLeavingOnReload(
 /** The language a field leaving translation keeps as its shared value. */
 function defaultLocaleOf(config: ReloadConfig): string {
   return config.localization?.defaultLocale ?? "en";
+}
+
+/** The site's languages as the reloaded config declares them: the default, and their order. */
+interface SiteLanguages {
+  defaultLocale: string;
+  /**
+   * The order the value an entry keeps is chosen in (`copyLiveness`): the config's own, which is
+   * what this reload applies, else the language registry's.
+   */
+  languageOrder: readonly string[] | undefined;
+}
+
+function siteOf(config: ReloadConfig): SiteLanguages {
+  const declared = config.localization?.locales?.map(locale =>
+    typeof locale === "string" ? locale : locale.code
+  );
+  return {
+    defaultLocale: defaultLocaleOf(config),
+    languageOrder: declared ?? appLanguageOrder(),
+  };
 }
 
 /** One entity the config keeps translated, at its table, or `undefined` for any other. */
@@ -381,7 +404,7 @@ const FIX_OF: Partial<
 async function leavingRefusalsOnReload(
   adapter: DrizzleAdapter,
   entries: readonly FieldsLeavingOnReload[],
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<{ slug: string; message: string }[]> {
   const dialect = adapter.getCapabilities().dialect;
   const said: { slug: string; message: string }[] = [];
@@ -400,10 +423,13 @@ async function leavingRefusalsOnReload(
         ...judged,
         adapter,
         tableName: e.tableName,
-        defaultLocale,
+        defaultLocale: site.defaultLocale,
         // The values the move keeps, ranked by each language's own state where its translations
         // table holds one.
-        liveness: copyLiveness(appLanguageOrder(), e.perLanguageStatus),
+        liveness: copyLiveness(
+          site.languageOrder,
+          await companionStatusOn(adapter, e)
+        ),
         uniqueIndexed: e.uniqueIndexed,
       })),
     ];
@@ -519,14 +545,14 @@ export async function moveFieldsLeavingOnReload(args: {
     e => !args.deferred.has(`${e.kind}:${e.slug}`)
   );
   if (args.blockedBy.length > 0 || entries.length === 0) return [];
-  const defaultLocale = defaultLocaleOf(args.config);
+  const site = siteOf(args.config);
   const all = entries.map(e => e.slug);
   // Each phase reports its own failures; anything else that rejects, such as the re-check's reads,
   // stops the move the same way, before any drop it has not reached.
   try {
-    const planned = await copyEveryEntity(args, entries, defaultLocale);
+    const planned = await copyEveryEntity(args, entries, site);
     if (planned === undefined) return all;
-    if (!(await settleEveryEntity(args, entries, defaultLocale))) return all;
+    if (!(await settleEveryEntity(args, entries, site))) return all;
     return await dropEveryEntity(args, planned);
   } catch (error) {
     args.report(notMoved(all.join(", "), error));
@@ -543,7 +569,7 @@ type Mover = Pick<
 async function copyEveryEntity(
   args: Mover,
   entries: readonly FieldsLeavingOnReload[],
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<
   { e: FieldsLeavingOnReload; plan: CompanionTransitionPlan }[] | undefined
 > {
@@ -551,7 +577,7 @@ async function copyEveryEntity(
     [];
   for (const e of entries) {
     try {
-      const plan = await planLeavingMove(args.adapter, e, defaultLocale);
+      const plan = await planLeavingMove(args.adapter, e, site);
       await applyCompanionStatements(args.adapter, plan);
       planned.push({ e, plan });
     } catch (error) {
@@ -569,13 +595,9 @@ async function copyEveryEntity(
 async function settleEveryEntity(
   args: Mover,
   entries: readonly FieldsLeavingOnReload[],
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<boolean> {
-  const refusals = await leavingRefusalsOnReload(
-    args.adapter,
-    entries,
-    defaultLocale
-  );
+  const refusals = await leavingRefusalsOnReload(args.adapter, entries, site);
   for (const r of refusals) args.report(r.message);
   if (refusals.length > 0) return false;
   const settings = entries.some(e => {
@@ -639,7 +661,7 @@ function notMoved(slug: string, error: unknown): string {
 async function planLeavingMove(
   adapter: DrizzleAdapter,
   e: FieldsLeavingOnReload,
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<CompanionTransitionPlan> {
   const shape = await liveCompanionShape(adapter, {
     tableName: e.tableName,
@@ -649,14 +671,17 @@ async function planLeavingMove(
     companionExists: true,
   });
   const dialect = adapter.getCapabilities().dialect;
+  // Named only where each language has its own `_status`, so the copy ranks by it; left out
+  // otherwise, as before, so the transition reconciles no `_status` on a reload.
+  const companionStatus = await companionStatusOn(adapter, e);
   return buildCompanionTransitionStatements({
     builtBy: "codeFirst",
     slug: e.slug,
     kind: e.kind,
     tableName: e.tableName,
     dialect,
-    defaultLocale,
-    languageOrder: appLanguageOrder(),
+    defaultLocale: site.defaultLocale,
+    languageOrder: site.languageOrder,
     status: e.status,
     wasStatus: e.status,
     wasLocalized: true,
@@ -666,7 +691,23 @@ async function planLeavingMove(
     companionExists: true,
     holdLeavingDrops: true,
     ...shape,
+    ...(companionStatus ? { companionHasStatus: true } : {}),
   });
+}
+
+/**
+ * Whether `e`'s translations table holds each language's own `_status`: the entity publishes each
+ * language on its own, and the table has the column (one made before Draft/Published was turned
+ * on may not).
+ */
+async function companionStatusOn(
+  adapter: DrizzleAdapter,
+  e: FieldsLeavingOnReload
+): Promise<boolean> {
+  return (
+    e.perLanguageStatus &&
+    (await companionHasStatusColumn(adapter, `${e.tableName}_locales`))
+  );
 }
 
 /**
