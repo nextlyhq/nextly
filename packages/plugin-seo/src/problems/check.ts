@@ -34,6 +34,7 @@ import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
 import { redirectMeeting } from "../redirects/meeting";
+import { readProxyStatus } from "../redirects/proxy-seen";
 import { redirectOf, type StoredRedirect } from "../redirects/store";
 import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
@@ -60,6 +61,7 @@ import {
   listingProblems,
   noAddressProblems,
   productionAddressProblems,
+  proxyProblems,
   redirectChainProblems,
   sharedValueProblems,
   type ConnectionsReport,
@@ -831,8 +833,28 @@ async function siteProblems(
   return [
     ...productionAddressProblems(addresses, standing),
     ...noAddressProblems(types),
+    // Redirects are site-wide SEO's: their count is told no one else.
+    ...(reader.seesRedirects ? await unservedRedirects(ctx) : []),
     ...connectionProblems(await connectionsReport(ctx, checks)),
   ];
+}
+
+/**
+ * The site's saved redirects going unserved for want of a running Proxy. A
+ * status that cannot be read is reported as nothing, never as a failed list.
+ */
+async function unservedRedirects(ctx: PluginContext): Promise<Problem[]> {
+  try {
+    const status = await readProxyStatus(ctx);
+    if (status.state === "running") return [];
+    return proxyProblems(
+      status,
+      await ctx.services.ownCollections.count(redirectsSlug(ctx))
+    );
+  } catch (error) {
+    ctx.logger.warn("Whether the Proxy runs could not be read", { error });
+    return [];
+  }
 }
 
 /**
