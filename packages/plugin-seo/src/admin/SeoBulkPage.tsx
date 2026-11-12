@@ -151,30 +151,33 @@ function useRows(type: string | undefined) {
  */
 function useFittedRows(
   table: RefObject<HTMLTableElement | null>,
-  shown: readonly BulkRow[],
-  edits: BulkEdits
+  shown: readonly BulkRow[]
 ) {
+  // Every row when rows are read or filtered, and when the window resizes;
+  // a keystroke fits only its own row (`fitRow`, from the cell).
   useLayoutEffect(() => {
     const element = table.current;
     if (element === null) return;
     const fit = () => {
-      for (const row of element.querySelectorAll("tbody tr")) {
-        const boxes = [...row.querySelectorAll("textarea")];
-        if (boxes.length === 0) continue;
-        for (const box of boxes) box.style.height = "auto";
-        const tallest = Math.max(
-          64,
-          ...boxes.map(box =>
-            Math.max(box.scrollHeight, placeholderHeight(box))
-          )
-        );
-        for (const box of boxes) box.style.height = `${tallest}px`;
-      }
+      for (const row of element.querySelectorAll("tbody tr")) fitRow(row);
     };
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [table, shown, edits]);
+  }, [table, shown]);
+}
+
+/** One row's cells grown to its tallest text, the grey automatic one included. */
+function fitRow(row: Element | null): void {
+  if (row === null) return;
+  const boxes = [...row.querySelectorAll("textarea")];
+  if (boxes.length === 0) return;
+  for (const box of boxes) box.style.height = "auto";
+  const tallest = Math.max(
+    64,
+    ...boxes.map(box => Math.max(box.scrollHeight, placeholderHeight(box)))
+  );
+  for (const box of boxes) box.style.height = `${tallest}px`;
 }
 
 /** The height a text box's grey placeholder needs, which it does not report. */
@@ -230,7 +233,10 @@ function Cell({
         title={
           row.editable ? undefined : "You can't change this page's SEO here."
         }
-        onChange={event => onEdit(row, field, event.target.value)}
+        onChange={event => {
+          onEdit(row, field, event.target.value);
+          fitRow(event.target.closest("tr"));
+        }}
       />
       <span className="nx-seo-cm">
         <span>{meta.typed ? "Typed" : "Automatic"}</span>
@@ -470,7 +476,7 @@ function Sheet({
   onEdit: (row: BulkRow, field: BulkField, value: string) => void;
 }): JSX.Element {
   const table = useRef<HTMLTableElement | null>(null);
-  useFittedRows(table, shown, edits);
+  useFittedRows(table, shown);
   return (
     <div className="nx-seo-tbox">
       <table className="nx-seo-sheet" ref={table}>

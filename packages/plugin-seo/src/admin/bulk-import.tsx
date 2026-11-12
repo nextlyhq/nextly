@@ -340,7 +340,8 @@ interface Run {
 
 /** An import that went through. */
 interface Done {
-  pages: number;
+  /** What the import says it did. */
+  message: string;
   group?: string;
 }
 
@@ -428,7 +429,7 @@ function useImportFlow(groups: readonly ImportGroup[], onImported: () => void) {
       if (answer === undefined) return;
       toastMutationResult(answer.message, []);
       setDone({
-        pages: answer.pages,
+        message: answer.message,
         ...(run.source.kind === "group" ? { group: run.source.field } : {}),
       });
       setRun(null);
@@ -604,6 +605,18 @@ function readyHelp(flow: ImportFlow): string {
     : "Choose the export file first; the dry run reads it.";
 }
 
+/** What the import button says it imports: pages, redirects, or both. */
+function importWords(run: DryRunBody): string | undefined {
+  const redirects = `${run.redirects} ${run.redirects === 1 ? "redirect" : "redirects"}`;
+  const parts = [
+    ...(run.pages > 0 ? [pages(run.pages)] : []),
+    ...(run.redirects > 0 ? [redirects] : []),
+  ];
+  return parts.length === 0
+    ? undefined
+    : `Import ${parts.join(" and ")}, all or nothing`;
+}
+
 /** The dry run's button, its answer and the import, or what was imported. */
 function RunArea({ flow }: { flow: ImportFlow }): JSX.Element | null {
   const { run, done } = flow;
@@ -612,7 +625,7 @@ function RunArea({ flow }: { flow: ImportFlow }): JSX.Element | null {
       <div className="nx-seo-note ok" role="status">
         <Icon name="check" />
         <div>
-          <b>Imported {pages(done.pages)} in one step.</b>{" "}
+          <b>{done.message}</b>{" "}
           {done.group !== undefined && done.group !== "seo"
             ? `The ${done.group} group can be removed in a later migration; its values stay until then.`
             : null}
@@ -642,12 +655,10 @@ function RunArea({ flow }: { flow: ImportFlow }): JSX.Element | null {
       <Button
         type="button"
         className="nx-seo-sidebtn"
-        disabled={run.body.pages === 0 || flow.busy}
+        disabled={importWords(run.body) === undefined || flow.busy}
         onClick={flow.apply}
       >
-        {run.body.pages > 0
-          ? `Import ${pages(run.body.pages)}, all or nothing`
-          : "Nothing to import"}
+        {importWords(run.body) ?? "Nothing to import"}
       </Button>
       <p className="nx-seo-help">
         If anything fails part-way, every value stays as it was.

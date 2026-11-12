@@ -391,3 +391,21 @@ describe("the bulk edit screen, when things happen in between", () => {
     await waitFor(() => expect(titleOf("Surfer vs Rext").value).toBe(""));
   });
 });
+
+describe("the import panel, for a file that only brings redirects", () => {
+  it("offers to import the redirects a dry run found", async () => {
+    vi.mocked(writePluginRoute).mockImplementation((async (request: {
+      path: string;
+      body?: unknown;
+    }) => {
+      writes.push({ path: request.path, body: request.body });
+      return { ...DRY, lines: [], pages: 0, same: 0, redirects: 2 };
+    }) as unknown as typeof writePluginRoute);
+    render(<SeoBulkPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    const button = (await screen.findByRole("button", {
+      name: "Import 2 redirects, all or nothing",
+    })) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+  });
+});
