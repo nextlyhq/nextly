@@ -478,6 +478,9 @@ export function PagesEditor({
           const shownPaths = rows.map(row => row.path);
           onEdits(current => withoutEdits(current, shownPaths));
           setOutcome(null);
+          // Read again, so a page someone else saved since is edited from
+          // its new version rather than the one a refused save was made from.
+          void again(types);
         }}
         onSave={() => void save()}
       />

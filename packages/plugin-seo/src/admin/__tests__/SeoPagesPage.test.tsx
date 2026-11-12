@@ -496,13 +496,21 @@ describe("Edit mode", () => {
     expect(screen.getByRole("status").textContent).toContain("1 page changed");
   });
 
-  it("discards every change without writing", async () => {
+  it("discards every change without writing, and reads the pages again", async () => {
     render(<SeoPagesPage />);
     editMode();
     fireEvent.change(await screen.findByLabelText("Title for Home"), {
       target: { value: "Something" },
     });
+    const reads = vi.mocked(readPluginRoute).mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    // Read again, so a page saved by someone else since is edited from its
+    // new version, not the one a refused save was made from.
+    await vi.waitFor(() =>
+      expect(vi.mocked(readPluginRoute).mock.calls.length).toBeGreaterThan(
+        reads
+      )
+    );
     expect(
       (screen.getByLabelText("Title for Home") as HTMLInputElement).value
     ).toBe("");

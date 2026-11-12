@@ -295,6 +295,13 @@ describe("Inspect", () => {
     expect(
       screen.getByText(/Nextly holds no published page at this address/)
     ).toBeTruthy();
+    // Not read here, which is not the same as none.
+    expect(
+      screen.getByText(
+        /structured data isn't shown for a page Nextly holds no entry for/
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/gives this page no structured data/)).toBeNull();
   });
 
   it("sends an address naming no page on to Pages", () => {

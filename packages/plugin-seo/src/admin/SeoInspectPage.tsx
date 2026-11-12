@@ -408,7 +408,14 @@ function HeadCard({
           />
         ) : null}
       </CardHeader>
-      <CardContent className="overflow-x-auto p-0">
+      <CardContent
+        className="overflow-x-auto p-0"
+        // Reachable by keyboard, so a table wider than the screen can be
+        // scrolled without a pointer.
+        tabIndex={0}
+        role="region"
+        aria-label="Head tags"
+      >
         {stored === undefined ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">
             Nextly holds no published page at this address that you can read.
@@ -487,15 +494,21 @@ function StructuredDataCard({
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const empty =
-    data === undefined ||
-    (data.items.length === 0 && data.leftOut.length === 0);
+    data !== undefined && data.items.length === 0 && data.leftOut.length === 0;
   return (
     <Card className="self-start overflow-hidden">
       <CardHeader>
         <CardTitle className="text-sm">Structured data</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
-        {empty ? (
+        {data === undefined ? (
+          // Not read here, which is not the same as none: a page built in
+          // code gets its structured data from its route.
+          <p className="px-4 py-3 text-sm text-muted-foreground">
+            Its structured data isn&apos;t shown for a page Nextly holds no
+            entry for.
+          </p>
+        ) : empty ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">
             Nextly gives this page no structured data.
           </p>
