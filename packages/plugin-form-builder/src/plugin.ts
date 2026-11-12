@@ -1439,7 +1439,10 @@ function consentsKept(
     });
   }
   return fields.filter(
-    field => field.type !== "consent" || isConsentAnswer(stored[field.name])
+    // Checked only where the field and the stored answer agree on being a
+    // consent: a consent stored under a field that is now something else, or
+    // an earlier answer under a field now a consent, is carried over as it is.
+    field => (field.type === "consent") === isConsentAnswer(stored[field.name])
   );
 }
 

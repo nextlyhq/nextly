@@ -432,6 +432,33 @@ describe.each(getConfiguredTestDialects())("a consent field (%s)", dialect => {
     });
   });
 
+  it("keeps a consent through edits once a text field takes its name", async () => {
+    const { t, formId, submit, answers } = await boot(dialect);
+    await submit({ name: "Ada", privacy: "on" });
+    const id = await onlySubmission(t);
+    const before = await answers(id);
+    await t.nextly.update({
+      collection: "forms",
+      id: formId,
+      data: {
+        fields: FIELDS.map(field =>
+          field.type === "consent"
+            ? { type: "text", name: "privacy", label: "Privacy notes" }
+            : field
+        ),
+        _overwrite: true,
+      },
+    });
+
+    await t.nextly.update({
+      collection: "form-submissions",
+      id,
+      data: { data: { ...before, name: "Ada Lovelace" }, _overwrite: true },
+    });
+
+    expect(await answers(id)).toEqual({ ...before, name: "Ada Lovelace" });
+  });
+
   it("refuses a form saved with a consent that has no text", async () => {
     const { t, formId } = await boot(dialect);
     const blank = FIELDS.map(field =>
