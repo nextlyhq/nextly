@@ -266,7 +266,8 @@ export default defineConfig({
 
 - **Production only** (`NODE_ENV === "production"`) — a no-op in development.
 - The step is `nextly migrate`, run by the start: it writes the registry, the permissions and the
-  preset grants as the command does. The rest of the start writes none of them.
+  preset grants, and changes the tables, as the command does. The rest of the start does neither,
+  so it is the one step of a production start that sets up an empty database.
 - Pending migrations apply during initialization, **under the migrate lock**, so
   multiple instances starting together are safe: one applies while the others
   wait, then all serve with the schema ready.
@@ -483,6 +484,81 @@ release seeds the permissions and the preset grants at every production start, f
 configuration and presets, and has no setting that turns that off. Its first start sets the
 grants its presets resolve to, and an older one may mark as no longer declared the permissions its
 build lacks. Keep production on this release or a newer one.
+
+### A production start changes no table
+
+A production start also leaves the database's structure as `nextly migrate` made it. Whatever
+the configuration declares, it creates no table, adds no column or index, renames nothing and
+creates no PostgreSQL schema:
+
+- a collection, Single or field group no migration made a table for has none, and a table that
+  has gone is not made again;
+- a translated entity whose translation table is missing keeps it missing, and its reads and
+  writes say its translations are not ready;
+- a collection or Single whose `dbName` changed keeps the table it has (see
+  [A changed `dbName`](#a-changed-dbname));
+- a user field gets no column, and a plugin's field on a Schema Builder entity gets neither its
+  column nor its place in the entity's registry row;
+- a configured `db.postgres.schema` the database lacks is not created.
+
+What your configuration adds arrives through `nextly migrate`. The migrations
+`nextly migrate:create` writes carry the tables and their columns, a plugin's fields on your Builder entities included, and the
+command makes the translation tables and the user fields' columns once they have applied. Every
+start used to create what it found missing from its own configuration, so several cold starts
+raced to create the same table, and a build older or newer than the database changed it to its
+own shape.
+
+**A database with no Nextly tables is refused.** A production start against one creates nothing
+and stops with `NEXTLY_DATABASE_NOT_SET_UP`:
+
+```text
+The database has not been set up for Nextly, and a production start creates no table. Run `nextly migrate` against it, then start the app again.
+```
+
+The same refusal answers a configured PostgreSQL schema that does not exist. `nextly migrate`
+sets an empty database up. With [`db.runMigrationsOnBoot`](#pattern-4-run-migrations-on-boot-opt-in),
+the start runs that step first: it sets the database up, makes a missing translation table, a
+field group's included, and the start goes on. `next build` runs no migration, so a build
+against an empty database stops the same way, with `NEXTLY_DATABASE_NOT_MIGRATED`, naming
+`nextly migrate`. A development start is unchanged: it still sets up an empty database and
+creates what is missing.
+
+#### A changed `dbName`
+
+Changing a collection's or Single's `dbName` now needs a migration: a start no longer renames
+the table to match. `nextly migrate:create` does not write a table rename yet. It reads the new
+name as a new table and the old one as dropped, so the file it writes would lose the rows. Until
+it does, write the rename by hand: run `nextly migrate:create`, then in the file it wrote replace
+the `DROP TABLE` and `CREATE TABLE` under `-- UP` with a rename of the table and a drop of the
+indexes that carry its old name, keeping the `CREATE INDEX` statements it wrote, and do the
+reverse under `-- DOWN`. Keep the snapshot it wrote beside the file. For a collection moving from
+`dbName: "posts"` to `dbName: "articles"` on PostgreSQL or SQLite:
+
+```sql
+-- UP
+ALTER TABLE "dc_posts" RENAME TO "dc_articles";
+DROP INDEX "idx_dc_posts_slug";
+DROP INDEX "idx_dc_posts_created_by";
+DROP INDEX "idx_dc_posts_created_at";
+-- the CREATE INDEX statements migrate:create wrote for "dc_articles"
+```
+
+On MySQL, rename with ``RENAME TABLE `dc_posts` TO `dc_articles`;`` and drop each index with
+``DROP INDEX `idx_dc_posts_slug` ON `dc_articles`;``. `nextly migrate` then applies it and points
+the registry row at the new table, and the next `nextly migrate:create` finds nothing to write.
+
+#### Upgrading a site whose starts made its tables
+
+Before this release, a production start created any collection, Single or field group table its
+configuration declared and the database lacked. A site whose production tables were made that
+way, with no migration for them, takes a baseline before upgrading: run
+[`nextly migrate:baseline`](#graduating-from-dbsync-to-migrations) once against the production
+database, from the build it runs now, and commit the files it writes. Without one, the first
+migration `nextly migrate:create` writes after the upgrade creates those tables again, and
+`nextly migrate` fails on a table that is already there. `migrate:baseline` refuses a project
+that already has a migration history; for one whose starts made only some of its tables, write
+the migration for them with `nextly migrate:create` and record it as applied, without running
+it, with `nextly migrate:resolve --applied <file>`.
 
 ### The schema version a production start checks
 

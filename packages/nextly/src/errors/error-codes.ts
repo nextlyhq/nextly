@@ -141,6 +141,10 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_BOOT_MIGRATIONS_NOT_RUN: 503,
   // Still running rather than refused. 503 for the same reason: retry shortly.
   NEXTLY_BOOT_MIGRATIONS_PENDING: 503,
+  // A production start refused a database `nextly migrate` has not set up: it
+  // holds none of Nextly's tables, and the start creates none. 503 for the
+  // same reason as the two above: the instance serves once the deploy migrates.
+  NEXTLY_DATABASE_NOT_SET_UP: 503,
   // A database with no Nextly tables, where the step that refuses sets up
   // nothing. 503 like the two above: the instance cannot serve until the
   // database is migrated, and running `nextly migrate` is the recovery.
