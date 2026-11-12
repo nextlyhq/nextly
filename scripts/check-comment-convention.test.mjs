@@ -316,7 +316,10 @@ describe("the allowlist", () => {
   // exists, and its entry went with it.
   // 442 -> 441: one recorded offence in `init.ts`, a comment on the drift check
   // naming a numbered change, now describes the code; its entry remains.
-  const EXPECTED_TOTAL = 434;
+  // 436 -> 433: both recorded offences in `BuilderFieldList.tsx` no longer
+  // exist, and its entry went with them; one in `routeHandler.ts` no longer
+  // exists, and its entry remains.
+  const EXPECTED_TOTAL = 433;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
