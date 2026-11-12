@@ -11,7 +11,7 @@
  *
  * @module layout/__tests__/DashboardLayout.rail-foot.test
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,6 +68,8 @@ vi.mock("@admin/hooks/useRouter", () => ({
 const { DashboardLayout } = await import("../DashboardLayout");
 
 const effects = { runs: 0, cleanups: 0 };
+/** How many times the fixture button's own handler ran. */
+let clicks = 0;
 
 function Helper(): JSX.Element {
   useEffect(() => {
@@ -76,12 +78,17 @@ function Helper(): JSX.Element {
       effects.cleanups += 1;
     };
   }, []);
-  return <button type="button">Helper</button>;
+  return (
+    <button type="button" onClick={() => (clicks += 1)}>
+      Helper
+    </button>
+  );
 }
 
 beforeEach(() => {
   effects.runs = 0;
   effects.cleanups = 0;
+  clicks = 0;
   registerComponent("@acme/helper/admin#Helper", Helper);
 });
 afterEach(cleanup);
@@ -106,6 +113,46 @@ describe("a plugin's rail-foot item in the layout", () => {
     await user.keyboard("{Escape}");
     await vi.waitFor(() =>
       expect(screen.queryByTestId("drawer-rail")).toBeNull()
+    );
+    expect(screen.getByTestId("rail")).toContainElement(helper);
+    expect(effects).toEqual({ runs: 1, cleanups: 0 });
+  });
+
+  it("takes a press inside the open drawer without closing it", async () => {
+    render(
+      <DashboardLayout>
+        <p>Page</p>
+      </DashboardLayout>
+    );
+    const helper = screen.getByRole("button", { name: "Helper" });
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Open the navigation menu" })
+    );
+    const drawer = await screen.findByRole("dialog", {
+      name: "Navigation menu",
+    });
+    expect(drawer).toContainElement(helper);
+
+    // A pointer press and its focus, then the click, on the moved item.
+    await user.click(helper);
+
+    expect(clicks).toBe(1);
+    expect(
+      screen.getByRole("dialog", { name: "Navigation menu" })
+    ).toContainElement(helper);
+    expect(screen.getByTestId("drawer-rail")).toContainElement(helper);
+    expect(effects).toEqual({ runs: 1, cleanups: 0 });
+
+    // The control: a press outside the drawer does close it, so the drawer
+    // staying open above is its own reading of the press as inside, not a
+    // dismissal this test cannot see. The page behind is inert to the
+    // pointer while the drawer is open, so the press is dispatched directly.
+    fireEvent.pointerDown(screen.getByText("Page"));
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Navigation menu" })
+      ).toBeNull()
     );
     expect(screen.getByTestId("rail")).toContainElement(helper);
     expect(effects).toEqual({ runs: 1, cleanups: 0 });
