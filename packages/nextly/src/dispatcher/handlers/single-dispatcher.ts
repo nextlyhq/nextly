@@ -122,6 +122,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
+  parseRichTextStyles,
   isTruthyParam,
   parseStatusParam,
   requireParam,
@@ -732,6 +733,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p, _body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
+      // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+      const richTextStyles = parseRichTextStyles(p.richTextStyles);
       // Absent → undefined so the service applies its published-only default
       // (an untrusted read must not leak a draft Single); pass
       // `?status=all|draft|published` to widen. An invalid value is rejected
@@ -781,7 +784,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           result.data = transformRichTextFields(
             result.data,
             single.fields,
-            richTextFormat
+            richTextFormat,
+            richTextStyles
           ) as typeof result.data;
         }
       }

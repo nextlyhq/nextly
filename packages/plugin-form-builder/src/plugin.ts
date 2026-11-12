@@ -22,7 +22,10 @@ import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
 
 import { formsCollection } from "./collections/forms";
-import { submissionSendsCollection } from "./collections/sends";
+import {
+  submissionResendsCollection,
+  submissionSendsCollection,
+} from "./collections/sends";
 import {
   submissionExtensionFields,
   submissionsCollection,
@@ -78,12 +81,15 @@ import {
   type SubmissionOriginMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
+import { registerResend, type ResendDeps } from "./handlers/resend";
 import {
   RETENTION_SCHEDULE,
   type RetentionDeps,
   retentionJob,
   runRetention,
 } from "./handlers/retention";
+import { registerSendHistory } from "./handlers/send-history";
+import { notificationSendDetails } from "./handlers/send-record";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
 import {
   markUploadClaims,
@@ -95,6 +101,7 @@ import {
 } from "./handlers/upload-cleanup";
 import { formUploadRoute } from "./routes/form-upload";
 import { publicFormRoutes } from "./routes/public-forms";
+import { submissionSendsRoutes } from "./routes/submission-sends";
 import { submissionsExportRoute } from "./routes/submissions-export";
 import type {
   AnyFormField,
@@ -291,6 +298,7 @@ export function formBuilder(
   const submissionFields = submissionExtensionFields(resolvedConfig);
   const sendsCol = submissionSendsCollection();
   const uploadsCol = formUploadsCollection();
+  const resendsCol = submissionResendsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
   // until `init` reads the slug the site installed it under.
@@ -330,7 +338,7 @@ export function formBuilder(
     // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
-      collections: [formsCol, submissionsCol, sendsCol, uploadsCol],
+      collections: [formsCol, submissionsCol, sendsCol, uploadsCol, resendsCol],
       // Gives earlier submissions their one-response keys after a form
       // changes how it tells people apart.
       jobs: [
@@ -473,6 +481,12 @@ export function formBuilder(
           handler: () =>
             Promise.resolve(Response.json({ fields: submissionFields })),
         },
+        // A submission's emails: what became of each, a notification's
+        // recent sends, and Resend.
+        ...submissionSendsRoutes({
+          submissionsDeclared: resolvedConfig.formSubmissionOverrides.slug,
+          deps: ctx => resendDeps(ctx, resolvedConfig),
+        }),
       ],
     },
 
@@ -751,6 +765,10 @@ export function formBuilder(
         forms: formsSlug,
         submissions: submissionSlug,
       });
+      // And what became of each, kept with its send as each change happens.
+      registerSendHistory(nextly);
+      // Resend's requests, each queued in the transaction that stores it.
+      registerResend(nextly, resendDeps(nextly, resolvedConfig));
 
       // The uploads a submission names, claimed in the transaction storing
       // it, and released in the one deleting it (or its form). After the
@@ -776,7 +794,7 @@ export function formBuilder(
 
   return {
     plugin,
-    collections: [formsCol, submissionsCol, sendsCol, uploadsCol],
+    collections: [formsCol, submissionsCol, sendsCol, uploadsCol, resendsCol],
     config: resolvedConfig,
   };
 }
@@ -1903,8 +1921,16 @@ async function queueSubmissionNotifications(
     ),
     tx: write.db,
     // Kept so marking the submission Spam, or deleting it, can call off or
-    // forget what it sent.
-    record: sent => recordSend(nextly, write.transaction, submissionId, sent),
+    // forget what it sent, and so its page can say what became of it.
+    record: async (sent, email) =>
+      recordSend(nextly, write.transaction, submissionId, {
+        ...sent,
+        ...(await notificationSendDetails(nextly, {
+          formId,
+          notifications,
+          email,
+        })),
+      }),
   });
 }
 
@@ -1959,6 +1985,67 @@ function logSkippedNotifications(
 }
 
 /**
+ * What Resend builds and queues with, from a context: the notification's
+ * email as `buildNotificationEmails` makes it, whether or not it is active
+ * or its conditions hold (a person chose to send it); the send filters; and
+ * the queue, as a submission's own notifications are queued.
+ */
+function resendDeps(
+  ctx: Pick<NextlyInstance, "self" | "filters" | "services" | "logger">,
+  config: ResolvedFormBuilderConfig
+): ResendDeps {
+  const declaredForms = config.formOverrides.slug;
+  const declaredSubmissions = config.formSubmissionOverrides.slug;
+  return {
+    formsSlug: ctx.self.collections[declaredForms] ?? declaredForms,
+    submissionsSlug:
+      ctx.self.collections[declaredSubmissions] ?? declaredSubmissions,
+    build: (form, submission, notification) =>
+      buildNotificationEmails({
+        notifications: [
+          {
+            ...notification,
+            enabled: true,
+            condition: undefined,
+            conditions: undefined,
+          },
+        ],
+        submittedData: parseJsonColumn(submission.data),
+        formName: form.name,
+        submissionId: idText(submission.id),
+        defaultFrom: config.notifications.defaultFrom,
+        fields: Array.isArray(form.fields)
+          ? (form.fields as AnyFormField[])
+          : [],
+      }).emails[0],
+    filter: (emails, form, submission) =>
+      ctx.filters.apply<FormEmailNotification[], BeforeEmailFilterContext>(
+        "form-builder.beforeEmail",
+        emails,
+        { form, submission }
+      ),
+    queue: input =>
+      queueNotificationEmails({
+        emails: input.emails,
+        emailService: ctx.services.email,
+        logger: ctx.logger,
+        formSlug: undefined,
+        submissionId: input.key,
+        fileAttachments: [],
+        tx: input.tx,
+        excludeRecipients: input.excludeRecipients,
+        record: input.record,
+      }),
+  };
+}
+
+/** A submission's id as text: a string or a number by dialect. */
+function idText(id: unknown): string {
+  if (typeof id === "number") return `${id}`;
+  return typeof id === "string" ? id : "";
+}
+
+/**
  * The key a notification is queued under: its submission, its place among
  * the submission's emails, and a short digest of its notification's id. The
  * place keeps apart two emails of one notification (a `beforeEmail` hook
@@ -2007,8 +2094,13 @@ export async function queueNotificationEmails(input: {
   fileAttachments: Array<{ mediaId: string; filename?: string }>;
   /** The transaction to queue in, which then decides what is kept. */
   tx?: QueueTransaction;
+  /**
+   * Recipients each email leaves out, by digest: those Resend found already
+   * reached. Judged on each email as send filters leave it.
+   */
+  excludeRecipients?: readonly string[];
   /** Records each queued notification for the submission, when given. */
-  record?: (sent: RecordedSend) => Promise<void>;
+  record?: (sent: RecordedSend, email: FormEmailNotification) => Promise<void>;
 }): Promise<void> {
   const { emails, emailService, logger, formSlug, fileAttachments } = input;
   for (const [index, email] of emails.entries()) {
@@ -2040,6 +2132,9 @@ export async function queueNotificationEmails(input: {
           attachments: files.length > 0 ? files : undefined,
           idempotencyKey: sendKey,
           ...(input.tx !== undefined ? { tx: input.tx } : {}),
+          ...(input.excludeRecipients
+            ? { excludeRecipients: input.excludeRecipients }
+            : {}),
         }
       );
       queuedId = queued.id;
@@ -2073,7 +2168,7 @@ export async function queueNotificationEmails(input: {
       if (!refused && input.tx !== undefined) throw err;
     }
     if (queuedId !== undefined) {
-      await recordQueued(input, identity, { queuedId, sendKey });
+      await recordQueued(input, identity, { queuedId, sendKey }, email);
     }
   }
 }
@@ -2091,16 +2186,20 @@ type QueueTransaction = NonNullable<
  */
 async function recordQueued(
   input: {
-    record?: (sent: RecordedSend) => Promise<void>;
+    record?: (
+      sent: RecordedSend,
+      email: FormEmailNotification
+    ) => Promise<void>;
     logger: Pick<NextlyInstance["logger"], "error">;
     tx?: QueueTransaction;
   },
   identity: Record<string, unknown>,
-  sent: RecordedSend
+  sent: RecordedSend,
+  email: FormEmailNotification
 ): Promise<void> {
   if (!input.record) return;
   try {
-    await input.record(sent);
+    await input.record(sent, email);
   } catch (err) {
     input.logger.error?.("Form Builder: notification not recorded", {
       ...identity,

@@ -85,37 +85,38 @@ describe("queryLiveColumnTypes - mysql", () => {
 });
 
 describe("queryLiveColumnTypes - sqlite", () => {
-  it("issues PRAGMA table_info per table", async () => {
-    const all = vi
-      .fn()
-      .mockReturnValueOnce([
-        {
-          cid: 0,
-          name: "id",
-          type: "INTEGER",
-          notnull: 1,
-          dflt_value: null,
-          pk: 1,
-        },
-        {
-          cid: 1,
-          name: "title",
-          type: "TEXT",
-          notnull: 0,
-          dflt_value: null,
-          pk: 0,
-        },
-      ])
-      .mockReturnValueOnce([
-        {
-          cid: 0,
-          name: "id",
-          type: "INTEGER",
-          notnull: 1,
-          dflt_value: null,
-          pk: 1,
-        },
-      ]);
+  it("reads every table's columns in one statement", async () => {
+    // One `pragma_table_info` join over `sqlite_master` for all the tables,
+    // each row naming its table (`tbl`); a statement per table would be two.
+    const all = vi.fn().mockReturnValueOnce([
+      {
+        tbl: "dc_posts",
+        cid: 0,
+        name: "id",
+        type: "INTEGER",
+        notnull: 1,
+        dflt_value: null,
+        pk: 1,
+      },
+      {
+        tbl: "dc_posts",
+        cid: 1,
+        name: "title",
+        type: "TEXT",
+        notnull: 0,
+        dflt_value: null,
+        pk: 0,
+      },
+      {
+        tbl: "dc_users",
+        cid: 0,
+        name: "id",
+        type: "INTEGER",
+        notnull: 1,
+        dflt_value: null,
+        pk: 1,
+      },
+    ]);
     const db = { all };
 
     const result = await queryLiveColumnTypes(db, "sqlite", [
@@ -123,7 +124,7 @@ describe("queryLiveColumnTypes - sqlite", () => {
       "dc_users",
     ]);
 
-    expect(all).toHaveBeenCalledTimes(2);
+    expect(all).toHaveBeenCalledTimes(1);
     // Lower-cased, as the diff reads a SQLite type: the engine treats type
     // names case-insensitively, and one reading serves both.
     expect(result.get("dc_posts")?.get("title")).toBe("text");

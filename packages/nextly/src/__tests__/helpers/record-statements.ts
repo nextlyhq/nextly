@@ -75,7 +75,10 @@ function statementValues(args: readonly unknown[]): unknown[] {
 }
 
 /** The prototype in `start`'s chain that defines `method` itself. */
-function ownerOf(start: object, method: string): Record<string, unknown> {
+export function ownerOf(
+  start: object,
+  method: string
+): Record<string, unknown> {
   let proto: object | null = start;
   while (proto && !Object.prototype.hasOwnProperty.call(proto, method)) {
     proto = Object.getPrototypeOf(proto) as object | null;
@@ -85,7 +88,7 @@ function ownerOf(start: object, method: string): Record<string, unknown> {
 }
 
 /** Where each dialect's driver takes statements: the object and its methods. */
-async function driverEntryPoints(
+export async function driverEntryPoints(
   adapter: DrizzleAdapter,
   dialect: TestDialect
 ): Promise<Array<{ instance: object; methods: string[]; sqlite?: boolean }>> {

@@ -85,7 +85,10 @@ function ConfirmDelete({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Keep them</AlertDialogCancel>
+          {/* Said of what is ticked: one submission is "it". */}
+          <AlertDialogCancel>
+            {count === 1 ? "Keep it" : "Keep them"}
+          </AlertDialogCancel>
           <AlertDialogAction variant="destructive" onClick={onConfirm}>
             Delete
           </AlertDialogAction>

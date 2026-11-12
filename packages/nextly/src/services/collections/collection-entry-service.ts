@@ -20,7 +20,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
-import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "@nextly/lib/rich-text-html";
 
 import {
   everyLanguageOf,
@@ -307,6 +310,8 @@ export class CollectionEntryService extends BaseService {
       select?: Record<string, boolean>;
       where?: WhereFilter;
       richTextFormat?: RichTextOutputFormat;
+      /** How rich text HTML is styled: `"none"` for classes only. */
+      richTextStyles?: RichTextStyles;
       /** Draft/Published lifecycle scope; forwarded to the query service. */
       status?: "published" | "draft" | "all";
       overrideAccess?: boolean;
@@ -457,6 +462,8 @@ export class CollectionEntryService extends BaseService {
     depth?: number;
     select?: Record<string, boolean>;
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     overrideAccess?: boolean;
     /**
      * Which collections a trusted read may reach as relationships are expanded.

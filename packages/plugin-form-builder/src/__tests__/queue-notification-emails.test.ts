@@ -212,7 +212,23 @@ describe("queueing a form's notifications", () => {
     await run(queued, [notification], { tx, record }).done;
     expect(queued.mock.calls[0]![3]).toMatchObject({ tx });
     expect(record).toHaveBeenCalledWith(
-      expect.objectContaining({ queuedId: "q-1" })
+      {
+        queuedId: "q-1",
+        sendKey: expect.stringMatching(
+          /^form-notification:sub-1:0:[0-9a-f]{16}$/
+        ),
+      },
+      {
+        notificationId: "notify-owner",
+        templateSlug: "form-notification",
+        providerId: "provider-1",
+        from: "forms@example.com",
+        to: "owner@example.com",
+        cc: ["team@example.com"],
+        bcc: ["audit@example.com"],
+        replyTo: "visitor@example.com",
+        variables: { name: "Visitor" },
+      }
     );
 
     const outage = new Error("storage read timed out");

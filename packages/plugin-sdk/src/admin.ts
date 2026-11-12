@@ -651,6 +651,80 @@ export { Badge } from "@nextlyhq/admin";
 export type { BadgeProps } from "@nextlyhq/admin";
 
 /**
+ * The parts a plugin page needs beyond a form (@experimental here): a notice
+ * above the content, a panel that slides in from the edge, tabs inside a card,
+ * a progress bar, a menu of row actions and a hint on hover. The same objects
+ * the admin's own pages draw, forwarded through `@nextlyhq/admin` like the
+ * controls above, so a plugin page needs no look of its own for any of them.
+ *
+ * - `Alert` takes `variant`: `info`, `success`, `warning` or `destructive`.
+ * - `Sheet` is the admin's side panel; `SheetContent` takes `side`.
+ * - `Tabs` switches between panels inside a page. For tabs that are routes,
+ *   use `PageTabs`.
+ * - `Progress` takes a `value` out of `max` (100 by default), and `variant`
+ *   `default`, `success` or `error`.
+ * - `DropdownMenu` is the menu behind a button, such as a row's actions.
+ * - `Tooltip` needs a `TooltipProvider` above it; the admin provides one, so a
+ *   plugin page adds its own only when it renders outside the admin.
+ */
+export {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Progress,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@nextlyhq/admin";
+export type {
+  AlertDescriptionProps,
+  AlertProps,
+  AlertTitleProps,
+  SheetCloseProps,
+  SheetContentProps,
+  SheetDescriptionProps,
+  SheetFooterProps,
+  SheetHeaderProps,
+  SheetProps,
+  SheetTitleProps,
+  SheetTriggerProps,
+  TabsContentProps,
+  TabsListProps,
+  TabsProps,
+  TabsTriggerProps,
+  ProgressProps,
+  DropdownMenuCheckboxItemProps,
+  DropdownMenuContentProps,
+  DropdownMenuItemProps,
+  DropdownMenuLabelProps,
+  DropdownMenuRadioItemProps,
+  DropdownMenuSeparatorProps,
+} from "@nextlyhq/admin";
+
+/**
  * Ask the admin to hide its own chrome while an immersive surface is mounted
  * (@experimental) — a full-bleed editor, a media browser, a preview mode.
  *
@@ -911,8 +985,10 @@ export type {
  * your project" card draws: `Checklist` puts a progress bar over an ordered
  * list, and `ChecklistItem` is one step, marked open, done or skipped, with
  * its name, a hint line and its buttons. The bar is a picture only; say the
- * count in words beside the list's title ("4 of 6 done"). `ChecklistMark` and
- * `ChecklistProgress` are the parts, for a layout of its own.
+ * count in words beside the list's title ("4 of 6 done"). `columns={2}` lays
+ * the steps in two columns where the list is wide enough, and
+ * `doneStyle="struck"` strikes a done step's name through. `ChecklistMark`
+ * and `ChecklistProgress` are the parts, for a layout of its own.
  *
  * Intended to be stable once a first-party plugin's setup list exercises it.
  */
@@ -928,6 +1004,7 @@ export type {
   ChecklistMarkProps,
   ChecklistProgressProps,
   ChecklistStatus,
+  ChecklistDoneStyle,
 } from "@nextlyhq/admin";
 
 /**

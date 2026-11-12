@@ -12,6 +12,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { startCatalogOf } from "../pipeline/diff/start-catalog-scope";
 
 import {
   identifierCaseRules,
@@ -26,7 +27,7 @@ import {
  * and `getDrizzle` is generic over it; naming only `execute` keeps this typed
  * without reaching for `any`.
  */
-interface RawSqlExecutor {
+export interface RawSqlExecutor {
   execute(query: SQL): Promise<unknown>;
 }
 
@@ -58,6 +59,17 @@ export async function readIdentifierCaseRules(
   }
 
   const db = adapter.getDrizzle<RawSqlExecutor>();
+  // A production start reads the setting once with the rest of its catalog
+  // (`start-catalog-scope`); every question it asks shares that reading.
+  const catalog = startCatalogOf(db);
+  if (catalog !== undefined) return catalog.caseRules;
+  return readMysqlIdentifierCaseRules(db);
+}
+
+/** Ask a MySQL server how it compares table names (`lower_case_table_names`). */
+export async function readMysqlIdentifierCaseRules(
+  db: RawSqlExecutor
+): Promise<IdentifierCaseRules> {
   const result = await db.execute(
     sql`select @@lower_case_table_names as lower_case_table_names`
   );
