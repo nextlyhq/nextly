@@ -57,6 +57,7 @@ function args(over: Record<string, unknown> = {}) {
       coreChanged: false,
       ran: true,
     })),
+    provisionUserFields: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -243,9 +244,7 @@ describe("runProdMigrationsIfEnabled", () => {
       }),
     });
 
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
   });
 
   it("still starts when an applied file was edited, logging the refusal", async () => {
@@ -266,9 +265,7 @@ describe("runProdMigrationsIfEnabled", () => {
       errors.push(m);
     };
 
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
     expect(errors.join("\n")).toContain(
       "20261102_000001_add_posts.sql` has changed since it was applied"
     );
@@ -318,9 +315,7 @@ describe("runProdMigrationsIfEnabled", () => {
         return { applied: 1, coreChanged: false, ran: true };
       }),
     });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(true);
     // The boot logger's .error must NOT have fired (no false "failed").
     expect(a.logger.error).not.toHaveBeenCalled();
     // success was routed to the boot logger's info.
@@ -417,9 +412,7 @@ describe("runProdMigrationsIfEnabled", () => {
         throw new Error("boom");
       }),
     });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
     expect(a.logger.error).toHaveBeenCalled();
   });
 });

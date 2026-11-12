@@ -9,8 +9,8 @@
  * - a dropdown's and a radio group's choices, stored as plain label and value
  *   pairs, and whether a dropdown takes several;
  * - a checkbox as one yes or no, with no list of choices;
- * - a text area's rows, a file's accepted types, several files and email
- *   attachment, a date's bounds, a number's step and a hidden field's value;
+ * - a text area's rows, a file's accepted types and several files, a date's
+ *   bounds, a number's step and a hidden field's value;
  * - a file's size limit, which a form stores on the field;
  * - the form's own show-or-hide logic on several conditions, as its own tab;
  * - only the validation rules the form's checks enforce for the type;
@@ -413,7 +413,7 @@ function ConsentText(props: FieldSettingsControlProps): JSX.Element {
   );
 }
 
-/** A file's accepted types, several files, and attaching it to emails. */
+/** A file's accepted types, and whether it takes several files. */
 function FileSettings(props: FieldSettingsSurfaceControlProps): JSX.Element {
   const { form, update } = useFormField(props);
   const { readOnly } = props;
@@ -443,14 +443,9 @@ function FileSettings(props: FieldSettingsSurfaceControlProps): JSX.Element {
         readOnly={readOnly}
         onChange={multiple => update({ multiple })}
       />
-      <Toggle
-        id={`${id}-attach`}
-        label="Attach to notification emails"
-        help="The uploaded files go with every notification email of this form."
-        checked={file.attachToEmail === true}
-        readOnly={readOnly}
-        onChange={attachToEmail => update({ attachToEmail })}
-      />
+      {/* Which notifications carry its files is chosen on each
+          notification's page (Attach files from); a field's earlier switch
+          stays stored as what a notification saved before attaches. */}
     </div>
   );
 }
