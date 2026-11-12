@@ -15,25 +15,14 @@
  * @module domains/versions/version-language
  */
 
-import { isFieldGroupField } from "../../collections/fields/guards";
-import { isVirtualField } from "../../collections/fields/virtual";
-
-/** What {@link carriesComponentValues} reads of a field. */
-interface VersionField {
-  readonly type: string;
-  readonly virtual?: unknown;
-  readonly options?: unknown;
-}
+import { componentsReached } from "./draft-split-eligibility";
 
 /**
- * Whether a version of a document with these top-level `fields` carries
- * component values, read in a language: true when one stores a component. A
- * virtual component field stores no rows, so it carries none.
+ * Whether a version of a document with these `fields` carries component
+ * values, read in a language: true when a stored field reaches a component at
+ * any depth, inside a group or a repeater as well as at the top level. A
+ * virtual field stores no rows, so a component only it reaches carries none.
  */
-export function carriesComponentValues(
-  fields: readonly VersionField[]
-): boolean {
-  return fields.some(
-    field => isFieldGroupField(field) && !isVirtualField(field)
-  );
+export function carriesComponentValues(fields: readonly unknown[]): boolean {
+  return componentsReached(fields, null).stored.size > 0;
 }

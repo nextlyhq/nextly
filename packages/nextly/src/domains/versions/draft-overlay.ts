@@ -36,7 +36,10 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 
-import { isDraftSplitEligible } from "./draft-split-eligibility";
+import {
+  evaluateDraftSplitEligibility,
+  heldBeforeTheRule,
+} from "./draft-split-eligibility";
 import type { ComponentSchemas } from "./restore-snapshot";
 import { workingDraftLocale } from "./working-draft-locale";
 
@@ -133,7 +136,7 @@ export function resolveDraftOverlay(
     defaultLocale: input.defaultLocale ?? null,
   });
 
-  const eligible = isDraftSplitEligible({
+  const verdict = evaluateDraftSplitEligibility({
     collectionHasStatus: input.collectionHasStatus,
     draftsVersioningEnabled: input.draftsVersioningEnabled,
     fields: input.fields,
@@ -143,7 +146,9 @@ export function resolveDraftOverlay(
   });
 
   const overlay =
-    eligible &&
+    // A draft held before the `localized-component` rule is still shown, as
+    // the publish that puts it live still finds it.
+    (verdict.eligible || heldBeforeTheRule(verdict)) &&
     input.includeWorkingDraft &&
     input.callerMayEdit &&
     input.requestedStatus !== "published" &&

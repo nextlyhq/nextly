@@ -2496,9 +2496,9 @@ describe("draft/published split — schema and component eligibility (integratio
     handle = undefined;
 
     // Re-open with the component now localized. An unlocalized collection
-    // reaching a localized component holds no draft without per-language
-    // storage, so the draft written before is no longer read, and a publish
-    // consumes it with none of its content written.
+    // reaching a localized component holds no new draft without per-language
+    // storage, but the draft written before is still shown, and a publish puts
+    // it live: an author is never shown one document and ships another.
     const reopened = await bootFile(withHero(true));
 
     const draftRead = await reopened.getEntry({
@@ -2520,7 +2520,7 @@ describe("draft/published split — schema and component eligibility (integratio
     expect({
       shown: (draftRead.data as { title?: string }).title,
       shipped: afterPublish?.title,
-    }).toEqual({ shown: "live", shipped: "live" });
+    }).toEqual({ shown: "draft-title", shipped: "draft-title" });
     expect(await workingDraftCount(id)).toBe(0);
   });
 

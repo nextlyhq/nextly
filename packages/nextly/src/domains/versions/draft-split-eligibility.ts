@@ -27,6 +27,7 @@
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
 import { isVirtualField } from "../../collections/fields/virtual";
+import { NextlyError } from "../../errors/nextly-error";
 import { hasPasswordField } from "../../shared/lib/password-fields";
 import { consoleLogger } from "../../shared/types";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
@@ -181,6 +182,32 @@ export function evaluateDraftSplitEligibility(
   // including the ones the schema and mutation paths read. Cheap here because
   // the object has three fields and this runs once per eligibility question.
   return { ...ELIGIBLE };
+}
+
+/**
+ * Whether a document the verdict refuses may still hold a draft saved before
+ * it was refused: the `localized-component` rule refuses documents that held
+ * drafts before it, and such a draft stays shown and publishable, never lost.
+ */
+export function heldBeforeTheRule(verdict: DraftSplitEligibility): boolean {
+  return verdict.reason === "localized-component";
+}
+
+/**
+ * The refusal of a save over a draft held before the `localized-component`
+ * rule: the save would write live beside it, and the draft's publish would
+ * then put its older values back.
+ */
+export function heldBeforeTheRuleRefusal(
+  collection: string,
+  entryId: string
+): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message:
+      "This document has a draft saved before it stopped holding drafts. Publish or discard that draft first, then save again.",
+    logContext: { reason: "held-before-the-rule", collection, entryId },
+  });
 }
 
 /**
@@ -387,6 +414,21 @@ function reachedOnlyThroughVirtualFields(
   fields: FieldConfig[],
   componentSchemas: ComponentSchemas | null
 ): Set<string> {
+  const reached = componentsReached(fields, componentSchemas);
+  return new Set(
+    [...reached.virtual].filter(slug => !reached.stored.has(slug))
+  );
+}
+
+/**
+ * The components `fields` reach at any depth (inside groups and repeaters,
+ * and inside the components `componentSchemas` describes), by whether a
+ * stored field reaches each or only a virtual one does.
+ */
+export function componentsReached(
+  fields: readonly unknown[],
+  componentSchemas: ComponentSchemas | null
+): { stored: Set<string>; virtual: Set<string> } {
   const reached = { stored: new Set<string>(), virtual: new Set<string>() };
   // Each field list once per state, so a group whose fields lead back to
   // itself ends, and a work list rather than recursion, so a deep chain of
@@ -401,9 +443,7 @@ function reachedOnlyThroughVirtualFields(
       work.push(...stepsFrom(field, state, reached, componentSchemas));
     }
   }
-  return new Set(
-    [...reached.virtual].filter(slug => !reached.stored.has(slug))
-  );
+  return reached;
 }
 
 /** Whether the walk is under a virtual field, which stores nothing. */

@@ -20,6 +20,7 @@ import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
+  group,
   text,
 } from "../../../config";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
@@ -31,6 +32,8 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { VersionsDbApi } from "../db-api";
+import { VersionsRepository } from "../versions-repository";
 
 /** Untranslated, embedding the translated `NOTE`. */
 const NOTES = "hdnotes";
@@ -38,6 +41,10 @@ const NOTES = "hdnotes";
 const PAGES = "hdpages";
 /** An untranslated Single embedding the translated `NOTE`. */
 const SITE = "hdsite";
+/** Translated: a translated `title` and a shared `code`. */
+const ARTICLES = "hdarticles";
+/** Untranslated, with the untranslated `SEO` inside a named group. */
+const BOXED = "hdboxed";
 const NOTE = "hdnote";
 const SEO = "hdseo";
 
@@ -73,6 +80,28 @@ async function boot(
         fields: [
           text({ name: "title" }),
           fieldGroup({ name: "banner", component: NOTE }),
+        ],
+      }),
+      defineCollection({
+        slug: BOXED,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          group({
+            name: "box",
+            fields: [fieldGroup({ name: "seo", component: SEO })],
+          }),
+        ],
+      }),
+      defineCollection({
+        slug: ARTICLES,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "code", localized: false }),
         ],
       }),
       defineCollection({
@@ -315,6 +344,122 @@ describe.each(getConfiguredTestDialects())(
         // Saved live, so nothing was held.
         expect(await heldIn(id)).toEqual([]);
       }, 90_000);
+
+      // Such a collection held one draft with no language before the rule
+      // refused it. That draft is still shown and can be published or
+      // discarded, and a save over it is refused rather than writing live
+      // beside it: nothing of it is lost.
+      it("keeps a draft held before the rule, refusing a save until it is published or discarded", async () => {
+        const t = await boot(dialect, false);
+        const entries = entriesOf(t);
+        const notes = collectionDoc(entries, NOTES);
+        const id = await notes.create({
+          title: "Notes",
+          banner: { words: "en words" },
+          status: "published",
+        });
+        const live = await entries.getEntry({
+          collectionName: NOTES,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        });
+        await new VersionsRepository(
+          t.adapter as unknown as VersionsDbApi
+        ).upsertWorkingDraft({
+          ref: { scopeKind: "collection", scopeSlug: NOTES, entryId: id },
+          locale: null,
+          snapshot: {
+            ...(live.data as Record<string, unknown>),
+            title: "Held before",
+          },
+        });
+        const editorTitle = async () =>
+          (
+            (
+              await entries.getEntry({
+                collectionName: NOTES,
+                entryId: id,
+                overrideAccess: true,
+                locale: "en",
+                includeWorkingDraft: true,
+                status: "all",
+              })
+            ).data as Record<string, unknown>
+          ).title;
+        expect(await editorTitle()).toBe("Held before");
+
+        const refused = await entries.updateEntry(
+          {
+            collectionName: NOTES,
+            entryId: id,
+            overrideAccess: true,
+            locale: "en",
+          },
+          { title: "Saved over it", _overwrite: true }
+        );
+        expect(refused.success).toBe(false);
+        expect(refused.statusCode).toBe(409);
+        expect(await heldIn(id)).toEqual(["shared"]);
+        expect(await editorTitle()).toBe("Held before");
+
+        await entries.discardWorkingDraft({
+          collectionName: NOTES,
+          entryId: id,
+          version: { _overwrite: true },
+        });
+        expect(await heldIn(id)).toEqual([]);
+        expect(await editorTitle()).toBe("Notes");
+      }, 90_000);
+
+      // A component inside a group is read in a language as one at the top
+      // level is, so its versions are recorded under that language too.
+      it("records a held save of a document with a component inside a group under its language", async () => {
+        const boxed = collectionDoc(
+          entriesOf(await boot(dialect, false)),
+          BOXED
+        );
+        const id = await boxed.create({ title: "Box", status: "published" });
+        await boxed.save(id, "en", { title: "Box 2", status: "published" });
+        await boxed.save(id, "en", { title: "Box 3" });
+
+        const languages = await versionLanguages(id);
+        expect(languages.length).toBeGreaterThanOrEqual(3);
+        expect(new Set(languages)).toEqual(new Set(["en"]));
+      }, 90_000);
+
+      // A second held edit of a field the first already changed is a change
+      // of its own: it is recorded and is what the draft holds, a translated
+      // field as well as a shared one.
+      it.each([
+        { field: "title", first: "Again", second: "Changed" },
+        { field: "code", first: "A-1", second: "A-2" },
+      ])(
+        "holds a second edit of $field after a first",
+        async ({ field, first, second }) => {
+          const entries = entriesOf(await boot(dialect, false));
+          const articles = collectionDoc(entries, ARTICLES);
+          const id = await articles.create({ title: "Live", code: "L" });
+          await articles.save(id, "en", { status: "published" });
+          await articles.save(id, "en", { [field]: first });
+          const afterFirst = (await versionLanguages(id)).length;
+
+          await articles.save(id, "en", { [field]: second });
+
+          expect((await versionLanguages(id)).length).toBe(afterFirst + 1);
+          const draft = await entries.getEntry({
+            collectionName: ARTICLES,
+            entryId: id,
+            overrideAccess: true,
+            locale: "en",
+            includeWorkingDraft: true,
+            status: "all",
+          });
+          expect(draft.success, JSON.stringify(draft)).toBe(true);
+          expect((draft.data as Record<string, unknown>)[field]).toBe(second);
+        },
+        90_000
+      );
 
       // An empty component was still read in a language, so a held save is
       // recorded under it as the publishes before it were, and the draft is

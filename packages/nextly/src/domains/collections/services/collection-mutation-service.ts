@@ -306,7 +306,12 @@ import {
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
-import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
+import {
+  evaluateDraftSplitEligibility,
+  heldBeforeTheRule,
+  heldBeforeTheRuleRefusal,
+  isDraftSplitEligible,
+} from "../../versions/draft-split-eligibility";
 import {
   mediaUsageTablePresent,
   sweepDeletedDocument,
@@ -1711,8 +1716,7 @@ interface WorkingDraftWriteContext {
   updateFilters?: readonly FilteredWriteCheck[];
   /**
    * The translatable fields this save wrote, which the locale split moved
-   * out of `updatePayload`. Kept by part (`part-drafts`), they are what makes
-   * a save touch its language's draft.
+   * out of `updatePayload`: what makes a save touch its language's draft.
    */
   translatedKeys?: readonly string[];
 }
@@ -12964,9 +12968,12 @@ export class CollectionMutationService extends BaseService {
       ...Object.keys(updatePayload),
       ...Object.keys(componentFieldData),
       ...Object.keys(manyToManyData),
-      // Kept by part, a translatable edit is a change of its own language's
-      // draft, so it is laid over that draft as the other edits are.
-      ...(draftsKeptByPart() ? (ctx.translatedKeys ?? []) : []),
+      // A translatable edit is moved out of `updatePayload` by the locale
+      // split, but is a change of this language's draft all the same, so it
+      // is laid over the draft as the other edits are. Left out, a second
+      // held edit of a translated field matches the draft it replaces and is
+      // dropped without a version.
+      ...(ctx.translatedKeys ?? []),
     ]);
     const patchFields = Object.fromEntries(
       Object.entries(patchedDocument).filter(([key]) => touched.has(key))
@@ -14691,13 +14698,18 @@ export class CollectionMutationService extends BaseService {
       // misfile a promoted draft into the wrong companion, an unresolved one
       // drops its subtree on promote, and a password cannot ride a draft
       // snapshot. See isDraftSplitEligible.
-      const splitEnabled = isDraftSplitEligible({
+      const splitVerdict = evaluateDraftSplitEligibility({
         collectionHasStatus,
         draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
         fields: fields as unknown as FieldConfig[],
         componentSchemas: splitComponentSchemas,
         documentLocalized,
       });
+      const splitEnabled = splitVerdict.eligible;
+      // A document the `localized-component` rule now refuses may still hold
+      // a draft saved before the rule: it stays shown and publishable, and a
+      // save is refused until it is published or discarded.
+      const mayHoldEarlierDraft = heldBeforeTheRule(splitVerdict);
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).
@@ -14729,7 +14741,10 @@ export class CollectionMutationService extends BaseService {
       // restore payload directly and leave any working draft in place.
       const isRestoreWrite =
         params.sourceVersionNo !== undefined && params.sourceVersionNo !== null;
-      const promotePossible = splitEnabled && !namesNoStatus && !isRestoreWrite;
+      const promotePossible =
+        (splitEnabled || mayHoldEarlierDraft) &&
+        !namesNoStatus &&
+        !isRestoreWrite;
       // The caller's grants, resolved HERE, before the write transaction opens.
       //
       // The promotion gate runs under the row lock, on the draft that
@@ -15086,6 +15101,25 @@ export class CollectionMutationService extends BaseService {
           requestLocale: params.locale ?? null,
           defaultLocale: this.localization?.defaultLocale ?? null,
         }).hold;
+
+        // A save over a draft held before the `localized-component` rule
+        // would write live beside it, and its next publish would put the
+        // older draft back: refused until the draft is published or discarded.
+        if (
+          mayHoldEarlierDraft &&
+          namesNoStatus &&
+          !isRestoreWrite &&
+          (await new VersionsRepository(tx).findWorkingDraft(
+            {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: params.entryId,
+            },
+            draftLocaleKey
+          ))
+        ) {
+          throw heldBeforeTheRuleRefusal(params.collectionName, params.entryId);
+        }
 
         // A recorded draft save restored onto a published document must stay
         // pending. A document that can no longer hold a draft would take it
@@ -15980,7 +16014,7 @@ export class CollectionMutationService extends BaseService {
             // leave the sidecar to resurface if the split were re-enabled. The
             // delete is a cheap indexed no-op when none exists, and it never hits
             // a just-stored draft: that path keeps `splitEnabled` true.
-            if (!splitEnabled) {
+            if (!splitEnabled && !mayHoldEarlierDraft) {
               await this.consumeWorkingDraft(
                 tx,
                 {

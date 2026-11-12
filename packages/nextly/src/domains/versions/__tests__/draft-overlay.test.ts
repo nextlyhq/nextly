@@ -99,15 +99,16 @@ describe("resolveDraftOverlay", () => {
    * overlay still tested `schema.localized` and refused them. The author's edit
    * was stored and then shown as the old content.
    */
-  // An unlocalized document reaching a localized component holds no draft
-  // without per-language storage (its draft would have no language), and holds
-  // one under it, keyed by the request's language. The read agrees either way.
+  // An unlocalized document reaching a localized component holds no new draft
+  // without per-language storage (its draft would have no language), yet a read
+  // still looks for one held before, which its publish would put live. Under
+  // per-language storage it holds one, keyed by the request's language.
   it.each([
-    { perLanguageStorage: false, holds: false },
-    { perLanguageStorage: true, holds: true },
+    { perLanguageStorage: false, holds: false, shows: true },
+    { perLanguageStorage: true, holds: true, shows: true },
   ])(
     "agrees with the WRITE rule about a localized component (per-language storage: $perLanguageStorage)",
-    ({ perLanguageStorage, holds }) => {
+    ({ perLanguageStorage, holds, shows }) => {
       setPerLanguageStorage(perLanguageStorage);
       try {
         const shared = {
@@ -135,7 +136,7 @@ describe("resolveDraftOverlay", () => {
         // would still pass if the write later stopped holding.
         expect({ held: held.hold, shown: shown.overlay }).toEqual({
           held: holds,
-          shown: holds,
+          shown: shows,
         });
         expect(shown.draftLocale).toBe(held.draftLocale);
       } finally {
