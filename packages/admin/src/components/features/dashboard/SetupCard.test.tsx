@@ -135,11 +135,11 @@ const lineOf = (kind: SetupStep["kind"]) =>
 
 /** A line's hint, under its name. */
 const hintOf = (kind: SetupStep["kind"]) =>
-  lineOf(kind).querySelector("[data-setup-hint]")!.textContent;
+  lineOf(kind).querySelector("[data-checklist-hint]")!.textContent;
 
 /** A line's mark. */
 const markOf = (kind: SetupStep["kind"]) =>
-  lineOf(kind).querySelector<HTMLElement>("[data-setup-mark]")!;
+  lineOf(kind).querySelector<HTMLElement>("[data-checklist-mark]")!;
 
 beforeEach(() => {
   put.mockReset();
@@ -157,7 +157,9 @@ describe("the setup card's checklist", () => {
     expect(
       screen.getByRole("region", { name: /Set up your project/ })
     ).toHaveAccessibleName("Set up your project, 1 of 5 done");
-    const bar = document.querySelector<HTMLElement>("[data-setup-progress]")!;
+    const bar = document.querySelector<HTMLElement>(
+      "[data-checklist-progress]"
+    )!;
     expect(bar.firstElementChild).toHaveStyle({ width: "20%" });
     // Drawn in the success status's solid colour, its own thin shape.
     expect(bar.firstElementChild).toHaveClass("bg-success-solid");
@@ -205,7 +207,7 @@ describe("the setup card's checklist", () => {
     );
     // No step numbers.
     for (const line of lines()) {
-      expect(line.querySelector("[data-setup-mark]")).toHaveTextContent("");
+      expect(line.querySelector("[data-checklist-mark]")).toHaveTextContent("");
     }
   });
 
@@ -385,7 +387,7 @@ describe("the setup card's checklist", () => {
       for (const line of lines()) {
         // The name takes what is left and the buttons wrap under it where both do not fit.
         expect(line).toHaveClass("flex", "flex-wrap");
-        expect(line.querySelector("[data-setup-actions]")).toHaveClass(
+        expect(line.querySelector("[data-checklist-actions]")).toHaveClass(
           "ml-auto",
           "flex-wrap"
         );

@@ -405,6 +405,344 @@ padding, so the page lays itself out. A page that draws its own `PageFrame` is n
 a second time. To put something in the admin's top bar, such as a Save button, use
 `TopBarPlace`.
 
+### Building blocks core pages use
+
+> **Experimental.** These may change before they are marked stable.
+
+`@nextlyhq/plugin-sdk/admin` also exports the parts core pages are assembled from, so a
+plugin page draws the admin's own list, trail, checklist and settings rows rather than a
+copy of how they look.
+
+| Export                                             | What it draws                                                                                                                                         |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Breadcrumbs`                                      | The page's trail, in the admin's top bar. Pass it as `PageHeader`'s `breadcrumbs`; the last item is the page itself.                                  |
+| `ListView`                                         | `DataTableView` with the admin's list toolbar (search, filters, the columns menu, list actions), its empty state and slots above and below the table. |
+| `useTableColumns`, `useListColumns`                | The columns menu's control, with each reader's choice remembered per list.                                                                            |
+| `ListToolbar`, `ListColumnsMenu`, `ListEmptyState` | The parts of `ListView`, for a list laid out by hand.                                                                                                 |
+| `Badge`                                            | A status chip. `success`, `warning`, `destructive` and `info` draw a quiet chip with a status dot.                                                    |
+| `SegmentedChoice`                                  | A short choice kept in view, such as a View / Edit switch. `size="bordered"` for a setting in a form.                                                 |
+| `Checklist`, `ChecklistItem`                       | A setup list with a progress bar; each step is `open`, `done` or `skipped`.                                                                           |
+| `FieldShell` with `layout="row"`                   | A settings row: the label and its help on the left, the control on the right.                                                                         |
+| `SettingsRowGroup`                                 | The same row for a group of controls, named as one group.                                                                                             |
+| `ListView` with `grouping`, `rowDetail`            | Rows in groups, each under a header row with its title, a badge, a count and actions; and rows that open a region below them.                         |
+| `Stepper`                                          | Where a flow of a few steps is: each step done, current or to come, with a way back from a done step.                                                 |
+| `FormActions`                                      | The form's one action bar, held at the bottom of the page, saying when there are unsaved changes, or the page's own `message`.                        |
+
+A list page with a trail, a search, a status filter, the columns menu and row actions:
+
+```tsx
+// src/admin/RedirectsPage.tsx
+import { useState } from "react";
+import {
+  Badge,
+  Breadcrumbs,
+  ListView,
+  PageFrame,
+  PageHeader,
+  useTableColumns,
+  type NextlyColumn,
+} from "@nextlyhq/plugin-sdk/admin";
+
+interface Redirect {
+  id: string;
+  from: string;
+  to: string;
+  live: boolean;
+}
+
+const COLUMNS: NextlyColumn<Redirect>[] = [
+  { name: "from", header: "From" },
+  { name: "to", header: "To" },
+  {
+    name: "live",
+    header: "Status",
+    cell: ({ row }) => (
+      <Badge variant={row.live ? "success" : "warning"}>
+        {row.live ? "Served" : "Not served"}
+      </Badge>
+    ),
+  },
+];
+
+// The identifying column stays out of the columns menu.
+const ALWAYS_VISIBLE = new Set(["from"]);
+
+export function RedirectsPage({ redirects }: { redirects: Redirect[] }) {
+  const [search, setSearch] = useState("");
+  const { columns, columnsControl } = useTableColumns({
+    storageKey: "my-plugin-redirects",
+    columns: COLUMNS,
+    alwaysVisible: ALWAYS_VISIBLE,
+  });
+  const rows = redirects.filter(row => row.from.includes(search));
+
+  return (
+    <PageFrame type="list">
+      <PageHeader
+        title="Redirects"
+        breadcrumbs={
+          <Breadcrumbs
+            items={[
+              { label: "My plugin", href: "/admin/plugins/my-plugin" },
+              { label: "Redirects" },
+            ]}
+          />
+        }
+      />
+      <ListView<Redirect>
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search redirects",
+        }}
+        columnsControl={columnsControl}
+        columns={columns}
+        rows={rows}
+        getRowId={row => row.id}
+        rowActions={() => [{ id: "edit", label: "Edit", onSelect: () => {} }]}
+        empty={{ title: "No redirects yet" }}
+        emptyFiltered={{ title: "No redirect matches" }}
+      />
+    </PageFrame>
+  );
+}
+```
+
+`empty` is shown for a list with nothing in it and `emptyFiltered` for a search or filter
+that matched nothing, so the second never invites the reader to create a first record.
+Filters go in `filters` (inside the toolbar's Filter menu) or `inlineFilters` (kept in
+view, such as a status `Select`). A `SelectTrigger` fills its container by default, so give
+an inline one a width, or it takes the whole row.
+
+A settings form in the admin's settings rows:
+
+```tsx
+// src/admin/SettingsPage.tsx
+import { useState } from "react";
+import {
+  Button,
+  FieldShell,
+  FormActions,
+  FormSection,
+  Input,
+  PageFrame,
+  PageHeader,
+  SegmentedChoice,
+  SettingsRowGroup,
+} from "@nextlyhq/plugin-sdk/admin";
+
+export function SettingsPage() {
+  const [separator, setSeparator] = useState("|");
+  const [dirty, setDirty] = useState(false);
+
+  return (
+    <PageFrame type="form">
+      <PageHeader title="Settings" />
+      <FormSection label="General">
+        <FieldShell
+          layout="row"
+          label="Site name"
+          description="Ends every title."
+        >
+          <Input onChange={() => setDirty(true)} />
+        </FieldShell>
+        <SettingsRowGroup label="Title separator">
+          <SegmentedChoice
+            aria-label="Title separator"
+            size="bordered"
+            options={["|", "-", "/"].map(value => ({ value, label: value }))}
+            value={separator}
+            onSelect={next => {
+              setSeparator(next);
+              setDirty(true);
+            }}
+          />
+        </SettingsRowGroup>
+      </FormSection>
+      <FormActions dirty={dirty}>
+        <Button onClick={() => setDirty(false)}>Save changes</Button>
+      </FormActions>
+    </PageFrame>
+  );
+}
+```
+
+`FieldShell` points its label at the control and its help and error at the control's
+description. Use `SettingsRowGroup` where the right column holds several controls, or one
+that is itself a group such as `SegmentedChoice`, which a `<label for>` cannot name.
+
+A setup checklist. The bar is a picture, so say the count in words beside the title:
+
+```tsx
+// src/admin/SetupCard.tsx
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Checklist,
+  ChecklistItem,
+} from "@nextlyhq/plugin-sdk/admin";
+
+export function SetupCard() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Set up · 1 of 2 done</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Checklist label="Setup steps" done={1} total={2}>
+          <ChecklistItem status="done" label="Name the site" hint="Done" />
+          <ChecklistItem
+            status="open"
+            label="Import old values"
+            hint="Nothing imported yet"
+            actions={
+              <Button size="sm" variant="outline">
+                Import
+              </Button>
+            }
+          />
+        </Checklist>
+      </CardContent>
+    </Card>
+  );
+}
+```
+
+Rows in groups, each row opening a region that lists what it counts. Every listed group is
+drawn in its listed order, even one with no rows; its header counts its rows ("2 rows")
+unless you pass a `count`, such as a total when the list is paginated:
+
+```tsx
+// src/admin/ProblemsList.tsx
+import {
+  Badge,
+  Button,
+  ListView,
+  type DataTableGroup,
+  type NextlyColumn,
+} from "@nextlyhq/plugin-sdk/admin";
+
+interface Problem {
+  id: string;
+  severity: "error" | "warning";
+  title: string;
+  pages: { id: string; title: string; path: string }[];
+}
+
+const COLUMNS: NextlyColumn<Problem>[] = [
+  { name: "title", header: "Problem" },
+  {
+    name: "pages",
+    header: "Pages",
+    accessor: row => row.pages.length,
+  },
+];
+
+const GROUPS: DataTableGroup[] = [
+  {
+    id: "error",
+    title: "Errors",
+    badge: <Badge variant="destructive">Fix first</Badge>,
+  },
+  {
+    id: "warning",
+    title: "Warnings",
+    actions: (
+      <Button size="sm" variant="outline">
+        Check again
+      </Button>
+    ),
+  },
+];
+
+export function ProblemsList({ problems }: { problems: Problem[] }) {
+  return (
+    <ListView<Problem>
+      columns={COLUMNS}
+      rows={problems}
+      getRowId={row => row.id}
+      ariaLabel="Problems"
+      grouping={{
+        groups: GROUPS,
+        groupOf: row => row.severity,
+        collapsible: true,
+      }}
+      rowDetail={{
+        hasDetail: row => row.pages.length > 0,
+        toggleLabel: row => `Pages with ${row.title}`,
+        render: row => (
+          <ul>
+            {row.pages.map(page => (
+              <li key={page.id}>
+                {page.title} <code>{page.path}</code>
+              </li>
+            ))}
+          </ul>
+        ),
+      }}
+      empty={{ title: "No problems found" }}
+    />
+  );
+}
+```
+
+Each group is a row group named by its title, and with `collapsible` the title is the
+button that folds its rows. A row's toggle is a button in its first column that says
+whether its region is open; the region below the row is named by the row's identifying
+cell. Both states belong to the list unless you pass `collapsedIds` or `expandedIds`
+with their change handlers. In the narrow card view the groups are sections and each
+card carries its own toggle.
+
+A flow of a few steps, with the steps already done linking back, and a save bar that
+says what changed:
+
+```tsx
+// src/admin/ImportPage.tsx
+import {
+  Button,
+  FormActions,
+  PageFrame,
+  PageHeader,
+  Stepper,
+} from "@nextlyhq/plugin-sdk/admin";
+
+export function ImportPage({ changed }: { changed: number }) {
+  return (
+    <PageFrame type="form">
+      <PageHeader title="Import" />
+      <Stepper
+        aria-label="Import steps"
+        current={2}
+        steps={[
+          {
+            label: "Choose the source",
+            href: "/admin/plugins/my-plugin/import",
+          },
+          {
+            label: "Match the fields",
+            href: "/admin/plugins/my-plugin/import/fields",
+          },
+          { label: "Check the result" },
+        ]}
+      />
+      <FormActions
+        dirty={changed > 0}
+        message={changed === 1 ? "1 page changed" : `${changed} pages changed`}
+      >
+        <Button>Import</Button>
+      </FormActions>
+    </PageFrame>
+  );
+}
+```
+
+`current` is the current step's index from 0, marked `aria-current="step"`. A done step
+with an `href` links back to it, or with `onSelect` runs it from a button; a step not yet
+reached never does. `FormActions` shows its `message` only while `dirty` is true.
+
 ### Document views
 
 > **Experimental.** `documentViews` and `DocumentViewProps` may change before

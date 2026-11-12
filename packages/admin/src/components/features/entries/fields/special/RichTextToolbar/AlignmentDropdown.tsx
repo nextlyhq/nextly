@@ -82,6 +82,9 @@ export function AlignmentDropdown({
               size="md"
               className="h-8 gap-0.5 px-1.5"
               disabled={disabled}
+              // Icons only: named by what it sets and its current setting,
+              // which the tooltip shows only while open.
+              aria-label={`Alignment: ${currentAlignment.label}`}
             >
               <CurrentIcon className="h-4 w-4" />
               <ChevronDown className="h-3 w-3 opacity-50" />

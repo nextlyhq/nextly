@@ -24,17 +24,16 @@ import type { CollectionConfig } from "nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionSendsCollection } from "./collections/sends";
-import { submissionsCollection } from "./collections/submissions";
+import {
+  submissionExtensionFields,
+  submissionsCollection,
+} from "./collections/submissions";
 import {
   FORM_UPLOADS_SLUG,
   formUploadsCollection,
 } from "./collections/uploads";
 import { newSubmissionsWidget } from "./dashboard/widget";
-import {
-  asFormDocument,
-  asSubmissionDocument,
-  asSubmissionDocuments,
-} from "./document-shapes";
+import { asFormDocument, asSubmissionDocument } from "./document-shapes";
 import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
@@ -97,6 +96,7 @@ import {
 } from "./handlers/upload-cleanup";
 import { formUploadRoute } from "./routes/form-upload";
 import { publicFormRoutes } from "./routes/public-forms";
+import { submissionsExportRoute } from "./routes/submissions-export";
 import type {
   AnyFormField,
   BeforeEmailFilterContext,
@@ -116,7 +116,6 @@ import {
   isConsentAnswer,
   storedConsentNames,
 } from "./utils/consent";
-import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
 import { normalizeFormSettings } from "./utils/form-settings";
 import {
@@ -290,6 +289,7 @@ export function formBuilder(
 
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
+  const submissionFields = submissionExtensionFields(resolvedConfig);
   const sendsCol = submissionSendsCollection();
   const uploadsCol = formUploadsCollection();
 
@@ -396,12 +396,9 @@ export function formBuilder(
           danger: true,
         },
       ],
-      // HTTP route — exported at
-      // /api/plugins/@nextlyhq/plugin-form-builder/submissions/export. Secure by
-      // default: gated by the custom `export-submissions` permission. Reads
-      // via the secure-by-default service path as the authed user and
-      // resolves its OWN slug through `ctx.self`. The canonical
-      // contributes.routes example for third-party authors.
+      // HTTP routes. The submissions export, gated by the custom
+      // `export-submissions` permission, is the canonical contributes.routes
+      // example for third-party authors (`routes/submissions-export`).
       routes: [
         // The public form endpoints, at the addresses core used to serve
         // before this plugin took them over. Root-mounted, so no caller's URL
@@ -410,109 +407,9 @@ export function formBuilder(
         // A visitor's file, uploaded before the form is submitted; see
         // `routes/form-upload`.
         formUploadRoute(resolvedConfig),
-        {
-          method: "GET",
-          path: "/submissions/export",
-          requiredPermission: "export-submissions",
-          handler: async (req, ctx) => {
-            const declaredSlug = resolvedConfig.formSubmissionOverrides.slug;
-            const slug = ctx.self.collections[declaredSlug] ?? declaredSlug;
-            const url = new URL(req.url);
-            const format = url.searchParams.get("format") ?? "json";
-            const formId = url.searchParams.get("form");
-            const status = url.searchParams.get("status");
-
-            // Spam stays out of exports unless it is explicitly requested —
-            // an export is "what people submitted", not "what bots sent".
-            const where: Record<string, unknown> = {};
-            if (formId) where.form = { equals: formId };
-            if (status) where.status = { equals: status };
-            else where.status = { not_equals: "spam" };
-
-            const opts = { as: "user", user: ctx.user ?? undefined } as const;
-
-            // CSV needs its form BEFORE any submissions are read: the
-            // columns come from one form's fields, and a malformed request
-            // must fail fast instead of paginating the whole table first.
-            let form: Record<string, unknown> | undefined;
-            if (format === "csv") {
-              if (!formId) {
-                return Response.json(
-                  {
-                    error: {
-                      code: "VALIDATION_ERROR",
-                      message: "CSV export requires a form parameter.",
-                    },
-                  },
-                  { status: 400 }
-                );
-              }
-              const formsSlugDeclared = resolvedConfig.formOverrides.slug;
-              const formsSlug =
-                ctx.self.collections[formsSlugDeclared] ?? formsSlugDeclared;
-              const formResult = await ctx.services.collections.listEntries(
-                formsSlug,
-                { where: { id: { equals: formId } } },
-                opts
-              );
-              form = formResult.data[0];
-              if (!form) {
-                return Response.json(
-                  { error: { code: "NOT_FOUND", message: "Form not found." } },
-                  { status: 404 }
-                );
-              }
-            }
-
-            // Page through the export with a hard ceiling: an unbounded loop
-            // over a high-traffic form could hold the whole table in memory.
-            // Hitting the ceiling is reported in a header, never silent.
-            const MAX_EXPORT_ROWS = 50_000;
-            const items: unknown[] = [];
-            const pageSize = 200;
-            let truncated = false;
-            for (let page = 1; ; page += 1) {
-              const result = await ctx.services.collections.listEntries(
-                slug,
-                { where, pagination: { limit: pageSize, page } },
-                opts
-              );
-              items.push(...result.data);
-              const pageWasFull = result.data.length === pageSize;
-              if (items.length >= MAX_EXPORT_ROWS) {
-                truncated = pageWasFull || items.length > MAX_EXPORT_ROWS;
-                items.length = MAX_EXPORT_ROWS;
-                break;
-              }
-              if (!pageWasFull) break;
-            }
-            const truncationHeaders: Record<string, string> = truncated
-              ? { "X-Export-Truncated": "true" }
-              : {};
-
-            if (format !== "csv" || !form) {
-              return Response.json({ items }, { headers: truncationHeaders });
-            }
-
-            // The service returns parsed entries; the export helpers declare
-            // the document shapes — the boundary cast is through unknown.
-            const csv = exportToCSV(
-              asSubmissionDocuments(items),
-              asFormDocument(form)
-            );
-            const filename = generateExportFilename(
-              typeof form.slug === "string" ? form.slug : "form",
-              "csv"
-            );
-            return new Response(csv, {
-              headers: {
-                "Content-Type": "text/csv; charset=utf-8",
-                "Content-Disposition": `attachment; filename="${filename}"`,
-                ...truncationHeaders,
-              },
-            });
-          },
-        },
+        // What a submissions list shows, as CSV or JSON; see
+        // `routes/submissions-export`.
+        submissionsExportRoute(resolvedConfig),
         {
           // The builder UI reads the host's resolved field enable/disable map
           // from here, so the plugin option actually gates the type picker.
@@ -562,6 +459,20 @@ export function formBuilder(
                 },
               })
             ),
+        },
+        {
+          // The fields a host added to submissions, which a submission's
+          // page shows in its details. Gated on reading submissions rather
+          // than forms: a person who may read submissions sees their values
+          // in the submission itself, and may lack any right to forms. Asked
+          // of the collection as installed, so a renamed one gates on its
+          // own read permission.
+          method: "GET",
+          path: "/submission-fields",
+          requiredPermission: ({ collection }) =>
+            collection(resolvedConfig.formSubmissionOverrides.slug, "read"),
+          handler: () =>
+            Promise.resolve(Response.json({ fields: submissionFields })),
         },
       ],
     },
