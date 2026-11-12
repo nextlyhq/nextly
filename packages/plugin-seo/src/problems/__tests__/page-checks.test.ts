@@ -96,7 +96,9 @@ describe("pageProblems", () => {
       })
     );
     expect(kinds(past)).toEqual(["longTitle", "longDescription"]);
-    expect(past[0]?.what).toBe("61 characters");
+    // A warning with the length measured: the value is saved and served.
+    expect(past[0]?.what).toBe("61 characters, Google shows about 60");
+    expect(past[1]?.what).toBe("161 characters, Google shows about 160");
   });
 
   it("counts characters, not UTF-16 units, so emoji are not counted twice", () => {

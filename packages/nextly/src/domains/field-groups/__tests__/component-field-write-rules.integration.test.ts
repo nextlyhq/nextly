@@ -580,9 +580,11 @@ describe.each(getConfiguredTestDialects())(
               fieldGroup({ name: "one", component: "note" }),
             ],
           }),
-          // History to restore from.
+          // History to restore from, kept with the working drafts a restore
+          // writes.
           defineCollection({
             slug: "versioned",
+            status: true,
             versions: true,
             fields: pageFields(),
           }),

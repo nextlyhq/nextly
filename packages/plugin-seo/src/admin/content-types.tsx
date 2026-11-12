@@ -42,10 +42,15 @@ import {
 import { Icon } from "./styles";
 import { PatternEditor, type TabProps } from "./tabs";
 
-/** The types that need details, which are the only ones with any to map. */
+/**
+ * The types described with details, which are the only ones with any to
+ * map: one a type needs, or one it states where the page has it.
+ */
 const MAPPABLE_TYPES: readonly StructuredDataTypeKey[] =
   STRUCTURED_DATA_TYPE_KEYS.filter(
-    key => STRUCTURED_DATA_TYPES[key].needs.length > 0
+    key =>
+      STRUCTURED_DATA_TYPES[key].needs.length > 0 ||
+      STRUCTURED_DATA_TYPES[key].uses.length > 0
   );
 
 /** Which editor is open under a type's row, if any. */

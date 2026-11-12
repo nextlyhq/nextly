@@ -88,7 +88,8 @@ beforeEach(async () => {
   dir = await realpath(await mkdtemp(path.join(tmpdir(), "cache-components-")));
   // A stand-in `nextly` with the two handler subpaths, so a loaded config's
   // `require.resolve` finds them where an app's node_modules would, and the
-  // `nextly/next` entry a new config takes its crawler list from.
+  // `nextly/next` entry a new config takes its crawler list and the files
+  // every route ships from.
   const nextly = path.join(dir, "node_modules/nextly");
   await mkdir(nextly, { recursive: true });
   await writeFile(
@@ -107,7 +108,8 @@ beforeEach(async () => {
   await writeFile(path.join(nextly, "cache-handlers.mjs"), "export {};\n");
   await writeFile(
     path.join(nextly, "next.mjs"),
-    "export const nextlyHtmlLimitedBots = /stand-in-bot/i;\n"
+    "export const nextlyHtmlLimitedBots = /stand-in-bot/i;\n" +
+      'export const nextlyTracingIncludes = () => ["./stand-in/**/*"];\n'
   );
 });
 afterEach(async () => {
@@ -141,9 +143,15 @@ describe("a new project's Next config", () => {
   it("has search engines and AI crawlers read each page's whole head", () => {
     const text = buildNextConfigTemplate(sqlite);
     expect(text).toContain(
-      'import { nextlyHtmlLimitedBots } from "nextly/next";'
+      'import { nextlyHtmlLimitedBots, nextlyTracingIncludes } from "nextly/next";'
     );
     expect(text).toContain("  htmlLimitedBots: nextlyHtmlLimitedBots,");
+  });
+
+  it("ships the files Nextly loads at request time with every route", () => {
+    expect(buildNextConfigTemplate(sqlite)).toContain(
+      '  outputFileTracingIncludes: { "/**": nextlyTracingIncludes() },'
+    );
   });
 
   it("turns both options on, installs Nextly's cache handlers, and says why", () => {
@@ -208,6 +216,10 @@ describe("a new project's Next config", () => {
     expectNextlyHandlers(config);
     // The crawlers that read each page's whole head, from `nextly/next`.
     expect(config.htmlLimitedBots).toEqual(/stand-in-bot/i);
+    // The files every route ships, from `nextly/next`.
+    expect(config.outputFileTracingIncludes).toEqual({
+      "/**": ["./stand-in/**/*"],
+    });
   });
 
   it("leaves nothing for the existing-app step to change", async () => {

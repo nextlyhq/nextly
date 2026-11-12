@@ -12,7 +12,10 @@ import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
 import { consoleLogger } from "../../../shared/types";
-import { appLocalization } from "../../i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
 import { refuseTranslatedUniqueThatCannotHold } from "../../i18n/migration/archive-preflight";
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import {
@@ -200,6 +203,7 @@ export async function reconcileComponentCompanion(args: {
     tableName,
     dialect,
     defaultLocale,
+    languageOrder: appLanguageOrder(),
     // Components are never Draft/Published — companion has no `_status`.
     status: false,
     // And never had one, so the disable restore has no status to carry back.

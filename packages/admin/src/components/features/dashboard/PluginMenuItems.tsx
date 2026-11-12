@@ -29,6 +29,12 @@ import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import { cn } from "@admin/lib/utils";
 import type { PluginMenuItemMeta } from "@admin/types/branding";
 
+import {
+  itemNumberName,
+  PluginItemNumber,
+  type ShownItemNumber,
+} from "./PluginItemNumber";
+
 /** Resolve a Lucide icon by name, falling back to the Package icon. */
 function iconFor(name?: string): React.ElementType {
   const byName =
@@ -124,15 +130,21 @@ export function PluginMenuItems({
 }
 
 /** The items as the sidebar draws them: a leaf, or a branch with its children. */
-function MenuEntries({
+export function MenuEntries({
   items,
   isActive,
   searching,
+  numberOf,
 }: {
   items: readonly PluginMenuItemMeta[];
   isActive: (href?: string) => boolean;
   /** Whether a search is filtering them: a branch then shows what matched. */
   searching: boolean;
+  /**
+   * The number an item shows beside its label, for a panel that draws them:
+   * `undefined` for an item declaring none, which is drawn as it always was.
+   */
+  numberOf?: (item: PluginMenuItemMeta) => ShownItemNumber | undefined;
 }): React.JSX.Element {
   return (
     <>
@@ -145,9 +157,15 @@ function MenuEntries({
             item={item}
             isActive={isActive}
             open={searching}
+            shown={numberOf?.(item)}
           />
         ) : (
-          <PluginMenuLeaf key={item.to} item={item} isActive={isActive} />
+          <PluginMenuLeaf
+            key={item.to}
+            item={item}
+            isActive={isActive}
+            shown={numberOf?.(item)}
+          />
         )
       )}
     </>
@@ -199,20 +217,32 @@ export function PluginMenuGroups({
 function PluginMenuLeaf({
   item,
   isActive,
+  shown,
 }: {
   item: PluginMenuItemMeta;
   isActive: (href?: string) => boolean;
+  /** The number it shows, when it declares one. */
+  shown?: ShownItemNumber;
 }) {
   const Icon = iconFor(item.icon);
   const active = isActive(item.to);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
-        <Link href={item.to}>
+        <Link href={item.to} aria-label={itemNumberName(item.label, shown)}>
           <Icon
             className={cn("shrink-0", !active && "text-muted-foreground")}
           />
-          <span>{item.label}</span>
+          {shown === undefined ? (
+            <span>{item.label}</span>
+          ) : (
+            <>
+              {/* Takes the row's width from the first draw, so the number
+                  arriving at its end moves nothing. */}
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              <PluginItemNumber shown={shown} />
+            </>
+          )}
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -223,11 +253,14 @@ function PluginMenuBranch({
   item,
   isActive,
   open,
+  shown,
 }: {
   item: PluginMenuItemMeta;
   isActive: (href?: string) => boolean;
   /** Opened by a search, whatever is active. */
   open: boolean;
+  /** The number it shows, when it declares one. */
+  shown?: ShownItemNumber;
 }) {
   const Icon = iconFor(item.icon);
   const children = item.children ?? [];
@@ -242,11 +275,13 @@ function PluginMenuBranch({
             tooltip={item.label}
             isActive={active}
             className="group/trigger"
+            aria-label={itemNumberName(item.label, shown)}
           >
             <Icon
               className={cn("shrink-0", !active && "text-muted-foreground")}
             />
             <span className="flex-1 truncate">{item.label}</span>
+            {shown === undefined ? null : <PluginItemNumber shown={shown} />}
             <ChevronDown className="ml-auto h-4 w-4 transition-transform duration-300 ease-out group-data-[state=open]/trigger:rotate-180" />
           </SidebarMenuButton>
         </CollapsibleTrigger>

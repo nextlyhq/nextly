@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 
 import type {
+  TransactionContext,
   WhereClause,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
@@ -128,6 +129,25 @@ export function reviewStateKey(part: ReviewPart): string {
     .map(encodeURIComponent)
     .join(":");
   return createHash("sha256").update(joined, "utf8").digest("hex");
+}
+
+/**
+ * The id of a part's review-state row, or null when it has none. The row is made afresh each time
+ * the part enters review again (a discard removes it), so the id names one review cycle, where the
+ * revision starts again at 1 with each.
+ */
+export async function readReviewStateId(
+  db: Pick<TransactionContext, "select">,
+  part: ReviewPart
+): Promise<string | null> {
+  const [row] = await db.select<{ id: string }>(REVIEW_STATES_TABLE, {
+    columns: ["id"],
+    where: {
+      and: [{ column: "partKey", op: "=", value: reviewStateKey(part) }],
+    },
+    limit: 1,
+  });
+  return row?.id ?? null;
 }
 
 /** A part's review state, or null when it has none, which reads as the workflow's first stage. */
@@ -274,6 +294,25 @@ export async function readReviewStatesOutside(
     },
   });
   return rows.map(fromRow);
+}
+
+/**
+ * The collections and Singles that stored review states name, each once: the entities a
+ * definition sweep may write through, an entity whose workflow was detached among them.
+ */
+export async function readReviewStateScopes(db: {
+  select<T = unknown>(
+    table: string,
+    options?: { columns?: string[]; distinct?: boolean }
+  ): Promise<T[]>;
+}): Promise<{ collections: string[]; singles: string[] }> {
+  const rows = await db.select<{ scopeKind: string; scopeSlug: string }>(
+    REVIEW_STATES_TABLE,
+    { columns: ["scopeKind", "scopeSlug"], distinct: true }
+  );
+  const of = (kind: ReviewScopeKind) =>
+    rows.filter(row => row.scopeKind === kind).map(row => row.scopeSlug);
+  return { collections: of("collection"), singles: of("single") };
 }
 
 /**
