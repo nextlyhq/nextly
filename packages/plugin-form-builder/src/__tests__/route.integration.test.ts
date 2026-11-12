@@ -43,6 +43,17 @@ describe("form-builder export route", () => {
     );
   });
 
+  it("lets whoever may read submissions read the fields a site added to them", () => {
+    const { plugin } = formBuilder();
+    expect(plugin.contributes?.routes).toContainEqual(
+      expect.objectContaining({
+        method: "GET",
+        path: "/submission-fields",
+        requiredPermission: "read-form-submissions",
+      })
+    );
+  });
+
   it("mounts the route under the catch-all, secured by default (401 without a session)", async () => {
     current = await createTestNextly({ plugins: [formBuilder().plugin] });
     const handlers = createDynamicHandlers();

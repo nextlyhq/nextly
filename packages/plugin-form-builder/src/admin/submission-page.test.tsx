@@ -32,16 +32,9 @@ import { SubmissionPage } from "./SubmissionPage";
 const navigateTo = vi.fn();
 // What the page last told the admin's leave guard, by key.
 const unsavedWork = new Map<string, boolean>();
-// Whether the answers still held the page at each move.
-const movedWhileUnsaved: boolean[] = [];
 vi.mock("@nextlyhq/plugin-sdk/admin", async original => ({
   ...(await original<object>()),
-  navigateTo: (href: string) => {
-    movedWhileUnsaved.push(
-      unsavedWork.get("forms.submission-answers") ?? false
-    );
-    navigateTo(href);
-  },
+  navigateTo: (href: string) => navigateTo(href),
   useReportUnsavedWork: (key: string, dirty: boolean) => {
     unsavedWork.set(key, dirty);
   },
@@ -59,7 +52,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   navigateTo.mockReset();
   unsavedWork.clear();
-  movedWhileUnsaved.length = 0;
   window.history.replaceState(null, "", "/");
 });
 
@@ -267,7 +259,6 @@ function server(options: ServerOptions) {
       () =>
         answer(200, {
           slugs: { forms: formsSlug, submissions: "form-submissions" },
-          submissionFields: options.extension?.fields ?? [],
         }),
     ],
     [
@@ -298,6 +289,10 @@ function server(options: ServerOptions) {
     ],
     ["/form-submissions/entries?", url => listAnswer(url, options)],
     ["/media/", () => answer(404, {})],
+    [
+      "/submission-fields",
+      () => answer(200, { fields: options.extension?.fields ?? [] }),
+    ],
   ];
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "PATCH" && options.offline) {
@@ -332,6 +327,17 @@ const patches = (fetchMock: ReturnType<typeof server>) =>
   fetchMock.mock.calls
     .filter(([, init]) => init?.method === "PATCH")
     .map(([, init]) => JSON.parse(String(init?.body)));
+
+/** Delete the open submission through its More menu, confirming it. */
+async function deleteThroughMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "More" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete submission" })
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "Delete submission" })
+  );
+}
 
 function page(
   props: Partial<React.ComponentProps<typeof SubmissionPage>> = {}
@@ -708,32 +714,62 @@ describe("a submission's page, writing", () => {
     );
   });
 
-  it("leaves a deleted submission without asking about its answers", async () => {
+  it("hands a deleted submission with unsaved answers to the entry page", async () => {
     server({
       status: "read",
       permissions: { isSuperAdmin: true },
       fields: [{ name: "name", label: "Full name", type: "text" }],
       older: "sub-3",
     });
-    const user = page();
+    const onDelete = vi.fn();
+    const user = page({ onDelete });
     await user.click(
       await screen.findByRole("button", { name: "Edit answers" })
     );
     await user.type(screen.getByRole("textbox", { name: "Full name" }), "!");
-    expect(unsavedWork.get("forms.submission-answers")).toBe(true);
-    await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Delete submission" })
-    );
-    await user.click(
-      await screen.findByRole("button", { name: "Delete submission" })
-    );
+    await deleteThroughMenu(user);
+    // The entry page stands its leave guard down and returns to the list.
+    await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1));
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  it("moves on to the next submission when nothing is unsaved", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      older: "sub-3",
+    });
+    const onDelete = vi.fn();
+    const user = page({ onDelete });
+    await screen.findByRole("heading", { name: "Hina Rossi" });
+    await deleteThroughMenu(user);
     await waitFor(() =>
       expect(navigateTo).toHaveBeenCalledWith(
         "/admin/collections/form-submissions/sub-3?status=all"
       )
     );
-    expect(movedWhileUnsaved).toEqual([false]);
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("stops calling a note saved once a newer note is stored", async () => {
+    const store = { data: DATA, notes: undefined as string | undefined };
+    server({ status: "read", permissions: { isSuperAdmin: true }, store });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    await user.type(note, "Call back");
+    await user.tab();
+    expect(await screen.findByText(/Saved\./)).toBeInTheDocument();
+    // Someone else rewrites it; the page reads theirs.
+    store.notes = "Their note";
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => expect(note).toHaveValue("Their note"));
+    // Typing the earlier text again is unsaved work, not "Saved".
+    await user.clear(note);
+    await user.type(note, "Call back");
+    expect(unsavedWork.get("forms.submission-note")).toBe(true);
+    expect(screen.queryByText(/Saved\./)).toBeNull();
   });
 
   it("saves a note after one was cleared", async () => {

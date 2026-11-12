@@ -538,9 +538,6 @@ export function formBuilder(
                 redirectCollections: Object.keys(
                   resolvedConfig.redirectRelationships
                 ),
-                // The fields a host added to submissions, which the
-                // submission page shows beside its own details.
-                submissionFields,
                 slugs: {
                   forms:
                     ctx.self.collections[resolvedConfig.formOverrides.slug] ??
@@ -552,6 +549,17 @@ export function formBuilder(
                 },
               })
             ),
+        },
+        {
+          // The fields a host added to submissions, which a submission's
+          // page shows in its details. Gated on reading submissions rather
+          // than forms: a person who may read submissions sees their values
+          // in the submission itself, and may lack any right to forms.
+          method: "GET",
+          path: "/submission-fields",
+          requiredPermission: `read-${resolvedConfig.formSubmissionOverrides.slug}`,
+          handler: () =>
+            Promise.resolve(Response.json({ fields: submissionFields })),
         },
       ],
     },

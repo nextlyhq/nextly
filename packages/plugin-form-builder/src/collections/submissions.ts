@@ -288,19 +288,13 @@ export function submissionsCollection(
   // Get the forms collection slug for the relationship
   const formSlug = pluginConfig.formOverrides.slug;
 
-  // The fields the plugin itself gives every submission.
-  const defaultFields = builtInSubmissionFields(formSlug);
-
-  // Process additional fields from formSubmissionOverrides
-  // Note: Function-style overrides should be resolved in plugin.ts before reaching here
-  let finalFields: FieldConfig[];
-
-  if (Array.isArray(additionalFields) && additionalFields.length > 0) {
-    // Merge: append additional fields to defaults
-    finalFields = [...defaultFields, ...additionalFields];
-  } else {
-    finalFields = defaultFields;
-  }
+  // The plugin's own fields, then any the host adds through
+  // formSubmissionOverrides (a function-style override is resolved in
+  // plugin.ts before it reaches here).
+  const submissionFields: FieldConfig[] = [
+    ...builtInSubmissionFields(formSlug),
+    ...(Array.isArray(additionalFields) ? additionalFields : []),
+  ];
 
   // Convert hyphenated slug to underscored table name (e.g., "form-submissions" -> "form_submissions")
   const dbName = slug.replace(/-/g, "_");
@@ -309,7 +303,7 @@ export function submissionsCollection(
     slug,
     dbName,
     labels,
-    fields: finalFields,
+    fields: submissionFields,
     timestamps: true,
 
     // Submissions carry visitor-entered answers plus ipAddress/userAgent, so the

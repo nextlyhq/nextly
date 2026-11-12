@@ -51,7 +51,16 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
-import { type JSX, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  type JSX,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import type { FormField } from "../types";
 import { type AskedSnapshot, askedFieldsOf } from "../utils/asked-fields";
@@ -83,10 +92,11 @@ import {
   SubmissionAnswers,
 } from "./components/submissions/SubmissionAnswers";
 import { readPermissions } from "./use-admin-permissions";
+import { useBuilderConfig } from "./use-builder-config";
 import {
   type SubmissionExtensionField,
-  useBuilderConfig,
-} from "./use-builder-config";
+  useSubmissionFields,
+} from "./use-submission-fields";
 
 /** A submission as the entries API answers it. */
 export type SubmissionDocument = SubmissionRow;
@@ -107,6 +117,12 @@ export interface SubmissionPageProps {
    * none, the automatic Read among them.
    */
   documentLock?: DocumentLockGates;
+  /**
+   * Tells the entry page the submission was deleted: it stands its leave
+   * guard down and returns to the list. Used when unsaved work is on the
+   * page; otherwise the page moves to the next submission itself.
+   */
+  onDelete?: () => void;
 }
 
 const STATUSES = [
@@ -478,22 +494,49 @@ function answersChanged(
   );
 }
 
+/**
+ * What on the page holds unsaved work, by key: each part reports to the
+ * admin's leave guard and to the page, which asks before handing off a
+ * deleted submission.
+ */
+const UnsavedOnPage = createContext<(key: string, unsaved: boolean) => void>(
+  () => undefined
+);
+
+/** The page's record of which of its parts hold unsaved work. */
+function useUnsavedOnPage() {
+  const held = useRef(new Map<string, boolean>());
+  const report = useCallback((key: string, unsaved: boolean) => {
+    held.current.set(key, unsaved);
+  }, []);
+  const any = useCallback(() => [...held.current.values()].some(Boolean), []);
+  return { report, any };
+}
+
+/** Report unsaved work to the admin's leave guard and to the page. */
+function useHoldPage(key: string, unsaved: boolean): void {
+  useReportUnsavedWork(key, unsaved);
+  const report = useContext(UnsavedOnPage);
+  useEffect(() => {
+    report(key, unsaved);
+    return () => report(key, false);
+  }, [report, key, unsaved]);
+}
+
 /** The keys this page reports its unsaved answers and note under. */
 const UNSAVED_ANSWERS_KEY = "forms.submission-answers";
 const UNSAVED_NOTE_KEY = "forms.submission-note";
 
 /**
  * Editing a submission's answers: the draft, the answers it is made from, and
- * saving it. An answer changed and not yet saved is reported to the admin's
- * leave guard, until it is saved or the person cancels, or the submission is
- * deleted and the page is leaving. Edits made while a save is on its way stay
+ * saving it. An answer changed and not yet saved holds the page until it is
+ * saved or the person cancels. Edits made while a save is on its way stay
  * open, now made from the answers just saved.
  */
 function useAnswerDraft(
   submission: SubmissionDocument,
   fields: readonly FormField[],
-  save: Save,
-  leaving: boolean
+  save: Save
 ) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
@@ -502,7 +545,7 @@ function useAnswerDraft(
   // The answers as they were when editing began, which the draft is made from.
   const [basis, setBasis] = useState<Record<string, unknown> | null>(null);
   const changed = editing && answersChanged(fields, basis ?? undefined, draft);
-  useReportUnsavedWork(UNSAVED_ANSWERS_KEY, !leaving && changed);
+  useHoldPage(UNSAVED_ANSWERS_KEY, changed);
   // Another submission opened: not editing it.
   useEffect(() => setEditing(false), [submission.id]);
   const begin = () => {
@@ -588,18 +631,15 @@ function AnswersBox({
   asked,
   canUpdate,
   save,
-  leaving,
 }: {
   submission: SubmissionDocument;
   form: FormDocument | null | undefined;
   asked: AskedSnapshot;
   canUpdate: boolean;
   save: Save;
-  /** The submission is deleted and the page is moving on: nothing is left to save. */
-  leaving: boolean;
 }): JSX.Element {
   const fields = form?.fields ?? [];
-  const draft = useAnswerDraft(submission, fields, save, leaving);
+  const draft = useAnswerDraft(submission, fields, save);
   return (
     <Box
       title="Answers"
@@ -670,11 +710,7 @@ function ActivityBox({
  * the stored note it last showed, so text typed while a save is on its way is
  * never wiped by that save's answer. "Saved" is said only of the text saved.
  */
-function useNoteDraft(
-  submission: SubmissionDocument,
-  save: Save,
-  leaving: boolean
-) {
+function useNoteDraft(submission: SubmissionDocument, save: Save) {
   const stored = submission.notes ?? "";
   const [note, setNote] = useState(stored);
   const [savedText, setSavedText] = useState<string | null>(null);
@@ -701,6 +737,8 @@ function useNoteDraft(
     const typed = noteNow.current !== shown.current;
     if (!typed) setNote(stored);
     shown.current = stored;
+    // "Saved" names text the server holds; a newer stored note ends that.
+    setSavedText(current => (current === stored ? current : null));
     if (pending.current === 0 && !typed) expected.current = stored;
   }, [submission.id, stored]);
   const saveNote = () => {
@@ -722,10 +760,7 @@ function useNoteDraft(
       });
   };
   // A note typed and not yet stored holds the page: leaving it asks first.
-  useReportUnsavedWork(
-    UNSAVED_NOTE_KEY,
-    !leaving && note !== stored && note !== savedText
-  );
+  useHoldPage(UNSAVED_NOTE_KEY, note !== stored && note !== savedText);
   return {
     note,
     edit: (text: string) => setNote(text),
@@ -768,7 +803,6 @@ function SidePanel({
   formName,
   formsSlug,
   extensionFields,
-  leaving,
 }: {
   submission: SubmissionDocument;
   status: string;
@@ -778,14 +812,8 @@ function SidePanel({
   formName: string;
   formsSlug: string;
   extensionFields: readonly SubmissionExtensionField[];
-  /** The submission is deleted and the page is moving on: nothing is left to save. */
-  leaving: boolean;
 }): JSX.Element {
-  const { note, edit, saveNote, saved } = useNoteDraft(
-    submission,
-    save,
-    leaving
-  );
+  const { note, edit, saveNote, saved } = useNoteDraft(submission, save);
   return (
     <aside
       aria-label="Submission details"
@@ -992,37 +1020,31 @@ function usePageMoves(
   slug: string,
   scope: SubmissionListScope,
   place: ListPlace | undefined,
-  remove: () => Promise<boolean>
+  remove: () => Promise<boolean>,
+  leaveDeleted: { onDelete?: () => void; holdsUnsaved: () => boolean }
 ) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // Where the page goes once its submission is deleted. Moved to on the next
-  // render, after the answers have stopped reporting unsaved work: a move made
-  // in the same breath as the delete would be asked about by the leave guard,
-  // for a submission that no longer exists.
-  const [leavingTo, setLeavingTo] = useState<string | null>(null);
-  useEffect(() => {
-    if (leavingTo !== null) navigateTo(leavingTo);
-  }, [leavingTo]);
   const go = (target: string | undefined) => {
     if (target) navigateTo(submissionPageAddress(slug, target, scope));
   };
   const deleteSubmission = async () => {
     setConfirmDelete(false);
     if (!(await remove())) return;
+    // With unsaved work on the page the admin's leave guard would ask about a
+    // submission that no longer exists, so the page hands the move to the
+    // host, which stands the guard down and returns to the list.
+    if (leaveDeleted.holdsUnsaved() && leaveDeleted.onDelete) {
+      leaveDeleted.onDelete();
+      return;
+    }
     const next = place?.older ?? place?.newer;
-    setLeavingTo(
+    navigateTo(
       next
         ? submissionPageAddress(slug, next, scope)
         : `/admin/collections/${encodeURIComponent(slug)}`
     );
   };
-  return {
-    go,
-    confirmDelete,
-    setConfirmDelete,
-    deleteSubmission,
-    leaving: leavingTo !== null,
-  };
+  return { go, confirmDelete, setConfirmDelete, deleteSubmission };
 }
 
 /**
@@ -1061,8 +1083,7 @@ function describe(
 function useSubmissionForm(submission: SubmissionDocument | undefined) {
   const formId = submission ? formIdOf(submission) : undefined;
   // The forms collection as this install names it; a host may rename it.
-  const config = useBuilderConfig();
-  const formsSlug = config.formsSlug ?? "forms";
+  const formsSlug = useBuilderConfig().formsSlug ?? "forms";
   const { data: form } = useQuery({
     enabled: formId !== undefined,
     queryKey: ["form-builder", "submission-form", formsSlug, formId],
@@ -1073,12 +1094,7 @@ function useSubmissionForm(submission: SubmissionDocument | undefined) {
       return body ? (body.item ?? body) : null;
     },
   });
-  return {
-    formId,
-    form,
-    formsSlug,
-    extensionFields: config.submissionFields,
-  };
+  return { formId, form, formsSlug };
 }
 
 /** What the page says when reading the submission again failed. */
@@ -1252,30 +1268,56 @@ function PageMessage({ error }: { error?: Error | null }): JSX.Element {
   );
 }
 
+/** The submission the page is of, and its collection, as the host names them. */
+function pageTarget(
+  collectionSlug: string | undefined,
+  entryId: string | undefined,
+  initialData: Partial<SubmissionDocument> | undefined
+): { slug: string; id: string } {
+  return {
+    slug: collectionSlug ?? "form-submissions",
+    id: entryId ?? initialData?.id ?? "",
+  };
+}
+
+/** Whether a colleague's claim withholds every change. */
+function heldBy(lock: DocumentLockGates | undefined): boolean {
+  return lock?.readOnly === true || lock?.actionsDisabled === true;
+}
+
+/** What the page says above the answers: a refused change, or a failed refresh. */
+function pageNotice(error: string | null, readError: unknown): string | null {
+  if (error) return error;
+  return readError ? REFRESH_FAILED_MESSAGE : null;
+}
+
 export function SubmissionPage({
   entryId,
   collectionSlug,
   initialData,
   documentLock,
+  onDelete,
 }: SubmissionPageProps): JSX.Element {
-  const slug = collectionSlug ?? "form-submissions";
-  const id = entryId ?? initialData?.id ?? "";
+  const { slug, id } = pageTarget(collectionSlug, entryId, initialData);
   const [scope] = useState<SubmissionListScope>(initialScope);
   const { data: submission, error: readError } = useSubmission(
     slug,
     id,
     initialData
   );
-  const { formId, form, formsSlug, extensionFields } =
-    useSubmissionForm(submission);
-  const held =
-    documentLock?.readOnly === true || documentLock?.actionsDisabled === true;
+  const { formId, form, formsSlug } = useSubmissionForm(submission);
+  const extensionFields = useSubmissionFields();
+  const held = heldBy(documentLock);
   const { known, canUpdate, canDelete } = useSubmissionRights(slug, held);
   const { data: place } = useListPlace(slug, submission, scope);
   const { save, remove, error } = useSubmissionWrites(slug, id, held);
   useReadOnOpen(submission, known, canUpdate, save);
-  const { go, confirmDelete, setConfirmDelete, deleteSubmission, leaving } =
-    usePageMoves(slug, scope, place, remove);
+  const unsaved = useUnsavedOnPage();
+  const { go, confirmDelete, setConfirmDelete, deleteSubmission } =
+    usePageMoves(slug, scope, place, remove, {
+      onDelete,
+      holdsUnsaved: unsaved.any,
+    });
 
   // Only a submission never read replaces the page. A refresh that fails
   // after it was read keeps the page, and every draft on it, and says so.
@@ -1285,7 +1327,7 @@ export function SubmissionPage({
   const status = submission.status;
 
   return (
-    <>
+    <UnsavedOnPage.Provider value={unsaved.report}>
       <SubmissionBar
         place={place}
         go={go}
@@ -1306,9 +1348,7 @@ export function SubmissionPage({
         <div className="flex min-h-full flex-col lg:flex-row">
           <div className="min-w-0 flex-1 space-y-5 px-4 py-6 sm:px-6 lg:px-8">
             <SubmissionHeader sender={sender} formName={formName} when={when} />
-            <ChangeError
-              error={error ?? (readError ? REFRESH_FAILED_MESSAGE : null)}
-            />
+            <ChangeError error={pageNotice(error, readError)} />
 
             <AnswersBox
               submission={submission}
@@ -1316,7 +1356,6 @@ export function SubmissionPage({
               asked={asked}
               canUpdate={canUpdate}
               save={save}
-              leaving={leaving}
             />
 
             <ActivityBox submission={submission} status={status} />
@@ -1331,10 +1370,9 @@ export function SubmissionPage({
             formName={formName}
             formsSlug={formsSlug}
             extensionFields={extensionFields}
-            leaving={leaving}
           />
         </div>
       </PageFrame>
-    </>
+    </UnsavedOnPage.Provider>
   );
 }
