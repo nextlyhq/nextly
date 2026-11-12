@@ -32,10 +32,27 @@ function heading(page: Page, label: "Collections" | "Singles"): Locator {
   });
 }
 
-/** The count a heading shows, read from its name. */
+/**
+ * The count a heading shows, read from its name. A heading whose list is still
+ * arriving is named without a count, so this waits for the settled one.
+ */
 async function countOf(page: Page, label: "Collections" | "Singles") {
+  await expect(heading(page, label)).toHaveAccessibleName(
+    new RegExp(`^${label}, \\d+$`)
+  );
   const name = await heading(page, label).getAttribute("aria-label");
   return Number(name?.split(", ")[1]);
+}
+
+/** Both headings' counts settled: each list has fully arrived. */
+async function countsSettled(page: Page) {
+  for (const label of ["Collections", "Singles"] as const) {
+    await expect(
+      contentList(page).getByRole("button", {
+        name: new RegExp(`^${label}, \\d+$`),
+      })
+    ).toBeVisible();
+  }
 }
 
 test.beforeEach(async ({ page }) => {
@@ -77,6 +94,9 @@ test("lists Collections then Singles, each heading with its count", async ({
 });
 
 test("one search filters both headings", async ({ page }) => {
+  // Read only once both lists have arrived: a heading still loading shows no
+  // count, and one read then would not be the count the search narrows.
+  await countsSettled(page);
   const before = {
     collections: await countOf(page, "Collections"),
     singles: await countOf(page, "Singles"),

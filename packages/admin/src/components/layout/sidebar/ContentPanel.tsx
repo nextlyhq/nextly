@@ -100,7 +100,10 @@ export function ContentPanel({
           <ContentFold
             foldKey="collections"
             label="Collections"
-            count={matches.collections}
+            // Drawn once every page has arrived, as the empty-search line
+            // waits: a count of a list still arriving would change under the
+            // reader.
+            count={collections.isComplete ? matches.collections : null}
             level="heading"
             folds={folds}
           >
@@ -118,7 +121,7 @@ export function ContentPanel({
           <ContentFold
             foldKey="singles"
             label="Singles"
-            count={matches.singles}
+            count={singles.isComplete ? matches.singles : null}
             level="heading"
             folds={folds}
           >

@@ -39,6 +39,7 @@ const lists = vi.hoisted(() => ({
   collections: [] as FixtureCollection[],
   singles: [] as FixtureSingle[],
   singlesComplete: true,
+  collectionsComplete: true,
   branding: {} as AdminBranding,
 }));
 
@@ -67,7 +68,7 @@ vi.mock("@admin/hooks/useSidebarContentLists", async () => {
         items,
         data: { items },
         isLoading: false,
-        isComplete: true,
+        isComplete: lists.collectionsComplete,
         error: null,
         isPinned: () => false,
         togglePin: () => {},
@@ -185,6 +186,7 @@ beforeEach(() => {
     { id: "s2", slug: "footer", label: "Footer" },
   ];
   lists.singlesComplete = true;
+  lists.collectionsComplete = true;
   lists.branding = {};
 });
 
@@ -314,6 +316,36 @@ describe("ContentPanel", () => {
       "Nothing matches “pricing”."
     );
     expect(outline()).toEqual(["Collections0", "Singles0"]);
+  });
+
+  it("draws no count on a heading whose list is still arriving, and names it without one", () => {
+    lists.singlesComplete = false;
+    const arriving = renderPanel();
+
+    // Named by its label alone, not "Singles, 0" while its pages arrive.
+    const singles = within(contentNav()).getByRole("button", {
+      name: "Singles",
+    });
+    expect(singles).not.toHaveAttribute("aria-label");
+    expect(singles).toHaveTextContent(/^Singles$/);
+    // The other heading's list is complete: its count is drawn.
+    expect(heading("Collections")).toHaveAccessibleName("Collections, 2");
+    arriving.unmount();
+
+    // The same for collections still arriving.
+    lists.singlesComplete = true;
+    lists.collectionsComplete = false;
+    const collectionsArriving = renderPanel();
+    expect(
+      within(contentNav()).getByRole("button", { name: "Collections" })
+    ).toHaveTextContent(/^Collections$/);
+    collectionsArriving.unmount();
+
+    // POPULATION CONTROL: once every page is in, the counts are drawn.
+    lists.collectionsComplete = true;
+    renderPanel();
+    expect(heading("Singles")).toHaveAccessibleName("Singles, 2");
+    expect(heading("Collections")).toHaveAccessibleName("Collections, 2");
   });
 
   it("doesn't say nothing matched while Singles are still arriving", () => {
