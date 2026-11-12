@@ -277,7 +277,13 @@ describe("importing this site's own field group", () => {
   });
 
   it("says nothing was imported when the import stops part-way, and tries again", async () => {
-    applying = () => Promise.reject(new Error("The database didn't answer."));
+    // The server answered: it refused, and wrote nothing.
+    applying = () =>
+      Promise.reject(
+        Object.assign(new Error("The database didn't answer."), {
+          status: 500,
+        })
+      );
     render(<SeoImportPage />);
     fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -341,6 +347,46 @@ describe("importing this site's own field group", () => {
     await settle();
     expect(screen.getByText(/become\s+automatic again/)).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("says it couldn't confirm an import whose answer never arrived, and checks again", async () => {
+    // No answer at all: the import may or may not have been written.
+    applying = () => Promise.reject(new TypeError("Failed to fetch"));
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 values" }));
+    await settle();
+    expect(screen.getByText("The import's answer didn't arrive")).toBeTruthy();
+    expect(screen.queryByText("Nothing was imported")).toBeNull();
+    const before = dryRuns().length;
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await settle();
+    expect(dryRuns().length).toBe(before + 1);
+  });
+
+  it("offers no way back on the stepper while an import is applied", async () => {
+    let finish = (_: unknown) => {};
+    applying = () =>
+      new Promise(resolve => {
+        finish = resolve;
+      });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 values" }));
+    await settle();
+    const steps = screen.getByRole("list", { name: "Steps" });
+    expect(within(steps).queryAllByRole("button")).toHaveLength(0);
+    finish({ message: "", pages: 1, redirects: 0 });
+    await settle();
+    expect(screen.getByText("2 values imported on 1 page")).toBeTruthy();
   });
 
   it("matches another group, chosen from the site's groups", async () => {

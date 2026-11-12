@@ -11,12 +11,16 @@ import { describe, expect, it } from "vitest";
 
 const HERE = path.resolve(import.meta.dirname, "..");
 
-/** The relative modules `file` loads at run time (type-only imports aside). */
-function runtimeImports(file: string): string[] {
-  const text = readFileSync(file, "utf8");
-  return [...text.matchAll(/^import (?!type )[^;]*?from "([^"]+)";/gms)].map(
-    match => match[1] ?? ""
-  );
+/**
+ * The modules `text` loads at run time: an import (type-only ones aside), a
+ * bare `import "x"`, and a re-export `export … from "x"`.
+ */
+function runtimeImports(text: string): string[] {
+  return [
+    ...text.matchAll(
+      /^(?:import|export)\s+(?!type\s)(?:[^;]*?\sfrom\s+)?["']([^"']+)["'];/gms
+    ),
+  ].map(match => match[1] ?? "");
 }
 
 /** Every module `entry` loads, followed through relative imports. */
@@ -24,7 +28,7 @@ function loaded(entry: string): Map<string, string[]> {
   const seen = new Map<string, string[]>();
   const visit = (file: string) => {
     if (seen.has(file)) return;
-    const imports = runtimeImports(file);
+    const imports = runtimeImports(readFileSync(file, "utf8"));
     seen.set(file, imports);
     for (const spec of imports.filter(each => each.startsWith("."))) {
       visit(path.resolve(path.dirname(file), `${spec}.ts`));
@@ -33,6 +37,23 @@ function loaded(entry: string): Map<string, string[]> {
   visit(entry);
   return seen;
 }
+
+describe("the scan of what a module loads", () => {
+  it("sees every form a module can load another by, and skips type-only ones", () => {
+    expect(
+      runtimeImports(
+        [
+          'import "server-only";',
+          'import { a } from "./a";',
+          'export { b } from "./b";',
+          'export * from "./c";',
+          'import type { D } from "./d";',
+          'export type { E } from "./e";',
+        ].join("\n")
+      )
+    ).toEqual(["server-only", "./a", "./b", "./c"]);
+  });
+});
 
 describe("the export readers", () => {
   it("load nothing from the server, so the browser can run them", () => {

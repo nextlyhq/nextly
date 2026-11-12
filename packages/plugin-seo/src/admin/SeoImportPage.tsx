@@ -18,6 +18,7 @@ import {
   AlertTitle,
   apiErrorMessage,
   Button,
+  isApiError,
   Card,
   Checkbox,
   DataTableView,
@@ -170,16 +171,18 @@ function sourceName(
 function stepsOf(
   step: number,
   name: string,
-  back: (to: 0 | 1) => void
+  back: ((to: 0 | 1) => void) | undefined
 ): { label: string; onSelect?: () => void }[] {
+  const way = (to: 0 | 1) =>
+    back === undefined ? {} : { onSelect: () => back(to) };
   return [
     {
       label: step === 0 ? "Choose the source" : `Source: ${name}`,
-      onSelect: () => back(0),
+      ...way(0),
     },
     {
       label: step === 2 ? "Fields matched" : "Match the fields",
-      onSelect: () => back(1),
+      ...way(1),
     },
     { label: "Check the result" },
   ];
@@ -870,11 +873,34 @@ function Imported({ run }: { run: DryRunBody }): JSX.Element {
 /** What a refused import says: that nothing was written, and why. */
 function Stopped({
   why,
+  confirmed,
   again,
 }: {
   why: string;
+  /**
+   * Whether the server answered that it wrote nothing; false where no
+   * answer arrived, so whether the import finished is not known.
+   */
+  confirmed: boolean;
   again: () => void;
 }): JSX.Element {
+  if (!confirmed) {
+    return (
+      <Alert variant="warning">
+        <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-4">
+          <div className="grid min-w-0 flex-1 gap-0.5">
+            <AlertTitle>The import&apos;s answer didn&apos;t arrive</AlertTitle>
+            <AlertDescription>
+              {`Nextly couldn't confirm whether it finished (${why.replace(/\.$/, "")}). Check again to see what is still to import: whatever was imported is already in place.`}
+            </AlertDescription>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={again}>
+            Check again
+          </Button>
+        </div>
+      </Alert>
+    );
+  }
   return (
     <Alert variant="destructive">
       <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-4">
@@ -910,6 +936,65 @@ function useGroups(): {
     language: read.data?.language,
     failed: read.error === null ? undefined : apiErrorMessage(read.error),
   };
+}
+
+/**
+ * What the chosen source is: its group with the matching for it (each
+ * field where the engine suggests until changed), or the file read for it.
+ */
+function selectionOf(
+  choice: Choice | undefined,
+  groups: readonly ImportGroup[],
+  maps: Readonly<Record<string, Record<string, ImportTarget>>>,
+  file: ReadFile | undefined
+): {
+  group: ImportGroup | undefined;
+  map: Record<string, ImportTarget>;
+  fileRead: ReadFile | undefined;
+} {
+  if (choice?.kind === "file") {
+    return {
+      group: undefined,
+      map: {},
+      fileRead: file?.tool === choice.tool ? file : undefined,
+    };
+  }
+  const group =
+    choice === undefined
+      ? undefined
+      : groups.find(each => each.field === choice.field);
+  return {
+    group,
+    map: group === undefined ? {} : (maps[group.field] ?? suggestedMap(group)),
+    fileRead: undefined,
+  };
+}
+
+/**
+ * Applies the dry run `run` worked out for `source`: nothing where it went
+ * through, else why not, and whether the server said nothing was written.
+ * Only an answer from the server says so: a request that got none may have
+ * been applied before the answer was lost.
+ */
+async function applyRun(
+  source: ImportSource,
+  run: DryRunBody,
+  include: boolean
+): Promise<{ why: string; confirmed: boolean } | undefined> {
+  try {
+    await writePluginRoute<ApplyBody & { message: string }>({
+      plugin: SEO_PLUGIN_NAME,
+      path: IMPORT_APPLY_PATH,
+      body: {
+        source,
+        plan: run.plan,
+        ...(include ? { includeNeverServed: true } : {}),
+      },
+    });
+    return undefined;
+  } catch (error) {
+    return { why: apiErrorMessage(error), confirmed: isApiError(error) };
+  }
 }
 
 /** A file read for a tool, with what reading it found wrong, if anything. */
@@ -991,16 +1076,15 @@ function useImportFlow() {
   const [include, setInclude] = useState(false);
   const { run, setRun, busy, setBusy, failure, setFailure, check } =
     useDryRuns();
-  const [stopped, setStopped] = useState<string>("");
+  const [stopped, setStopped] = useState<{
+    why: string;
+    confirmed: boolean;
+  }>({ why: "", confirmed: true });
+  // The dry run an applied import wrote, kept for its result whatever the
+  // flow does after.
+  const [applied, setApplied] = useState<DryRunBody | undefined>(undefined);
 
-  const group =
-    choice?.kind === "group"
-      ? groups.find(each => each.field === choice.field)
-      : undefined;
-  const map =
-    group === undefined ? {} : (maps[group.field] ?? suggestedMap(group));
-  const fileRead =
-    choice?.kind === "file" && file?.tool === choice.tool ? file : undefined;
+  const { group, map, fileRead } = selectionOf(choice, groups, maps, file);
 
   const sourceOf = (
     groupMap: Record<string, ImportTarget> = map
@@ -1016,22 +1100,14 @@ function useImportFlow() {
     if (source === undefined || run === undefined) return;
     setBusy(true);
     setFailure(undefined);
-    try {
-      await writePluginRoute<ApplyBody & { message: string }>({
-        plugin: SEO_PLUGIN_NAME,
-        path: IMPORT_APPLY_PATH,
-        body: {
-          source,
-          plan: run.plan,
-          ...(include ? { includeNeverServed: true } : {}),
-        },
-      });
+    const outcome = await applyRun(source, run, include);
+    setBusy(false);
+    if (outcome === undefined) {
+      setApplied(run);
       setStep("imported");
-    } catch (error) {
-      setStopped(apiErrorMessage(error));
+    } else {
+      setStopped(outcome);
       setStep("stopped");
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -1039,6 +1115,7 @@ function useImportFlow() {
     groups,
     ownSeo,
     language,
+    applied,
     groupsFailed,
     step,
     choice,
@@ -1133,11 +1210,17 @@ function MatchStep({ flow }: { flow: ImportFlow }): JSX.Element {
 
 /** What the current step shows. */
 function StepBody({ flow }: { flow: ImportFlow }): JSX.Element {
-  if (flow.step === "imported" && flow.run !== undefined) {
-    return <Imported run={flow.run} />;
+  if (flow.step === "imported" && flow.applied !== undefined) {
+    return <Imported run={flow.applied} />;
   }
   if (flow.step === "stopped") {
-    return <Stopped why={flow.stopped} again={() => flow.goTo(2)} />;
+    return (
+      <Stopped
+        why={flow.stopped.why}
+        confirmed={flow.stopped.confirmed}
+        again={() => flow.goTo(2)}
+      />
+    );
   }
   if (flow.step === 0) {
     return (
@@ -1181,7 +1264,13 @@ export function SeoImportPage(): JSX.Element {
           <Stepper
             aria-label="Steps"
             current={current}
-            steps={stepsOf(current, flow.name, flow.goTo)}
+            // No way back while a step's work is on its way, an import
+            // being applied above all.
+            steps={stepsOf(
+              current,
+              flow.name,
+              flow.busy ? undefined : flow.goTo
+            )}
           />
         ) : null}
         <StepBody flow={flow} />
