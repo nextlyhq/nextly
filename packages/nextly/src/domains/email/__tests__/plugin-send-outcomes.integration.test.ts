@@ -429,12 +429,17 @@ describe.each(getConfiguredTestDialects())(
       behaviour.gate = undefined;
       held.open();
       await queuing;
-      await trigger(t);
 
+      // Cancelled as that attempt fails, not left waiting for one that
+      // would find nothing to send.
       expect(lastOf(id)).toMatchObject({
         state: "cancelled",
         cancel: { by: "request" },
       });
+      expect(await plugin().services.email.readQueued([id])).toEqual([
+        expect.objectContaining({ state: "cancelled", messageHeld: false }),
+      ]);
+      await trigger(t);
       expect(statesOf(id)).not.toContain("retrying");
       expect(calls).toHaveLength(1);
     });
