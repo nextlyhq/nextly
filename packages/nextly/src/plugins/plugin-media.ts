@@ -97,7 +97,12 @@ export interface PluginMediaWrites {
     opts?: PluginMediaCaller,
     actor?: RequestActor
   ): Result<"moveToFolder">;
-  /** @experimental Delete a file. Needs `delete-media` when checked. */
+  /**
+   * @experimental Delete a file. Needs `delete-media` when checked. Its
+   * stored files are removed durably: recorded as left to remove in the
+   * delete's own transaction, and tried again by the jobs queue until they
+   * are gone, so a storage failure never leaves a file behind for good.
+   */
   delete(
     mediaId: string,
     opts?: PluginMediaCaller,
@@ -135,10 +140,28 @@ export type PluginMediaService = Pick<
 > &
   PluginMediaWrites;
 
+/** The service's durable delete, bound to it: what a plugin's `delete` runs. */
+function durableDelete(service: MediaService): MediaService["deleteDurably"] {
+  return service.deleteDurably.bind(service);
+}
+
+/** How one write is run: see {@link MEDIA_WRITES}. */
+interface MediaWriteEntry {
+  at: number;
+  actor: boolean;
+  via?: (service: MediaService) => (...args: never[]) => Promise<unknown>;
+}
+
 /**
- * Where each write takes its caller, and whether an `actor` follows it. What
- * each asks of a checked caller is `SYSTEM_WRITE_POLICY.media`, the entry the
+ * Where each write takes its caller, whether an `actor` follows it, and the
+ * service method it runs when that is not the write's own name. What each
+ * asks of a checked caller is `SYSTEM_WRITE_POLICY.media`, the entry the
  * Direct API reads, so the two doors cannot ask different questions.
+ *
+ * `delete` runs `deleteDurably`: a plugin deleting its own files (an upload
+ * nobody claimed, a submission's attachment) has no later chance to remove
+ * bytes a storage failure left, so core keeps the record and retries. Named
+ * through the service itself, so the method is read where it is used.
  */
 const MEDIA_WRITES = {
   upload: { at: 1, actor: true },
@@ -147,12 +170,12 @@ const MEDIA_WRITES = {
   update: { at: 2, actor: true },
   moveToFolder: { at: 2, actor: true },
   updateFolder: { at: 2, actor: false },
-  delete: { at: 1, actor: true },
+  delete: { at: 1, actor: true, via: durableDelete },
   bulkDelete: { at: 1, actor: true },
   deleteFolder: { at: 2, actor: false },
 } as const satisfies Record<
   keyof PluginMediaWrites & keyof typeof SYSTEM_WRITE_POLICY.media,
-  { at: number; actor: boolean }
+  MediaWriteEntry
 >;
 
 /**
@@ -212,8 +235,9 @@ function checkedWrite(
   service: MediaService,
   name: keyof PluginMediaWrites
 ): (...args: unknown[]) => Promise<unknown> {
-  const { at, actor: takesActor } = MEDIA_WRITES[name];
-  const write = Reflect.get(service, name) as (
+  const entry: MediaWriteEntry = MEDIA_WRITES[name];
+  const { at, actor: takesActor } = entry;
+  const write = (entry.via?.(service) ?? Reflect.get(service, name)) as (
     ...args: unknown[]
   ) => Promise<unknown>;
   return async (...args: unknown[]) => {

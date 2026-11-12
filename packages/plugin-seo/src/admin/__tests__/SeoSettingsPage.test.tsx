@@ -18,9 +18,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   MediaPickerDialog: () => null,
   toastMutationResult: vi.fn(),
   usePluginClientConfig: vi.fn(() => undefined),
+  navigateTo: vi.fn(),
 }));
 
 import {
+  navigateTo,
   usePluginClientConfig,
   usePluginRoute,
   useSingleDocument,
@@ -206,6 +208,30 @@ describe("first-time setup", () => {
     expect(window.location.search).toBe("");
     // Finished: no banner offers setup again.
     expect(screen.queryByText("Finish setting up SEO.")).toBeNull();
+  });
+
+  it("ends on the section's Overview", async () => {
+    serving({ _rev: "3", siteName: "Rext AI", setupStep: 2 });
+    render(<SeoSettingsPage />);
+
+    const third = await screen.findByRole("dialog");
+    fireEvent.click(within(third).getByRole("button", { name: "Finish" }));
+    await settle();
+    const done = screen.getByRole("dialog");
+    expect(
+      within(done).getByRole("heading", { name: "You're set up" })
+    ).toBeTruthy();
+    fireEvent.click(
+      within(done).getByRole("button", { name: "Go to the overview" })
+    );
+    // Anything still unsaved is saved first; nothing is, so none is sent.
+    await settle();
+    expect(sent).toHaveLength(1);
+
+    expect(navigateTo).toHaveBeenCalledWith(
+      "/admin/plugins/nextlyhq-plugin-seo/overview"
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("closed part-way keeps the answers and offers itself again", async () => {

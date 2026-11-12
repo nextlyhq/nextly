@@ -210,6 +210,12 @@ export interface SubmissionDocument {
   userAgent?: string;
   /** Which spam check flagged this, when one did. */
   spamReason?: string | null;
+  /**
+   * What it was asked, as the write seam stored it (`utils/asked-fields`):
+   * its fields' labels and option labels at the time. Absent on a
+   * submission stored before submissions kept it.
+   */
+  asked?: unknown;
   submittedAt: Date;
   createdAt: Date;
   updatedAt: Date;

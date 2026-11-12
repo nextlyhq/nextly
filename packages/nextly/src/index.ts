@@ -331,6 +331,7 @@ export type {
   QueueTemplateEmailArgs,
   QueuedEmail,
   QueuedEmailState,
+  CancelQueuedEmailArgs,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;
@@ -694,6 +695,18 @@ export {
   type CoreAdminPlaceId,
 } from "./plugins";
 export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
+// What a plugin is told of its queued emails' changes, and reads of them.
+export type {
+  QueuedEmailCancelCause,
+  QueuedEmailChange,
+  QueuedEmailRecipient,
+  QueuedRecipientOutcome,
+} from "./domains/email/queued-send-changes";
+export type {
+  QueuedEmailStanding,
+  QueuedEmailStatus,
+} from "./domains/email/queued-send-read";
+export type { QueuedEmailChangeHandler } from "./plugins/plugin-context";
 
 // "Every content type except these", one answer for each reader of a scope.
 // @experimental

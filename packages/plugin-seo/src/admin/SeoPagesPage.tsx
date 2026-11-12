@@ -15,6 +15,7 @@ import {
 import { useMemo, useRef, useState, type JSX } from "react";
 
 import { ADDRESSES_ROUTE_PATH, type SiteAddress } from "../code-pages/contract";
+import { IMPORT_PAGE_HREF } from "../overview/contract";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
 
 import { CodePagePanel, SOURCE_LABELS } from "./code-page-panel";
@@ -26,6 +27,7 @@ import {
   shownAddresses,
   type FilterKey,
 } from "./pages-view";
+import { AdminLink } from "./section";
 import { ROOT, SeoStyles } from "./styles";
 
 /** The list the addresses route answers with. */
@@ -150,6 +152,10 @@ function AddressesScreen({ items }: { items: SiteAddress[] }): JSX.Element {
               entry get their SEO here.
             </p>
           </div>
+          {/* Import is reached from Pages, as its one way in. */}
+          <Button variant="outline" asChild>
+            <AdminLink href={IMPORT_PAGE_HREF}>Import</AdminLink>
+          </Button>
         </div>
         <div className="nx-seo-body">
           <div className="nx-seo-sum">

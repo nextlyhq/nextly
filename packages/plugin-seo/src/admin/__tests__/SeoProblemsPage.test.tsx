@@ -23,7 +23,7 @@ import {
   usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
 
-import type { ProblemListBody } from "../../problems/contract";
+import type { Problem, ProblemListBody } from "../../problems/contract";
 import { SeoProblemsPage } from "../SeoProblemsPage";
 
 const LIST: ProblemListBody = {
@@ -186,5 +186,51 @@ describe("SeoProblemsPage", () => {
         []
       )
     );
+  });
+});
+
+describe("narrowed to one severity", () => {
+  /** A broken link on page `id`. */
+  const broken = (id: string, at: string): Problem => ({
+    kind: "brokenLink",
+    subject: { type: "posts", id, label: `Post ${id}` },
+    what: `Links to ${at}, which is not found`,
+    action: "Edit the link",
+    fix: { place: "page", tab: "content" },
+  });
+
+  it("counts a check failing three times on one page as one problem", () => {
+    serving({
+      ...LIST,
+      problems: [broken("1", "/a"), broken("1", "/b"), broken("1", "/c")],
+    });
+    render(<SeoProblemsPage />);
+    expect(screen.getByText("1 problem")).toBeTruthy();
+  });
+
+  it("shows only the severity the address names, with the way back to all", () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/plugins/nextlyhq-plugin-seo/problems?severity=error"
+    );
+    try {
+      serving(LIST);
+      render(<SeoProblemsPage />);
+      // The content type with no public address is an error; the shared
+      // titles are warnings.
+      expect(
+        screen.getByText("Content type with no public address")
+      ).toBeTruthy();
+      expect(screen.queryByText(/Same title on several pages/)).toBeNull();
+      expect(screen.getByText("1 problem")).toBeTruthy();
+      expect(
+        screen
+          .getByRole("link", { name: "Show all problems" })
+          .getAttribute("href")
+      ).toBe("/admin/plugins/nextlyhq-plugin-seo/problems");
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 });

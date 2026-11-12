@@ -90,6 +90,21 @@ function tabInAddress(): Tab {
 }
 
 /**
+ * The new redirect the address asks for, from a link such as the Overview's
+ * Redirect on an address not found: `?from=` and, where one is suggested,
+ * `&to=`. None where the address names no From.
+ */
+export function redirectAskedFor(
+  search: string
+): Pick<NotFoundView, "from" | "suggestion"> | null {
+  const query = new URLSearchParams(search);
+  const from = query.get("from")?.trim() ?? "";
+  if (from === "") return null;
+  const to = query.get("to")?.trim() ?? "";
+  return { from, suggestion: to === "" ? null : to };
+}
+
+/**
  * The screen's busy flag and the one way it runs a write: busy while it runs,
  * with a refusal's words handed to `onRefused` rather than thrown.
  */
@@ -334,7 +349,7 @@ function useRedirectForm(
     }, warn);
 
   /** Fills the form from an address not found, its To the suggestion. */
-  const fillFrom = (row: NotFoundView) => {
+  const fillFrom = (row: Pick<NotFoundView, "from" | "suggestion">) => {
     setEditing(null);
     // The address a redirect is added by, its domain kept where its
     // language has one.
@@ -500,6 +515,20 @@ export function SeoRedirectsPage(): JSX.Element {
     notFound.refetch();
   };
   const form = useRedirectForm(rows, run, reread);
+  // A link asking for a new redirect fills the add form once, as the Not
+  // found tab's Redirect does; the address is read, never written back.
+  const asked = useRef(
+    typeof window === "undefined"
+      ? null
+      : redirectAskedFor(window.location.search)
+  );
+  const { fillFrom } = form;
+  useEffect(() => {
+    const once = asked.current;
+    if (once === null) return;
+    asked.current = null;
+    fillFrom(once);
+  }, [fillFrom]);
   const importer = useImportFile(run, form.warn, () => setTab("list"), reread);
   const chooseFile = () => fileRef.current?.click();
 
