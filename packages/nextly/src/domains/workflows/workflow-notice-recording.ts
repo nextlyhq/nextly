@@ -99,8 +99,10 @@ export interface NoticeTelling {
   dialect: string;
   /** Whom the act counts as: nobody is told of their own. Null for trusted code. */
   accountable: string | null;
-  /** Who acted, as a notice names them. */
+  /** Who acted, as a notice stores them: a key as a key, nobody by name. */
   actor: string | null;
+  /** The account of a person who acted. */
+  actorUserId: string | undefined;
   /** Whether the site sends email at all. */
   sendsEmail: boolean;
   /** Each workflow's email switches, by its slug. */
@@ -131,10 +133,18 @@ async function sendsEmail(): Promise<boolean> {
   return container.get<EmailService>("emailService").isConfigured();
 }
 
-/** Who acted, as a notice names them: a person by name, a key as a key, trusted code by none. */
+/**
+ * Who acted, as a notice stores them: a key as a key, and nobody by name. A person is kept by
+ * their account's id alone ({@link actorUserIdOf}) and named when the notice is shown, so an
+ * erased account leaves no name on other people's notices.
+ */
 function actorName(event: ContentEventActor): string | null {
-  if (event.kind === "person") return event.name;
   return event.kind === "apiKey" ? "An API key" : null;
+}
+
+/** The account of a person who acted, to name them by when the notice is shown. */
+function actorUserIdOf(event: ContentEventActor): string | undefined {
+  return event.kind === "person" ? event.id : undefined;
 }
 
 /** Each workflow's email switches, read once each. */
@@ -190,6 +200,7 @@ export async function prepareNoticeTelling(
     dialect: adapter.getCapabilities().dialect,
     accountable: caller.accountable,
     actor: actorName(caller.event),
+    actorUserId: actorUserIdOf(caller.event),
     sendsEmail: await sendsEmail(),
     emails: await emailSwitches(
       adapter,
@@ -289,6 +300,9 @@ async function dataOf(
     localized: naming.localized,
     step: notice.step,
     actor: telling.actor,
+    ...(telling.actorUserId === undefined
+      ? {}
+      : { actorUserId: telling.actorUserId }),
     ...(notice.comment === undefined ? {} : { comment: notice.comment }),
   };
 }

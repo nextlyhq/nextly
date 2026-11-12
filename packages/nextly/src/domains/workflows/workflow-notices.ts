@@ -27,12 +27,16 @@ import { z } from "zod";
 import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
+import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
   resolveDocumentVisibilityScope,
   visibleDocuments,
 } from "../../services/lib/document-visibility";
-import { existingDocumentIds } from "../../services/lib/readable-documents";
-import { resolvedCallerGrants } from "../../shared/lib/field-level-registry";
+import {
+  existingDocumentIds,
+  readableDocumentColumns,
+  readableSingleColumns,
+} from "../../services/lib/readable-documents";
 import { resolveRunAs } from "../../shared/lib/resolve-run-as";
 import type { JobDefinition } from "../jobs/job-registry";
 import { databaseRunAs } from "../jobs/jobs-runner";
@@ -52,7 +56,6 @@ import {
   type NoticeToJudge,
 } from "../notices/notice-kinds";
 
-import { hiddenFrom } from "./hidden-changes";
 import type { ReviewDocument } from "./review-state-repository";
 import { MAX_STEP_COMMENT_LENGTH } from "./step-comment";
 
@@ -75,6 +78,11 @@ const workflowNoticeData = z.object({
   step: z.string().nullable(),
   /** Who acted, by name, or null where no name is known. */
   actor: z.string().nullable(),
+  /**
+   * The account that acted, for a person: named when the notice is shown, from the account as it is
+   * then, so the notice keeps no name of its own for an erasure to miss.
+   */
+  actorUserId: z.string().optional(),
   /**
    * The comment the step asked for changes with, as the step accepted it: kept by a request for
    * changes alone, so the writer reads in their notice what to change.
@@ -157,45 +165,132 @@ async function readableDocumentNotices(
       await resolveDocumentVisibilityScope()
     )
   );
-  const grants = await resolvedCallerGrants(user);
+  const titled = await runDetachedFromRequest(() =>
+    titlesReadable(visible, { user })
+  );
+  const names = await actorNames(
+    adapter,
+    visible.map(each => each.notice.data.actorUserId)
+  );
   const shown = new Map<string, WorkflowNoticeData>();
-  for (const { notice, document } of visible) {
-    shown.set(
-      notice.id,
-      await withTitleAsRead(notice.data, document, user, grants)
-    );
+  for (const { notice } of visible) {
+    const data = titled.has(notice.id)
+      ? notice.data
+      : { ...notice.data, title: null };
+    shown.set(notice.id, withActorNamed(data, names));
   }
   return shown;
 }
 
+/** A visible notice and the document its part reads as. */
+interface VisibleNotice {
+  notice: NoticeToJudge<WorkflowNoticeData>;
+  document: {
+    kind: "collection" | "single";
+    slug: string;
+    entryId: string;
+    locale?: string | null;
+  };
+}
+
 /**
- * A notice's snapshot as `user` may read it: without its title where a field read rule hides the
- * field the title came from, asked of the field-access evaluation every read uses.
+ * The notices whose stored title `caller` may be shown: those whose title field the caller's own
+ * read of the document returns, in the part's language. Asked of the ordinary read path over the
+ * whole document, so a rule that reads another field, or the id, answers as it does for any read.
+ * A notice with no title field (one that named the document "Untitled") has nothing to withhold.
+ * One read per collection and language for the page, and one per Single.
  */
-async function withTitleAsRead(
-  data: WorkflowNoticeData,
-  document: { kind: "collection" | "single"; slug: string; entryId: string },
-  user: Parameters<typeof hiddenFrom>[4],
-  grants: Parameters<typeof hiddenFrom>[5]
-): Promise<WorkflowNoticeData> {
-  const field = data.titleField;
-  if (field === undefined || data.title === null) return data;
-  const hidden = await runDetachedFromRequest(() =>
-    hiddenFrom(
-      {
-        scopeKind: document.kind,
-        scopeSlug: document.slug,
-        entryId: document.entryId,
-      },
-      data.part,
-      { [field]: data.title },
-      [field],
-      user,
-      grants,
-      undefined
-    )
+async function titlesReadable(
+  visible: readonly VisibleNotice[],
+  caller: ReadCaller
+): Promise<Set<string>> {
+  const shown = new Set<string>();
+  const groups = new Map<string, VisibleNotice[]>();
+  for (const each of visible) {
+    if (each.notice.data.titleField === undefined) {
+      shown.add(each.notice.id);
+      continue;
+    }
+    const { kind, slug, locale } = each.document;
+    const key = JSON.stringify([kind, slug, locale ?? null]);
+    groups.set(key, [...(groups.get(key) ?? []), each]);
+  }
+  for (const group of groups.values()) {
+    const { kind, slug, locale } = group[0].document;
+    const fields = [
+      ...new Set(group.map(each => each.notice.data.titleField ?? "")),
+    ];
+    const rows = await rowsAsRead(kind, slug, group, caller, fields, locale);
+    for (const each of group) {
+      const row = rows.get(each.document.entryId);
+      const field = each.notice.data.titleField ?? "";
+      if (row !== undefined && row[field] !== undefined) {
+        shown.add(each.notice.id);
+      }
+    }
+  }
+  return shown;
+}
+
+/** The documents of one collection or Single as `caller` reads them, by id, with `fields`. */
+async function rowsAsRead(
+  kind: "collection" | "single",
+  slug: string,
+  group: readonly VisibleNotice[],
+  caller: ReadCaller,
+  fields: readonly string[],
+  locale: string | null | undefined
+): Promise<Map<string, Record<string, unknown>>> {
+  if (kind === "collection") {
+    return readableDocumentColumns(
+      slug,
+      [...new Set(group.map(each => each.document.entryId))],
+      caller,
+      fields,
+      locale
+    );
+  }
+  const row = await readableSingleColumns(slug, caller, fields, locale);
+  const id = row?.id;
+  return typeof id === "string" && row !== null
+    ? new Map([[id, row]])
+    : new Map();
+}
+
+/** What a notice calls an actor whose account is gone. */
+const FORMER_USER = "A former user";
+
+/** The names of the accounts `ids` names, as they are now; an account that is gone has none. */
+async function actorNames(
+  adapter: DrizzleAdapter,
+  ids: readonly (string | undefined)[]
+): Promise<Map<string, string | null>> {
+  const wanted = [
+    ...new Set(ids.filter((id): id is string => id !== undefined)),
+  ];
+  if (wanted.length === 0) return new Map();
+  const rows = await adapter.select<{ id: string; name: string | null }>(
+    "users",
+    {
+      columns: ["id", "name"],
+      where: { and: [{ column: "id", op: "IN", value: wanted }] },
+    }
   );
-  return hidden.length > 0 ? { ...data, title: null } : data;
+  return new Map(rows.map(row => [row.id, row.name]));
+}
+
+/** A notice's snapshot with its actor named from the account, or as a former user once it is gone. */
+function withActorNamed(
+  data: WorkflowNoticeData,
+  names: ReadonlyMap<string, string | null>
+): WorkflowNoticeData {
+  if (data.actorUserId === undefined) return data;
+  return {
+    ...data,
+    actor: names.has(data.actorUserId)
+      ? (names.get(data.actorUserId) ?? null)
+      : FORMER_USER,
+  };
 }
 
 /**
