@@ -34,8 +34,7 @@ it for `NEXTLY_SPEED_DB_DELAY_MS` when asked.
 to send a varying number of times: two parts of it racing to ask for the same
 thing, or a timer firing near the end of a load. On that screen their number
 may move, and they may come and go between every load and only some; on every
-other screen they are held like any request. While any are listed, a screen's
-statements may move by 15% rather than 5%. Remove each one as its duplicate is
+other screen they are held like any request. Remove each one as its duplicate is
 fixed.
 
 ## When it fails
@@ -70,8 +69,8 @@ all is listed as `occasional` and not counted; if every load starts sending
 it, that is a new request, unless the screen lists it as `racy`. A request the admin always sends is in every load, so a new one
 fails by its name and one more of a kind fails by its number. Statements and rounds
 are likewise the fewest any load took, since an extra copy of a request sends
-its own statements and one slow answer can add a round; statements may move by
-5% and rounds by one.
+its own statements and one slow answer can add a round. A start's statements
+may move by 5%, a screen's by 15% (`SCREEN_STATEMENT_SLACK`), and rounds by one.
 
 It serves on port 3103, or `ADMIN_SPEED_PORT`, and refuses to start when that
 port is already taken.

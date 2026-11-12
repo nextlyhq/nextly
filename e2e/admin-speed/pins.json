@@ -1,8 +1,5 @@
 {
-  "racy": {
-    "list": ["GET /admin/api/schema/journal"],
-    "edit": ["GET /admin/api/schema/journal"]
-  },
+  "racy": {},
   "sqlite": {
     "start": {
       "statements": 1125

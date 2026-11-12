@@ -66,9 +66,9 @@ const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const STATEMENT_SLACK = 0.05;
 /**
- * A screen's statements move more than a start's from run to run, while a
- * few requests are still sometimes sent twice (`racy` in the pins); they are
- * held to this until those duplicates are gone, then to `STATEMENT_SLACK`.
+ * A screen's statements are held to this rather than `STATEMENT_SLACK`, since
+ * repeated runs of one commit have moved them by about a tenth. It tightens
+ * to `STATEMENT_SLACK` once runs show each screen's count holding still.
  */
 const SCREEN_STATEMENT_SLACK = 0.15;
 /** The least a growth pin allows either way, as two starts differ by a few. */
