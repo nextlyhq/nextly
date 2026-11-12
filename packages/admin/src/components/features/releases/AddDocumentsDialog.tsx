@@ -71,6 +71,13 @@ export interface AddDocumentsDialogProps {
   release: Pick<Release, "id" | "title">;
   /** The documents the release holds that the reader can see, by key. */
   inRelease: ReadonlySet<string>;
+  /**
+   * Where focus goes back to on close, as read by whatever opened this dialog
+   * before its code arrived. The lazy wrapper reads the opener on the click
+   * itself: by the time this dialog first renders, the dialog standing in
+   * while its code loaded holds focus, so this dialog cannot read it.
+   */
+  returnFocus?: (event: Event) => void;
 }
 
 /** The scope filter's value for every collection and Single. */
@@ -86,9 +93,12 @@ export function AddDocumentsDialog({
   onOpenChange,
   release,
   inRelease,
+  returnFocus: givenReturnFocus,
 }: AddDocumentsDialogProps): JSX.Element {
-  // Focus goes back to what opened the dialog when it closes.
-  const returnFocus = useReturnFocusOnClose(open);
+  // Focus goes back to what opened the dialog when it closes: the opener its
+  // lazy wrapper read, or, rendered directly, the one read here.
+  const ownReturnFocus = useReturnFocusOnClose(open);
+  const returnFocus = givenReturnFocus ?? ownReturnFocus;
   // The offer replaces the picker once an add has landed, so the dialog keeps
   // which one it shows; reopening it starts at the picker again.
   const [offer, setOffer] = useState<LinkedOffer | null>(null);
