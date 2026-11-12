@@ -235,7 +235,10 @@ async function subscribe(): Promise<void> {
   const db = app().adapter.getDrizzle() as unknown as {
     insert(table: unknown): { values(row: unknown): Promise<unknown> };
   };
-  const now = new Date();
+  // Made a minute back: fan-out sends an endpoint only the events from after it was made, and
+  // MySQL rounds a stored time to the second, which can put an endpoint made in this second after
+  // an event made in it.
+  const now = new Date(Date.now() - 60_000);
   await db.insert(nextlyWebhooks).values({
     id: "wh-moves",
     name: "Moves",
