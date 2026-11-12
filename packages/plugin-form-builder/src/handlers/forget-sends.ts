@@ -9,8 +9,19 @@
  * submissions handler here; deleting a form deletes its submissions the same
  * way, in the form's transaction.
  *
+ * Marking a submission Spam calls off what it queued the same way, in the
+ * transaction that marks it: a notification still waiting, waiting to be
+ * retried, or failed with its message still held is cancelled and its
+ * message cleared, so nothing about spam is sent and Settings › Email cannot
+ * retry it later. One already with the provider finishes with the message it
+ * has, as the queued send's cancellation rules say: it ends sent if the
+ * provider takes it, and cancelled if it fails, since its next attempt finds
+ * no message. The delivery records of what went out stay: the submission is
+ * still there, and they go when it is deleted.
+ *
  * What a submission sent is recorded as it is queued (`recordSend`), in the
- * plugin's own `form-submission-sends` collection.
+ * plugin's own `form-submission-sends` collection, in the transaction that
+ * stores the submission and queues the notification.
  *
  * @module handlers/forget-sends
  */
@@ -64,16 +75,78 @@ export interface RecordedSend {
   sendKey: string;
 }
 
-/** Record that `submissionId` queued a notification. */
+/**
+ * Record that `submissionId` queued a notification, in `transaction`: the
+ * one storing the submission and queuing the notification, so the record,
+ * the submission and the queued email commit or roll back together.
+ */
 export async function recordSend(
   ctx: Pick<PluginContext, "services" | "self">,
+  transaction: InTransactionContext["transaction"],
   submissionId: string,
   send: RecordedSend
 ): Promise<void> {
-  await ctx.services.collections.createEntry(sendsSlugOf(ctx), {
-    submission: submissionId,
-    ...send,
-  });
+  await ctx.services.collections.createEntryInTransaction(
+    transaction,
+    sendsSlugOf(ctx),
+    { submission: submissionId, ...send }
+  );
+}
+
+/** A submission's status as a write describes it, or undefined. */
+function statusOf(row: unknown): unknown {
+  return row && typeof row === "object"
+    ? (row as { status?: unknown }).status
+    : undefined;
+}
+
+/** Whether `write` is the update that marks its submission Spam. */
+function marksSpam(write: InTransactionContext): boolean {
+  return (
+    write.operation === "update" &&
+    statusOf(write.data) === "spam" &&
+    statusOf(write.originalData) !== "spam"
+  );
+}
+
+/**
+ * The queued emails a submission's notifications went out as, read on the
+ * write's transaction. Paged by number: nothing here deletes the records.
+ */
+async function queuedIdsOf(
+  ctx: ForgettingContext,
+  write: InTransactionContext
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (let page = 1; ; page += 1) {
+    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+      write.transaction,
+      sendsSlugOf(ctx),
+      {
+        where: { submission: { equals: String(write.id) } },
+        pagination: { limit: DELETE_PAGE, page },
+        depth: 0,
+      }
+    );
+    const sends = data as Array<Partial<RecordedSend>>;
+    for (const send of sends) if (send.queuedId) ids.push(send.queuedId);
+    if (sends.length < DELETE_PAGE) return ids;
+  }
+}
+
+/**
+ * Cancel and clear what a submission queued as it is marked Spam (see the
+ * module). Only the queued emails are named, not the keys they were sent
+ * with, so the delivery records of what already went out are kept.
+ */
+async function cancelSpamSends(
+  ctx: ForgettingContext,
+  write: InTransactionContext
+): Promise<void> {
+  if (!marksSpam(write)) return;
+  const queuedIds = await queuedIdsOf(ctx, write);
+  if (queuedIds.length === 0) return;
+  await ctx.services.email.forgetSends({ queuedIds }, { tx: write.db });
 }
 
 /** Forget what the submission a delete removes sent, and its records of it. */
@@ -158,14 +231,18 @@ async function deleteFormSubmissions(
   }
 }
 
-/** Forget what submissions sent on every path that deletes them. */
+/**
+ * Forget what submissions sent on every path that deletes them, and call
+ * off what one queued as it is marked Spam.
+ */
 export function registerForgettingSends(
   ctx: ForgettingContext,
   slugs: { forms: string; submissions: string }
 ): void {
-  ctx.hooks.onInTransaction(slugs.submissions, write =>
-    forgetSubmissionSends(ctx, write)
-  );
+  ctx.hooks.onInTransaction(slugs.submissions, async write => {
+    await forgetSubmissionSends(ctx, write);
+    await cancelSpamSends(ctx, write);
+  });
   ctx.hooks.onInTransaction(slugs.forms, write =>
     deleteFormSubmissions(ctx, write, slugs.submissions)
   );
