@@ -125,6 +125,20 @@ function homeOf(
   return { own, home: ownAllowed ? own : (first ?? "") };
 }
 
+/** The place a choice names, when the field may go there; else null. */
+function targetOf(
+  place: MoveDestination | undefined,
+  position: PlacePosition | undefined
+): FieldInsertPosition | null {
+  if (!place?.verdict.allowed || !position) return null;
+  return {
+    ...(place.parentFieldId ? { parentFieldId: place.parentFieldId } : {}),
+    ...(position.beforeFieldId
+      ? { beforeFieldId: position.beforeFieldId }
+      : {}),
+  };
+}
+
 /** The place and position chosen, and what the rule says of a move there. */
 function useMoveToChoice(
   fields: readonly BuilderField[],
@@ -147,17 +161,7 @@ function useMoveToChoice(
   const position =
     positions.find(each => each.key === positionKey) ??
     positions.find(each => each.key === now);
-  const target: FieldInsertPosition | null =
-    place?.verdict.allowed && position
-      ? {
-          ...(place.parentFieldId
-            ? { parentFieldId: place.parentFieldId }
-            : {}),
-          ...(position.beforeFieldId
-            ? { beforeFieldId: position.beforeFieldId }
-            : {}),
-        }
-      : null;
+  const target = targetOf(place, position);
   return {
     places,
     chosen,
