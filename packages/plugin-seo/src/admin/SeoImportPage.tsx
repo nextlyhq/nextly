@@ -84,6 +84,7 @@ import {
 } from "./import-files";
 import {
   neverServedWords,
+  otherChanges,
   reportCsv,
   reportedPages,
   resultOf,
@@ -811,19 +812,32 @@ function reportedPageHref(row: ImportReportEntry): string | undefined {
  */
 function ReportedPage({ row }: { row: ImportReportEntry }): JSX.Element {
   const href = reportedPageHref(row);
-  if (href === undefined) {
-    return <span className="font-medium text-foreground">{row.label}</span>;
-  }
+  const others = otherChanges(row);
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="font-medium text-foreground hover:underline"
-    >
-      {row.label}
-      <span className="sr-only"> (opens in a new tab)</span>
-    </a>
+    <div className="grid gap-0.5">
+      {href === undefined ? (
+        <span className="font-medium text-foreground">{row.label}</span>
+      ) : (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-foreground hover:underline"
+        >
+          {row.label}
+          <span className="sr-only"> (opens in a new tab)</span>
+        </a>
+      )}
+      {/* Its other places, which have no column: each with its result. */}
+      {others.map(change => (
+        <span
+          key={change.place}
+          className="whitespace-normal text-xs text-muted-foreground"
+        >
+          {`${change.label}: ${RESULT_WORDS[change.result].label}`}
+        </span>
+      ))}
+    </div>
   );
 }
 
