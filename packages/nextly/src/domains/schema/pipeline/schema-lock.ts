@@ -1766,6 +1766,11 @@ async function outlastEarlierStatements(
     return;
   }
   const deadline = wait.earlierStatementsDeadline();
+  // The sessions already sent MySQL's `KILL QUERY`, which stops whatever the session runs when it
+  // arrives: sent once, so a session that ends the statement and takes up other work is not
+  // stopped by a later poll. PostgreSQL's cancel asks for the marked statement itself, so it is
+  // sent again on each poll, in case the first raced the statement's start.
+  const killed = new Set<string>();
   for (;;) {
     const running =
       await hold.adapter.queryStatement<EarlierStatement>(listing);
@@ -1790,6 +1795,11 @@ async function outlastEarlierStatements(
       });
     }
     for (const statement of running) {
+      if (hold.dialect === "mysql") {
+        const session = String(statement.session);
+        if (killed.has(session)) continue;
+        killed.add(session);
+      }
       const cancel = cancelStatement(hold.dialect, statement.session, claim);
       // A cancel this role may not make, or one racing the statement's own end, is waited out.
       if (cancel !== undefined) {

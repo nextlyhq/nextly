@@ -442,6 +442,9 @@ async function executeStatements(
         await tx.execute(sqlTag.raw(markedForSchemaLock(stmt)));
         executed.push(stmt);
       }
+      // The commit is what lands the reconcile: refused, and the transaction undone, as a
+      // statement is, so a run that lost the lock while its last statement ran changes nothing.
+      await assertSchemaLockHeld();
     });
     return executed;
   }
