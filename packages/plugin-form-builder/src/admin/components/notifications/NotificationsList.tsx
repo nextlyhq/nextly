@@ -16,7 +16,14 @@ import {
   DropdownMenuTrigger,
   Switch,
 } from "@nextlyhq/ui";
-import { ChevronRight, Mail, Plus, Send, Users } from "lucide-react";
+import {
+  ChevronRight,
+  Mail,
+  Plus,
+  Send,
+  TriangleAlert,
+  Users,
+} from "lucide-react";
 import type { JSX, MouseEvent } from "react";
 
 import type { AnyFormField, FormNotification } from "../../../types";
@@ -55,7 +62,8 @@ function AddNotification({
 }): JSX.Element {
   const hasEmailField = fields.some(field => field.type === "email");
   return (
-    <DropdownMenu>
+    // Not modal: the page around the menu stays as it is to assistive tech.
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button type="button">
           <Plus className="h-4 w-4" aria-hidden="true" />
@@ -134,7 +142,15 @@ function NotificationRow({
           {notification.templateSlug ? (
             <>Message: {message?.name ?? notification.templateSlug}</>
           ) : (
-            <span className="text-destructive">No message: will not send</span>
+            // The warning colour is on the icon; the words stay in the
+            // foreground colour, readable at this size in both themes.
+            <span className="inline-flex items-center gap-1 text-foreground">
+              <TriangleAlert
+                className="h-3 w-3 shrink-0 text-destructive"
+                aria-hidden="true"
+              />
+              No message: will not send
+            </span>
           )}
         </p>
       </div>

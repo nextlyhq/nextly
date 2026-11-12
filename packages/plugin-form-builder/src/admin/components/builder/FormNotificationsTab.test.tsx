@@ -396,9 +396,15 @@ describe("a notification's page", () => {
       <FormNotificationsTab defaults={{ defaultFrom: "forms@example.com" }} />
     );
     expect(await screen.findByText("Subject:")).toBeInTheDocument();
+    // The site's default sender wins over the message's, as sending does.
     expect(screen.getByRole("textbox", { name: "From" })).toHaveAttribute(
       "placeholder",
-      "hello@example.com"
+      "forms@example.com"
+    );
+    expect(
+      screen.getByRole("textbox", { name: "From" })
+    ).toHaveAccessibleDescription(
+      /forms@example.com, the site's default sender/
     );
     expect(
       screen.getByRole("combobox", { name: "Provider" })
@@ -407,6 +413,17 @@ describe("a notification's page", () => {
       screen.getByRole("combobox", { name: "Reply-To" })
     ).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Active" })).toBeChecked();
+  });
+
+  it("shows the message's From as the default when the site sets none", async () => {
+    notifications = [aNotification()];
+    openPage("n1");
+    render(<FormNotificationsTab defaults={null} />);
+    await screen.findByText("Subject:");
+    expect(screen.getByRole("textbox", { name: "From" })).toHaveAttribute(
+      "placeholder",
+      "hello@example.com"
+    );
   });
 
   it("links to the message in the Email hub, in a new tab, for someone who may edit it", async () => {

@@ -30,7 +30,11 @@ import {
   teamAddressesOf,
 } from "../../../utils/notification-model";
 import { addressError, isValidEmail } from "../builder/notification-addresses";
-import { ChoiceCards, SettingRow } from "../builder/settings-rows";
+import {
+  ChoiceCards,
+  descriptionIdOf,
+  SettingRow,
+} from "../builder/settings-rows";
 
 import { NO_EMAIL_FIELD_REASON } from "./NotificationsList";
 
@@ -182,7 +186,11 @@ function ReplyTo({
             } else update({ replyTo: "" });
           }}
         >
-          <SelectTrigger id="notification-reply-to" className={TRIGGER}>
+          <SelectTrigger
+            id="notification-reply-to"
+            aria-describedby={descriptionIdOf("notification-reply-to")}
+            className={TRIGGER}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

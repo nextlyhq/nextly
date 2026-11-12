@@ -113,7 +113,8 @@ export function NotificationPage({
             checked={notification.enabled}
             onCheckedChange={enabled => update({ enabled })}
           />
-          <DropdownMenu>
+          {/* Not modal: the page around it stays as it is to assistive tech. */}
+          <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <Button
                 type="button"

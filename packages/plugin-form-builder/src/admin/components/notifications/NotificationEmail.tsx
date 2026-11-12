@@ -29,7 +29,7 @@ import {
 import type { AnyFormField, FormNotification } from "../../../types";
 import { attachFieldsOf } from "../../../utils/notification-model";
 import { addressError } from "../builder/notification-addresses";
-import { SettingRow } from "../builder/settings-rows";
+import { descriptionIdOf, SettingRow } from "../builder/settings-rows";
 
 import {
   emailHubEditHref,
@@ -56,8 +56,11 @@ function MessageDetails({
     const starter = starterTemplateFor(notification.recipientType);
     return (
       <div className="min-w-0 flex-1 space-y-2">
-        <p className="flex items-center gap-1.5 text-sm font-semibold text-destructive">
-          <TriangleAlert className="h-4 w-4" aria-hidden="true" />
+        <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <TriangleAlert
+            className="h-4 w-4 shrink-0 text-destructive"
+            aria-hidden="true"
+          />
           No message: this notification never sends
         </p>
         <Button
@@ -223,13 +226,28 @@ function AttachFiles({
 }
 
 /** The address a notification sends from when its From is blank. */
+/**
+ * Where a blank From sends from, in the order sending decides it: the
+ * plugin's default sender (`notifications.defaultFrom`), which the send path
+ * passes as the sender, then the message's own, then the provider's.
+ */
 function inheritedSender(
   message: TemplateOption | undefined,
   defaults: NotificationDefaults | null
-): string {
-  return (
-    message?.fromOverride || defaults?.defaultFrom || "the provider's address"
-  );
+): { address: string; source: string } {
+  if (defaults?.defaultFrom) {
+    return {
+      address: defaults.defaultFrom,
+      source: "the site's default sender",
+    };
+  }
+  if (message?.fromOverride) {
+    return { address: message.fromOverride, source: "the message's setting" };
+  }
+  return {
+    address: "the provider's address",
+    source: "the provider's setting",
+  };
 }
 
 /** The provider the message sends through, or the site's default. */
@@ -249,7 +267,7 @@ function FromRow({
   update,
 }: {
   notification: FormNotification;
-  inherited: string;
+  inherited: { address: string; source: string };
   update: NotificationUpdate;
 }): JSX.Element {
   const error = addressError("senderEmail", notification.senderEmail);
@@ -257,14 +275,15 @@ function FromRow({
     <SettingRow
       label="From"
       htmlFor="notification-from"
-      description={`Leave blank to send from ${inherited}, the message's setting.`}
+      description={`Leave blank to send from ${inherited.address}, ${inherited.source}.`}
     >
       <div className="flex w-full flex-col gap-1 sm:w-72">
         <Input
           id="notification-from"
+          aria-describedby={descriptionIdOf("notification-from")}
           type="email"
           value={notification.senderEmail ?? ""}
-          placeholder={inherited}
+          placeholder={inherited.address}
           onChange={event =>
             update({ senderEmail: event.target.value || undefined })
           }
@@ -301,6 +320,7 @@ function ProviderRow({
       >
         <SelectTrigger
           id="notification-provider"
+          aria-describedby={descriptionIdOf("notification-provider")}
           className={`${TRIGGER} sm:w-72`}
         >
           <SelectValue />
