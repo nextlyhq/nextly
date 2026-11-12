@@ -142,7 +142,7 @@ const allowed = () =>
     },
   });
 
-const sampleTile = () =>
+const sampleLine = () =>
   document.querySelector<HTMLElement>('[data-setup-step="sample"]');
 const panel = () =>
   document.querySelector<HTMLElement>("[data-setup-sample-panel]");
@@ -173,15 +173,15 @@ afterEach(() => {
 });
 
 describe("who is offered sample content", () => {
-  it("offers Load and No thanks on a 2xx probe only", async () => {
+  it("offers Add samples and No thanks on a 2xx probe only", async () => {
     route(allowed);
     render(card(dataOf(OPEN)));
-    const tile = sampleTile()!;
+    const line = sampleLine()!;
     expect(
-      await within(tile).findByRole("button", { name: "Load" })
+      await within(line).findByRole("button", { name: "Add samples" })
     ).toBeInTheDocument();
     expect(
-      within(tile).getByRole("button", { name: "No thanks" })
+      within(line).getByRole("button", { name: "No thanks" })
     ).toBeInTheDocument();
   });
 
@@ -194,8 +194,8 @@ describe("who is offered sample content", () => {
     async (_name, probe) => {
       route(probe);
       render(card(dataOf(OPEN)));
-      await waitFor(() => expect(sampleTile()).toBeNull());
-      expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+      await waitFor(() => expect(sampleLine()).toBeNull());
+      expect(screen.queryByRole("button", { name: "Add samples" })).toBeNull();
     }
   );
 
@@ -213,9 +213,9 @@ describe("who is offered sample content", () => {
       route(probe);
       render(card(dataOf(OPEN)));
       expect(
-        await within(sampleTile()!).findByText("Couldn't check")
+        await within(sampleLine()!).findByText("Couldn't check")
       ).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Add samples" })).toBeNull();
     }
   );
 
@@ -223,11 +223,11 @@ describe("who is offered sample content", () => {
     route(allowed);
     render(card(dataOf({ kind: "sample", status: "open", unreadable: true })));
     expect(
-      await within(sampleTile()!).findByText("Couldn't check")
+      await within(sampleLine()!).findByText("Couldn't check")
     ).toBeInTheDocument();
     // Given time for the probe, still no offer.
     await act(async () => undefined);
-    expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add samples" })).toBeNull();
     expect(screen.getByRole("link", { name: /^Add/ })).toHaveAttribute(
       "href",
       expect.stringContaining("posts")
@@ -252,7 +252,7 @@ describe("who is offered sample content", () => {
       );
       await panelSays("status", /has not finished/);
       await act(async () => undefined);
-      expect(sampleTile()).toHaveAttribute("data-status", "open");
+      expect(sampleLine()).toHaveAttribute("data-status", "open");
       expect(screen.queryByTestId("setup-all-set")).toBeNull();
       expect(put).not.toHaveBeenCalledWith(
         "/dashboard/setup",
@@ -267,7 +267,7 @@ describe("who is offered sample content", () => {
     route(() => (answers.shift() ?? allowed)());
     render(card(dataOf(OPEN, { kind: "entry", status: "done" })));
     expect(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     ).toBeInTheDocument();
     expect(screen.queryByTestId("setup-all-set")).toBeNull();
     expect(put).not.toHaveBeenCalledWith(
@@ -283,7 +283,7 @@ describe("who is offered sample content", () => {
     // Every other step done: read as a no, the 503 would drop the step and retire the card.
     render(card(dataOf(OPEN, { kind: "entry", status: "done" })));
     expect(
-      await within(sampleTile()!).findByText("Couldn't check")
+      await within(sampleLine()!).findByText("Couldn't check")
     ).toBeInTheDocument();
     await act(async () => undefined);
     expect(screen.queryByTestId("setup-all-set")).toBeNull();
@@ -291,13 +291,13 @@ describe("who is offered sample content", () => {
       "/dashboard/setup",
       expect.objectContaining({ retire: expect.anything() })
     );
-    expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add samples" })).toBeNull();
     // Asked again when the dashboard regains focus: now it says yes.
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
     expect(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     ).toBeInTheDocument();
   });
 
@@ -313,10 +313,10 @@ describe("who is offered sample content", () => {
       )
     );
     expect(
-      await within(sampleTile()!).findByText("Couldn't check")
+      await within(sampleLine()!).findByText("Couldn't check")
     ).toBeInTheDocument();
     await act(async () => undefined);
-    expect(sampleTile()).toHaveAttribute("data-status", "open");
+    expect(sampleLine()).toHaveAttribute("data-status", "open");
     expect(screen.queryByTestId("setup-all-set")).toBeNull();
     expect(put).not.toHaveBeenCalledWith(
       "/dashboard/setup",
@@ -327,7 +327,7 @@ describe("who is offered sample content", () => {
   it("asks for the site's current answer whenever the dashboard regains focus", async () => {
     route(allowed);
     render(card(dataOf(OPEN)));
-    await within(sampleTile()!).findByRole("button", { name: "Load" });
+    await within(sampleLine()!).findByRole("button", { name: "Add samples" });
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
@@ -348,7 +348,7 @@ describe("a load and its outcome", () => {
     const queryClient = createTestQueryClient();
     const first = render(card(dataOf(OPEN)), { queryClient });
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     await panelSays("status", "Loading sample content");
     // Drawn again mid-run, as customise mode draws it: the run is still on show.
@@ -357,7 +357,7 @@ describe("a load and its outcome", () => {
     expect(within(await shownPanel()).getByRole("status")).toHaveTextContent(
       "Loading sample content"
     );
-    expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add samples" })).toBeNull();
     // Its answer lands though the card that asked is gone.
     await act(async () => land(loadedAnswer()));
     await panelSays("status", "Sample content loaded.");
@@ -379,8 +379,8 @@ describe("a load and its outcome", () => {
         })
     );
     render(card(dataOf(OPEN)));
-    const load = await within(sampleTile()!).findByRole("button", {
-      name: "Load",
+    const load = await within(sampleLine()!).findByRole("button", {
+      name: "Add samples",
     });
     fireEvent.click(load);
     fireEvent.click(load);
@@ -402,7 +402,7 @@ describe("a load and its outcome", () => {
     const queryClient = createTestQueryClient();
     render(card(dataOf(OPEN)), { queryClient });
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     await panelSays("status", "Loading sample content");
     // This tab's state set aside (as nothing in the card does), and a second start made.
@@ -410,7 +410,7 @@ describe("a load and its outcome", () => {
       queryClient.setQueryData(["dashboard", "setup", "sample-run"], null);
     });
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     await panelSays("status", "Sample content loaded.");
     // The first start's refusal lands late, and changes nothing.
@@ -439,10 +439,10 @@ describe("a load and its outcome", () => {
     );
     render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     await panelSays("status", /A load started at .+ has not finished/);
-    for (const name of ["Load", "Try again", "Decline sample content"]) {
+    for (const name of ["Add samples", "Try again", "Decline sample content"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
   });
@@ -457,7 +457,7 @@ describe("a load and its outcome", () => {
     );
     render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     expect(
       await within(await shownPanel()).findByRole("alert")
@@ -560,7 +560,7 @@ describe("a load and its outcome", () => {
       within(message).getByRole("link", { name: "Add your first entry" })
     ).toBeInTheDocument();
     await act(async () => undefined);
-    for (const name of ["Load", "Try again", "No thanks", "Continue"]) {
+    for (const name of ["Add samples", "Try again", "No thanks", "Continue"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
     expect(posts).toHaveLength(0);
@@ -575,7 +575,7 @@ describe("a load and its outcome", () => {
     );
     render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     expect(
       await within(await shownPanel()).findByRole("alert")
@@ -583,7 +583,7 @@ describe("a load and its outcome", () => {
       "The sample content loaded, but recording that failed."
     );
     // Neither the offer again nor a way on as if it were recorded.
-    for (const name of ["Load", "No thanks", "Continue"]) {
+    for (const name of ["Add samples", "No thanks", "Continue"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
     put.mockRejectedValueOnce(
@@ -640,7 +640,7 @@ describe("a load and its outcome", () => {
     );
     render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     expect(
       await within(await shownPanel()).findByRole("alert")
@@ -652,7 +652,7 @@ describe("a load and its outcome", () => {
     route(allowed, loadedAnswer);
     const { rerender } = render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     await within(await shownPanel()).findByText(/Sample content loaded/);
     // The card's next read could not check setup.
@@ -677,7 +677,7 @@ describe("a load and its outcome", () => {
     route(allowed, loadedAnswer);
     const { rerender } = render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     fireEvent.click(
       await within(await shownPanel()).findByRole("button", {
@@ -689,7 +689,7 @@ describe("a load and its outcome", () => {
     rerender(card(dataOf(OPEN), true));
     await panelSays("status", "Checking your steps…");
     rerender(card(dataOf(OPEN)));
-    expect(screen.queryByRole("button", { name: "Load" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add samples" })).toBeNull();
     // The site's answer now: sample content and the first entry done, an invitation still open.
     const now = dataOf(
       { kind: "sample", status: "done" },
@@ -721,7 +721,7 @@ describe("the outcome until Continue", () => {
       card(dataOf(OPEN, { kind: "entry", status: "done" }))
     );
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "Load" })
+      await within(sampleLine()!).findByRole("button", { name: "Add samples" })
     );
     await panelSays("status", "Sample content loaded.");
     // Nothing is read again, and nothing retired, while the outcome waits.
@@ -750,7 +750,7 @@ describe("the outcome until Continue", () => {
 });
 
 describe("declining", () => {
-  it("declines for the site through core, drawn done once confirmed, and asks for the card again", async () => {
+  it("declines for the site through core, its line gone once confirmed, and asks for the card again", async () => {
     let land: () => void = () => undefined;
     put.mockReturnValueOnce(
       new Promise<void>(resolve => {
@@ -760,14 +760,13 @@ describe("declining", () => {
     route(allowed);
     render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "No thanks" })
+      await within(sampleLine()!).findByRole("button", { name: "No thanks" })
     );
     expect(put).toHaveBeenCalledWith("/dashboard/setup", { sample: "decline" });
-    expect(sampleTile()).toHaveAttribute("data-status", "open");
+    expect(sampleLine()).toHaveAttribute("data-status", "open");
     await act(async () => land());
-    await waitFor(() =>
-      expect(sampleTile()).toHaveAttribute("data-status", "done")
-    );
+    // Answered, the step is done and its line goes: the checklist lists what is left to do.
+    await waitFor(() => expect(sampleLine()).toBeNull());
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
@@ -781,14 +780,14 @@ describe("declining", () => {
     route(allowed);
     render(card(dataOf(OPEN)));
     fireEvent.click(
-      await within(sampleTile()!).findByRole("button", { name: "No thanks" })
+      await within(sampleLine()!).findByRole("button", { name: "No thanks" })
     );
     expect(
       await within(await shownPanel()).findByRole("alert")
     ).toHaveTextContent(
       "Someone has already loaded or declined sample content."
     );
-    expect(sampleTile()).toHaveAttribute("data-status", "open");
+    expect(sampleLine()).toHaveAttribute("data-status", "open");
     expect(retry).toHaveBeenCalledTimes(1);
   });
 });

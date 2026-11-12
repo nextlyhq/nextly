@@ -15,6 +15,11 @@ import { cn } from "@admin/lib/utils";
  */
 type CatalogFieldType = FieldTypeCatalogEntry["type"];
 
+/**
+ * @deprecated Use `FieldPicker` from `@nextlyhq/plugin-sdk/admin` instead.
+ *   Removed no earlier than 0.0.2-alpha.75, and only once the Form Builder and
+ *   user custom fields use the shared picker and panel.
+ */
 export interface FieldTypePickerProps<T extends string> {
   /**
    * The surface's allowed canonical types, rendered in catalog order.
@@ -44,6 +49,10 @@ export interface FieldTypePickerProps<T extends string> {
  * rendered from `nextly/field-catalog` so every surface shows the same
  * label, hint, and icon for the same type. Controlled and form-library
  * agnostic — wrap it in react-hook-form or plain state alike.
+ *
+ * @deprecated Use `FieldPicker` from `@nextlyhq/plugin-sdk/admin` instead.
+ *   Removed no earlier than 0.0.2-alpha.75, and only once the Form Builder and
+ *   user custom fields use the shared picker and panel.
  */
 export function FieldTypePicker<T extends string>({
   types,

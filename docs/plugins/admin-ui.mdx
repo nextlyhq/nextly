@@ -41,7 +41,11 @@ An app loads these through its **component map**, two generated files beside its
 types (D60):
 
 - `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
-  the app's admin page imports it.
+  the app's admin page imports it. That includes the views a collection names for its own
+  screens under `admin.components` (its `Edit` and `List` views, and what is drawn before and
+  after its list table and edit form), whether the collection is a plugin's or the site's own.
+  The admin imports no module by name at run time, so a component the map doesn't list draws
+  its fallback, and `next dev` names it.
 - `plugin-admin-components.generated.ts` lists the same paths as plain strings, and the admin's
   server layout passes them to `checkAdminComponents` from `nextly/runtime`.
 
@@ -83,7 +87,6 @@ import "../../../types/generated/plugin-admin-imports.generated";
 // src/app/admin/[[...params]]/layout.tsx
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { checkAdminComponents } from "nextly/runtime";
 
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
@@ -93,23 +96,28 @@ export default function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return (
+  return process.env.NODE_ENV === "development" ? (
     <Suspense fallback={null}>
-      <ForThisRequest>{children}</ForThisRequest>
+      <ComponentMapKeptCurrent>{children}</ComponentMapKeptCurrent>
     </Suspense>
+  ) : (
+    children
   );
 }
 
-async function ForThisRequest({ children }: { children: React.ReactNode }) {
+async function ComponentMapKeptCurrent({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   await connection();
+  const { checkAdminComponents } = await import("nextly/runtime");
   await checkAdminComponents({ config, registeredComponentPaths });
   return children;
 }
 ```
 
-Keep anything your layout already renders, such as branding styles, around the `<Suspense>`
-element. The check goes in the component beneath the boundary because, under Cache
-Components, request work outside one fails the build.
+Keep anything your layout already renders, such as branding styles, around that choice. The check runs in development only, and beneath a Suspense boundary because, under Cache Components, request work outside one fails the build. A production build leaves it out, so the admin page is prebuilt: the same page for every visitor, served at once, even while the server is still starting.
 
 Then run `npx nextly generate:types` once and commit the two generated files. The paths
 assume the default types location (`./src/types/generated/`); use the folder your
@@ -262,6 +270,51 @@ contributes: {
 `menu` and `pages` honour `requiredPermission` for client-side gating (see
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
+
+### Pages that look like core pages
+
+> **Experimental.** `PageFrame` and `PageHeader` may change before they are marked
+> stable.
+
+A page you contribute under `pages` is drawn inside the admin's shell, with its top bar,
+rail and panel. Draw it from the same two pieces core pages use, both from
+`@nextlyhq/plugin-sdk/admin`, and it looks like one.
+
+`PageFrame` takes the page's `type`, and the type decides how wide the page is:
+
+| Type        | Width                                                     | Use it for                                                  |
+| ----------- | --------------------------------------------------------- | ----------------------------------------------------------- |
+| `list`      | Full width, inset by the page gutter                      | A table or a list of records                                |
+| `form`      | A column of at most 56rem, under the page's left edge     | Settings and other forms you read top to bottom             |
+| `editor`    | Full width with no gutter, so a side panel meets the edge | An editor that lays out its own field column and side panel |
+| `workspace` | Full width with no gutter and no padding                  | A surface you lay out yourself, such as a canvas or a board |
+
+`PageHeader` draws the page's title as its heading, with an optional `description`,
+`actions` on the title's line, `meta` chips beside the title, a leading `media` visual and
+a `tabs` row (`PageTabs`, with a `PageTab` per section).
+
+```tsx
+// src/admin/ReportsPage.tsx
+import { Button, PageFrame, PageHeader } from "@nextlyhq/plugin-sdk/admin";
+
+export function ReportsPage() {
+  return (
+    <PageFrame type="list">
+      <PageHeader
+        title="Reports"
+        description="Every report your team has saved."
+        actions={<Button>New report</Button>}
+      />
+      {/* The page's table */}
+    </PageFrame>
+  );
+}
+```
+
+A page that uses neither is drawn as a Workspace page: full width, with no gutter and no
+padding, so the page lays itself out. A page that draws its own `PageFrame` is not framed
+a second time. To put something in the admin's top bar, such as a Save button, use
+`TopBarPlace`.
 
 ### Document views
 
@@ -692,9 +745,10 @@ Every card draws in one frame: a header of one fixed height, the body, and at mo
 link. The header shows the card's subject as its title (a collection card set to Posts reads
 "Posts"), with the widget's own name beneath it when the two differ ("Count"), then the card's
 quick control and its menu, in the same place on every card. A widget may mark up to three
-settings `quick`: the header draws the first, and the card's quick popover, opened from its
-title or from Settings in its menu, holds them all with the card's Collection and Size. The
-menu lists Settings, Size, Refresh and Remove. A card does not say when its data arrived.
+settings `quick`: the header draws the first it can (a `select` or a `checkbox`). Every setting
+is changed in the card's settings drawer, opened from Settings… in its menu: a preview of the
+card, then Content, Display and Size (its width), saved on Save. The menu lists Settings…,
+Refresh and Remove. A card does not say when its data arrived.
 
 The frame also owns the states, so a card never draws its own: a skeleton while data has never
 arrived, the last value marked busy while it refreshes, an empty state, one "Not available to
@@ -842,6 +896,16 @@ definePlugin({
 
 Placement defaults to `plugins`. `standalone` gives the plugin its own top-level icon,
 anchored after the section named by `after`.
+
+A standalone plugin's icon opens the page named by `landing`, written the way a menu
+item's `to` is: one of the plugin's own pages (`/admin/plugins/<slug>/<path>`, a
+`contributes.admin.pages` path) or one of its own collections
+(`/admin/collections/<slug>`, which follows a host's rename). A reader who may not open
+that page goes where the icon would go without one. Without `landing`, the icon
+opens the first collection its panel lists for the reader, and with none, the first menu
+item the panel lists. A `landing` naming anything else is ignored, and a development
+start warns about it, as it does about a standalone plugin with menu items but no
+collections and no `landing`.
 
 The value is written out rather than read from the `AdminPlacement` constant, which ships
 from `nextly` and not from `@nextlyhq/plugin-sdk`. The SDK is the only surface a plugin

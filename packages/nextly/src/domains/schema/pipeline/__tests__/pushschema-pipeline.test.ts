@@ -960,6 +960,48 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
     consoleSpy.mockRestore();
   });
 
+  it("runs again when only what a plugin's scope holds back changed", async () => {
+    // The same declared schema, but a type switched on again: its held-back
+    // field no longer keeps its column, which no declared change shows.
+    const { publishWithheldScopeFields } = await import(
+      "../withheld-scope-fields"
+    );
+    const pushSchemaImpl = vi
+      .fn()
+      .mockResolvedValue({ sqlStatements: [], hints: [] });
+    const { pipeline } = makePipeline({
+      pushSchemaImpl,
+      // The drizzle-kit route, as the short-circuit tests above take it.
+      resolvedOpsOverride: [
+        {
+          type: "rename_column",
+          tableName: "_force_slow_path",
+          fromColumn: "x",
+          toColumn: "x",
+          fromType: "text",
+          toType: "text",
+        },
+      ],
+    });
+    const apply = () =>
+      pipeline.apply({
+        desired: onePostsCollection,
+        db: {},
+        dialect: "postgresql",
+        source: "code",
+        promptChannel: "terminal",
+      });
+
+    publishWithheldScopeFields(
+      new Map([["collection:posts", [{ name: "seo", type: "text" } as never]]])
+    );
+    expect((await apply()).success).toBe(true);
+    publishWithheldScopeFields(new Map());
+    expect((await apply()).success).toBe(true);
+
+    expect(pushSchemaImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("Phase 5: cache miss when desired actually changed — pipeline runs again", async () => {
     // Run with desired A, then with desired B — different shape — and
     // assert pushSchema is called both times.

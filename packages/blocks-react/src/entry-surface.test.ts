@@ -846,6 +846,10 @@ describe("the next entry", () => {
       "createPublicContentPage",
       "createPublicSinglePage",
       "createSinglePage",
+      // Added deliberately: what a page's design says about it, asked
+      // outside a route by the route's own derivation, so a check or an
+      // admin screen reads the values the published page is answered with.
+      "designMetadataFor",
       // Added deliberately: what a page's bindings read, through whichever
       // reader a route passes, so the editor's canvas reads its binding
       // sources by the published page's own implementation.

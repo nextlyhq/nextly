@@ -507,7 +507,11 @@ describe("core's built-in names", () => {
     // and `replaces` each name exactly one part of the page.
     const NAME = /^[a-z]+(-[a-z]+)*$/;
     for (const [place, { builtIns }] of Object.entries(CORE_ADMIN_PLACES)) {
-      const names = Object.values(builtIns as Record<string, string[]>).flat();
+      // Read as the catalogue holds it: each place's kinds, each a read-only
+      // list of names. Every place now names at least one part.
+      const names = Object.values(
+        builtIns as Readonly<Record<string, readonly string[]>>
+      ).flat();
       expect(new Set(names).size, place).toBe(names.length);
       for (const name of names) expect(name, `${place} ${name}`).toMatch(NAME);
     }

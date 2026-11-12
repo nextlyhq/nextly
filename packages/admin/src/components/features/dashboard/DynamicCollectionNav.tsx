@@ -9,19 +9,19 @@ import {
   removedFromCodeMarkId,
 } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import * as Icons from "@admin/components/icons";
-import { Bookmark, Loader2, type LucideIcon } from "@admin/components/icons";
+import { Bookmark, type LucideIcon } from "@admin/components/icons";
 import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
 } from "@admin/components/layout/sidebar";
+import { PanelGhostRows } from "@admin/components/layout/sidebar/RailColumn";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useSidebarCollectionList } from "@admin/hooks/useSidebarContentLists";
 import {
   filterCollectionItems,
@@ -46,18 +46,13 @@ interface DynamicCollectionNavProps {
 }
 
 /**
- * Loading skeleton for collection items
+ * The panel's rows while the collections load: neutral shapes where the links
+ * will be, still, so nothing in the panel spins or names a list not known yet.
  */
 function CollectionSkeleton() {
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton disabled className="opacity-50">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <span className="text-muted-foreground">Loading collections...</span>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
+  return <PanelGhostRows as="li" />;
 }
+
 /** A single sidebar entry (collection or single within a group) */
 interface SidebarEntry {
   type: "collection" | "single";
@@ -105,7 +100,6 @@ export function DynamicCollectionNav({
   } = useSidebarCollectionList();
 
   const { data: singlesData } = useSingles();
-  usePluginAutoRegistration(data?.items);
   // Plugin-level metadata with declared placement
   const pluginMetadata = branding?.plugins;
   const customGroups = branding?.customGroups;

@@ -227,3 +227,26 @@ describe("the admin's favicon", () => {
     expect(activeIcons()[0]?.getAttribute("type")).toBeNull();
   });
 });
+
+describe("no favicon to show", () => {
+  it("adds nothing and leaves the host's icon as the page's own", () => {
+    render(<HostIcon href="/favicon.ico" />);
+    renderHook(() => useFaviconInjection(null));
+    expect(hrefs()).toEqual(["/favicon.ico"]);
+  });
+
+  it("shows the admin's icon once one arrives, and gives the host's back when it goes", () => {
+    render(<HostIcon href="/favicon.ico" />);
+    const { rerender } = renderHook(
+      ({ href }: { href: string | null }) => useFaviconInjection(href),
+      { initialProps: { href: null as string | null } }
+    );
+    expect(hrefs()).toEqual(["/favicon.ico"]);
+
+    rerender({ href: ADMIN_ICON });
+    expect(hrefs()).toEqual([ADMIN_ICON]);
+
+    rerender({ href: null });
+    expect(hrefs()).toEqual(["/favicon.ico"]);
+  });
+});

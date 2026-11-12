@@ -9,7 +9,13 @@
  *   dropping it again deletes nothing that was there before the file.
  * - drops a column, or changes its type (`ALTER ... TYPE`, MySQL's `MODIFY`
  *   and `CHANGE`): a `column` deletion. A changed type may not hold every
- *   value, so it needs consent naming the column like a drop does.
+ *   value, so it needs consent naming the column like a drop does. A string
+ *   column widened (`varchar(n)` to `text` or a `varchar` at least as long,
+ *   `keepsEveryStringValue`), with nothing else that converts it stated, keeps
+ *   every value and deletes nothing. The MySQL run `migrate:create` writes to
+ *   change a column's nullability (`mysqlLiveRunAt`) restates its live type:
+ *   it is judged as that restatement, a `column` deletion only when it makes a
+ *   nullable column NOT NULL, and its rename run as the plain rename.
  * - removes rows (`DELETE`, `TRUNCATE`, `REPLACE`, SQLite's `OR REPLACE`): a
  *   `rows` deletion, and one for each table a foreign key's `ON DELETE
  *   CASCADE` (or PostgreSQL's `TRUNCATE ... CASCADE`) reaches from it, read
@@ -39,10 +45,20 @@ import { createHash } from "node:crypto";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import type { LiveColumns } from "../ownership/drop-guard";
-import { introspectTableNames } from "../pipeline/diff/introspect-live";
-import { queryLiveColumnTypes } from "../pipeline/live-column-types";
+import { keepsEveryStringValue } from "../pipeline/classifier/type-widening";
+import {
+  MYSQL_LIVE_RUN_LENGTH,
+  mysqlLiveRunAt,
+  plainMysqlStatement,
+  type MysqlLiveRun,
+} from "../pipeline/sql-templates/mysql-live-restate";
+import {
+  introspectLiveColumns,
+  introspectTableNames,
+} from "../pipeline/diff/introspect-live";
 import {
   readHiddenCode,
+  readMysqlOtherCharsets,
   readPgDescendants,
   readReferencingKeys,
   readUserFunctions,
@@ -111,6 +127,20 @@ export interface DeletionFacts {
    * without it judge every carried column a possible deletion rather than none.
    */
   liveColumnTypes?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /**
+   * MySQL: by lower-cased table, the columns whose character set is not their table's default,
+   * read for the tables whose column types are read. A `MODIFY` or `CHANGE` naming none gives the
+   * column the table's default, converting its values. A table absent here was not read, and a
+   * widening of its columns is judged as any type change.
+   */
+  otherCharsets?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * By lower-cased table, its columns that are NOT NULL, read with the column types. A MySQL
+   * restatement that makes a nullable column NOT NULL turns its NULLs into a type's empty value on
+   * a server not in strict mode, so it is no widening; a table absent here was not read, and such
+   * a restatement of its columns is judged as any type change.
+   */
+  liveNotNull?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 type Token = string | QuotedToken;
@@ -131,6 +161,10 @@ interface FactSource {
   unseenRebuild: "drop" | "deferred";
   liveColumns(table: string): ReadonlySet<string> | undefined;
   liveType(table: string, column: string): string | undefined;
+  /** MySQL: whether `column` has its table's default character set; undefined when unread. */
+  keepsCharacterSet(table: string, column: string): boolean | undefined;
+  /** Whether live `column` of `table` is NOT NULL; undefined when unread. */
+  liveNotNull(table: string, column: string): boolean | undefined;
 }
 
 /** A column whose values a row removal elsewhere blanks. */
@@ -187,7 +221,24 @@ type Step =
       /** PostgreSQL's ONLY: the table without its descendants. */
       only?: boolean;
     }
-  | { kind: "column"; table: string; column: string }
+  | {
+      kind: "column";
+      table: string;
+      column: string;
+      /** The type the change gives the column, when it states nothing else that converts it (`plainTypeStated`). */
+      to?: string;
+      /**
+       * MySQL's restatement: whether the column is NOT NULL after it (`MODIFY`
+       * and `CHANGE` set nullability whatever they omit). Absent where the
+       * change keeps nullability (PostgreSQL's `ALTER ... TYPE`).
+       */
+      notNull?: boolean;
+      /**
+       * The change restates the column's live type, character set and collation as the
+       * database has them when it runs (`mysqlLiveRunAt`): only its nullability changes.
+       */
+      typeKept?: true;
+    }
   | { kind: "drop-column"; table: string; column: string }
   | { kind: "rename-table"; from: string; to: string }
   | { kind: "rename-column"; table: string; from: string; to: string }
@@ -406,22 +457,11 @@ function readDropTables(
   tokens: readonly Token[]
 ): Step[] {
   cursor.acceptCondition();
-  const tables = readNames(cursor);
+  const tables = cursor.names();
   if (tables === undefined) return [unread(tokens)];
   if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
   if (!cursor.done()) return [unread(tokens)];
   return tables.map(table => ({ kind: "drop", table }));
-}
-
-/** A comma-separated list of plain names; undefined when one is not plain. */
-function readNames(cursor: StatementCursor): string[] | undefined {
-  const names: string[] = [];
-  do {
-    const name = cursor.name();
-    if (name === undefined) return undefined;
-    names.push(name);
-  } while (cursor.accept(","));
-  return names;
 }
 
 /**
@@ -1021,7 +1061,7 @@ function readAddedKey(
   // MySQL may name the key's index before its columns.
   if (!clause.isWord("(")) clause.name();
   if (!clause.accept("(")) return undefined;
-  const columns = readNames(clause);
+  const columns = clause.names();
   if (columns === undefined || !clause.accept(")")) return undefined;
   return readReferences(clause, table, columns);
 }
@@ -1075,7 +1115,7 @@ function readMysqlAlterClause(
     const column = clause.name();
     return column === undefined
       ? undefined
-      : [{ kind: "column", table, column }];
+      : [restated(table, column, clause.rest())];
   }
   if (clause.accept("CHANGE")) return readChangeColumn(clause, table);
   // Converting the table's character set rewrites every text column, and
@@ -1100,7 +1140,7 @@ function readChangeColumn(
   const from = clause.name();
   const to = clause.name();
   if (from === undefined || to === undefined) return undefined;
-  const changed: Step[] = [{ kind: "column", table, column: from }];
+  const changed: Step[] = [restated(table, from, clause.rest())];
   if (from !== to) changed.push({ kind: "rename-column", table, from, to });
   return changed;
 }
@@ -1190,8 +1230,101 @@ function readAlterColumn(
   const column = clause.name();
   if (column === undefined) return undefined;
   return clause.accept("TYPE") || clause.accept("SET", "DATA", "TYPE")
-    ? [{ kind: "column", table, column }]
+    ? [typeChange(table, column, plainTypeStated(clause.rest(), column))]
     : [];
+}
+
+/** A change of `column`'s type, with the type it is given when that is all the change states. */
+function typeChange(
+  table: string,
+  column: string,
+  to: string | undefined
+): Extract<Step, { kind: "column" }> {
+  return to === undefined
+    ? { kind: "column", table, column }
+    : { kind: "column", table, column, to };
+}
+
+/**
+ * MySQL's `MODIFY` or `CHANGE` of `column`, from the tokens of its new
+ * definition: a type change that also sets its nullability, NOT NULL where the
+ * definition says `NOT NULL` or `PRIMARY KEY` (which implies it), else
+ * nullable.
+ */
+function restated(
+  table: string,
+  column: string,
+  definition: readonly Token[]
+): Step {
+  const notNull = definition.some(
+    (token, at) =>
+      token === "PRIMARY" || (token === "NOT" && definition[at + 1] === "NULL")
+  );
+  return {
+    ...typeChange(table, column, plainTypeStated(definition, column)),
+    notNull,
+  };
+}
+
+/**
+ * Whether a column change keeps every value of a column that stands as
+ * `before`: a string column widened (`keepsEveryStringValue`) with nothing
+ * else converting it, that makes no nullable column NOT NULL (a server not in
+ * strict mode turns its NULLs into empty strings), and on MySQL in its table's
+ * default character set (`keepsCharacterSet`), which the restated column
+ * takes. A type, nullability or character set not known keeps nothing. A
+ * change that keeps the live type, character set and collation (`typeKept`)
+ * is judged by its nullability alone.
+ */
+function keepsEveryValue(
+  before: { type: string | undefined; notNull: boolean | undefined },
+  change: Extract<Step, { kind: "column" }>,
+  dialect: SupportedDialect,
+  keepsCharacterSet: () => boolean | undefined
+): boolean {
+  if (change.notNull === true && before.notNull !== true) return false;
+  if (change.typeKept === true) return true;
+  if (change.to === undefined || before.type === undefined) return false;
+  if (dialect === "mysql" && keepsCharacterSet() !== true) return false;
+  return keepsEveryStringValue(before.type, change.to, dialect);
+}
+
+/** Words of a column's restated definition that convert its values whatever its type. */
+const CONVERTING_ATTRIBUTES = new Set(["CHARACTER", "CHARSET", "COLLATE"]);
+
+/**
+ * The type a type-changing clause gives `column`, spelled for comparison, when
+ * the clause states nothing else that converts a value: no character set or
+ * collation, and for PostgreSQL's `USING` only the column itself, plainly cast
+ * to that type. Undefined otherwise, and the change is judged as any type
+ * change is.
+ */
+function plainTypeStated(
+  tokens: readonly Token[],
+  column: string
+): string | undefined {
+  const at = tokens.indexOf("USING");
+  const stated = at === -1 ? tokens : tokens.slice(0, at);
+  if (
+    stated.some(
+      token => typeof token === "string" && CONVERTING_ATTRIBUTES.has(token)
+    )
+  ) {
+    return undefined;
+  }
+  const type = declaredType(stated);
+  if (type === undefined || type === "") return undefined;
+  if (at === -1) return type;
+  const using = new StatementCursor(tokens.slice(at + 1));
+  if (using.name() !== column) return undefined;
+  // A quoted unit in the cast (a string, a name) makes it no plain cast.
+  const cast: string[] = [];
+  for (const token of using.rest()) {
+    if (typeof token !== "string") return undefined;
+    cast.push(token);
+  }
+  const spelled = typeSpelling(cast.join(""));
+  return spelled === "" || spelled === `::${type}` ? type : undefined;
 }
 
 /** A rebuild twin's column: its declared type spelled for comparison, or undefined when unreadable. */
@@ -1371,7 +1504,7 @@ function readCopyColumns(
   columns: readonly TwinColumn[]
 ): string[] | undefined {
   if (!cursor.accept("(")) return columns.map(column => column.name);
-  const names = readNames(cursor);
+  const names = cursor.names();
   return names !== undefined && cursor.accept(")") ? names : undefined;
 }
 
@@ -1476,7 +1609,20 @@ class FileWalk {
     onDelete: KeyAction;
   }[] = [];
 
-  constructor(private readonly facts: FactSource) {}
+  /**
+   * Per live table and column (`table` NUL `column`), the type and
+   * nullability the list's last change of it left, each undefined when not
+   * known: a later change is judged against them rather than the live ones.
+   */
+  private readonly changedColumns = new Map<
+    string,
+    { type: string | undefined; notNull: boolean | undefined }
+  >();
+
+  constructor(
+    private readonly facts: FactSource,
+    private readonly dialect: SupportedDialect
+  ) {}
 
   /** The live table a name reaches here, or null for one the list made. */
   private origin(name: string): string | null {
@@ -1564,7 +1710,7 @@ class FileWalk {
   private applyToColumn(step: Step): boolean {
     switch (step.kind) {
       case "column":
-        this.changeColumn(step.table, step.column);
+        this.changeColumn(step);
         return true;
       case "drop-column":
         this.dropColumn(step.table, step.column);
@@ -1638,17 +1784,38 @@ class FileWalk {
     this.origins.set(name, null);
   }
 
-  private changeColumn(name: string, column: string): void {
-    const table = this.origin(name);
+  private changeColumn(step: Extract<Step, { kind: "column" }>): void {
+    const table = this.origin(step.table);
     if (table === null) return;
-    if (!this.made(table, column)) {
-      this.emit({
-        kind: "column",
-        table,
-        column: this.columnOrigin(table, column),
+    if (!this.made(table, step.column)) {
+      const live = this.columnOrigin(table, step.column);
+      const before = this.columnNow(table, live);
+      if (
+        !keepsEveryValue(before, step, this.dialect, () =>
+          this.facts.keepsCharacterSet(table, live)
+        )
+      ) {
+        this.emit({ kind: "column", table, column: live });
+      }
+      this.changedColumns.set(`${table}\0${live}`, {
+        type: step.typeKept === true ? before.type : step.to,
+        notNull: step.notNull ?? before.notNull,
       });
     }
     this.rewrite(table);
+  }
+
+  /** Live `column`'s type and nullability as the list has left them so far. */
+  private columnNow(
+    table: string,
+    column: string
+  ): { type: string | undefined; notNull: boolean | undefined } {
+    return (
+      this.changedColumns.get(`${table}\0${column}`) ?? {
+        type: this.facts.liveType(table, column),
+        notNull: this.facts.liveNotNull(table, column),
+      }
+    );
   }
 
   /**
@@ -2114,6 +2281,34 @@ function fingerprinted(step: Step, statement: string): Step {
   };
 }
 
+/**
+ * What a MySQL run `migrate:create` writes does, named as statements name
+ * things (lower-cased): a rename renames the column and deletes nothing; a
+ * nullability change keeps the column's type, character set and collation,
+ * and is judged by its nullability (`keepsEveryValue`).
+ */
+function liveRunSteps(run: MysqlLiveRun): Step[] {
+  const table = run.tableName.toLowerCase();
+  return run.kind === "rename"
+    ? [
+        {
+          kind: "rename-column",
+          table,
+          from: run.fromColumn.toLowerCase(),
+          to: run.toColumn.toLowerCase(),
+        },
+      ]
+    : [
+        {
+          kind: "column",
+          table,
+          column: run.columnName.toLowerCase(),
+          notNull: !run.toNullable,
+          typeKept: true,
+        },
+      ];
+}
+
 /** Every step of the list, with each SQLite rebuild judged as one. */
 function walk(
   statements: readonly string[],
@@ -2121,7 +2316,7 @@ function walk(
   facts: FactSource,
   partOf: (at: number) => number = () => 0
 ): { deletion: Deletion; part: number }[] {
-  const file = new FileWalk(facts);
+  const file = new FileWalk(facts, dialect);
   const rebuilds = rebuildsIn(statements, dialect);
   const byDrop = new Map(rebuilds.map(rebuild => [rebuild.dropAt, rebuild]));
   // The twin's creation, its copies and its rename back are the rebuild's
@@ -2139,9 +2334,20 @@ function walk(
     const rebuild = byDrop.get(at);
     if (rebuild !== undefined) file.rebuild(rebuild, statements);
     else if (!owned.has(at)) {
-      const tokens = tokensOf(statement, dialect);
+      // A MySQL run `migrate:create` writes builds its statement from the
+      // catalog when the file runs: read as what it amounts to, its later
+      // statements its own.
+      const run =
+        dialect === "mysql" ? mysqlLiveRunAt(statements, at) : undefined;
+      if (run !== undefined) {
+        for (let k = 1; k < MYSQL_LIVE_RUN_LENGTH; k++) owned.add(at + k);
+      }
+      const read = run === undefined ? statement : plainMysqlStatement(run);
+      const tokens = tokensOf(read, dialect);
       for (const step of placed(
-        readStatement(statement, dialect),
+        run === undefined
+          ? readStatement(statement, dialect)
+          : liveRunSteps(run),
         tokens,
         state
       )) {
@@ -2305,6 +2511,11 @@ function factSource(facts: DeletionFacts): FactSource {
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
     liveType: (table, column) => facts.liveColumnTypes?.get(table)?.get(column),
+    keepsCharacterSet: (table, column) => {
+      const other = facts.otherCharsets?.get(table);
+      return other === undefined ? undefined : !other.has(column);
+    },
+    liveNotNull: (table, column) => facts.liveNotNull?.get(table)?.has(column),
   };
 }
 
@@ -2496,6 +2707,10 @@ class FactReading {
     string,
     Map<string, string> | undefined
   >();
+  /** MySQL: per table read with its column types, its columns of another character set. */
+  private readonly charsets = new Map<string, Set<string> | undefined>();
+  /** Per table read with its column types, its NOT NULL columns, from the same reading. */
+  private readonly notNulls = new Map<string, Set<string> | undefined>();
   private readonly spellings = new Map<string, string>();
   /**
    * Lower-cased names two live tables share but for case ("Posts" beside posts, which
@@ -2568,7 +2783,17 @@ class FactReading {
           ? undefined
           : new Set(known.value.keys());
       },
-      liveType: (table, column) => this.columnTypes.get(table)?.get(column),
+      // Asked for a column whose type a statement changes: its table's
+      // column types (and, on MySQL, character sets) are read with a
+      // rebuilt table's, in one reading.
+      liveType: (table, column) =>
+        lookup(this.columnTypes, table, asked.rebuilt)?.value?.get(column),
+      keepsCharacterSet: (table, column) => {
+        const other = lookup(this.charsets, table, asked.rebuilt)?.value;
+        return other === undefined ? undefined : !other.has(column);
+      },
+      liveNotNull: (table, column) =>
+        lookup(this.notNulls, table, asked.rebuilt)?.value?.has(column),
     };
   }
 
@@ -2672,29 +2897,61 @@ class FactReading {
     return found?.map(name => name.toLowerCase());
   }
 
-  /** The live columns and types of the rebuilt tables, read once together. */
+  /**
+   * The live columns, types and nullability of the tables asked (a rebuilt
+   * table's, or one whose column a statement changes), from one reading.
+   */
   private async readColumnTypes(tables: readonly string[]): Promise<void> {
     if (tables.length === 0) return;
     const live = tables.flatMap(table => {
       const name = this.live(table);
       return name === undefined ? [] : [name];
     });
-    const types =
+    const snapshot =
       live.length === 0
-        ? new Map<string, Map<string, string>>()
-        : await settle(() => queryLiveColumnTypes(this.db, this.dialect, live));
+        ? { tables: [] }
+        : await settle(() =>
+            introspectLiveColumns(this.db, this.dialect, live)
+          );
     const byTable = new Map(
-      [...(types ?? [])].map(([name, columns]) => [
-        name.toLowerCase(),
-        new Map(
-          [...columns].map(([column, type]) => [
-            column.toLowerCase(),
-            type.toLowerCase(),
-          ])
-        ),
+      (snapshot?.tables ?? []).map(found => [
+        found.name.toLowerCase(),
+        found.columns,
       ])
     );
-    for (const table of tables) this.columnTypes.set(table, byTable.get(table));
+    for (const table of tables) {
+      const columns = byTable.get(table);
+      this.columnTypes.set(
+        table,
+        columns === undefined
+          ? undefined
+          : new Map(
+              columns.map(c => [c.name.toLowerCase(), c.type.toLowerCase()])
+            )
+      );
+      this.notNulls.set(
+        table,
+        columns === undefined
+          ? undefined
+          : new Set(
+              columns.filter(c => !c.nullable).map(c => c.name.toLowerCase())
+            )
+      );
+    }
+    // Elsewhere a type change keeps the column's character set, so nothing
+    // is read; a MySQL table whose sets could not be read stays unknown.
+    const other =
+      this.dialect !== "mysql"
+        ? new Map<string, Set<string>>()
+        : await settle(() => readMysqlOtherCharsets(this.db, live));
+    for (const table of tables) {
+      this.charsets.set(
+        table,
+        other === undefined
+          ? undefined
+          : (other.get(table) ?? new Set<string>())
+      );
+    }
   }
 
   /** The facts read, as the walk's judgement takes them. */
@@ -2704,6 +2961,14 @@ class FactReading {
     const liveColumnTypes = new Map<string, Map<string, string>>();
     for (const [table, columns] of this.columnTypes) {
       if (columns !== undefined) liveColumnTypes.set(table, columns);
+    }
+    const otherCharsets = new Map<string, Set<string>>();
+    for (const [table, columns] of this.charsets) {
+      if (columns !== undefined) otherCharsets.set(table, columns);
+    }
+    const liveNotNull = new Map<string, Set<string>>();
+    for (const [table, columns] of this.notNulls) {
+      if (columns !== undefined) liveNotNull.set(table, columns);
     }
     const liveColumns: LiveColumns = new Map(
       [...liveColumnTypes].map(([table, columns]) => [
@@ -2723,6 +2988,8 @@ class FactReading {
       ...(userFunctions === undefined ? {} : { userFunctions }),
       liveColumns,
       liveColumnTypes,
+      otherCharsets,
+      liveNotNull,
     };
   }
 }

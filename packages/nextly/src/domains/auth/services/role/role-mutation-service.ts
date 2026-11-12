@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, or, sql } from "drizzle-orm";
 
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
@@ -20,6 +21,7 @@ import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
+import { runReadsAndWritesInTransaction } from "../../../../shared/lib/read-transaction-scope";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
 import {
@@ -111,6 +113,25 @@ export class RoleMutationService extends BaseService {
       description: "Grants implicit access to all permissions",
       level: 1000,
     });
+  }
+
+  /**
+   * Ensure a system role exists with this slug on `tx`, a transaction the
+   * caller holds, created holding nothing where it is missing, so that the
+   * role and the grants the caller then sets on `tx` commit or roll back
+   * together. A role already holding the slug is used as it is.
+   *
+   * @returns Role ID and whether it was newly created
+   */
+  ensureSystemRoleOn(
+    tx: TransactionContext,
+    role: { name: string; slug: string; description: string; level: number }
+  ): Promise<{ id: string; created: boolean }> {
+    // The lookup and the insert read and write through `this.db`, routed to
+    // `tx` here rather than to a pooled connection of their own.
+    return runReadsAndWritesInTransaction(tx, () =>
+      this.ensureBuiltInRole(role)
+    );
   }
 
   /**

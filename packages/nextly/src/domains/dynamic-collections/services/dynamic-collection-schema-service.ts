@@ -20,8 +20,6 @@
  * ```
  */
 
-import { createHash } from "node:crypto";
-
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -70,33 +68,23 @@ import {
   indexNameForColumn,
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
+  uniquenessNotEnforceableError,
 } from "../../schema/services/index-name";
 import {
   backfillDefaultForType,
   backfillValueForType,
+  storedDateValue,
 } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import type { CollectionTables } from "./collection-tables";
+// The drop file's name and first line, spelled where the old-Builder reading
+// checks a file against them too.
+import { dropFileHeader, dropFileLabel } from "./drop-file-name";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 /** A field-group field renamed with no column of its own: its instances move with it. */
 type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
-
-/**
- * What a drop file's name says it drops: the collection, or for several, how
- * many and a digest of which. A name listing every slug grows with the
- * selection, and past the filesystem's limit on one name the file cannot be
- * written at all.
- */
-function dropFileLabel(names: readonly string[]): string {
-  if (names.length === 1) return names[0];
-  const digest = createHash("sha256")
-    .update(names.join(","))
-    .digest("hex")
-    .slice(0, 12);
-  return `${String(names.length)}_collections_${digest}`;
-}
 
 /**
  * Field types this service stores in a JSON array column (see its column-type
@@ -559,25 +547,7 @@ export class DynamicCollectionSchemaService {
     tableName: string,
     field: FieldDefinition
   ): NextlyError {
-    return NextlyError.validation({
-      errors: [
-        {
-          path: `fields.${field.name}`,
-          code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
-          message:
-            `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
-            `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
-            `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
-            `the unique flag.`,
-        },
-      ],
-      logContext: {
-        tableName,
-        field: field.name,
-        type: field.type,
-        dialect: this.dialect,
-      },
-    });
+    return uniquenessNotEnforceableError(tableName, field, this.dialect);
   }
 
   /**
@@ -1001,6 +971,29 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * The statements that move a renamed field-group field's association to its
+   * new name (`associationMove`), when the change renames no column, as the
+   * change's migration file decides it; none otherwise. What the push runs
+   * beside its diff and what a Builder save writes into its file are both
+   * read here, so the two cannot move it differently.
+   */
+  associationStatements(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+    }
+  ): string[] {
+    if (this.detectFieldRename(oldFields, newFields) !== null) return [];
+    return (
+      this.associationMove(tableName, oldFields, newFields, options)
+        ?.statements ?? []
+    );
+  }
+
+  /**
    * What a collection change needs beside the schema pipeline's push, which leaves these tables
    * out of its diff: a renamed field-group field's association, and the junction tables of
    * many-to-many fields. The same statements the change's migration file carries for them, from
@@ -1021,13 +1014,8 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string[] {
-    // The association moves only when no column is renamed, as the file decides it.
-    const association =
-      this.detectFieldRename(oldFields, newFields) === null
-        ? this.associationMove(tableName, oldFields, newFields, options)
-        : null;
     return [
-      ...(association?.statements ?? []),
+      ...this.associationStatements(tableName, oldFields, newFields, options),
       ...this.junctionLifecycle(
         tableName,
         options?.junctionFields?.old ?? oldFields,
@@ -1082,9 +1070,7 @@ export class DynamicCollectionSchemaService {
               ? new Date(value)
               : null;
         if (at !== null && !Number.isNaN(at.getTime())) {
-          return this.dialect === "sqlite"
-            ? Math.floor(at.getTime() / 1000)
-            : at;
+          return storedDateValue(at, this.dialect);
         }
       }
       // No driver binds an object or an array as JSON: SQLite refuses one, and PostgreSQL's
@@ -2945,7 +2931,7 @@ ${allColumnDefs.join(",\n")}
     // One statement per breakpoint, as every other file this service writes:
     // the runner splits on the breakpoint line, and MySQL refuses several
     // statements sent as one.
-    const migrationSQL = `-- Drop dynamic collection${names.length === 1 ? "" : "s"}: ${names.join(", ")}\n${[
+    const migrationSQL = `${dropFileHeader(names)}\n${[
       ...junctions,
       ...tables,
     ].join("\n--> statement-breakpoint\n")}`;

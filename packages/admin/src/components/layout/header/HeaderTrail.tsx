@@ -114,54 +114,99 @@ const NARROW_SHOWN = "hidden @max-[37.5rem]/topbar:inline";
 
 /**
  * The registered trail, or nothing where no page registered one.
- *
- * On a narrow bar the outer steps, the separators and the current page step
- * aside and a chevron appears before the list's step, so the same link reads
- * as "< Blog posts".
  */
 export function HeaderTrail(): JSX.Element | null {
   const { trail } = useContext(HeaderTrailContext);
   if (trail === null) return null;
-  const last = trail.steps.length - 1;
+  return <BarTrail steps={trail.steps} current={trail.current} />;
+}
+
+/**
+ * One step of a trail drawn in the bar: a link to its page, a button that
+ * goes there, or (rarely) a plain label.
+ */
+export interface BarTrailStep {
+  label: ReactNode;
+  href?: string;
+  onClick?: () => void;
+}
+
+/**
+ * The trail as the bar draws it, for every page: the editors' registered
+ * trail and the breadcrumb a list or form page draws into the bar.
+ *
+ * On a narrow bar the outer steps, the separators and the current page step
+ * aside and a chevron appears before the last step, the parent page, so the
+ * same link reads as "< Blog posts". A trail with no parent step keeps its
+ * current page at every width.
+ */
+export function BarTrail({
+  steps,
+  current,
+}: {
+  steps: readonly BarTrailStep[];
+  current: ReactNode;
+}): JSX.Element {
+  const last = steps.length - 1;
   return (
     <nav aria-label="Breadcrumb" className="min-w-0">
       <ol className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted-foreground">
-        {trail.steps.map((step, index) => {
-          const isList = index === last;
+        {steps.map((step, index) => {
+          const isParent = index === last;
+          const label = (
+            <>
+              {isParent ? (
+                <ChevronLeft
+                  className={cn("h-3.5 w-3.5 shrink-0", NARROW_SHOWN)}
+                  aria-hidden="true"
+                />
+              ) : null}
+              <span className="truncate">{step.label}</span>
+            </>
+          );
+          const stepClass =
+            "inline-flex min-w-0 items-center gap-1 whitespace-nowrap underline-offset-2 transition-colors hover:text-foreground hover:underline";
+          // The whole label for a pointer, where the parent's is cut short.
+          const title =
+            isParent && typeof step.label === "string" ? step.label : undefined;
           return (
             <li
-              key={`${index}:${step.href}`}
+              key={index}
               className={cn(
                 "flex items-center gap-1.5",
-                // The list's step may shrink and truncate: below 600px it is
+                // The parent's step may shrink and truncate: below 600px it is
                 // the trail's only item, and a collection's label has no
                 // length limit, so held whole it would run into the controls
                 // on the right. The outer steps are short and keep their size.
-                isList ? "min-w-0" : "shrink-0",
-                !isList && NARROW_HIDDEN
+                isParent ? "min-w-0" : "shrink-0",
+                !isParent && NARROW_HIDDEN
               )}
             >
-              <Link
-                href={step.href}
-                className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap underline-offset-2 transition-colors hover:text-foreground hover:underline"
-                // The whole label for a pointer, where it is cut short.
-                {...(isList ? { title: step.label } : {})}
-              >
-                {isList ? (
-                  <ChevronLeft
-                    className={cn("h-3.5 w-3.5 shrink-0", NARROW_SHOWN)}
-                    aria-hidden="true"
-                  />
-                ) : null}
-                <span className="truncate">{step.label}</span>
-              </Link>
+              {step.href !== undefined ? (
+                <Link href={step.href} className={stepClass} title={title}>
+                  {label}
+                </Link>
+              ) : step.onClick !== undefined ? (
+                <button
+                  type="button"
+                  onClick={step.onClick}
+                  className={cn(stepClass, "cursor-pointer")}
+                  title={title}
+                >
+                  {label}
+                </button>
+              ) : (
+                <span className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap">
+                  {label}
+                </span>
+              )}
               {/* The muted token at full strength: faded, it falls below the
                   contrast the admin holds every text colour to. */}
               <span
                 aria-hidden="true"
                 className={cn(
                   "shrink-0 text-muted-foreground",
-                  isList && NARROW_HIDDEN
+                  isParent && NARROW_HIDDEN
                 )}
               >
                 /
@@ -169,12 +214,12 @@ export function HeaderTrail(): JSX.Element | null {
             </li>
           );
         })}
-        <li className={cn("min-w-0", NARROW_HIDDEN)}>
+        <li className={cn("min-w-0", steps.length > 0 && NARROW_HIDDEN)}>
           <span
             aria-current="page"
             className="block truncate font-medium text-foreground"
           >
-            {trail.current}
+            {current}
           </span>
         </li>
       </ol>

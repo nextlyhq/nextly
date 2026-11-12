@@ -55,6 +55,11 @@ import { serviceContainerFor } from "../../../services/service-container-for";
 import type { Logger } from "../../../services/shared";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 
+import {
+  readTeamPeople,
+  type TeamPeopleOptions,
+  type TeamPeoplePage,
+} from "./team-people";
 import type { UserExtSchemaService } from "./user-ext-schema-service";
 
 // ============================================================
@@ -877,6 +882,20 @@ export class UserQueryService extends BaseService {
       id: String(r.id),
       name: typeof r.name === "string" ? r.name : null,
     }));
+  }
+
+  /**
+   * The people a dashboard's Team card lists, a page of them and how many the
+   * filter matched (`readTeamPeople`). It decides nothing about who may be
+   * answered: the caller asks that before it reads.
+   */
+  async listTeamPeople(options: TeamPeopleOptions): Promise<TeamPeoplePage> {
+    try {
+      return await readTeamPeople(this.db, this.tables, options);
+    } catch (err) {
+      if (NextlyError.is(err)) throw err;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
   }
 
   /**

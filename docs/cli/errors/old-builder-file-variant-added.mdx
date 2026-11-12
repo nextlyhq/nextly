@@ -1,0 +1,25 @@
+---
+title: OLD_BUILDER_FILE_VARIANT_ADDED
+description: "A dialect variant now shares the name of a migration file recognised as an old Schema Builder file, so its ledger rows and the Builder's cannot be told apart."
+---
+
+## Cause
+
+A dialect variant now shares the name of a migration file recognised as an old Schema Builder file, so its ledger rows and the Builder's cannot be told apart.
+
+A file an earlier version's Schema Builder wrote is recognised by its whole signature, one part of which is that no dialect variant stands beside it: the Builder wrote one file per change, never a `.mysql.sql`, `.sqlite.sql` or `.postgresql.sql` variant. The first run of this release marks the ledger rows of such a file, and every command ignores them. A variant shares its base file's name in the ledger, so once one stands beside a marked file, or is left where a marked file was, its rows and the Builder's carry one name, and the command stops before changing anything.
+
+## Fix
+
+- Remove the dialect variant, and put its change in a migration of its own with `nextly migrate:create`. The marked file is then ignored again.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ `1761732000000_create_posts.sql` has a dialect variant sharing its ledger name since it was recognised as a file an earlier Schema Builder wrote, so `nextly migrate` ran nothing.
+  Why:  A ledger row marks the name as an old Schema Builder file's, which every command ignores, and a dialect variant now shares that name, so its rows and the Builder's cannot be told apart.
+  Next: Remove the dialect variant, and put its change in a migration of its own with `nextly migrate:create`; the marked file is then ignored again.
+  Docs: https://nextlyhq.com/docs/cli/errors/old-builder-file-variant-added  (OLD_BUILDER_FILE_VARIANT_ADDED)
+```

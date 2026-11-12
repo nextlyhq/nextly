@@ -312,13 +312,28 @@ export function getDefaultVisibleColumns(
 }
 
 /**
+ * The data field `fieldName` names among `fields` themselves, not inside a
+ * group or repeater: a row holds such a field's value under its own name,
+ * where a nested one's sits inside its parent's value.
+ */
+export function findTopLevelField(
+  fields: FieldConfig[],
+  fieldName: string
+): NamedDataFieldConfig | undefined {
+  return fields.find(
+    (field): field is NamedDataFieldConfig =>
+      isDataField(field) && field.name === fieldName
+  );
+}
+
+/**
  * Finds a field configuration by name, handling nested fields in layout wrappers.
  *
  * @param fields - Array of field configurations
  * @param fieldName - Name of the field to find
  * @returns Field configuration or undefined if not found
  */
-export function findFieldByName(
+function findFieldByName(
   fields: FieldConfig[],
   fieldName: string
 ): NamedDataFieldConfig | undefined {

@@ -107,18 +107,6 @@
     "count": 1,
     "digests": ["ed8e1e591593b44d"]
   },
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/GeneralTab.tsx": {
-    "count": 1,
-    "digests": ["435202709028602e"]
-  },
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx": {
-    "count": 3,
-    "digests": ["0894647024e30cb3", "a625d70befa5a8b8", "ad761c020a630a22"]
-  },
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/__tests__/GeneralTab.test.tsx": {
-    "count": 1,
-    "digests": ["0d8eb790d66fd949"]
-  },
   "packages/admin/src/components/features/schema-builder/index.ts": {
     "count": 1,
     "digests": ["b70fc43076d40eb9"]

@@ -25,7 +25,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
-import type { CollectionHooks } from "../collections/config/define-collection";
+import type {
+  CollectionConfig,
+  CollectionHooks,
+} from "../collections/config/define-collection";
 import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
@@ -71,8 +74,13 @@ import type {
   Operation,
   TableSpec,
 } from "../domains/schema/pipeline/diff/types";
+import {
+  columnsByTable,
+  heldBackChanges,
+  noteHeldBackServed,
+  keptScopeFields,
+} from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
-import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { ttyRequiredDetail } from "../domains/schema/pipeline/prompt-dispatcher/errors";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline";
 import type {
@@ -101,6 +109,10 @@ import type {
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
+import {
+  currentWithheldScopeFields,
+  publishWithheldScopeFields,
+} from "../domains/schema/pipeline/withheld-scope-fields";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import {
@@ -1436,6 +1448,26 @@ const globalForReload = globalThis as unknown as {
  */
 export type ReloadOutcome = "refused" | "finished";
 
+/**
+ * The terminal's prompt dispatcher, loaded at its first dispatch and kept for
+ * the rest of the apply. Most reloads ask nothing, and the prompt brings the
+ * CLI's prompt and error reporting with it.
+ */
+function terminalPromptDispatcher(): PromptDispatcher {
+  let loaded: Promise<PromptDispatcher> | undefined;
+  return {
+    async dispatch(args) {
+      loaded ??= import(
+        "../domains/schema/pipeline/prompt-dispatcher/clack-terminal"
+      ).then(
+        ({ ClackTerminalPromptDispatcher }) =>
+          new ClackTerminalPromptDispatcher()
+      );
+      return (await loaded).dispatch(args);
+    },
+  };
+}
+
 export function reloadNextlyConfig(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
@@ -1710,6 +1742,12 @@ async function applyReloadHolding(
         registerFieldType(fieldType);
       }
     });
+    // The fold `loadConfig` runs publishes what each scope holds back from a
+    // switched-off type, process-wide. A refused reload keeps the previous
+    // configuration, so its held-back fields are put back with it, or the
+    // next apply would plan dropping a column the running site still keeps.
+    const previousWithheld = currentWithheldScopeFields();
+    reloadUndo.push(() => publishWithheldScopeFields(previousWithheld));
     clearConfigCache();
     const result = await loadConfig();
     // Watch exactly what this read: the config and every file it imported. Set
@@ -1871,7 +1909,13 @@ async function applyReloadHolding(
       // the reloaded config declares them, so a plugin added or changed in
       // development is rewritten into the map without a restart. The site
       // dashboard with them, as the loader carries it after every setup().
-      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
+      setAdminComponentPlugins(
+        newConfig.plugins,
+        newConfig.admin?.dashboard,
+        // The loader's collections, which this function's own type reads only
+        // in part: the check lists the views their `admin` names.
+        newConfig.collections as readonly CollectionConfig[] | undefined
+      );
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
@@ -2263,6 +2307,14 @@ async function applyReloadHolding(
   // a field leaving translation whose main column an earlier reload added
   // before it stopped: the move below is what finishes it.
   let hasChanges = startsAsChange(extensionSchemaChanged, leaving.entries);
+  // A plugin's field held back from a type switched off keeps its column
+  // while the database has it, as the apply keeps it: judged here the same
+  // way, so this gate and the apply see the same table (`kept-scope-fields.ts`).
+  const liveColumns = columnsByTable(liveSnapshot, dialect);
+  const keptFor = (
+    kind: "collection" | "single",
+    entry: DesiredCollection | DesiredSingle
+  ) => keptScopeFields(kind, entry, liveColumns);
   // The rows a development start held, once this reload takes them (`recordRegistryHistory`), so a
   // refused apply can hold them again.
   const held: { atStart?: RecordedAtStart } = {};
@@ -2307,12 +2359,10 @@ async function applyReloadHolding(
       const desiredTable = desiredCollectionTable(
         {
           ...entry,
-          fields: heldFields(
-            leaving.entries,
-            "collection",
-            target.slug,
-            entry.fields
-          ),
+          fields: heldFields(leaving.entries, "collection", target.slug, [
+            ...entry.fields,
+            ...keptFor("collection", entry),
+          ]),
         },
         dialect
       );
@@ -2364,7 +2414,10 @@ async function applyReloadHolding(
         : { tables: [] };
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
-        heldFields(leaving.entries, "single", target.slug, target.fields),
+        heldFields(leaving.entries, "single", target.slug, [
+          ...target.fields,
+          ...keptFor("single", entry),
+        ]),
         dialect,
         {
           // These branches apply a CONFIG edit, so the table is the pipeline's.
@@ -2463,6 +2516,13 @@ async function applyReloadHolding(
     resolve,
     adapter,
   });
+
+  // A type switched off or on for a plugin's scope since its runtime tables
+  // were built: in the configuration or made in the Schema Builder, whose
+  // entities join the apply below. Its kept column may need relaxing, and its
+  // tables building again, which no column diff above shows.
+  const heldBackChanged = heldBackChanges();
+  if (heldBackChanged.length > 0) hasChanges = true;
 
   // A relation switched between storage shapes is a change to apply even where the gate above
   // saw none: SQLite keeps every shape as text, and a translated relation's column is on its
@@ -2743,8 +2803,7 @@ async function applyReloadHolding(
   // pipeline/index.ts) so we can thread MySQL databaseName + the
   // resolved adapter into the F3 PushSchemaPipeline at this site.
   // F8 will collapse both seams into the unified pipeline.
-  const promptDispatcher =
-    opts?.dispatcher ?? new ClackTerminalPromptDispatcher();
+  const promptDispatcher = opts?.dispatcher ?? terminalPromptDispatcher();
   const apply = createApplyDesiredSchema({
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
@@ -3260,6 +3319,10 @@ async function applyReloadHolding(
     } catch {
       // Non-fatal: same reasoning as SchemaRegistry block above.
     }
+    // The types' tables are now built from their declared fields, with the
+    // kept ones left out: recorded, so the next reload rebuilds them again
+    // only when a field moves between the two.
+    noteHeldBackServed(heldBackChanged);
 
     // Signal all connected browser tabs to reload so they immediately
     // reflect the updated schema without a manual F5.

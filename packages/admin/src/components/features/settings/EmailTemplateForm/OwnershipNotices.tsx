@@ -17,7 +17,7 @@ import {
 import { Info, Lock, RotateCcw } from "@admin/components/icons";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
-import { ownerName } from "./workbench-model";
+import { useOwnerName } from "./useOwnerName";
 
 /** An act just done that can still be undone. */
 export interface UndoNote {
@@ -43,8 +43,9 @@ export function OwnershipNotices({
   onReview: () => void;
   onReset: () => void;
 }): JSX.Element | null {
+  const nameOwner = useOwnerName();
   if (!record) return null;
-  const owner = ownerName(record);
+  const owner = nameOwner(record);
 
   return (
     <div className="flex flex-col gap-3" data-testid="ownership-notices">

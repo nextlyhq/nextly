@@ -9,7 +9,8 @@
  * check and the generator (which resolves through the same steps) agree. The
  * site's `admin.dashboard` is kept as the boot registered it too, after every
  * plugin's `setup()`, rather than read again from the config as written, where
- * a widget a setup adds is not.
+ * a widget a setup adds is not. The site's collections likewise, whose own
+ * views the map lists.
  *
  * Pinned to `globalThis`, as the widget registry is, so a development reload
  * that re-evaluates this module finds the list the boot left.
@@ -17,6 +18,7 @@
  * @module domains/widgets/declaration/component-map-store
  */
 
+import type { CollectionConfig } from "../../../collections/config/define-collection";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 
 const STORE_KEY = "__nextly_admin_component_plugins";
@@ -26,6 +28,11 @@ interface Registered {
   readonly plugins: readonly PluginDefinition[];
   /** The site config's `admin.dashboard` after every plugin's `setup()`. */
   readonly siteDashboard: unknown;
+  /**
+   * The site config's collections after every plugin's `setup()`, whose own
+   * views the map lists: a setup may add one, or rename the view it names.
+   */
+  readonly siteCollections: readonly CollectionConfig[] | undefined;
 }
 
 type Holder = Record<string, Registered | undefined>;
@@ -36,9 +43,14 @@ type Holder = Record<string, Registered | undefined>;
  */
 export function setAdminComponentPlugins(
   plugins: readonly PluginDefinition[],
-  siteDashboard?: unknown
+  siteDashboard?: unknown,
+  siteCollections?: readonly CollectionConfig[]
 ): void {
-  (globalThis as unknown as Holder)[STORE_KEY] = { plugins, siteDashboard };
+  (globalThis as unknown as Holder)[STORE_KEY] = {
+    plugins,
+    siteDashboard,
+    siteCollections,
+  };
 }
 
 /** The plugins the last boot resolved, or `undefined` before any boot. */
@@ -51,4 +63,11 @@ export function adminComponentPlugins():
 /** The site dashboard the last boot registered, after every plugin's `setup()`. */
 export function adminSiteDashboard(): unknown {
   return (globalThis as unknown as Holder)[STORE_KEY]?.siteDashboard;
+}
+
+/** The site's collections as the last boot read them, after every plugin's `setup()`. */
+export function adminSiteCollections():
+  | readonly CollectionConfig[]
+  | undefined {
+  return (globalThis as unknown as Holder)[STORE_KEY]?.siteCollections;
 }

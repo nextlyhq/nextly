@@ -781,7 +781,7 @@ fieldGroup({
 | `admin.initCollapsed` | `boolean`  | `false` | Start instances collapsed.                                                                |
 | `admin.isSortable`    | `boolean`  | `true`  | Drag-and-drop reorder when `repeatable: true`.                                            |
 
-**Gotchas:** `component` and `components` are mutually exclusive; you'll get a startup error if both are set. Component nesting is capped at depth 3.
+**Gotchas:** `component` and `components` are mutually exclusive; you'll get a startup error if both are set. Field groups nest to any depth; one placed inside itself is refused (see [Field group nesting](/docs/configuration/field-groups#field-group-nesting)).
 
 **Cross-links:** see [Field Groups](/docs/configuration/field-groups) for the `defineFieldGroup()` reference and [the three modes](/docs/configuration/field-groups#using-field-groups-in-collections-and-singles) explained side-by-side.
 

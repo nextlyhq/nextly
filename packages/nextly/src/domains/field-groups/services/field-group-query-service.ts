@@ -45,12 +45,16 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { directFieldGroupFields } from "../field-group-write-access";
 import { passwordReachOf } from "../password-reach";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
 } from "../storage/field-group-field-type";
-import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
+import {
+  currentFieldGroupTypeKey,
+  readFieldGroupType,
+} from "../storage/field-group-type-key";
 
 import {
   DEFAULT_COMPONENT_DEPTH,
@@ -270,10 +274,55 @@ interface BatchPopulateRead {
   executor?: unknown;
 }
 
+/**
+ * `instances` by the field group each is an instance of: the one `field` names, or, in a zone,
+ * the one each instance says it is, among those the zone allows.
+ */
+function instancesBySlug(
+  instances: Record<string, unknown>[],
+  field: FieldGroupFieldConfig
+): Map<string, Record<string, unknown>[]> {
+  const bySlug = new Map<string, Record<string, unknown>[]>();
+  if (!field.components || field.components.length === 0) {
+    if (field.component) bySlug.set(field.component, instances);
+    return bySlug;
+  }
+  for (const instance of instances) {
+    const slug = readFieldGroupType(instance);
+    if (slug === undefined || !field.components.includes(slug)) continue;
+    bySlug.set(slug, [...(bySlug.get(slug) ?? []), instance]);
+  }
+  return bySlug;
+}
+
+/** The instance objects one field-group field's read values hold: a single one, a list's, or none. */
+function instancesIn(values: readonly unknown[]): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
+  for (const value of values) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+        found.push(item as Record<string, unknown>);
+      }
+    }
+  }
+  return found;
+}
+
 // Duplicated here (and in the mutation service) to avoid a cross-domain
 // import into collections just for a type predicate.
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return isFieldGroupFieldType(field.type);
+}
+
+/**
+ * The field-group fields whose instances are rows read at this level: those at the top of
+ * `fields`, and those in a group with no name, which only lays them out and stores them where it
+ * sits. The same fields the write stores rows for, from the same walk.
+ */
+function fieldGroupFieldsAt(
+  fields: readonly FieldConfig[]
+): FieldGroupFieldConfig[] {
+  return directFieldGroupFields(fields).filter(isFieldGroupField);
 }
 
 /**
@@ -810,8 +859,7 @@ export class FieldGroupQueryService extends BaseService {
 
     const results = languages.map(() => ({ ...entry }));
 
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
+    for (const field of fieldGroupFieldsAt(fields)) {
       const fieldName = field.name;
 
       if (!this.shouldPopulateField(fieldName, select)) {
@@ -867,6 +915,14 @@ export class FieldGroupQueryService extends BaseService {
         values?.forEach((value, index) => {
           results[index][fieldName] = value;
         });
+        // The field groups placed directly in what was read, at every depth.
+        await this.populateNestedInEachLanguage(values, f, languages, {
+          depth,
+          currentDepth,
+          access,
+          strict,
+          executor,
+        });
       } catch (error) {
         // A rule that could not run never answered: the request ends with
         // that, not with the component replaced by a default.
@@ -885,6 +941,61 @@ export class FieldGroupQueryService extends BaseService {
     }
 
     return results;
+  }
+
+  /**
+   * Read, into each of `instances` under its field's name, the field groups placed directly in its
+   * fields, at every depth. The instances are what one field-group field read: one field group's,
+   * or a zone's of several. Each field group's are read together, through the batch read, so a
+   * level costs one read per field group placed in it however many instances hold one, and that
+   * read descends in turn. A level whose instances hold no rows below ends the descent, so a
+   * definition that places a field group inside itself ends with the data.
+   *
+   * Nesting is not a relationship hop: each level keeps the relationship depth of the one above.
+   */
+  private async populateNestedInstances(
+    instances: Record<string, unknown>[],
+    field: FieldGroupFieldConfig,
+    read: BatchPopulateRead
+  ): Promise<void> {
+    if (instances.length === 0) return;
+    for (const [slug, group] of instancesBySlug(instances, field)) {
+      const meta = await this.registryService.getComponent(slug, read.executor);
+      if (fieldGroupFieldsAt(meta.fields).length === 0) continue;
+      const filled = await this.populateComponentDataMany({
+        entries: group,
+        parentTable: meta.tableName,
+        fields: meta.fields,
+        depth: read.depth,
+        currentDepth: read.currentDepth,
+        locale: read.locale,
+        fallbackLocale: read.fallbackLocale,
+        access: read.access,
+        strict: read.strict,
+        executor: read.executor,
+      });
+      filled.forEach((value, index) => Object.assign(group[index], value));
+    }
+  }
+
+  /**
+   * {@link populateNestedInstances} for what one field read in each language: each language's copy
+   * holds its own instances, so each is read in its own language.
+   */
+  private async populateNestedInEachLanguage(
+    values: readonly unknown[] | undefined,
+    field: FieldGroupFieldConfig,
+    languages: readonly ComponentReadLanguage[],
+    read: Omit<BatchPopulateRead, "locale" | "fallbackLocale">
+  ): Promise<void> {
+    if (values === undefined) return;
+    for (const [index, language] of languages.entries()) {
+      await this.populateNestedInstances(instancesIn([values[index]]), field, {
+        ...read,
+        locale: language.locale,
+        fallbackLocale: language.fallbackLocale,
+      });
+    }
   }
 
   /**
@@ -914,17 +1025,15 @@ export class FieldGroupQueryService extends BaseService {
     if (entryIds.length === 0) return entries;
 
     const componentFields: FieldGroupFieldConfig[] = [];
-    for (const field of fields) {
-      if (isFieldGroupField(field)) {
-        if (!this.shouldPopulateField(field.name, select)) {
-          continue;
-        }
-        // Resolved once, at collection: every reader below — the dispatch,
-        // the slug reads, and the populate default for a failed or absent
-        // entry — sees the references on the keys it opens, whichever
-        // spelling the stored definition carries.
-        componentFields.push(withResolvedFieldGroupReferences(field));
+    for (const field of fieldGroupFieldsAt(fields)) {
+      if (!this.shouldPopulateField(field.name, select)) {
+        continue;
       }
+      // Resolved once, at collection: every reader below — the dispatch,
+      // the slug reads, and the populate default for a failed or absent
+      // entry — sees the references on the keys it opens, whichever
+      // spelling the stored definition carries.
+      componentFields.push(withResolvedFieldGroupReferences(field));
     }
     if (componentFields.length === 0) return entries;
 
@@ -971,12 +1080,22 @@ export class FieldGroupQueryService extends BaseService {
             fieldDataMaps.set(field.name, dataMap);
           }
         }
+        // The field groups placed directly in what was read, at every depth, every entry's at once.
+        await this.populateNestedInstances(
+          instancesIn([...(fieldDataMaps.get(field.name)?.values() ?? [])]),
+          field,
+          read
+        );
       } catch (error) {
         // A rule that could not run never answered: see the catch above.
         rethrowIfRuleCouldNotRun(error);
         // A caller judging a document by what it holds cannot take a default
         // for a field it failed to read.
         if (strict) throw error;
+        // A field read only in part, its instances without what is placed in
+        // them, takes its default whole, as the one-entry read gives it: what
+        // was read of it is not returned.
+        fieldDataMaps.delete(field.name);
         this.logger.debug("Could not batch populate component field", {
           fieldName: field.name,
           error: error instanceof Error ? error.message : String(error),

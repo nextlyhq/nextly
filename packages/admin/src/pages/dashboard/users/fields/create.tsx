@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@nextlyhq/ui";
 import { useCallback, type JSX } from "react";
 
 import {
@@ -18,8 +19,9 @@ import { useCreateUserField } from "@admin/hooks/queries/useUserFields";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
+import { UserFieldsGuard } from "./user-fields-guard";
 
-export default function CreateUserFieldPage(): JSX.Element {
+function CreateUserFieldPageContent(): JSX.Element {
   const { mutate: createField, isPending } = useCreateUserField();
 
   const handleSubmit = useCallback(
@@ -52,23 +54,16 @@ export default function CreateUserFieldPage(): JSX.Element {
   return (
     <PermissionGuard requiredPermission={READ_SETTINGS}>
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer width="form">
+        <PageContainer type="form">
           <div>
-            <div className="mb-6">
+            <div className="mb-6 empty:hidden">
               <UserBreadcrumbs currentPage="fields-create" />
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-              <div>
-                <h1 className="text-xl font-semibold tracking-tight">
-                  Create Field
-                </h1>
-                {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-                <p className="text-sm font-normal text-muted-foreground mt-1">
-                  Add a new custom attribute to user accounts
-                </p>
-              </div>
-            </div>
+            <PageHeader
+              title="Create Field"
+              description="Add a new custom attribute to user accounts"
+            />
 
             <UserFieldForm
               mode="create"
@@ -79,5 +74,14 @@ export default function CreateUserFieldPage(): JSX.Element {
         </PageContainer>
       </QueryErrorBoundary>
     </PermissionGuard>
+  );
+}
+
+/** The page, opened only to a reader who may also see users (`UserFieldsGuard`). */
+export default function CreateUserFieldPage(): JSX.Element {
+  return (
+    <UserFieldsGuard>
+      <CreateUserFieldPageContent />
+    </UserFieldsGuard>
   );
 }
