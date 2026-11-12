@@ -6,6 +6,10 @@
 export { seoPlugin } from "./plugin";
 export type { SeoPluginOptions } from "./plugin";
 export { defaultSeoFields } from "./fields";
+// Pages with no entry: the one line a page built in code adds so the SEO set
+// for its address on the Pages and addresses screen reaches its head.
+export { seoMetadata } from "./code-pages/metadata";
+export type { RouteMetadata, SeoMetadataOptions } from "./code-pages/metadata";
 export {
   buildSitemapUrls,
   serializeSitemap,
@@ -19,13 +23,6 @@ export type {
   SitemapServices,
   UrlForEntry,
 } from "./sitemap";
-export {
-  issuesFor,
-  checksFor,
-  reportableIssues,
-  ISSUE_SCAN_ROW_BUDGET,
-} from "./widget-source";
-export type { IssueChecks } from "./widget-source";
 // The listing every address-listing output reads, as the plugin's
 // `listedPages` service hands it out, and the AI crawler choices robots.txt
 // answers.

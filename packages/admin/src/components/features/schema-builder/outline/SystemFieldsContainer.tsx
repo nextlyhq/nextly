@@ -12,6 +12,8 @@
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
+import { recallPreference } from "@admin/lib/device-memory/device-memory";
+
 import { SystemFieldsRow } from "../builder-field-list/SystemFieldsRow";
 import type { BuilderField } from "../types";
 
@@ -23,7 +25,8 @@ export function SystemFieldsContainer({
   const [showSystemFields, setShowSystemFields] = useState(true);
 
   useEffect(() => {
-    const stored = localStorage.getItem("builder.showSystemInternals");
+    // Through the device memory, which guards storage that throws.
+    const stored = recallPreference("builder.showSystemInternals");
     setShowSystemFields(stored === null ? true : stored === "true");
   }, []);
 

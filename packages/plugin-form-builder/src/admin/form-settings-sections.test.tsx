@@ -37,13 +37,23 @@ const answer = (status: number, body: unknown) =>
   );
 
 /** Answers the builder's settings read, and every save as stored. */
-function server() {
+/** The plugin's spam options as Settings is told them, unless a test says. */
+const SPAM = {
+  honeypot: true,
+  recaptchaEnabled: false,
+  botCheckDefault: null,
+  botChecks: {
+    recaptcha: { secret: true, siteKey: true },
+    turnstile: { secret: false, siteKey: false },
+  },
+  rateLimit: { maxSubmissions: 10, windowMs: 60_000 },
+};
+
+function server(spamProtection: Record<string, unknown> = SPAM) {
   const fetchMock = vi.fn((_url: string, init?: RequestInit) =>
     init?.method === "PATCH"
       ? answer(200, { message: "Updated", item: { id: "form-1" } })
-      : answer(200, {
-          spamProtection: { honeypot: true, recaptchaEnabled: false },
-        })
+      : answer(200, { spamProtection })
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -63,8 +73,11 @@ const saves = (fetchMock: ReturnType<typeof server>) =>
         }
     );
 
-function view(initialData: Record<string, unknown> = {}) {
-  const fetchMock = server();
+function view(
+  initialData: Record<string, unknown> = {},
+  spamProtection?: Record<string, unknown>
+) {
+  const fetchMock = server(spamProtection);
   render(
     <QueryClientProvider client={new QueryClient()}>
       <FormBuilderView
@@ -106,6 +119,7 @@ describe("a form's Settings", () => {
       "Availability",
       "One response per person",
       "Spam protection",
+      "Privacy",
     ];
     expect(sections).toHaveLength(names.length);
     sections.forEach((section, index) =>
@@ -159,6 +173,22 @@ describe("a form's Settings", () => {
     });
   });
 
+  it("saves a form that keeps no IP address or browser", async () => {
+    const { user, fetchMock } = view({ status: "published" });
+    const keep = screen.getByRole("switch", {
+      name: "Store IP address and browser",
+    });
+    expect(keep).toBeChecked();
+    expect(keep).toHaveAccessibleDescription(/one per network still works/);
+    await user.click(keep);
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({
+      settings: { storeIpAndBrowser: false },
+    });
+  });
+
   it("saves a web address to go to after submitting", async () => {
     const { user, fetchMock } = view();
     await user.click(
@@ -206,12 +236,77 @@ describe("a form's Settings", () => {
     }
   );
 
-  it("shows a stored way to limit responses that is not offered yet", () => {
-    // Written through the API: shown chosen, and not choosable here.
-    view({ settings: { oneResponse: "email" } });
-    const stored = screen.getByRole("radio", { name: "One per email address" });
-    expect(stored).toBeChecked();
-    expect(stored).toBeDisabled();
+  it("saves one response per browser, saying how it is counted", async () => {
+    const { user, fetchMock } = view({ status: "published" });
+    const browser = screen.getByRole("radio", { name: "One per browser" });
+    expect(browser).toHaveAccessibleDescription(
+      /Counted from when you choose it/
+    );
+    await user.click(browser);
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({
+      settings: { oneResponse: "browser" },
+    });
+  });
+
+  it("offers one per email, comparing only an Email field it can", async () => {
+    const { user, fetchMock } = view({
+      fields: [
+        {
+          id: "f1",
+          name: "email",
+          label: "Email",
+          type: "email",
+          required: true,
+        },
+        {
+          id: "f2",
+          name: "work",
+          label: "Work email",
+          type: "email",
+          required: true,
+          conditionalLogic: {
+            enabled: true,
+            action: "show",
+            operator: "AND",
+            conditions: [{ field: "email", comparison: "is_not_empty" }],
+          },
+        },
+        { id: "f3", name: "other", label: "Other email", type: "email" },
+      ],
+    });
+    await user.click(
+      screen.getByRole("radio", { name: "One per email address" })
+    );
+    // Started on the one field it can compare, and offering no other.
+    const fieldPicker = screen.getByRole("combobox", {
+      name: "Email field to compare",
+    });
+    expect(fieldPicker).toHaveTextContent("Email");
+    await user.click(fieldPicker);
+    expect(
+      (await screen.findAllByRole("option")).map(option => option.textContent)
+    ).toEqual(["Email"]);
+    await user.keyboard("{Escape}");
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({
+      settings: { oneResponse: "email", oneResponseField: "email" },
+    });
+  });
+
+  it("cannot take one per email without an Email field it can compare", () => {
+    // The form's only Email field is optional.
+    view();
+    expect(
+      screen.getByRole("radio", { name: "One per email address" })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/Add an Email field that is required/)
+    ).toBeInTheDocument();
   });
 });
 
@@ -262,6 +357,81 @@ describe("closing by itself", () => {
     const { settings } = saves(fetchMock)[0]!;
     expect(settings).not.toHaveProperty("closesAt");
     expect(settings).not.toHaveProperty("submissionLimit");
+  });
+});
+
+describe("spam protection", () => {
+  it("describes reCAPTCHA as a background score, not a puzzle", async () => {
+    view({ settings: { botCheck: "recaptcha" } });
+    expect(
+      await screen.findByText(/scores each visitor in the background/i)
+    ).toBeVisible();
+  });
+
+  it("refuses to newly choose a check whose keys are missing", async () => {
+    const { user } = view();
+    await user.click(screen.getByRole("combobox", { name: "Bot check" }));
+    const turnstile = await screen.findByRole("option", {
+      name: "Turnstile (needs keys)",
+    });
+    expect(turnstile).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("option", { name: "reCAPTCHA" })
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("refuses a check with a secret but no site key a visitor's widget could use", async () => {
+    const { user } = view(
+      {},
+      {
+        ...SPAM,
+        botChecks: {
+          recaptcha: { secret: true, siteKey: false },
+          turnstile: { secret: true, siteKey: true },
+        },
+      }
+    );
+    await user.click(screen.getByRole("combobox", { name: "Bot check" }));
+    expect(
+      await screen.findByRole("option", { name: "reCAPTCHA (needs keys)" })
+    ).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByRole("option", { name: "Turnstile" })
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("says a form's check without a secret accepts submissions unchecked, naming the option", async () => {
+    view({ settings: { botCheck: "turnstile" } });
+    expect(
+      await screen.findByText(/submissions are accepted unchecked/i)
+    ).toBeVisible();
+    expect(
+      screen.getByText("spamProtection.turnstile.secretKey")
+    ).toBeVisible();
+    expect(screen.getByText("spamProtection.turnstile.siteKey")).toBeVisible();
+  });
+
+  it("asks to move a form's own reCAPTCHA site key into the plugin's options", async () => {
+    view(
+      { settings: { captchaEnabled: true, captchaSiteKey: "legacy" } },
+      {
+        ...SPAM,
+        botChecks: {
+          recaptcha: { secret: true, siteKey: false },
+          turnstile: { secret: false, siteKey: false },
+        },
+      }
+    );
+    expect(
+      await screen.findByText(/keeps its own reCAPTCHA site key/i)
+    ).toBeVisible();
+    expect(screen.getByText("spamProtection.recaptcha.siteKey")).toBeVisible();
+  });
+
+  it("shows the plugin's rate limit, read-only", async () => {
+    view();
+    expect(await screen.findByText("10 a minute")).toBeVisible();
+    expect(screen.getByText(/spamProtection\.rateLimit/)).toBeVisible();
   });
 });
 

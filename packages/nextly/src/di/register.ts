@@ -183,6 +183,7 @@ import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
+import { getNextlyLogger } from "../observability/logger";
 import { maskingServiceLogger } from "../observability/mask-emails";
 import {
   forgetCapabilityProviders,
@@ -218,6 +219,7 @@ import {
   clearPluginDependencies,
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
+import { pluginLandingWarnings } from "../plugins/plugin-landing";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
@@ -1654,7 +1656,10 @@ function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
   }
 }
 
-/** Name the boot's plugins, and warn about any without a description. */
+/**
+ * Name the boot's plugins, and warn about any without a description, and in
+ * development about a landing a plugin or the site names wrongly or leaves out.
+ */
 function logRegisteredPlugins(
   transformedConfig: NextlyServiceConfig,
   logger: Logger
@@ -1671,6 +1676,18 @@ function logRegisteredPlugins(
   // plugin author's and breaks nothing, and an operator cannot fix a
   // third-party package from their own config.
   warnUndescribedPlugins(transformedConfig.plugins, logger);
+
+  // Once per start, here rather than in the admin metadata, which is built on
+  // every request. Reported in development only and never thrown: the value
+  // is already ignored everywhere, and a rail item that opens a menu item
+  // still works.
+  for (const warning of pluginLandingWarnings(
+    transformedConfig.plugins,
+    transformedConfig.admin?.pluginOverrides,
+    process.env.NODE_ENV
+  )) {
+    getNextlyLogger().warn(warning);
+  }
 }
 
 /**

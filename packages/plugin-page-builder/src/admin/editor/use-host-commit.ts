@@ -197,6 +197,18 @@ export function finishInlineEdit(
 }
 
 /**
+ * The document a store takes: the one the edits Settings tabs hold make
+ * (`flushHeld`), else the one held, with any open passage finished on it.
+ */
+export function documentToStore(
+  inline: { commit: () => InlineEditOutcome },
+  held: BlockDocument,
+  flushHeld: (() => BlockDocument | null) | undefined
+): BlockDocument {
+  return finishInlineEdit(inline, flushHeld?.() ?? held).document;
+}
+
+/**
  * Whether this document holds unsaved work, from EITHER surface that writes it.
  *
  * The status pill otherwise reads the editor's `undoDepth` alone, which is its
@@ -232,6 +244,28 @@ export function useDocumentDirty<TFieldValues extends FieldValues>(
 }
 
 /**
+ * The document an editor going away hands the form: with the edits Settings
+ * tabs hold made first, since a tab's own cleanup runs only after this
+ * handover; nothing where nothing is unsaved and no tab held an edit.
+ */
+export function documentToHandOver(
+  editor: { document: BlockDocument; undoDepth: number },
+  inline: {
+    commit: () => InlineEditOutcome;
+    editing: unknown;
+    editingRich: unknown;
+  },
+  savedAt: SavedAt,
+  flushHeld: (() => BlockDocument | null) | undefined
+): BlockDocument | null {
+  const flushed = flushHeld?.() ?? null;
+  if (flushed === null && !hasUnsavedWork(editor, inline, savedAt)) {
+    return null;
+  }
+  return finishInlineEdit(inline, flushed ?? editor.document).document;
+}
+
+/**
  * Hand unsaved work to the form when the editor goes without leaving.
  *
  * The editor can be unmounted from outside: a colleague takes the document
@@ -263,25 +297,26 @@ function useCommitOnUnmount(
     editingRich: unknown;
   },
   onCommit: (value: BlockDocument) => void,
-  savedAt: SavedAt
+  savedAt: SavedAt,
+  flushHeld: (() => BlockDocument | null) | undefined
 ): () => void {
-  const latest = useRef({ editor, inline, onCommit, savedAt });
-  latest.current = { editor, inline, onCommit, savedAt };
+  const latest = useRef({ editor, inline, onCommit, savedAt, flushHeld });
+  latest.current = { editor, inline, onCommit, savedAt, flushHeld };
   const committed = useRef(false);
   useLayoutEffect(
     () => () => {
+      if (committed.current) return;
       const held = latest.current;
-      if (
-        committed.current ||
-        !hasUnsavedWork(held.editor, held.inline, held.savedAt)
-      ) {
-        return;
-      }
+      const handing = documentToHandOver(
+        held.editor,
+        held.inline,
+        held.savedAt,
+        held.flushHeld
+      );
+      if (handing === null) return;
       committed.current = true;
       try {
-        held.onCommit(
-          finishInlineEdit(held.inline, held.editor.document).document
-        );
+        held.onCommit(handing);
       } catch (error) {
         // The repeater row this field sits in is not where the editor was
         // bound, so the write was refused rather than put in another row.
@@ -318,6 +353,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onClose,
   savePoint,
   removalReach,
+  flushHeld,
 }: {
   name: Path<TFieldValues>;
   /**
@@ -344,6 +380,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   removalReach?: () =>
     | { readonly count: number; readonly complete: boolean }
     | undefined;
+  /** The edits Settings tabs hold, made before a store (`SettingsPlace`). */
+  flushHeld?: () => BlockDocument | null;
 }): {
   done: () => void;
   /**
@@ -396,7 +434,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   // handler in the same action that asks what is being stored.
   const lastCommitted = useRef<BlockDocument | null>(null);
   useBeforeDocumentAction(() => {
-    const committing = finishInlineEdit(inline, editor.document).document;
+    const committing = documentToStore(inline, editor.document, flushHeld);
     savePoint.committing(committing);
     onCommit(committing);
     lastCommitted.current = committing;
@@ -443,7 +481,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     editor,
     inline,
     onCommit,
-    savePoint.savedAt
+    savePoint.savedAt,
+    flushHeld
   );
   const done = useCallback(() => {
     /*

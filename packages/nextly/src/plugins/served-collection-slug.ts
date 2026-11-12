@@ -62,3 +62,53 @@ export function servedCollectionSlug(
     : contributors.get(slug);
   return contributor ? renamedSlug(contributor.renameMap ?? {}, slug) : slug;
 }
+
+/**
+ * The slug a contribution's named Single is served under: a Single the plugin
+ * contributes itself through its rename map, as the host registered it; any
+ * other names one of the app's Singles, as written.
+ */
+export function servedSingleSlug(
+  owner: PluginDefinition,
+  slug: string
+): string {
+  const own = (owner.contributes?.singles ?? []).some(
+    single => single.slug === slug
+  );
+  return own ? renamedSlug(owner.renameMap ?? {}, slug) : slug;
+}
+
+/**
+ * A destination naming one of a plugin's collections, pointed at the slug the
+ * host registered: a menu item's `to`, and a plugin's `landing`, which is
+ * written the way a menu item's `to` is.
+ *
+ * Returns the declared `to` UNCHANGED when nothing was renamed. Naming a
+ * collection is how an item opts into rename-safety and RBAC, not a request to
+ * be sent somewhere canonical, so an item whose destination carries list state
+ * — `?status=draft`, a hash, a sub-path — keeps it. Overwriting it made adding
+ * `collection` to a working link change where that link went.
+ *
+ * When the slug DID move, only the collection segment is rewritten and
+ * whatever followed it is carried across. A destination that does not address
+ * the declared collection at all is left alone: the item named a collection so
+ * its permission still moves, but a path this function does not recognise is
+ * not one it should be inventing a new spelling for.
+ */
+export function retargetedTo(
+  to: string,
+  declared: string,
+  resolved: string
+): string {
+  if (declared === resolved) return to;
+
+  const prefix = `/admin/collections/${declared}`;
+  const addressesTheList =
+    to === prefix ||
+    to.startsWith(`${prefix}/`) ||
+    to.startsWith(`${prefix}?`) ||
+    to.startsWith(`${prefix}#`);
+  if (!addressesTheList) return to;
+
+  return `/admin/collections/${resolved}${to.slice(prefix.length)}`;
+}

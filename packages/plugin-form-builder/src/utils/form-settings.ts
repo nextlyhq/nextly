@@ -130,6 +130,7 @@ export function normalizeFormSettings(raw: unknown): FormSettings {
     oneResponseVersion:
       asWholeNumber(source.oneResponseVersion) ??
       DEFAULT_FORM_SETTINGS.oneResponseVersion,
+    oneResponseKeyedVersion: asWholeNumber(source.oneResponseKeyedVersion),
     honeypotEnabled: asOptionalBoolean(source.honeypotEnabled),
     botCheck: botCheckOf(
       source,

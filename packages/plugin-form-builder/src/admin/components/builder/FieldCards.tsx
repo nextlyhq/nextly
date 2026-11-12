@@ -15,8 +15,8 @@
  * Reordering is triple-redundant on purpose: drag handles (pointer), the
  * same handle with Space + arrow keys (dnd-kit keyboard sensor), and
  * explicit Move up / Move down menu items. Deleting a field that another
- * field's condition or a notification references is blocked with the list
- * of referrers instead of silently breaking them.
+ * field's condition, a notification or a form setting references is blocked
+ * with the list of referrers instead of silently breaking them.
  *
  * @module admin/components/builder/FieldCards
  */
@@ -427,9 +427,15 @@ function BesideSettings({
   );
 }
 
-/** What every submission stores beside a form's own fields. */
-const STORED_WITH_EVERY_SUBMISSION =
-  "Every submission also stores when it was submitted, its status, internal notes, and the IP address and browser it came from.";
+/**
+ * What every submission stores beside a form's own fields: its IP address
+ * and browser only while the form keeps them (Settings › Privacy).
+ */
+function storedWithEverySubmission(storesAddress: boolean): string {
+  return storesAddress
+    ? "Every submission also stores when it was submitted, its status, internal notes, and the IP address and browser it came from."
+    : "Every submission also stores when it was submitted, its status and internal notes. This form keeps no IP address or browser.";
+}
 
 export function FieldCards({
   enabledTypes,
@@ -440,6 +446,7 @@ export function FieldCards({
   const {
     fields,
     notifications,
+    settings,
     selectedFieldId,
     selectField,
     deleteField,
@@ -483,8 +490,8 @@ export function FieldCards({
   // One O(N^2) pass per fields/notifications change; each row then looks
   // its blockers up in O(1) instead of re-walking everything per render.
   const referenceMap = useMemo(
-    () => buildFieldReferenceMap(fields, notifications),
-    [fields, notifications]
+    () => buildFieldReferenceMap(fields, notifications, settings),
+    [fields, notifications, settings]
   );
 
   const labels = useMemo(
@@ -598,7 +605,7 @@ export function FieldCards({
 
       <p className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
         <Lucide.Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        {STORED_WITH_EVERY_SUBMISSION}
+        {storedWithEverySubmission(settings.storeIpAndBrowser !== false)}
       </p>
 
       {pickerConfig && (

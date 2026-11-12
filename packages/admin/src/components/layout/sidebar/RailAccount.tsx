@@ -28,6 +28,7 @@ import {
 } from "../header/header-visibility";
 import { shellAnswersMarker } from "../lib/shell-answers";
 
+import { RailFootGhost } from "./RailColumn";
 import { useNextDevOverlay } from "./use-next-dev-overlay";
 import { UserProfileDropdown } from "./UserProfileDropdown";
 
@@ -118,6 +119,41 @@ const ACCOUNT_LAYOUT = {
   }
 >;
 
+/**
+ * The class of the foot's own box in `placement`: its flow, and in the rail
+ * the space kept clear for Next.js's development badge (bottom-left), which
+ * Next.js draws over the rail's foot while the host runs `next dev`. One
+ * answer for the foot and for its outline drawn before the session is
+ * confirmed, so the outline's shapes stand exactly where the foot lands.
+ */
+function useAccountFrameClass(
+  placement: AccountPlacement,
+  className: string | undefined
+): string {
+  const devOverlay = useNextDevOverlay();
+  const { flow, devSpace } = ACCOUNT_LAYOUT[placement];
+  return cn(flow, devOverlay && devSpace, className);
+}
+
+/**
+ * The rail's foot before the reader is known: the Inbox's and the avatar's
+ * shapes, in the foot's own box, so the real foot replaces them in place.
+ */
+export function RailAccountOutline({
+  className,
+}: {
+  className?: string;
+}): JSX.Element {
+  return (
+    <div
+      className={useAccountFrameClass("rail", className)}
+      data-testid="rail-account-outline"
+    >
+      <RailFootGhost />
+    </div>
+  );
+}
+
 function RailAccountItems({
   className,
   placement,
@@ -137,17 +173,18 @@ function RailAccountItems({
   // Drawn only once every answer it depends on is in, so neither the bell nor
   // the avatar arrives after the rest and moves the foot.
   const settled = headerControlsSettled(pending, bellOffered);
-  // Next.js draws its development badge in the bottom-left corner, over the
-  // rail's foot, while the host runs `next dev`.
-  const devOverlay = useNextDevOverlay();
-  const { flow, side, devSpace, testId } = ACCOUNT_LAYOUT[placement];
+  const frameClass = useAccountFrameClass(placement, className);
+  const { flow, side, testId } = ACCOUNT_LAYOUT[placement];
 
   return (
     <div
-      className={cn(flow, devOverlay && devSpace, className)}
+      className={frameClass}
       data-testid={testId}
       data-shell-answers={shellAnswersMarker(settled)}
     >
+      {/* In the rail, the Inbox's and the avatar's shapes hold the foot
+          until both can be drawn, so the rail never reads as missing them. */}
+      {!settled && placement === "rail" ? <RailFootGhost /> : null}
       <div hidden={!settled} className={settled ? flow : undefined}>
         {bellOffered && (
           <NotificationBell

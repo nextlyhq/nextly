@@ -83,6 +83,19 @@ export interface SnapshotFile {
   translatedFieldsRecorded?: true;
 }
 
+/**
+ * Whether a snapshot carries the registry metadata: every collection's,
+ * Single's and field group's declaration (`entities`), which `nextly migrate`
+ * writes the registry rows from. A snapshot written before declarations were
+ * recorded has none and says nothing about the registry. The one reading of
+ * that question, for the registry source and the first-run record alike.
+ */
+export function carriesRegistryMetadata(
+  file: Pick<SnapshotFile, "entities">
+): file is SnapshotFile & { entities: EntitySettingsRecord } {
+  return file.entities !== undefined;
+}
+
 /** Empty snapshot used for "first migration" (no prior state). */
 export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
 

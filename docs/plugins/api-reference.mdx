@@ -896,6 +896,12 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
+A contribution to another plugin's place names that plugin in `dependsOn`, or in
+`optionalDependsOn` where the contributor works without it: while the owner is absent or
+disabled, a contribution to one of its places is left out and the app starts. A place the
+running owner does not declare is still refused (`admin-place-unknown`), as is one of a plugin
+the contributor names in neither.
+
 Every core place draws what is sent to it: settings, a user's detail page, the
 account page, the entry form, the login page, both edit pages, the dashboard
 and the entry list. A plugin draws its own
@@ -1122,6 +1128,28 @@ not saved, and what it writes through `control` is stored by the bar's Save
 and Publish with everything else. The open tab is kept in the address as
 `?tab=<id>`, so a reload or a shared link opens it again.
 
+A tab on an edit page may take over fields of the document with `fields`
+(`@experimental`), a list of top-level field names. The page then draws those
+fields in the tab instead of among its own content, and draws the tab only on a
+document that has every one of them. Their values stay in the document's form,
+so Save and Publish store them, and any surface that reads the document reads
+them as before. While a past version of the document is on screen, the page
+draws its own content alone and no contributed tab, since a tab reads the live
+document. A contribution to a Single's edit page may name the Singles it
+is for with `singles`, as one on a collection's page names its `collections`:
+
+```ts
+{
+  id: "acme-seo.tab",
+  kind: "tab",
+  place: "single.edit",
+  singles: ["homepage"], // every Single's page when absent
+  label: "SEO",
+  component: "@acme/seo/admin#SeoTab",
+  fields: ["seo"], // drawn in this tab, not among the page's fields
+}
+```
+
 ```tsx
 import { useEffect } from "react";
 import { useWatch } from "react-hook-form";
@@ -1228,7 +1256,8 @@ there (`contribution-replace-unknown`), replaced twice
 dashboard's `widgets` is (`contribution-replace-not-allowed`), and one that
 is malformed
 (`admin-contribution-invalid`): a key its kind does not take, no label or
-component, an action that names none of the plugin's own routes, or a route
+component, `fields` that are not top-level field names or are named away from an
+edit page, `singles` away from a Single's page, an action that names none of the plugin's own routes, or a route
 that is public, a signed-in person's, or answers `GET`, a permission
 on the login page, or a rule where there is no entry to judge.
 
