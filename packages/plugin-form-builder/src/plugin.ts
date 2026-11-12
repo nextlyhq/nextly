@@ -1905,7 +1905,8 @@ async function queueSubmissionNotifications(
   // all form emails regardless of per-rule state.
   if (!config.notifications.enabled) return;
 
-  const submission = write.data;
+  // The submission as the write leaves it, in the shape a read returns.
+  const submission = write.data as Record<string, unknown> | undefined;
   if (!submission) return;
 
   // Spam is stored for review, but nobody gets emailed about it — otherwise

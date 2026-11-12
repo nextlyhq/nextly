@@ -223,7 +223,11 @@ async function boot(
 
   /** Mark a submission with `status`, as the admin's actions do. */
   const mark = (id: string, status: string) =>
-    t.nextly.update({ collection: "form-submissions", id, data: { status } });
+    t.nextly.update({
+      collection: "form-submissions",
+      id,
+      data: { status, _overwrite: true },
+    });
 
   /** What the submission recorded as sent. */
   const sendsOf = async (id: string) =>
@@ -291,7 +295,12 @@ describe.each(getConfiguredTestDialects())(
       const b = await boot(dialect, {
         notifications: [
           teamNotification,
-          { ...teamNotification, id: "off", to: "off@example.com", enabled: false },
+          {
+            ...teamNotification,
+            id: "off",
+            to: "off@example.com",
+            enabled: false,
+          },
           {
             ...teamNotification,
             id: "vip",
@@ -336,12 +345,14 @@ describe.each(getConfiguredTestDialects())(
       expect(inside).toEqual({ queued: 1, records: 1 });
       // Each reported on its own, so a run shows every one that failed.
       expect.soft(await b.queue()).toEqual([]);
-      expect.soft(
-        (await b.t.nextly.find({ collection: SUBMISSION_SENDS_SLUG })).items
-      ).toEqual([]);
-      expect.soft(
-        (await b.t.nextly.find({ collection: "form-submissions" })).items
-      ).toEqual([]);
+      expect
+        .soft(
+          (await b.t.nextly.find({ collection: SUBMISSION_SENDS_SLUG })).items
+        )
+        .toEqual([]);
+      expect
+        .soft((await b.t.nextly.find({ collection: "form-submissions" })).items)
+        .toEqual([]);
       await b.trigger();
       expect.soft(sent).toEqual([]);
     }, 60_000);
@@ -381,7 +392,10 @@ describe.each(getConfiguredTestDialects())(
         b.t.nextly.update({
           collection: "forms",
           id: b.formId,
-          data: { settings: { honeypotEnabled: true, ...settings } },
+          data: {
+            settings: { honeypotEnabled: true, ...settings },
+            _overwrite: true,
+          },
         });
 
       // The control: a clean submission through the same route is queued.
