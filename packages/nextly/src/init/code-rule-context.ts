@@ -17,8 +17,15 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { Container, container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
-import { LanguageRegistry } from "../domains/i18n/language-registry";
+import {
+  LanguageRegistry,
+  type StoredLanguageReader,
+} from "../domains/i18n/language-registry";
 import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
+import {
+  adapterForReads,
+  pooledAdapterOf,
+} from "../shared/lib/read-transaction-scope";
 import type {
   CollectionAccessControl,
   SingleAccessControl,
@@ -72,14 +79,18 @@ export function codeDefinedAccessTargets(
   ];
 }
 
-/** The site's languages for `config`: its own and those stored in Settings. */
+/**
+ * The site's languages for `config`: its own and those stored in Settings,
+ * read through `reader`, by default on `adapter`'s pool.
+ */
 export function languageRegistryFor(
   adapter: DrizzleAdapter,
-  config: Pick<NextlyServiceConfig, "localization" | "perLanguageStorage">
+  config: Pick<NextlyServiceConfig, "localization" | "perLanguageStorage">,
+  reader: StoredLanguageReader = storedLanguageReader(adapter)
 ): LanguageRegistry {
   return new LanguageRegistry({
     configured: config.localization,
-    reader: storedLanguageReader(adapter),
+    reader,
     // A site keeping every translatable field per language stores its values under one
     // language even before it declares any.
     implicitLanguage: config.perLanguageStorage === true,
@@ -87,11 +98,36 @@ export function languageRegistryFor(
 }
 
 /**
+ * The stored languages read where a command's writes go. Inside a registry
+ * write's transaction (a first `nextly migrate` run's one commit, a plugin's
+ * install) a command is handed the view of its adapter that reads on that
+ * transaction (`adapterForReads`), so the list is read there, beside the
+ * grants it decides. The registry reads nothing in an open transaction only
+ * because a read through the pool would leave it; this one does not, so it is
+ * read. Where the flow reads on no transaction it is read on the pool, and
+ * skipped as before inside a transaction it cannot read on.
+ */
+function storedLanguagesWhereWritten(
+  adapter: DrizzleAdapter
+): StoredLanguageReader {
+  const pooled = pooledAdapterOf(adapter);
+  const readingOn = (): StoredLanguageReader =>
+    storedLanguageReader(adapterForReads(pooled));
+  return {
+    inOpenTransaction: () =>
+      adapterForReads(pooled) === pooled && pooled.transactionOpenInFlow(),
+    fingerprint: () => readingOn().fingerprint(),
+    rows: () => readingOn().rows(),
+  };
+}
+
+/**
  * Runs `work` with code rules told what a start of `config` would tell them.
  * Where services are registered (a command that started Nextly, or migrations
  * at a start), they already answer and are used as they are. Otherwise the
- * configuration and its languages, the stored ones read once, are lent to the
- * container for the length of `work` and taken back after, leaving any service
+ * configuration and its languages, the stored ones read once where the
+ * command writes (`storedLanguagesWhereWritten`), are lent to the container
+ * for the length of `work` and taken back after, leaving any service
  * registered meanwhile in place.
  */
 export async function withRuleContextOf<T>(
@@ -100,7 +136,11 @@ export async function withRuleContextOf<T>(
   work: () => Promise<T>
 ): Promise<T> {
   if (container.has("config")) return work();
-  const languages = languageRegistryFor(adapter, config);
+  const languages = languageRegistryFor(
+    adapter,
+    config,
+    storedLanguagesWhereWritten(adapter)
+  );
   await languages.refresh({ force: true });
   const lent = new Container();
   lent.registerSingleton("config", () => config);

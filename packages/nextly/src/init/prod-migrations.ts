@@ -73,6 +73,8 @@ interface MigrateCoreLike {
     pluginsWithMigrations?: ReadonlySet<string>;
     /** Spread in by `pluginMigrationArgs`, checked here for the same reason. */
     declaredPlugins?: ReadonlySet<string>;
+    /** See `MigrateCoreDeps.seedPermissions`. */
+    seedPermissions?: () => Promise<void>;
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -203,6 +205,34 @@ function migrateCoreFor(args: RunProdMigrationsArgs): MigrateCoreLike {
   );
 }
 
+/**
+ * Phase 4 of `nextly migrate`, as the command runs it: the permissions, the
+ * declared roles, the preset grants and the Public role with its grants
+ * (`seedAccessOnCommandConnection`), for the configuration this start serves.
+ * A production start writes none of them itself, so a site that migrates at
+ * start gets them here, under the same lock and in the same order as the
+ * command: after the registry rows they are read from.
+ */
+function startAccessSeeder(
+  adapter: AdapterLike,
+  logger: LoggerLike
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    const [{ seedAccessOnCommandConnection }, { getService }] =
+      await Promise.all([
+        import("../domains/schema/migrate/command-access"),
+        import("../di/service-access"),
+      ]);
+    // The boot adapter and logger are the command's in all it uses, as for
+    // `migrateCore` above.
+    await seedAccessOnCommandConnection(
+      adapter as never,
+      { config: getService("config") as never, configPath: null },
+      logger as never
+    );
+  };
+}
+
 /** What one boot-migration run is handed besides the caller's arguments. */
 interface BootMigrationRun {
   core: MigrateCoreLike;
@@ -267,6 +297,9 @@ async function applyBootMigrations(
     // table while reporting a clean migrate.
     ...(await pluginMigrationArgs(args.config.plugins ?? [])),
     ensureLedger: run.ensureLedger,
+    // The access `nextly migrate` adds once the registry rows are written:
+    // a production start adds none, so these migrations are the deploy step.
+    seedPermissions: startAccessSeeder(adapter, run.coreLogger),
   });
   // REFUSES rather than serving. A held lock no longer comes back as
   // `ran: false` (the lock throws `NEXTLY_MIGRATE_LOCK_BUSY`, which the

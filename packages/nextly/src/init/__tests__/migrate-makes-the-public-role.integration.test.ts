@@ -23,6 +23,14 @@
  * - A plugin declaring a public grant on the collection it contributes: the
  *   `nextly migrate` that adds the collection, with the plugin recorded
  *   uninstalled, grants nothing for it; the plugin's install grants it.
+ * - The languages stored in Settings, with none in the configuration, are the
+ *   ones a rule is told where the seeding runs inside a transaction: the
+ *   first `nextly migrate` run on this release of a database an earlier one
+ *   migrated, which writes its bookkeeping in one commit, and a plugin's
+ *   install, which writes it in the transaction recording the install.
+ * - Migrations at start (`db.runMigrationsOnBoot`) add the permissions and
+ *   make the Public role and its grants as `nextly migrate` does: on a new
+ *   database, and for a collection added later.
  */
 
 // Set before anything reads it (env validation reads it once).
@@ -30,7 +38,14 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,6 +62,7 @@ import { runPluginInstall } from "../../cli/commands/plugin-lifecycle-runner";
 import { defineCollection, defineConfig, text } from "../../config";
 import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
+import { _resetPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
 import { recordPluginLifecycle } from "../../domains/schema/ownership/plugin-lifecycle-state";
@@ -73,12 +89,18 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => {
     ...original,
     loadConfig: async () => {
       const config = state.config as LoadedConfig;
+      const merged = original.mergeSetupResultIntoConfig(
+        config,
+        config,
+        config.plugins ?? []
+      );
+      // As the real loader does, so the command keeps values per language as the site does.
+      const { adoptPerLanguageStorage } = await import(
+        "../../domains/i18n/per-language-storage"
+      );
+      adoptPerLanguageStorage(merged.perLanguageStorage);
       return {
-        config: original.mergeSetupResultIntoConfig(
-          config,
-          config,
-          config.plugins ?? []
-        ),
+        config: merged,
         appConfig: config,
         pluginConsent: undefined,
         projectRoot: state.dir,
@@ -119,6 +141,26 @@ const FRENCH = defineCollection({
   fields: [text({ name: "title" })],
 });
 
+/**
+ * Read by anyone only in French, on a site whose languages are stored in
+ * Settings alone: kept per language under the setting, so its content differs
+ * by language with no `localization` in the configuration.
+ */
+const STORED_FRENCH = defineCollection({
+  slug: "mpr-french",
+  access: { read: ({ locale }) => locale === "fr" },
+  fields: [text({ name: "title" })],
+});
+
+/** `STORED_FRENCH` on a site keeping its content per language, its languages stored. */
+function storedLanguagesConfig() {
+  return defineConfig({
+    collections: [STORED_FRENCH],
+    experimental: { perLanguageStorage: true },
+    db: { migrationsDir: "./migrations" },
+  });
+}
+
 /** A plugin contributing a collection with no read rule, and a public read of it. */
 const FORMS = definePlugin({
   name: "@test/mpr-forms",
@@ -133,6 +175,13 @@ const FORMS = definePlugin({
     ],
     publicGrants: [{ collection: "mpr-entries", action: "read" }],
   },
+});
+
+/** Added after the site was set up, and read by anyone. */
+const ADDED = defineCollection({
+  slug: "mpr-added",
+  access: { read: () => true },
+  fields: [text({ name: "title" })],
 });
 
 function configOf(...collections: (typeof OPEN)[]) {
@@ -178,6 +227,7 @@ describe.each(getConfiguredTestDialects())(
       await shutdownNextly();
       await shutdownServices();
       resetDispatcherForTests();
+      _resetPerLanguageStorage();
       vi.useRealTimers();
       vi.unstubAllEnvs();
       _resetEnvCache();
@@ -271,6 +321,93 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
+    /** The slugs of every stored permission, sorted. */
+    async function permissionSlugs(): Promise<string[]> {
+      const adapter = await open();
+      try {
+        const rows = await adapter.executeQuery<{ slug: unknown }>(
+          `SELECT ${q}slug${q} AS slug FROM ${q}permissions${q}`
+        );
+        return rows.map(row => String(row.slug)).sort();
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
+    }
+
+    /** English, the default, and French, stored in Settings as it writes them. */
+    async function storeLanguages(): Promise<void> {
+      const adapter = await open();
+      const flag = (value: boolean) =>
+        dialect === "postgresql" ? String(value) : value ? "1" : "0";
+      const now = dialect === "sqlite" ? "1700000000" : "CURRENT_TIMESTAMP";
+      const columns = [
+        "code",
+        "label",
+        "direction",
+        "fallback",
+        "position",
+        "is_default",
+        "active",
+        "revision",
+        "created_at",
+        "updated_at",
+      ]
+        .map(column => `${q}${column}${q}`)
+        .join(", ");
+      try {
+        for (const [position, code] of ["en", "fr"].entries()) {
+          await adapter.executeQuery(
+            `INSERT INTO ${q}nextly_languages${q} (${columns}) VALUES ('${code}', '${code}', 'ltr', '[]', ${position}, ${flag(position === 0)}, ${flag(true)}, 1, ${now}, ${now})`
+          );
+        }
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
+    }
+
+    /**
+     * The migrations as an earlier release's `nextly migrate:create` wrote
+     * them: snapshots without the registry metadata, so a first run on this
+     * release writes the rows from the configuration in its one commit.
+     */
+    function asEarlierRelease(): void {
+      const meta = join(state.dir, "migrations", "meta");
+      for (const file of readdirSync(meta)) {
+        if (!file.endsWith(".snapshot.json")) continue;
+        const path = join(meta, file);
+        const snapshot = JSON.parse(readFileSync(path, "utf-8")) as Record<
+          string,
+          unknown
+        >;
+        delete snapshot.entities;
+        delete snapshot.permissions;
+        writeFileSync(path, JSON.stringify(snapshot, null, 2));
+      }
+    }
+
+    /** What an earlier release leaves: the database without the registry record. */
+    async function deleteRegistryRecord(): Promise<void> {
+      const adapter = await open();
+      try {
+        await adapter.executeQuery(
+          `DELETE FROM ${q}nextly_meta${q} WHERE ${q}key${q} = 'registry_record'`
+        );
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
+    }
+
+    /** `collections`, migrated at start from the test's migrations folder. */
+    function migratedAtStart(...collections: (typeof OPEN)[]) {
+      return defineConfig({
+        collections,
+        db: {
+          migrationsDir: join(state.dir, "migrations"),
+          runMigrationsOnBoot: true,
+        },
+      });
+    }
+
     /**
      * A production start of `config`, then what a visitor is answered: the
      * status of a request with no session for each collection's entries, and
@@ -354,6 +491,77 @@ describe.each(getConfiguredTestDialects())(
       await migrate(config);
 
       expect(await publicHolds()).toContain("read-mpr-french");
+    }, 240_000);
+
+    it("asks a read rule in the stored languages in the first run's one commit", async () => {
+      const config = storedLanguagesConfig();
+      await migrateCreate("initial", config);
+      asEarlierRelease();
+      await migrate(config);
+      // The control: with no language stored, the rule never answers `true`.
+      expect(await publicHolds()).not.toContain("read-mpr-french");
+
+      // A database an earlier release migrated, with languages stored in
+      // Settings: the first run on this release writes its rows, permissions
+      // and grants in one commit, and nothing after it.
+      await storeLanguages();
+      await deleteRegistryRecord();
+      await migrate(config);
+
+      expect(await publicHolds()).toContain("read-mpr-french");
+    }, 240_000);
+
+    it("asks a read rule in the stored languages at a plugin's install", async () => {
+      const without = storedLanguagesConfig();
+      await migrateCreate("initial", without);
+      await migrate(without);
+      const adapter = await open();
+      await recordPluginLifecycle(
+        new SchemaEventsRepository(adapter.getDrizzle(), dialect),
+        FORMS.name,
+        { state: "uninstalled" }
+      );
+      await adapter.disconnect().catch(() => undefined);
+      const withPlugin = { ...without, plugins: [FORMS] };
+      await migrateCreate("forms", withPlugin);
+      await migrate(withPlugin);
+      expect(await publicHolds()).not.toContain("read-mpr-french");
+
+      await storeLanguages();
+      state.config = withPlugin;
+      tick();
+      await runPluginInstall(FORMS.name, {}, command().context);
+
+      expect(await publicHolds()).toContain("read-mpr-french");
+    }, 240_000);
+
+    it("makes the Public role and the permissions when migrations run at start", async () => {
+      const before = migratedAtStart(OPEN, CLOSED);
+      await migrateCreate("initial", before);
+
+      expect(await asVisitor(before, ["mpr-posts", "mpr-notes"])).toEqual({
+        statuses: { "mpr-posts": 200, "mpr-notes": 401 },
+        media: "read",
+      });
+      expect(await publicHolds()).toEqual(
+        expect.arrayContaining(["read-media", "read-mpr-posts"])
+      );
+
+      const after = migratedAtStart(OPEN, CLOSED, ADDED);
+      await migrateCreate("added", after);
+
+      expect((await asVisitor(after, ["mpr-added"])).statuses).toEqual({
+        "mpr-added": 200,
+      });
+      expect(await permissionSlugs()).toEqual(
+        expect.arrayContaining([
+          "create-mpr-added",
+          "read-mpr-added",
+          "update-mpr-added",
+          "delete-mpr-added",
+        ])
+      );
+      expect(await publicHolds()).toContain("read-mpr-added");
     }, 240_000);
 
     it("gives the Public role a plugin's public grant at its install", async () => {
