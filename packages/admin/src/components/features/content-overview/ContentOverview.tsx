@@ -90,30 +90,25 @@ function OverviewSearch({
   );
 }
 
-export function ContentOverview({
-  scope,
-}: {
-  scope: OverviewScope;
-}): JSX.Element {
+/**
+ * The lists the page draws, what it shows of them, and the redirect that
+ * follows when it sends the reader to the other kind's address.
+ */
+function useOverview(scope: OverviewScope) {
   const collections = useSidebarCollectionList();
   const singles = useSidebarSingleList();
-  const { content, retry, hasPermission } = useCurrentUserPermissions();
-  const branding = useBranding();
-  const [search, setSearch] = useState("");
+  const { content, retry } = useCurrentUserPermissions();
 
   // Without the server's answer about what the reader may do, the lists are
   // filtered through nothing and read as empty: that is a failure to say, not
   // a reader with no content to redirect or tell so.
   const accessFailed = !content.hasAnswer && content.error !== null;
+  // The lists are filtered through the server's answer about each entity, so
+  // they are not settled until that answer is.
+  const pending = [collections.isLoading, singles.isLoading, content.isLoading];
   const plan = overviewPlan({
     scope,
-    // The lists are filtered through the server's answer about each entity,
-    // so they are not settled until that answer is.
-    settled:
-      !collections.isLoading &&
-      !singles.isLoading &&
-      !content.isLoading &&
-      !accessFailed,
+    settled: !pending.includes(true) && !accessFailed,
     readable: {
       collections: collections.items.length > 0,
       singles: singles.items.length > 0,
@@ -125,54 +120,97 @@ export function ContentOverview({
     if (redirectTo !== null) replaceTo(redirectTo);
   }, [redirectTo]);
 
+  return {
+    collections: collections.items,
+    singles: singles.items,
+    plan,
+    failure: accessFailed ? { error: content.error, retry } : null,
+  };
+}
+
+type Overview = ReturnType<typeof useOverview>;
+
+/** The empty state, offering to build a collection to a reader who may. */
+function NothingToOpen(): JSX.Element {
+  const { hasPermission } = useCurrentUserPermissions();
+  const branding = useBranding();
+  return (
+    <ContentEmptyState
+      canBuild={mayBuildCollections(
+        hasPermission,
+        branding.showBuilder !== false
+      )}
+    />
+  );
+}
+
+/** What the page shows under its header, as the plan decides. */
+function OverviewBody({
+  overview,
+  search,
+}: {
+  overview: Overview;
+  search: string;
+}): JSX.Element {
+  const { plan, failure } = overview;
+  if (failure !== null) {
+    return (
+      <SectionErrorFallback
+        title="Couldn't check your access"
+        description="The admin couldn't load what you may do with collections and Singles, so it can't tell which ones to show."
+        error={failure.error ?? undefined}
+        reset={failure.retry}
+      />
+    );
+  }
+  if (plan.kind === "empty") return <NothingToOpen />;
+  if (plan.kind !== "tables") {
+    // Pending, or on the way to the other kind's address: nothing is claimed
+    // of the lists yet.
+    return <div className="h-32" aria-hidden="true" />;
+  }
+  return (
+    <div className="space-y-10">
+      {plan.collections ? (
+        <CollectionsTable collections={overview.collections} search={search} />
+      ) : null}
+      {plan.singles ? (
+        <SinglesTable singles={overview.singles} search={search} />
+      ) : null}
+    </div>
+  );
+}
+
+export function ContentOverview({
+  scope,
+}: {
+  scope: OverviewScope;
+}): JSX.Element {
+  const overview = useOverview(scope);
+  const [search, setSearch] = useState("");
+  // The summary and the search only beside tables to summarize and search.
+  const showsTables = overview.plan.kind === "tables";
   return (
     <PageContainer>
       <Breadcrumbs items={crumbsOf(scope)} className="mb-6" />
       <PageHeader
         title={OVERVIEW_TITLE[scope]}
         description={
-          plan.kind === "tables"
+          showsTables
             ? overviewSummary({
                 scope,
-                collections: collections.items.length,
-                singles: singles.items.length,
+                collections: overview.collections.length,
+                singles: overview.singles.length,
               })
             : undefined
         }
         actions={
-          plan.kind === "tables" ? (
+          showsTables ? (
             <OverviewSearch scope={scope} value={search} onChange={setSearch} />
           ) : undefined
         }
       />
-      {accessFailed ? (
-        <SectionErrorFallback
-          title="Couldn't check your access"
-          description="The admin couldn't load what you may do with collections and Singles, so it can't tell which ones to show."
-          error={content.error ?? undefined}
-          reset={retry}
-        />
-      ) : plan.kind === "tables" ? (
-        <div className="space-y-10">
-          {plan.collections ? (
-            <CollectionsTable collections={collections.items} search={search} />
-          ) : null}
-          {plan.singles ? (
-            <SinglesTable singles={singles.items} search={search} />
-          ) : null}
-        </div>
-      ) : plan.kind === "empty" ? (
-        <ContentEmptyState
-          canBuild={mayBuildCollections(
-            hasPermission,
-            branding.showBuilder !== false
-          )}
-        />
-      ) : (
-        // Pending, or on the way to the other kind's address: nothing is
-        // claimed of the lists yet.
-        <div className="h-32" aria-hidden="true" />
-      )}
+      <OverviewBody overview={overview} search={search} />
     </PageContainer>
   );
 }
