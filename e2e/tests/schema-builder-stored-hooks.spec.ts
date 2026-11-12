@@ -193,6 +193,62 @@ test("a field change saved, the hooks read back unchanged", async ({
   }
 });
 
+test("a field added and applied, the hooks read back unchanged", async ({
+  page,
+}) => {
+  // A schema-changing save takes the other road: a preview, the confirmation,
+  // the apply, and then the settings write that follows it.
+  const slug = await makeCollection(page, "stored_hooks_apply");
+  try {
+    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await page.getByRole("button", { name: "Add field", exact: true }).click();
+    const search = page.getByRole("combobox", { name: "Search field types" });
+    await expect(search).toBeFocused();
+    await search.fill("text");
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Label" }).fill("Subtitle");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Add field", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Close field settings" }).click();
+
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    // The apply is followed by the collection's settings write; the hooks are
+    // read back only after it has landed, so a write that dropped them could
+    // not be missed by reading too early.
+    const settingsWrite = page.waitForResponse(
+      response =>
+        response.request().method() === "PATCH" &&
+        new URL(response.url()).pathname === `${API}/collections/${slug}`,
+      { timeout: 60_000 }
+    );
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Apply and restart" })
+      .click();
+    expect((await settingsWrite).ok()).toBe(true);
+
+    await expect
+      .poll(
+        async () => {
+          const schema = await page.request.get(
+            `${API}/collections/schema/${slug}`
+          );
+          const body = (await schema.json()) as {
+            fields?: { name: string }[];
+          };
+          return body.fields?.some(f => f.name === "subtitle") ?? false;
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+    expect(await storedHooks(page.request, slug)).toEqual(STORED_HOOKS);
+  } finally {
+    await removeRuntimeCollection(page.request, slug);
+  }
+});
+
 test("a settings change saved, the hooks read back unchanged", async ({
   page,
 }) => {

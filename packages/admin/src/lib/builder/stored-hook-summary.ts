@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { getPrebuiltHook } from "@admin/components/features/schema-builder/HooksEditor/utils/prebuiltHooks";
+import {
+  getPrebuiltHook,
+  type PrebuiltHookConfig,
+} from "@admin/components/features/schema-builder/HooksEditor/utils/prebuiltHooks";
 import { getObjectShape } from "@admin/components/features/schema-builder/HooksEditor/utils/zodIntrospection";
 
 /**
@@ -39,25 +42,41 @@ const storedHookEntry = z.object({
 type StoredHookEntry = z.infer<typeof storedHookEntry>;
 
 /**
- * The phases the server runs stored hooks in, in lifecycle sequence, and how
- * each reads. A phase missing here (`beforeOperation`, `beforeRead`, or any
- * other string) is never dispatched to stored hooks, so a hook stored with it
- * never runs. The server orders hooks by `order` only within a phase, so the
- * list is grouped by this sequence first.
+ * The phases the server runs stored hooks in: how each reads, and its place in
+ * the sequence the server dispatches them. A phase missing here
+ * (`beforeOperation`, `beforeRead`, or any other string) is never dispatched to
+ * stored hooks, so a hook stored with it never runs.
+ *
+ * The ranks follow the executor's calls, not the phase names:
+ * - a create runs its stored `beforeCreate` hooks, then the `beforeChange` ones
+ *   in a separate pass, and an update does the same with `beforeUpdate`, so
+ *   those two share a rank ahead of `beforeChange`;
+ * - after a create or an update, `afterChange` hooks are matched into the same
+ *   pass as `afterCreate` or `afterUpdate` and sorted with them by `order`, so
+ *   all three share one rank.
+ * Within a rank the list is ordered by `order`, as each pass sorts.
  */
-const RUNNING_PHASES: ReadonlyArray<readonly [phase: string, when: string]> = [
-  ["beforeChange", "Before an entry is created or updated"],
-  ["beforeCreate", "Before an entry is created"],
-  ["beforeUpdate", "Before an entry is updated"],
-  ["beforeDelete", "Before an entry is deleted"],
-  ["afterChange", "After an entry is created or updated"],
-  ["afterCreate", "After an entry is created"],
-  ["afterUpdate", "After an entry is updated"],
-  ["afterDelete", "After an entry is deleted"],
-  ["afterRead", "After entries are read"],
+const RUNNING_PHASES: ReadonlyArray<
+  readonly [phase: string, rank: number, when: string]
+> = [
+  ["beforeCreate", 0, "Before an entry is created"],
+  ["beforeUpdate", 0, "Before an entry is updated"],
+  ["beforeChange", 1, "Before an entry is created or updated"],
+  ["afterCreate", 2, "After an entry is created"],
+  ["afterUpdate", 2, "After an entry is updated"],
+  ["afterChange", 2, "After an entry is created or updated"],
+  ["beforeDelete", 3, "Before an entry is deleted"],
+  ["afterDelete", 4, "After an entry is deleted"],
+  ["afterRead", 5, "After entries are read"],
 ];
-const PHASE_RANK = new Map(RUNNING_PHASES.map(([phase], i) => [phase, i]));
-const PHASE_WHEN = new Map(RUNNING_PHASES);
+const PHASE_RANK = new Map(
+  RUNNING_PHASES.map(([phase, rank]) => [phase, rank])
+);
+const PHASE_WHEN = new Map(
+  RUNNING_PHASES.map(([phase, , when]) => [phase, when])
+);
+/** After every rank that runs: hooks that never run, then unreadable entries. */
+const NEVER_RUNS_RANK = 6;
 
 /**
  * Where the provided kinds act. Each changes or refuses the data being written,
@@ -95,8 +114,8 @@ export function summarizeStoredHooks(
 }
 
 function rankOf(entry: Entry): number {
-  if (!entry.readable) return RUNNING_PHASES.length + 1;
-  return PHASE_RANK.get(entry.hook.hookType) ?? RUNNING_PHASES.length;
+  if (!entry.readable) return NEVER_RUNS_RANK + 1;
+  return PHASE_RANK.get(entry.hook.hookType) ?? NEVER_RUNS_RANK;
 }
 
 function compareEntries(a: Entry, b: Entry): number {
@@ -127,7 +146,7 @@ function summarize(hook: StoredHookEntry): StoredHookSummary {
     name: kind?.name ?? hook.hookId,
     when:
       PHASE_WHEN.get(hook.hookType) ?? `Never (stored as "${hook.hookType}")`,
-    does: describe(hook, kind?.name),
+    does: describe(hook, kind),
     on: hook.enabled,
     settings: kind
       ? declaredSettings(kind.configSchema, config)
@@ -140,14 +159,40 @@ function summarize(hook: StoredHookEntry): StoredHookSummary {
  * server never runs stored hooks in, an unknown kind, and a known kind stored
  * where it cannot act each say so instead of describing an effect.
  */
-function describe(hook: StoredHookEntry, kindName: string | undefined): string {
+function describe(
+  hook: StoredHookEntry,
+  kind: PrebuiltHookConfig | undefined
+): string {
   if (!PHASE_WHEN.has(hook.hookType))
     return "Never runs: the server does not run stored hooks at this point.";
-  if (kindName === undefined)
+  if (kind === undefined)
     return "Not a hook this version of Nextly knows, so it runs nothing.";
   if (!ACTING_PHASES.has(hook.hookType))
-    return `Runs, but changes nothing: ${kindName} only acts before an entry is created or updated.`;
-  return describeKnown(hook.hookId, hook.config ?? {});
+    return `Runs, but changes nothing: ${kind.name} only acts before an entry is created or updated.`;
+  const config = hook.config ?? {};
+  const wrong = wronglyTypedSettings(kind.configSchema, config);
+  if (wrong.length > 0)
+    return `Runs with settings of the wrong type (${wrong.join(", ")}), so what it does cannot be described exactly.`;
+  return describeKnown(hook.hookId, config, hook.hookType);
+}
+
+/**
+ * The declared settings whose stored value is not of the declared type. The
+ * server passes stored settings to the hook unparsed, so such a value is used
+ * by the server's own coercion (a stored "false" is truthy there), and a
+ * sentence read from it here could say the opposite. A missing setting is not
+ * listed: it reads as "(not set)" in the sentence instead.
+ */
+function wronglyTypedSettings(
+  schema: Parameters<typeof getObjectShape>[0],
+  config: HookConfig
+): string[] {
+  return Object.entries(getObjectShape(schema))
+    .filter(
+      ([key, field]) =>
+        config[key] !== undefined && !field.safeParse(config[key]).success
+    )
+    .map(([key]) => key);
 }
 
 /**
@@ -202,7 +247,10 @@ type HookConfig = Record<string, unknown>;
  * stored values as they are: no default is assumed for a setting that is
  * missing.
  */
-const DESCRIBE_KIND: Record<string, (config: HookConfig) => string> = {
+const DESCRIBE_KIND: Record<
+  string,
+  (config: HookConfig, phase: string) => string
+> = {
   "auto-slug": config => {
     const target = named(config.targetField);
     const source = named(config.sourceField);
@@ -210,8 +258,12 @@ const DESCRIBE_KIND: Record<string, (config: HookConfig) => string> = {
       ? `Fills ${target} from ${source}, replacing any value already there.`
       : `Fills ${target} from ${source}, unless ${target} already has a value.`;
   },
-  "audit-fields": config =>
-    `Records who created an entry in ${named(config.createdByField)}, and who last changed it in ${named(config.updatedByField)}.`,
+  // An update sets only the updater: the creator is written on a create alone,
+  // so a hook stored for updates records nothing about who created the entry.
+  "audit-fields": (config, phase) =>
+    phase === "beforeUpdate"
+      ? `Records who last changed an entry in ${named(config.updatedByField)}.`
+      : `Records who created an entry in ${named(config.createdByField)}, and who last changed it in ${named(config.updatedByField)}.`,
   "unique-validation": config =>
     `Refuses an entry whose ${named(config.field)} another entry already uses${ignoringCase(config)}${refusalMessage(config)}.`,
 };
@@ -231,9 +283,13 @@ function refusalMessage(config: HookConfig): string {
  * A kind this admin provides but has no sentence for falls back to the kind's
  * own description, so a kind added to the registry still reads as something.
  */
-function describeKnown(hookId: string, config: HookConfig): string {
+function describeKnown(
+  hookId: string,
+  config: HookConfig,
+  phase: string
+): string {
   // Own keys only: an id such as "constructor" must not reach Object's.
   return Object.hasOwn(DESCRIBE_KIND, hookId)
-    ? DESCRIBE_KIND[hookId](config)
+    ? DESCRIBE_KIND[hookId](config, phase)
     : (getPrebuiltHook(hookId)?.description ?? "");
 }

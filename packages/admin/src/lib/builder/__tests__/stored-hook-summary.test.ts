@@ -233,6 +233,64 @@ describe("summarizeStoredHooks", () => {
     );
   });
 
+  it("lists a create's own before hooks ahead of its before-change ones", () => {
+    // A create runs its stored `beforeCreate` hooks, then the `beforeChange`
+    // ones in a separate pass, whatever their `order` across the two.
+    const summaries = summarizeStoredHooks([
+      hook({ hookId: "audit-fields", hookType: "beforeChange", order: 0 }),
+      hook({ hookId: "auto-slug", hookType: "beforeCreate", order: 5 }),
+    ]);
+
+    expect(summaries.map(s => s.hookId)).toEqual(["auto-slug", "audit-fields"]);
+  });
+
+  it("orders after-change hooks together with after-create ones", () => {
+    // `afterChange` is matched into the same pass as `afterCreate` and sorted
+    // with it by `order`, so neither phase goes first as a block.
+    const summaries = summarizeStoredHooks([
+      hook({ hookId: "audit-fields", hookType: "afterCreate", order: 1 }),
+      hook({ hookId: "auto-slug", hookType: "afterChange", order: 0 }),
+      hook({ hookId: "unique-validation", hookType: "afterCreate", order: 2 }),
+    ]);
+
+    expect(summaries.map(s => s.hookId)).toEqual([
+      "auto-slug",
+      "audit-fields",
+      "unique-validation",
+    ]);
+  });
+
+  it("says an audit hook stored for updates records only the updater", () => {
+    const [summary] = summarizeStoredHooks([
+      hook({
+        hookId: "audit-fields",
+        hookType: "beforeUpdate",
+        config: { createdByField: "author", updatedByField: "editor" },
+      }),
+    ]);
+
+    expect(summary.does).toBe("Records who last changed an entry in editor.");
+  });
+
+  it("names wrongly typed settings instead of describing what they would do", () => {
+    // The server passes stored settings unparsed: a stored "false" is truthy
+    // there and overwrites, so reading it as "keeps the value" would be wrong.
+    const [summary] = summarizeStoredHooks([
+      hook({
+        hookId: "auto-slug",
+        config: {
+          sourceField: "title",
+          targetField: "slug",
+          overwriteExisting: "false",
+        },
+      }),
+    ]);
+
+    expect(summary.does).toBe(
+      "Runs with settings of the wrong type (overwriteExisting), so what it does cannot be described exactly."
+    );
+  });
+
   it("returns nothing for a collection without stored hooks", () => {
     expect(summarizeStoredHooks(undefined)).toEqual([]);
     expect(summarizeStoredHooks([])).toEqual([]);
