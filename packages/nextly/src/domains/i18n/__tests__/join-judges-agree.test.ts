@@ -39,6 +39,8 @@ const short = (maxLength: number): Field => ({
   validation: { maxLength },
 });
 const TEXT: Field = { type: "text" };
+/** Unique with no width: its shared column is bounded to be keyed whole, its translated one not. */
+const UNIQUE_TEXT: Field = { type: "text", unique: true };
 const LONG: Field = { type: "text", options: { variant: "long" } };
 const INTEGER: Field = { type: "number" };
 const FLOAT: Field = { type: "number", options: { format: "float" } };
@@ -96,6 +98,13 @@ const PAIRS: {
     expected: ALL_REFUSED,
   },
   { name: "a text made long", from: TEXT, to: LONG, expected: ALL_KEEP },
+  {
+    // Judged from the shared column the values sit in: `varchar(255)` on MySQL, `text` elsewhere.
+    name: "a unique text made a longer short text",
+    from: UNIQUE_TEXT,
+    to: short(300),
+    expected: { postgresql: "refused", mysql: "keeps", sqlite: "refused" },
+  },
   {
     name: "an integer made a float",
     from: INTEGER,

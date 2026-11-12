@@ -927,15 +927,21 @@ export function joiningFieldsLosingValues(
   },
   dialect: SupportedDialect
 ): string[] {
-  const columnOf = (field: LeavingFieldLike | undefined) =>
+  // The values sit in the field's shared column, which a unique field's whole-column key can
+  // bound, as the push and `migrate:create` read it from the main table; they move into its
+  // translated one.
+  const columnOf = (
+    field: LeavingFieldLike | undefined,
+    shape: "shared" | "translated"
+  ) =>
     field === undefined
       ? undefined
-      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
+      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy, shape);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
   const after = new Map(args.newFields.map(f => [f.name, f]));
   return joining.filter(name => {
-    const from = columnOf(before.get(name));
-    const to = columnOf(after.get(name));
+    const from = columnOf(before.get(name), "shared");
+    const to = columnOf(after.get(name), "translated");
     return (
       storageDiffers(from, to) &&
       !(
