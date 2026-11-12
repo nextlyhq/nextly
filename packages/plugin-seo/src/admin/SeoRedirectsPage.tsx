@@ -505,15 +505,16 @@ function RedirectsTabs(props: {
 }): JSX.Element {
   return (
     <PageTabs label="Redirects">
-      <PageTab asChild current={props.tab === "list"}>
+      <PageTab asChild current={props.tab === "list"} className="gap-1.5">
         <AdminLink href={REDIRECTS_HREF}>
+          {/* Spaced by the tab's gap; the space keeps the name "Redirects 3". */}
           Redirects{" "}
           <span className="font-normal text-muted-foreground">
             {props.redirects}
           </span>
         </AdminLink>
       </PageTab>
-      <PageTab asChild current={props.tab === "notfound"}>
+      <PageTab asChild current={props.tab === "notfound"} className="gap-1.5">
         <AdminLink href={NOT_FOUND_HREF}>
           Not found{" "}
           <span className="font-normal text-muted-foreground">
