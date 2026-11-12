@@ -140,6 +140,23 @@ describe("a submission's answers", () => {
     // Read by the labels it was asked under.
     expect(screen.getByText("Full name")).toBeInTheDocument();
   });
+
+  it("keeps an answer the form no longer describes", () => {
+    wrap(
+      <SubmissionAnswers
+        asked={{
+          fields: [{ name: "name", label: "Full name", type: "text" }],
+          hidden: [],
+        }}
+        data={{ name: "Hina Rossi", budget: "5k" }}
+      />
+    );
+    expect(screen.getByText("budget")).toBeInTheDocument();
+    expect(screen.getByText("5k")).toBeInTheDocument();
+    expect(screen.getByText("No longer on the form")).toBeInTheDocument();
+    // An answer the snapshot names is not repeated as one it lost.
+    expect(screen.getAllByText("Hina Rossi")).toHaveLength(1);
+  });
 });
 
 interface ServerOptions {
@@ -147,24 +164,34 @@ interface ServerOptions {
   permissions: Record<string, unknown>;
   newer?: string;
   older?: string;
+  /** The forms collection as the install names it; "forms" when absent. */
+  formsSlug?: string;
+  /** The form's fields as it is now. */
+  fields?: unknown[];
 }
 
 /** The list's answer to one of the page's place queries. */
 function listAnswer(url: string, options: ServerOptions) {
   const where = JSON.parse(
     new URL(url, "http://x").searchParams.get("where")!
-  ) as { submittedAt?: { greater_than?: string; less_than?: string } };
+  ) as {
+    or?: Array<{ submittedAt?: { greater_than?: string; less_than?: string } }>;
+  };
   const one = (id: string | undefined) =>
     answer(200, { items: id ? [{ id }] : [], meta: { total: id ? 1 : 0 } });
-  if (where.submittedAt?.greater_than) return one(options.newer);
-  if (where.submittedAt?.less_than) return one(options.older);
+  const side = where.or?.[0]?.submittedAt;
+  if (side?.greater_than) return one(options.newer);
+  if (side?.less_than) return one(options.older);
   return answer(200, { items: [{ id: "sub-1" }], meta: { total: 3 } });
 }
 
 /** A server holding one submission of the "Jobs" form, and its list. */
 function server(options: ServerOptions) {
-  // The submission as stored, changed by what the page saves.
+  // The submission as stored, changed by what the page saves: each save
+  // moves its version on, as revision checking does.
   let status = options.status;
+  let rev = 7;
+  const formsSlug = options.formsSlug ?? "forms";
   const routes: Array<
     [match: string, reply: (url: string) => Promise<Response>]
   > = [
@@ -173,12 +200,17 @@ function server(options: ServerOptions) {
       "/builder-config",
       () =>
         answer(200, {
-          slugs: { forms: "forms", submissions: "form-submissions" },
+          slugs: { forms: formsSlug, submissions: "form-submissions" },
         }),
     ],
     [
-      "/collections/forms/entries/",
-      () => answer(200, { id: "form-1", name: "Jobs", fields: [] }),
+      `/collections/${formsSlug}/entries/`,
+      () =>
+        answer(200, {
+          id: "form-1",
+          name: "Jobs",
+          fields: options.fields ?? [],
+        }),
     ],
     [
       "/form-submissions/entries/sub-2",
@@ -190,7 +222,7 @@ function server(options: ServerOptions) {
           asked: ASKED,
           status,
           submittedAt: "2026-11-10T14:15:00.000Z",
-          _rev: "rev-7",
+          _rev: `rev-${rev}`,
         }),
     ],
     ["/form-submissions/entries?", url => listAnswer(url, options)],
@@ -200,6 +232,7 @@ function server(options: ServerOptions) {
     if (init?.method === "PATCH") {
       const sent = JSON.parse(String(init.body)) as { status?: string };
       if (sent.status) status = sent.status;
+      rev += 1;
       return answer(200, { item: {} });
     }
     const route = routes.find(([match]) => url.includes(match));
@@ -214,8 +247,16 @@ const patches = (fetchMock: ReturnType<typeof server>) =>
     .filter(([, init]) => init?.method === "PATCH")
     .map(([, init]) => JSON.parse(String(init?.body)));
 
-function page() {
-  wrap(<SubmissionPage entryId="sub-2" collectionSlug="form-submissions" />);
+function page(
+  props: Partial<React.ComponentProps<typeof SubmissionPage>> = {}
+) {
+  wrap(
+    <SubmissionPage
+      entryId="sub-2"
+      collectionSlug="form-submissions"
+      {...props}
+    />
+  );
   return userEvent.setup();
 }
 
@@ -310,6 +351,102 @@ describe("a submission's page", () => {
         notes: "Book a call",
         _rev: "rev-7",
       })
+    );
+  });
+});
+
+describe("a submission's page, writing", () => {
+  it("sends nothing while a colleague holds the submission", async () => {
+    const fetchMock = server({
+      status: "new",
+      permissions: { isSuperAdmin: true },
+    });
+    page({ documentLock: { readOnly: true, actionsDisabled: true } });
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).includes("/me/permissions")
+        )
+      ).toBe(true)
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // Not even the automatic Read.
+    expect(patches(fetchMock)).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Edit answers" })).toBeNull();
+    expect(
+      within(details).getByRole("button", { name: "Read" })
+    ).toBeDisabled();
+    expect(
+      within(details).getByRole("textbox", { name: "Internal note" })
+    ).toBeDisabled();
+  });
+
+  it("saves untouched answers without writing them", async () => {
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+    });
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    expect(
+      await screen.findByRole("button", { name: "Edit answers" })
+    ).toBeInTheDocument();
+    expect(patches(fetchMock)).toEqual([]);
+
+    // A real change is written.
+    await user.click(screen.getByRole("button", { name: "Edit answers" }));
+    const name = screen.getByRole("textbox", { name: "Full name" });
+    await user.clear(name);
+    await user.type(name, "Hina R.");
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { data: { ...DATA, name: "Hina R." }, _rev: "rev-7" },
+      ])
+    );
+  });
+
+  it("saves a note and then a status, each with the version before it left", async () => {
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+    });
+    const user = page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    const note = within(details).getByRole("textbox", {
+      name: "Internal note",
+    });
+    await waitFor(() => expect(note).toBeEnabled());
+    await user.type(note, "Book a call");
+    // The click blurs the note, which saves it, then asks for the status.
+    await user.click(within(details).getByRole("button", { name: "Archived" }));
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "Book a call", _rev: "rev-7" },
+        { status: "archived", _rev: "rev-8" },
+      ])
+    );
+  });
+
+  it("links the form under the forms collection as the install names it", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      formsSlug: "contact-forms",
+    });
+    page();
+    expect(await screen.findByRole("link", { name: "Jobs" })).toHaveAttribute(
+      "href",
+      "/admin/collections/contact-forms/form-1"
     );
   });
 });

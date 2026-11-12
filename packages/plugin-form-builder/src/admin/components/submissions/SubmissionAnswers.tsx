@@ -14,6 +14,7 @@ import { Download, ExternalLink, FileText } from "lucide-react";
 import type { JSX, ReactNode } from "react";
 
 import type { AskedField, AskedSnapshot } from "../../../utils/asked-fields";
+import { isConsentAnswer } from "../../../utils/consent";
 import { formatExportValue } from "../../../utils/export-formats";
 
 import { ConsentValue } from "./submission-fields";
@@ -261,7 +262,7 @@ function AnswerRow({
   label,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -282,6 +283,7 @@ export function SubmissionAnswers({
 }): JSX.Element {
   const hidden = new Set(asked.hidden);
   const shown = asked.fields.filter(field => field.type !== "hidden");
+  const orphans = orphanedAnswers(asked, data);
   return (
     <dl className="px-4 sm:px-5">
       {shown.map(field => (
@@ -295,6 +297,41 @@ export function SubmissionAnswers({
           )}
         </AnswerRow>
       ))}
+      {orphans.map(field => (
+        <AnswerRow
+          key={field.name}
+          label={
+            <>
+              <span className="font-mono">{field.name}</span>
+              <span className="block text-xs">No longer on the form</span>
+            </>
+          }
+        >
+          <AnswerValue field={field} value={data[field.name]} />
+        </AnswerRow>
+      ))}
     </dl>
   );
+}
+
+/**
+ * The answers stored under a name the snapshot does not describe. A
+ * submission sent before snapshots existed is described by the form as it is
+ * now, so an answer to a field since removed or renamed has no descriptor:
+ * it is still what the visitor sent, so it shows under its stored name rather
+ * than vanishing. A field the snapshot names, hidden ones among them, never
+ * lands here.
+ */
+function orphanedAnswers(
+  asked: AskedSnapshot,
+  data: Record<string, unknown>
+): AskedField[] {
+  const described = new Set(asked.fields.map(field => field.name));
+  return Object.keys(data)
+    .filter(name => !described.has(name))
+    .map(name => ({
+      name,
+      label: name,
+      type: isConsentAnswer(data[name]) ? "consent" : "text",
+    }));
 }

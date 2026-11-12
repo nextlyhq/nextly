@@ -298,8 +298,7 @@ export function SubmissionsView({
       const params = new URLSearchParams({
         page: String(page),
         limit: String(PAGE_SIZE),
-        sortBy: LIST_SORT.sortBy,
-        sortOrder: LIST_SORT.sortOrder,
+        sort: LIST_SORT,
         where: JSON.stringify(where),
       });
       const res = await fetch(

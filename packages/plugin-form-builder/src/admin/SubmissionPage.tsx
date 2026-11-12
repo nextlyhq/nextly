@@ -12,6 +12,7 @@
  */
 
 import {
+  type DocumentLockGates,
   navigateTo,
   PageFrame,
   PageHeader,
@@ -65,6 +66,7 @@ import {
 import {
   LIST_SORT,
   listWhere,
+  neighbourQueries,
   scopeFromSearch,
   type SubmissionListScope,
   submissionPageAddress,
@@ -94,6 +96,12 @@ export interface SubmissionPageProps {
   entryId?: string;
   collectionSlug?: string;
   initialData?: Partial<SubmissionDocument>;
+  /**
+   * What a colleague's claim on this submission withholds, as the entry page
+   * hands it over. While either is set the page offers no change and sends
+   * none, the automatic Read among them.
+   */
+  documentLock?: DocumentLockGates;
 }
 
 const STATUSES = [
@@ -169,23 +177,21 @@ function useListPlace(
     enabled: submission?.submittedAt != null,
     queryKey: ["form-builder", "submission-place", slug, submission?.id, scope],
     queryFn: async (): Promise<ListPlace> => {
-      const at = submission!.submittedAt!;
-      const base = listWhere(scope);
-      const page = async (where: object, order: "asc" | "desc") =>
+      const around = neighbourQueries(
+        scope,
+        submission!.submittedAt!,
+        submission!.id
+      );
+      const page = async (where: object, sort: string) =>
         readJson<{ items?: Array<{ id: string }>; meta?: { total?: number } }>(
           `/admin/api/collections/${encodeURIComponent(slug)}/entries?${new URLSearchParams(
-            {
-              limit: "1",
-              sortBy: LIST_SORT.sortBy,
-              sortOrder: order,
-              where: JSON.stringify(where),
-            }
+            { limit: "1", sort, where: JSON.stringify(where) }
           )}`
         );
       const [all, newer, older] = await Promise.all([
-        page(base, LIST_SORT.sortOrder),
-        page({ ...base, submittedAt: { greater_than: at } }, "asc"),
-        page({ ...base, submittedAt: { less_than: at } }, "desc"),
+        page(listWhere(scope), LIST_SORT),
+        page(around.newer.where, around.newer.sort),
+        page(around.older.where, around.older.sort),
       ]);
       return {
         index: newer?.meta?.total ?? 0,
@@ -436,6 +442,23 @@ function EditableAnswer({
   );
 }
 
+/**
+ * Whether a draft changes any of the form's answers. Compared by value, so an
+ * answer only re-typed to what it was is no change.
+ */
+function answersChanged(
+  fields: readonly FormField[],
+  stored: Record<string, unknown> | undefined,
+  draft: Record<string, unknown>
+): boolean {
+  const before = stored ?? {};
+  return fields.some(
+    field =>
+      JSON.stringify(before[field.name] ?? null) !==
+      JSON.stringify(draft[field.name] ?? null)
+  );
+}
+
 /** The answers, as asked, and editing them for a person who may. */
 function AnswersBox({
   submission,
@@ -504,11 +527,19 @@ function AnswersBox({
             </Button>
             <Button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                // Saving untouched answers writes nothing: a `data` write
+                // stamps the submission as edited in the admin.
+                if (
+                  !answersChanged(form?.fields ?? [], submission.data, draft)
+                ) {
+                  setEditing(false);
+                  return;
+                }
                 void save({ data: draft })
                   .then(() => setEditing(false))
-                  .catch(() => undefined)
-              }
+                  .catch(() => undefined);
+              }}
             >
               Save answers
             </Button>
@@ -569,6 +600,7 @@ function SidePanel({
   save,
   formId,
   formName,
+  formsSlug,
 }: {
   submission: SubmissionDocument;
   status: string;
@@ -576,6 +608,7 @@ function SidePanel({
   save: Save;
   formId: string | undefined;
   formName: string;
+  formsSlug: string;
 }): JSX.Element {
   const [note, setNote] = useState(submission.notes ?? "");
   const [noteSaved, setNoteSaved] = useState(false);
@@ -665,7 +698,7 @@ function SidePanel({
               {formId ? (
                 <a
                   className="underline decoration-border underline-offset-4 hover:decoration-foreground"
-                  href={`/admin/collections/forms/${encodeURIComponent(formId)}`}
+                  href={`/admin/collections/${encodeURIComponent(formsSlug)}/${encodeURIComponent(formId)}`}
                 >
                   {formName}
                 </a>
@@ -812,8 +845,11 @@ function usePageMoves(
   return { go, confirmDelete, setConfirmDelete, deleteSubmission };
 }
 
-/** What this person may do with submissions; nothing until it is known. */
-function useSubmissionRights(slug: string) {
+/**
+ * What this person may do with this submission: nothing until it is known,
+ * and nothing while a colleague holds it.
+ */
+function useSubmissionRights(slug: string, held: boolean) {
   const { data: has } = useQuery({
     queryKey: ["plugin-form-builder", "me-permissions"],
     queryFn: readPermissions,
@@ -821,8 +857,8 @@ function useSubmissionRights(slug: string) {
   });
   return {
     known: has !== undefined,
-    canUpdate: has?.(`update-${slug}`) === true,
-    canDelete: has?.(`delete-${slug}`) === true,
+    canUpdate: !held && has?.(`update-${slug}`) === true,
+    canDelete: !held && has?.(`delete-${slug}`) === true,
   };
 }
 
@@ -856,38 +892,52 @@ function useSubmissionForm(submission: SubmissionDocument | undefined) {
       return body ? (body.item ?? body) : null;
     },
   });
-  return { formId, form };
+  return { formId, form, formsSlug };
 }
 
-/** Saving and deleting this submission, and what a refusal said. */
-function useSubmissionWrites(
-  slug: string,
-  id: string,
-  submission: SubmissionDocument | undefined
-) {
+/** What a change held by a colleague's claim says. */
+const HELD_MESSAGE =
+  "Someone else is editing this submission. Your change was not saved.";
+
+/**
+ * Saving and deleting this submission, and what a refusal said. Saves run one
+ * at a time, each with the version the one before it left: a note saved on
+ * blur and the status button clicked straight after would otherwise both send
+ * the version the page was read at, and the second be refused as stale. While
+ * a colleague holds the submission every write is refused here, before it is
+ * sent, judged when it would run rather than when it was asked for.
+ */
+function useSubmissionWrites(slug: string, id: string, held: boolean) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const heldNow = useRef(held);
+  heldNow.current = held;
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
   const address = `/admin/api/collections/${encodeURIComponent(slug)}/entries/${encodeURIComponent(id)}`;
+  const key = ["form-builder", "submission", slug, id];
+  const refuseWhileHeld = () => {
+    if (!heldNow.current) return;
+    setError(HELD_MESSAGE);
+    throw new Error(HELD_MESSAGE);
+  };
   const refresh = async () => {
-    await queryClient.invalidateQueries({
-      queryKey: ["form-builder", "submission", slug, id],
-    });
+    await queryClient.invalidateQueries({ queryKey: key });
     void queryClient.invalidateQueries({
       queryKey: ["form-builder", "submission-place", slug],
     });
     void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
   };
-  /** Save a change, with the version it was read at. */
-  const save: Save = async changes => {
+  /** Send a change, with the version the page holds now. */
+  const send: Save = async changes => {
+    refuseWhileHeld();
     setError(null);
+    const rev = queryClient.getQueryData<SubmissionDocument>(key)?._rev;
     const response = await fetch(address, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify(
-        typeof submission?._rev === "string"
-          ? { ...changes, _rev: submission._rev }
-          : changes
+        typeof rev === "string" ? { ...changes, _rev: rev } : changes
       ),
     });
     if (!response.ok) {
@@ -898,8 +948,18 @@ function useSubmissionWrites(
     }
     await refresh();
   };
+  /** Save a change once every change asked for before it has settled. */
+  const save: Save = changes => {
+    const run = queue.current.then(() => send(changes));
+    queue.current = run.catch(() => undefined);
+    return run;
+  };
   /** Delete it, answering whether it went. */
   const remove = async (): Promise<boolean> => {
+    if (heldNow.current) {
+      setError(HELD_MESSAGE);
+      return false;
+    }
     const response = await fetch(address, {
       method: "DELETE",
       credentials: "include",
@@ -967,6 +1027,7 @@ export function SubmissionPage({
   entryId,
   collectionSlug,
   initialData,
+  documentLock,
 }: SubmissionPageProps): JSX.Element {
   const slug = collectionSlug ?? "form-submissions";
   const id = entryId ?? initialData?.id ?? "";
@@ -976,10 +1037,12 @@ export function SubmissionPage({
     id,
     initialData
   );
-  const { formId, form } = useSubmissionForm(submission);
-  const { known, canUpdate, canDelete } = useSubmissionRights(slug);
+  const { formId, form, formsSlug } = useSubmissionForm(submission);
+  const held =
+    documentLock?.readOnly === true || documentLock?.actionsDisabled === true;
+  const { known, canUpdate, canDelete } = useSubmissionRights(slug, held);
   const { data: place } = useListPlace(slug, submission, scope);
-  const { save, remove, error } = useSubmissionWrites(slug, id, submission);
+  const { save, remove, error } = useSubmissionWrites(slug, id, held);
   useReadOnOpen(submission, known, canUpdate, save);
   const { go, confirmDelete, setConfirmDelete, deleteSubmission } =
     usePageMoves(slug, scope, place, remove);
@@ -1031,6 +1094,7 @@ export function SubmissionPage({
             save={save}
             formId={formId}
             formName={formName}
+            formsSlug={formsSlug}
           />
         </div>
       </PageFrame>

@@ -37,8 +37,49 @@ export function listWhere(scope: SubmissionListScope): Record<string, unknown> {
   return where;
 }
 
-/** The list's order: newest first. */
-export const LIST_SORT = { sortBy: "submittedAt", sortOrder: "desc" } as const;
+/**
+ * The list's order: newest first, and among submissions sent at the same
+ * moment, by id. The id makes the order total, so a submission's newer and
+ * older neighbours are always defined even when timestamps tie (imported
+ * rows can share one). It is the tiebreak the entries API adds last anyway,
+ * spelled out so the page's neighbour queries mirror it exactly.
+ */
+export const LIST_SORT = "-submittedAt,id";
+
+/** A query for one end of the list around a submission. */
+export interface NeighbourQuery {
+  where: Record<string, unknown>;
+  sort: string;
+}
+
+/**
+ * The queries that find the submissions just newer and just older than the
+ * one sent at `at` with id `id`, in LIST_SORT's order: each side is a strict
+ * comparison on the timestamp, or the same timestamp and the id on that side.
+ * The newer side is read in reverse, so its first row is the nearest one, and
+ * its total is how many rows come before this submission in the list.
+ */
+export function neighbourQueries(
+  scope: SubmissionListScope,
+  at: string,
+  id: string
+): { newer: NeighbourQuery; older: NeighbourQuery } {
+  const base = listWhere(scope);
+  const side = (time: string, tie: string) => ({
+    ...base,
+    or: [
+      { submittedAt: { [time]: at } },
+      { and: [{ submittedAt: { equals: at } }, { id: { [tie]: id } }] },
+    ],
+  });
+  return {
+    newer: {
+      where: side("greater_than", "less_than"),
+      sort: "submittedAt,-id",
+    },
+    older: { where: side("less_than", "greater_than"), sort: LIST_SORT },
+  };
+}
 
 /** The scope as a submission page's address carries it. */
 function scopeParam(scope: SubmissionListScope): string {
