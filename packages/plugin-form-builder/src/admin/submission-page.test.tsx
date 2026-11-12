@@ -924,6 +924,38 @@ describe("a submission's page, writing", () => {
     expect(unsavedWork.get("forms.submission-answers")).toBe(true);
   });
 
+  it("links the page it was sent from by its path", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      extension: {
+        fields: [],
+        values: { page: "https://acme.test/careers/backend" },
+      },
+    });
+    page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    expect(
+      within(details).getByRole("link", { name: "/careers/backend" })
+    ).toHaveAttribute("href", "https://acme.test/careers/backend");
+  });
+
+  it("links no page that is not a web page", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      extension: { fields: [], values: { page: "javascript:alert(1)" } },
+    });
+    page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    await within(details).findByText("Submitted");
+    expect(within(details).queryByText("Page")).toBeNull();
+  });
+
   it("shows the fields a host added to submissions", async () => {
     server({
       status: "read",
