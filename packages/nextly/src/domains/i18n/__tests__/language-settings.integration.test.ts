@@ -123,11 +123,12 @@ describeEachDialect("the site's languages in Settings", dialect => {
     });
     const registry = current.getService("languageRegistry") as LanguageRegistry;
     const settings = new LanguageSettingsService(current.adapter, registry);
-    const created = (await current.nextly.create({
+    // A create answers `{ message, item }`; the item's id is an unknown value.
+    const created = await current.nextly.create({
       collection: "lsarticles",
       data: { headline: "Hello", views: 3 },
-    })) as { item?: { id: string }; id?: string };
-    const id = created.item?.id ?? created.id ?? "";
+    });
+    const id = String(created.item.id);
 
     const statements = await statementsOf(dialect, () =>
       settings.change({ kind: "add", code: "fr", label: "French" })

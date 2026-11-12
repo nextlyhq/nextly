@@ -838,7 +838,7 @@ function SentFrom({
         target="_blank"
         rel="noopener noreferrer"
         title={address}
-        className="underline decoration-border underline-offset-4 hover:decoration-foreground"
+        className="underline decoration-muted-foreground underline-offset-4 hover:decoration-foreground"
       >
         {new URL(address).pathname}
       </a>
@@ -940,7 +940,7 @@ function SidePanel({
             <Detail label="Form">
               {formId ? (
                 <a
-                  className="underline decoration-border underline-offset-4 hover:decoration-foreground"
+                  className="underline decoration-muted-foreground underline-offset-4 hover:decoration-foreground"
                   href={`/admin/collections/${encodeURIComponent(formsSlug)}/${encodeURIComponent(formId)}`}
                 >
                   {formName}

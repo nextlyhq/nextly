@@ -194,8 +194,11 @@ function fileIds(value: unknown): string[] {
   );
 }
 
+// The underline is drawn in an ink token, not the border's: it is what marks
+// the text as a link, so it must read on every surface the page lands on, and
+// the border token falls far below that in dark.
 const linkClass =
-  "text-foreground underline decoration-border underline-offset-4 hover:decoration-foreground";
+  "text-foreground underline decoration-muted-foreground underline-offset-4 hover:decoration-foreground";
 
 /** An option answer by its label as asked, several joined. */
 function optionLabels(field: AskedField, value: unknown): string {

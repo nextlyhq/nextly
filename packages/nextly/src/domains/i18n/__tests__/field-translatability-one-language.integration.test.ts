@@ -74,11 +74,14 @@ describeEachDialect(
 
     /** Every entry's heading, read through the Direct API, by id. */
     async function headings(): Promise<Record<string, unknown>> {
-      const { items } = (await current.nextly.find({
+      // Read as the Direct API types it: rows of unknown values, keyed by id.
+      const { items } = await current.nextly.find({
         collection: "onelangposts",
         limit: 10,
-      })) as { items: { id: string; heading?: unknown }[] };
-      return Object.fromEntries(items.map(item => [item.id, item.heading]));
+      });
+      return Object.fromEntries(
+        items.map(item => [String(item.id), item.heading])
+      );
     }
 
     async function archived(): Promise<number> {

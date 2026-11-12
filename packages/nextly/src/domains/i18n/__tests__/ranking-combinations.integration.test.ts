@@ -207,12 +207,13 @@ describeEachDialect("the value an entry keeps, case by case", dialect => {
   });
 
   it.each(CASES)("$name", async ({ rows, keeps }) => {
-    const created = (await current.nextly.create({
+    // A create answers `{ message, item }`; the item's id is an unknown value.
+    const created = await current.nextly.create({
       collection: "rcposts",
       locale: "en",
       data: { heading: "seed" },
-    })) as { item: { id: string } };
-    const id = created.item.id;
+    });
+    const id = String(created.item.id);
     await current.adapter.executeQuery(
       `DELETE FROM ${q("dc_rcposts_locales")} WHERE ${q("_parent")} = '${id}'`
     );
