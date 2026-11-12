@@ -24,6 +24,7 @@ import { stripHtmlTags } from "nextly";
 
 import type { AnyFormField } from "../types";
 import { fieldsHiddenByCondition } from "../utils/condition-visibility";
+import { isConsentAnswer } from "../utils/consent";
 import {
   generateZodSchema,
   getValidationErrors,
@@ -179,6 +180,11 @@ function sameValue(left: unknown, right: unknown): boolean {
       left.length === right.length &&
       left.every((value, index) => sameValue(value, right[index]))
     );
+  }
+  // A consent's answer is an object, made afresh each time a payload is
+  // read: the same choice and text are the same answer.
+  if (isConsentAnswer(left) && isConsentAnswer(right)) {
+    return left.agreed === right.agreed && left.text === right.text;
   }
   return false;
 }

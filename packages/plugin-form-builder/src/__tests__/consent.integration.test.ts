@@ -264,6 +264,35 @@ describe.each(getConfiguredTestDialects())("a consent field (%s)", dialect => {
     expect((await answers(id)).privacy).toEqual(before.privacy);
   });
 
+  it("records no answer edit when a spam submission is restored", async () => {
+    const { t, formId } = await boot(dialect);
+    // Stored as spam with a consent given, as a server import keeps it.
+    const created = await t.nextly.create({
+      collection: "form-submissions",
+      data: {
+        form: formId,
+        status: "spam",
+        data: { name: "Ada", privacy: "on" },
+        submittedAt: new Date().toISOString(),
+      },
+    });
+    const id = String(created.item.id);
+
+    await t.nextly.update({
+      collection: "form-submissions",
+      id,
+      data: { status: "new", _overwrite: true },
+    });
+
+    const row = (await t.nextly.findByID({
+      collection: "form-submissions",
+      id,
+    })) as { status: string; editedAt?: unknown; data: { privacy: unknown } };
+    expect(row.status).toBe("new");
+    expect(row.editedAt ?? null).toBeNull();
+    expect(row.data.privacy).toEqual({ agreed: true, text: AGREEMENT });
+  });
+
   it("refuses a form saved with a consent that has no text", async () => {
     const { t, formId } = await boot(dialect);
     const blank = FIELDS.map(field =>
