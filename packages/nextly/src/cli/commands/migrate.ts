@@ -217,6 +217,7 @@ import {
   assertSchemaLockHeld,
   isSchemaLockLost,
   lostLockError,
+  markedForSchemaLock,
 } from "../../domains/schema/pipeline/schema-lock";
 import {
   newestAppliedAppMigration,
@@ -2091,6 +2092,23 @@ function appStepAfter(
 }
 
 /**
+ * One statement of the run's own steps, sent as the file runner sends one: refused once the run
+ * has lost the schema lock (`assertSchemaLockHeld`), and marked with the lock's claim on the
+ * servers (`markedForSchemaLock`), where a run taking over a lapsed lock looks for a statement of
+ * the earlier holder still running. SQLite runs one writer at a time and reads a statement's
+ * first word, so its statements go unmarked.
+ */
+async function executeHoldingSchemaLock(
+  deps: MigrateCoreDeps,
+  statement: string
+): Promise<unknown> {
+  await assertSchemaLockHeld();
+  return (deps.adapter as unknown as DrizzleAdapter).executeQuery(
+    deps.dialect === "sqlite" ? statement : markedForSchemaLock(statement)
+  );
+}
+
+/**
  * Each one-to-one an earlier release left without its uniqueness gets it, judged on the
  * definitions the run's files just left, and refused, creating nothing, while any repeats a value
  * (`makeOneToOnesUnique`). A run `--step` stops short leaves it to one that runs every file; a
@@ -2106,8 +2124,7 @@ async function makeOneToOnesUniqueAfterFiles(
   await makeOneToOnesUnique({
     db: deps.db,
     dialect: deps.dialect,
-    executeQuery: statement =>
-      (deps.adapter as unknown as DrizzleAdapter).executeQuery(statement),
+    executeQuery: statement => executeHoldingSchemaLock(deps, statement),
     logger: deps.logger,
   });
 }

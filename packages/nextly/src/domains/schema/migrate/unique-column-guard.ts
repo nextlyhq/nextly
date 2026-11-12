@@ -721,11 +721,26 @@ export interface AdoptedUniqueIndex {
 
 /**
  * Whether a statement drops `table`, or may drop an index of it: a DROP TABLE naming it, a DROP
- * INDEX naming `index`, MySQL's DROP INDEX on the table, whose index is not read here, MySQL's
+ * INDEX naming `index`, MySQL's DROP INDEX on the table, whose index is not read here, a DROP INDEX
+ * whose names are not read (`dropIndexMayReach`), MySQL's
  * RENAME TABLE, PostgreSQL's ALTER INDEX renaming `index` away (or any one not read here), or an
  * ALTER TABLE on it that drops or renames anything (a column, a constraint, an index), which may
  * take the index with it.
  */
+/**
+ * Whether a DROP INDEX the index-name reading did not match may still drop an index of `table`:
+ * MySQL's, which names the table, when it names this one, and any one whose names are not read
+ * here (a schema-qualified index, say), which may name it.
+ */
+function dropIndexMayReach(
+  statement: string,
+  dialect: SupportedDialect,
+  table: string
+): boolean {
+  if (indexesDroppedBy(statement, dialect) !== undefined) return false;
+  return tablesChangedIn(statement, dialect)?.includes(table) ?? true;
+}
+
 function dropsTableOrIndex(
   statement: string,
   dialect: SupportedDialect,
@@ -738,8 +753,10 @@ function dropsTableOrIndex(
     const renamed = indexesRenamedBy(statement, dialect);
     return renamed === undefined || renamed[0] === index;
   }
+  if (/^\s*DROP\s+INDEX\b/i.test(statement)) {
+    return dropIndexMayReach(statement, dialect, table);
+  }
   const onTable = tablesChangedIn(statement, dialect)?.includes(table) === true;
-  if (/^\s*DROP\s+INDEX\b/i.test(statement)) return onTable;
   // MySQL's RENAME TABLE moves the table, with its indexes, away from the name a later create
   // makes the index on. Its targets are not read here, so any one counts.
   if (/^\s*RENAME\s+TABLE\b/i.test(statement)) return true;

@@ -1006,6 +1006,37 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    // Only PostgreSQL drops an index by its name alone, here qualified by its schema.
+    it.runIf(dialect === "postgresql")(
+      "keeps the create of a unique index an earlier schema-qualified drop takes away, leaving the column unique",
+      async () => {
+        await run([
+          profile("p1", "ada"),
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+        writeFileAs(NAME, [
+          `DROP INDEX ${q("public")}.${q(UNIQUE)}`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+
+        // The data-loss check reads no qualified name either, and asks for consent first.
+        await migrate(undefined, true);
+
+        expect(await personIsUnique()).toBe(true);
+      },
+      120_000
+    );
+
     // Only PostgreSQL renames an index by its own statement.
     it.runIf(dialect === "postgresql")(
       "keeps the create of a unique index whose name an earlier statement renames away, leaving the column unique",
