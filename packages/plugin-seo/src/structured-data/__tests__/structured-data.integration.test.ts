@@ -74,7 +74,7 @@ async function boot(dialect: TestDialect) {
 async function renderedWith(
   t: TestNextly,
   slug: string,
-  title?: string
+  description?: string
 ): Promise<string | undefined> {
   const route = createPublicContentRoute({
     collections: ["posts"],
@@ -84,10 +84,11 @@ async function renderedWith(
     depth: 1,
     render: (_: ContentEntry, context) => context.structuredData,
     // The share image the route's code sets, which the article shows, and a
-    // title, which the route's code sets as it likes: what a person saves is
-    // cleaned of markup, so a value meant to break out comes from code.
+    // description, which the route's code sets as it likes: what a person
+    // saves is cleaned of markup, so a value meant to break out comes from
+    // code.
     buildMetadata: () => ({
-      ...(title === undefined ? {} : { title }),
+      ...(description === undefined ? {} : { description }),
       openGraph: { images: ["/media/cover.jpg"] },
     }),
   });
@@ -134,7 +135,9 @@ describe.each(getConfiguredTestDialects())(
       expect(text).not.toMatch(/<\/script/i);
       expect(nodeOf(text, "BlogPosting")).toMatchObject({
         "@id": "https://example.com/blog/ship-fast#blogPosting",
-        headline: "Ship </script><script>alert(1)</script> fast",
+        // The post's own title, as its heading shows it.
+        headline: "Ship fast",
+        description: "Ship </script><script>alert(1)</script> fast",
         datePublished: "2026-11-10",
         author: {
           "@type": "Person",
@@ -186,7 +189,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(nodeOf(text, "BlogPosting")).toBeUndefined();
       expect(nodeOf(text, "CollectionPage")).toMatchObject({
-        "@id": "https://example.com/blog/changelog",
+        "@id": "https://example.com/blog/changelog#webpage",
         name: "Changelog",
       });
     });

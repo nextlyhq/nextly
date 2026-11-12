@@ -229,7 +229,7 @@ in `optionalDependsOn`.
 | `robots`          | `boolean`                                                        | `true`             | Controls `/robots.txt`                                                                                           |
 | `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
 | `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
-| `structuredData`  | `{ brand, types }`                                               | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
+| `structuredData`  | `{ brand, types, defaultAuthor, breadcrumbs }`                   | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
 | `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
@@ -746,7 +746,9 @@ built from the page's head. The plugin states everything the card reads:
   pattern and structured data name the site the same way; until it is saved, `socialCard.siteName`;
 - the page's **language**: the one the route read it in, or else `socialCard.language`, or else
   the site's default language (English on a site that declares no languages), written as Open
-  Graph writes it (`en-US` becomes `en_US`).
+  Graph writes it, always with a territory (`en-US` becomes `en_US`). A bare language is given the
+  territory it is most often written for: `en` is `en_US`, `de` is `de_DE`, `pt` is `pt_BR`. Set
+  `socialCard.language` (such as `en-GB`) where that is not the site's.
 
 ```ts
 seoPlugin({
@@ -789,58 +791,122 @@ made from, and **Go back to automatic** returns to the page's own picture.
 ## Structured data
 
 Each page served by a route helper also gets structured data: JSON-LD describing the site, the page
-and what the page is about, which search engines read to show details such as an article's author
-and date, or a product's price. It is built from the same answer as the page's head, so its title,
-description, address and image are the head's own. Every address in it is absolute, so it needs the
-site's origin: set `baseUrl`.
+and what the page is about, which search and answer engines read to show details such as an
+article's author and date, a product's price, or a page's place in the site. It is built from the
+same answer as the page's head, so its description, address and image are the head's own. Every
+address in it is absolute, so it needs the site's origin: set `baseUrl`.
 
-A page is described as one linked graph:
+A page is described as one linked graph, each node naming the others by `@id`:
 
-- the **organisation** that owns the site (`structuredData.brand`: its name, logo and official
-  profiles), and the **website**, named by the site name;
-- the **page**, at its canonical address, with a **breadcrumb trail** from the site's home;
-- the page's **subject**, as its type describes it.
+- the **organisation** that owns the site (`<home>#organization`), from the brand facts: its name,
+  other names, logo, description, official profiles, email and phone, contact points, founding date
+  and parent organisation, each where given;
+- the **website** (`<home>#website`), named by the site name, with the brand's other names (which
+  Google reads a site's name from), its description and its language. A page read in no particular
+  language is in the site's default language;
+- the **page** (`<address>#webpage`), named by **its own title** rather than the title its pattern
+  made for search results (`What is Acme?`, not `What is Acme? | Acme Blog`), with its description,
+  share image, language, and the dates it was published and last changed;
+- a **breadcrumb trail** (`<address>#breadcrumb`) from the site's home along the page's address:
+  one step for each part of the address that holds a page, named by that page's title (or the name
+  a page built in code goes by), so a post reads Home › Blog › the post. A part of the address that
+  holds no page gets no step, since a trail leads only through pages a visitor can open;
+- the page's **subject**, as its type describes it (`<address>#<type>`), and, where the page lists
+  entries or answers questions, the list and the questions.
 
-Only types Google still shows a result for are offered:
+The home page is the start of every trail, so it has none; it is named by its whole title, and
+what it describes, such as the site's app, by the brand's name. Every address is spelled as the
+page's canonical is, so the home page, the organisation and the website share one spelling, and a
+site whose addresses end in a slash has its trail's addresses end in one too.
 
-| Type            | Key                   | Details it needs                              |
-| --------------- | --------------------- | --------------------------------------------- |
-| Article         | `article`             | author, date published, image                 |
-| Blog post       | `blogPosting`         | author, date published, image                 |
-| Web page        | `webPage`             | none                                          |
-| Collection page | `collectionPage`      | none                                          |
-| Profile page    | `profilePage`         | person                                        |
-| Software app    | `softwareApplication` | operating system, price, rating, rating count |
-| Product         | `product`             | price, availability                           |
-| Event           | `event`               | start date, location                          |
-| Video           | `videoObject`         | video file, upload date, image                |
-| Review          | `review`              | author, item reviewed, item type, rating      |
-| Local business  | `localBusiness`       | street address, opening hours                 |
+These types are offered. Each says what search engines read from it; some can earn a rich result in
+Google, the rest describe the page without one:
+
+| Type                  | Key                   | Details it needs                         | Rich result in Google                               |
+| --------------------- | --------------------- | ---------------------------------------- | --------------------------------------------------- |
+| Article               | `article`             | author, date published, image            | Yes                                                 |
+| Blog post             | `blogPosting`         | author, date published, image            | Yes                                                 |
+| Technical article     | `techArticle`         | none                                     | Yes                                                 |
+| Web page              | `webPage`             | none                                     | No                                                  |
+| About page            | `aboutPage`           | none                                     | No                                                  |
+| Contact page          | `contactPage`         | none                                     | No                                                  |
+| Collection page       | `collectionPage`      | none                                     | No                                                  |
+| Questions and answers | `faqPage`             | questions and answers                    | No (retired by Google in May 2026)                  |
+| Profile page          | `profilePage`         | person                                   | Yes                                                 |
+| Software app          | `softwareApplication` | none                                     | Only with a price and a rating                      |
+| Source code           | `softwareSourceCode`  | code repository                          | No                                                  |
+| Product               | `product`             | price, availability                      | Yes                                                 |
+| Event                 | `event`               | start date, location                     | Yes                                                 |
+| Video                 | `videoObject`         | video file, upload date, image           | Yes                                                 |
+| Review                | `review`              | author, item reviewed, item type, rating | Yes                                                 |
+| Local business        | `localBusiness`       | street address, opening hours            | Yes                                                 |
+
+What each type states beyond what it needs, where the page has it:
+
+- an **article** of any kind: when it was last changed, its keywords (such as its tags), its
+  section (such as its category), its word count (a field holding one, or else the words of the
+  page's `content` or `body`, rich text included) and its language. Its author is a person with
+  their job title and, where they have a page of their own, that page and an `@id` made from it, so
+  every post by one author names one person;
+- an **About page** is about the organisation, and names its founders (`brand.founders`), each
+  with an `@id` the organisation's `founder` names; a **Contact page** is about the organisation;
+- a **software app** states its category, operating system and image, a price only where the
+  page gives one, and a rating only where the page gives one with its count. Google shows an app as
+  a rich result only with both a price and a rating; without them the app is still described, and
+  no rating is ever made up to earn one;
+- **source code** states its repository (an absolute address), programming language and licence.
 
 The image is the page's share image unless a field is mapped to it. A rating is read out of 5, as
 search engines read one with no scale; a content type rating out of 10 maps `bestRating`, such as
 `{ value: "10" }`, and a rating off its scale is reported missing. An event's location is a group or
-an entry with the venue's name and its address, never text alone. A page with no type chosen is
-an Article when it has an author and a publish date, and a Web page otherwise. A content type
-chooses its pages' type, and a page can choose another in its `seo.structuredDataType`. A page
-hidden from search is offered only Web page and Collection page.
+an entry with the venue's name and its address, never text alone.
+
+A page's type is the first of: the page's own choice (`seo.structuredDataType`), its content type's,
+and an automatic one: the kind its route says it is, a Collection page where its route lists
+entries, an Article where it has an author and a publish date, and a Web page otherwise. A page
+hidden from search is offered only the kinds of page: Web, About, Contact and Collection page.
 
 Each detail is read from the field the content type maps to it, or else from the first field named
-like it (`author`, `publishedAt`, `price`, `startDate` and so on). Structured data states only what the route
+like it (`author`, `publishedAt`, `price`, `startDate`, `tags`, `category` and so on). The date a
+page last changed is read from `dateModified`, `modifiedAt`, `correctedAt`, `revisedAt` or
+`lastReviewed` before the row's own `updatedAt`, which changes with every save; map
+`dateModified` (or `datePublished`) to read another field. Structured data states only what the route
 read for the page, so a relationship names someone only where the route read the entry it holds:
 give a route that shows its author `depth: 1`. The route's own access rules, language and cache
 tags then govern the author as they govern the page, so an unpublished or private author is never
-named. An author with a public address of their own is linked to it. A relationship read at
-`depth: 0` holds only an id, which is not a name, and the problem says the route is the fix.
+named. A relationship read at `depth: 0` holds only an id, which is not a name, and the problem says
+the route is the fix.
 
 ```ts
 seoPlugin({
   collections: ["posts", "events"],
+  singles: ["about", "contact"],
   baseUrl: "https://example.com",
   structuredData: {
-    brand: { name: "Acme", profiles: [{ url: "https://x.com/acme" }] },
+    brand: {
+      name: "Acme",
+      otherNames: ["Acme Inc"],
+      profiles: [{ url: "https://x.com/acme" }],
+      description: "Acme makes rockets for small teams.",
+      email: "hello@example.com",
+      contactPoints: [
+        { contactType: "customer support", email: "help@example.com" },
+      ],
+      foundingDate: "2020",
+      parentOrganization: { name: "Acme Holdings", url: "https://holdings.example.com" },
+      founders: [{ name: "Sara Khan", jobTitle: "Founder", url: "/about" }],
+    },
+    // A post that names no author is credited to the brand.
+    defaultAuthor: "organization",
+    // The step at /blog is named "Blog", whatever its page's title is.
+    breadcrumbs: { names: { "/blog": "Blog" } },
     types: {
-      posts: { type: "blogPosting" },
+      posts: {
+        type: "blogPosting",
+        details: { blogPosting: { dateModified: "correctedAt" } },
+      },
+      "single:about": { type: "aboutPage" },
+      "single:contact": { type: "contactPage" },
       events: {
         type: "event",
         // A field by name, a field in a group, or a value for every page.
@@ -852,10 +918,62 @@ seoPlugin({
 });
 ```
 
+`defaultAuthor` credits an article whose page names no author at all: `"organization"` for the
+brand, or a person such as `{ name: "Editorial team" }`. A page that names an author the route did
+not read is never credited to anyone else. `breadcrumbs.home` names the first step (`"Home"` unless
+given), and `breadcrumbs.names` names the step at an address over the title of the page there. Each
+of these options is checked when the plugin is created, so a mistyped email or date fails at start.
+
 The [SEO settings](#the-seo-settings) take over from these options fact by fact: their first
 production address is the origin, their brand name (else the site's name), other names, logo and
-social profiles describe the organisation, and a content type's choice kept in the settings wins
-over the one given here. Whatever the settings leave empty, the options still answer.
+social profiles describe the organisation, their default description is the brand's description
+where `brand.description` is not given, and a content type's choice kept in the settings wins over
+the one given here. Whatever the settings leave empty, the options still answer.
+
+### What a route tells structured data
+
+Some of what a page shows is not in its document: the posts a blog index lists, the questions a
+page answers, what kind of page it is. A route says so with `structuredDataHints`, which is asked
+only for the page's structured data, never for its head, so a list read there costs nothing in
+`generateMetadata`:
+
+```ts
+import { createPublicContentRoute } from "nextly/runtime";
+
+// Your own read of the questions a page shows.
+declare function questionsShownOn(
+  slug: string
+): Promise<Array<{ question: string; answer: string }>>;
+
+export const route = createPublicContentRoute({
+  collections: ["pages"],
+  render: (entry, context) => context.structuredData ?? "",
+  structuredDataHints: async entry => ({
+    // A kind of page the plugin offers, used where nobody chose one.
+    type: entry.slug === "about" ? "aboutPage" : undefined,
+    // The page's own name, as its heading shows it.
+    name: typeof entry.title === "string" ? entry.title : undefined,
+    // The questions the page shows, as plain text.
+    questions: await questionsShownOn(String(entry.slug)),
+  }),
+});
+```
+
+`items` lists the entries a page shows, in order, each `{ name, url }`: the page is then a
+Collection page with an `ItemList` as its main subject, unless somebody chose another type.
+`questions` lists the questions it answers, each `{ question, answer }`: on a Questions and answers
+page they are its main subject, and on any other page they are described beside it as an
+`FAQPage`. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
+item with its `question` and its `answer` (plain or rich text). Give only what the page shows:
+Google asks that structured data describe content a visitor can see, and the plugin never makes a
+question, a list or a rating up.
+
+A Single route (`createSingleRoute` and its public form) takes `structuredDataHints` the same way,
+called with the Single's document; so does `singlePageStructuredData` in its config. A page built
+in code passes them as an object in `seoStructuredData`'s options
+(`seoStructuredData("/about", { structuredDataHints: { type: "aboutPage" } })`); `seoMetadata`
+ignores them, so the head is the same either way. A page built in code is named by the `name` its
+route gives, or else by its route's own title without the site's name.
 
 **A type missing a detail it needs is left out**, rather than sending search engines a description
 they would reject; the page and the site are still described. `structuredDataProblems(ctx, input)`

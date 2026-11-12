@@ -35,7 +35,11 @@ export { definePlugin } from "nextly";
  * the route, and turn its `PageMetadataAnswer` into the page's head. Its
  * `tags` name what the answer depends on, so a change to them refreshes every
  * page. Boot refuses a second provider, and a provider without the service.
- * Type-only, so importing it pulls no runtime into the plugin.
+ * `PageStructuredDataHints` (with `PageListItem` and `PageQuestion`) is what
+ * a route says about its page for its structured data, handed in as
+ * `input.structuredDataHints`; experimental with the rest of the contract,
+ * and intended to become stable with it. Type-only, so importing it pulls
+ * no runtime into the plugin.
  */
 export type {
   PageMetadataAnswer,
@@ -44,6 +48,9 @@ export type {
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
+  PageListItem,
+  PageQuestion,
+  PageStructuredDataHints,
 } from "nextly/runtime";
 
 /**
