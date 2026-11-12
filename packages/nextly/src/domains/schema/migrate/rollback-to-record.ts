@@ -58,15 +58,13 @@ import {
   type DashboardTables,
 } from "../../versions/entity-teardown";
 import { newestMigrationName } from "../build-schema-version";
-import { isPluginLedgerRow } from "../events/ledger-scope";
-import { standingsByFilename } from "../events/migration-state";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import {
   carriesRegistryMetadata,
   parseSnapshotFile,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
-import { writeRegistryRows } from "../schema-version";
+import { appliedAppMigrations, writeRegistryRows } from "../schema-version";
 
 import {
   pluginsRecordedNotInstalled,
@@ -427,16 +425,6 @@ export interface RollbackBookkeeping {
   restore?: () => Promise<void>;
   /** What a dry run says of it. */
   summary?: string;
-}
-
-/** Each app migration the ledger records applied, by base name. */
-function appliedAppMigrations(rows: readonly SchemaEventRow[]): Set<string> {
-  const applied = new Set<string>();
-  for (const [filename, standing] of standingsByFilename(rows)) {
-    if (isPluginLedgerRow(filename) || standing.state !== "applied") continue;
-    applied.add(baseNameOf(filename));
-  }
-  return applied;
 }
 
 /** A ledger filename's base name, as the record names a point. */

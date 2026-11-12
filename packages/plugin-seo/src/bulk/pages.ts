@@ -6,17 +6,24 @@
  * text and an import's "same as automatic" never disagree with the page.
  *
  * The automatic values are read with no share image looked up, since
- * neither the table nor the comparison needs one, and with the address
- * record read once for every page of a read rather than once a page.
+ * neither the table nor the comparison needs one, with what each page's
+ * route last supplied in code (`route-values`), so they are what the page is
+ * served, and with the address record read once for every page of a read
+ * rather than once a page.
+ *
+ * A content type is named by its key: a collection's slug, or
+ * `single:<slug>` for a Single, whose one document is its one page.
  *
  * @module bulk/pages
  */
 import {
   humanizeFieldName,
+  NextlyError,
   publicAddressOf,
   resolvedCollectionDraftSplit,
   resolvedCollectionView,
   type PageMetadataInput,
+  type PageMetadataValues,
   type PluginContext,
   type ServiceOpts,
 } from "@nextlyhq/plugin-sdk";
@@ -24,11 +31,20 @@ import {
 import { withAddressHolders } from "../address-record/participant";
 import { idText } from "../import/records";
 import { isRecord, textOf } from "../plain-values";
+import { pageTypeOf } from "../problems/page-types";
 import { resolveOrder, type Levels } from "../resolver/order";
 import { levelsOf, type SiteRules } from "../resolver/page-levels";
+import { readRouteValues, routeValuesKey } from "../route-values/store";
 import { TITLE_FIELDS } from "../settings/patterns";
 import { mediaReadFor } from "../tab/route";
 import { SEO_GROUP, withoutTyped } from "../tab/typed";
+
+import {
+  readSingle,
+  singleDeclaration,
+  singleKeepsDrafts,
+  type SingleAccess,
+} from "./singles";
 
 /** One page as the bulk edit screen and the import read it. */
 export interface ReadPage {
@@ -45,8 +61,11 @@ export interface ReadPage {
   document: Record<string, unknown>;
   /** Its `seo` group's values, or none. */
   seo: Record<string, unknown>;
-  /** Its title and description without anything typed. */
-  auto: { title?: string; description?: string };
+  /**
+   * Its title and description without anything typed, and whether its
+   * route's code hides it from search.
+   */
+  auto: { title?: string; description?: string; hiddenByCode?: true };
   /**
    * Every level of the order for the page with nothing typed, which the
    * page's answer for any typed values is worked out over.
@@ -58,6 +77,11 @@ export interface ReadPage {
 export interface PageReadOptions {
   /** Who the read is for: their access decides which pages are read. */
   as: ServiceOpts;
+  /**
+   * The same person as a Single's read takes them, where a Single is read:
+   * through the Direct API, which names them by their identity.
+   */
+  singleAs?: SingleAccess;
   /** The language the pages are read in, where the site has several. */
   locale?: string;
   rules: SiteRules;
@@ -66,8 +90,11 @@ export interface PageReadOptions {
 /** The type's declaration in the app's configuration, where it is there. */
 function declarationOf(
   ctx: PluginContext,
-  slug: string
+  key: string
 ): Record<string, unknown> | undefined {
+  const type = pageTypeOf(key);
+  if (type.kind === "single") return singleDeclaration(ctx, type.slug);
+  const slug = type.slug;
   const declared: readonly unknown[] = ctx.config.collections ?? [];
   return declared.find(
     (entity): entity is Record<string, unknown> =>
@@ -89,31 +116,48 @@ export function pageLabel(
   slug: string,
   document: Readonly<Record<string, unknown>>
 ): string {
-  return labelOfPage(document, titleFieldOf(declarationOf(ctx, slug)));
+  return labelOfPage(ctx, slug, document);
 }
 
-/** A page's own name: its type's title field, a usual one, else its id. */
+/**
+ * A page's own name: its type's title field, a usual one, else a Single's
+ * own name, else its id.
+ */
 function labelOfPage(
-  document: Readonly<Record<string, unknown>>,
-  titleField: string | undefined
+  ctx: PluginContext,
+  key: string,
+  document: Readonly<Record<string, unknown>>
 ): string {
+  const titleField = titleFieldOf(declarationOf(ctx, key));
   const named = [titleField, ...TITLE_FIELDS]
     .filter((name): name is string => name !== undefined)
     .map(name => textOf(document[name]))
     .find(value => value !== undefined);
-  return named ?? idText(document.id) ?? "";
+  if (named !== undefined) return named;
+  if (pageTypeOf(key).kind === "single") return typeNamesOf(ctx, key).singular;
+  return idText(document.id) ?? "";
 }
 
-/** A type's names for many pages and for one. */
+/**
+ * A type's names for many pages and for one. A Single is one page, so both
+ * are its own name, as it declares it (`label`, or `label.singular`).
+ */
 export function typeNamesOf(
   ctx: PluginContext,
-  slug: string
+  key: string
 ): { label: string; singular: string } {
-  const declaration = declarationOf(ctx, slug);
+  const declaration = declarationOf(ctx, key);
+  const type = pageTypeOf(key);
+  const readable = humanizeFieldName(type.slug);
+  if (type.kind === "single") {
+    const named = declaration?.label;
+    const name =
+      (isRecord(named) ? textOf(named.singular) : textOf(named)) ?? readable;
+    return { label: name, singular: name };
+  }
   const labels = isRecord(declaration?.labels) ? declaration.labels : {};
   const plural = textOf(labels.plural) ?? textOf(declaration?.label);
   const singular = textOf(labels.singular);
-  const readable = humanizeFieldName(slug);
   return {
     label: plural ?? singular ?? readable,
     singular: singular ?? plural ?? readable,
@@ -127,25 +171,23 @@ export function typeNamesOf(
  */
 export async function keepsDrafts(
   ctx: PluginContext,
-  slug: string
+  key: string
 ): Promise<boolean> {
-  const record = await ctx.services.collections.getCollection(slug, {});
+  const type = pageTypeOf(key);
+  if (type.kind === "single") return singleKeepsDrafts(ctx, type.slug);
+  const record = await ctx.services.collections.getCollection(type.slug, {});
   return (await resolvedCollectionDraftSplit(resolvedCollectionView(record)))
     .eligible;
 }
 
 /** The page's address, as its type forms it, or none. */
 async function pathOf(
-  slug: string,
+  key: string,
   document: Readonly<Record<string, unknown>>,
   locale: string | undefined
 ): Promise<string | undefined> {
   try {
-    const address = await publicAddressOf(
-      { kind: "collection", slug },
-      document,
-      locale
-    );
+    const address = await publicAddressOf(pageTypeOf(key), document, locale);
     return address.status === "resolved" ? address.path : undefined;
   } catch {
     // A type the address rules cannot read has no address to show; the
@@ -154,17 +196,26 @@ async function pathOf(
   }
 }
 
-/** A page's levels with nothing typed, and its title and description then. */
+/**
+ * A page's levels with nothing typed, and its title and description then:
+ * with `code`, what its route last supplied, at that level.
+ */
 async function automaticOf(
   ctx: PluginContext,
-  slug: string,
+  key: string,
   document: Record<string, unknown>,
-  options: PageReadOptions
+  options: PageReadOptions,
+  code: PageMetadataValues
 ): Promise<Pick<ReadPage, "auto" | "levels">> {
+  const type = pageTypeOf(key);
+  const page = withoutTyped(document);
   const input: PageMetadataInput = {
     ...(options.locale === undefined ? {} : { locale: options.locale }),
-    source: { kind: "entry", collection: slug, entry: withoutTyped(document) },
-    code: {},
+    source:
+      type.kind === "single"
+        ? { kind: "single", slug: type.slug, document: page }
+        : { kind: "entry", collection: type.slug, entry: page },
+    code,
     derived: {},
   };
   // No image is needed, so none is looked up.
@@ -177,6 +228,7 @@ async function automaticOf(
       ...(answer.description === undefined
         ? {}
         : { description: answer.description.value }),
+      ...(answer.robots.from === "code" ? { hiddenByCode: true } : {}),
     },
   };
 }
@@ -188,13 +240,25 @@ async function pagesOf(
   entries: readonly unknown[],
   options: PageReadOptions
 ): Promise<ReadPage[]> {
-  const titleField = titleFieldOf(declarationOf(ctx, slug));
   const documents = entries.filter(isRecord);
   const paths = await Promise.all(
     documents.map(document => pathOf(slug, document, options.locale))
   );
   const language =
     options.locale ?? (await ctx.publicAddresses.defaultLanguage());
+  // What each page's route last supplied in code, one read for them all.
+  const supplied = await readRouteValues(
+    ctx,
+    documents.map(document => ({
+      type: slug,
+      id: String(document.id),
+      language,
+    }))
+  );
+  const codeOf = (document: Record<string, unknown>) =>
+    supplied.get(
+      routeValuesKey({ type: slug, id: String(document.id), language })
+    ) ?? {};
   const known = paths.filter((path): path is string => path !== undefined);
   return withAddressHolders(ctx, language, known, async () => {
     const pages: ReadPage[] = [];
@@ -205,16 +269,28 @@ async function pagesOf(
       pages.push({
         type: slug,
         id: String(document.id),
-        label: labelOfPage(document, titleField),
+        label: labelOfPage(ctx, slug, document),
         ...(path === undefined ? {} : { path }),
         ...(slugValue === undefined ? {} : { slug: slugValue }),
         ...(typeof rev === "string" ? { rev } : {}),
         document,
         seo: isRecord(document[SEO_GROUP]) ? { ...document[SEO_GROUP] } : {},
-        ...(await automaticOf(ctx, slug, document, options)),
+        ...(await automaticOf(ctx, slug, document, options, codeOf(document))),
       });
     }
     return pages;
+  });
+}
+
+/**
+ * Who a Single is read as: the person the options name. A read of a Single
+ * with no such person is refused rather than made as the system.
+ */
+function singleAsOf(options: PageReadOptions): SingleAccess {
+  if (options.singleAs !== undefined) return options.singleAs;
+  if (options.as.as === "system") return { overrideAccess: true };
+  throw NextlyError.internal({
+    logContext: { reason: "seo-bulk-single-reader-missing" },
   });
 }
 
@@ -230,6 +306,25 @@ export async function readPages(
   slug: string,
   options: PageReadOptions & { page: number; limit: number }
 ): Promise<{ pages: ReadPage[]; total: number }> {
+  const type = pageTypeOf(slug);
+  if (type.kind === "single") {
+    // A Single's one document is its one page, on the first page of a read.
+    const document = await readSingle(
+      type.slug,
+      singleAsOf(options),
+      options.locale
+    );
+    const entries = document === undefined ? [] : [document];
+    return {
+      pages: await pagesOf(
+        ctx,
+        slug,
+        options.page === 1 ? entries : [],
+        options
+      ),
+      total: entries.length,
+    };
+  }
   const result = await ctx.services.collections.listEntries(
     slug,
     {

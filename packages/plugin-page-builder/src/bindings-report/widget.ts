@@ -24,6 +24,12 @@ import { BINDINGS_TO_FIX_ADMIN_PATH } from "./contract";
 /** The permission the card, the page and the route ask for. */
 export const EDIT_PAGES_PERMISSION = "update-pages";
 
+/**
+ * The id of the report's Needs your attention line, which the Page Builder's
+ * panel reads its "Bindings to fix" badge from.
+ */
+export const BINDINGS_TO_FIX_ATTENTION_ID = "page-builder/bindings-to-fix";
+
 /** How many broken bindings the person a card is loaded for may see. */
 export type VisibleBindings = (
   user: PluginRouteIdentity["user"]
@@ -38,7 +44,7 @@ export function bindingsToFixAttention(
   visible: VisibleBindings
 ): AttentionItem {
   return defineAttentionItem({
-    id: "page-builder/bindings-to-fix",
+    id: BINDINGS_TO_FIX_ATTENTION_ID,
     label: "Bindings to fix",
     reason: "Bindings whose field or block changed after they were saved",
     permission: EDIT_PAGES_PERMISSION,

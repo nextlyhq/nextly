@@ -91,6 +91,8 @@ const memo = defineWorkflow({
   ],
 });
 const drafts = { status: true, versions: { drafts: true } } as const;
+/** This file's own table prefix, so its tables are never another file's; the slugs are unchanged. */
+const TABLE_PREFIX = "wst_";
 
 let t: TestNextly | undefined;
 
@@ -111,6 +113,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: "posts",
+        dbName: `${TABLE_PREFIX}posts`,
         localized: true,
         ...drafts,
         workflow: desk,
@@ -118,12 +121,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineCollection({
         slug: "pages",
+        dbName: `${TABLE_PREFIX}pages`,
         ...drafts,
         workflow: desk,
         fields: [text({ name: "title" })],
       }),
       defineCollection({
         slug: "notes",
+        dbName: `${TABLE_PREFIX}notes`,
         ...drafts,
         workflow: memo,
         fields: [text({ name: "title" })],
@@ -132,12 +137,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     singles: [
       defineSingle({
         slug: "home",
+        dbName: `${TABLE_PREFIX}home`,
         ...drafts,
         workflow: desk,
         fields: [text({ name: "headline" })],
       }),
       defineSingle({
         slug: "about",
+        dbName: `${TABLE_PREFIX}about`,
         ...drafts,
         workflow: memo,
         fields: [text({ name: "headline" })],

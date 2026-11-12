@@ -75,6 +75,8 @@ export interface BulkRow {
   rev?: string;
   /** Whether the reader may change this page's SEO; shown read-only if not. */
   editable: boolean;
+  /** The page's route hides it from search in its own code. */
+  hiddenByCode?: true;
 }
 
 /** What the rows route answers. */
