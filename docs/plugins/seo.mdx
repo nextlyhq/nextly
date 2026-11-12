@@ -201,10 +201,9 @@ the plugin's `POST /resolve` route for the document as it is typed. The route an
 anyone who may read that collection or Single, a reader shown the page read-only too.
 What a page's route sets in its own code (the title, description and social values its
 `buildMetadata` returns, and whether it hides the page) is recorded each time the page's head
-is worked out, and the tab shows it marked **Set in code**, "by this page's route"; a page its
-route hides says **Hidden from search by the page's code**. Until the route has answered once
-after it changed, for example before the first visit to a page after a deploy, the tab shows
-what it last recorded. A later page of a list (`/blog/page/2`) is that page's own, and is
+is worked out, and the tab shows it marked **Set in code**, "by this page's route". Until the
+route has answered once after it changed, for example before the first visit to a page after a
+deploy, the tab shows what it last recorded. A later page of a list (`/blog/page/2`) is that page's own, and is
 not recorded as the list's. What a [Page Builder design](#in-the-page-builder) sets is
 shown too, where the Page Builder is installed: "from this page's template".
 
@@ -1317,8 +1316,7 @@ With no production address set, the screen asks for one and checks nothing.
 The **Bulk edit** screen, under SEO in the admin, shows the title and description of every page
 of one content type in one table. Each Single SEO is added to is a type of its own, with its one
 page. A cell left empty shows, in grey, what the page uses automatically: what its route last set
-in code, else the type's title pattern or its own content; typing in it sets the page's own. A
-page whose route hides it from search says so under its name.
+in code, else the type's title pattern or its own content; typing in it sets the page's own.
 **Show** narrows the table to the pages with something typed, or to those wholly automatic. Each
 cell counts its characters against what Google shows: about 60 for a title, 160 for a description.
 
