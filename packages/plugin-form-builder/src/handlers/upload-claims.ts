@@ -20,7 +20,9 @@
  * job) is trusted, as it was before uploads were recorded: nothing it names
  * is refused, and an issued upload it names for the same form and field that
  * no submission has claimed is claimed for it, so the file is kept with the
- * submission and deleted with it.
+ * submission and deleted with it. One it names that another submission
+ * already holds is recorded again, as this submission's too: a file stays
+ * while any submission holding it is left.
  *
  * Deleting a submission releases its uploads in the deleting transaction,
  * and deleting a form releases the uploads no submission claimed: a released
@@ -163,18 +165,53 @@ async function fileFieldsInTransaction(
   }
 }
 
-/** Whether `upload` may be claimed for `field` under `terms`. */
-function claimable(
-  upload: UploadRow | undefined,
-  terms: ClaimTerms,
-  field: string
-): upload is UploadRow {
-  if (!upload || upload.releasedAt) return false;
-  if (upload.form !== terms.formId || upload.field !== field) return false;
-  return !upload.submission || upload.submission === terms.submissionId;
+/** Whether an upload record still counts: not released for deletion. */
+function live(upload: UploadRow): boolean {
+  return !upload.releasedAt;
 }
 
-/** Claim the upload of `mediaId` for the submission, or refuse it. */
+/** Whether `upload` was issued for `field` of the form and nobody holds it. */
+function claimable(
+  upload: UploadRow,
+  terms: ClaimTerms,
+  field: string
+): boolean {
+  return (
+    live(upload) &&
+    !upload.submission &&
+    upload.form === terms.formId &&
+    upload.field === field
+  );
+}
+
+/**
+ * Whether the submission already holds `upload`: a request write only for
+ * the field it names, a trusted one however it came to hold it.
+ */
+function heldBy(upload: UploadRow, terms: ClaimTerms, field: string): boolean {
+  if (!live(upload) || upload.submission !== terms.submissionId) return false;
+  return (
+    !terms.strict || (upload.form === terms.formId && upload.field === field)
+  );
+}
+
+/** The refusal of a file answer naming what it may not. */
+function notClaimable(field: string, mediaId: string, terms: ClaimTerms) {
+  return NextlyError.validation({
+    errors: [{ path: field, code: "INVALID", message: UPLOAD_NOT_CLAIMABLE }],
+    logContext: {
+      mediaId,
+      formId: terms.formId,
+      reason: "upload-not-claimable",
+    },
+  });
+}
+
+/**
+ * Hold the upload of `mediaId` for the submission: claim the record the
+ * route issued, refuse a request write anything else, and record a trusted
+ * write as one more holder of a file another submission holds.
+ */
 async function claimOne(
   deps: ClaimDeps,
   write: InTransactionContext,
@@ -183,38 +220,47 @@ async function claimOne(
   field: string,
   mediaId: string
 ): Promise<void> {
-  // For update: a second submission naming this upload waits here until
-  // this one commits or rolls back, then reads what it left.
+  // For update: a second submission naming this upload, and a deletion
+  // releasing it, wait here until this one commits or rolls back, then
+  // read what it left.
   const { data } = await deps.own.listEntriesInTransaction(
     write.transaction,
     uploadsSlug,
     {
       where: { media: { equals: mediaId } },
-      pagination: { limit: 1 },
+      pagination: { limit: DELETE_PAGE },
       depth: 0,
     },
     { lock: "update" }
   );
-  const upload = data[0] as UploadRow | undefined;
-  if (!claimable(upload, terms, field)) {
-    if (!terms.strict) return;
-    throw NextlyError.validation({
-      errors: [{ path: field, code: "INVALID", message: UPLOAD_NOT_CLAIMABLE }],
-      logContext: {
-        mediaId,
-        formId: terms.formId,
-        reason: "upload-not-claimable",
-      },
-    });
+  const uploads = data as UploadRow[];
+  if (uploads.some(upload => heldBy(upload, terms, field))) return;
+  const issued = uploads.find(upload => claimable(upload, terms, field));
+  if (issued) {
+    await deps.collections.updateEntryInTransaction(
+      write.transaction,
+      uploadsSlug,
+      String(issued.id),
+      // Replaces what is stored: the row was just read for update.
+      { submission: terms.submissionId, _overwrite: true }
+    );
+    return;
   }
-  if (upload.submission === terms.submissionId) return;
-  await deps.collections.updateEntryInTransaction(
-    write.transaction,
-    uploadsSlug,
-    String(upload.id),
-    // Replaces what is stored: the row was just read for update.
-    { submission: terms.submissionId, _overwrite: true }
-  );
+  if (terms.strict) throw notClaimable(field, mediaId, terms);
+  // Trusted, naming a file another submission holds: recorded as this
+  // submission's too, so deleting either keeps it while the other names it.
+  if (uploads.some(live)) {
+    await deps.collections.createEntryInTransaction(
+      write.transaction,
+      uploadsSlug,
+      {
+        media: mediaId,
+        form: terms.formId,
+        field,
+        submission: terms.submissionId,
+      }
+    );
+  }
 }
 
 /** The ids `field` names now that it did not name before this write. */

@@ -9,8 +9,9 @@
  * them in its own transaction; an update keeps the ids a submission already
  * holds; a write no request produced is trusted. Deleting a submission (by a
  * person, with its form, or by the nightly pass) deletes the files it held
- * once the deletion commits, unless the site uses one, and the nightly pass
- * deletes the uploads no submission claimed within a day.
+ * once the deletion commits, unless the site uses one or another submission
+ * still names it, and the nightly pass deletes the uploads no submission
+ * claimed within a day.
  */
 import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 import {
@@ -543,6 +544,40 @@ describe.each(getConfiguredTestDialects())(
           releasedAt: expect.anything(),
         }),
       ]);
+    });
+
+    it("keeps a file while another submission a trusted write stored still names it", async () => {
+      const { t, applyId, uploaded, submit, mediaExists, uploads } =
+        await boot(dialect);
+      const cv = await uploaded("apply", "cv");
+      const first = String(
+        (await submit("apply", { name: "Ada", cv })).body.submissionId
+      );
+      // Server code stores a second submission naming the same file.
+      const second = String(
+        (
+          await t.nextly.create({
+            collection: "form-submissions",
+            data: {
+              form: applyId,
+              data: { name: "Copy of Ada", cv },
+              status: "new",
+              submittedAt: new Date(),
+            },
+          })
+        ).item.id
+      );
+
+      await t.nextly.delete({ collection: "form-submissions", id: first });
+
+      expect(await mediaExists(cv)).toBe(true);
+      expect((await uploads()).map(row => row.submission)).toEqual([second]);
+
+      // The last submission naming it goes, and the file with it.
+      await t.nextly.delete({ collection: "form-submissions", id: second });
+
+      expect(await mediaExists(cv)).toBe(false);
+      expect(await uploads()).toEqual([]);
     });
 
     it("deletes the files of a form's submissions, and its unclaimed uploads, with the form", async () => {

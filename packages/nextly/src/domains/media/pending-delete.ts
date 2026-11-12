@@ -509,6 +509,19 @@ export class PendingMediaDeletes {
   ): Promise<boolean> {
     const taken = await tx.delete(META_TABLE, this.dueMark(mediaId, due));
     if (taken === 0) return false;
+    await this.recordRemoval(tx, mediaId, row);
+    return true;
+  }
+
+  /**
+   * Record, on `tx`, the row's files as left to remove: the record the
+   * removal works from, and that stays until every file is gone.
+   */
+  private async recordRemoval(
+    tx: TransactionContext,
+    mediaId: string,
+    row: MediaFilesRecord
+  ): Promise<void> {
     const files: MediaFilesRecord = {
       filename: row.filename,
       url: row.url,
@@ -523,7 +536,45 @@ export class PendingMediaDeletes {
       value: JSON.stringify({ files }),
       updated_at: this.now(),
     });
-    return true;
+  }
+
+  /**
+   * Delete an item now, with no Undo window, and remove its files durably.
+   * In the delete's own transaction, under the item's row lock, its files
+   * are recorded as left to remove, any standing Undo mark is taken (as an
+   * ordinary delete takes it), and the finalising job is queued for when a
+   * window would have ended. Once the delete commits its files are removed
+   * and the record with them. A file storage cannot remove now keeps the
+   * record, and the job, retried with backoff, and then the library's reads
+   * remove it once it can be, so a storage failure never leaves a file
+   * nothing will try again. Throws not-found for an item already gone.
+   */
+  async deleteNow(mediaId: string, actor?: RequestActor): Promise<void> {
+    await this.deps.deleteItem(mediaId, actor, async (tx, row) => {
+      await tx.delete(META_TABLE, {
+        and: [{ column: "key", op: "=", value: pendingDeleteKey(mediaId) }],
+      });
+      await this.recordRemoval(tx, mediaId, row);
+      const now = this.now();
+      await this.deps.schedule?.(tx, {
+        ids: [mediaId],
+        runAt: new Date(now.getTime() + this.windowMs),
+        now,
+      });
+      return true;
+    });
+    try {
+      await this.finishRemovals([mediaId]);
+    } catch (error) {
+      // The delete has committed: what is left is the job's to finish.
+      this.deps.logger?.warn({
+        kind: "media-delete-not-finished",
+        message:
+          "A deleted media item's files could not be removed yet; they will be tried again.",
+        mediaId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

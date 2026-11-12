@@ -478,32 +478,49 @@ The file is stored in the media library as the plugin, and is judged there as ev
 
 The plugin records each upload, and a submission's file answer may only name uploads made through this route for the same form and field that no other submission has claimed. Anything else, such as another form's upload, an upload already part of another submission, or the id of a file the site uses, refuses the submission with a validation error on that field ("This file was not uploaded for this field. Please upload it again."). This holds for a visitor submitting and for staff writing through the API. An edit keeps the files a submission already holds: an update may send a field's stored ids back unchanged. A submission flagged as spam is stored without the refusal, as it is stored without validation.
 
-A write no request produced (the Direct API from your own server code, an import, a job) is trusted, as it was before uploads were recorded: nothing it names is refused, and an upload it names for the same form and field that no submission has claimed is claimed for it, so the file stays with that submission.
+A write no request produced (the Direct API from your own server code, an import, a job) is trusted, as it was before uploads were recorded: nothing it names is refused, and an upload it names for the same form and field that no submission has claimed is claimed for it, so the file stays with that submission. An upload it names that another submission already holds is recorded as this submission's too, so the file stays while either of them names it.
 
-Deleting a submission deletes the files it holds, whichever way it is deleted: one at a time, in bulk, by the nightly pass, or with its form. The file is deleted once the deletion has committed, and only if nothing else uses it (a document's field, an avatar, a logo); a file in use is kept, and checked again each night. An upload no submission claims within a day is deleted by the nightly pass. A file the submission names without holding it (one a trusted write named that was not uploaded through the route, or was already another submission's, and any file a submission stored before uploads were recorded names) is not deleted with it.
+Deleting a submission deletes the files it holds, whichever way it is deleted: one at a time, in bulk, by the nightly pass, or with its form. The file is deleted once the deletion has committed, and only if no other submission holds it and nothing else uses it (a document's field, an avatar, a logo); a file in use is kept, and checked again each night. Its stored bytes are removed durably: a storage error is retried by the jobs queue until they are gone. An upload no submission claims within a day is deleted by the nightly pass. A file the submission names without holding it (one a trusted write named that was not uploaded through the route, and any file a submission stored before uploads were recorded names) is not deleted with it.
 
 The plugin ships no front-end form of its own, so your site's form does the upload. For example:
 
 ```typescript
+/** Upload one file for `field` of the form at `slug`; answers its media id. */
+async function uploadFile(slug: string, field: string, file: File) {
+  const body = new FormData();
+  body.append("field", field);
+  body.append("file", file);
+  const res = await fetch(`/admin/api/forms/${slug}/upload`, {
+    method: "POST",
+    body,
+  });
+  const json = (await res.json()) as {
+    mediaId?: string;
+    error?: { message: string };
+  };
+  if (!res.ok || !json.mediaId) throw new Error(json.error?.message);
+  return json.mediaId;
+}
+
 async function uploadThenSubmit(form: HTMLFormElement, slug: string) {
+  const values = new FormData(form);
   const answers: Record<string, unknown> = {};
-  for (const [name, value] of new FormData(form)) {
-    if (!(value instanceof File)) {
-      answers[name] = value;
+  for (const name of new Set(values.keys())) {
+    const input = form.elements.namedItem(name);
+    if (!(input instanceof HTMLInputElement && input.type === "file")) {
+      answers[name] = values.get(name);
       continue;
     }
-    if (value.size === 0) continue;
-    const body = new FormData();
-    body.append("field", name);
-    body.append("file", value);
-    const res = await fetch(`/admin/api/forms/${slug}/upload`, {
-      method: "POST",
-      body,
-    });
-    if (!res.ok) throw new Error((await res.json()).error.message);
-    const { mediaId } = (await res.json()) as { mediaId: string };
-    // A field with `multiple` answers with a list of ids.
-    answers[name] = mediaId;
+    const ids: string[] = [];
+    for (const file of values.getAll(name)) {
+      if (file instanceof File && file.size > 0) {
+        ids.push(await uploadFile(slug, name, file));
+      }
+    }
+    // A field with `multiple` answers with a list of ids, a single-file
+    // field with one id; an empty one is left out.
+    if (input.multiple) answers[name] = ids;
+    else if (ids[0] !== undefined) answers[name] = ids[0];
   }
   await fetch(`/admin/api/forms/${slug}/submit`, {
     method: "POST",

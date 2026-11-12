@@ -32,7 +32,11 @@ import {
 
 import { normalizeFormSettings } from "../utils/form-settings";
 
-import { sweepUploads, type UploadCleanupDeps } from "./upload-cleanup";
+import {
+  sweepUploads,
+  type UploadCleanupDeps,
+  type UploadSweepCursor,
+} from "./upload-cleanup";
 
 /** The retention job's slug. */
 export const RETENTION_JOB = "form-builder:retention";
@@ -92,24 +96,33 @@ function pastDeadline(deadline: Date): boolean {
 
 /**
  * Where a run carries on from: past the spam, past the forms already done,
- * by id, and past every form. Handed to the continuation, so a run that
- * stops partway does not spend the next one re-reading what it finished.
+ * by id, past every form, and how far through the uploads' sweep. Handed to
+ * the continuation, so a run that stops partway does not spend the next one
+ * re-reading what it finished.
  */
-export interface RetentionCursor {
+export interface RetentionCursor extends UploadSweepCursor {
   spamDone?: boolean;
   afterForm?: string;
   formsDone?: boolean;
 }
 
+/** The cursor's yes-or-no parts, and its by-id parts. */
+const CURSOR_FLAGS = ["spamDone", "formsDone", "releasedDone"] as const;
+const CURSOR_IDS = ["afterForm", "afterUpload"] as const;
+
 /** A continuation's cursor, read from its job input; none starts afresh. */
 export function retentionCursorOf(input: unknown): RetentionCursor {
   if (!input || typeof input !== "object") return {};
-  const { spamDone, afterForm, formsDone } = input as Record<string, unknown>;
-  return {
-    ...(spamDone === true ? { spamDone } : {}),
-    ...(typeof afterForm === "string" ? { afterForm } : {}),
-    ...(formsDone === true ? { formsDone } : {}),
-  };
+  const raw = input as Record<string, unknown>;
+  const cursor: RetentionCursor = {};
+  for (const flag of CURSOR_FLAGS) {
+    if (raw[flag] === true) cursor[flag] = true;
+  }
+  for (const key of CURSOR_IDS) {
+    const value = raw[key];
+    if (typeof value === "string") cursor[key] = value;
+  }
+  return cursor;
 }
 
 /**
@@ -139,10 +152,10 @@ export async function runRetention(
       return continueFrom(deps, { spamDone: true, ...stoppedAt });
     }
   }
-  if (deps.uploads && !(await sweepUploads(deps.uploads, now, deadline))) {
-    return continueFrom(deps, { spamDone: true, formsDone: true });
-  }
-  return "done";
+  if (!deps.uploads) return "done";
+  const swept = await sweepUploads(deps.uploads, now, deadline, cursor);
+  if (swept === "done") return "done";
+  return continueFrom(deps, { spamDone: true, formsDone: true, ...swept });
 }
 
 /** Queue the continuation, with where this run stopped. */

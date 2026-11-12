@@ -13,10 +13,16 @@
  * file in use is kept, with its record, and asked about again on the next
  * nightly pass, so it goes once nothing uses it.
  *
+ * The file goes through `ctx.services.media.delete`, which records the
+ * item's stored files as left to remove in the delete's own transaction and
+ * has core's jobs queue remove them until they are gone. So once it returns
+ * the bytes are core's to finish, even when storage refused them this time,
+ * and the record here can go.
+ *
  * Every step can run twice: a file or record already gone is what the step
- * wanted. A deletion that could not finish (a storage error, a crash between
+ * wanted. A deletion that could not finish (a database error, a crash between
  * the commit and the delete) leaves the record released, and the nightly
- * retention pass finishes it.
+ * retention pass finishes it, carrying on from where its last run stopped.
  *
  * @module handlers/upload-cleanup
  */
@@ -90,9 +96,11 @@ async function mediaPresent(
 }
 
 /**
- * Free one released upload: delete its file unless something else holds or
- * uses it, then its record. A file in use keeps its record, for the next
- * pass. Answers whether the record is gone.
+ * Free one released upload: delete its file unless another record holds it
+ * or something else uses it, then its record. A file in use keeps its
+ * record, for the next pass. Answers whether the record is gone. Its stored
+ * bytes are removed durably by the media delete itself, so the record need
+ * not outlive it.
  */
 async function freeUpload(
   deps: UploadCleanupDeps,
@@ -133,23 +141,39 @@ async function releasedAfter(
 }
 
 /**
+ * Where the nightly sweep carries on from: past the released records it
+ * checked, by id, and past all of them once `releasedDone`. Handed to the
+ * retention pass's continuation, so records kept because their file is in
+ * use are not checked again by every run while those after them, and the
+ * uploads nobody claimed, wait.
+ */
+export interface UploadSweepCursor {
+  releasedDone?: boolean;
+  afterUpload?: string;
+}
+
+/**
  * Free the released uploads `where` selects (every one, by default), in id
- * order, until `deadline`. Answers false when the deadline stopped it first.
+ * order from just after `from`, until `deadline`. Answers "done", or where
+ * it stopped.
  */
 async function freeReleasedUploads(
   deps: UploadCleanupDeps,
   where: Record<string, unknown> = {},
-  deadline?: Date
-): Promise<boolean> {
-  let after: string | undefined;
+  deadline?: Date,
+  from?: string
+): Promise<"done" | UploadSweepCursor> {
+  let after = from;
   for (;;) {
     const page = await releasedAfter(deps, where, after);
     for (const upload of page) {
-      if (pastDeadline(deadline)) return false;
+      if (pastDeadline(deadline)) {
+        return after === undefined ? {} : { afterUpload: after };
+      }
       await freeUpload(deps, upload);
       after = String(upload.id);
     }
-    if (page.length < PAGE) return true;
+    if (page.length < PAGE) return "done";
   }
 }
 
@@ -217,19 +241,28 @@ async function releaseStaleUploads(
 }
 
 /**
- * The nightly part: retry the released uploads an earlier deletion could not
- * free, then give up on the ones never claimed. Answers false when the
- * deadline stopped it first.
+ * The nightly part, from `cursor`: retry the released uploads an earlier
+ * deletion could not free, then give up on the ones never claimed. Answers
+ * "done", or where the deadline stopped it.
  */
 export async function sweepUploads(
   deps: UploadCleanupDeps,
   now: number,
-  deadline: Date
-): Promise<boolean> {
-  return (
-    (await freeReleasedUploads(deps, {}, deadline)) &&
-    (await releaseStaleUploads(deps, now, deadline))
-  );
+  deadline: Date,
+  cursor: UploadSweepCursor = {}
+): Promise<"done" | UploadSweepCursor> {
+  if (!cursor.releasedDone) {
+    const stopped = await freeReleasedUploads(
+      deps,
+      {},
+      deadline,
+      cursor.afterUpload
+    );
+    if (stopped !== "done") return stopped;
+  }
+  return (await releaseStaleUploads(deps, now, deadline))
+    ? "done"
+    : { releasedDone: true };
 }
 
 /** An after-delete hook's deleted id, and its hold until the commit. */

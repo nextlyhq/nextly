@@ -4,6 +4,9 @@
  * Every file a visitor uploaded through a form's upload route
  * (`POST /api/forms/:slug/upload`): the media item, the form and file field
  * it was uploaded for, and the submission that claimed it, if one has. A
+ * submission a trusted write stored naming a file another already holds is
+ * recorded beside it, one row per holder, so the file stays while any of
+ * them is left. A
  * file answer in a submission a request writes may only name an upload
  * recorded here for the same form and field that no other submission has
  * claimed, so the files a submission holds are known to be its own and can
@@ -60,8 +63,9 @@ export function formUploadsCollection(): CollectionConfig {
       date({ name: "releasedAt" }),
     ],
     indexes: [
-      // One record per file: an upload is claimed by one submission at most.
-      { fields: ["media"], unique: true },
+      // One record per file and holder: a submission holds a file once. Led
+      // by `media`, so it serves every lookup of a file's records too.
+      { fields: ["media", "submission"], unique: true },
       { fields: ["submission"] },
       { fields: ["form"] },
     ],
