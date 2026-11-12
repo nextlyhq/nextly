@@ -143,8 +143,12 @@ describe("plannedDeletions", () => {
             fromType: "text",
             toType: "text",
           },
-          { type: "drop_index", tableName: "dc_b", indexName: "dc_b_y_idx" },
-        ] as Operation[],
+          {
+            type: "drop_index",
+            tableName: "dc_b",
+            index: { name: "dc_b_y_idx", columns: ["y"], unique: false },
+          },
+        ],
       })
     ).toEqual([]);
   });
@@ -157,7 +161,13 @@ describe("plannedDeletions", () => {
         dropColumn("dc_a", "y"),
         dropTable("dc_c"),
       ],
-    }).map(d => (d.kind === "column" ? `${d.table}.${d.column}` : d.table));
+    }).map(d =>
+      d.kind === "column"
+        ? `${d.table}.${d.column}`
+        : d.kind === "unnamed"
+          ? d.description
+          : d.table
+    );
     expect(listed).toEqual(["dc_c", "dc_z", "dc_a.y", "dc_b.z"]);
   });
 });

@@ -324,8 +324,8 @@ describe("the destructive mark", () => {
           {
             type: "drop_index",
             tableName: "dc_posts",
-            indexName: "i",
-          } as Operation,
+            index: { name: "i", columns: ["title"], unique: false },
+          },
         ])
       )
     ).toEqual([]);

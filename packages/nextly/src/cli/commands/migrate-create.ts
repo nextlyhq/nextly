@@ -48,6 +48,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
@@ -404,7 +405,9 @@ async function countWhereReadable(
     return [...deletions];
   }
   try {
-    return await countDeletions(deletions, opened.getDrizzle(), dialect);
+    // The CLI adapter is the Drizzle adapter its factory made, as every command that reads with it treats it.
+    const db = (opened as unknown as DrizzleAdapter).getDrizzle();
+    return await countDeletions(deletions, db, dialect);
   } finally {
     await opened.disconnect().catch(() => undefined);
   }
