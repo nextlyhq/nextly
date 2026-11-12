@@ -224,6 +224,68 @@ export async function pruneNotFound(
 }
 
 /**
+ * Whether rows an earlier version kept in the log's collection may still be
+ * waiting to move, as this process last found: `none` once a move found the
+ * collection empty, `left` while one has rows to move, unknown before the
+ * start's move has counted. Kept on `globalThis`, as the plugin's context
+ * is, so every copy of this module a site's bundler loads reads the same
+ * answer. Only a move sets it; nothing writes the collection any more.
+ */
+const legacyState = globalThis as unknown as {
+  __nextly_seoLegacyNotFound?: "none" | "left";
+};
+
+type Token = Parameters<
+  PluginContext["services"]["collections"]["deleteEntryInTransaction"]
+>[0];
+
+/**
+ * Drop from the log's earlier collection the rows `where` reads and `goes`
+ * keeps, on the redirect's transaction `transaction`, while rows may still
+ * be waiting to move; nothing once none are.
+ *
+ * Read under each row's lock, as the move reads it: a move that holds a row
+ * finishes first, and the table's own delete after this one then finds the
+ * row it moved. A row read here first is deleted before the move can read it.
+ */
+async function forgetEarlierRows(
+  ctx: PluginContext,
+  transaction: Token,
+  where: Record<string, unknown>,
+  goes: (row: LoggedRow) => boolean
+): Promise<void> {
+  if (legacyState.__nextly_seoLegacyNotFound === "none") return;
+  const slug = notFoundSlug(ctx);
+  let page = 1;
+  for (;;) {
+    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+      transaction,
+      slug,
+      {
+        where,
+        pagination: { limit: PAGE, page },
+        sort: { field: "pathKey", direction: "asc" },
+        depth: 0,
+      },
+      { lock: "update" }
+    );
+    const rows = data as Record<string, unknown>[];
+    const gone = rows.filter(row => goes(loggedRowOf(row)));
+    for (const row of gone) {
+      await ctx.services.collections.deleteEntryInTransaction(
+        transaction,
+        slug,
+        String(row.id)
+      );
+    }
+    if (rows.length < PAGE) return;
+    // A page that lost rows is read again, as the rows after it moved up;
+    // one that lost none is passed.
+    if (gone.length === 0) page += 1;
+  }
+}
+
+/**
  * Drop `address` from the log, as a redirect now answers it.
  *
  * Called inside the redirect's own transaction (`transaction` is its token):
@@ -232,11 +294,17 @@ export async function pruneNotFound(
  */
 export async function forgetNotFound(
   ctx: PluginContext,
-  _transaction: Parameters<
-    PluginContext["services"]["collections"]["deleteEntryInTransaction"]
-  >[0],
+  transaction: Token,
   address: LoggedAddress
 ): Promise<void> {
+  // The earlier collection first: a move holding the row finishes before
+  // the table is read below, so the row it moved is deleted there.
+  await forgetEarlierRows(
+    ctx,
+    transaction,
+    { pathKey: { equals: pathKey(address) } },
+    () => true
+  );
   await ctx.db.transaction(async tx => {
     await tx
       .delete(notFoundLog)
@@ -251,12 +319,17 @@ export async function forgetNotFound(
  */
 export async function forgetNotFoundUnder(
   ctx: PluginContext,
-  _transaction: Parameters<
-    PluginContext["services"]["collections"]["deleteEntryInTransaction"]
-  >[0],
+  transaction: Token,
   locale: string,
   base: string
 ): Promise<void> {
+  // `contains` matches anywhere in the address; only those below go.
+  await forgetEarlierRows(
+    ctx,
+    transaction,
+    { and: [{ locale: { equals: locale } }, { path: { contains: base } }] },
+    row => within(row.path, base)
+  );
   await ctx.db.transaction(async tx => {
     const columns = tx.table(notFoundLog);
     // The log is bounded, so the language's rows are read whole and only
@@ -274,6 +347,17 @@ export async function forgetNotFoundUnder(
         .where(inArray(columns.id, gone.slice(at, at + PAGE)));
     }
   });
+}
+
+/**
+ * What a move may be told to do along the way, the moments a redirect save
+ * can land in. `afterCount` runs once the start's count has found rows to
+ * move and before any is read; `afterLock` once a row is read under its lock
+ * and before it is copied.
+ */
+interface MoveOptions {
+  afterCount?: () => Promise<void>;
+  afterLock?: () => Promise<void>;
 }
 
 /** A stored time read back as a date, or `fallback` where it reads as none. */
@@ -294,14 +378,23 @@ function dateOf(value: unknown, fallback: Date): Date {
 function moveOne(
   ctx: PluginContext,
   slug: string,
-  id: string
+  listed: { id: string; pathKey: string | undefined },
+  options: MoveOptions
 ): Promise<boolean> {
+  const { id } = listed;
   return ctx.services.collections.withTransaction(async transaction => {
+    // Read by the address's key where the row has one, as a redirect's
+    // forget reads it: on MySQL a read through the key's index and one
+    // through the primary key lock the row's entries in opposite orders, and
+    // two transactions doing so deadlock.
     const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
       transaction,
       slug,
       {
-        where: { id: { equals: id } },
+        where:
+          listed.pathKey === undefined
+            ? { id: { equals: id } }
+            : { pathKey: { equals: listed.pathKey } },
         pagination: { limit: 1, page: 1 },
         depth: 0,
       },
@@ -309,6 +402,7 @@ function moveOne(
     );
     const [held] = data as Record<string, unknown>[];
     if (held === undefined) return false;
+    await options.afterLock?.();
     const row = loggedRowOf(held);
     const now = new Date();
     const lastSeen = dateOf(held.lastSeen, now);
@@ -350,7 +444,7 @@ function moveOne(
     await ctx.services.collections.deleteEntryInTransaction(
       transaction,
       slug,
-      id
+      String(held.id)
     );
     return true;
   });
@@ -364,9 +458,19 @@ function moveOne(
  * with it; a row that cannot be moved now is left in place for the next
  * start.
  */
-export async function moveLoggedRows(ctx: PluginContext): Promise<number> {
+export async function moveLoggedRows(
+  ctx: PluginContext,
+  options: MoveOptions = {}
+): Promise<number> {
   const slug = notFoundSlug(ctx);
-  if ((await ctx.services.ownCollections.count(slug)) === 0) return 0;
+  if ((await ctx.services.ownCollections.count(slug)) === 0) {
+    legacyState.__nextly_seoLegacyNotFound = "none";
+    return 0;
+  }
+  // Until the rows are gone, a redirect saved meanwhile drops its address
+  // from the collection too, or the move would bring it back.
+  legacyState.__nextly_seoLegacyNotFound = "left";
+  await options.afterCount?.();
   let moved = 0;
   for (;;) {
     // Each moved row leaves the collection, so the first page is read again
@@ -376,11 +480,20 @@ export async function moveLoggedRows(ctx: PluginContext): Promise<number> {
       sort: { field: "pathKey", direction: "asc" },
       depth: 0,
     });
-    const ids = (data as Record<string, unknown>[]).map(row => String(row.id));
-    if (ids.length === 0) return moved;
+    const listed = (data as Record<string, unknown>[]).map(row => ({
+      id: String(row.id),
+      pathKey:
+        typeof row.pathKey === "string" && row.pathKey !== ""
+          ? row.pathKey
+          : undefined,
+    }));
+    if (listed.length === 0) {
+      legacyState.__nextly_seoLegacyNotFound = "none";
+      return moved;
+    }
     let movedNow = 0;
-    for (const id of ids) {
-      if (await moveOne(ctx, slug, id)) movedNow += 1;
+    for (const row of listed) {
+      if (await moveOne(ctx, slug, row, options)) movedNow += 1;
     }
     moved += movedNow;
     // Another process moved this page's rows meanwhile, and will go on.

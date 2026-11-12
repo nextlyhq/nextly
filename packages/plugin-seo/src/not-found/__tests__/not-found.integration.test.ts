@@ -9,6 +9,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -73,6 +74,28 @@ async function renderedWith(path: string, sent: Record<string, string> = {}) {
   );
   await proxy(new Request(`https://example.com${path}`, { headers: sent }));
   return forwarded;
+}
+
+/** A row as an earlier version kept it, in the log's collection. */
+function loggedEarlier(t: TestNextly, path: string, hits = 1) {
+  return t.nextly.create({
+    collection: NOT_FOUND_SLUG,
+    data: {
+      pathKey: pathKey({ locale: "en", path }),
+      locale: "en",
+      path,
+      hits,
+      lastSeen: "2026-10-01T00:00:00.000Z",
+      kind: "missing",
+    },
+  });
+}
+
+/** Save a redirect from `source`, as the redirects screen does. */
+function redirectFrom(seo: PluginContext, source: string, target: string) {
+  return seo.services.collections.withTransaction(tx =>
+    putRedirect(seo, tx, { locale: "en", source, target, origin: "person" })
+  );
 }
 
 /** The log, as `address` → visits. */
@@ -187,6 +210,80 @@ describe.each(getConfiguredTestDialects())(
       expect(again).toBe(0);
       expect(statements).toHaveLength(1);
     });
+
+    it("keeps off the log an address a redirect was saved for before its earlier row moved", async () => {
+      const { t, seo } = await boot(dialect);
+      // The start's own move has found nothing: the rows below are what an
+      // upgrade finds, still in the collection when the next move counts.
+      await moveLoggedRows(seo);
+      await loggedEarlier(t, "/gone", 4);
+      await loggedEarlier(t, "/old/page", 2);
+      await loggedEarlier(t, "/kept", 1);
+
+      // The move has counted the rows and read none yet when the redirects
+      // are saved: one from an address, and a pattern over another.
+      await moveLoggedRows(seo, {
+        afterCount: async () => {
+          await redirectFrom(seo, "/gone", "/here");
+          await redirectFrom(seo, "/old/*", "/new/*");
+        },
+      });
+
+      expect(await logged(t)).toEqual({ "/kept": 1 });
+      const { items } = await t.nextly.find({ collection: NOT_FOUND_SLUG });
+      expect(items).toEqual([]);
+    });
+
+    it("reads nothing of the earlier collection on a redirect save once nothing is left to move", async () => {
+      const { seo } = await boot(dialect);
+      await moveLoggedRows(seo);
+
+      const statements = await statementsOf(dialect, () =>
+        redirectFrom(seo, "/gone", "/here")
+      );
+
+      expect(statements.filter(sql => /nx_seo_not_found/.test(sql))).toEqual(
+        []
+      );
+    });
+
+    it.skipIf(dialect === "sqlite")(
+      "keeps an address off the log where its redirect is saved while the move holds its earlier row",
+      async () => {
+        const { t, seo } = await boot(dialect);
+        await moveLoggedRows(seo);
+        await loggedEarlier(t, "/gone", 4);
+
+        // The move reads the row under its lock and stops there, before it
+        // copies the row. The redirect is saved from the test's own flow, so
+        // on a transaction of its own: one started inside the move's would
+        // join the move's transaction instead.
+        let locked!: () => void;
+        const held = new Promise<void>(resolve => {
+          locked = resolve;
+        });
+        let release!: () => void;
+        const released = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        const moving = moveLoggedRows(seo, {
+          afterLock: async () => {
+            locked();
+            await released;
+          },
+        });
+        await held;
+        const saving = redirectFrom(seo, "/gone", "/here");
+        // Long enough for the save to reach the row the move holds and wait.
+        await new Promise(resolve => setTimeout(resolve, 500));
+        release();
+        await Promise.all([moving, saving]);
+
+        expect(await logged(t)).toEqual({});
+        const { items } = await t.nextly.find({ collection: NOT_FOUND_SLUG });
+        expect(items).toEqual([]);
+      }
+    );
 
     it("leaves admin, API and asset requests out, whatever header a visitor sends", async () => {
       const { t } = await boot(dialect);
