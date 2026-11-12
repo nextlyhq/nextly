@@ -36,7 +36,13 @@ export function PreviewCard({
   site,
   status,
   sharedTitleTyped,
+  heading,
 }: {
+  /**
+   * What heads the card where a surface says more than that it follows
+   * typing: a template's panel names the page it previews with.
+   */
+  heading?: ReactNode;
   answer: SeoAnswer | undefined;
   site: SeoTabContext["site"] | undefined;
   /**
@@ -55,9 +61,11 @@ export function PreviewCard({
       className="rounded-lg border border-border bg-card"
     >
       <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-border-subtle py-2 pr-2.5 pl-3.5">
-        <span className="text-xs font-semibold text-muted-foreground">
-          Preview · updates as you type
-        </span>
+        {heading ?? (
+          <span className="text-xs font-semibold text-muted-foreground">
+            Preview · updates as you type
+          </span>
+        )}
         <div
           role="tablist"
           aria-label="Preview"

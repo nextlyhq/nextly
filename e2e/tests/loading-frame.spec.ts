@@ -25,6 +25,8 @@ import { test } from "./support/test";
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
+/** Where the admin keeps what it remembers of the menu and schemas. */
+const REMEMBERED_PREFIX = "nextly:admin:memory:";
 
 /** The times the frame's parts appear at, in milliseconds. */
 const OUTLINE_AT = 400;
@@ -45,12 +47,19 @@ type Marks = Record<Part, number | null>;
 
 /**
  * Records, in the page, when each part first appears (`performance.now()`),
- * and writes the signed-in record before the admin's code reads it.
+ * and writes the signed-in record, with no remembered menu, before the
+ * admin's code reads it.
  */
 async function recordParts(page: Page): Promise<void> {
   await page.addInitScript(
-    ([key, selectors]) => {
+    ([key, memory, selectors]) => {
       window.localStorage.setItem(key, "1");
+      // Nothing remembered of the menu, so the frame is the one a browser
+      // draws before it has one: the rail drawn from memory is
+      // device-memory.spec's.
+      for (const stored of Object.keys(window.localStorage)) {
+        if (stored.startsWith(memory)) window.localStorage.removeItem(stored);
+      }
       const marks: Record<string, number | null> = {};
       for (const part of Object.keys(selectors)) marks[part] = null;
       (window as unknown as { __marks: typeof marks }).__marks = marks;
@@ -67,7 +76,7 @@ async function recordParts(page: Page): Promise<void> {
         attributes: true,
       });
     },
-    [SIGNED_IN_HERE_KEY, SELECTORS] as const
+    [SIGNED_IN_HERE_KEY, REMEMBERED_PREFIX, SELECTORS] as const
   );
 }
 

@@ -136,6 +136,7 @@ import {
   type SettingsAddress,
 } from "./settings-address";
 import { SettingsDialog } from "./settings-dialog";
+import { useSettingsPlace, type SettingsPlace } from "./settings-place";
 import {
   sharePreview,
   type SharePreview,
@@ -1164,7 +1165,8 @@ function pagePreview(view: EditorView, page: PageFacts): SharePreview {
  */
 function editorSettings(
   view: EditorView,
-  page: PageFacts
+  page: PageFacts,
+  place: SettingsPlace | null
 ): NonNullable<React.ComponentProps<typeof BuilderShell>["renderSettings"]> {
   const {
     entryFields,
@@ -1182,6 +1184,8 @@ function editorSettings(
       <SettingsDialog
         {...dialog}
         pageFields={entryFields}
+        // Other plugins' tabs beside the page's own settings.
+        place={place}
         // The page's Layout, in its own section after the page's fields.
         pageLayout={pageLayout}
         // Built only while the dialog is drawn, from the page on screen.
@@ -1464,6 +1468,14 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
+  // The Settings dialog's place for other plugins' tabs, for a page or a
+  // design: what is being edited, and its own metadata as one undoable edit.
+  const settingsPlace = useSettingsPlace(
+    editor,
+    control,
+    mount.initialDocument.kind,
+    name
+  );
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
     address: place.address,
@@ -1476,6 +1488,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The count the removal dialog says now; the hold keeps it as it stood
     // when each field was removed.
     removalReach: () => mount.componentFacts?.reach,
+    // A tab's text still being typed, made before the document is stored.
+    ...(settingsPlace === null ? {} : { flushHeld: settingsPlace.flushHeld }),
   });
 
   const page = usePageFacts(control);
@@ -1727,7 +1741,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             page.title
           )}
           openSettingsRequest={view.pages.settingsRequest}
-          renderSettings={editorSettings(view, page)}
+          renderSettings={editorSettings(view, page, settingsPlace)}
           // The shell owns the region; this fills it. Rendered unconditionally
           // rather than only when something is selected, because the panel states
           // "select a block to edit it" — a region that appears and disappears

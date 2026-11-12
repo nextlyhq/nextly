@@ -119,6 +119,7 @@ describe("a form's Settings", () => {
       "Availability",
       "One response per person",
       "Spam protection",
+      "Privacy",
     ];
     expect(sections).toHaveLength(names.length);
     sections.forEach((section, index) =>
@@ -169,6 +170,22 @@ describe("a form's Settings", () => {
         botCheck: "recaptcha",
         internalNote: "Lahore meetup.",
       },
+    });
+  });
+
+  it("saves a form that keeps no IP address or browser", async () => {
+    const { user, fetchMock } = view({ status: "published" });
+    const keep = screen.getByRole("switch", {
+      name: "Store IP address and browser",
+    });
+    expect(keep).toBeChecked();
+    expect(keep).toHaveAccessibleDescription(/one per network still works/);
+    await user.click(keep);
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({
+      settings: { storeIpAndBrowser: false },
     });
   });
 

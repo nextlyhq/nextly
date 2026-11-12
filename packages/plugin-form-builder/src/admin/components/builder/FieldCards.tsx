@@ -427,9 +427,15 @@ function BesideSettings({
   );
 }
 
-/** What every submission stores beside a form's own fields. */
-const STORED_WITH_EVERY_SUBMISSION =
-  "Every submission also stores when it was submitted, its status, internal notes, and the IP address and browser it came from.";
+/**
+ * What every submission stores beside a form's own fields: its IP address
+ * and browser only while the form keeps them (Settings › Privacy).
+ */
+function storedWithEverySubmission(storesAddress: boolean): string {
+  return storesAddress
+    ? "Every submission also stores when it was submitted, its status, internal notes, and the IP address and browser it came from."
+    : "Every submission also stores when it was submitted, its status and internal notes. This form keeps no IP address or browser.";
+}
 
 export function FieldCards({
   enabledTypes,
@@ -599,7 +605,7 @@ export function FieldCards({
 
       <p className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
         <Lucide.Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        {STORED_WITH_EVERY_SUBMISSION}
+        {storedWithEverySubmission(settings.storeIpAndBrowser !== false)}
       </p>
 
       {pickerConfig && (

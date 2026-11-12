@@ -26,6 +26,7 @@ import {
   MAX_SEO_SEGMENTS,
   MAX_SEO_TEXT_LENGTH,
   MAX_CLASSES_PER_NODE,
+  SEO_TEXT_FIELDS,
   STYLE_STATES,
   isBindingSource,
   readBlockOrigin,
@@ -3363,8 +3364,8 @@ function validBindingShape(
 }
 
 /**
- * A document's own metadata: `title` and `description`, each a list of
- * literal text and bindings, and `image`, one binding. Each binding is held
+ * A document's own metadata: its text values (`SEO_TEXT_FIELDS`), each a
+ * list of literal text and bindings, and `image`, one binding. Each binding is held
  * to the shape a prop's is. A list item is no source here: the metadata is
  * read once for the page, outside any list.
  */
@@ -3384,7 +3385,7 @@ function validateDocumentSeo(
   }
   for (const [field, value] of Object.entries(seo)) {
     const at = pointer(path, field);
-    if (field === "title" || field === "description") {
+    if ((SEO_TEXT_FIELDS as readonly string[]).includes(field)) {
       validateSeoText(value, at, issues);
     } else if (field === "image") {
       validateSeoBinding(value, at, issues);
@@ -3393,10 +3394,21 @@ function validateDocumentSeo(
         path: at,
         code: "invalid-seo",
         severity: "error",
-        message: `"${describeValue(field)}" is not a metadata field: a document's seo holds title, description and image.`,
+        message: `"${describeValue(field)}" is not a metadata field: a document's seo holds ${SEO_TEXT_FIELDS.join(", ")} and image.`,
       });
     }
   }
+}
+
+/**
+ * The problems of a document's own metadata, judged by its shape alone, as a
+ * save judges `settings.seo`: what an edit writing the metadata whole checks
+ * before the document holds it.
+ */
+export function documentSeoIssues(seo: unknown): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  validateDocumentSeo(seo, "/settings/seo", issues);
+  return issues;
 }
 
 /** One metadata text value: a bounded list of literal text and bindings. */

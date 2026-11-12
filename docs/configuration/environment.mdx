@@ -48,16 +48,16 @@ openssl rand -base64 32
 
 Source: `packages/nextly/src/shared/lib/env.ts`.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DB_DIALECT` | Yes | `postgresql` | Database dialect: `postgresql`, `mysql`, or `sqlite`. |
-| `DATABASE_URL` | Yes for PostgreSQL and MySQL; for SQLite, for the CLI's database commands | — | Full database connection URL; for `sqlite`, a `file:` URL. The running app falls back to `file:./data/nextly.db` on SQLite, but the CLI commands that use the database (`migrate`, `db:sync`) require it on every dialect. Validated as a URL. |
-| `DB_POOL_MAX` | No | `20` | Max connections in the pool. Min: 1. |
-| `DB_POOL_MIN` | No | `2` | Min connections in the pool. Min: 0. |
-| `DB_POOL_IDLE_TIMEOUT` | No | `30000` | Idle connection timeout in milliseconds. Min: 1000. |
-| `DB_QUERY_TIMEOUT` | No | `15000` | Query timeout in milliseconds. Min: 1000. |
-| `DB_HEALTHCHECK_INTERVAL_MS` | No | `30000` | Health-check interval in milliseconds. Min: 1000. |
-| `DB_SNAKE_CASE` | No | `false` | Use `snake_case` for database column names instead of `camelCase`. |
+| Variable                     | Required                                                                  | Default      | Description                                                                                                                                                                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DB_DIALECT`                 | Yes                                                                       | `postgresql` | Database dialect: `postgresql`, `mysql`, or `sqlite`.                                                                                                                                                                                          |
+| `DATABASE_URL`               | Yes for PostgreSQL and MySQL; for SQLite, for the CLI's database commands | —            | Full database connection URL; for `sqlite`, a `file:` URL. The running app falls back to `file:./data/nextly.db` on SQLite, but the CLI commands that use the database (`migrate`, `db:sync`) require it on every dialect. Validated as a URL. |
+| `DB_POOL_MAX`                | No                                                                        | `20`         | Max connections in the pool. Min: 1.                                                                                                                                                                                                           |
+| `DB_POOL_MIN`                | No                                                                        | `2`          | Min connections in the pool. Min: 0.                                                                                                                                                                                                           |
+| `DB_POOL_IDLE_TIMEOUT`       | No                                                                        | `30000`      | Idle connection timeout in milliseconds. Min: 1000.                                                                                                                                                                                            |
+| `DB_QUERY_TIMEOUT`           | No                                                                        | `15000`      | Query timeout in milliseconds. Min: 1000.                                                                                                                                                                                                      |
+| `DB_HEALTHCHECK_INTERVAL_MS` | No                                                                        | `30000`      | Health-check interval in milliseconds. Min: 1000.                                                                                                                                                                                              |
+| `DB_SNAKE_CASE`              | No                                                                        | `false`      | Use `snake_case` for database column names instead of `camelCase`.                                                                                                                                                                             |
 
 ### Connection-string formats
 
@@ -76,17 +76,17 @@ DATABASE_URL=file:./dev.db
 
 ## Runtime
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NODE_ENV` | No | `development` | Runtime environment: `development`, `production`, or `test`. Affects production-only checks below. |
+| Variable   | Required | Default       | Description                                                                                        |
+| ---------- | -------- | ------------- | -------------------------------------------------------------------------------------------------- |
+| `NODE_ENV` | No       | `development` | Runtime environment: `development`, `production`, or `test`. Affects production-only checks below. |
 
 ---
 
 ## Development diagnostics
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NEXTLY_DEV_DIAGNOSTICS` | No | — | Set to `1` to add a `_devDiagnostics` field to error responses, carrying the error's log context and the message of its underlying cause. Ignored unless `NODE_ENV` is `development`. |
+| Variable                 | Required | Default | Description                                                                                                                                                                           |
+| ------------------------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXTLY_DEV_DIAGNOSTICS` | No       | —       | Set to `1` to add a `_devDiagnostics` field to error responses, carrying the error's log context and the message of its underlying cause. Ignored unless `NODE_ENV` is `development`. |
 
 An error response is deliberately generic: it carries a code, a public message
 and a request id, and withholds the log context and the underlying cause so a
@@ -136,14 +136,14 @@ of any environment where `NODE_ENV` might not be what you expect.
 
 Nextly uses a custom JWT auth system (access + refresh tokens, sessions, API keys, RBAC). There is **no** OAuth.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NEXTLY_SECRET` | Yes (production: ≥ 32 chars) | — | Secret used to sign JWTs and other crypto. Production startup throws if it is missing or shorter than 32 characters. Generate with `openssl rand -base64 32`. |
-| `NEXTLY_SECRET_PREVIOUS` | No | — | Secrets you have RETIRED, newest first. Kept for READING only — nothing new is ever keyed with one. See "Rotating `NEXTLY_SECRET`" below. |
-| `NEXTLY_ALLOWED_ORIGINS` | Self-hosted | — | Comma-separated list of additional origins allowed for CSRF validation (e.g. `https://admin.example.com,https://staging.example.com`). The origin the request arrives at is always allowed, but a self-hosted server (`next start` or the standalone build) takes that from the address it listens on, such as `http://localhost:3000`, not from your public URL. List the origin browsers use (`https://example.com`) whenever it differs from that address — behind a proxy, by IP or hostname, or in a container — or sign-in and plugin-route writes are refused with `CSRF_FAILED`. |
-| `NEXTLY_SETUP_TOKEN` | No | — | From the release after 0.0.2-alpha.68: the token `/admin/setup` asks for in production until an administrator exists. At least 43 characters with at least 16 distinct ones; a weaker value keeps setup closed. Unset, Nextly generates a token valid for 24 hours and one setup, and prints it to the server's output on a line starting with `[nextly] SETUP TOKEN`. `nextly setup-token --generate` prints a suitable value. See [The first administrator](/docs/guides/authentication#the-first-administrator). |
-| `NEXTLY_ADMIN_PASSWORD` | No | — | From the release after 0.0.2-alpha.68: the password `nextly users:create-admin` gives the first administrator, read instead of prompting. Set it only in the environment of that command. |
-| `NEXTLY_ERASE_RETIRED_AUTH_TABLES` | No | — | The retired `accounts` and `sessions` tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created these tables, and the Auth.js adapters' tables share their names and shape, so name a table only when it is Nextly's. Unset, the rows stay, and the startup warning says so. See [Production migrations](/docs/guides/production-migrations). |
+| Variable                           | Required                     | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------- | ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXTLY_SECRET`                    | Yes (production: ≥ 32 chars) | —       | Secret used to sign JWTs and other crypto. Production startup throws if it is missing or shorter than 32 characters. Generate with `openssl rand -base64 32`.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `NEXTLY_SECRET_PREVIOUS`           | No                           | —       | Secrets you have RETIRED, newest first. Kept for READING only — nothing new is ever keyed with one. See "Rotating `NEXTLY_SECRET`" below.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `NEXTLY_ALLOWED_ORIGINS`           | Self-hosted                  | —       | Comma-separated list of additional origins allowed for CSRF validation (e.g. `https://admin.example.com,https://staging.example.com`). The origin the request arrives at is always allowed, but a self-hosted server (`next start` or the standalone build) takes that from the address it listens on, such as `http://localhost:3000`, not from your public URL. List the origin browsers use (`https://example.com`) whenever it differs from that address — behind a proxy, by IP or hostname, or in a container — or sign-in and plugin-route writes are refused with `CSRF_FAILED`. |
+| `NEXTLY_SETUP_TOKEN`               | No                           | —       | From the release after 0.0.2-alpha.68: the token `/admin/setup` asks for in production until an administrator exists. At least 43 characters with at least 16 distinct ones; a weaker value keeps setup closed. Unset, Nextly generates a token valid for 24 hours and one setup, and prints it to the server's output on a line starting with `[nextly] SETUP TOKEN`. `nextly setup-token --generate` prints a suitable value. See [The first administrator](/docs/guides/authentication#the-first-administrator).                                                                      |
+| `NEXTLY_ADMIN_PASSWORD`            | No                           | —       | From the release after 0.0.2-alpha.68: the password `nextly users:create-admin` gives the first administrator, read instead of prompting. Set it only in the environment of that command.                                                                                                                                                                                                                                                                                                                                                                                                |
+| `NEXTLY_ERASE_RETIRED_AUTH_TABLES` | No                           | —       | The retired `accounts` and `sessions` tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created these tables, and the Auth.js adapters' tables share their names and shape, so name a table only when it is Nextly's. Unset, the rows stay, and the startup warning says so. See [Production migrations](/docs/guides/production-migrations).                                                    |
 
 ### Rotating `NEXTLY_SECRET`
 
@@ -202,10 +202,10 @@ reason.
 
 ## Application URLs
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NEXT_PUBLIC_APP_URL` | Yes (production) | — | Public-facing app URL. Used in client-side code and as the fallback for email-link `baseUrl`. Production startup throws if missing. |
-| `API_BASE_URL` | No | `http://localhost:3000/api` | Base URL for API routes. Validated as a URL. |
+| Variable              | Required         | Default                     | Description                                                                                                                         |
+| --------------------- | ---------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_APP_URL` | Yes (production) | —                           | Public-facing app URL. Used in client-side code and as the fallback for email-link `baseUrl`. Production startup throws if missing. |
+| `API_BASE_URL`        | No               | `http://localhost:3000/api` | Base URL for API routes. Validated as a URL.                                                                                        |
 
 ---
 
@@ -219,15 +219,15 @@ Cloud adapters are opt-in. The variables below are read **by the adapter package
 
 Works with AWS S3, Cloudflare R2, MinIO, and DigitalOcean Spaces. The plugin accepts these values directly; the env-var names below are the conventional ones used in our examples (and what your `nextly.config.ts` typically references with `process.env.X`).
 
-| Variable | Required | Description |
-|---|---|---|
-| `S3_BUCKET` | Yes | Bucket name. |
-| `AWS_REGION` | Yes | AWS region (e.g. `us-east-1`). Use `auto` for Cloudflare R2. |
-| `AWS_ACCESS_KEY_ID` | Yes | Access key ID. |
-| `AWS_SECRET_ACCESS_KEY` | Yes | Secret access key. |
-| `S3_ENDPOINT` | Sometimes | Custom endpoint URL. Required for R2 and MinIO. |
-| `S3_PUBLIC_URL` | No | Public URL prefix (e.g. `https://pub-xxxx.r2.dev` for R2 or a CDN domain). |
-| `S3_FORCE_PATH_STYLE` | No | Set `true` for MinIO and other path-style providers. |
+| Variable                | Required  | Description                                                                |
+| ----------------------- | --------- | -------------------------------------------------------------------------- |
+| `S3_BUCKET`             | Yes       | Bucket name.                                                               |
+| `AWS_REGION`            | Yes       | AWS region (e.g. `us-east-1`). Use `auto` for Cloudflare R2.               |
+| `AWS_ACCESS_KEY_ID`     | Yes       | Access key ID.                                                             |
+| `AWS_SECRET_ACCESS_KEY` | Yes       | Secret access key.                                                         |
+| `S3_ENDPOINT`           | Sometimes | Custom endpoint URL. Required for R2 and MinIO.                            |
+| `S3_PUBLIC_URL`         | No        | Public URL prefix (e.g. `https://pub-xxxx.r2.dev` for R2 or a CDN domain). |
+| `S3_FORCE_PATH_STYLE`   | No        | Set `true` for MinIO and other path-style providers.                       |
 
 ```typescript title="nextly.config.ts"
 import { s3Storage } from "@nextlyhq/storage-s3";
@@ -250,15 +250,15 @@ storage: [
 
 Recommended for Vercel deployments.
 
-| Variable | Required | Description |
-|---|---|---|
-| `BLOB_READ_WRITE_TOKEN` | Yes | Vercel Blob token from the Vercel dashboard. The adapter reads this directly when the `token` config option is omitted. |
+| Variable                | Required | Description                                                                                                             |
+| ----------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `BLOB_READ_WRITE_TOKEN` | Yes      | Vercel Blob token from the Vercel dashboard. The adapter reads this directly when the `token` config option is omitted. |
 
 ### UploadThing — `@nextlyhq/storage-uploadthing`
 
-| Variable | Required | Description |
-|---|---|---|
-| `UPLOADTHING_TOKEN` | Yes | UploadThing API token. The adapter reads this directly when the `token` config option is omitted. |
+| Variable            | Required | Description                                                                                       |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `UPLOADTHING_TOKEN` | Yes      | UploadThing API token. The adapter reads this directly when the `token` config option is omitted. |
 
 ---
 
@@ -266,13 +266,13 @@ Recommended for Vercel deployments.
 
 Source: `packages/nextly/src/shared/lib/env.ts`. Required only if you send emails (password resets, notifications). In production, if **any** SMTP variable is set, **all four** of `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` must be set or the env validator throws.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `SMTP_HOST` | No | — | SMTP server hostname (e.g. `smtp.gmail.com`). |
-| `SMTP_PORT` | No | `587` | SMTP port. 587 for TLS, 465 for SSL. Range: 1–65535. |
-| `SMTP_USER` | No | — | SMTP authentication username. |
-| `SMTP_PASS` | No | — | SMTP authentication password. |
-| `SMTP_FROM` | No | — | From address for outgoing emails. Validated as an email. |
+| Variable    | Required | Default | Description                                              |
+| ----------- | -------- | ------- | -------------------------------------------------------- |
+| `SMTP_HOST` | No       | —       | SMTP server hostname (e.g. `smtp.gmail.com`).            |
+| `SMTP_PORT` | No       | `587`   | SMTP port. 587 for TLS, 465 for SSL. Range: 1–65535.     |
+| `SMTP_USER` | No       | —       | SMTP authentication username.                            |
+| `SMTP_PASS` | No       | —       | SMTP authentication password.                            |
+| `SMTP_FROM` | No       | —       | From address for outgoing emails. Validated as an email. |
 
 For local development, the repo ships a Mailpit profile (`docker compose --profile with-mailpit up -d mailpit`) on host ports 1025 (SMTP) and 8025 (web UI) — see [Email guide](/docs/guides/email) for details.
 
@@ -282,9 +282,10 @@ For local development, the repo ships a Mailpit profile (`docker compose --profi
 
 These env vars are read by middleware and security helpers. None are part of the central env schema; they are read directly by the modules that use them.
 
-| Variable | Required | Default | Description | Read by |
-|---|---|---|---|---|
-| `TRUSTED_PROXY_IPS` | No | empty | Comma-separated list of trusted reverse-proxy IPs: IPv4 CIDR ranges or addresses, and exact IPv6 addresses (IPv6 ranges are not supported and are ignored). Combined with `security.trustProxy: true`, controls which `X-Forwarded-For` values are honoured for client-IP resolution (rate limiting, refresh-token binding, audit logging): the listed hops are skipped, reading from the right, to reach the client. Needed only for hops in front of your own proxy, such as a load balancer; see [Client addresses and the auth rate limit](/docs/guides/deployment#client-addresses-and-the-auth-rate-limit). | `packages/nextly/src/utils/get-trusted-client-ip.ts` |
+| Variable                     | Required | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Read by                                                |
+| ---------------------------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `TRUSTED_PROXY_IPS`          | No       | empty   | Comma-separated list of trusted reverse-proxy IPs: IPv4 CIDR ranges or addresses, and exact IPv6 addresses (IPv6 ranges are not supported and are ignored). Combined with `security.trustProxy: true`, controls which `X-Forwarded-For` values are honoured for client-IP resolution (rate limiting, refresh-token binding, audit logging): the listed hops are skipped, reading from the right, to reach the client. Needed only for hops in front of your own proxy, such as a load balancer; see [Client addresses and the auth rate limit](/docs/guides/deployment#client-addresses-and-the-auth-rate-limit).                                                                                                                                                    | `packages/nextly/src/utils/get-trusted-client-ip.ts`   |
+| `NEXTLY_ADMIN_DEVICE_MEMORY` | No       | `on`    | Set to `off` so the admin keeps nothing in your editors' browsers. By default it keeps a small map of the site there (the menu as each person sees it, the schemas of the collections, Singles and field groups they read, the site's logo and name, their interface preferences, and a note that someone signed in), so a new tab draws its menu at once. It never keeps an entry, a media item, a user, a form's values, a session token or a permission list, and signing out removes everything about the person, keeping only the public logo and name. Turn it off where people share computers and collection names should not stay behind. With it off, each browser removes what it kept on its next visit, and every new tab shows the sign-in form first. | `packages/nextly/src/route-handler/startup-request.ts` |
 
 ---
 
@@ -298,11 +299,11 @@ Each server instance keeps a user's access in memory once it has read it: their 
 
 The variables below configured the permission cache this replaced. They no longer change anything, and Nextly logs a warning once, the first time it checks access, when one is set. They are removed in a later release; remove them from your environment.
 
-| Variable | Status |
-|---|---|
-| `PERMISSION_CACHE_ENABLED` | The access cache cannot be turned off. Where an earlier release ran with this set to `false`, keep it so during the upgrade: it tells Nextly that no instance reads the stored answers, so they are not emptied when access changes. |
-| `PERMISSION_CACHE_TTL_SECONDS` | No longer read. |
-| `PERMISSION_CACHE_MEMORY_SIZE` | No longer read. |
+| Variable                       | Status                                                                                                                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PERMISSION_CACHE_ENABLED`     | The access cache cannot be turned off. Where an earlier release ran with this set to `false`, keep it so during the upgrade: it tells Nextly that no instance reads the stored answers, so they are not emptied when access changes. |
+| `PERMISSION_CACHE_TTL_SECONDS` | No longer read.                                                                                                                                                                                                                      |
+| `PERMISSION_CACHE_MEMORY_SIZE` | No longer read.                                                                                                                                                                                                                      |
 
 Nothing reads the stored permission table, `user_permission_cache`, any more, and a new install no longer creates it. While an existing database still has it, every access change empties it, for any instance still running an earlier release that reads it. An existing database keeps it until `nextly migrate` runs with `NEXTLY_DROP_RETIRED_AUTH_TABLES=1`, which drops it even when it holds rows: they were only copies of answers recomputed from roles. Until then, on MySQL, where the table has no foreign key to `users`, a deleted user's rows stay in it; they name only the user's id and permissions. See [Production migrations](/docs/guides/production-migrations).
 
@@ -310,9 +311,9 @@ Nothing reads the stored permission table, `user_permission_cache`, any more, an
 
 ## Debug
 
-| Variable | Required | Default | Description | Read by |
-|---|---|---|---|---|
-| `DEBUG_RBAC` | No | — | Set `1` to log detailed RBAC permission decisions. | `packages/nextly/src/services/lib/permissions.ts` |
+| Variable     | Required | Default | Description                                        | Read by                                           |
+| ------------ | -------- | ------- | -------------------------------------------------- | ------------------------------------------------- |
+| `DEBUG_RBAC` | No       | —       | Set `1` to log detailed RBAC permission decisions. | `packages/nextly/src/services/lib/permissions.ts` |
 
 ---
 
@@ -320,15 +321,15 @@ Nothing reads the stored permission table, `user_permission_cache`, any more, an
 
 Used by the bundled `docker-compose.yml` for local Postgres / Redis / Adminer / Drizzle Studio / Mailpit setup. Not needed when connecting to an existing database.
 
-| Variable | Default | Description |
-|---|---|---|
-| `DB_NAME` | `nextly_dev` | PostgreSQL database name. |
-| `DB_USER` | `postgres` | PostgreSQL user. |
-| `DB_PASSWORD` | — | PostgreSQL password. Override in production. |
-| `DB_PORT` | `5432` | PostgreSQL host port. |
-| `ADMINER_PORT` | `8080` | Adminer (database browser) UI port. |
-| `REDIS_PORT` | `6379` | Redis cache port. |
-| `DRIZZLE_STUDIO_PORT` | `4983` | Drizzle Studio port for the database GUI. |
+| Variable              | Default      | Description                                  |
+| --------------------- | ------------ | -------------------------------------------- |
+| `DB_NAME`             | `nextly_dev` | PostgreSQL database name.                    |
+| `DB_USER`             | `postgres`   | PostgreSQL user.                             |
+| `DB_PASSWORD`         | —            | PostgreSQL password. Override in production. |
+| `DB_PORT`             | `5432`       | PostgreSQL host port.                        |
+| `ADMINER_PORT`        | `8080`       | Adminer (database browser) UI port.          |
+| `REDIS_PORT`          | `6379`       | Redis cache port.                            |
+| `DRIZZLE_STUDIO_PORT` | `4983`       | Drizzle Studio port for the database GUI.    |
 
 ---
 

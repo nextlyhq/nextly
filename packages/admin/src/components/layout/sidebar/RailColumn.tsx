@@ -9,8 +9,13 @@
  * @module components/layout/sidebar/RailColumn
  */
 
-import { Skeleton } from "@nextlyhq/ui";
-import type { JSX, ReactNode } from "react";
+import {
+  Skeleton,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@nextlyhq/ui";
+import type { ElementType, JSX, ReactNode } from "react";
 
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { Link } from "@admin/components/ui/link";
@@ -31,7 +36,7 @@ import { shellAnswersMarker } from "../lib/shell-answers";
  * draws a 2px outline there in the system's colour, where `outline-none`
  * would leave focus with nothing drawn at all.
  */
-export const RAIL_FOCUS_RING =
+const RAIL_FOCUS_RING =
   "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar";
 
 export function RailColumn({
@@ -86,6 +91,83 @@ export function RailColumn({
 
       {foot}
     </aside>
+  );
+}
+
+/**
+ * One rail entry: its icon in the rail's box, named for assistive technology
+ * and by a tooltip, as a link where it goes somewhere and a button where it
+ * only opens its panel. One component for the rail the reader uses and for
+ * the rail drawn from what this device remembered, so the two look the same.
+ */
+export function RailEntry({
+  label,
+  icon: Icon,
+  href,
+  selected,
+  asLink,
+  onSelect,
+}: {
+  label: string;
+  icon: ElementType;
+  href: string;
+  selected: boolean;
+  /** A link to `href`, or a button that only selects the entry. */
+  asLink: boolean;
+  onSelect?: () => void;
+}): JSX.Element {
+  // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
+  const className = cn(
+    "flex shrink-0 items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
+    RAIL_FOCUS_RING,
+    selected
+      ? // `sidebar-accent` rather than `muted`: it is the surface
+        // `sidebar-accent-foreground` is declared against. Pairing the
+        // sidebar's ink with a surface from another scale is a combination no
+        // theme declares, so the contrast suite -- which asserts each token
+        // against its declared partner -- never checks it, and it goes
+        // unreadable in any theme that does not happen to survive the
+        // mismatch.
+        "bg-sidebar-accent text-sidebar-accent-foreground"
+      : "text-muted-foreground hover-unified"
+  );
+  const content = <Icon className="h-5 w-5" />;
+  return (
+    <Tooltip delayDuration={0}>
+      <TooltipTrigger asChild>
+        {asLink ? (
+          <Link
+            href={href}
+            onClick={onSelect}
+            className={className}
+            data-active={selected}
+            // Named for assistive technology: it draws an icon alone, and its tooltip
+            // is shown on hover and does not name the control.
+            aria-label={label}
+          >
+            {content}
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={onSelect}
+            className={className}
+            data-active={selected}
+            // Named as the link beside it is: an icon alone, with a tooltip that does
+            // not name the control.
+            aria-label={label}
+          >
+            {content}
+          </button>
+        )}
+      </TooltipTrigger>
+      <TooltipContent
+        side="right"
+        className="bg-primary border-border text-primary-foreground"
+      >
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

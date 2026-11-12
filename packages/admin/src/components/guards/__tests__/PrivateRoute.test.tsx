@@ -12,7 +12,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTES } from "@admin/constants/routes";
-import { SIGNED_IN_HERE_KEY } from "@admin/lib/auth/signed-in-here";
+import { SIGNED_IN_HERE_KEY } from "@admin/lib/device-memory/device-memory";
 
 const mockUseAuthSession = vi.fn();
 const mockRestart = vi.fn();

@@ -425,6 +425,10 @@ When the sweep finishes it records that on the form, which moves the form's revi
 
 If a form's setting changes while a submission is on its way, the submission is refused with "This form's settings changed while your response was being sent. Please send it again." and is judged by the new setting when it is sent again.
 
+### Privacy: not keeping IP addresses
+
+A form's **Settings › Privacy › Store IP address and browser** (`settings.storeIpAndBrowser`, on by default) decides whether a new submission keeps the address it came from and the visitor's browser. Off, it keeps neither. One per network still works on such a form: the address's keyed digest is made before the address is dropped, and only the digest is stored. Earlier submissions keep what they stored. A form that keeps no addresses cannot count its earlier responses by network after a change of setting, since it has none to count.
+
 ### Validation
 
 The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage, and free-text fields are sanitized by stripping HTML tags to prevent injection.

@@ -175,7 +175,8 @@ The tab's values come from the same answer the page's head is built from, worked
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
 anyone who may read that collection or Single, a reader shown the page read-only too.
 What a page's route sets in its own code is not known to the admin, so the tab does not
-show it.
+show it. What a [Page Builder design](#in-the-page-builder) sets is, where the Page Builder is
+installed, and the tab says so: "from this page's template".
 
 The tab's component is `@nextlyhq/plugin-seo/admin#SeoTab`. `nextly generate:types`
 adds it to your app's generated component map, as it does every component a plugin
@@ -186,6 +187,35 @@ group declares. A `fields` option whose group has fields the tab
 does not edit (a focus keyword, say), or a field it cannot honour as declared (read-only,
 disabled, hidden or shown under a condition), keeps the whole group among the page's own fields
 instead, where each one can still be edited, and no tab is drawn.
+
+## In the Page Builder
+
+Where the [Page Builder](/docs/page-builder) is installed, its **Settings** dialog has an
+**SEO** tab beside **General**.
+
+- **A page** gets the same SEO tab its edit page draws, for that page alone. Its `seo`
+  group moves from **General** to the tab, and saves with the page.
+- **A template** gets the rules every page it draws follows. **Title on Google**,
+  **Description on Google** and **Different title when shared** are written with variables,
+  `{Post title} | {Site name}`: click a variable to add it where you are typing. A variable
+  is one of the content type's text fields, by its label, or `{Site name}`, the site's name.
+  **Share image** takes the image from one of the type's image fields, or leaves it
+  automatic. A page's own text in its SEO tab still wins over the template's rule, which
+  wins over the content type's pattern ([the order](#turning-the-fields-into-tags)).
+  Hiding from search, the official address and structured data stay with each page and its
+  content type.
+- **An entry's own design** gets the same rules, for the one entry it draws.
+
+The template's preview shows one of the type's published pages, chosen under **Preview
+with**, as it is served once the template is saved: worked out by the plugin's
+`POST /template` route, through the Page Builder's own reading of the design. A change is
+one edit of the template: the editor's Undo takes it back, and **Save** or **Publish**
+stores it. Every page the template draws follows the rule without a redeploy.
+
+The rules are stored in the template's own metadata (`settings.seo`), as text and bindings
+joined in order, which the Page Builder fills for each page. On a site without the Page
+Builder the tab is not offered, and nothing else changes: the plugin names the Page Builder
+in `optionalDependsOn`.
 
 ## Configuration
 
