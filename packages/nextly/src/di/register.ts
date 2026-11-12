@@ -122,7 +122,6 @@ import {
   holdRecordedAtStart,
   registryRows,
 } from "../domains/schema/pipeline/recorded-fields";
-import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -3639,18 +3638,16 @@ async function initializeSchemaRegistry(
       registry.registerDynamicSchema(tableName, runtimeTable);
       if (perLanguage) {
         if (options.createMissingCompanions) {
-          const { ensureCompanionTable } = await import(
-            "../domains/i18n/runtime/companion-io"
+          // The one making of a field group's translation table, which the
+          // reload after the migrations at start asks of too.
+          const { ensureFieldGroupCompanion } = await import(
+            "../init/field-group-companions"
           );
-          await ensureCompanionTable(adapter, {
-            // As above: a field group's own creator sizes a text column from a different key
-            // again, and a code-first row in this registry was not built by it at all.
-            builtBy: builtByFor("fieldGroup", builderOwned),
-            slug: tableName,
+          await ensureFieldGroupCompanion(adapter, {
             tableName,
-            fields: fields as { name: string; type: string }[],
+            fields,
+            builderOwned,
             dialect,
-            status: false,
           });
         }
         const { buildCompanionRuntimeTable } = await import(

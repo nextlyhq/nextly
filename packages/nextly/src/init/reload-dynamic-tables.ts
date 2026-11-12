@@ -205,6 +205,12 @@ async function runReload(label: string, creates: boolean): Promise<boolean> {
      * how the two would come to disagree.
      */
     const components = await registerComponents(deps, label, failures);
+    // A field group's registration makes no table, so where this reload may
+    // define structure, its missing translation tables are made here, as a
+    // collection's and a Single's are by their registration above.
+    if (deps.createMissingCompanions) {
+      await provisionFieldGroupCompanions(deps, failures);
+    }
 
     if (failures.length > 0) {
       consoleLogger.warn(
@@ -264,6 +270,39 @@ async function registerComponents(
       `field groups: ${err instanceof Error ? err.message : String(err)}`
     );
     return 0;
+  }
+}
+
+/**
+ * Make every translated field group's missing translation table
+ * (`ensureFieldGroupCompanions`), or record why a row could not be.
+ */
+async function provisionFieldGroupCompanions(
+  deps: ReloadDeps,
+  failures: string[]
+): Promise<void> {
+  try {
+    const { ensureFieldGroupCompanions } = await import(
+      "./field-group-companions"
+    );
+    const outcome = await ensureFieldGroupCompanions(
+      deps.adapter,
+      deps.dialect
+    );
+    for (const failure of outcome.failures) {
+      const why =
+        failure.error instanceof Error
+          ? failure.error.message
+          : String(failure.error);
+      failures.push(
+        `field group translation tables${failure.tableName ? `.${failure.tableName}` : ""}: ${why}`
+      );
+    }
+  } catch (err) {
+    // Recorded rather than thrown: this function's caller must never throw.
+    failures.push(
+      `field group translation tables: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 

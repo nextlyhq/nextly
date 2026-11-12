@@ -29,6 +29,11 @@
  * the start creates nothing and refuses with the one message naming
  * `nextly migrate`. With migrations at start on, that step sets the database
  * up and the start goes on.
+ *
+ * A translated field group whose translation table is gone stays without one
+ * at a production start, and the migrations at start make it again, as they
+ * do a collection's, so its translations are written and read in each
+ * language.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -49,6 +54,7 @@ import {
   defineConfig,
   defineFieldGroup,
   defineSingle,
+  fieldGroup,
   text,
 } from "../../config";
 import { createAdapter } from "../../database/factory";
@@ -401,6 +407,127 @@ describe.each(getConfiguredTestDialects())(
         expect(await catalog(dialect, url)).toEqual(before);
       },
       240_000
+    );
+
+    /** A translated field group, used by a collection, in two languages. */
+    function translatedFieldGroup() {
+      return {
+        localization: {
+          locales: ["en", "es"],
+          defaultLocale: "en",
+          fallback: false,
+        },
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "pscn_hero",
+            localized: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "pscn_pages",
+            access: READABLE,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "pscn_hero" }),
+            ],
+          }),
+        ],
+      };
+    }
+
+    it.each([false, true])(
+      "a translated field group whose translation table is gone gets it back only from the migrations at start (on: %s)",
+      async migrationsAtStart => {
+        const setup = await adapterFor();
+        await createTestNextly({
+          adapter: setup as never,
+          ...translatedFieldGroup(),
+        });
+        await shutdownServices();
+        await setup.disconnect().catch(() => undefined);
+        const tables = async (): Promise<Set<string>> => {
+          const check = await adapterFor();
+          try {
+            return new Set(
+              (await check.listTables()).map(name => name.toLowerCase())
+            );
+          } finally {
+            await check.disconnect().catch(() => undefined);
+          }
+        };
+        expect(await tables(), "the translation table was migrated").toContain(
+          "comp_pscn_hero_locales"
+        );
+        const drop = await adapterFor();
+        await drop.executeQuery("DROP TABLE comp_pscn_hero_locales");
+        await drop.disconnect().catch(() => undefined);
+
+        vi.stubEnv("NODE_ENV", "production");
+        _resetEnvCache();
+        const nextly = await getNextly({
+          config: sanitizeConfig(
+            defineConfig({
+              ...translatedFieldGroup(),
+              ...(migrationsAtStart
+                ? { db: { runMigrationsOnBoot: true, migrationsDir } }
+                : {}),
+            })
+          ) as never,
+        });
+
+        if (!migrationsAtStart) {
+          // The first request loads the definitions again, and still makes
+          // no table.
+          const handlers = createDynamicHandlers({
+            config: sanitizeConfig(
+              defineConfig(translatedFieldGroup())
+            ) as never,
+          });
+          const path = ["collections", "pscn_pages", "entries"];
+          await handlers.GET(
+            new Request(`http://localhost/api/${path.join("/")}`),
+            { params: Promise.resolve({ params: path }) }
+          );
+          await startSettled();
+          expect(await tables()).not.toContain("comp_pscn_hero_locales");
+          return;
+        }
+        expect(await tables()).toContain("comp_pscn_hero_locales");
+        // The translations are written and read in each language.
+        const { item } = (await nextly.create({
+          collection: "pscn_pages",
+          data: { title: "home", hero: { heading: "Hello" } },
+        } as never)) as unknown as { item: { id: string } };
+        const inEnglish = (await nextly.findByID({
+          collection: "pscn_pages",
+          id: String(item.id),
+          depth: 1,
+        } as never)) as { hero: { id: string; heading: string } };
+        await nextly.update({
+          collection: "pscn_pages",
+          id: String(item.id),
+          locale: "es",
+          data: {
+            hero: { id: inEnglish.hero.id, heading: "Hola" },
+            _overwrite: true,
+          },
+        } as never);
+        const read = async (locale: string) =>
+          (
+            (await nextly.findByID({
+              collection: "pscn_pages",
+              id: String(item.id),
+              depth: 1,
+              locale,
+            } as never)) as { hero: { heading: string } }
+          ).hero.heading;
+        expect(await read("es")).toBe("Hola");
+        expect(await read("en")).toBe("Hello");
+        await startSettled();
+      },
+      300_000
     );
 
     it("the control: with migrations at start on, that step sets an empty database up and the start goes on", async () => {
