@@ -20,13 +20,15 @@
  * @module domains/email/plugin-send-forgetting
  */
 
-import type { OpenTransactionProbe } from "../../shared/lib/open-transaction";
 import { z } from "zod";
 
 import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { linkedTransaction } from "../../plugins/database/plugin-transaction-link";
-import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
+import {
+  assertNoOpenTransaction,
+  type OpenTransactionProbe,
+} from "../../shared/lib/open-transaction";
 import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import { adapterDialect, rowLockServer } from "../audit/audit-log-writer";
 import {

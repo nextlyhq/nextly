@@ -250,13 +250,26 @@ describe.each(getConfiguredTestDialects())(
         to: "linus@example.com",
         idempotencyKey: "submission-2",
       });
-      expect(await deliveriesTo(t, "ada@example.com")).toHaveLength(1);
+      const [forgotten] = await deliveriesTo(t, "ada@example.com");
+      const digest = forgotten?.keyDigest;
+      expect(digest).toMatch(/^[0-9a-f]{64}$/);
+      const carrying = async (table: string) =>
+        (
+          await t.adapter.select<{ id: string }>(table, {
+            where: { and: [{ column: "keyDigest", op: "=", value: digest }] },
+          })
+        ).length;
+      expect(await carrying("email_send_claims")).toBe(1);
 
       await plugin().services.email.forgetSends({
         idempotencyKeys: ["submission-1"],
       });
 
       expect(await deliveriesTo(t, "ada@example.com")).toEqual([]);
+      // The send's key digest is gone from its records and from its claim,
+      // so nothing ties the erased record to the key any more.
+      expect(await carrying("email_deliveries")).toBe(0);
+      expect(await carrying("email_send_claims")).toBe(0);
       expect(await erasedCount(t)).toBe(1);
       expect(await deliveriesTo(t, "grace@example.com")).toHaveLength(1);
       const [kept] = await deliveriesTo(t, "linus@example.com");
