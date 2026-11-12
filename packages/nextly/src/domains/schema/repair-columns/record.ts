@@ -234,10 +234,12 @@ export async function insertRepair(
 
 /**
  * A type as the record keeps it: with the size PostgreSQL reports beside it (`numeric` and
- * `10,2` as `numeric(10,2)`), so the record says exactly what was converted.
+ * `10,2` as `numeric(10,2)`), so the record says exactly what was converted. MySQL's type already
+ * spells its size (`varchar(36)`, with `36` beside it as well), so a type that carries one is kept
+ * as it is rather than given it twice.
  */
 function typeText(state: ColumnState): string {
-  return state.typeModifier === undefined
+  return state.typeModifier === undefined || state.type.includes("(")
     ? state.type
     : `${state.type}(${state.typeModifier})`;
 }

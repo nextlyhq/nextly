@@ -340,3 +340,78 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
     });
   }
 );
+
+describe.each(getConfiguredTestDialects().filter(d => d !== "mysql"))(
+  "a stopped lossy conversion on %s",
+  dialect => {
+    let handle: TestNextly;
+    const tools = tableTools(() => handle.adapter, dialect);
+    const { q, run } = tools;
+
+    beforeEach(async () => {
+      handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+    });
+
+    afterEach(async () => {
+      await run(`DROP TABLE IF EXISTS ${q(TABLE)}`);
+      await run(`DROP TABLE IF EXISTS ${q(COLUMN_REPAIRS_TABLE)}`);
+      await handle?.destroy();
+    });
+
+    it("a stopped run leaves no recorded progress and no value cleared", async () => {
+      // The lossy case each dialect holds: a repeater held as text on PostgreSQL; on SQLite, where
+      // JSON is text, an integer column becoming a real and holding a word.
+      const price = f({
+        name: "price",
+        type: "number",
+        options: { format: "float" },
+      });
+      let column: string;
+      let entity;
+      if (dialect === "sqlite") {
+        await run(
+          `CREATE TABLE ${q(TABLE)} (${q("id")} text PRIMARY KEY, ${q("slug")} text, ${q("title")} text, ${q("price")} integer)`
+        );
+        await tools.insert(TABLE, [
+          { id: "p1", title: "a", price: 3 },
+          { id: "p2", title: "b", price: "word" },
+        ]);
+        column = "price";
+        entity = collection(TABLE, [TITLE, price]);
+      } else {
+        await createLegacyLinks();
+        column = "links";
+        entity = ENTITY;
+      }
+      const before = await tools.definition(TABLE);
+      const values = await tools.values(TABLE, column);
+
+      // The run stops as its conversion starts, once the column was judged and its values were
+      // about to be cleared: the clearing and the conversion commit together, or neither does.
+      const document = await applyRepairs({
+        adapter: handle.adapter,
+        dialect,
+        entities: [entity],
+        nextlyVersion: "test",
+        consent: resolveDataLossConsent({ flag: `${TABLE}.${column}` }),
+        beforeStep: () => Promise.reject(new Error("the process stopped")),
+      });
+      expect(recordOf(document.result?.records, column).outcome).toBe("failed");
+      expect(await tools.definition(TABLE)).toEqual(before);
+      expect(await tools.values(TABLE, column)).toEqual(values);
+      expect(await readRepairs(handle.adapter.getDrizzle(), dialect)).toEqual(
+        []
+      );
+    });
+
+    /** The repeater held as text, with a value that does not parse. */
+    async function createLegacyLinks() {
+      await tools.createTable(TABLE, [TITLE, LINKS]);
+      await tools.retype(TABLE, "links", "text");
+      await tools.insert(TABLE, [
+        { id: "p1", title: "a", links: VALID },
+        { id: "p2", title: "b", links: "" },
+      ]);
+    }
+  }
+);
