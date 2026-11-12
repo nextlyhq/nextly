@@ -24,6 +24,8 @@ export interface ReceivedHead {
     image?: string;
     imageWidth?: number;
     imageHeight?: number;
+    locale?: string;
+    siteName?: string;
   };
   twitter: { title?: string; description?: string; image?: string };
 }
@@ -311,6 +313,8 @@ export function readHead(html: string): ReceivedHead {
       ...some("image", values.get("og:image") ?? values.get("og:image:url")),
       ...some("imageWidth", wholeNumber(values.get("og:image:width"))),
       ...some("imageHeight", wholeNumber(values.get("og:image:height"))),
+      ...some("locale", values.get("og:locale")),
+      ...some("siteName", values.get("og:site_name")),
     },
     twitter: {
       ...some("title", values.get("twitter:title")),

@@ -444,7 +444,7 @@ function editedScalars(
     ) {
       continue;
     }
-    if (!sameValue(draft[key], before[key])) keepEdited(edited, draft, key);
+    if (!same(draft[key], before[key])) keepEdited(edited, draft, key);
   }
   return edited;
 }
@@ -458,11 +458,6 @@ function keepEdited<K extends keyof SettingsDraft>(
   target[key] = source[key];
 }
 
-/** Whether two values hold the same, compared as stored. */
-function sameValue(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 /** A map moved entry by entry: each entry edited here kept, every other the newer one. */
 function rebasedEntries<T>(
   draft: Readonly<Record<string, T>>,
@@ -471,7 +466,7 @@ function rebasedEntries<T>(
 ): Record<string, T> {
   const next: Record<string, T> = { ...after };
   for (const key of new Set([...Object.keys(draft), ...Object.keys(before)])) {
-    if (sameValue(draft[key], before[key])) continue;
+    if (same(draft[key], before[key])) continue;
     const edited = draft[key];
     if (edited === undefined) delete next[key];
     else next[key] = edited;

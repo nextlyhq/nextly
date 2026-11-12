@@ -1094,6 +1094,43 @@ function useImportFlow() {
 
 type ImportFlow = ReturnType<typeof useImportFlow>;
 
+/** The second step: where each field goes, and values never served. */
+function MatchStep({ flow }: { flow: ImportFlow }): JSX.Element {
+  let matching: ReactNode = null;
+  if (flow.group?.own === true) {
+    // The plugin's own group, as an earlier version kept it: nothing to
+    // match, since its fields are the plugin's own places.
+    matching = (
+      <p className="text-sm text-muted-foreground">
+        Titles and descriptions typed the same as the automatic ones become
+        automatic again, so a change to a pattern reaches them. Every other
+        value stays as it is.
+      </p>
+    );
+  } else if (flow.group !== undefined) {
+    matching = (
+      <MatchTable
+        group={flow.group}
+        map={flow.map}
+        setTarget={flow.setTarget}
+      />
+    );
+  } else if (flow.run !== undefined) {
+    matching = <FileTable run={flow.run} />;
+  }
+  return (
+    <div className="grid gap-4">
+      {matching}
+      <NeverServedNote
+        run={flow.run}
+        sourceLabel={flow.name}
+        include={flow.include}
+        setInclude={flow.includeAnyway}
+      />
+    </div>
+  );
+}
+
 /** What the current step shows. */
 function StepBody({ flow }: { flow: ImportFlow }): JSX.Element {
   if (flow.step === "imported" && flow.run !== undefined) {
@@ -1118,35 +1155,7 @@ function StepBody({ flow }: { flow: ImportFlow }): JSX.Element {
       />
     );
   }
-  if (flow.step === 1) {
-    return (
-      <div className="grid gap-4">
-        {flow.group?.own === true ? (
-          // The plugin's own group, as an earlier version kept it: nothing
-          // to match, since its fields are the plugin's own places.
-          <p className="text-sm text-muted-foreground">
-            Titles and descriptions typed the same as the automatic ones become
-            automatic again, so a change to a pattern reaches them. Every other
-            value stays as it is.
-          </p>
-        ) : flow.group !== undefined ? (
-          <MatchTable
-            group={flow.group}
-            map={flow.map}
-            setTarget={flow.setTarget}
-          />
-        ) : flow.run === undefined ? null : (
-          <FileTable run={flow.run} />
-        )}
-        <NeverServedNote
-          run={flow.run}
-          sourceLabel={flow.name}
-          include={flow.include}
-          setInclude={flow.includeAnyway}
-        />
-      </div>
-    );
-  }
+  if (flow.step === 1) return <MatchStep flow={flow} />;
   return flow.run === undefined ? (
     <p className="text-sm text-muted-foreground" role="status">
       Working out what would change…

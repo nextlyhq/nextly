@@ -1,5 +1,5 @@
 /**
- * The Pages and addresses screen's routes: every public address the site
+ * Pages' routes: every public address the site
  * knows of, and the save of a page with no entry's SEO, both site-wide SEO
  * for whoever holds `manage-seo`.
  *
@@ -138,7 +138,7 @@ function saveRoute(config: CodePageRoutesConfig): PluginRoute {
   });
 }
 
-/** The routes the Pages and addresses screen reads and saves through. */
+/** The routes Pages reads and saves through. */
 export function codePageRoutes(config: CodePageRoutesConfig): PluginRoute[] {
   return [addressesRoute(config), saveRoute(config)];
 }

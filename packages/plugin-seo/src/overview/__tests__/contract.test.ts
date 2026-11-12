@@ -119,6 +119,16 @@ describe("recentNotFound", () => {
     lastSeen,
     kind: "missing",
     suggestion: null,
+    cameFrom: null,
+    ignored: false,
+  });
+
+  it("leaves out an address someone chose to ignore", () => {
+    const rows = [
+      { ...row("set-aside", "2026-11-12T11:30:00Z"), ignored: true },
+      row("b", "2026-11-12T11:00:00Z"),
+    ];
+    expect(recentNotFound(rows, NOW).map(each => each.id)).toEqual(["b"]);
   });
 
   it("lists the last week's addresses, most recent first, three at most", () => {

@@ -12,24 +12,24 @@
  * @module admin/code-page-panel
  */
 import {
+  Alert,
+  AlertDescription,
   apiErrorMessage,
   Button,
   MediaPickerDialog,
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
   Switch,
   toastMutationResult,
   useMediaItem,
   usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Check, Info } from "lucide-react";
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type JSX,
-  type ReactNode,
-} from "react";
+import { useRef, useState, type JSX, type ReactNode } from "react";
 
 import {
   ADDRESSES_ROUTE_PATH,
@@ -49,10 +49,9 @@ import { Chip, LinkAction, Note, SourceRow } from "./parts";
 import { PreviewCard } from "./previews";
 import { Row, RowButton } from "./rows";
 import { SeoTextField } from "./SeoPanel";
-import { Icon } from "./styles";
 
 /** Where each source of an address is said to come from. */
-export const SOURCE_LABELS: Record<SiteAddress["source"], string> = {
+const SOURCE_LABELS: Record<SiteAddress["source"], string> = {
   entry: "Entry",
   built: "Built route",
   dynamic: "Declared by a dynamic route",
@@ -460,13 +459,6 @@ function useCodePageDraft(
   };
 }
 
-/** The style placing the panel `top` pixels down the window. */
-function drawerTop(
-  top: number
-): CSSProperties & Record<"--nx-seo-drawer-top", string> {
-  return { "--nx-seo-drawer-top": `${top}px` };
-}
-
 /** The panel that sets the SEO of one page built in code. */
 export function CodePagePanel({
   item,
@@ -480,120 +472,113 @@ export function CodePagePanel({
   const { draft, change, automatic, answer, site, address, save, submit } =
     useCodePageDraft(item, host, onClose);
   const titleField = useRef<HTMLInputElement>(null);
-  const panel = useRef<HTMLElement>(null);
-  // The panel opens below the admin's top bar: from where the page's main
-  // region starts, which the admin's layout decides.
-  const [top, setTop] = useState<number | undefined>(undefined);
-  useLayoutEffect(() => {
-    const main = panel.current?.closest("main");
-    if (main) setTop(Math.max(0, main.getBoundingClientRect().top));
-  }, []);
-  useEffect(() => {
-    titleField.current?.focus();
-  }, []);
   // Nothing is edited while a save is on its way, so what it sends is what
   // the panel holds when it closes.
   const writable = !save.pending;
   return (
-    <aside
-      ref={panel}
-      style={top === undefined ? undefined : drawerTop(top)}
-      className="nx-seo-drawer"
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby="nx-seo-pages-dh"
-      onKeyDown={event => {
-        if (event.key === "Escape") onClose();
+    <Sheet
+      open
+      onOpenChange={open => {
+        if (!open) onClose();
       }}
     >
-      <div className="nx-seo-dh">
-        <div>
-          <h2 id="nx-seo-pages-dh">SEO for {item.path}</h2>
-          <span className="nx-seo-help">
-            {SOURCE_LABELS[item.source]} · <span>{item.from}</span>
-          </span>
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-[480px]"
+        onOpenAutoFocus={event => {
+          // The title is where a person starts.
+          event.preventDefault();
+          titleField.current?.focus();
+        }}
+      >
+        <SheetHeader className="border-b border-border p-4">
+          <SheetTitle className="break-words text-base">
+            SEO for {item.path}
+          </SheetTitle>
+          <SheetDescription>
+            {SOURCE_LABELS[item.source]} ·{" "}
+            <span className="font-mono text-xs">{item.from}</span>
+          </SheetDescription>
+        </SheetHeader>
+        <div className="flex flex-col gap-4 p-4">
+          <ConnectionNote item={item} />
+          <PreviewCard answer={answer} site={site} status="ready" />
+          <fieldset
+            className="m-0 grid min-w-0 gap-4 border-0 p-0"
+            disabled={save.pending}
+          >
+            <SeoTextField
+              label="Title on Google"
+              help="The blue link people click in Google's results."
+              value={draft.title}
+              placeholder={automatic.title}
+              count={characters(answer.title?.value ?? "")}
+              limit={TITLE_LIMIT}
+              maxLength={LONGEST_SEO_TEXT}
+              writable={writable}
+              inputRef={titleField}
+              onChange={title => change({ title: title ?? "" })}
+              source={id => (
+                <Source
+                  id={id}
+                  item={item}
+                  field="title"
+                  typed={draft.title.trim() !== ""}
+                  onAutomatic={() => change({ title: "" })}
+                />
+              )}
+            />
+            <SeoTextField
+              multiline
+              label="Description on Google"
+              help="The grey text under the link."
+              value={draft.description}
+              placeholder={automatic.description}
+              count={characters(answer.description?.value ?? "")}
+              limit={DESCRIPTION_LIMIT}
+              maxLength={LONGEST_SEO_TEXT}
+              writable={writable}
+              onChange={description =>
+                change({ description: description ?? "" })
+              }
+              source={id => (
+                <Source
+                  id={id}
+                  item={item}
+                  field="description"
+                  typed={draft.description.trim() !== ""}
+                  onAutomatic={() => change({ description: "" })}
+                />
+              )}
+            />
+            <Advanced
+              item={item}
+              address={address}
+              draft={draft}
+              change={change}
+            />
+          </fieldset>
+          {save.error ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                Not saved. {apiErrorMessage(save.error)}
+              </AlertDescription>
+            </Alert>
+          ) : null}
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Close"
-          onClick={onClose}
-        >
-          <Icon name="x" />
-        </Button>
-      </div>
-      <div className="nx-seo-db">
-        <ConnectionNote item={item} />
-        <PreviewCard answer={answer} site={site} status="ready" />
-        <fieldset className="nx-seo-fields" disabled={save.pending}>
-          <SeoTextField
-            label="Title on Google"
-            help="The blue link people click in Google's results."
-            value={draft.title}
-            placeholder={automatic.title}
-            count={characters(answer.title?.value ?? "")}
-            limit={TITLE_LIMIT}
-            maxLength={LONGEST_SEO_TEXT}
-            writable={writable}
-            inputRef={titleField}
-            onChange={title => change({ title: title ?? "" })}
-            source={id => (
-              <Source
-                id={id}
-                item={item}
-                field="title"
-                typed={draft.title.trim() !== ""}
-                onAutomatic={() => change({ title: "" })}
-              />
-            )}
-          />
-          <SeoTextField
-            multiline
-            label="Description on Google"
-            help="The grey text under the link."
-            value={draft.description}
-            placeholder={automatic.description}
-            count={characters(answer.description?.value ?? "")}
-            limit={DESCRIPTION_LIMIT}
-            maxLength={LONGEST_SEO_TEXT}
-            writable={writable}
-            onChange={description => change({ description: description ?? "" })}
-            source={id => (
-              <Source
-                id={id}
-                item={item}
-                field="description"
-                typed={draft.description.trim() !== ""}
-                onAutomatic={() => change({ description: "" })}
-              />
-            )}
-          />
-          <Advanced
-            item={item}
-            address={address}
-            draft={draft}
-            change={change}
-          />
-        </fieldset>
-        {save.error ? (
-          <p className="nx-seo-error" role="alert">
-            Not saved. {apiErrorMessage(save.error)}
-          </p>
-        ) : null}
-      </div>
-      <div className="nx-seo-df">
-        <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          type="button"
-          disabled={save.pending}
-          onClick={() => void submit()}
-        >
-          {save.pending ? "Saving…" : "Save"}
-        </Button>
-      </div>
-    </aside>
+        <SheetFooter className="mt-auto gap-2 border-t border-border p-4">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={save.pending}
+            onClick={() => void submit()}
+          >
+            {save.pending ? "Saving…" : "Save"}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }

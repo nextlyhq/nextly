@@ -16,6 +16,7 @@ import { askedAddress } from "../redirects/served";
 
 import { recordNotFound } from "./log";
 import { notAPageAddress } from "./page-address";
+import { isBotProbe } from "./probes";
 
 /**
  * The SEO plugin's context, once it has started, on `globalThis` so the
@@ -57,6 +58,27 @@ function loggedBefore(id: string | null): boolean {
   return false;
 }
 
+/**
+ * Where a visitor came from, as the log keeps it, from the page that sent
+ * them (the request's `referer`): a path on this site without its query,
+ * another site's host, or nothing for one who came directly. Only what the
+ * list needs is kept: never another site's path or anyone's query.
+ */
+export function cameFromOf(
+  referer: string | null,
+  asked: URL
+): string | undefined {
+  if (referer === null || referer.trim() === "") return undefined;
+  let from: URL;
+  try {
+    from = new URL(referer);
+  } catch {
+    return undefined;
+  }
+  if (from.protocol !== "http:" && from.protocol !== "https:") return undefined;
+  return from.origin === asked.origin ? from.pathname : from.host;
+}
+
 /** Anything that reads a request header by name, as `headers()` does. */
 export interface HeaderReader {
   get(name: string): string | null;
@@ -91,12 +113,14 @@ export async function logNotFound(headers: HeaderReader): Promise<void> {
   if (loggedBefore(headers.get(REQUEST_HEADER))) return;
   try {
     const url = new URL(asked);
-    if (notAPageAddress(url.pathname)) return;
+    if (notAPageAddress(url.pathname) || isBotProbe(url.pathname)) return;
     // Kept by language and path, so `/gone` on two languages' domains is
     // two addresses, each answered by its own language's redirect.
+    const cameFrom = cameFromOf(headers.get("referer"), url);
     await recordNotFound(ctx, {
       ...(await askedAddress(ctx, url)),
       asked: url.pathname,
+      ...(cameFrom === undefined ? {} : { cameFrom }),
     });
   } catch (error) {
     ctx.logger.warn("An address not found could not be logged", { error });
