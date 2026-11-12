@@ -60,7 +60,21 @@ export interface MoveContext {
    * moving it out is refused as moving into it is.
    */
   fieldGroupFieldHolding?: (rowId: string) => BuilderField | undefined;
+  /**
+   * Whether a field may change container at all; `CONTAINER_CHANGES_KEEP_VALUES`
+   * when not given. The rule's other answers hold either way.
+   */
+  containerChanges?: boolean;
 }
+
+/**
+ * Whether a save keeps a field's values when the field changes container: not
+ * yet, since the save drops the column of a field that leaves the main table
+ * and starts the JSON value of one that enters a group empty. Until it does,
+ * every move into or out of a group or repeating rows is refused, so no gesture
+ * offers a move that would lose values; reorders within a container go ahead.
+ */
+export const CONTAINER_CHANGES_KEEP_VALUES = false;
 
 /** Why a move is refused. */
 export type MoveRefusalReason =
@@ -75,7 +89,8 @@ export type MoveRefusalReason =
   | "unique-into-container"
   | "excluded-type"
   | "name-clash"
-  | "reserved-name";
+  | "reserved-name"
+  | "not-available-yet";
 
 /** A move's answer: the fields after it, or why it is refused. */
 export type MoveVerdict =
@@ -188,6 +203,21 @@ function fieldGroupRefusal(
   return refuse(
     "into-field-group",
     `${called(container)} uses the field group ${name}, which is changed only in its own editor, where a change reaches every place that uses it.${usedBy}`
+  );
+}
+
+/** The refusal of any change of container while a save would lose its values. */
+function containerChangeRefusal(
+  from: readonly BuilderField[],
+  container: BuilderField | null,
+  ctx: MoveContext
+): MoveVerdict | null {
+  const allowed = ctx.containerChanges ?? CONTAINER_CHANGES_KEEP_VALUES;
+  const source = from.length > 0 ? from[from.length - 1] : null;
+  if (allowed || (source?.id ?? null) === (container?.id ?? null)) return null;
+  return refuse(
+    "not-available-yet",
+    "Moving a field into or out of a group or repeating rows is not available yet."
   );
 }
 
@@ -326,6 +356,7 @@ export function judgeMove(
     ((ctx.excludedTypes ?? []).includes(field.type)
       ? refuse("excluded-type", `${called(field)} cannot go here.`)
       : null) ??
+    containerChangeRefusal(from, container, ctx) ??
     nameRefusal(field, container, siblingsIn(fields, container), ctx);
   if (refusal) return refusal;
   const passed = passedReadOnlySibling(

@@ -50,7 +50,10 @@ function renderList(
   const callbacks: OutlineCallbacks = {
     select: vi.fn(),
     addAt: onAddAt,
-    move: vi.fn(),
+    fields,
+    judgeMove: vi.fn(),
+    moveDestinations: vi.fn(() => []),
+    commitMove: vi.fn(),
     duplicate: vi.fn(),
     remove: vi.fn(),
     setHidden: vi.fn(),

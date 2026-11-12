@@ -114,7 +114,7 @@ export default function SingleBuilderEditPage({
     resolver: zodResolver(singleFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
@@ -327,7 +327,6 @@ export default function SingleBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         <SchemaBuilderSlots
           fields={builder.fields}

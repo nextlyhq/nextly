@@ -4,12 +4,13 @@
  * useBuilderFieldActions — the operations a schema-builder page performs on its
  * own field list, independent of which kind of entity it is editing.
  *
- * `useFieldBuilder` owns the field state; this owns the three decisions the
+ * `useFieldBuilder` owns the field state; this owns the two decisions the
  * pages make about that state and had been making identically three times
- * over: what a duplicated field is named, what a drag means, and which fields
- * count as the user's.
+ * over: where a duplicated field goes and what it is named, and which fields
+ * count as the user's. What a drag means is the outline's, through the move
+ * rule every way of moving a field asks.
  */
-import type { DragEndEvent } from "@dnd-kit/core";
+import { siblingNameClash } from "nextly/config";
 import { useCallback } from "react";
 
 import type {
@@ -21,19 +22,28 @@ import {
   convertToFieldDefinition,
   findFieldById,
   findParentContainerId,
-  reorderNestedFields,
   SYSTEM_FIELD_NAMES,
 } from "@admin/lib/builder";
-import { builderDropAccepted } from "@admin/lib/builder/builder-rows";
+import { isReservedFieldName } from "@admin/lib/builder/constants";
 import { copyWithNewIds } from "@admin/lib/builder/copy-field";
-import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
+import { freeDuplicateName } from "@admin/lib/builder/duplicate-field-name";
+import { insertField, positionAfter } from "@admin/lib/builder/insert-field";
+import type { MoveContext } from "@admin/lib/builder/move-rule";
 import type { FieldDefinition } from "@admin/types/collection";
 
+/** What naming a copy needs beyond the fields: the move rule's view of names. */
+export type DuplicateNaming = Pick<
+  MoveContext,
+  "heldNames" | "topLevelReservesNames"
+>;
+
 export interface UseBuilderFieldActionsReturn {
-  /** Clone a field beside itself, under the next free name. */
-  handleDuplicateField: (fieldId: string) => void;
-  /** Apply a drag from the outline: a field moving within its container. */
-  handleRowDragEnd: (event: DragEndEvent) => void;
+  /**
+   * Copy a field to right after itself, under the first name that clashes
+   * with nothing beside it, by the server's own clash rule, and is not
+   * reserved there.
+   */
+  handleDuplicateField: (fieldId: string, naming?: DuplicateNaming) => void;
   /**
    * The user's fields as field definitions, or null when they do not validate
    * — in which case the reason has already been shown as a toast.
@@ -41,49 +51,52 @@ export interface UseBuilderFieldActionsReturn {
   getValidatedFields: () => FieldDefinition[] | null;
 }
 
+/**
+ * Whether a copy may not be called `name` beside `siblings`: a sibling's name
+ * clashes with it (the same, in other letter case, or the same column), a
+ * pending delete there still holds one that does, or it is reserved there.
+ */
+function nameTaken(
+  name: string,
+  siblings: readonly BuilderField[],
+  containerId: string | null,
+  naming: DuplicateNaming | undefined
+): boolean {
+  const held = naming?.heldNames?.get(containerId ?? "") ?? [];
+  return (
+    siblings.some(sibling => siblingNameClash(name, sibling.name) !== null) ||
+    held.some(other => siblingNameClash(name, other) !== null) ||
+    (containerId === null &&
+      naming?.topLevelReservesNames === true &&
+      isReservedFieldName(name))
+  );
+}
+
 export function useBuilderFieldActions(
   builder: BuilderFieldsApi
 ): UseBuilderFieldActionsReturn {
   const handleDuplicateField = useCallback(
-    (fieldId: string) => {
-      // Duplicate is reachable from nested rows as well as top-level ones, so
-      // locate the source and its container first. `takenNames` is the sibling
-      // list rather than every field, which lets a nested field and a
-      // top-level one carry the same name.
+    (fieldId: string, naming?: DuplicateNaming) => {
       const source = findFieldById(builder.fields, fieldId);
       if (!source) return;
-      const parent = findParentContainerId(builder.fields, fieldId);
-      const siblings = parent
-        ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
+      const containerId =
+        findParentContainerId(builder.fields, fieldId)?.containerId ?? null;
+      const siblings = containerId
+        ? (findFieldById(builder.fields, containerId)?.fields ?? [])
         : builder.fields;
-      const takenNames = siblings.map(f => f.name);
       // A new field all the way down: the copy and every field inside it get
       // new ids, so editing inside the copy never reaches the original.
       const duplicate: BuilderField = {
         ...copyWithNewIds(source),
-        name: nextDuplicateName(source.name, takenNames),
+        name: freeDuplicateName(source.name, name =>
+          nameTaken(name, siblings, containerId, naming)
+        ),
       };
-      if (parent) {
-        builder.handleNestedFieldAdd(parent.containerId, duplicate);
-      } else {
-        builder.setFields([...builder.fields, duplicate]);
-      }
-    },
-    [builder]
-  );
-
-  // A field drags by its own id and moves among its siblings, at any depth.
-  const handleRowDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over) return;
-      const activeId = String(active.id);
-      const overId = String(over.id);
-      // The ONE acceptance rule, shared with the drag announcements so what
-      // the reader is told matches what happens: a refused drop is refused
-      // here and described as unchanged there.
-      if (!builderDropAccepted(builder.fields, activeId, overId)) return;
-      builder.setFields(prev => reorderNestedFields(prev, activeId, overId));
+      // Right after the original, read from its own container's list.
+      const position = positionAfter(siblings, fieldId, containerId ?? undefined);
+      if (!position) return;
+      const next = insertField(builder.fields, duplicate, position);
+      if (next) builder.setFields(next);
     },
     [builder]
   );
@@ -103,5 +116,5 @@ export function useBuilderFieldActions(
     return userFields.map(convertToFieldDefinition);
   }, [builder]);
 
-  return { handleDuplicateField, handleRowDragEnd, getValidatedFields };
+  return { handleDuplicateField, getValidatedFields };
 }

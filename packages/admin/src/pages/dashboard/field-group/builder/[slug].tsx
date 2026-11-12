@@ -127,7 +127,7 @@ export default function FieldGroupBuilderEditPage({
     resolver: zodResolver(componentFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
@@ -307,7 +307,6 @@ export default function FieldGroupBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         /* This page is where the refusal actually happens: a diverged field group loads and
            edits normally, and only the SAVE is refused. An affordance living only on the list

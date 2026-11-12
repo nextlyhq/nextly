@@ -160,7 +160,7 @@ export default function CollectionBuilderEditPage({
     resolver: zodResolver(collectionFormSchema),
     defaultValues: { singularName: "", pluralName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [hooks, setHooks] = useState<EnabledHook[]>([]);
@@ -392,7 +392,6 @@ export default function CollectionBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         <SchemaBuilderSlots
           fields={builder.fields}

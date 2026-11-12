@@ -18,7 +18,14 @@ import {
   type MoveVerdict,
 } from "../move-rule";
 
-const ctx: MoveContext = { entityReadOnly: false, topLevelReservesNames: true };
+// The rule's whole answer, every change of container included: what it says
+// once a save keeps values across containers. The refusal it gives until then
+// is tested on its own, below.
+const ctx: MoveContext = {
+  entityReadOnly: false,
+  topLevelReservesNames: true,
+  containerChanges: true,
+};
 
 /** A plain field, as the Builder holds one. */
 function plain(
@@ -472,5 +479,84 @@ describe("Move to…'s places", () => {
     expect(answers.get("f-items-cta")).toBe("ok");
     expect(answers.get("f-body")).toBe("into-blocks");
     expect(answers.get("f-seo")).toBe("into-field-group");
+  });
+});
+
+describe("while a save cannot keep values across containers", () => {
+  // What the Builder asks today: the switch as it ships.
+  const today: MoveContext = {
+    entityReadOnly: false,
+    topLevelReservesNames: true,
+  };
+  const NOT_YET =
+    "Moving a field into or out of a group or repeating rows is not available yet.";
+
+  it.each([
+    ["into a group", "f-summary-a", { parentFieldId: "f-meta" }],
+    ["out of a group", "f-meta-title", {}],
+    ["into repeating rows", "f-summary-a", { parentFieldId: "f-sections" }],
+    [
+      "into a group inside repeating rows",
+      "f-sections-heading",
+      { parentFieldId: "f-items-cta" },
+    ],
+  ])("refuses a move %s, saying so", (_, id, target) => {
+    expect(refusal(judgeMove(nestedFixtureFields(), id, target, today))).toEqual(
+      { reason: "not-available-yet", message: NOT_YET }
+    );
+  });
+
+  it("still reorders within the top level and within a nested group", () => {
+    const top = moved(
+      judgeMove(
+        nestedFixtureFields(),
+        "f-summary-b",
+        { beforeFieldId: "f-summary-a" },
+        today
+      )
+    );
+    expect(namesIn(top).slice(0, 3)).toEqual([
+      "title",
+      "summary_b",
+      "summary_a",
+    ]);
+    const inGroup = moved(
+      judgeMove(
+        nestedFixtureFields(),
+        "f-cta-kind",
+        { parentFieldId: "f-items-cta", beforeFieldId: "f-cta-label" },
+        today
+      )
+    );
+    expect(namesIn(inGroup, "f-items-cta")).toEqual(["kind", "label"]);
+  });
+
+  it("keeps the lasting refusals ahead of it, which say more", () => {
+    const answer = (target: { parentFieldId?: string }) =>
+      refusal(judgeMove(nestedFixtureFields(), "f-summary-a", target, today))
+        .reason;
+    expect(answer({ parentFieldId: "f-body" })).toBe("into-blocks");
+    expect(answer({ parentFieldId: "f-seo" })).toBe("into-field-group");
+    expect(
+      refusal(judgeMove(nestedFixtureFields(), "f-cta-label", {}, today))
+        .reason
+    ).toBe("out-of-repeating-rows");
+  });
+
+  it("offers only the field's own container in Move to…", () => {
+    const answers = moveDestinations(
+      nestedFixtureFields(),
+      "f-summary-a",
+      today
+    ).map(place => [
+      place.parentFieldId ?? "top",
+      place.verdict.allowed ? "ok" : place.verdict.reason,
+    ]);
+    expect(Object.fromEntries(answers)).toMatchObject({
+      top: "ok",
+      "f-meta": "not-available-yet",
+      "f-sections": "not-available-yet",
+      "f-items-cta": "not-available-yet",
+    });
   });
 });

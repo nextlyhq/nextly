@@ -3,12 +3,23 @@
 /**
  * What can be done to the outline's rows, as one object that stays the same
  * for the outline's whole life, so no row redraws because of it; and the
- * state those actions keep: which row has focus, whose menu is open, and what
- * was last announced.
+ * state those actions keep: which row has focus, whose menu or Move to… is
+ * open, which row a move asks focus back on, and what was last announced.
+ *
+ * Every move, by key, menu, Move to… or drag, is judged by the one move rule
+ * and announced: where the field went, or why nothing moved.
  */
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import type { MoveVerdict } from "@admin/lib/builder/move-rule";
+import { movedSentence } from "@admin/lib/builder/move-words";
+import {
+  dropTarget,
+  stepTarget,
+  type MoveStep,
+  type OutlineRows,
+} from "@admin/lib/builder/outline/move-targets";
 import {
   flattenOutline,
   type OutlineNode,
@@ -25,6 +36,14 @@ export interface OutlineActionState {
   focusedId: string | null;
   setFocusedId: (id: string | null) => void;
   menuFor: string | null;
+  /** The row whose Move to… is open, if any. */
+  moveToFor: string | null;
+  closeMoveTo: () => void;
+  /**
+   * The row a move asks focus back on once it is drawn, taken by the outline
+   * when it can focus it.
+   */
+  takeRefocus: (drawn: (id: string) => boolean) => string | null;
   announcement: string;
 }
 
@@ -33,12 +52,29 @@ function spokenName(node: OutlineNode): string {
   return node.field.label || node.field.name || "the field";
 }
 
+/** Why a step has nowhere to go, said when it is asked for anyway. */
+function nowhereSentence(node: OutlineNode, step: MoveStep): string {
+  const name = spokenName(node);
+  if (isPendingDelete(node)) {
+    return `${name} is deleted. Undo brings it back before it can move.`;
+  }
+  const why: Record<MoveStep, string> = {
+    up: `${name} cannot move up: it is first at the top level, or a deleted field is above it.`,
+    down: `${name} cannot move down: it is last at the top level, or a deleted field is below it.`,
+    out: `${name} is already at the top level.`,
+    in: `There is no container right above ${name} to move into.`,
+  };
+  return `${why[step]} Nothing moved.`;
+}
+
 export function useOutlineActions(
   nodes: readonly OutlineNode[],
   callbacks: OutlineCallbacks
 ): OutlineActionState {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [moveToFor, setMoveToFor] = useState<string | null>(null);
+  const refocus = useRef<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
 
   const byId = useMemo(
@@ -71,26 +107,52 @@ export function useOutlineActions(
     rowElements.current.get(id)?.focus({ preventScroll: !scroll });
   }, []);
 
+  const takeRefocus = useCallback((drawn: (id: string) => boolean) => {
+    const id = refocus.current;
+    if (id !== null && drawn(id)) refocus.current = null;
+    return id;
+  }, []);
+
   const actions = useMemo<OutlineActions>(() => {
     const call = () => latest.current.callbacks;
     const nodeOf = (id: string) => latest.current.byId.get(id);
+    const rows = (): OutlineRows => ({
+      nodes: latest.current.nodes,
+      byId: latest.current.byId,
+    });
 
-    const canMove = (id: string, delta: -1 | 1): boolean => {
+    /**
+     * Judge a move and keep it if allowed, saying where the field went, or
+     * why nothing moved; focus stays on the field either way.
+     */
+    const carryOut = (
+      id: string,
+      target: FieldInsertPosition,
+      step?: "up" | "down"
+    ): MoveVerdict => {
+      const before = call().fields;
+      const verdict = call().judgeMove(id, target);
+      if (verdict.allowed) {
+        call().commitMove(verdict.fields);
+        setAnnouncement(movedSentence(before, verdict.fields, id, step));
+      } else {
+        setAnnouncement(`${verdict.message} Nothing moved.`);
+      }
+      refocus.current = id;
+      return verdict;
+    };
+
+    const canMove = (id: string, step: MoveStep): boolean => {
       const node = nodeOf(id);
       // A deleted row neither moves nor is moved past: the builder no
       // longer holds it, so a move beside it would land elsewhere.
       if (!node || !node.own || node.readOnly || isPendingDelete(node)) {
         return false;
       }
-      const siblings = siblingsOf(node);
-      const target = siblings[siblings.indexOf(node) + delta];
-      // Nor past a read-only sibling: that would move it too.
-      return (
-        target !== undefined &&
-        target.own &&
-        target.readOnly === null &&
-        !isPendingDelete(target)
-      );
+      // Nor past a read-only sibling, nor anywhere else the rule refuses;
+      // the step's target is null beside a deleted row.
+      const target = stepTarget(rows(), id, step);
+      return target !== null && call().judgeMove(id, target).allowed;
     };
 
     /** Right after a field, in its own container. */
@@ -127,16 +189,42 @@ export function useOutlineActions(
         }
       },
       canMove,
-      move: (id, delta) => {
+      move: (id, step) => {
         const node = nodeOf(id);
-        if (!node || !canMove(id, delta)) return;
-        const siblings = siblingsOf(node);
-        const at = siblings.indexOf(node) + delta;
-        call().move(id, delta);
+        if (!node) return;
+        const target = isPendingDelete(node)
+          ? null
+          : stepTarget(rows(), id, step);
+        if (!target) {
+          setAnnouncement(nowhereSentence(node, step));
+          return;
+        }
+        carryOut(id, target, step === "up" || step === "down" ? step : undefined);
+      },
+      openMoveTo: id => setMoveToFor(id),
+      moveDestinations: id => call().moveDestinations(id),
+      judgeMoveTo: (id, target) => call().judgeMove(id, target),
+      moveTo: (id, target) => {
+        const verdict = carryOut(id, target);
+        if (verdict.allowed) setMoveToFor(null);
+        return verdict;
+      },
+      judgeDrop: (activeId, overId, levels) => {
+        const target = dropTarget(rows(), activeId, overId, levels);
+        return target ? call().judgeMove(activeId, target) : null;
+      },
+      drop: (activeId, overId, levels) => {
+        const node = nodeOf(activeId);
+        if (!node) return;
+        const target = dropTarget(rows(), activeId, overId, levels);
+        if (target) {
+          carryOut(activeId, target);
+          return;
+        }
         setAnnouncement(
-          `Moved ${spokenName(node)} ${delta < 0 ? "up" : "down"}, position ${
-            at + 1
-          } of ${siblings.length}.`
+          overId === activeId
+            ? `${spokenName(node)} was dropped where it was. Nothing moved.`
+            : `${spokenName(node)} cannot go where a deleted field was until the delete is saved or undone. Nothing moved.`
         );
       },
       duplicate: id => call().duplicate(id),
@@ -164,6 +252,7 @@ export function useOutlineActions(
     };
   }, [focusRow, siblingsOf]);
 
+
   return {
     actions,
     registerRow,
@@ -171,6 +260,9 @@ export function useOutlineActions(
     focusedId,
     setFocusedId,
     menuFor,
+    moveToFor,
+    closeMoveTo: () => setMoveToFor(null),
+    takeRefocus,
     announcement,
   };
 }
