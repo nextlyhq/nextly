@@ -224,13 +224,26 @@ async function deleteResends(
   }
 }
 
-/** Forget a batch of a submission's sends, and delete their records. */
+/**
+ * Delete a batch of a submission's send records, then forget the sends.
+ * Records first: the cancel each forget causes then finds no record to fold
+ * into (`send-history`), so a deletion writes nothing it is about to delete.
+ * An update and a delete of one record in one transaction, beside another
+ * deletion doing the same, deadlocks MySQL on the content-events table.
+ */
 async function forgetBatch(
   ctx: ForgettingContext,
   write: InTransactionContext,
   slug: string,
   sends: Array<{ id: unknown } & Partial<RecordedSend>>
 ): Promise<void> {
+  for (const send of sends) {
+    await ctx.services.collections.deleteEntryInTransaction(
+      write.transaction,
+      slug,
+      String(send.id)
+    );
+  }
   await ctx.services.email.forgetSends(
     {
       queuedIds: sends.flatMap(send => (send.queuedId ? [send.queuedId] : [])),
@@ -240,13 +253,6 @@ async function forgetBatch(
     },
     { tx: write.db }
   );
-  for (const send of sends) {
-    await ctx.services.collections.deleteEntryInTransaction(
-      write.transaction,
-      slug,
-      String(send.id)
-    );
-  }
 }
 
 /** Delete a form's submissions with the form, each forgetting what it sent. */
