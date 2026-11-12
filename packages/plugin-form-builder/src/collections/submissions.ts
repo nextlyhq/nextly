@@ -229,6 +229,25 @@ export function submissionsCollection(
       label: "One-response key",
       admin: { hidden: true },
     }),
+
+    // What the submission was asked: each field's label, type and option
+    // labels, and which fields its conditions hid, so its page reads as it
+    // was answered after the form changes. Written by the plugin at the write
+    // seam, never taken from a caller.
+    json({
+      name: "asked",
+      label: "Fields asked",
+      admin: { hidden: true },
+    }),
+
+    // Who sent it, as the admin names it (`submission-title`): its title in
+    // the breadcrumb and lists. Written by the plugin from the answers, never
+    // taken from a caller.
+    text({
+      name: "title",
+      label: "Sender",
+      admin: { hidden: true },
+    }),
   ];
 
   // Process additional fields from formSubmissionOverrides
@@ -269,7 +288,7 @@ export function submissionsCollection(
       isPlugin: true,
       group: "Forms",
       order: 51,
-      useAsTitle: "id",
+      useAsTitle: "title",
       description: "View and manage form submissions",
       // Submissions are created by visitors submitting forms — a hand-typed
       // "New Submission" would be fiction, so the admin never offers one.
@@ -277,10 +296,15 @@ export function submissionsCollection(
 
       components: {
         // The full submissions experience (per-form columns, status tabs,
-        // drawer detail, export) replaces the generic list.
+        // export) replaces the generic list.
         views: {
           List: {
             Component: "@nextlyhq/plugin-form-builder/admin#SubmissionsView",
+          },
+          // Each submission is a page of its own: its answers as asked, its
+          // activity, and its status, note and details beside them.
+          Edit: {
+            Component: "@nextlyhq/plugin-form-builder/admin#SubmissionPage",
           },
         },
       },

@@ -15,6 +15,7 @@ import {
   publicAddressOf,
   typesWithoutAddress,
   type PageMetadataInput,
+  type PageMetadataValues,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
@@ -33,10 +34,12 @@ import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
 import { redirectMeeting } from "../redirects/meeting";
+import { readProxyStatus } from "../redirects/proxy-seen";
 import { redirectOf, type StoredRedirect } from "../redirects/store";
 import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
+import { readRouteValues, routeValuesKey } from "../route-values/store";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
@@ -58,6 +61,7 @@ import {
   listingProblems,
   noAddressProblems,
   productionAddressProblems,
+  proxyProblems,
   redirectChainProblems,
   sharedValueProblems,
   type ConnectionsReport,
@@ -164,14 +168,16 @@ async function readEntries(
 
 /**
  * What checking a page reads before anything else: its rows as they stand,
- * the paths it holds in each language, and its entry in each of those
- * languages. Read for a whole batch of pages at once by a full check.
+ * the paths it holds in each language, its entry in each of those
+ * languages, and what its route last supplied in code in each. Read for a
+ * whole batch of pages at once by a full check.
  */
 interface PageReads {
   defaultLanguage: string;
   before: PageRow[];
   held: HeldLanguages;
   entries: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+  code: ReadonlyMap<string, PageMetadataValues>;
 }
 
 /** {@link PageReads} for each of `ids`, pages of `type`, read together. */
@@ -200,6 +206,18 @@ async function readBatch(
       entries.set(id, byLanguage);
     }
   }
+  // What each page's route supplied in each language, one read for them all.
+  const pages = ids.flatMap(id =>
+    [...languages].map(language => ({ type, id, language }))
+  );
+  const supplied = await readRouteValues(ctx, pages);
+  const codeOf = (id: string) =>
+    new Map(
+      [...languages].flatMap(language => {
+        const values = supplied.get(routeValuesKey({ type, id, language }));
+        return values === undefined ? [] : [[language, values] as const];
+      })
+    );
   return new Map(
     ids.map(id => [
       id,
@@ -208,6 +226,7 @@ async function readBatch(
         before: before.get(id) ?? [],
         held: held.get(id) ?? new Map(),
         entries: entries.get(id) ?? new Map(),
+        code: codeOf(id),
       },
     ])
   );
@@ -222,6 +241,8 @@ interface Version {
   /** Read in no particular language: the site's default one. */
   locale: string | undefined;
   held: ReadonlySet<string>;
+  /** What the page's route last supplied in code in this language. */
+  code: PageMetadataValues;
 }
 
 /**
@@ -250,12 +271,16 @@ async function servedAddress(
   );
 }
 
-/** One language of a page as its head is asked for, from its entry. */
+/**
+ * One language of a page as its head is asked for, from its entry and what
+ * its route last supplied in code.
+ */
 async function inputOf(
   ctx: PluginContext,
   type: string,
   entry: Readonly<Record<string, unknown>>,
-  locale: string | undefined
+  locale: string | undefined,
+  code: PageMetadataValues
 ): Promise<PageMetadataInput> {
   const pageType = pageTypeOf(type);
   const source: PageMetadataInput["source"] =
@@ -264,7 +289,7 @@ async function inputOf(
       : { kind: "entry", collection: type, entry };
   return {
     source,
-    code: {},
+    code,
     // The design drawing the page, as its route would hand it, so a title
     // or description only the design sets is not listed as missing.
     derived: await designLevelOf(ctx, source, locale),
@@ -291,7 +316,7 @@ async function examine(
   if (ownAddress === undefined) return undefined;
 
   const { readers } = checks;
-  const input = await inputOf(ctx, type, entry, locale);
+  const input = await inputOf(ctx, type, entry, locale, version.code);
   const answer = await resolveSeo(ctx, input, readers.readRules);
   const rules = await readers.readRules(ctx, locale);
   const productionAddresses = productionAddressesOf(rules.productionAddresses);
@@ -381,12 +406,13 @@ async function checkPage(
   reads?: PageReads,
   marks = true
 ): Promise<string[]> {
-  const { defaultLanguage, before, held, entries } = reads ??
+  const { defaultLanguage, before, held, entries, code } = reads ??
     (await readBatch(ctx, type, [id])).get(id) ?? {
       defaultLanguage: await ctx.publicAddresses.defaultLanguage(),
       before: [],
       held: new Map(),
       entries: new Map(),
+      code: new Map(),
     };
   const languages = new Set([...held.keys(), ...before.map(row => row.locale)]);
   const found: { previous: PageRow | undefined; row: PageRow | undefined }[] =
@@ -401,6 +427,7 @@ async function checkPage(
         language,
         locale: language === defaultLanguage ? undefined : language,
         held: held.get(language) ?? new Set(),
+        code: code.get(language) ?? {},
       },
       entries.get(language)
     );
@@ -806,8 +833,28 @@ async function siteProblems(
   return [
     ...productionAddressProblems(addresses, standing),
     ...noAddressProblems(types),
+    // Redirects are site-wide SEO's: their count is told no one else.
+    ...(reader.seesRedirects ? await unservedRedirects(ctx) : []),
     ...connectionProblems(await connectionsReport(ctx, checks)),
   ];
+}
+
+/**
+ * The site's saved redirects going unserved for want of a running Proxy. A
+ * status that cannot be read is reported as nothing, never as a failed list.
+ */
+async function unservedRedirects(ctx: PluginContext): Promise<Problem[]> {
+  try {
+    const status = await readProxyStatus(ctx);
+    if (status.state === "running") return [];
+    return proxyProblems(
+      status,
+      await ctx.services.ownCollections.count(redirectsSlug(ctx))
+    );
+  } catch (error) {
+    ctx.logger.warn("Whether the Proxy runs could not be read", { error });
+    return [];
+  }
 }
 
 /**

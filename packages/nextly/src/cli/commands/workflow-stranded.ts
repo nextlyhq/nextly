@@ -163,12 +163,26 @@ export async function installStrandedRunResolver(
   adapter: DrizzleAdapter,
   workflows: Iterable<RegisteredWorkflow>
 ): Promise<void> {
+  const attached = [...workflows];
+  await installEntityTablesResolver(adapter, {
+    collections: attached.flatMap(each => each.collections),
+    singles: attached.flatMap(each => each.singles),
+  });
+}
+
+/**
+ * Installs the table resolver a command reads and writes documents through: the system tables,
+ * and the tables of the collections and Singles named, read from their registry rows.
+ */
+export async function installEntityTablesResolver(
+  adapter: DrizzleAdapter,
+  entities: { collections: readonly string[]; singles: readonly string[] }
+): Promise<void> {
   const schemaRegistry = installRegistryResolver(adapter);
   const { dialect } = adapter.getCapabilities();
-  const attached = [...workflows];
   const registries = [
-    ["dynamic_collections", attached.flatMap(each => each.collections)],
-    ["dynamic_singles", attached.flatMap(each => each.singles)],
+    ["dynamic_collections", [...new Set(entities.collections)]],
+    ["dynamic_singles", [...new Set(entities.singles)]],
   ] as const;
   for (const [registry, slugs] of registries) {
     if (slugs.length === 0) continue;

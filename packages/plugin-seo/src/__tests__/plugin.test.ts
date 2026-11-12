@@ -122,6 +122,8 @@ describe("seoPlugin", () => {
       ["DELETE", "/redirects/:id", undefined, undefined],
       ["POST", "/redirects/import", undefined, undefined],
       ["GET", "/not-found", undefined, undefined],
+      // Whether the site's Proxy runs, which serves the redirects.
+      ["GET", "/proxy-status", undefined, undefined],
       // What search engines received: the pages it offers, and the check,
       // for anyone signed in.
       ["GET", "/received/pages", undefined, undefined],
@@ -181,7 +183,10 @@ describe("seoPlugin", () => {
 
     const asked = (plugin.contributes?.routes ?? [])
       .filter(
-        ({ path }) => path.startsWith("/redirects") || path === "/not-found"
+        ({ path }) =>
+          path.startsWith("/redirects") ||
+          path === "/not-found" ||
+          path === "/proxy-status"
       )
       .map(({ method, path, requiredPermission }) => [
         method,
@@ -196,6 +201,7 @@ describe("seoPlugin", () => {
       ["DELETE", "/redirects/:id", "manage-seo"],
       ["POST", "/redirects/import", "manage-seo"],
       ["GET", "/not-found", "manage-seo"],
+      ["GET", "/proxy-status", "manage-seo"],
     ]);
   });
 
@@ -218,6 +224,7 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
+      "/proxy-status",
       "/received/pages",
       "/received",
       "/resolve",
@@ -260,6 +267,7 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
+      "/proxy-status",
       "/received/pages",
       "/received",
       "/resolve",
@@ -339,6 +347,57 @@ describe("seoPlugin", () => {
       "noindex",
       "structuredDataType",
     ]);
+  });
+});
+
+describe("how long a title or description may be", () => {
+  /** The `maxLength` each of a group's fields is saved with. */
+  function limits(group: unknown) {
+    const fields: readonly unknown[] =
+      typeof group === "object" &&
+      group !== null &&
+      "fields" in group &&
+      Array.isArray(group.fields)
+        ? group.fields
+        : [];
+    return Object.fromEntries(
+      fields
+        .filter(
+          (field): field is FieldConfig =>
+            typeof field === "object" && field !== null
+        )
+        .filter(field => "name" in field)
+        .map(field => [field.name, (field as { maxLength?: number }).maxLength])
+    );
+  }
+
+  it("saves a title or description of any length by default", () => {
+    // Google cuts a long title by width rather than refusing it, so the
+    // length is a warning in the SEO tab and the problem list.
+    const group = seoGroup(seoPlugin({ collections: ["pages"] }));
+    for (const read of [
+      limits(group),
+      limits({ fields: defaultSeoFields() }),
+    ]) {
+      expect(read).toHaveProperty("metaTitle", undefined);
+      expect(read).toHaveProperty("metaDescription", undefined);
+    }
+  });
+
+  it("refuses a longer one where the site asks for hard limits", () => {
+    const group = seoGroup(
+      seoPlugin({ collections: ["pages"], hardLengthLimits: true })
+    );
+    expect(limits(group)).toMatchObject({
+      metaTitle: 60,
+      metaDescription: 160,
+    });
+    expect(
+      limits({ fields: defaultSeoFields({ hardLengthLimits: true }) })
+    ).toMatchObject({
+      metaTitle: 60,
+      metaDescription: 160,
+    });
   });
 });
 
@@ -592,6 +651,32 @@ describe("the optional connections the plugin declares", () => {
     expect(plugin.contributes?.events).toContainEqual({
       name: "nextlyhq-plugin-seo.addresses-moved",
     });
+  });
+
+  it("reads a client secret wrapped by another copy of the plugin SDK", () => {
+    // A site may install its own copy of the SDK beside the plugin's, whose
+    // `secret()` makes an object of a class the plugin's copy did not make.
+    class OtherCopySecret {
+      readonly #value: string;
+      constructor(value: string) {
+        this.#value = value;
+      }
+      reveal(): string {
+        return this.#value;
+      }
+      toString(): string {
+        return "[redacted]";
+      }
+    }
+    expect(() =>
+      seoPlugin({
+        collections: ["pages"],
+        searchConsole: {
+          clientId: "id",
+          clientSecret: new OtherCopySecret("s") as unknown as string,
+        },
+      })
+    ).not.toThrow();
   });
 
   it("refuses a Search Console sign-in with a blank client id or secret", () => {

@@ -21,11 +21,29 @@ export const REDIRECT_ROUTES: {
   readonly list: "/redirects";
   readonly notFound: "/not-found";
   readonly import: "/redirects/import";
+  readonly proxy: "/proxy-status";
 } = {
   list: "/redirects",
   notFound: "/not-found",
   import: "/redirects/import",
+  // Whether the site's Proxy runs, which redirects and the log depend on.
+  proxy: "/proxy-status",
 };
+
+/**
+ * Whether the site's Proxy runs: `running` where it noted a request lately,
+ * `quiet` where its last note is older than a week, and `not-wired` where it
+ * never noted one, as on a site whose `proxy.ts` does not hand requests to
+ * Nextly. Redirects and the not-found log do nothing without it.
+ */
+export type ProxyState = "running" | "quiet" | "not-wired";
+
+/** What the proxy status route answers. */
+export interface ProxyStatus {
+  state: ProxyState;
+  /** When the Proxy last noted a request, as an ISO time; null where never. */
+  lastSeen: string | null;
+}
 
 /** Whether a redirect is for good or for now. */
 export type RedirectType = "permanent" | "temporary";

@@ -25,6 +25,7 @@ import {
 import type { VersionsDbApi } from "./db-api";
 import { sameContent } from "./draft-save";
 import { recordedStatus } from "./recorded-status";
+import { sourcesHeld, type FieldSources } from "./restored-from";
 import type { VersionCaptureService } from "./version-capture-service";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
@@ -66,6 +67,12 @@ export interface CaptureInTxArgs {
    * document distinguishes it from someone retyping the same content.
    */
   sourceVersionNo?: number | null;
+  /**
+   * The fields this write names as restored, and the version each came from
+   * (a save's `_restoredFrom`, or a restore's own fields). Recorded on the
+   * version only for the fields it holds with the value that version holds.
+   */
+  restoredFrom?: FieldSources;
   /**
    * A human-readable marker for this version, when one is meaningful — e.g. the
    * pre-restore snapshot a restore takes of the content it is about to replace,
@@ -162,6 +169,9 @@ export async function captureInTx(
   if (await changesNothing(tx, args, status, snapshot)) {
     return { versionNo: null };
   }
+  const fieldSources = args.restoredFrom
+    ? await sourcesHeld(tx, args.ref, args.restoredFrom, snapshot)
+    : undefined;
   return capture.capture(tx, {
     ref: args.ref,
     status,
@@ -169,6 +179,7 @@ export async function captureInTx(
     createdBy: args.createdBy ?? null,
     locale: args.locale ?? null,
     sourceVersionNo: args.sourceVersionNo ?? null,
+    fieldSources: fieldSources ?? null,
     label: args.label ?? null,
     maxPerDoc: args.maxPerDoc,
     lifecycle: args.lifecycle,

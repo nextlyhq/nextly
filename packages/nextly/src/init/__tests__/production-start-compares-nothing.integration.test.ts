@@ -16,7 +16,9 @@
  * - whether a table exists, and which tables there are (the start's own
  *   table creation, which a later change removes, asks this per entity);
  * - the per-language storage layout refusal, which refuses a database laid
- *   out for the other choice of `experimental.perLanguageStorage`;
+ *   out for the other choice of `experimental.perLanguageStorage` (on SQLite
+ *   it reads only an entity whose per-language table exists, so the fixture
+ *   leaves one beside a collection that is not translated);
  * - the column a component's table keeps its discriminator in, which the
  *   start needs to serve the table at all;
  * - the two registry tables, for the rules left in their retired
@@ -391,6 +393,11 @@ describe.each(getConfiguredTestDialects())(
         PLUGIN.name,
         { state: "installed" }
       );
+      // A per-language table left beside a collection that is not translated,
+      // as turning translation off leaves one, so the layout refusal has a
+      // table to read on every dialect. Its main table keeps the columns, so
+      // the start is not refused.
+      await setup.executeQuery("CREATE TABLE dc_pcna_locales (id VARCHAR(36))");
       await shutdownServices();
     }, 180_000);
 

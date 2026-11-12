@@ -44,7 +44,10 @@ import {
   pageStructuredDataFor,
   type PageMetadataRequest,
 } from "../seo/page-metadata";
-import type { PageMetadataValues } from "../seo/page-metadata-contract";
+import type {
+  PageMetadataValues,
+  PageStructuredDataHints,
+} from "../seo/page-metadata-contract";
 
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
@@ -214,6 +217,20 @@ export interface SingleRouteConfig<TNode> {
     context: SingleContext
   ) => PageMetadataValues | Promise<PageMetadataValues>;
   /**
+   * @experimental What the route knows about the Single's page for its
+   * structured data and the Single does not hold: what kind of page it is,
+   * its own name, the entries it lists, the questions it answers. Asked only
+   * where a plugin provides page metadata, and only for the structured data,
+   * never the head, as a content route's `structuredDataHints` is.
+   */
+  structuredDataHints?: (
+    document: SingleDocument,
+    context: SingleContext
+  ) =>
+    | PageStructuredDataHints
+    | undefined
+    | Promise<PageStructuredDataHints | undefined>;
+  /**
    * The address this route serves the Single at, from `/`, where the page's
    * head should be answered for it: a later page of the Single's list, such
    * as `/blog/page/2` for a blog Single at `/blog`, is then its own page to
@@ -357,7 +374,11 @@ export interface SingleRouteArgs {
  */
 export type SinglePageAnswerConfig = Pick<
   SingleRouteConfig<unknown>,
-  "buildMetadata" | "derivedMetadata" | "tags" | "revalidate"
+  | "buildMetadata"
+  | "derivedMetadata"
+  | "structuredDataHints"
+  | "tags"
+  | "revalidate"
 >;
 
 /**
@@ -458,7 +479,11 @@ export async function singlePageStructuredData(
   // Nobody to answer: the route's own metadata is not worked out for nothing.
   if (knownNoPageMetadataProvider()) return undefined;
   const { request } = await singlePageRequest(config, document, context, path);
-  return request === null ? undefined : pageStructuredDataFor(request);
+  if (request === null) return undefined;
+  const hints = await config.structuredDataHints?.(document, context);
+  return pageStructuredDataFor(
+    hints === undefined ? request : { ...request, structuredDataHints: hints }
+  );
 }
 
 /** What a Single route hands back for the route file to export. */

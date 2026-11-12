@@ -351,6 +351,10 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  restoredFromOf,
+  type FieldSources,
+} from "../../versions/restored-from";
+import {
   asIdSet,
   type FieldNameReader,
   outOfDateSharedFields,
@@ -1687,6 +1691,8 @@ interface WorkingDraftWriteContext {
     actor?: RequestActor;
     /** The version a restore write restored; recorded on the save's version. */
     sourceVersionNo?: number | null;
+    /** The fields this write restored, and their versions; see `restored-from`. */
+    restoredFrom?: FieldSources;
     /** The write's trust and key scope, for the held field groups' own rules. */
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
@@ -13339,6 +13345,8 @@ export class CollectionMutationService extends BaseService {
       replaces,
       createdBy: params.user?.id ?? null,
       sourceVersionNo: params.sourceVersionNo ?? null,
+      // Recorded per field on the save's version, where still true of it.
+      ...(params.restoredFrom ? { restoredFrom: params.restoredFrom } : {}),
       maxPerDoc: versionsConfig?.maxPerDoc,
       ...(byParts
         ? {
@@ -13627,6 +13635,31 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The fields an update restored, and their versions: as server code stated
+   * them, or as the body's `_restoredFrom` names them. A malformed
+   * `_restoredFrom` is answered as the validation error it is.
+   */
+  private restoredFromOf(
+    params: { restoredFrom?: FieldSources },
+    body: Record<string, unknown>
+  ):
+    | { sources: FieldSources | undefined }
+    | { refused: CollectionServiceResult } {
+    if (params.restoredFrom) return { sources: params.restoredFrom };
+    try {
+      return { sources: restoredFromOf(body) };
+    } catch (error) {
+      return {
+        refused: errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        ),
+      };
+    }
+  }
+
+  /**
    * The refusal of a save whose version is below the one the entry already
    * holds, before any hook runs: a counter only goes up, so such a version is
    * certainly out of date. Null otherwise, for the row lock to decide.
@@ -13800,6 +13833,14 @@ export class CollectionMutationService extends BaseService {
        */
       sourceVersionNo?: number;
       /**
+       * The fields this write restored, and the version each came from, as
+       * server code states it. A client states it as `_restoredFrom` in the
+       * body, read below when this is absent.
+       *
+       * @experimental
+       */
+      restoredFrom?: FieldSources;
+      /**
        * Set when this write restores a recorded save of a working draft: its
        * content was never live, so on a published document it must be held as
        * the working draft. Where the document can no longer hold one, the
@@ -13844,13 +13885,22 @@ export class CollectionMutationService extends BaseService {
     // exempt, and nothing a caller sends can make a write one.
     const versionCheck = this.versionCheckOf(rawParams, body);
     if ("success" in versionCheck) return versionCheck;
+    // The fields the save names as restored, read before the key is dropped
+    // with the version below; a value that is not a map of field to version
+    // is refused, as a malformed version is.
+    const restored = this.restoredFromOf(rawParams, body);
+    if ("refused" in restored) return restored.refused;
+    const restoredFrom = restored.sources;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
-    const params = sweepAllLocales
-      ? { ...rawParams, locale: undefined }
+    const withSources = restoredFrom
+      ? { ...rawParams, restoredFrom }
       : rawParams;
+    const params = sweepAllLocales
+      ? { ...withSources, locale: undefined }
+      : withSources;
 
     // The wildcard moves a LIFECYCLE and nothing else.
     //
@@ -15876,6 +15926,10 @@ export class CollectionMutationService extends BaseService {
                 // update unrestorable.
                 locale: versionLocale,
                 sourceVersionNo: params.sourceVersionNo ?? null,
+                // Recorded per field on the version, where still true of it.
+                ...(params.restoredFrom
+                  ? { restoredFrom: params.restoredFrom }
+                  : {}),
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
               producedVersionNo = versionNo;

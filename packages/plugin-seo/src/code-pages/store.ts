@@ -74,8 +74,12 @@ function imageOf(value: unknown): PageMetadataImage | undefined {
   };
 }
 
-/** Stored code values read back, each one checked rather than trusted. */
-function codeValuesOf(value: unknown): PageMetadataValues {
+/**
+ * Stored code values read back, each one checked rather than trusted. Also
+ * how the values a content route supplies are kept (`route-values`), so the
+ * two records read alike.
+ */
+export function codeValuesOf(value: unknown): PageMetadataValues {
   const stored = isRecord(value) ? value : {};
   const values: PageMetadataValues = {};
   for (const name of [
@@ -96,7 +100,7 @@ function codeValuesOf(value: unknown): PageMetadataValues {
 }
 
 /** JSON with object keys sorted, so equal values are equal text. */
-function sortedJson(value: unknown): string {
+export function sortedJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) =>
     isRecord(inner)
       ? Object.fromEntries(

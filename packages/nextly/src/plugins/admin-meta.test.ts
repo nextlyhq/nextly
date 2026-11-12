@@ -1715,3 +1715,197 @@ describe("buildPluginAdminMeta, a standalone plugin's landing", () => {
     expect(landingOf(reports())).toBeUndefined();
   });
 });
+
+describe("buildPluginAdminMeta, a standalone plugin's panel", () => {
+  /**
+   * A standalone plugin owning `patterns` (renamed by the host to
+   * `site-patterns`) and `layouts`, with a `checks` page and a
+   * `bindings-to-fix` attention item, and the menu and panel a test gives it.
+   */
+  function library(admin: object): PluginDefinition {
+    return {
+      ...base,
+      admin: { placement: "standalone" },
+      renameMap: { patterns: "site-patterns" },
+      contributes: {
+        collections: [{ slug: "patterns" }, { slug: "layouts" }],
+        dashboard: { attention: [{ id: "acme/bindings-to-fix" }] },
+        admin: {
+          pages: [{ path: "/checks", component: "@acme/p/admin#Checks" }],
+          ...admin,
+        },
+      },
+    } as unknown as PluginDefinition;
+  }
+
+  const metaOf = (plugin: PluginDefinition) =>
+    buildPluginAdminMeta([plugin], undefined)[0];
+
+  it("serializes the groups in the order declared", () => {
+    const meta = metaOf(
+      library({
+        panel: {
+          groups: [
+            { id: "library", label: "Library" },
+            { id: "checks", label: "Checks" },
+          ],
+        },
+        menu: [
+          {
+            label: "Layouts",
+            to: "/admin/collections/layouts",
+            group: "checks",
+          },
+        ],
+      })
+    );
+    expect(meta.panel).toEqual({
+      groups: [
+        { id: "library", label: "Library" },
+        { id: "checks", label: "Checks" },
+      ],
+    });
+    expect(meta.menu?.[0].group).toBe("checks");
+  });
+
+  it("sends no panel for a plugin that declares none, and its items as before", () => {
+    const item = { label: "Layouts", to: "/admin/collections/layouts" };
+    const meta = metaOf(library({ menu: [item] }));
+    expect(meta.panel).toBeUndefined();
+    expect(meta.menu).toEqual([item]);
+  });
+
+  it("resolves a collection count through the host's rename, with its where", () => {
+    const where = { status: { equals: "draft" } };
+    const meta = metaOf(
+      library({
+        menu: [
+          {
+            label: "Patterns",
+            to: "/admin/collections/patterns",
+            collection: "patterns",
+            count: { collection: "patterns", where },
+          },
+        ],
+      })
+    );
+    expect(meta.menu?.[0]).toMatchObject({
+      to: "/admin/collections/site-patterns",
+      count: { collection: "site-patterns", where },
+    });
+  });
+
+  it("keeps a badge naming one of the plugin's own attention items", () => {
+    const meta = metaOf(
+      library({
+        menu: [
+          {
+            label: "Checks",
+            to: "/admin/plugins/acme-p/checks",
+            badge: { attention: "acme/bindings-to-fix" },
+          },
+        ],
+      })
+    );
+    expect(meta.menu?.[0].badge).toEqual({ attention: "acme/bindings-to-fix" });
+  });
+
+  it("lists an item naming an unknown group with the ungrouped items", () => {
+    const meta = metaOf(
+      library({
+        panel: { groups: [{ id: "library", label: "Library" }] },
+        menu: [
+          { label: "Layouts", to: "/admin/collections/layouts", group: "nope" },
+        ],
+      })
+    );
+    expect(meta.menu?.[0]).toEqual({
+      label: "Layouts",
+      to: "/admin/collections/layouts",
+    });
+  });
+
+  it("draws a count naming a collection the plugin does not own without a number", () => {
+    const meta = metaOf(
+      library({
+        menu: [
+          {
+            label: "Posts",
+            to: "/admin/collections/posts",
+            count: { collection: "posts" },
+          },
+        ],
+      })
+    );
+    expect(meta.menu?.[0]).toEqual({
+      label: "Posts",
+      to: "/admin/collections/posts",
+    });
+  });
+
+  it("draws a badge naming an attention item the plugin does not declare without a number", () => {
+    const meta = metaOf(
+      library({
+        menu: [
+          {
+            label: "Checks",
+            to: "/admin/plugins/acme-p/checks",
+            badge: { attention: "core/overdue-releases" },
+          },
+        ],
+      })
+    );
+    expect(meta.menu?.[0]).toEqual({
+      label: "Checks",
+      to: "/admin/plugins/acme-p/checks",
+    });
+  });
+
+  it("leaves out an item, or a child, for a page of its own it does not register", () => {
+    const meta = metaOf(
+      library({
+        menu: [
+          { label: "Missing", to: "/admin/plugins/acme-p/missing?tab=1" },
+          {
+            label: "Checks",
+            to: "/admin/plugins/acme-p/checks#top",
+            children: [
+              { label: "Gone", to: "/admin/plugins/acme-p/gone" },
+              { label: "Kept", to: "/admin/plugins/acme-p/checks?all=1" },
+            ],
+          },
+        ],
+      })
+    );
+    expect(meta.menu).toEqual([
+      {
+        label: "Checks",
+        to: "/admin/plugins/acme-p/checks#top",
+        children: [{ label: "Kept", to: "/admin/plugins/acme-p/checks?all=1" }],
+      },
+    ]);
+  });
+
+  it("keeps items linking anywhere but the plugin's own pages untouched", () => {
+    const menu = [
+      { label: "Settings", to: "/admin/plugins/acme-p" },
+      { label: "Other plugin", to: "/admin/plugins/acme-q/reports" },
+      { label: "Posts", to: "/admin/collections/posts" },
+      { label: "General", to: "/admin/settings" },
+      { label: "Docs", to: "https://example.com/docs" },
+    ];
+    expect(metaOf(library({ menu })).menu).toEqual(menu);
+  });
+
+  it("sends no panel and no menu for a disabled plugin", () => {
+    const meta = metaOf({
+      ...library({
+        panel: { groups: [{ id: "library", label: "Library" }] },
+        menu: [{ label: "Layouts", to: "/admin/collections/layouts" }],
+      }),
+      enabled: false,
+    } as PluginDefinition);
+    expect(meta.panel).toBeUndefined();
+    expect(meta.menu).toBeUndefined();
+  });
+});
