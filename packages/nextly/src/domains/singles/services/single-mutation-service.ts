@@ -3474,9 +3474,12 @@ export class SingleMutationService extends BaseService {
           // The live status is the one belonging to the language being
           // written: a non-default language's lifecycle lives on its
           // companion `_status`, not on the main row, so reading the main row
-          // would judge a translation by another language's state.
+          // would judge a translation by another language's state. Only where
+          // the Single publishes each language on its own: a Single kept per
+          // language without being translated has no `_status` per language,
+          // and its one status is the main row's, as a collection's is.
           const singleLiveStatus =
-            companion &&
+            companion?.hasStatus === true &&
             writeLocale !== undefined &&
             this.localization &&
             writeLocale !== this.localization.defaultLocale

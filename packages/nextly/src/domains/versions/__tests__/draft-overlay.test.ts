@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { text } from "../../../config";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { resolveDraftHold } from "../draft-hold";
 import { resolveDraftOverlay } from "../draft-overlay";
 import type { ComponentSchemas } from "../restore-snapshot";
@@ -95,35 +99,50 @@ describe("resolveDraftOverlay", () => {
    * overlay still tested `schema.localized` and refused them. The author's edit
    * was stored and then shown as the old content.
    */
-  it("agrees with the WRITE rule about a localized component", () => {
-    const shared = {
-      collectionHasStatus: true,
-      draftsVersioningEnabled: true,
-      documentLocalized: false,
-      fields: FIELDS,
-      componentSchemas: LOCALIZED_COMPONENT,
-    };
+  // An unlocalized document reaching a localized component holds no draft
+  // without per-language storage (its draft would have no language), and holds
+  // one under it, keyed by the request's language. The read agrees either way.
+  it.each([
+    { perLanguageStorage: false, holds: false },
+    { perLanguageStorage: true, holds: true },
+  ])(
+    "agrees with the WRITE rule about a localized component (per-language storage: $perLanguageStorage)",
+    ({ perLanguageStorage, holds }) => {
+      setPerLanguageStorage(perLanguageStorage);
+      try {
+        const shared = {
+          collectionHasStatus: true,
+          draftsVersioningEnabled: true,
+          documentLocalized: false,
+          fields: FIELDS,
+          componentSchemas: LOCALIZED_COMPONENT,
+          requestLocale: "es",
+        };
 
-    const held = resolveDraftHold({
-      ...shared,
-      namedStatus: undefined,
-      liveStatus: "published",
-    });
-    const shown = resolveDraftOverlay({
-      ...shared,
-      includeWorkingDraft: true,
-      callerMayEdit: true,
-    });
+        const held = resolveDraftHold({
+          ...shared,
+          namedStatus: undefined,
+          liveStatus: "published",
+        });
+        const shown = resolveDraftOverlay({
+          ...shared,
+          includeWorkingDraft: true,
+          callerMayEdit: true,
+        });
 
-    // Asserted as the PAIR, not as two independent truths: what matters is that
-    // they cannot differ, and a test asserting only `shown.overlay === true`
-    // would still pass if the write later stopped holding.
-    expect({ held: held.hold, shown: shown.overlay }).toEqual({
-      held: true,
-      shown: true,
-    });
-    expect(shown.draftLocale).toBe(held.draftLocale);
-  });
+        // Asserted as the PAIR, not as two independent truths: what matters is
+        // that they cannot differ, and a test asserting only `shown.overlay`
+        // would still pass if the write later stopped holding.
+        expect({ held: held.hold, shown: shown.overlay }).toEqual({
+          held: holds,
+          shown: holds,
+        });
+        expect(shown.draftLocale).toBe(held.draftLocale);
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    }
+  );
 
   it("agrees with the WRITE rule about an unresolved component", () => {
     const shared = {

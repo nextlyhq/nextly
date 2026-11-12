@@ -2260,7 +2260,11 @@ describe("draft/published split — schema and component eligibility (integratio
     ],
   });
 
-  it("holds a status-less edit when the collection embeds a localized component", async () => {
+  // Without per-language storage an unlocalized collection's held draft has no
+  // language, while a localized component keeps a value per language, so one
+  // draft would mix languages: such a collection holds no draft, as a Single
+  // like it does not, and a status-less edit saves live.
+  it("saves a status-less edit live when the collection embeds a localized component", async () => {
     const entries = await bootFile(withHero(true));
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -2268,10 +2272,6 @@ describe("draft/published split — schema and component eligibility (integratio
     const [row] = await handle!.adapter.select<LiveRow>(TABLE);
     const id = row.id;
 
-    // A localized component is representable in a draft snapshot, which holds
-    // exactly one locale's values and is keyed by that locale. What is still
-    // refused is an UNRESOLVED component, whose subtree would be dropped on
-    // promote without anyone noticing.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
       { title: "edited", _overwrite: true }
@@ -2279,24 +2279,8 @@ describe("draft/published split — schema and component eligibility (integratio
     expect(res.success).toBe(true);
 
     const [live] = await handle!.adapter.select<LiveRow>(TABLE);
-    expect(live.title).toBe("live");
-    expect(await workingDraftCount(id)).toBe(1);
-
-    // The half the assertions above cannot reach: a held edit the author can
-    // never see is lost in the worst way, because the save reported success.
-    // "The live row is untouched" is satisfied just as well by a system that
-    // stored nothing, so the draft VIEW has to be asserted too.
-    const draftRead = await entries.getEntry({
-      ...ctx,
-      entryId: id,
-      includeWorkingDraft: true,
-      status: "all",
-    });
-    expect(draftRead.success).toBe(true);
-    expect((draftRead.data as { title?: string }).title).toBe("edited");
-    expect(
-      (draftRead.data as { _isWorkingDraft?: boolean })._isWorkingDraft
-    ).toBe(true);
+    expect(live.title).toBe("edited");
+    expect(await workingDraftCount(id)).toBe(0);
   });
 
   it("prunes fields the current schema no longer declares from a draft read", async () => {
@@ -2511,13 +2495,10 @@ describe("draft/published split — schema and component eligibility (integratio
     await handle!.destroy();
     handle = undefined;
 
-    // Re-open with the component now localized. This case previously asserted
-    // that the read FELL BACK to the live row, on the premise that no write
-    // could consume the sidecar any more. That premise stopped being true when a
-    // localized component became representable in a draft snapshot: measured
-    // here, the publish below succeeds, promotes the draft's content and clears
-    // the sidecar. So the old behaviour meant an author was shown "live",
-    // pressed Publish, and shipped content they had never seen.
+    // Re-open with the component now localized. An unlocalized collection
+    // reaching a localized component holds no draft without per-language
+    // storage, so the draft written before is no longer read, and a publish
+    // consumes it with none of its content written.
     const reopened = await bootFile(withHero(true));
 
     const draftRead = await reopened.getEntry({
@@ -2526,7 +2507,6 @@ describe("draft/published split — schema and component eligibility (integratio
       overrideAccess: true,
       includeWorkingDraft: true,
     });
-    expect((draftRead.data as { title?: string }).title).toBe("draft-title");
 
     // The invariant, asserted as the pair rather than as two separate facts:
     // what the editor is shown and what a publish would ship must be the same
@@ -2540,7 +2520,7 @@ describe("draft/published split — schema and component eligibility (integratio
     expect({
       shown: (draftRead.data as { title?: string }).title,
       shipped: afterPublish?.title,
-    }).toEqual({ shown: "draft-title", shipped: "draft-title" });
+    }).toEqual({ shown: "live", shipped: "live" });
     expect(await workingDraftCount(id)).toBe(0);
   });
 
