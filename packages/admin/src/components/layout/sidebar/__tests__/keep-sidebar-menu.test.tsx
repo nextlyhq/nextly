@@ -24,13 +24,25 @@ import { KeepSidebarMenu } from "../lib/remembered-menu";
 import type { MainMenuItem } from "../sidebar-types";
 
 const POSTS = { name: "posts", label: "Posts" } as ApiCollection;
+const PRODUCTS = {
+  name: "products",
+  label: "Products",
+  admin: { sidebarGroup: "shop" },
+} as ApiCollection;
+
+const lists = vi.hoisted(() => ({ collections: [] as unknown[] }));
 
 vi.mock("@admin/hooks/useSidebarContentLists", () => ({
   useSidebarCollectionList: () => ({
-    data: { items: [POSTS] },
-    items: [POSTS],
+    data: { items: lists.collections },
+    items: lists.collections,
   }),
   useSidebarSingleList: () => ({ hasArrived: false, items: [] }),
+}));
+vi.mock("@admin/context/providers/BrandingProvider", () => ({
+  useBranding: () => ({
+    customGroups: [{ slug: "shop", name: "Online shop" }],
+  }),
 }));
 
 const RAIL: MainMenuItem[] = [
@@ -50,6 +62,7 @@ function keep(settled: boolean) {
 }
 
 beforeEach(() => {
+  lists.collections = [POSTS];
   window.localStorage.clear();
   resetDeviceMemoryForTests();
   confirmLabels({ user: "u1", schemaVersion: "3", permissionVersion: "p" });
@@ -73,5 +86,21 @@ describe("the kept menu when the schema version moves", () => {
     render(keep(false));
     act(() => noteRememberedSchemaVersion("4"));
     expect(recallMenu()).toBeUndefined();
+  });
+});
+
+describe("the kept Content panel", () => {
+  it("keeps the sub-heading each collection is listed under", () => {
+    lists.collections = [POSTS, PRODUCTS];
+    render(keep(true));
+
+    expect(recallMenu()?.collections).toEqual([
+      { slug: "posts", label: "Posts" },
+      {
+        slug: "products",
+        label: "Products",
+        group: { slug: "shop", label: "Online shop" },
+      },
+    ]);
   });
 });

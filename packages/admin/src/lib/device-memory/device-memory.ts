@@ -140,6 +140,8 @@ const contentItemSchema = z.object({
   slug: name,
   label: name,
   icon: name.optional(),
+  /** The `sidebarGroup` a collection is listed under, and its shown name. */
+  group: z.object({ slug: name, label: name }).optional(),
 });
 
 /**
@@ -149,7 +151,7 @@ const contentItemSchema = z.object({
  */
 const rememberedMenuSchema = z.object({
   rail: z.array(railEntrySchema).max(64),
-  /** Which parts the Content panel offers, so its switch is drawn from memory. */
+  /** Which headings the Content panel shows, so they are drawn from memory. */
   parts: z.object({ collections: z.boolean(), singles: z.boolean() }),
   collections: z.array(contentItemSchema).max(1000),
   singles: z.array(contentItemSchema).max(1000),

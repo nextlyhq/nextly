@@ -13,16 +13,19 @@
 import type { ElementType, JSX } from "react";
 
 import * as Icons from "@admin/components/icons";
-import { Database, Globe } from "@admin/components/icons";
+import { Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
+import { contentIcon } from "@admin/lib/content-icons";
 import type {
   RememberedContentItem,
   RememberedMenu,
 } from "@admin/lib/device-memory/device-memory";
+import { cn } from "@admin/lib/utils";
 
-import { ContentTypeControl } from "./ContentPanel";
-import type { ContentSection } from "./lib/content-rail";
+import { ContentFold } from "./ContentFold";
+import { groupFoldKey, useContentFolds } from "./lib/content-folds";
+import { isContentSection, type ContentSection } from "./lib/content-rail";
 import { RailEntry } from "./RailColumn";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SidebarSearch } from "./SidebarSearch";
@@ -75,66 +78,154 @@ function hrefOf(part: ContentSection, item: RememberedContentItem): string {
     : buildRoute(ROUTES.SINGLE_EDIT, { slug: item.slug });
 }
 
-/** Whether the remembered menu has anything to list for `part`. */
+/** Whether the remembered menu has anything to list in the Content panel. */
 export function remembersContent(
   menu: RememberedMenu | undefined,
-  part: string
-): part is ContentSection {
+  section: string
+): menu is RememberedMenu {
   return (
-    (part === "collections" && (menu?.collections.length ?? 0) > 0) ||
-    (part === "singles" && (menu?.singles.length ?? 0) > 0)
+    isContentSection(section) &&
+    (menu?.collections.length ?? 0) + (menu?.singles.length ?? 0) > 0
+  );
+}
+
+/** Remembered collections listed under one sub-heading, or under none. */
+interface RememberedRun {
+  group: RememberedContentItem["group"];
+  items: RememberedContentItem[];
+}
+
+/**
+ * The remembered items in runs under one sub-heading each, in their order:
+ * the panel kept them ungrouped first, then each group together.
+ */
+function runsOf(items: readonly RememberedContentItem[]): RememberedRun[] {
+  const runs: RememberedRun[] = [];
+  for (const item of items) {
+    const last = runs.at(-1);
+    if (last !== undefined && last.group?.slug === item.group?.slug) {
+      last.items.push(item);
+    } else {
+      runs.push({ group: item.group, items: [item] });
+    }
+  }
+  return runs;
+}
+
+/** One kind's remembered links, as the real lists draw them. */
+function RememberedLinks({
+  part,
+  items,
+  pathname,
+}: {
+  part: ContentSection;
+  items: readonly RememberedContentItem[];
+  pathname: string;
+}): JSX.Element {
+  return (
+    <SidebarMenu>
+      {items.map(item => {
+        const href = hrefOf(part, item);
+        const active = pathname === href || pathname.startsWith(`${href}/`);
+        // The same icons the real lists draw, defaults included.
+        const Icon = contentIcon(
+          part === "collections" ? "collection" : "single",
+          item.icon
+        );
+        return (
+          <SidebarMenuItem key={item.slug}>
+            <SidebarMenuButton asChild tooltip={item.label} isActive={active}>
+              <Link href={href}>
+                <Icon
+                  aria-hidden="true"
+                  className={cn(
+                    "h-4 w-4 shrink-0",
+                    !active && "text-muted-foreground"
+                  )}
+                />
+                <span className="min-w-0 truncate">{item.label}</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        );
+      })}
+    </SidebarMenu>
   );
 }
 
 /**
- * The Content panel as this device remembered it: the switch between
- * Collections and Singles where it offered both, the search (inert until the
- * server answers, when the real panel takes its place) and the part's links.
+ * The Content panel as this device remembered it: the search (inert until the
+ * server answers, when the real panel takes its place) and each heading the
+ * panel showed with its links, folded as the person left them.
  */
 export function RememberedContentBody({
   menu,
-  part,
   pathname,
 }: {
   menu: RememberedMenu;
-  part: ContentSection;
   pathname: string;
 }): JSX.Element {
-  const items = part === "collections" ? menu.collections : menu.singles;
-  // The switch where the panel offered both parts, as the real panel does.
-  const both = menu.parts.collections && menu.parts.singles;
+  const folds = useContentFolds();
   return (
     <div className="space-y-4 px-4 py-6" data-testid="remembered-content">
-      {both ? <ContentTypeControl shown={part} dotOn={null} /> : null}
       <SidebarSearch
-        placeholder={`Search ${part === "collections" ? "collections" : "Singles"}`}
+        placeholder="Search content"
+        label="Search content"
         value=""
         onChange={() => {}}
         disabled
       />
-      <SidebarMenu>
-        {items.map(item => {
-          const href = hrefOf(part, item);
-          // The same fallbacks the real lists draw: a database for a
-          // collection, a globe for a Single.
-          const fallback = part === "collections" ? Database : Globe;
-          const Icon = (item.icon ? ICONS[item.icon] : undefined) ?? fallback;
-          return (
-            <SidebarMenuItem key={item.slug}>
-              <SidebarMenuButton
-                asChild
-                tooltip={item.label}
-                isActive={pathname === href || pathname.startsWith(`${href}/`)}
-              >
-                <Link href={href}>
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span className="min-w-0 truncate">{item.label}</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          );
-        })}
-      </SidebarMenu>
+      <nav aria-label="Content" className="space-y-4">
+        {menu.parts.collections && menu.collections.length > 0 ? (
+          <ContentFold
+            foldKey="collections"
+            label="Collections"
+            count={menu.collections.length}
+            level="heading"
+            folds={folds}
+          >
+            {runsOf(menu.collections).map(run =>
+              run.group === undefined ? (
+                <RememberedLinks
+                  key=""
+                  part="collections"
+                  items={run.items}
+                  pathname={pathname}
+                />
+              ) : (
+                <ContentFold
+                  key={run.group.slug}
+                  foldKey={groupFoldKey(run.group.slug)}
+                  label={run.group.label}
+                  level="group"
+                  folds={folds}
+                >
+                  <RememberedLinks
+                    part="collections"
+                    items={run.items}
+                    pathname={pathname}
+                  />
+                </ContentFold>
+              )
+            )}
+          </ContentFold>
+        ) : null}
+        {menu.parts.singles && menu.singles.length > 0 ? (
+          <ContentFold
+            foldKey="singles"
+            label="Singles"
+            count={menu.singles.length}
+            level="heading"
+            folds={folds}
+          >
+            <RememberedLinks
+              part="singles"
+              items={menu.singles}
+              pathname={pathname}
+            />
+          </ContentFold>
+        ) : null}
+      </nav>
     </div>
   );
 }

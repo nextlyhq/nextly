@@ -84,7 +84,6 @@ export function SubSidebarContent({
   if (isContentSection(selectedMain)) {
     return (
       <ContentPanel
-        part={selectedMain}
         search={contentSearch}
         onSearchChange={onContentSearchChange}
         hasCollections={hasCollectionsSection}
