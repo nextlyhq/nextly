@@ -112,8 +112,10 @@ vi.mock("nextly/runtime", async importOriginal => {
 import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
 import {
+  createBlocksPage,
   createContentPage,
   createPublicContentPage,
+  createSinglePage,
   type ContentAddressHolder,
   type ContentPageConfig,
 } from "./next";
@@ -1072,5 +1074,119 @@ describe("under a [locale] segment", () => {
     );
     await route.generateStaticParams({ params: { locale: "de" } });
     expect(asked).toEqual(["de"]);
+  });
+});
+
+describe("a site's own not-found handler", () => {
+  /** A handler that throws its own error, counting its calls. */
+  function handler(): { notFound: () => never; calls: () => number } {
+    let calls = 0;
+    return {
+      notFound: () => {
+        calls += 1;
+        throw new Error("site: not found");
+      },
+      calls: () => calls,
+    };
+  }
+
+  const missing = { params: { slug: ["blog", "none"] } };
+
+  it.each([
+    ["an access-enforced route", createContentPage],
+    ["a public route", createPublicContentPage],
+  ] as const)(
+    "is not needed: without one a miss is Next's notFound() (%s)",
+    async (_name, factory) => {
+      const route = factory(config());
+      await expect(route.ContentPage(missing)).rejects.toMatchObject(NOT_FOUND);
+      await expect(route.generateMetadata(missing)).rejects.toMatchObject(
+        NOT_FOUND
+      );
+    }
+  );
+
+  it.each([
+    ["an access-enforced route", createContentPage],
+    ["a public route", createPublicContentPage],
+  ] as const)(
+    "answers a miss for the page and its head alike (%s)",
+    async (_name, factory) => {
+      const site = handler();
+      const route = factory(config({ notFound: site.notFound }));
+      await expect(route.ContentPage(missing)).rejects.toThrow(
+        "site: not found"
+      );
+      await expect(route.generateMetadata(missing)).rejects.toThrow(
+        "site: not found"
+      );
+      expect(site.calls()).toBe(2);
+    }
+  );
+
+  it("answers a miss the pages route decides, given on the route or on its pages", async () => {
+    // A path the runtime keeps is refused by the pages route itself.
+    const onRoute = handler();
+    await expect(
+      createContentPage(config({ notFound: onRoute.notFound })).ContentPage({
+        params: { slug: ["admin"] },
+      })
+    ).rejects.toThrow("site: not found");
+    expect(onRoute.calls()).toBe(1);
+
+    const onPages = handler();
+    const options = config();
+    await expect(
+      createContentPage({
+        ...options,
+        pages: { ...options.pages, notFound: onPages.notFound },
+      }).ContentPage(missing)
+    ).rejects.toThrow("site: not found");
+    expect(onPages.calls()).toBe(1);
+  });
+
+  it("is still followed by Next's notFound() when it returns", async () => {
+    let calls = 0;
+    const route = createContentPage(
+      config({
+        notFound: async () => {
+          calls += 1;
+          return undefined as never;
+        },
+      })
+    );
+    await expect(route.ContentPage(missing)).rejects.toMatchObject(NOT_FOUND);
+    expect(calls).toBe(1);
+  });
+
+  it("is never called for a path the route serves", async () => {
+    const site = handler();
+    const route = createContentPage(config({ notFound: site.notFound }));
+    await served(route, ["blog", "hello"]);
+    await route.generateMetadata({ params: { slug: ["blog", "hello"] } });
+    expect(site.calls()).toBe(0);
+  });
+
+  it("answers a blocks page's and a Single page's misses too", async () => {
+    const pages = handler();
+    await expect(
+      createBlocksPage({
+        ...config().pages,
+        notFound: pages.notFound,
+      }).ContentPage({ params: { slug: ["admin"] } })
+    ).rejects.toThrow("site: not found");
+    expect(pages.calls()).toBe(1);
+
+    const single = handler();
+    await expect(
+      createSinglePage({
+        slug: "home",
+        field: "content",
+        blocks,
+        nextly: instance(POSTS) as never,
+        notFound: single.notFound,
+      }).SinglePage()
+    ).rejects.toThrow("site: not found");
+    expect(single.calls()).toBe(1);
   });
 });

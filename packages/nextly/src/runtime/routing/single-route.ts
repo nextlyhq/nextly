@@ -51,7 +51,7 @@ import type {
 
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
-import { triggerNotFound } from "./not-found";
+import { answerNotFound } from "./not-found";
 import {
   confirmedLanguage,
   requestLanguage,
@@ -348,6 +348,16 @@ export interface SingleRouteConfig<TNode> {
   tags?: string[];
   /** Time-based revalidation for a public route. Tag-based busting needs none. */
   revalidate?: number | false;
+  /**
+   * How this route answers a request it has nothing for, in place of
+   * Next.js's `notFound()`: a site passes its own to do something for each
+   * miss, such as logging the address. The page and `generateMetadata` may
+   * both call it for one request. A handler that returns is followed by
+   * Next.js's `notFound()`; without one the route answers as before.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */
+  notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -520,7 +530,7 @@ function buildSingleRoute<TNode>(
       config.locale,
       getReader
     );
-    if (language === null) triggerNotFound();
+    if (language === null) return answerNotFound(config.notFound);
     return {
       language,
       context: {
@@ -709,7 +719,7 @@ function buildSingleRoute<TNode>(
     // `generateMetadata`.
     return runWithAccessMemo(async () => {
       const document = await documentFor(context, language);
-      if (!document) triggerNotFound();
+      if (!document) return answerNotFound(config.notFound);
       // Asked only where a provider may answer: a site with none renders as
       // it always has, and works nothing out for it.
       const structuredData = await singlePageStructuredData(

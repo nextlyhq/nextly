@@ -4541,8 +4541,15 @@ export interface BlocksSinglePageConfig
 function singlePassthrough(
   config: BlocksSinglePageConfig
 ): Partial<SingleRouteConfig<ReactElement>> {
-  const { locale, depth, nextly, revalidate, draft, trustedCollections } =
-    config;
+  const {
+    locale,
+    depth,
+    nextly,
+    revalidate,
+    draft,
+    trustedCollections,
+    notFound,
+  } = config;
   return {
     ...(locale === undefined ? {} : { locale }),
     ...(depth === undefined ? {} : { depth }),
@@ -4553,6 +4560,7 @@ function singlePassthrough(
     // `createPublicSinglePage` inherits that rather than restating it.
     ...(draft === undefined ? {} : { draft }),
     ...(trustedCollections === undefined ? {} : { trustedCollections }),
+    ...(notFound === undefined ? {} : { notFound }),
   };
 }
 
@@ -4889,6 +4897,17 @@ export interface ContentPageConfig {
     id: string,
     locale: string | undefined
   ) => Promise<string | null>;
+  /**
+   * How the route answers a path it has nothing for, in place of Next.js's
+   * `notFound()`, for a page and an entry alike: a site passes its own to do
+   * something for each miss, such as logging the address. The page and
+   * `generateMetadata` may both call it for one request. A handler that
+   * returns is followed by Next.js's `notFound()`; without one the route
+   * answers as before. `pages.notFound` is used where this is absent.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */
+  readonly notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -4950,8 +4969,15 @@ function listPageSegments(
   return page <= 1 ? segments : [...segments, LIST_PAGE_SEGMENT, String(page)];
 }
 
-/** Answer not found, through the App Router's own boundary. */
-async function contentNotFound(): Promise<never> {
+/**
+ * Answer not found: with the route's own `notFound` where the site passed
+ * one, then through the App Router's own boundary, so a handler that returns
+ * still leaves the request answered not found.
+ */
+async function contentNotFound(
+  handler: ContentPageConfig["notFound"]
+): Promise<never> {
+  if (handler !== undefined) await handler();
   const { notFound } = await import("next/navigation");
   return notFound();
 }
@@ -4993,6 +5019,8 @@ function buildContentRoute(
 ): StaticContentRoute<ReactElement> {
   const { templates } = config;
   const entryPath = config.entryPath;
+  /** How the route answers a miss: the site's handler, where it passed one. */
+  const notFound = config.notFound ?? config.pages.notFound;
   /**
    * The tags a cached read of the address store carries: every collection
    * whose writes change who holds an address (the pages', the templates', and
@@ -5082,11 +5110,17 @@ function buildContentRoute(
   // A page is served by the pages route itself, so it is drawn exactly as
   // `createBlocksPage` draws it: its draft gate, its list's later pages, its
   // tags and metadata.
+  //
+  // Its misses are answered as the route's own are, by the one handler.
+  const pagesConfig: BlocksPageConfig =
+    notFound === undefined ? pages : { ...pages, notFound };
   const pagesRoute: ContentRoute<ReactElement> &
     Partial<Pick<StaticContentRoute<ReactElement>, "generateStaticParams">> =
     isPublic
-      ? createPublicContentRoute<ReactElement>(blocksRouteConfig(pages, true))
-      : createContentRoute<ReactElement>(blocksRouteConfig(pages, false));
+      ? createPublicContentRoute<ReactElement>(
+          blocksRouteConfig(pagesConfig, true)
+        )
+      : createContentRoute<ReactElement>(blocksRouteConfig(pagesConfig, false));
   const pageCollections = new Set(pages.collections);
   const mountPath = pages.mountPath ?? "";
   const mountSegments = mountPath.split("/").filter(part => part !== "");
@@ -5455,12 +5489,28 @@ function buildContentRoute(
     return (await confirmedLanguage(language)) ? found : null;
   }
 
-  async function ContentPage(args: ContentRouteArgs): Promise<ReactElement> {
+  /**
+   * What a request is served as, with its path, language and params; not
+   * found, through the route's handler, where it names nothing the route
+   * serves. The page and its head ask alike: a crawler is answered once its
+   * head is ready, so the head answering not found is what gives it a 404
+   * rather than a 200 carrying a not-found body.
+   */
+  async function servedFor(args: ContentRouteArgs): Promise<{
+    found: ContentAnswer;
+    segments: string[];
+    language: RequestLanguage;
+    params: { slug: string[]; locale?: string };
+  }> {
     const request = await requestOf(args);
-    if (request === null) return await contentNotFound();
-    const { segments, language, params } = request;
-    const found = await answered(segments, language);
-    if (found === null) return await contentNotFound();
+    if (request === null) return await contentNotFound(notFound);
+    const found = await answered(request.segments, request.language);
+    if (found === null) return await contentNotFound(notFound);
+    return { ...request, found };
+  }
+
+  async function ContentPage(args: ContentRouteArgs): Promise<ReactElement> {
+    const { found, segments, language, params } = await servedFor(args);
     if (found.kind === "page") {
       return await pagesRoute.ContentPage({ params });
     }
@@ -5484,14 +5534,8 @@ function buildContentRoute(
   }
 
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
-    const request = await requestOf(args);
-    if (request === null) return await contentNotFound();
-    const { segments, language, params } = request;
-    const found = await answered(segments, language);
-    // Not found here as in the page: a crawler is answered once its head is
-    // ready, so this is what gives it a 404 rather than a 200 carrying a
-    // not-found body.
-    if (found === null) return await contentNotFound();
+    // Not found here as in the page (`servedFor`).
+    const { found, segments, language, params } = await servedFor(args);
     // A redirect's metadata is never read: the page answers with it.
     if (found.kind === "redirect") return {};
     if (found.kind === "page") {
