@@ -29,6 +29,7 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import { BULK_PAGE, BULK_PAGE_HREF } from "./bulk/contract";
 import { bulkRoutes } from "./bulk/route";
 import { codePagesCollection } from "./code-pages/collection";
 import {
@@ -705,6 +706,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           icon: "Eye",
           requiredPermission: CHECK_SEO_PERMISSION,
         },
+        // Shown to everyone in the admin: the table holds the pages of the
+        // types each person may read, the ones they may not change read-only,
+        // and its import asks for manage-seo itself.
+        { label: "Bulk edit", to: BULK_PAGE_HREF, icon: "Table" },
         {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
@@ -718,6 +723,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...RECEIVED_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
         { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        BULK_PAGE,
       ],
     },
   };
