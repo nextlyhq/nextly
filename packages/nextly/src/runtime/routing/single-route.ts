@@ -41,6 +41,7 @@ import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageMetadataProviderToAsk,
   pageStructuredDataFor,
   type PageMetadataRequest,
 } from "../seo/page-metadata";
@@ -409,9 +410,10 @@ async function singlePageRequest(
   const code = config.buildMetadata
     ? await config.buildMetadata(document, context)
     : undefined;
-  // Worked out only where a provider may be asked: with none known, the
-  // route's own metadata is served and the content is not walked for it.
-  if (knownNoPageMetadataProvider()) return { code, request: null };
+  // Only where a provider can be asked: Nextly is started first where nothing
+  // has started it, and with no provider, or none reachable, the route's own
+  // metadata is served without the content being read for one.
+  if (!(await pageMetadataProviderToAsk(path))) return { code, request: null };
   const derived = config.derivedMetadata
     ? await config.derivedMetadata(document, context)
     : undefined;
@@ -486,8 +488,9 @@ export async function singlePageStructuredData(
   context: SingleContext,
   path?: string
 ): Promise<string | undefined> {
-  // Nobody to answer: the route's own metadata is not worked out for nothing.
-  if (knownNoPageMetadataProvider()) return undefined;
+  // Nobody to answer, or nobody reachable once Nextly's start was tried: the
+  // route's own metadata is not worked out for nothing.
+  if (!(await pageMetadataProviderToAsk(path))) return undefined;
   const { request } = await singlePageRequest(config, document, context, path);
   if (request === null) return undefined;
   const hints = await config.structuredDataHints?.(document, context);
