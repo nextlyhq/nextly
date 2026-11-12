@@ -174,8 +174,8 @@ describeEachDialect("the value an entry keeps, case by case", dialect => {
   const q = (name: string) => quote(dialect, name);
   const spec = {
     dialect,
-    mainTable: "dc_posts",
-    companionTable: "dc_posts_locales",
+    mainTable: "dc_rcposts",
+    companionTable: "dc_rcposts_locales",
     defaultLocale: "en",
     liveness: copyLiveness(["en", "de", "fr"], true),
   } as const;
@@ -192,7 +192,7 @@ describeEachDialect("the value an entry keeps, case by case", dialect => {
       "collectionsHandler"
     ) as unknown as CollectionsHandler;
     const made = await handler.createCollection({
-      name: "posts",
+      name: "rcposts",
       label: "Post",
       localized: true,
       status: true,
@@ -208,17 +208,17 @@ describeEachDialect("the value an entry keeps, case by case", dialect => {
 
   it.each(CASES)("$name", async ({ rows, keeps }) => {
     const created = (await current.nextly.create({
-      collection: "posts",
+      collection: "rcposts",
       locale: "en",
       data: { heading: "seed" },
     })) as { item: { id: string } };
     const id = created.item.id;
     await current.adapter.executeQuery(
-      `DELETE FROM ${q("dc_posts_locales")} WHERE ${q("_parent")} = '${id}'`
+      `DELETE FROM ${q("dc_rcposts_locales")} WHERE ${q("_parent")} = '${id}'`
     );
     for (const [locale, status, heading] of rows) {
       await current.adapter.executeQuery(
-        `INSERT INTO ${q("dc_posts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) ` +
+        `INSERT INTO ${q("dc_rcposts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) ` +
           `VALUES ('${id}', '${locale}', '${status}', ${heading === null ? "NULL" : `'${heading}'`})`
       );
     }
@@ -227,9 +227,9 @@ describeEachDialect("the value an entry keeps, case by case", dialect => {
       value: string | null;
       locale: string | null;
     }>(
-      `SELECT ${restoredValue(spec, `${q("dc_posts_locales")}.${q("heading")}`)} AS ${q("value")}, ` +
-        `${chosenLocaleOf(spec, `${q("dc_posts")}.${q("id")}`, "heading")} AS ${q("locale")} ` +
-        `FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+      `SELECT ${restoredValue(spec, `${q("dc_rcposts_locales")}.${q("heading")}`)} AS ${q("value")}, ` +
+        `${chosenLocaleOf(spec, `${q("dc_rcposts")}.${q("id")}`, "heading")} AS ${q("locale")} ` +
+        `FROM ${q("dc_rcposts")} WHERE ${q("id")} = '${id}'`
     );
 
     expect({

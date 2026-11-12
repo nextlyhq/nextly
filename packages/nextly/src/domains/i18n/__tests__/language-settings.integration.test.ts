@@ -113,7 +113,7 @@ describeEachDialect("the site's languages in Settings", dialect => {
       perLanguageStorage: true,
       collections: [
         {
-          slug: "articles",
+          slug: "lsarticles",
           fields: [
             { name: "headline", type: "text" },
             { name: "views", type: "number" },
@@ -124,7 +124,7 @@ describeEachDialect("the site's languages in Settings", dialect => {
     const registry = current.getService("languageRegistry") as LanguageRegistry;
     const settings = new LanguageSettingsService(current.adapter, registry);
     const created = (await current.nextly.create({
-      collection: "articles",
+      collection: "lsarticles",
       data: { headline: "Hello", views: 3 },
     })) as { item?: { id: string }; id?: string };
     const id = created.item?.id ?? created.id ?? "";
@@ -141,7 +141,7 @@ describeEachDialect("the site's languages in Settings", dialect => {
     // French is there for the translatable field at once, falling back to the content written.
     expect(
       await current.nextly.findByID({
-        collection: "articles",
+        collection: "lsarticles",
         id,
         locale: "fr",
       })

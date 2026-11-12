@@ -129,7 +129,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     fields: Record<string, unknown>[] = TRANSLATED
   ): Promise<void> {
     const created = await handler().createCollection({
-      name: "posts",
+      name: "flpposts",
       label: "Post",
       localized: true,
       fields,
@@ -141,7 +141,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       ["Two", { es: "Dos" }],
     ] as const) {
       const entry = await entries.createEntry(
-        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { collectionName: "flpposts", overrideAccess: true, locale: "en" },
         { heading: title, views: 1 }
       );
       expect(entry.success, JSON.stringify(entry)).toBe(true);
@@ -149,7 +149,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       for (const [locale, value] of Object.entries(translations)) {
         const translated = await entries.updateEntry(
           {
-            collectionName: "posts",
+            collectionName: "flpposts",
             entryId: id,
             overrideAccess: true,
             locale,
@@ -168,7 +168,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       await dispatchCollections(
         {} as ServiceContainer,
         "previewSchemaChanges",
-        { collectionName: "posts" },
+        { collectionName: "flpposts" },
         { fields: SHARED, localized: true }
       )
     );
@@ -187,7 +187,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
         sharedFrom: {},
         defaultLocale: "en",
         restoreCommand:
-          "nextly i18n:restore --collection posts --field heading",
+          "nextly i18n:restore --collection flpposts --field heading",
       },
     ]);
   });
@@ -197,7 +197,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       await dispatchCollections(
         {} as ServiceContainer,
         "previewSchemaChanges",
-        { collectionName: "posts" },
+        { collectionName: "flpposts" },
         { fields, localized: true }
       )
     );
@@ -211,13 +211,13 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     await seedCollection(both);
     const entries = handler().getEntryService();
     const created = await entries.createEntry(
-      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { collectionName: "flpposts", overrideAccess: true, locale: "en" },
       { heading: "Three", summary: "Sub" }
     );
     const id = String((created.data as { id: unknown }).id);
     await entries.updateEntry(
       {
-        collectionName: "posts",
+        collectionName: "flpposts",
         entryId: id,
         overrideAccess: true,
         locale: "es",
@@ -241,7 +241,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     await seedCollection();
     // A companion that has drifted from its registry: the count has nothing to read.
     await query(
-      `ALTER TABLE ${quote(dialect, "dc_posts_locales")} DROP COLUMN ${quote(dialect, "heading")}`
+      `ALTER TABLE ${quote(dialect, "dc_flpposts_locales")} DROP COLUMN ${quote(dialect, "heading")}`
     );
 
     const preview = await previewShared();
@@ -258,7 +258,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     await seedCollection();
     // One entry translated before it had an English row, as an older install may hold.
     await query(
-      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+      `DELETE FROM ${quote(dialect, "dc_flpposts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
     );
 
     const preview = await previewShared();
@@ -272,7 +272,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
   it("names the language an entry without a default-language value takes its shared value from", async () => {
     await seedCollection();
     await query(
-      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+      `DELETE FROM ${quote(dialect, "dc_flpposts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
     );
 
     const [leaving] = (await previewShared()).leavingTranslation ?? [];
@@ -288,7 +288,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
   // translated. The summary says how many values that is.
   it("counts the values a field becoming translated keeps as the default language's", async () => {
     const made = await handler().createCollection({
-      name: "posts",
+      name: "flpposts",
       label: "Post",
       localized: true,
       fields: SHARED,
@@ -298,7 +298,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       const entry = await handler()
         .getEntryService()
         .createEntry(
-          { collectionName: "posts", overrideAccess: true, locale: "en" },
+          { collectionName: "flpposts", overrideAccess: true, locale: "en" },
           { heading, views: 1 }
         );
       expect(entry.success, JSON.stringify(entry)).toBe(true);
@@ -330,10 +330,10 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     // One entry with no heading in any language, as an older install may hold: whichever
     // language it keeps, it would be left without one.
     const [two] = await query<{ parent: string }>(
-      `SELECT ${quote(dialect, "_parent")} AS parent FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+      `SELECT ${quote(dialect, "_parent")} AS parent FROM ${quote(dialect, "dc_flpposts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
     );
     await query(
-      `UPDATE ${quote(dialect, "dc_posts_locales")} SET ${quote(dialect, "heading")} = NULL WHERE ${quote(dialect, "_parent")} = '${two.parent}'`
+      `UPDATE ${quote(dialect, "dc_flpposts_locales")} SET ${quote(dialect, "heading")} = NULL WHERE ${quote(dialect, "_parent")} = '${two.parent}'`
     );
 
     expect(
@@ -354,7 +354,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     const entries = handler().getEntryService();
     for (const heading of ["One", "Two", "Two"]) {
       const entry = await entries.createEntry(
-        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { collectionName: "flpposts", overrideAccess: true, locale: "en" },
         { heading, views: 1 }
       );
       expect(entry.success, JSON.stringify(entry)).toBe(true);

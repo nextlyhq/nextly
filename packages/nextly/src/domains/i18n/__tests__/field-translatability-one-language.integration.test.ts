@@ -75,7 +75,7 @@ describeEachDialect(
     /** Every entry's heading, read through the Direct API, by id. */
     async function headings(): Promise<Record<string, unknown>> {
       const { items } = (await current.nextly.find({
-        collection: "posts",
+        collection: "onelangposts",
         limit: 10,
       })) as { items: { id: string; heading?: unknown }[] };
       return Object.fromEntries(items.map(item => [item.id, item.heading]));
@@ -90,7 +90,7 @@ describeEachDialect(
 
     async function seeded(fields: Record<string, unknown>[]) {
       const made = await handler().createCollection({
-        name: "posts",
+        name: "onelangposts",
         label: "Post",
         localized: true,
         fields,
@@ -100,7 +100,11 @@ describeEachDialect(
         const created = await handler()
           .getEntryService()
           .createEntry(
-            { collectionName: "posts", overrideAccess: true, locale: "en" },
+            {
+              collectionName: "onelangposts",
+              overrideAccess: true,
+              locale: "en",
+            },
             { heading }
           );
         expect(created.success, JSON.stringify(created)).toBe(true);
@@ -110,7 +114,7 @@ describeEachDialect(
 
     async function change(fields: Record<string, unknown>[]) {
       const saved = await handler().updateCollection(
-        { collectionName: "posts" },
+        { collectionName: "onelangposts" },
         { fields }
       );
       expect(saved.success, saved.message).toBe(true);

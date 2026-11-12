@@ -20,6 +20,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 
 interface Entries {
   createEntry(
@@ -95,7 +96,7 @@ describeEachDialect(
         "collectionsHandler"
       ) as unknown as CollectionsHandler;
       const made = await handler.createCollection({
-        name: "posts",
+        name: "rrposts",
         label: "Post",
         localized: true,
         status: true,
@@ -104,14 +105,14 @@ describeEachDialect(
       expect(made.success, JSON.stringify(made)).toBe(true);
       const entries = handler.getEntryService();
       const created = await entries.createEntry(
-        { collectionName: "posts", overrideAccess: true, locale: "fr" },
+        { collectionName: "rrposts", overrideAccess: true, locale: "fr" },
         { heading: "Bonjour", status: "published" }
       );
       expect(created.success, JSON.stringify(created)).toBe(true);
       const id = String((created.data as { id: unknown }).id);
       const german = await entries.updateEntry(
         {
-          collectionName: "posts",
+          collectionName: "rrposts",
           entryId: id,
           overrideAccess: true,
           locale: "de",
@@ -124,7 +125,7 @@ describeEachDialect(
         locale: string;
         status: string;
       }>(
-        `SELECT ${q("_locale")} AS locale, ${q("_status")} AS status FROM ${q("dc_posts_locales")} ORDER BY ${q("_locale")}`
+        `SELECT ${q("_locale")} AS locale, ${q("_status")} AS status FROM ${q("dc_rrposts_locales")} ORDER BY ${q("_locale")}`
       );
       expect(rows).toEqual([
         { locale: "de", status: "draft" },
@@ -137,7 +138,7 @@ describeEachDialect(
       const [main] = await current!.adapter.executeQuery<{
         heading: string | null;
       }>(
-        `SELECT ${q("heading")} AS heading FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+        `SELECT ${q("heading")} AS heading FROM ${q("dc_rrposts")} WHERE ${q("id")} = '${id}'`
       );
       const archived = await current!.adapter.executeQuery<{ locale: string }>(
         `SELECT ${q("locale")} AS locale FROM ${q("nextly_i18n_archive")} WHERE ${q("entry_id")} = '${id}' AND ${q("field")} = 'heading' ORDER BY ${q("locale")}`
@@ -151,7 +152,7 @@ describeEachDialect(
 
     async function makeHeadingShared(handler: CollectionsHandler) {
       const saved = await handler.updateCollection(
-        { collectionName: "posts" },
+        { collectionName: "rrposts" },
         { fields: [{ name: "heading", type: "text", localized: false }] }
       );
       expect(saved.success, saved.message).toBe(true);
@@ -162,10 +163,10 @@ describeEachDialect(
     it("keeps a draft of a language the site lists over a published one of a language it removed", async () => {
       const { handler, id } = await seeded();
       await companionSql(
-        `UPDATE ${q("dc_posts_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_locale")} = 'fr'`
+        `UPDATE ${q("dc_rrposts_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_locale")} = 'fr'`
       );
       await companionSql(
-        `INSERT INTO ${q("dc_posts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'it', 'published', 'Ciao')`
+        `INSERT INTO ${q("dc_rrposts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'it', 'published', 'Ciao')`
       );
 
       await makeHeadingShared(handler);
@@ -181,7 +182,7 @@ describeEachDialect(
     it("keeps the next live language's value where the first live one has the field empty", async () => {
       const { handler, id } = await seeded();
       await companionSql(
-        `UPDATE ${q("dc_posts_locales")} SET ${q("_status")} = 'published', ${q("heading")} = NULL WHERE ${q("_locale")} = 'de'`
+        `UPDATE ${q("dc_rrposts_locales")} SET ${q("_status")} = 'published', ${q("heading")} = NULL WHERE ${q("_locale")} = 'de'`
       );
 
       await makeHeadingShared(handler);
@@ -194,10 +195,10 @@ describeEachDialect(
     it("keeps a published English that is empty rather than a draft that has the field", async () => {
       const { handler, id } = await seeded();
       await companionSql(
-        `UPDATE ${q("dc_posts_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_locale")} = 'fr'`
+        `UPDATE ${q("dc_rrposts_locales")} SET ${q("_status")} = 'draft' WHERE ${q("_locale")} = 'fr'`
       );
       await companionSql(
-        `INSERT INTO ${q("dc_posts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'en', 'published', NULL)`
+        `INSERT INTO ${q("dc_rrposts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("heading")}) VALUES ('${id}', 'en', 'published', NULL)`
       );
 
       await makeHeadingShared(handler);
@@ -208,11 +209,43 @@ describeEachDialect(
       });
     });
 
+    // The file the Schema Builder writes for the change is what another database replays, so it
+    // must keep the same value the save keeps here.
+    it("keeps the published French when the Schema Builder's migration file for the change is replayed", async () => {
+      const { id } = await seeded();
+      const service = new DynamicCollectionService(
+        current!.adapter as unknown as ConstructorParameters<
+          typeof DynamicCollectionService
+        >[0],
+        current!.getService("logger") as ConstructorParameters<
+          typeof DynamicCollectionService
+        >[1]
+      );
+
+      const { migrationSQL } = await service.generateCollectionUpdate(
+        "rrposts",
+        {
+          fields: [{ name: "heading", type: "text", localized: false }],
+        } as never
+      );
+      for (const statement of (migrationSQL ?? "")
+        .split("--> statement-breakpoint")
+        .map(text => text.trim())
+        .filter(text => text !== "" && !/^--/.test(text))) {
+        await companionSql(statement);
+      }
+
+      expect(await kept(id)).toEqual({
+        shared: "Bonjour",
+        archived: ["de", "fr"],
+      });
+    });
+
     it("keeps the published French when the whole collection stops being translated", async () => {
       const { handler, id } = await seeded();
 
       const saved = await handler.updateCollection(
-        { collectionName: "posts" },
+        { collectionName: "rrposts" },
         { localized: false, fields: [{ name: "heading", type: "text" }] }
       );
 
@@ -227,7 +260,7 @@ describeEachDialect(
       const { handler, id } = await seeded();
 
       const saved = await handler.updateCollection(
-        { collectionName: "posts" },
+        { collectionName: "rrposts" },
         { fields: SHARED_REQUIRED }
       );
 
@@ -244,7 +277,7 @@ describeEachDialect(
       const response = (await dispatchCollections(
         {} as ServiceContainer,
         "previewSchemaChanges",
-        { collectionName: "posts" },
+        { collectionName: "rrposts" },
         { fields: SHARED_REQUIRED, localized: true }
       )) as Response;
       const body = (await response.json()) as Preview & { data?: Preview };

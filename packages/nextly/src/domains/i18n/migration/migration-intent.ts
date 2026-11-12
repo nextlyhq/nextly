@@ -31,7 +31,7 @@ export const LOCALIZATION_INTENT_VERSION = 6;
  * comes out and its files start refusing instead of being silently misread.
  */
 const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([
-  1, 2, 3, 4, 5, 6,
+  1, 2, 3, 4, 5, 6, 7,
 ]);
 
 /**
@@ -106,6 +106,7 @@ const KINDS_BY_VERSION: ReadonlyMap<
   ],
   [5, LOCALIZATION_MIGRATION_KINDS],
   [6, LOCALIZATION_MIGRATION_KINDS],
+  [7, LOCALIZATION_MIGRATION_KINDS],
 ]);
 
 /**
@@ -116,6 +117,13 @@ const KINDS_BY_VERSION: ReadonlyMap<
 const SETTINGS_INTENT_VERSION = 6;
 
 /**
+ * The first version whose spec may record `liveness`, the ranking that chooses the value an entry
+ * keeps. A build before it would apply such a file judging the Required and Unique settings on
+ * other rows than the copy keeps, so it refuses the file instead.
+ */
+const LIVENESS_INTENT_VERSION = 7;
+
+/**
  * The version a file of this kind is written with: the lowest that can declare it. A file of a
  * version-1 kind stays readable by a build that knows only version 1, and a file of a newer kind
  * is refused by such a build as a version it does not support, which says to upgrade, rather
@@ -124,8 +132,9 @@ const SETTINGS_INTENT_VERSION = 6;
  */
 export function intentVersionFor(
   kind: LocalizationMigrationKind,
-  spec?: Pick<CompanionMigrationSpec, "settings">
+  spec?: Pick<CompanionMigrationSpec, "settings" | "liveness">
 ): number {
+  if (spec?.liveness !== undefined) return LIVENESS_INTENT_VERSION;
   if (spec?.settings !== undefined) return SETTINGS_INTENT_VERSION;
   for (const [version, kinds] of KINDS_BY_VERSION) {
     if (kinds.includes(kind)) return version;
@@ -195,6 +204,15 @@ export function formatLocalizationIntent(
                 field: u.field,
                 column: u.column,
               })),
+            },
+          }),
+      ...(s.liveness === undefined
+        ? {}
+        : {
+            liveness: {
+              languageOrder: [...s.liveness.languageOrder],
+              publicStates: [...s.liveness.publicStates],
+              companionHasStatus: s.liveness.companionHasStatus,
             },
           }),
     },
@@ -348,11 +366,30 @@ function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
     return false;
   if (s.status !== undefined && typeof s.status !== "boolean") return false;
   if (s.unique !== undefined && !isFieldColumnList(s.unique)) return false;
+  // The ranking arrived with its version, as the settings did.
+  if (
+    s.liveness !== undefined &&
+    !(v.version >= LIVENESS_INTENT_VERSION && isLivenessShape(s.liveness))
+  )
+    return false;
   // Settings arrived with their version: an older header carrying them was not written by a
   // generator, and a hand-added key is not one to trust.
   return (
     s.settings === undefined ||
     (v.version >= SETTINGS_INTENT_VERSION && isSettingsShape(s.settings))
+  );
+}
+
+/** The ranking a file records: the site's language order, the public states, the status flag. */
+function isLivenessShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const l = value as Record<string, unknown>;
+  const strings = (list: unknown) =>
+    Array.isArray(list) && list.every(item => typeof item === "string");
+  return (
+    strings(l.languageOrder) &&
+    strings(l.publicStates) &&
+    typeof l.companionHasStatus === "boolean"
   );
 }
 
