@@ -364,6 +364,7 @@ export function PagesEditor({
   onEdits,
   saving,
   onSaving,
+  list,
   onSaved,
 }: {
   shown: readonly SiteAddress[];
@@ -379,6 +380,8 @@ export function PagesEditor({
    */
   saving: boolean;
   onSaving: (saving: boolean) => void;
+  /** The list as last read, which a new read replaces. */
+  list: unknown;
   /** Called once a save has run, so the list and the problems are read again. */
   onSaved: () => void;
 }): JSX.Element {
@@ -386,6 +389,21 @@ export function PagesEditor({
   const { rows: typeRows, again } = useTypeRows(types);
   const rows = useMemo(() => editRowsOf(shown, typeRows), [shown, typeRows]);
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
+  // A save of pages built in code waiting for the list to be read again.
+  const held = useRef<{
+    list: unknown;
+    paths: string[];
+    sent: PageEdits;
+  } | null>(null);
+  useEffect(() => {
+    const waiting = held.current;
+    if (waiting === null) return;
+    // The list read again, or a read that failed: either way it is let go.
+    if (list === waiting.list && failure === null) return;
+    held.current = null;
+    onEdits(current => editsAfter(current, waiting.paths, waiting.sent));
+    onSaving(false);
+  }, [list, failure, onEdits, onSaving]);
   const changedPages = rows.filter(row => rowChanged(row, edits)).length;
   const byPath = useMemo(
     () => new Map(shown.map(item => [item.path, item])),
@@ -414,9 +432,17 @@ export function PagesEditor({
           : []
       )
     );
-    onEdits(current => editsAfter(current, result.saved, sent));
+    // A page built in code is read again with the whole list: its edits,
+    // and the lock, are held until that read arrives, so a box never shows,
+    // or sends, the value the save replaced.
+    const code = result.saved.filter(path =>
+      steps.some(step => step.kind === "code" && step.paths.includes(path))
+    );
+    const entries = result.saved.filter(path => !code.includes(path));
+    onEdits(current => editsAfter(current, entries, sent));
+    if (code.length === 0) onSaving(false);
+    else held.current = { list, paths: code, sent };
     onSaved();
-    onSaving(false);
     if (result.failed.length === 0) {
       toastMutationResult(`Saved ${pagesText(result.saved.length)}.`, []);
     } else {

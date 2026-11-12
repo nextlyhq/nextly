@@ -155,12 +155,15 @@ const ROWS: BulkRow[] = [
 let sent: unknown[];
 /** Every write Edit mode sent, in order. */
 let writes: { path: string; body?: unknown }[];
+/** The list the addresses route answers: replaced to model a read after a save. */
+let listed: SiteAddress[];
 
 beforeEach(() => {
+  listed = ITEMS;
   sent = [];
   writes = [];
   vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
-    data: args.path === "/problems" ? PROBLEMS : { items: ITEMS },
+    data: args.path === "/problems" ? PROBLEMS : { items: listed },
     pending: false,
     error: null,
     refetch: () => {},
@@ -379,6 +382,36 @@ describe("Edit mode", () => {
         hidden: false,
       },
     });
+  });
+
+  it("holds a saved page built in code until the list is read again with what it saved", async () => {
+    const { rerender } = render(<SeoPagesPage />);
+    editMode();
+    const pricing = (await screen.findByLabelText(
+      "Title for Pricing"
+    )) as HTMLInputElement;
+    fireEvent.change(pricing, { target: { value: "Plans" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() =>
+      expect(toastMutationResult).toHaveBeenCalledWith("Saved 1 page.", [])
+    );
+    // The list still holds the page as it was: its box stays as typed, and
+    // locked, so nothing is sent over the save from the older values.
+    expect(pricing.readOnly).toBe(true);
+    expect(pricing.value).toBe("Plans");
+
+    listed = ITEMS.map(item =>
+      item.path === "/pricing" && item.seo !== undefined
+        ? {
+            ...item,
+            seo: { ...item.seo, typed: { ...item.seo.typed, title: "Plans" } },
+          }
+        : item
+    );
+    rerender(<SeoPagesPage />);
+    await vi.waitFor(() => expect(pricing.readOnly).toBe(false));
+    expect(pricing.value).toBe("Plans");
+    expect(screen.queryByText(/page changed/)).toBeNull();
   });
 
   it("says which pages a save left unsaved, and keeps their changes", async () => {

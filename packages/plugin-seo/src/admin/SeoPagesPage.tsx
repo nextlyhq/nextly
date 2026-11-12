@@ -130,6 +130,8 @@ function usePages(filter: PagesFilter) {
     ? `The site's pages could not be read. ${apiErrorMessage(addresses.error)}`
     : null;
   return {
+    // The answer as read, which a later read replaces.
+    list: items,
     items: items ?? [],
     byPage,
     shown,
@@ -236,6 +238,7 @@ export function SeoPagesPage(): JSX.Element {
           onEdits={setEdits}
           saving={saving}
           onSaving={setSaving}
+          list={pages.list}
           onSaved={pages.reread}
         />
       )}

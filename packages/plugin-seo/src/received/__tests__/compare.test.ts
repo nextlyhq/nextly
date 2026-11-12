@@ -527,4 +527,25 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     expect(of("googlebot")?.expected).toBe(true);
     expect(of("x")?.expected).toBeUndefined();
   });
+
+  it("leaves a crawler's difference to fix though another crawler was served a saved copy", () => {
+    const changed = page(head => (head.title = "Old title | Rext AI"));
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: STORED,
+      fetched: everyone(page(), {
+        googlebot: received(changed, { headers: { age: "300" } }),
+        bingbot: received(changed),
+      }),
+    });
+    const of = (key: "googlebot" | "bingbot") => {
+      const cell = compared.rows.title[key];
+      return compared.differences.find(
+        difference =>
+          cell.kind === "different" && difference.number === cell.difference
+      );
+    };
+    expect(of("googlebot")?.expected).toBe(true);
+    expect(of("bingbot")?.expected).toBeUndefined();
+  });
 });

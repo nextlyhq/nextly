@@ -786,8 +786,10 @@ function groupFor(
   basis = ""
 ): Group {
   // Crawlers judged against different values, or values of different
-  // origins, are kept apart though they received the same thing.
-  const id = `${row}|${basis}|${received ?? ""}|${received === undefined ? "none" : "some"}`;
+  // origins, are kept apart though they received the same thing, and so is
+  // one served a host's saved copy from one served the page afresh.
+  const copy = cachedCopy(reading.headers) === undefined ? "fresh" : "saved";
+  const id = `${row}|${basis}|${copy}|${received ?? ""}|${received === undefined ? "none" : "some"}`;
   const group = groups.get(id) ?? {
     number: groups.size + 1,
     keys: [],
