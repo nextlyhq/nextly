@@ -37,8 +37,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { countNonEmpty, countRows } from "../pipeline/classifier/count-helpers";
 
-/** The consent's command-line spelling. */
-const ACCEPT_DATA_LOSS_FLAG = "--accept-data-loss";
+/** The consent's command-line spelling, which a command naming the consent that would cover a change reads. */
+export const ACCEPT_DATA_LOSS_FLAG = "--accept-data-loss";
 
 /** The consent's environment spelling. */
 export const ACCEPT_DATA_LOSS_ENV = "NEXTLY_ACCEPT_DATA_LOSS";

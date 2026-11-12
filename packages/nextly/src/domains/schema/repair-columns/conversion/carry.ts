@@ -115,6 +115,8 @@ const REFUSAL_WORDS: Record<ConversionReasonKind, string> = {
   "unreadable-reference-list": "cannot be read as a list of references",
   "no-conversion": "has no conversion to the new type",
   "late-write": "could be changed by a write while the conversion runs",
+  "cleared-under-not-null":
+    "would be cleared, and the column does not allow a null",
 };
 
 /** The entry for a default whose literal the new type refuses. */

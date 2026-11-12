@@ -8,14 +8,24 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import type { PluginContext, PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  type PluginContext,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, defineSingle, richText, text } from "nextly";
+import {
+  defineCollection,
+  defineSingle,
+  getService,
+  richText,
+  text,
+} from "nextly";
 import { createPublicContentRoute, type ContentEntry } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -723,6 +733,68 @@ describe.each(getConfiguredTestDialects())(
       expect(hidden.problems.some(p => p.subject.type === "single:home")).toBe(
         false
       );
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a page saved inside a transaction (%s)",
+  dialect => {
+    it("is checked outside that transaction, so its check never shares the transaction's connection", async () => {
+      // Whether each write of the problem list's rows was made while a
+      // transaction its flow is inside was open.
+      const inTransaction: boolean[] = [];
+      const watcher: PluginDefinition = definePlugin({
+        name: "@test/problem-writes",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init(ctx) {
+          const adapter = getService("adapter");
+          for (const hook of ["beforeCreate", "beforeUpdate"] as const) {
+            ctx.hooks.on(hook, PROBLEMS_SLUG, () => {
+              inTransaction.push(adapter.transactionOpenInFlow());
+            });
+          }
+        },
+      });
+      const seen: { ctx?: PluginContext } = {};
+      current = await createTestNextly({
+        dialect,
+        plugins: [seoWithContext(seen, ["posts"]), watcher],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            access: { read: () => true },
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      const id = await publish(t, { title: "Before", slug: "before" });
+      await until(t, checkedSince(id));
+      inTransaction.length = 0;
+
+      // A save on a transaction its hook runs inside, held open a while as a
+      // longer transaction would be, so its check starts before it ends.
+      await ctx.services.collections.withTransaction(async transaction => {
+        await ctx.services.collections.updateEntryInTransaction(
+          transaction,
+          "posts",
+          id,
+          { title: "Changed", _overwrite: true }
+        );
+        await new Promise(resolve => setTimeout(resolve, 500));
+      });
+      await until(t, found =>
+        found.some(row => row.holderId === id && row.title === "Changed")
+      );
+
+      expect(inTransaction.length).toBeGreaterThan(0);
+      expect(inTransaction).not.toContain(true);
     });
   }
 );
