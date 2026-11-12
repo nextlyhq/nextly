@@ -128,11 +128,6 @@ export interface ReconcileMetadataDeps {
    * registry source uses, in place of any snapshot.
    */
   configurationRows?: EntitySettingsRecord;
-  /**
-   * Asked before each registry row is written; throws once the run can no
-   * longer show it holds the schema lock (`RegistryWriteDeps.assertLockHeld`).
-   */
-  assertLockHeld?: () => Promise<void> | void;
   /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
@@ -609,9 +604,6 @@ async function registerRows(
     {
       adapter,
       logger: asServiceLogger(logger),
-      ...(deps.assertLockHeld === undefined
-        ? {}
-        : { assertLockHeld: deps.assertLockHeld }),
       ...(deps.collectionSources === undefined
         ? {}
         : { collectionSources: deps.collectionSources }),

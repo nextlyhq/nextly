@@ -28,6 +28,11 @@ export interface PrunableVersion {
   label: string | null;
   /** The version a restore was made from, when this row records a restore. */
   sourceVersionNo: number | null;
+  /**
+   * The version each restored field came from, when the save this row records
+   * carried restored values; absent or null when it carried none.
+   */
+  fieldSources?: Readonly<Record<string, number>> | null;
 }
 
 /**
@@ -42,7 +47,8 @@ export interface PrunableVersion {
  *   snapshot, and with it the only copy of what that language's readers see;
  * - every named version: someone (or a restore, for its undo point) chose to
  *   keep it;
- * - every row that records a restore, and the version it was made from, so
+ * - every row that records a restore, and the version it was made from, and
+ *   every row whose save carried restored fields, and each field's source, so
  *   "restored from" never points at a version that is gone;
  * - every version a feature has pinned (`pinnedVersionNos`): a feature holds
  *   it for as long as it needs it, whatever the limit;
@@ -111,6 +117,9 @@ function protectedVersionIds(
   const keepVersionNos = [
     ...protectVersionNos,
     ...rows.map(r => r.sourceVersionNo),
+    // Every version a saved field was restored from, so each "Restored from"
+    // still points at a version that is there.
+    ...rows.flatMap(r => Object.values(sourcesOf(r))),
   ];
   for (const versionNo of keepVersionNos) {
     const id = typeof versionNo === "number" && idByVersionNo.get(versionNo);
@@ -153,7 +162,22 @@ function isNamed(row: PrunableVersion): boolean {
   return row.label !== null && row.label !== "";
 }
 
-/** Whether a row records a restore, which names the version it came from. */
+/**
+ * Whether a row records a restore, which names the version it came from, or a
+ * save carrying restored fields, which names a version for each.
+ */
 function isRestore(row: PrunableVersion): boolean {
-  return typeof row.sourceVersionNo === "number";
+  return (
+    typeof row.sourceVersionNo === "number" ||
+    Object.keys(sourcesOf(row)).length > 0
+  );
+}
+
+/**
+ * A row's field sources as a map, or an empty one. A read that handed the
+ * JSON back as text would otherwise be walked character by character.
+ */
+function sourcesOf(row: PrunableVersion): Readonly<Record<string, number>> {
+  const sources = row.fieldSources;
+  return sources && typeof sources === "object" ? sources : {};
 }

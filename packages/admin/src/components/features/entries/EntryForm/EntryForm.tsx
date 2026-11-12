@@ -1681,6 +1681,10 @@ export function EntryForm({
                                           locale={locale}
                                           onLocaleChange={switchLocale}
                                           hasStatus={hasStatus}
+                                          sharedChangesPending={
+                                            entry?._sharedChangesPending ===
+                                            true
+                                          }
                                           actionsDisabled={contentHeld}
                                           // Publishing every language is a write
                                           // too, so a recovery holds it as well.

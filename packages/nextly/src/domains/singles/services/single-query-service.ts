@@ -178,6 +178,13 @@ import {
   draftDocumentFacts,
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
+import {
+  combinedDraft,
+  draftsKeptByPart,
+  findPartDrafts,
+  holdsPendingChange,
+  SHARED_DRAFT_SLOT,
+} from "../../versions/part-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
 import type { ComponentSchemas } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -871,13 +878,30 @@ export class SingleQueryService extends BaseService {
     });
     if (view === null) return doc;
 
-    const workingDraft = await new VersionsRepository(
-      this.adapter
-    ).findWorkingDraft(
-      { scopeKind: "single", scopeSlug: slug, entryId },
-      view.draftLocale
-    );
-    if (!workingDraft) return doc;
+    const draftRef = { scopeKind: "single" as const, scopeSlug: slug, entryId };
+    const draftRepo = new VersionsRepository(this.adapter);
+    // Kept by part, the pending change is the shared draft and this
+    // language's, read as the one change they make together: only the keys
+    // they hold, laid over the live document below.
+    const parts =
+      draftsKeptByPart() && view.draftLocale !== SHARED_DRAFT_SLOT
+        ? await findPartDrafts(draftRepo, draftRef, view.draftLocale)
+        : undefined;
+    // The shared part's pending change concerns every language, so each
+    // language's editor read says whether there is one.
+    const withSharedSignal = (document: SingleDocument): SingleDocument =>
+      parts
+        ? {
+            ...document,
+            _sharedChangesPending: parts.shared !== undefined,
+          }
+        : document;
+    const workingDraft = parts
+      ? holdsPendingChange(parts)
+        ? { snapshot: combinedDraft({}, parts) }
+        : undefined
+      : await draftRepo.findWorkingDraft(draftRef, view.draftLocale);
+    if (!workingDraft) return withSharedSignal(doc);
     // Shown on publish alone only where the field rules let this caller put
     // it live, so no pending value they could never publish reaches them.
     if (
@@ -893,7 +917,7 @@ export class SingleQueryService extends BaseService {
           authenticatedScope: options.authenticatedScope,
         })))
     ) {
-      return doc;
+      return withSharedSignal(doc);
     }
 
     const shaped = shapeDraftSnapshot({
@@ -948,8 +972,19 @@ export class SingleQueryService extends BaseService {
     // The flag the editor reads to show "Changed" and offer Discard. Set only
     // when a draft was actually overlaid, so a read of a language with no
     // pending change reports nothing — which is what makes it per-language.
+    // A draft kept by part holds only what it changes, so its values are
+    // laid over the live document rather than replacing it.
+    if (parts) {
+      const changed = workingDraft.snapshot as Record<string, unknown>;
+      overlaid = {
+        ...doc,
+        ...Object.fromEntries(
+          Object.entries(overlaid).filter(([key]) => key in changed)
+        ),
+      };
+    }
     (overlaid as Record<string, unknown>)._isWorkingDraft = true;
-    return overlaid;
+    return withSharedSignal(overlaid);
   }
 
   private async assembleStoredDocument(params: {

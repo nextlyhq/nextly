@@ -19,6 +19,7 @@ import { useCreateUserField } from "@admin/hooks/queries/useUserFields";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
+
 import { UserFieldsGuard } from "./user-fields-guard";
 
 function CreateUserFieldPageContent(): JSX.Element {

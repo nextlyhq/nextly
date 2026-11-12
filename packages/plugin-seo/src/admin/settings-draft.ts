@@ -315,6 +315,9 @@ export const FROM_THE_PAGE: Readonly<
 > = {
   // The page's own share image, from the order of who wins.
   image: "The page's share image",
+  // A page's route can give the questions it shows, with no field holding
+  // them.
+  questions: "The questions the page's route gives",
 };
 
 /**

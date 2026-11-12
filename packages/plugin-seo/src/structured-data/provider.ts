@@ -45,7 +45,10 @@ export function withStructuredData(
   readRules: ReadStructuredDataRules = noStructuredDataRules
 ): PageMetadataResolver {
   // The head's own cache tags: structured data reads nothing they miss but
-  // the entries a relationship names, which the page's route tags.
+  // the entries a relationship names, which the page's route tags, and the
+  // name a page built in code goes by in a breadcrumb trail, which changes
+  // only with the route's code, so with a deploy. The address record a
+  // trail is named from is among the head's tags.
   return overAnswer(resolver, async (answer, input) => {
     const { nodes } = await buildStructuredData(
       ctx,

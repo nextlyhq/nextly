@@ -10,6 +10,10 @@ import { sql } from "drizzle-orm";
 import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { isPluginLedgerRow } from "../events/ledger-scope";
+import {
+  assertSchemaLockHeld,
+  markedForSchemaLock,
+} from "../pipeline/schema-lock";
 
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import {
@@ -256,15 +260,28 @@ export async function runMigrationStatements(
   // its statement, after the fill, through the handle the statements run on; undefined when the
   // unit has no such column, so this costs nothing.
   const checkpoint = requiredColumnCheckpoint(statements, dialect, unit);
+  // Each statement is marked with the lock's claim on the servers, where a run taking over a
+  // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
+  // a time, so a taker cannot start while a statement of the holder runs, and its adapter reads a
+  // statement's first word.
+  const sent = (statement: string) =>
+    dialect === "sqlite" ? statement : markedForSchemaLock(statement);
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
       for (const [index, statement] of statements.entries()) {
         await checkpoint?.(tx.db, index);
-        await tx.execute(statement);
+        // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
+        await assertSchemaLockHeld();
+        await tx.execute(sent(statement));
       }
-      if (after === undefined) return;
-      await tx.restoreSession();
-      await after(tx.db, statements.length);
+      if (after !== undefined) {
+        await tx.restoreSession();
+        await after(tx.db, statements.length);
+      }
+      // The commit is what lands the file: refused, and the transaction undone, as a statement.
+      // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing here
+      // would report it as not recorded.
+      if (dialect !== "mysql") await assertSchemaLockHeld();
     });
     return statements.length;
   }
@@ -276,8 +293,10 @@ export async function runMigrationStatements(
       // refusal names the statements that ran and says they stayed applied, so it reaches the
       // caller as it is, not as a statement that failed part-way.
       await checkpoint?.(adapter.getDrizzle(), index);
+      // Asked before the statement, outside the failure below: refused here, nothing of it ran.
+      await assertSchemaLockHeld();
       try {
-        await execute(statement);
+        await execute(sent(statement));
       } catch (error) {
         throw partialFailure(unit, index, statements.length, error);
       }
@@ -314,7 +333,10 @@ export async function runMigrationStatements(
   } else {
     await runEach(onPool);
   }
-  await after?.(adapter.getDrizzle(), statements.length);
+  if (after !== undefined) {
+    await assertSchemaLockHeld();
+    await after(adapter.getDrizzle(), statements.length);
+  }
   return statements.length;
 }
 
