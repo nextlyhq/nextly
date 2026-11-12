@@ -32,14 +32,38 @@ import type {
  */
 export const LIST_CONVERSION_STEPS = 3;
 
-/** A step's name, as the report gives it: the state the column is in once that step committed. */
-export function stepName(step: number, steps: number): string {
+/**
+ * Whether a recorded conversion clears values before it converts: a lossy one, whose first step on
+ * MySQL is the clearing, committed on its own with its record.
+ */
+export function clearsFirst(progress: { class: string }): boolean {
+  return progress.class === "lossy";
+}
+
+/**
+ * A step's name, as the report gives it: the state the column is in once that step committed.
+ * `clearing` says the conversion's first step clears values.
+ */
+export function stepName(
+  step: number,
+  steps: number,
+  clearing = false
+): string {
   if (step <= 0) return "not started";
   if (step >= steps) return "converted";
+  if (clearing && step === 1) return "values cleared";
   if (steps === LIST_CONVERSION_STEPS) {
     return step === 1 ? "widened to text" : "values rewritten as lists";
   }
   return `step ${String(step)} of ${String(steps)}`;
+}
+
+/** The name of the step a recorded conversion has reached. */
+export function progressStepName(
+  progress: RecordedProgress,
+  step: number
+): string {
+  return stepName(step, progress.steps, clearsFirst(progress));
 }
 
 /** Whether `live` holds `state`'s type and nullability. */
@@ -69,12 +93,36 @@ async function everyValueIsAList(
 }
 
 /**
+ * Whether every stored value of the column is one MySQL reads as JSON, which is what a lossy
+ * conversion's clearing leaves. MySQL only: a conversion runs in steps nowhere else.
+ */
+async function everyValueIsJson(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  column: string
+): Promise<boolean> {
+  const value = sql.identifier(column);
+  const [row] = await querySqlRows<{ n: unknown }>(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}
+      WHERE ${value} IS NOT NULL AND NOT JSON_VALID(${value})`
+  );
+  return Number(row?.n ?? 0) === 0;
+}
+
+/**
  * The step the live column has reached, from 0 (nothing committed) to `steps` (converted), or null
  * where it matches no step of its conversion. `live` is null where the column does not exist.
  *
  * Between the list conversion's widening and its retyping the column is text either way; the
  * rewrite is what tells them apart, so its values are read. A column whose every value is already
  * a list has had the rewrite, which never wraps a list twice.
+ *
+ * A lossy conversion's clearing changes no type either: a column still of its old type whose every
+ * value reads as JSON has nothing left to clear, so its retype is next, and one holding a value
+ * that does not has its clearing next.
  */
 export async function liveStepOf(
   db: unknown,
@@ -84,6 +132,17 @@ export async function liveStepOf(
 ): Promise<number | null> {
   if (live === null) return null;
   if (holds(live, progress.to)) return progress.steps;
+  if (clearsFirst(progress)) {
+    if (!holds(live, progress.from)) return null;
+    return (await everyValueIsJson(
+      db,
+      dialect,
+      progress.table,
+      progress.column
+    ))
+      ? 1
+      : 0;
+  }
   if (progress.steps === LIST_CONVERSION_STEPS) {
     if (parseColumnType(live).family === "text") {
       return (await everyValueIsAList(

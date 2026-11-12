@@ -145,7 +145,7 @@ export async function ensureColumnRepairsTable(
 }
 
 /** Run one Drizzle statement for its effect, on a Drizzle instance of the dialect. */
-async function runSql(
+export async function runSql(
   db: unknown,
   dialect: SupportedDialect,
   statement: SQL
@@ -261,6 +261,19 @@ export async function recordStep(
     dialect,
     sql`UPDATE ${id(COLUMN_REPAIRS_TABLE)} SET ${id("step")} = ${step}, ${id("state")} = ${finished ? "converted" : "in-progress"}, ${id("ended_at")} = ${finished ? nowExpression(dialect) : sql`NULL`} WHERE ${id("id")} = ${rowId}`
   );
+}
+
+/**
+ * The statement that moves an in-progress row past a lossy conversion's clearing: to `step`, with
+ * `cleared` added to the values it has cleared. It runs in the clearing's own transaction, so the
+ * values cleared and their count commit together and the record can never miss a clearing.
+ */
+export function clearedStepStatement(
+  rowId: string,
+  step: number,
+  cleared: number
+): SQL {
+  return sql`UPDATE ${id(COLUMN_REPAIRS_TABLE)} SET ${id("step")} = ${step}, ${id("values_cleared")} = ${id("values_cleared")} + ${cleared} WHERE ${id("id")} = ${rowId}`;
 }
 
 interface RawRow {

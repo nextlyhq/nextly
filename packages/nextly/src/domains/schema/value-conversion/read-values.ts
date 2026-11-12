@@ -20,7 +20,7 @@ import type { ColumnSpec } from "../pipeline/diff/types";
 import type { SupportedDialect } from "../services/field-column-descriptor";
 
 import { parseColumnType } from "./column-type";
-import { judgeColumn } from "./judge-column";
+import { judgeColumn, type JudgeColumnOptions } from "./judge-column";
 import type {
   ColumnConversion,
   ConversionJudgement,
@@ -233,13 +233,15 @@ function storedValue(
 export async function judgeStoredColumn(
   db: unknown,
   conversion: ColumnConversion,
-  source: Omit<ValueSource, "toJson">
+  source: Omit<ValueSource, "toJson">,
+  options: JudgeColumnOptions = {}
 ): Promise<ConversionJudgement> {
   return judgeColumn(
     conversion,
     readStoredValues(db, conversion.dialect, {
       ...source,
       toJson: parseColumnType(conversion.to).family === "json",
-    })
+    }),
+    options
   );
 }

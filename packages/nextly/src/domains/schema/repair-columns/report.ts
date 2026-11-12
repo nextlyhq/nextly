@@ -14,6 +14,7 @@ import type {
   RowKey,
 } from "../value-conversion/types";
 
+import { consentFlagFor } from "./consent";
 import { OWNER_CAN } from "./conversion/carry";
 import type {
   BlockedWhileRunning,
@@ -24,6 +25,7 @@ import {
   findingClass,
   OUTCOME_ORDER,
   outcomeOf,
+  type ColumnConsentFacts,
   type ColumnRunFacts,
   type ConversionFailure,
   type ConversionProgress,
@@ -114,6 +116,11 @@ export interface RepairRecord {
   lock: TableLockFacts | null;
   progress: ConversionProgress | null;
   failure: ConversionFailure | null;
+  /**
+   * For a column whose conversion clears values: whether this run's consent covered it, how many
+   * values it cleared, and the consent that would cover it. Null for any other column.
+   */
+  consent: ColumnConsentFacts | null;
 }
 
 function stateRecord(state: ColumnState | null): StateRecord | null {
@@ -320,6 +327,27 @@ export function repairRecord(
     lock: facts.lock,
     progress: facts.progress,
     failure: facts.failure,
+    consent: consentFacts(finding, facts, own.class),
+  };
+}
+
+/**
+ * The consent facts a lossy column's record carries: what the run established, or, where it
+ * established none (a dry run, or an apply that never reached the column), that no consent covered
+ * it yet and the consent that would.
+ */
+function consentFacts(
+  finding: ColumnFinding,
+  facts: ColumnRunFacts,
+  cls: ConversionClass | null
+): ColumnConsentFacts | null {
+  if (facts.consent !== null) return facts.consent;
+  if (cls !== "lossy") return null;
+  return {
+    given: null,
+    valuesCleared: 0,
+    flag: consentFlagFor(finding.location.table, finding.location.column),
+    notice: null,
   };
 }
 
