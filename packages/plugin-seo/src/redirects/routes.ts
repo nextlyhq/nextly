@@ -22,7 +22,7 @@ import {
 import { z } from "zod";
 
 import { recordSlug, rowOf } from "../address-record/participant";
-import { notFoundSlug } from "../not-found/collection";
+import { type LoggedRow, readNotFoundLog } from "../not-found/log";
 import { closestPageIn, type LivePage } from "../not-found/suggest";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 
@@ -308,35 +308,26 @@ async function livePages(ctx: PluginContext): Promise<LivePage[]> {
   return live;
 }
 
-/** A stored time as ISO text, whichever way the dialect hands it back. */
-function isoOf(seen: unknown): string {
-  if (seen instanceof Date) return seen.toISOString();
-  return typeof seen === "string" ? seen : "";
-}
-
 /** One logged address as the Not found tab shows it, with its suggestion. */
 async function notFoundViewOf(
-  row: Record<string, unknown>,
+  row: LoggedRow,
   live: readonly LivePage[]
 ): Promise<NotFoundView> {
-  const kept = typeof row.path === "string" ? row.path : "";
-  const locale = typeof row.locale === "string" ? row.locale : "";
   // Suggested for in the spelling live pages are listed in, and shown as the
   // visitor asked for it, where that is known.
-  const served = await servedOf(kept, locale);
-  const asked = typeof row.asked === "string" ? row.asked : "";
-  const path = asked === "" ? served : asked;
+  const served = await servedOf(row.path, row.locale);
+  const path = row.asked === null || row.asked === "" ? served : row.asked;
   return {
-    id: String(row.id),
+    id: row.id,
     path,
     // A full address where its language has a domain of its own.
     from: served.startsWith("/") ? path : served,
-    hits: Number(row.hits ?? 0),
-    lastSeen: isoOf(row.lastSeen),
-    kind: row.kind === "moved" ? "moved" : "missing",
+    hits: row.hits,
+    lastSeen: row.lastSeen,
+    kind: row.kind,
     // A page in the address's own language, the only one a redirect from it
     // may go to.
-    suggestion: closestPageIn(served, locale, live),
+    suggestion: closestPageIn(served, row.locale, live),
   };
 }
 
@@ -349,15 +340,10 @@ export async function listNotFound(
   ctx: PluginContext,
   pageSize: number = MOST_LISTED
 ): Promise<Response> {
-  const rows = await everyRow(
-    ctx,
-    notFoundSlug(ctx),
-    { field: "hits", direction: "desc" },
-    pageSize
-  );
+  const rows = await readNotFoundLog(ctx, pageSize);
   const live = await livePages(ctx);
   const items: NotFoundView[] = [];
-  for (const row of rows as Record<string, unknown>[]) {
+  for (const row of rows) {
     items.push(await notFoundViewOf(row, live));
   }
   // Most visited first, and of those visited as often, the most recent.

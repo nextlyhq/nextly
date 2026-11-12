@@ -18,10 +18,18 @@ import {
 import { createNextlyProxy } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { statementsOf } from "../../__tests__/count-statements";
+import { lastCatchUp } from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
 import { putRedirect } from "../../redirects/store";
 import { NOT_FOUND_SLUG } from "../collection";
-import { pruneNotFound, recordNotFound } from "../log";
+import {
+  moveLoggedRows,
+  pathKey,
+  pruneNotFound,
+  readNotFoundLog,
+  recordNotFound,
+} from "../log";
 import { keptSeoContext, logNotFound } from "../report";
 
 let current: TestNextly | undefined;
@@ -68,16 +76,11 @@ async function renderedWith(path: string, sent: Record<string, string> = {}) {
 }
 
 /** The log, as `address` → visits. */
-async function logged(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: NOT_FOUND_SLUG,
-    limit: 500,
-  });
+async function logged(_t: TestNextly) {
+  const seo = keptSeoContext();
+  if (!seo) throw new Error("the SEO plugin never started");
   return Object.fromEntries(
-    (items as Record<string, unknown>[]).map(row => [
-      String(row.path),
-      Number(row.hits),
-    ])
+    (await readNotFoundLog(seo)).map(row => [row.path, row.hits])
   );
 }
 
@@ -117,6 +120,72 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(await logged(t)).toEqual({ "/busy": 8 });
+    });
+
+    it("counts a request for an address already logged in one statement, and a first in at most three", async () => {
+      const { t, seo } = await boot(dialect);
+      // The start's own background work finished first, outside the count.
+      await lastCatchUp();
+      await moveLoggedRows(seo);
+
+      const first = await statementsOf(dialect, () =>
+        recordNotFound(seo, { locale: "en", path: "/gone" })
+      );
+      const again = await statementsOf(dialect, () =>
+        recordNotFound(seo, { locale: "en", path: "/gone" })
+      );
+
+      expect(first.length).toBeLessThanOrEqual(3);
+      expect(again).toHaveLength(1);
+      expect(await logged(t)).toEqual({ "/gone": 2 });
+    });
+
+    it("moves the rows an earlier version logged in its collection, adding to an address logged since", async () => {
+      const { t, seo } = await boot(dialect);
+      // As an earlier version left them: two addresses in the collection.
+      const earlier = (path: string, hits: number, kind: string) =>
+        t.nextly.create({
+          collection: NOT_FOUND_SLUG,
+          data: {
+            pathKey: pathKey({ locale: "en", path }),
+            locale: "en",
+            path,
+            hits,
+            lastSeen: "2026-10-01T00:00:00.000Z",
+            kind,
+          },
+        });
+      await earlier("/old", 7, "missing");
+      await earlier("/moved", 3, "moved");
+      // And one of them asked for again since this version started.
+      await recordNotFound(seo, { locale: "en", path: "/old" });
+
+      expect(await moveLoggedRows(seo)).toBe(2);
+
+      const rows = await readNotFoundLog(seo);
+      expect(
+        Object.fromEntries(
+          rows.map(row => [row.path, `${String(row.hits)} ${row.kind}`])
+        )
+      ).toEqual({ "/old": "8 missing", "/moved": "3 moved" });
+      // The later last time: the request since, not the earlier row's.
+      const old = rows.find(row => row.path === "/old");
+      expect(Date.parse(old?.firstSeen ?? "")).toBeLessThanOrEqual(
+        Date.parse(old?.lastSeen ?? "")
+      );
+      expect(Date.parse(old?.lastSeen ?? "")).toBeGreaterThan(
+        Date.parse("2026-10-01T00:00:00.000Z")
+      );
+      const { items } = await t.nextly.find({ collection: NOT_FOUND_SLUG });
+      expect(items).toEqual([]);
+
+      // Moved once: a later start finds nothing left, and costs one count.
+      let again: number | undefined;
+      const statements = await statementsOf(dialect, async () => {
+        again = await moveLoggedRows(seo);
+      });
+      expect(again).toBe(0);
+      expect(statements).toHaveLength(1);
     });
 
     it("leaves admin, API and asset requests out, whatever header a visitor sends", async () => {
@@ -195,18 +264,13 @@ describe.each(getConfiguredTestDialects())(
       await logNotFound(await renderedWith("/de/gone"));
       await logNotFound(await renderedWith("/de/gone"));
 
-      const byLanguage = async () => {
-        const { items } = await t.nextly.find({
-          collection: NOT_FOUND_SLUG,
-          limit: 50,
-        });
-        return Object.fromEntries(
-          (items as Record<string, unknown>[]).map(row => [
+      const byLanguage = async () =>
+        Object.fromEntries(
+          (await readNotFoundLog(seo)).map(row => [
             `${row.locale}|${row.path}`,
-            Number(row.hits),
+            row.hits,
           ])
         );
-      };
       expect(await byLanguage()).toEqual({ "en|/gone": 1, "de|/gone": 2 });
 
       await seo.services.collections.withTransaction(tx =>
@@ -219,6 +283,29 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(await byLanguage()).toEqual({ "en|/gone": 1 });
+    });
+
+    it("keeps an address logged where the redirect saved from it rolls back", async () => {
+      const { seo } = await boot(dialect);
+      await recordNotFound(seo, { locale: "en", path: "/gone" });
+
+      // The log's row goes on the redirect's own transaction, so a save that
+      // fails after it takes the row back with it.
+      await expect(
+        seo.services.collections.withTransaction(async tx => {
+          await putRedirect(seo, tx, {
+            locale: "en",
+            source: "/gone",
+            target: "/here",
+            origin: "person",
+          });
+          throw new Error("the save failed after the redirect");
+        })
+      ).rejects.toThrow("the save failed after the redirect");
+
+      expect(
+        (await readNotFoundLog(seo)).map(row => `${row.path} ${row.hits}`)
+      ).toEqual(["/gone 1"]);
     });
 
     it("takes off every address a saved pattern now answers, and only those", async () => {

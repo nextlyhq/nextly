@@ -23,8 +23,7 @@ import { defineCollection, text } from "nextly";
 import { createNextlyProxy } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { NOT_FOUND_SLUG } from "../../not-found/collection";
-import { recordNotFound } from "../../not-found/log";
+import { readNotFoundLog, recordNotFound } from "../../not-found/log";
 import { keptSeoContext, logNotFound } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
@@ -403,11 +402,8 @@ describe.each(getConfiguredTestDialects())(
       await logNotFound(
         new Headers({ "x-nextly-seo-asked-for": "https://example.com/gone" })
       );
-      const { items: logged } = await t.nextly.find({
-        collection: NOT_FOUND_SLUG,
-      });
       expect(
-        (logged as Record<string, unknown>[]).map(
+        (await readNotFoundLog(seo)).map(
           row => `${row.locale}|${row.path}|${row.asked}`
         )
       ).toEqual(["en|/gone|/gone"]);
