@@ -359,11 +359,21 @@ function NotificationRow({
   );
 }
 
+/** How often the emails are read again while a send is in progress. */
+const IN_PROGRESS_REFRESH_MS = 5000;
+
 /** The submission's sends, as its route answers them. */
 function useSubmissionSends(submissionId: string, status: string | undefined) {
   return useQuery({
     // By status too: marking Spam cancels what is waiting.
     queryKey: ["form-builder", "submission-sends", submissionId, status],
+    // A send in progress settles in the background, and the admin does not
+    // refetch on focus: read again until every send has settled, so the page
+    // stops saying "in progress" and offers Resend once it may.
+    refetchInterval: query =>
+      query.state.data?.some(group => group.inProgress)
+        ? IN_PROGRESS_REFRESH_MS
+        : false,
     queryFn: async (): Promise<NotificationSendsView[]> => {
       const response = await fetch(
         `${ROUTES}/submissions/${encodeURIComponent(submissionId)}/sends`,

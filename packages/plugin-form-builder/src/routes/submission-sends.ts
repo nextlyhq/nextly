@@ -16,48 +16,33 @@
  * @module routes/submission-sends
  */
 import {
-  buildPaginatedResponse,
   type PaginationMeta,
   type PluginContext,
   type PluginRoute,
   type PluginRouteContext,
   respondList,
-} from "nextly";
+} from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
 import { formIdOf } from "../handlers/form-closing-hold";
-import { type ResendDeps, resendRoute } from "../handlers/resend";
-import { configuredRecipients } from "../handlers/send-record";
+import {
+  addressableFor,
+  type ResendDeps,
+  resendRoute,
+} from "../handlers/resend";
 import {
   type NotificationSends,
   recentSends,
   submissionSends,
 } from "../handlers/send-views";
 import type { FormNotification } from "../types";
+import type { AddressableRecipient } from "../utils/send-status";
+
+import { toPageMeta } from "./public-forms";
 
 /** A list that is whole: one page holding every item. */
 function wholeList(total: number): PaginationMeta {
-  const built = buildPaginatedResponse([], {
-    total,
-    page: 1,
-    limit: Math.max(total, 1),
-  });
-  return {
-    total: built.totalDocs,
-    page: built.page,
-    limit: built.limit,
-    totalPages: built.totalPages,
-    hasNext: built.hasNextPage,
-    hasPrev: built.hasPrevPage,
-  };
-}
-
-/** A recipient the notification can address now, and whether it has it. */
-interface AddressableNow {
-  digest: string;
-  hint: string;
-  source: string;
-  reached: boolean;
+  return toPageMeta({ total, limit: Math.max(total, 1), offset: 0 });
 }
 
 /**
@@ -69,7 +54,7 @@ async function withAddressable(
   deps: ResendDeps,
   submission: Record<string, unknown>,
   groups: NotificationSends[]
-): Promise<Array<NotificationSends & { addressable: AddressableNow[] }>> {
+): Promise<Array<NotificationSends & { addressable: AddressableRecipient[] }>> {
   const form = (await ctx.services.ownCollections.findEntryById(
     deps.formsSlug,
     formIdOf(submission.form) ?? ""
@@ -86,24 +71,14 @@ async function withAddressable(
         ? deps.build(form, submission, notification)
         : undefined;
       if (!notification || !email) return { ...group, addressable: [] };
-      const reached = new Set(
-        group.recipients
-          .filter(recipient => recipient.state === "sent")
-          .map(recipient => recipient.digest)
-      );
-      const now = await configuredRecipients(
-        email,
-        notification.recipientType === "field" ? "visitor" : "team",
-        address => ctx.services.email.recipientDigest(address)
-      );
       return {
         ...group,
-        addressable: now.map(recipient => ({
-          digest: recipient.digest,
-          hint: recipient.hint,
-          source: recipient.source,
-          reached: reached.has(recipient.digest),
-        })),
+        addressable: await addressableFor(
+          ctx,
+          email,
+          notification,
+          group.recipients
+        ),
       };
     })
   );

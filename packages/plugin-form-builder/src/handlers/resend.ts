@@ -24,16 +24,18 @@
  * @module handlers/resend
  */
 import type { PluginContext, PluginRouteContext } from "@nextlyhq/plugin-sdk";
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-import { respondMutation } from "nextly";
+import { NextlyError, respondMutation } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
 import { resendsSlugOf, sendsSlugOf } from "../collections/sends";
 import type { FormEmailNotification, FormNotification } from "../types";
 import {
+  type AddressableRecipient,
+  addressableNow,
   latestByRecipient,
+  reachedExcept,
+  type RecipientStatus,
   sendInProgress,
-  type StoredRecipient,
 } from "../utils/send-status";
 
 import { type RecordedSend, recordSend } from "./forget-sends";
@@ -85,7 +87,7 @@ const REQUEST = z.object({
   submission: z.string(),
   notification: z.string(),
   requestedBy: z.string().nullish(),
-  exclude: z.array(z.string()).default([]),
+  ticked: z.array(z.string()).default([]),
   retire: z.array(z.string()).default([]),
   settled: z.array(z.string()).default([]),
 });
@@ -114,17 +116,46 @@ interface Plan {
   settled: string[];
 }
 
-/** The recipients it can address now, and those it has reached. */
-async function addressable(
+/**
+ * Who a resend of `notification` can send to now, each marked as reached
+ * when `history` (its latest result per recipient) shows it received it:
+ * what the route plans with and the submission's page offers to tick.
+ */
+export async function addressableFor(
   ctx: Pick<PluginContext, "services">,
   email: FormEmailNotification,
-  notification: FormNotification
-): Promise<StoredRecipient[]> {
-  return configuredRecipients(
+  notification: FormNotification,
+  history: readonly RecipientStatus[]
+): Promise<AddressableRecipient[]> {
+  const configured = await configuredRecipients(
     email,
     notification.recipientType === "field" ? "visitor" : "team",
     address => ctx.services.email.recipientDigest(address)
   );
+  return addressableNow(configured, history);
+}
+
+/**
+ * The recipients a resend leaves out, as `sends` show them: each one that
+ * received it and is not ticked to send again. Refused when that leaves
+ * nobody it can address now: what the route plans with, and what the
+ * request's own transaction works out again from the sends as it locked
+ * them.
+ */
+function leftOut(
+  addressNow: readonly AddressableRecipient[],
+  sends: readonly SendRow[],
+  tick: readonly string[]
+): string[] {
+  const exclude = reachedExcept(latestByRecipient(sends), tick);
+  if (addressNow.every(recipient => exclude.includes(recipient.digest))) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        "Everyone this notification can address has received it. Tick a recipient to send it to them again.",
+    });
+  }
+  return exclude;
 }
 
 /**
@@ -134,7 +165,7 @@ async function addressable(
 async function planResend(
   ctx: Pick<PluginContext, "services">,
   sends: readonly SendRow[],
-  addressNow: readonly StoredRecipient[],
+  addressNow: readonly AddressableRecipient[],
   tick: readonly string[]
 ): Promise<Plan> {
   if (sends.some(sendInProgress)) {
@@ -157,17 +188,7 @@ async function planResend(
       ],
     });
   }
-  const ticked = new Set(tick);
-  const exclude = latestByRecipient(sends)
-    .filter(status => status.state === "sent" && !ticked.has(status.digest))
-    .map(status => status.digest);
-  if (addressNow.every(recipient => exclude.includes(recipient.digest))) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message:
-        "Everyone this notification can address has received it. Tick a recipient to send it to them again.",
-    });
-  }
+  const exclude = leftOut(addressNow, sends, tick);
   const failed = sends.filter(
     send => send.state === "failed" && !send.retiredBy
   );
@@ -244,7 +265,7 @@ export async function resendRoute(
   const plan = await planResend(
     ctx,
     sends,
-    await addressable(ctx, email, notification),
+    await addressableFor(ctx, email, notification, latestByRecipient(sends)),
     parsed.data.tick
   );
   const created = await ctx.services.collections.createEntry(
@@ -360,12 +381,21 @@ async function resendInTransaction(
       message: "This notification has no one to send to now.",
     });
   }
+  // Worked out again from the sends as locked here, not taken from the
+  // plan: one another resend reached since the plan was made is left out,
+  // and a resend left with nobody is refused, so two at once cannot both
+  // send to the same recipient.
+  const exclude = leftOut(
+    await addressableFor(ctx, email, notification, latestByRecipient(sends)),
+    sends,
+    request.ticked
+  );
   let recorded = 0;
   await deps.queue({
     emails: await deps.filter([email], form, submission),
     key: `${request.submission}:resend:${String(write.id)}`,
     tx: write.db,
-    excludeRecipients: request.exclude,
+    excludeRecipients: exclude,
     record: async (sent, queued) => {
       recorded += 1;
       await recordSend(ctx, write.transaction, request.submission, {

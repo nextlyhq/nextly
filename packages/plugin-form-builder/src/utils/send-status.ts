@@ -153,6 +153,63 @@ export function latestByRecipient(
   return [...latest.values()];
 }
 
+/** A recipient Resend can send a notification to now, and whether it has it. */
+export interface AddressableRecipient {
+  digest: string;
+  hint: string;
+  source: RecipientSource;
+  reached: boolean;
+}
+
+/**
+ * Who Resend can send a notification to now: each recipient the notification
+ * addresses as it is now (`configured`), then each recipient a send filter
+ * added that its sends have not reached, since the filters add it again to
+ * the next send. Whether each has received it is read from `history`, the
+ * latest result per recipient.
+ */
+export function addressableNow(
+  configured: readonly Pick<StoredRecipient, "digest" | "hint" | "source">[],
+  history: readonly RecipientStatus[]
+): AddressableRecipient[] {
+  const latest = new Map(history.map(status => [status.digest, status]));
+  const now = configured.map(recipient => ({
+    digest: recipient.digest,
+    hint: recipient.hint,
+    source: recipient.source,
+    reached: latest.get(recipient.digest)?.state === "sent",
+  }));
+  const listed = new Set(now.map(recipient => recipient.digest));
+  const missedAdded = history
+    .filter(
+      status =>
+        status.source === "added" &&
+        status.state !== "sent" &&
+        !listed.has(status.digest)
+    )
+    .map(status => ({
+      digest: status.digest,
+      hint: status.hint,
+      source: status.source,
+      reached: false,
+    }));
+  return [...now, ...missedAdded];
+}
+
+/**
+ * The recipients a resend leaves out: each one `history` shows has received
+ * it, except those ticked to send it to again.
+ */
+export function reachedExcept(
+  history: readonly RecipientStatus[],
+  ticked: readonly string[]
+): string[] {
+  const again = new Set(ticked);
+  return history
+    .filter(status => status.state === "sent" && !again.has(status.digest))
+    .map(status => status.digest);
+}
+
 /** How a status is drawn: its words and the tone of its dot. */
 export interface StatusLook {
   label: string;

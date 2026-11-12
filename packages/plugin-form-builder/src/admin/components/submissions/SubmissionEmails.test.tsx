@@ -6,7 +6,7 @@
  * only to a person who may, sending the recipients ticked.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -73,8 +73,14 @@ const group = (
   ...more,
 });
 
-/** The box, with the route answering `items`, and every call it saw. */
-function draw(items: NotificationSendsView[], canResend = false) {
+/**
+ * The box, with the route answering `items` (or, as a function, what it
+ * holds at each read), and every call it saw.
+ */
+function draw(
+  items: NotificationSendsView[] | (() => NotificationSendsView[]),
+  canResend = false
+) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   vi.stubGlobal(
     "fetch",
@@ -82,7 +88,10 @@ function draw(items: NotificationSendsView[], canResend = false) {
       calls.push({ url, init });
       return init?.method === "POST"
         ? json(201, { message: "Sent again.", item: { id: "r1" } })
-        : json(200, { items, meta: { total: items.length } });
+        : json(200, {
+            items: typeof items === "function" ? items() : items,
+            meta: { total: 1 },
+          });
     })
   );
   render(
@@ -161,6 +170,43 @@ describe("a submission's emails", () => {
     );
     expect(await screen.findByText("A send is in progress.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Resend" })).toBeNull();
+  });
+
+  it("reads the emails again while a send is in progress, until it settles", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const addressable = [
+        {
+          digest: "d1",
+          hint: "a•••@acme.test",
+          source: "team" as const,
+          reached: false,
+        },
+      ];
+      let now = group({
+        inProgress: true,
+        recipients: [recipient("a•••@acme.test", "retrying")],
+        addressable,
+      });
+      const calls = draw(() => [now], true);
+      expect(await screen.findByText("A send is in progress.")).toBeTruthy();
+
+      // The retry fails in the background.
+      now = group({
+        recipients: [recipient("a•••@acme.test", "failed")],
+        addressable,
+      });
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(await screen.findByText("Failed")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Resend" })).toBeTruthy();
+
+      // Settled: no more reads.
+      const reads = calls.length;
+      await act(() => vi.advanceTimersByTimeAsync(20000));
+      expect(calls).toHaveLength(reads);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("offers Resend only to a person who may", async () => {

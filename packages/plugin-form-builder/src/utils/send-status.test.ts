@@ -6,9 +6,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addressableNow,
   cancelText,
   latestByRecipient,
   notificationLook,
+  reachedExcept,
   recipientLook,
   type RecipientStatus,
   type StoredSend,
@@ -127,5 +129,78 @@ describe("a recipient's latest result across a notification's sends", () => {
       configured: [TEAM],
     };
     expect(latestByRecipient([send])[0]?.cancel).toEqual({ by: "spam" });
+  });
+});
+
+describe("who Resend can send to now", () => {
+  const ADDED = {
+    ...TEAM,
+    digest: "d-added",
+    hint: "a•••@acme.test",
+    source: "added" as const,
+  };
+  const GONE = { ...TEAM, digest: "d-gone", hint: "g•••@acme.test" };
+  const of = (
+    recipient: typeof TEAM | typeof ADDED,
+    state: RecipientStatus["state"]
+  ): RecipientStatus => ({ ...recipient, state, retries: 0, at: null });
+
+  it("offers each configured recipient, marked reached by its history", () => {
+    expect(
+      addressableNow([TEAM, OPS], [of(TEAM, "sent"), of(OPS, "failed")])
+    ).toEqual([
+      {
+        digest: "d-team",
+        hint: "t•••@acme.test",
+        source: "team",
+        reached: true,
+      },
+      {
+        digest: "d-ops",
+        hint: "o•••@acme.test",
+        source: "team",
+        reached: false,
+      },
+    ]);
+  });
+
+  it("adds a recipient a send filter added who missed it, and no other one gone from the notification", () => {
+    const now = addressableNow(
+      [TEAM],
+      [of(TEAM, "sent"), of(ADDED, "failed"), of(GONE, "failed")]
+    );
+    expect(now).toEqual([
+      {
+        digest: "d-team",
+        hint: "t•••@acme.test",
+        source: "team",
+        reached: true,
+      },
+      {
+        digest: "d-added",
+        hint: "a•••@acme.test",
+        source: "added",
+        reached: false,
+      },
+    ]);
+  });
+
+  it("stops offering a filter's recipient once it has received it", () => {
+    expect(
+      addressableNow([TEAM], [of(TEAM, "failed"), of(ADDED, "sent")])
+    ).toEqual([
+      {
+        digest: "d-team",
+        hint: "t•••@acme.test",
+        source: "team",
+        reached: false,
+      },
+    ]);
+  });
+
+  it("leaves out each recipient that received it, unless ticked to send again", () => {
+    const history = [of(TEAM, "sent"), of(OPS, "failed"), of(ADDED, "sent")];
+    expect(reachedExcept(history, [])).toEqual(["d-team", "d-added"]);
+    expect(reachedExcept(history, ["d-team"])).toEqual(["d-added"]);
   });
 });

@@ -636,6 +636,70 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("sends again to a recipient a send filter added who missed it", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      const addAudit = (value: EmailPayloadFilterValue) => ({
+        ...value,
+        bcc: [...(value.bcc ?? []), AUDIT],
+      });
+      getFilterRegistry().addFilter("email.beforeSend", addAudit);
+      try {
+        behaviour.refuse = new Set([AUDIT]);
+        const id = await submit();
+        behaviour.refuse = new Set();
+        // Offered on the page, though the notification does not name it.
+        expect((await groupOf(t, cookie, id)).addressable).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              hint: "a•••@example.com",
+              source: "added",
+              reached: false,
+            }),
+          ])
+        );
+
+        const before = calls.length;
+        expect(
+          (await resend(cookie, id, { notification: "team" })).status
+        ).toBe(201);
+        expect(calls.slice(before)).toEqual([{ to: [AUDIT], cc: [], bcc: [] }]);
+      } finally {
+        getFilterRegistry().removeFilter("email.beforeSend", addAudit);
+      }
+    });
+
+    it("leaves out who another resend reached since the plan was made", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      behaviour.refuse = new Set([OPS]);
+      const id = await submit();
+      behaviour.refuse = new Set();
+      const first = await groupOf(t, cookie, id);
+      const teamDigest = first.addressable.find(
+        recipient => recipient.hint === "t•••@example.com"
+      )!.digest;
+      // A plan made while ops had not received it: only the team left out.
+      const stale = {
+        submission: id,
+        notification: "team",
+        exclude: [teamDigest],
+        ticked: [],
+        retire: [],
+        settled: first.sends.map(send => send.queuedId),
+      };
+      // Another resend reaches ops before that plan is stored.
+      expect((await resend(cookie, id, { notification: "team" })).status).toBe(
+        201
+      );
+      const before = calls.length;
+
+      await expect(
+        t.nextly.create({ collection: "form-submission-resends", data: stale })
+      ).rejects.toThrow();
+      expect(calls).toHaveLength(before);
+    });
+
     it("sends a copied recipient who missed it a message of its own", async () => {
       const { t, owner, submit } = await boot(dialect, [visitor]);
       const cookie = await sessionOf(t, owner);

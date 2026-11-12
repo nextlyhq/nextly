@@ -33,4 +33,6 @@ A submission's page shows each notification it sent and, for each recipient, Wai
 
 Resend sends a notification again to the recipients who have not received it, plus any the person ticks, and records who asked. It needs both `update-<submissions>` and `manage-email-deliveries`, is refused while a send is in progress, and retires a failed earlier send whose message is still held.
 
+`@nextlyhq/plugin-sdk` now exports the `json` and `number` field factories, beside `date`, intended to be stable.
+
 Migration: `form-submission-sends` gains fields (form, notification and its name, state, attempts, retries, when it changed, cancel causes, configured and final recipients, who asked and the resend), and a new internal collection `form-submission-resends` keeps Resend's requests. Run `nextly migrate:create` and `nextly migrate` (or `nextly db:sync` in development). Sends recorded before the upgrade are not listed.

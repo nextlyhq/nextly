@@ -28,13 +28,12 @@
 
 import {
   date,
+  json,
+  number,
   text,
   type CollectionConfig,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
-// The SDK offers no `json` or `number` factory yet; the core's own are the
-// ones it would re-export.
-import { json, number } from "nextly";
 
 /** The slug the sends are kept under. */
 export const SUBMISSION_SENDS_SLUG = "form-submission-sends";
