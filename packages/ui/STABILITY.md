@@ -175,6 +175,21 @@ first-party plugin exercised `FieldShell` in production until `plugin-form-build
 Notifications and Status fields adopted the function form for their `Select` controls,
 so it has not yet met the graduation bar.
 
+`FieldShell` takes a `layout` (`FieldLayout`): `stacked`, the default and unchanged, or
+`row`, the settings row with the label and its help in a left column and the control and
+any error in a right one. The wiring is the same computation in both, so a row's label
+still targets its control and its help and error still describe it; only where each part
+stands differs. In the row layout `width` defaults to `fill`, because the right column is
+already the control's measure.
+
+`FieldRow` (with `FieldRowProps`) is that row's grid and nothing else: an `aside` in the
+left column and `children` in the right, stacking on a narrow screen, with no vertical
+padding of its own since `FormSection` owns the rhythm. It exists so the row has ONE
+geometry: `FieldShell`'s row layout and the admin's form-bound `SettingsRow` and grouped
+`SettingsRowGroup` all draw it, where each used to carry the same grid classes. Naming is
+the caller's business, which is why `aside` is a node: a `<label for>` for one control, a
+`<span>` that `aria-labelledby` points at for a group. Both are experimental.
+
 `FormSection` (with `FormSectionProps`) is the form-layout kit's section: a labelled
 card holding a group of fields. It composes `Card` for its container rather than
 hand-rolling its own border and background, so it carries `Card`'s CONTAINER radius

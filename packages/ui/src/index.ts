@@ -580,10 +580,21 @@ export type { ModifierState } from "./lib/shortcuts/key-spec";
 export { FieldShell } from "./components/field-shell";
 /** @experimental */
 export type {
+  FieldLayout,
   FieldShellProps,
   FieldShellRenderProps,
   FieldWidth,
 } from "./types/form-layout";
+
+/**
+ * @experimental The settings row's two-column grid, geometry only: the label
+ * and its help on the left, the control on the right. `FieldShell`'s row
+ * layout and the admin's form-bound and grouped settings rows all draw it, so
+ * there is one copy of the grid rather than one per row idiom.
+ */
+export { FieldRow } from "./components/field-row";
+/** @experimental */
+export type { FieldRowProps } from "./components/field-row";
 
 /**
  * @experimental A labelled card holding a group of fields, composing `Card`

@@ -155,6 +155,7 @@ function resolveBody<Row extends object>({
 
 export { ListEmptyState } from "./ListEmptyState";
 export { ListToolbar } from "./ListToolbar";
+export type { ListToolbarProps } from "./ListToolbar";
 export { ListColumnsMenu } from "./ListColumnsMenu";
 export { useListColumns } from "./useListColumns";
 export type { UseListColumnsOptions } from "./useListColumns";

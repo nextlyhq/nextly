@@ -2,15 +2,16 @@
 
 /**
  * A choice drawn as a segmented control: a radio group, one radio per option, the chosen one
- * raised on the muted track. Used where every option fits on one line and the one not chosen
- * should be one press away and in view: a card header's quick setting, and the settings drawer's
- * short choices (Width, Number of entries, Row spacing).
+ * raised on the muted track or filled. Used where every option fits on one line and the one not
+ * chosen should be one press away and in view: a card header's quick setting, the dashboard
+ * settings drawer's short choices (Width, Number of entries, Row spacing), and through
+ * `@nextlyhq/plugin-sdk/admin` a plugin page's view switch or a short setting.
  *
  * Only the chosen radio is in the tab order (the first, while none is chosen), and the arrows,
  * Home and End move to another choice and choose it, as a radio group does. While the choice
  * cannot change, every radio is disabled.
  *
- * @module components/features/widgets/edit/SegmentedChoice
+ * @module components/ui/segmented-choice
  */
 
 import { useRef, type JSX, type KeyboardEvent } from "react";
@@ -64,16 +65,17 @@ function segmentFor(
 
 /** The track and radio classes for each place the control is drawn. */
 const SIZES = {
-  // As tall as a header's menu trigger, so the card's header keeps its own height.
-  header: {
+  // As tall as a card header's menu trigger, so a header keeps its own height: the chosen
+  // option raised on a muted track.
+  compact: {
     track: "h-7 gap-0.5 rounded-md p-0.5",
     radio: "h-full rounded-sm px-2 text-xs",
   },
-  // The drawer's: one bordered row of 30px options, parted by rules, the chosen one filled in
+  // The settings drawer's, and a form's: one bordered row of 30px options, parted by rules, the chosen one filled in
   // the primary colour, as the drawer's other controls are bordered; wrapping onto another line
   // where its options do not fit. Its 12.5px text keeps four short options, such as Count's
   // "Under the number", on one line.
-  drawer: {
+  bordered: {
     track:
       "max-w-full flex-wrap self-start overflow-hidden rounded-lg border border-control-border bg-card",
     radio:
@@ -82,22 +84,25 @@ const SIZES = {
 } as const;
 
 /**
- * How the chosen option and the others are drawn in each place: raised on the muted track in a
- * card's header, filled in the primary colour in the drawer, so the choice holds 3:1 against the
+ * How the chosen option and the others are drawn in each size: raised on the muted track when
+ * compact, filled in the primary colour when bordered, so the choice holds 3:1 against the
  * options beside it.
  */
 const STATES = {
-  header: {
+  compact: {
     checked: "bg-background font-semibold text-foreground shadow-sm",
     unchecked: "font-medium text-muted-foreground hover:text-foreground",
   },
-  drawer: {
+  bordered: {
     // Focus is drawn inside the option, in the colour of its text, so it shows on the fill.
     checked:
       "bg-primary font-medium text-primary-foreground focus-visible:ring-primary-foreground",
     unchecked: "font-medium text-foreground hover:bg-accent",
   },
 } as const;
+
+/** How large the control is drawn, and how its chosen option is marked. */
+export type SegmentedChoiceSize = keyof typeof SIZES;
 
 /** How the group is named: by its own label, or by the element that labels it. */
 type GroupName =
@@ -109,7 +114,12 @@ export type SegmentedChoiceProps = GroupName & {
   value: string | undefined;
   onSelect: (next: string) => void;
   disabled?: boolean;
-  size?: keyof typeof SIZES;
+  /**
+   * `compact` (the default): small options on a muted track, the chosen one raised, for a
+   * header or a toolbar. `bordered`: a bordered row of options, the chosen one filled, for a
+   * setting in a form.
+   */
+  size?: SegmentedChoiceSize;
   /** Why the choice cannot change now, shown on hover. */
   title?: string | undefined;
   "aria-describedby"?: string | undefined;
@@ -121,7 +131,7 @@ export function SegmentedChoice({
   value,
   onSelect,
   disabled = false,
-  size = "header",
+  size = "compact",
   title,
   ...rest
 }: SegmentedChoiceProps): JSX.Element {
@@ -163,7 +173,7 @@ export function SegmentedChoice({
       title={title}
       className={cn(
         "inline-flex items-center",
-        size === "header" && "bg-muted",
+        size === "compact" && "bg-muted",
         classes.track
       )}
     >
