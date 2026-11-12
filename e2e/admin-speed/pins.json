@@ -38,7 +38,7 @@
       "dashboard": {
         "requests": 6,
         "rounds": 4,
-        "statements": 144,
+        "statements": 151,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -129,7 +129,7 @@
       "dashboard": {
         "requests": 6,
         "rounds": 3,
-        "statements": 143,
+        "statements": 150,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -220,7 +220,7 @@
       "dashboard": {
         "requests": 6,
         "rounds": 3,
-        "statements": 144,
+        "statements": 153,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
