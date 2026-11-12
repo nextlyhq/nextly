@@ -1031,6 +1031,16 @@ export { Stepper } from "@nextlyhq/admin";
 export type { StepperProps, StepperStep, StepState } from "@nextlyhq/admin";
 
 /**
+ * The admin's drop area for a file a plugin screen reads itself, rather than
+ * uploads to the media library (@experimental): drag a file onto it or press
+ * it to choose one, and it is handed to `onFiles` as it is; what the file
+ * must be is the screen's to judge and say. It looks as the Media library's
+ * upload area does, and is meant to stay part of this surface.
+ */
+export { FileDropArea } from "@nextlyhq/admin";
+export type { FileDropAreaProps } from "@nextlyhq/admin";
+
+/**
  * The field-UI kit (@experimental): controlled, form-library-agnostic
  * field-building components rendered from `nextly/field-catalog`. Each has a
  * narrow, storage-agnostic contract that never exposes admin internals, so a

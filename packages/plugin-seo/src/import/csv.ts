@@ -6,10 +6,9 @@
  *
  * @module import/csv
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-
 import type { ImportTarget } from "./contract";
 import {
+  ImportFileRefused,
   pathOfAddress,
   spelledPathOf,
   textValue,
@@ -188,11 +187,10 @@ export function readRankMathCsv(text: string): ParsedSource {
   const [header, ...rows] = csvRows(text);
   const names = (header ?? []).map(name => name.trim().toLowerCase());
   if (!names.includes("seo_title") && !names.includes("seo_description")) {
-    throw NextlyError.invalidInput({
-      message:
-        "This isn't a Rank Math CSV export: it has no seo_title or seo_description column.",
-      logContext: { reason: "seo-import-not-rank-math-csv" },
-    });
+    throw new ImportFileRefused(
+      "This isn't a Rank Math CSV export: it has no seo_title or seo_description column.",
+      "seo-import-not-rank-math-csv"
+    );
   }
   const from: ParsedSource["from"] = {};
   const left = new Set<string>();

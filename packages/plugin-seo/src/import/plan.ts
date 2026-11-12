@@ -66,19 +66,20 @@ import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
 import type { ImportActor } from "./actor";
 import type {
+  TypeWithOwnSeo,
   DryRunBody,
   ImportGroup,
   ImportReportEntry,
   ImportSource,
   ImportTarget,
 } from "./contract";
-import { readRankMathCsv } from "./csv";
 import { declaresOtherGroups, groupsOf, OWN_FIELDS, readGroup } from "./group";
-import { readPayload } from "./payload";
+import { readFile } from "./read-file";
 import {
   count,
   fillTemplate,
   idText,
+  ImportFileRefused,
   pathOfAddress,
   textValue,
   type ImageRef,
@@ -86,7 +87,6 @@ import {
   type ParsedSource,
   type TemplateValues,
 } from "./records";
-import { readRankMathExport, readYoast } from "./wordpress";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -145,7 +145,17 @@ export interface PlannedPage {
   same: ImportTarget[];
   /** The places a person already filled, which keep their value. */
   kept: ImportTarget[];
+  /**
+   * The places whose value never reached the page, since its route's code
+   * sets that value itself: left out unless the import includes them.
+   */
+  neverServed: ImportTarget[];
+  /** The title and description the source holds for the page, as imported. */
+  values: ReportedValues;
 }
+
+/** The title and description a source holds for a page, as imported. */
+type ReportedValues = Partial<Record<"title" | "description", string>>;
 
 /** One redirect the import adds. */
 export interface PlannedRedirect {
@@ -187,6 +197,12 @@ export interface PlanImportArgs {
   mapping?: Readonly<Record<string, ImportTarget>>;
   /** The language the values are imported into: the site's default one. */
   locale?: string;
+  /**
+   * Whether values a page's own code overrides, which never reached it, are
+   * imported anyway. Left out by default: importing one would change what
+   * the page shows.
+   */
+  includeNeverServed?: boolean;
 }
 
 /** An import worked out, ready for `applyImport`. */
@@ -225,6 +241,52 @@ async function readableTypes(
     if (await engine.actor.mayRead(key)) readable.push(key);
   }
   return readable;
+}
+
+/** How many collections one listing reads while finding types with their own `seo`. */
+const LISTED_AT_ONCE = 100;
+
+/**
+ * The site's own types, other than those SEO is added to, that hold a field
+ * of their own named `seo`: the plugin's group can't join one until that
+ * field has another name, after which its values are imported from it. A
+ * type SEO is added to can't hold one, since the two would clash.
+ */
+export async function typesWithOwnSeo(
+  ctx: PluginContext,
+  targets: readonly string[]
+): Promise<TypeWithOwnSeo[]> {
+  const found: TypeWithOwnSeo[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed = await ctx.services.collections.listCollections(
+      { page, limit: LISTED_AT_ONCE, sortBy: "slug", sortOrder: "asc" },
+      {}
+    );
+    for (const row of listed.data) {
+      const type = ownSeoOf(row);
+      if (type !== undefined && !targets.includes(type.slug)) found.push(type);
+    }
+    if (!listed.pagination.hasMore) return found;
+  }
+}
+
+/** A listed collection of the site's own holding a field named `seo`, or none. */
+function ownSeoOf(row: unknown): TypeWithOwnSeo | undefined {
+  if (!isRecord(row) || (row.source !== "code" && row.source !== "ui")) {
+    return undefined;
+  }
+  const slug = textValue(row.slug);
+  const fields = Array.isArray(row.fields) ? row.fields : [];
+  const holds = fields.some(
+    field => isRecord(field) && field.name === SEO_GROUP
+  );
+  if (slug === undefined || !holds) return undefined;
+  const labels = isRecord(row.labels) ? row.labels : {};
+  return {
+    slug,
+    label: textValue(labels.plural) ?? slug,
+    definedIn: row.source === "code" ? "code" : "admin",
+  };
 }
 
 /** Every page of `types`, read as the actor in `locale`. */
@@ -335,14 +397,23 @@ function parsedSource(
         source.field,
         source.field === SEO_GROUP ? OWN_FIELDS : mapping
       );
-    case "yoast":
-      return readYoast(source.text);
-    case "rankMath":
-      return source.text.trimStart().startsWith("<")
-        ? readRankMathExport(source.text)
-        : readRankMathCsv(source.text);
-    case "payload":
-      return readPayload(source.text, language);
+    case "records":
+      return source.parsed;
+    default:
+      return refusedAsInput(() => readFile(source.kind, source.text, language));
+  }
+}
+
+/** `read`'s answer, a file it refuses answered as invalid input. */
+function refusedAsInput(read: () => ParsedSource): ParsedSource {
+  try {
+    return read();
+  } catch (error) {
+    if (!(error instanceof ImportFileRefused)) throw error;
+    throw NextlyError.invalidInput({
+      message: error.message,
+      logContext: { reason: error.reason },
+    });
   }
 }
 
@@ -514,6 +585,8 @@ interface Tally {
   elsewhere: number;
   /** Canonicals that are no address a page could name. */
   unusableCanonicals: number;
+  /** Values never served, left out. */
+  neverServed: number;
 }
 
 /**
@@ -526,6 +599,8 @@ interface Decision {
   places: ImportTarget[];
   same: ImportTarget[];
   kept: ImportTarget[];
+  neverServed: ImportTarget[];
+  values: ReportedValues;
 }
 
 /** A decision that changes nothing yet. */
@@ -534,6 +609,8 @@ const undecided = (): Decision => ({
   places: [],
   same: [],
   kept: [],
+  neverServed: [],
+  values: {},
 });
 
 /** What deciding one record's values needs about its page. */
@@ -550,6 +627,8 @@ interface Deciding {
   templates: TemplateValues;
   tally: Tally;
   decision: Decision;
+  /** Whether values the page's own code overrides are imported anyway. */
+  includeNeverServed: boolean;
 }
 
 /**
@@ -589,6 +668,41 @@ function keep(at: Deciding, place: ImportTarget): void {
   at.decision.kept.push(place);
 }
 
+/**
+ * Whether `value` never reached the page: its route's code sets that place
+ * itself, to something else, so the stored value was never what the page
+ * showed, and importing it would change the page. Such a value is left out
+ * unless the import includes them; one that agrees with the code is not
+ * marked, since importing it changes nothing.
+ */
+function neverServed(
+  at: Deciding,
+  place: (typeof TEXT_PLACES)[number],
+  value: string
+): boolean {
+  if (at.includeNeverServed || place === "canonical") return false;
+  const fromCode = at.page.levels.code[place];
+  return fromCode !== undefined && !same(fromCode, value);
+}
+
+/**
+ * Notes the title or description the source holds for the report, and
+ * whether `value` is left out as never served, counted as such.
+ */
+function leftAsNeverServed(
+  at: Deciding,
+  place: (typeof TEXT_PLACES)[number],
+  value: string
+): boolean {
+  if (place === "title" || place === "description") {
+    at.decision.values[place] = value;
+  }
+  if (!neverServed(at, place, value)) return false;
+  at.tally.neverServed++;
+  at.decision.neverServed.push(place);
+  return true;
+}
+
 /** Write `value` into `place`, unless it is typed already or is automatic. */
 function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   const raw = at.record.values[place];
@@ -605,6 +719,7 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
     at.tally.unfilled++;
     return;
   }
+  if (leftAsNeverServed(at, place, value)) return;
   if (at.unreadable.has(STORED[place])) {
     keep(at, place);
     return;
@@ -713,9 +828,11 @@ function decide(
   images: ReadonlyMap<string, string>,
   tally: Tally,
   origins: readonly string[],
-  unreadable: ReadonlySet<string>
+  unreadable: ReadonlySet<string>,
+  includeNeverServed: boolean
 ): Decision {
   const at: Deciding = {
+    includeNeverServed,
     origins,
     unreadable,
     record,
@@ -902,6 +1019,8 @@ function matchRecords(
         places: decision.places,
         same: decision.same,
         kept: decision.kept,
+        neverServed: decision.neverServed,
+        values: decision.values,
       });
     }
   }
@@ -1015,6 +1134,8 @@ const SKIPPED = {
   refused: "You may not change this page's SEO.",
   drafted: "Its type keeps drafts: change its SEO in its own editor.",
   empty: "The source holds no value for this page.",
+  neverServed:
+    "Never served: the page's own code sets these values, so they never reached it.",
 } as const;
 
 /**
@@ -1041,6 +1162,8 @@ function reportOf(
     set: outcome === "set" ? [...page.places] : [],
     same: [...page.same],
     kept: [...page.kept],
+    neverServed: [...page.neverServed],
+    values: { ...page.values },
     ...(reason === undefined ? {} : { reason }),
   });
   const pages = planned.map(page => {
@@ -1049,6 +1172,9 @@ function reportOf(
     if (page.places.length > 0) return entry(page, "set");
     if (page.kept.length > 0) return entry(page, "kept");
     if (page.same.length > 0) return entry(page, "same");
+    if (page.neverServed.length > 0) {
+      return entry(page, "skipped", SKIPPED.neverServed);
+    }
     return entry(page, "skipped", SKIPPED.empty);
   });
   const passed = (labels: readonly string[], reason: string) =>
@@ -1059,6 +1185,8 @@ function reportOf(
         set: [],
         same: [],
         kept: [],
+        neverServed: [],
+        values: {},
         reason,
       })
     );
@@ -1225,6 +1353,7 @@ export async function planImport(
     missingImages: 0,
     elsewhere: 0,
     unusableCanonicals: 0,
+    neverServed: 0,
   };
   const matched = matchRecords(
     parsed.records,
@@ -1239,7 +1368,8 @@ export async function planImport(
             images,
             tally,
             origins,
-            unreadable.get(`${page.type}|${page.id}`) ?? new Set()
+            unreadable.get(`${page.type}|${page.id}`) ?? new Set(),
+            args.includeNeverServed === true
           )
   );
   const {
@@ -1290,10 +1420,14 @@ export async function planImport(
     body: {
       checked: source.kind === "group" ? pages.length : parsed.records.length,
       fromFile: source.kind !== "group",
+      held: parsed.records.filter(
+        record => Object.keys(record.values).length > 0
+      ).length,
       lines: linesOf(changing, parsed.from),
       pages: changing.length,
       same: tally.same,
       kept: tally.kept,
+      neverServed: tally.neverServed,
       redirects: kept.length,
       left: parsed.left,
       warnings,

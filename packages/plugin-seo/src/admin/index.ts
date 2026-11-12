@@ -31,6 +31,7 @@ import { PAGE_BUILDER_TAB_COMPONENT } from "../template/contributions";
 import { PageBuilderSeoTab } from "./PageBuilderSeoTab";
 import { PAGES_STEP, SeoReceivedMoved, withTrail } from "./section";
 import { SeoBulkPage as BulkScreen } from "./SeoBulkPage";
+import { SeoImportPage } from "./SeoImportPage";
 import { SeoOverviewPage } from "./SeoOverviewPage";
 import { SeoPagesPage as PagesScreen } from "./SeoPagesPage";
 import { SeoProblemsPage as ProblemsScreen } from "./SeoProblemsPage";
@@ -58,11 +59,6 @@ export const SeoBulkPage: () => JSX.Element = withTrail(BulkScreen, [
   PAGES_STEP,
   { label: "Bulk edit" },
 ]);
-/** Import, reached from Pages: drawn, for now, by the bulk edit screen and its import panel. */
-export const SeoImportPage: () => JSX.Element = withTrail(BulkScreen, [
-  PAGES_STEP,
-  { label: "Import" },
-]);
 /** Inspect a page: drawn, for now, by the check of what search engines received. */
 export const SeoInspectPage: () => JSX.Element = withTrail(SeoReceivedPage, [
   PAGES_STEP,
@@ -88,6 +84,7 @@ registerComponents({
 });
 
 export { SeoOverviewPage } from "./SeoOverviewPage";
+export { SeoImportPage } from "./SeoImportPage";
 export { SeoSettingsPage } from "./SeoSettingsPage";
 export { SeoReceivedMoved } from "./section";
 export { SeoReceivedPage } from "./SeoReceivedPage";
