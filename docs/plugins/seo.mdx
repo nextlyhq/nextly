@@ -25,9 +25,11 @@ plugin owns the data, and delivery belongs to whatever is serving the pages. See
 npm install @nextlyhq/plugin-seo
 ```
 
-Its peer dependencies are `nextly` and `@nextlyhq/plugin-sdk`, and while Nextly is in
-alpha the manifest pins `nextly` at the **matching lockstep version**: every publishable
-package ships on one train, so install the plugin and the core at the same version.
+Its peer dependency is `nextly`, and while Nextly is in alpha the manifest pins it at the
+**matching lockstep version**: every publishable package ships on one train, so install the
+plugin and the core at the same version. `@nextlyhq/plugin-sdk`, which the plugin imports at
+run time, is installed with it as a dependency of its own, so a site never has to list it (and
+cannot leave it out of a production install by listing it among its `devDependencies`).
 
 The plugin also declares a compatibility range for the runtime check: `>=` its own
 version, so a core older than the plugin is refused at boot. Install the two at the same
@@ -83,8 +85,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 
 | Field                | Type     | Notes                                                                                                                                                           |
 | -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `metaTitle`          | text     | Capped at 60 characters, which is roughly where search engines truncate a title                                                                                 |
-| `metaDescription`    | textarea | Capped at 160 characters, for the same reason                                                                                                                   |
+| `metaTitle`          | text     | Any length. Past about 60 characters Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                |
+| `metaDescription`    | textarea | Any length. Past about 160 characters the same warning applies                                                                                                  |
 | `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                    |
 | `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                        |
 | `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                    |
@@ -111,6 +113,23 @@ All nine are optional. `canonical` and `noindex` ship by default rather than bei
 you to add, because a canonical URL and a search opt-out are baseline controls rather than
 advanced ones.
 
+**A long title is a warning, not a refusal.** Google has no maximum length for a title or a
+description: it shows as much as fits the width of the results and cuts the rest
+([title links](https://developers.google.com/search/docs/appearance/title-link),
+[snippets](https://developers.google.com/search/docs/appearance/snippet)). So the default fields
+save any length, and the SEO tab's count (`68 / 60`) and the problem list (`68 characters, Google
+shows about 60`) say how much is past what Google usually shows. A site that wants the lengths
+enforced passes `hardLengthLimits: true`, and a save of a title over 60 characters or a
+description over 160 is then refused:
+
+```ts
+seoPlugin({ collections: ["posts"], hardLengthLimits: true });
+```
+
+`hardLengthLimits` applies to the default fields; a site passing its own `fields` sets
+`maxLength` on them itself. Turning it on or off changes the two fields' settings, which, like any
+field change, reaches a deployed database through `nextly migrate:create` and `nextly migrate`.
+
 ### Custom fields
 
 Replace the whole set when a project needs a different shape:
@@ -125,7 +144,7 @@ export default defineConfig({
     seoPlugin({
       collections: ["posts"],
       fields: [
-        text({ name: "metaTitle", label: "Meta Title", maxLength: 60 }),
+        text({ name: "metaTitle", label: "Meta Title" }),
         text({ name: "focusKeyword", label: "Focus Keyword" }),
       ],
     }),
@@ -182,10 +201,9 @@ the plugin's `POST /resolve` route for the document as it is typed. The route an
 anyone who may read that collection or Single, a reader shown the page read-only too.
 What a page's route sets in its own code (the title, description and social values its
 `buildMetadata` returns, and whether it hides the page) is recorded each time the page's head
-is worked out, and the tab shows it marked **Set in code**, "by this page's route"; a page its
-route hides says **Hidden from search by the page's code**. Until the route has answered once
-after it changed, for example before the first visit to a page after a deploy, the tab shows
-what it last recorded. A later page of a list (`/blog/page/2`) is that page's own, and is
+is worked out, and the tab shows it marked **Set in code**, "by this page's route". Until the
+route has answered once after it changed, for example before the first visit to a page after a
+deploy, the tab shows what it last recorded. A later page of a list (`/blog/page/2`) is that page's own, and is
 not recorded as the list's. What a [Page Builder design](#in-the-page-builder) sets is
 shown too, where the Page Builder is installed: "from this page's template".
 
@@ -603,8 +621,12 @@ newest page updates as you type.
 - A pattern naming a variable the type has no field for is refused before it can be saved.
 - A pattern whose variables a page has no value for gives way to the next source in the order
   below, rather than leaving a gap in the title.
-- The site's name is never added right after a title that already ends with it: with the pattern
-  `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays `Pricing | Acme`.
+- The site's name is never added right after a title that already ends with it, where the pattern
+  ends with `{Site name}`: with `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays
+  `Pricing | Acme`. A title that names the brand before its end, such as `Acme pricing`, still
+  gets it: `Acme pricing | Acme`.
+- Where the pattern goes on after `{Site name}`, the name is always filled in, since it is part of
+  a longer suffix: `{Title} | {Site name} Blog` gives `Why we chose Acme | Acme Blog`.
 
 **Reset to default** returns a type to the site's default pattern.
 
@@ -780,6 +802,13 @@ by making a share image, in the route's code where the route set the picture, or
 where the site's address is missing. `shareImageSizeProblem({ width, height })` answers the same
 for one picture.
 
+The picture's file type is checked too. X's cards take JPEG, PNG, WebP and GIF, and no network
+shows an SVG on a card, while AVIF and WebP are shown by fewer apps than JPEG and PNG, which every
+network shows. A share image whose address ends in `.svg`, `.avif` or `.webp` is named (`An SVG
+image, which networks don't show on a card`), and the same `twitter:image` is served as the
+`og:image`. Making a share image fixes it, since the copy is a JPEG; an image a route draws at an
+address with no file type, such as `/og?title=…`, is not checked.
+
 Making a share image is one action. The plugin's `POST /share-image` route
 (`/admin/api/plugins/@nextlyhq/plugin-seo/share-image` in a scaffolded project), sent
 `{ "media": "<media id>" }`, makes a copy of the picture at exactly 1200 × 630, cut around the
@@ -904,7 +933,10 @@ seoPlugin({
         { contactType: "customer support", email: "help@example.com" },
       ],
       foundingDate: "2020",
-      parentOrganization: { name: "Acme Holdings", url: "https://holdings.example.com" },
+      parentOrganization: {
+        name: "Acme Holdings",
+        url: "https://holdings.example.com",
+      },
       founders: [{ name: "Sara Khan", jobTitle: "Founder", url: "/about" }],
     },
     // A post that names no author is credited to the brand.
@@ -1065,24 +1097,84 @@ export const config = {
 };
 ```
 
-A saved redirect applies from the next request, on every server, since each request reads it. A permanent redirect answers `301`, a temporary one `302`, and the visitor's query string goes with them unless the To address has its own. Admin, API and asset requests are never redirected.
+A permanent redirect answers `301`, a temporary one `302`, and the visitor's query string goes with them unless the To address has its own. Admin, API and asset requests are never redirected.
+
+A saved redirect applies from the next request on the server that saved it, and within 15 seconds on every other server: each server keeps the addresses redirects hold in memory and reads them again in the background. Without the Proxy, redirects are saved but never served, and the not-found log stays empty. SEO › Problems then lists **Redirects saved but not served**, with the wiring to hand a developer.
+
+#### What the Proxy costs
+
+Next.js 16 runs `proxy.ts` on the Node.js runtime only, on every request its matcher matches, before a cached page is served. On a host such as Vercel, every matched request is a function call, pages the CDN would otherwise serve from its cache included. That is Next.js's cost of having a Proxy at all, and the matcher is how you keep it down: leave out every path no handler has anything to say about.
+
+What the plugin adds to each request is kept off the database:
+
+- **A page request no redirect is for reads nothing.** Each server reads the addresses redirects hold once, keeps them as a set, and reads them again in the background every 15 seconds. Only a request whose address, or a range above it, a redirect holds reads the database, to choose the redirect.
+- **The staging guard reads only the environment** when `NEXTLY_PRODUCTION_ADDRESSES` is set, which is the setting to use on a production site. Without it, the SEO settings' addresses are read by a server's first request and kept, read again in the background every 30 seconds.
+- **Each server notes once an hour that its Proxy runs**, in the background, which is how the admin knows redirects are served.
+
+Nextly starts on a server's first request through the Proxy and lets requests through as the page alone until it has, so a cold server never waits; redirects apply from the first request after the start. A redirect that must hold from a server's very first request, or a site that needs only a few fixed redirects and a staging `noindex`, is better served by `redirects()` and `headers()` in `next.config`, which run with no function call.
+
+#### A site that already has `middleware.ts`
+
+Next.js 16 refuses to build an app with both `middleware.ts` and `proxy.ts`, and `proxy.ts` cannot run on the Edge runtime. To wire the plugin, rename `middleware.ts` to `proxy.ts`, keep the site's own rules in it, and hand the rest to Nextly. The rules then run on Node.js, which runs everything the Edge runtime does:
+
+```ts
+// src/proxy.ts, formerly src/middleware.ts
+import { NextResponse, type NextRequest } from "next/server";
+import { createNextlyProxy } from "nextly/runtime";
+
+import nextlyConfig from "../nextly.config";
+
+const nextly = createNextlyProxy(nextlyConfig);
+
+// The site's own rules, as its middleware had them: a response for a
+// request they answer, such as a 410 or a redirect, and nothing otherwise.
+declare function siteRules(request: NextRequest): Response | undefined;
+
+export async function proxy(request: NextRequest) {
+  const own = siteRules(request);
+  if (own !== undefined) return own;
+  // A redirect, or the page with the headers the plugin adds.
+  const response = (await nextly(request)) ?? NextResponse.next();
+  // What the site added to every page goes on whichever response is sent.
+  response.headers.set("x-frame-options", "DENY");
+  return response;
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/).*)"],
+};
+```
+
+Keep the site's matcher, written out in the file. A request the site's own rules answer is sent as they made it, without the plugin's headers; call `nextly(request)` first instead where the staging guard's `noindex` must reach those responses too. A rewrite the site's rules make (`NextResponse.rewrite`) is answered before the plugin sees the request, as before.
+
+#### Is the Proxy running?
+
+`GET /admin/api/plugins/@nextlyhq/plugin-seo/proxy-status` answers whether it is, for someone holding `manage-seo`:
+
+```json
+{ "state": "running", "lastSeen": "2026-11-12T09:41:07.000Z" }
+```
+
+`state` is `running` where the Proxy noted a request in the last week, `quiet` where its last note is older, and `not-wired` where it never noted one. A quiet site's Proxy notes only when a request comes, so `quiet` on a site nobody visited all week is not a fault.
 
 ### Addresses not found
 
 The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, so each can be given a redirect. Admin, API and asset requests are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
 
-Log a request from the site's not-found page, with the request headers the Proxy passes on:
+Log a request from the site's not-found page, with the request headers the Proxy passes on, after the page is sent:
 
 ```tsx
 // src/app/not-found.tsx
 import { logNotFound } from "@nextlyhq/plugin-seo";
 import { headers } from "next/headers";
-import { connection } from "next/server";
+import { after, connection } from "next/server";
 import { Suspense } from "react";
 
 async function LogThisAddress() {
   await connection();
-  await logNotFound(await headers());
+  const requestHeaders = await headers();
+  // Written once the page is sent, so the visitor never waits on the log.
+  after(() => logNotFound(requestHeaders));
   return null;
 }
 
@@ -1098,7 +1190,7 @@ export default function NotFound() {
 }
 ```
 
-The log is written under a `Suspense` boundary because reading the request's headers makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted.
+The headers are read under a `Suspense` boundary because reading them makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted. `after()` runs the write once the response is finished, so a slow database never holds the page.
 
 A request is counted once, however many times Next.js renders its not-found page. `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
 
@@ -1115,10 +1207,12 @@ it is published in and at its address there, as its head would be served, for:
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
 - a title or description another page has too;
-- a title over 60 characters, or a description over 160;
+- a title over 60 characters, or a description over 160, named with its length as a warning (the
+  value is saved and served as it is);
 - a canonical typed for the page that names another address;
 - a link in its content to an address of a content type that no page holds;
-- no share image, or one networks crop or shrink;
+- no share image, one networks crop or shrink, or one in a format some networks don't show
+  (SVG, AVIF or WebP);
 - an image in its content (rich text, a media field or a Page Builder image block) with no alt
   text, unless it is marked decorative;
 - structured data missing a detail its type needs;
@@ -1222,8 +1316,7 @@ With no production address set, the screen asks for one and checks nothing.
 The **Bulk edit** screen, under SEO in the admin, shows the title and description of every page
 of one content type in one table. Each Single SEO is added to is a type of its own, with its one
 page. A cell left empty shows, in grey, what the page uses automatically: what its route last set
-in code, else the type's title pattern or its own content; typing in it sets the page's own. A
-page whose route hides it from search says so under its name.
+in code, else the type's title pattern or its own content; typing in it sets the page's own.
 **Show** narrows the table to the pages with something typed, or to those wholly automatic. Each
 cell counts its characters against what Google shows: about 60 for a title, 160 for a description.
 
@@ -1323,6 +1416,12 @@ each entry's, each route with no variable part (`/pricing`), and each address a 
 one declares through `generateStaticParams` (`/integrations/wordpress`). Choose **Edit SEO**
 on a page built in code to set its title, description, visibility and share image. The
 screen and its saves ask `manage-seo`.
+
+The routes are read at run time from what `next build` wrote: `.next/server/app-paths-manifest.json`
+and `.next/prerender-manifest.json`. Next.js lists both among the files every server function
+needs (`.next/required-server-files.json`), so a Vercel deployment and a `standalone` build
+carry them with no setting. A deploy that copies only part of `.next` must keep both, or the
+screen lists no page built in code.
 
 What is set there reaches the page once its route adds one line, calling `seoMetadata` with
 its address:

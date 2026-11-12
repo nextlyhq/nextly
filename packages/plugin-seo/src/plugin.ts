@@ -26,6 +26,7 @@ import { startCatchUp } from "./address-record/catch-up";
 import { addressRecordCollection } from "./address-record/collection";
 import {
   ADDRESSES_MOVED,
+  REDIRECTS_CHANGED,
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
@@ -84,6 +85,7 @@ import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
 import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE } from "./redirects/contract";
+import { heldRedirectKeys } from "./redirects/held-keys";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
@@ -154,6 +156,15 @@ export interface SeoPluginOptions {
    * data from one predictable place.
    */
   fields?: FieldConfig[];
+  /**
+   * Refuse a save of a title longer than 60 characters or a description
+   * longer than 160, the lengths Google shows about as much of. Off by
+   * default: search engines cut a longer one to fit rather than refusing it,
+   * so a long value is saved and named as a warning in the SEO tab and the
+   * problem list. Applies to the default fields; a site passing its own
+   * `fields` sets `maxLength` on them itself.
+   */
+  hardLengthLimits?: boolean;
   /**
    * The site's production origin (e.g. "https://example.com", no trailing
    * slash): every address the sitemap lists, and the sitemap's address in
@@ -304,13 +315,27 @@ export interface SeoPluginOptions {
   searchConsole?: { clientId: string; clientSecret: string | Secret<string> };
 }
 
+/**
+ * The value a client secret holds: wrapped in `secret()`, or as typed. A
+ * wrapper made by another copy of the SDK than the plugin's, which a site
+ * installing its own may load, is not an instance of the plugin's class, so
+ * it is read by its `reveal()` too.
+ */
+function revealed(value: string | Secret<string>): unknown {
+  if (isSecret(value)) return value.reveal();
+  if (typeof value === "object" && value !== null) {
+    const reveal: unknown = Reflect.get(value, "reveal");
+    if (typeof reveal === "function") return Reflect.apply(reveal, value, []);
+  }
+  return value;
+}
+
 /** The Google sign-in `options` name, or none; a blank one is refused at boot. */
 function googleClientOf(options: SeoPluginOptions): GoogleClient | undefined {
   const named = options.searchConsole;
   if (named === undefined) return undefined;
-  const clientSecret = isSecret(named.clientSecret)
-    ? named.clientSecret.reveal()
-    : named.clientSecret;
+  const secretValue = revealed(named.clientSecret);
+  const clientSecret = typeof secretValue === "string" ? secretValue : "";
   if (named.clientId.trim() === "" || clientSecret.trim() === "") {
     throw new Error(
       "seoPlugin: searchConsole needs both a clientId and a clientSecret"
@@ -492,7 +517,9 @@ function siteFileRoutes(
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
-  const seoFields = options.fields ?? defaultSeoFields();
+  const seoFields =
+    options.fields ??
+    defaultSeoFields({ hardLengthLimits: options.hardLengthLimits === true });
   const pagePermissions = options.pagePermissions === true;
   const seoGroup = group({
     name: "seo",
@@ -521,6 +548,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
 
   const sitemapSubset = subsetOf(options.sitemap, targets);
   const readRules = rulesReader(options);
+  // The addresses redirects hold, kept for the Proxy and dropped whenever a
+  // redirect saved here commits.
+  const redirectKeys = heldRedirectKeys();
   // The pages the site's routes render from their own code, read from the
   // build each time they are asked for, so a new deploy is read as it is.
   const codeRoutes = () =>
@@ -655,7 +685,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // answered here too, each at its own address only.
     proxy: [
       stagingGuard(readRules),
-      redirectsProxyHandler(),
+      redirectsProxyHandler(redirectKeys),
       plainCopyProxyHandler({
         readRules,
         ...siteOrigin,
@@ -669,9 +699,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Changed only by whoever manages site-wide SEO, through core's own
     // settings route as through the plugin's.
     settingsPermission: MANAGE_SEO_PERMISSION,
-    // The event the address record announces each committed save's
-    // addresses on, which IndexNow takes its notes from.
-    events: [{ name: ADDRESSES_MOVED }],
+    // The events the address record announces once a save commits: each
+    // page's addresses, which IndexNow takes its notes from, and that
+    // redirects changed, which the Proxy's kept addresses are dropped on.
+    events: [{ name: ADDRESSES_MOVED }, { name: REDIRECTS_CHANGED }],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -874,6 +905,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // asked on every save, and told what each document holds after it.
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // A redirect saved here applies from this server's next request.
+      ctx.events.on(REDIRECTS_CHANGED, () => redirectKeys.forget());
       // Kept for the site's not-found page, which logs through it, and for
       // the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);

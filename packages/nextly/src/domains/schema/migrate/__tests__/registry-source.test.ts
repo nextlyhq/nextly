@@ -127,4 +127,50 @@ describe("readRegistrySource", () => {
       file: "20260102_000000_000_b.snapshot.json",
     });
   });
+
+  // A template's hand-written migration ships its snapshot in the older shape:
+  // its entities listed, no hash. That is no failure to read.
+  it("is none, as the older format, where the newest applied snapshot is a template's", async () => {
+    writeFileSync(
+      join(dir, "meta", "0001_000000_blog_schema.snapshot.json"),
+      JSON.stringify({
+        version: 1,
+        template: "blog",
+        collections: [{ slug: "posts", tableName: "dc_posts", fields: [] }],
+        singles: [],
+      })
+    );
+    const source = await readRegistrySource({
+      migrationsDir: dir,
+      isApplied: appliedOnly("0001_000000_blog_schema.sql"),
+    });
+    expect(source).toEqual({
+      kind: "none",
+      reason: "older-format",
+      file: "0001_000000_blog_schema.snapshot.json",
+    });
+  });
+
+  // Only that shape: a snapshot of today's shape whose hash is not one stays
+  // unreadable, so nothing is written from it.
+  it("stays unreadable where a snapshot of today's shape has a malformed hash", async () => {
+    writeFileSync(
+      join(dir, "meta", "20260101_000000_000_a.snapshot.json"),
+      JSON.stringify({
+        version: 1,
+        migrationHash: "not-a-hash",
+        snapshot: { tables: [] },
+        collections: [],
+      })
+    );
+    const source = await readRegistrySource({
+      migrationsDir: dir,
+      isApplied: appliedOnly("20260101_000000_000_a.sql"),
+    });
+    expect(source).toEqual({
+      kind: "none",
+      reason: "unreadable",
+      file: "20260101_000000_000_a.snapshot.json",
+    });
+  });
 });

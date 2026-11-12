@@ -14,6 +14,7 @@ import {
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import { parseColumnType } from "../value-conversion/column-type";
+import type { JudgeColumnOptions } from "../value-conversion/judge-column";
 import {
   judgeStoredColumn,
   type KeyedBy,
@@ -100,13 +101,19 @@ function conversionFor(
 export async function classifyDifference(
   db: unknown,
   dialect: SupportedDialect,
-  difference: DifferenceToClass
+  difference: DifferenceToClass,
+  options: JudgeColumnOptions = {}
 ): Promise<ConversionJudgement> {
-  return judgeStoredColumn(db, conversionFor(difference, dialect), {
-    table: difference.liveTable,
-    column: difference.liveColumn,
-    keyedBy: difference.keyedBy,
-  });
+  return judgeStoredColumn(
+    db,
+    conversionFor(difference, dialect),
+    {
+      table: difference.liveTable,
+      column: difference.liveColumn,
+      keyedBy: difference.keyedBy,
+    },
+    options
+  );
 }
 
 /**

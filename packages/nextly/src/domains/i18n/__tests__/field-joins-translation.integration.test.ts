@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { asWritten } from "../../../__tests__/helpers/statement-as-written";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -769,9 +770,15 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       getDrizzle(...args: unknown[]): unknown;
     };
     const realGetDrizzle = adapter.getDrizzle.bind(adapter);
-    const textOf = (query: unknown) =>
-      ((query as { queryChunks?: { value?: unknown }[] }).queryChunks ?? [])
-        .map(chunk => (Array.isArray(chunk.value) ? chunk.value.join("") : ""))
+    // The text of a Drizzle query, nested queries included: a statement marked with the lock's
+    // comment is the marker followed by the statement as a query of its own.
+    const textOf = (query: unknown): string =>
+      ((query as { queryChunks?: unknown[] }).queryChunks ?? [])
+        .map(chunk => {
+          const { value } = chunk as { value?: unknown };
+          if (Array.isArray(value)) return value.join("");
+          return textOf(chunk);
+        })
         .join("");
     const wrap = (db: object): object =>
       new Proxy(db, {
@@ -780,7 +787,9 @@ describeEachDialect("a shared field that becomes translated", dialect => {
           if (typeof value !== "function") return value;
           if (property === "execute" || property === "run") {
             return (query: unknown, ...rest: unknown[]) => {
-              if (matches(textOf(query))) {
+              // Judged as written: a schema apply under the lock sends each statement behind
+              // the lock's comments.
+              if (matches(asWritten(textOf(query)))) {
                 throw new Error("injected copy failure");
               }
               return Reflect.apply(value, target, [query, ...rest]);

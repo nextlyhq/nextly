@@ -8,19 +8,30 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import type { PluginContext, PluginDefinition } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  type PluginContext,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, defineSingle, richText, text } from "nextly";
+import {
+  defineCollection,
+  defineSingle,
+  getService,
+  richText,
+  text,
+} from "nextly";
 import { createPublicContentRoute, type ContentEntry } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
 import { lastCatchUp } from "../../address-record/catch-up";
+import { recordProxySeen } from "../../redirects/proxy-seen";
 import { putRedirect } from "../../redirects/store";
 import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
@@ -395,6 +406,35 @@ describe.each(getConfiguredTestDialects())(
       expect(await rows(t)).toEqual(kept);
     });
 
+    it("lists saved redirects as not served until the site's Proxy runs, to who may see redirects", async () => {
+      const { ctx } = await boot(dialect);
+      const unserved = async (reader: Reader) =>
+        (await problemList(ctx, CHECKS, reader)).problems.filter(
+          p => p.kind === "proxyNotWired"
+        );
+      // No redirect saved: nothing is going unserved yet.
+      expect(await unserved(everything)).toEqual([]);
+
+      await ctx.services.collections.withTransaction(tx =>
+        putRedirect(ctx, tx, {
+          locale: "en",
+          origin: "person",
+          source: "/old",
+          target: "/new",
+        })
+      );
+      expect((await unserved(everything)).map(p => p.what)).toEqual([
+        "1 redirect is saved but not served: proxy.ts is not wired, so no request has reached the site's Proxy.",
+      ]);
+      expect(await unserved({ ...everything, seesRedirects: false })).toEqual(
+        []
+      );
+
+      // Once the Proxy has handled a request, the redirects are served.
+      await recordProxySeen(ctx);
+      expect(await unserved(everything)).toEqual([]);
+    });
+
     it("a full check reports a redirect that takes more than one hop", async () => {
       const { ctx } = await boot(dialect);
       const save = (source: string, target: string) =>
@@ -693,6 +733,68 @@ describe.each(getConfiguredTestDialects())(
       expect(hidden.problems.some(p => p.subject.type === "single:home")).toBe(
         false
       );
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a page saved inside a transaction (%s)",
+  dialect => {
+    it("is checked outside that transaction, so its check never shares the transaction's connection", async () => {
+      // Whether each write of the problem list's rows was made while a
+      // transaction its flow is inside was open.
+      const inTransaction: boolean[] = [];
+      const watcher: PluginDefinition = definePlugin({
+        name: "@test/problem-writes",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        init(ctx) {
+          const adapter = getService("adapter");
+          for (const hook of ["beforeCreate", "beforeUpdate"] as const) {
+            ctx.hooks.on(hook, PROBLEMS_SLUG, () => {
+              inTransaction.push(adapter.transactionOpenInFlow());
+            });
+          }
+        },
+      });
+      const seen: { ctx?: PluginContext } = {};
+      current = await createTestNextly({
+        dialect,
+        plugins: [seoWithContext(seen, ["posts"]), watcher],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            status: true,
+            access: { read: () => true },
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      const id = await publish(t, { title: "Before", slug: "before" });
+      await until(t, checkedSince(id));
+      inTransaction.length = 0;
+
+      // A save on a transaction its hook runs inside, held open a while as a
+      // longer transaction would be, so its check starts before it ends.
+      await ctx.services.collections.withTransaction(async transaction => {
+        await ctx.services.collections.updateEntryInTransaction(
+          transaction,
+          "posts",
+          id,
+          { title: "Changed", _overwrite: true }
+        );
+        await new Promise(resolve => setTimeout(resolve, 500));
+      });
+      await until(t, found =>
+        found.some(row => row.holderId === id && row.title === "Changed")
+      );
+
+      expect(inTransaction.length).toBeGreaterThan(0);
+      expect(inTransaction).not.toContain(true);
     });
   }
 );
