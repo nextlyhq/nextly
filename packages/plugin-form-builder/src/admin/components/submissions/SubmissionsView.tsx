@@ -38,6 +38,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Columns3, Download } from "lucide-react";
 import {
   type JSX,
@@ -50,6 +51,8 @@ import {
 
 import type { FormField } from "../../../types";
 import { formatExportValue } from "../../../utils/export-formats";
+import { readPermissions } from "../../use-admin-permissions";
+import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
 
 import { SubmissionSheet } from "./SubmissionSheet";
 
@@ -99,6 +102,11 @@ export interface FormOption {
 
 interface SubmissionsViewProps {
   collectionSlug?: string;
+  /**
+   * Show only this form's submissions, with no choice of form: the list as a
+   * form's own Submissions tab draws it.
+   */
+  formId?: string;
 }
 
 type StatusTab = "all" | "new" | "read" | "archived" | "spam";
@@ -132,6 +140,56 @@ function formatDate(value: string | null | undefined): string {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+/** A form entry as the entries API answers it. */
+type FormEntry = { id: string; name?: string; fields?: FormField[] };
+
+/** A form as the list uses it: its id, name and fields. */
+function formOptionOf(item: FormEntry): FormOption {
+  return {
+    id: item.id,
+    name: item.name ?? item.id,
+    fields: Array.isArray(item.fields) ? item.fields : [],
+  };
+}
+
+/**
+ * Every form, page by page: a capped single fetch would silently drop forms
+ * from the filter and the per-field column lookup. The entries API reads the
+ * page size from `limit` and answers its default page when that is absent, so
+ * the size goes there: under any other name the first page comes back short
+ * and the loop reads it as the last.
+ */
+async function readAllForms(formsSlug: string): Promise<FormOption[]> {
+  const allForms: FormOption[] = [];
+  const formsPageSize = 200;
+  for (let formsPage = 1; ; formsPage += 1) {
+    const formsRes = await fetch(
+      `/admin/api/collections/${formsSlug}/entries?limit=${formsPageSize}&page=${formsPage}`,
+      { credentials: "include" }
+    );
+    if (!formsRes.ok) break;
+    const json = (await formsRes.json()) as { items?: FormEntry[] };
+    const items = json.items ?? [];
+    allForms.push(...items.map(formOptionOf));
+    if (items.length < formsPageSize) break;
+  }
+  return allForms;
+}
+
+/** One form, for the list fixed to it; none if it cannot be read. */
+async function readOneForm(
+  formsSlug: string,
+  formId: string
+): Promise<FormOption[]> {
+  const response = await fetch(
+    `/admin/api/collections/${formsSlug}/entries/${encodeURIComponent(formId)}`,
+    { credentials: "include" }
+  );
+  if (!response.ok) return [];
+  const json = (await response.json()) as FormEntry & { item?: FormEntry };
+  return [formOptionOf(json.item ?? json)];
 }
 
 /** Status → badge styling. Tokens only; spam reads as a warning state. */
@@ -168,14 +226,18 @@ function summarizeData(data: Record<string, unknown>): string {
 
 export function SubmissionsView({
   collectionSlug,
+  formId,
 }: SubmissionsViewProps): JSX.Element {
   const [slugs, setSlugs] = useState<{ forms: string; submissions: string }>();
   const [forms, setForms] = useState<FormOption[]>([]);
-  const [selectedFormId, setSelectedFormId] = useState<string>(() => {
+  const [chosenFormId, setChosenFormId] = useState<string>(() => {
     // Deep links (?form=<id>) preselect the form filter.
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("form") ?? "";
   });
+  // A form's own tab names its form; the list of all submissions offers the
+  // choice.
+  const selectedFormId = formId ?? chosenFormId;
   const [statusTab, setStatusTab] = useState<StatusTab>("all");
   const [rows, setRows] = useState<SubmissionRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -210,50 +272,18 @@ export function SubmissionsView({
         if (cancelled) return;
         setSlugs(resolved);
 
-        // Page through ALL forms — a capped single fetch would silently
-        // drop forms from the filter and the per-field column lookup. The
-        // entries API reads the page size from `limit` and answers its
-        // default page when that is absent, so the size goes there: under
-        // any other name the first page comes back short and the loop below
-        // reads it as the last.
-        const allForms: FormOption[] = [];
-        const formsPageSize = 200;
-        for (let formsPage = 1; ; formsPage += 1) {
-          const formsRes = await fetch(
-            `/admin/api/collections/${resolved.forms}/entries?limit=${formsPageSize}&page=${formsPage}`,
-            { credentials: "include" }
-          );
-          if (!formsRes.ok) break;
-          const json = (await formsRes.json()) as {
-            items?: Array<{ id: string; name?: string; fields?: FormField[] }>;
-          };
-          const items = json.items ?? [];
-          allForms.push(
-            ...items.map(item => ({
-              id: item.id,
-              name: item.name ?? item.id,
-              fields: Array.isArray(item.fields) ? item.fields : [],
-            }))
-          );
-          if (items.length < formsPageSize) break;
-        }
-        if (!cancelled) setForms(allForms);
+        // One form's tab needs that form alone; the list of all
+        // submissions needs every form, for its filter and its columns.
+        const found =
+          formId === undefined
+            ? await readAllForms(resolved.forms)
+            : await readOneForm(resolved.forms, formId);
+        if (!cancelled) setForms(found);
 
-        const permsRes = await fetch("/admin/api/me/permissions", {
-          credentials: "include",
-        });
-        if (permsRes.ok) {
-          const perms = (await permsRes.json()) as {
-            permissions?: string[];
-            isSuperAdmin?: boolean;
-          };
-          const has = (slug: string) =>
-            Boolean(perms.isSuperAdmin) ||
-            (perms.permissions ?? []).includes(slug);
-          if (!cancelled) {
-            setCanUpdate(has(`update-${resolved.submissions}`));
-            setCanDelete(has(`delete-${resolved.submissions}`));
-          }
+        const has = await readPermissions().catch(() => undefined);
+        if (has !== undefined && !cancelled) {
+          setCanUpdate(has(`update-${resolved.submissions}`));
+          setCanDelete(has(`delete-${resolved.submissions}`));
         }
       } catch {
         // Bootstrap failures degrade to the default slugs — without them
@@ -269,7 +299,7 @@ export function SubmissionsView({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [formId]);
 
   // --- the list fetch ------------------------------------------------------
   // Monotonic request sequence: rapid filter changes overlap fetches, and
@@ -402,6 +432,9 @@ export function SubmissionsView({
   }, [selectedForm, formNameById, hiddenFieldColumns]);
 
   // --- actions ---------------------------------------------------------------
+  // The form's submission count, beside the list in the form editor's bar and
+  // tab, is read again after any change here.
+  const queryClient = useQueryClient();
   // The rows as last read, for the version a change sends.
   const rowsNow = useRef(rows);
   rowsNow.current = rows;
@@ -434,8 +467,10 @@ export function SubmissionsView({
         throw new Error(`Update failed (${res.status})`);
       }
       await fetchRows();
+      // A status changed: the form's count leaves spam out, so it moves too.
+      void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
     },
-    [submissionsSlug, fetchRows]
+    [submissionsSlug, fetchRows, queryClient]
   );
 
   const deleteSubmission = useCallback(
@@ -447,8 +482,9 @@ export function SubmissionsView({
       if (!res.ok) throw new Error(`Delete failed (${res.status})`);
       setOpenId(null);
       await fetchRows();
+      void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
     },
-    [submissionsSlug, fetchRows]
+    [submissionsSlug, fetchRows, queryClient]
   );
 
   const rowActions = useCallback(
@@ -508,29 +544,31 @@ export function SubmissionsView({
       {/* Toolbar: form filter, status tabs, export */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Select
-            value={selectedFormId || "__all"}
-            onValueChange={value => {
-              setSelectedFormId(value === "__all" ? "" : value);
-              setPage(1);
-              setOpenId(null);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Filter by form"
-              className="w-full sm:w-56 bg-transparent border-input dark:bg-muted/50"
+          {formId === undefined ? (
+            <Select
+              value={selectedFormId || "__all"}
+              onValueChange={value => {
+                setChosenFormId(value === "__all" ? "" : value);
+                setPage(1);
+                setOpenId(null);
+              }}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all">All forms</SelectItem>
-              {forms.map(form => (
-                <SelectItem key={form.id} value={form.id}>
-                  {form.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                aria-label="Filter by form"
+                className="w-full sm:w-56 bg-transparent border-input dark:bg-muted/50"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">All forms</SelectItem>
+                {forms.map(form => (
+                  <SelectItem key={form.id} value={form.id}>
+                    {form.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
 
           <Tabs
             value={statusTab}

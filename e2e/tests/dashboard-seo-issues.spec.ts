@@ -4,14 +4,15 @@
  * (`NEXTLY_PLAYGROUND_PLUGINS=seo`, set by `e2e/playwright.config.ts`),
  * extending the `seo-pages` collection, which no other spec writes.
  *
- * The card is placed by the test through the layout, as the Breakdown spec
- * places its card. Its counts are read back before and after the spec writes
- * its pages, so a retry, which writes them again, still finds exactly what it
- * added.
+ * Both count the SEO problem list, as the person looking may read it: the
+ * card draws it by kind, and the line counts it whole. Each is compared with
+ * what the list's own route answers the same person, read once the save's
+ * check of the pages this spec writes has kept their problems.
  *
- * The Needs attention line is read from the dashboard's own query route, the
- * attention digest the Needs attention card and the header read, as the
- * signed-in person asks for it.
+ * The card is placed by the test through the layout, as the Breakdown spec
+ * places its card. The Needs attention line is read from the dashboard's own
+ * query route, the attention digest the Needs attention card and the header
+ * read, as the signed-in person asks for it.
  */
 import {
   expect,
@@ -36,16 +37,25 @@ const CARD = "seo/issues";
 /** Core's Needs your attention card, which draws the plugin's lines. */
 const ATTENTION_CARD = "core/needs-attention";
 const PAGES = "seo-pages";
-/** The Needs attention line of the one collection the plugin checks here. */
-const PAGES_LINE = "seo/issues-seo-pages";
+/** The plugin's one Needs attention line, counting the problem list. */
+const PROBLEMS_LINE = "seo/problems";
+/** The problem list's route, and its screen. */
+const PROBLEMS = `${API}/plugins/@nextlyhq/plugin-seo/problems`;
+const PROBLEMS_SCREEN = "plugins/nextlyhq-plugin-seo/problems";
+/** The kind of problem a title longer than Google shows is listed under. */
+const LONG_TITLE = "Title longer than Google shows";
 
-/** The issues a page with no SEO fields filled in has. */
-const ALL_MISSING = [
-  "Missing meta title",
-  "Missing canonical URL",
-  "Missing meta description",
-  "Missing social image",
-];
+/** One bar of the card's answer. */
+interface Bucket {
+  value: string;
+  count: number;
+}
+
+/** One problem of the list, as far as this spec reads it. */
+interface Problem {
+  kind: string;
+  subject: { label: string };
+}
 
 interface Layout {
   version: number;
@@ -63,7 +73,7 @@ interface DigestItem {
 
 /** One answer of the dashboard's query route. */
 type Slot =
-  | { ok: true; result: { items?: DigestItem[] } }
+  | { ok: true; result: { items?: DigestItem[]; buckets?: Bucket[] } }
   | { ok: false; code?: string };
 
 let admin: APIRequestContext;
@@ -112,7 +122,7 @@ async function placeCard(page: Page): Promise<void> {
 }
 
 /**
- * The bars the card draws, each issue's count by its name, or none while the
+ * The bars the card draws, each kind's count by its name, or none while the
  * card says there is nothing to fix.
  */
 async function drawnBars(card: Locator): Promise<Record<string, number>> {
@@ -121,7 +131,7 @@ async function drawnBars(card: Locator): Promise<Record<string, number>> {
   ).toBeVisible();
   if (await card.getByTestId("card-empty").isVisible()) {
     await expect(card.getByTestId("card-empty")).toContainText(
-      "No SEO issues in published pages."
+      "The SEO problem list has nothing to fix."
     );
     return {};
   }
@@ -161,7 +171,7 @@ async function askDashboard(
   return results[0];
 }
 
-/** The pages' SEO line of the attention digest `request`'s person is answered, if any. */
+/** The SEO line of the attention digest `request`'s person is answered, if any. */
 async function seoLineFor(
   request: APIRequestContext
 ): Promise<DigestItem | undefined> {
@@ -172,25 +182,71 @@ async function seoLineFor(
   });
   expect(slot.ok, JSON.stringify(slot)).toBe(true);
   const items = slot.ok ? (slot.result.items ?? []) : [];
-  return items.find(item => item.id === PAGES_LINE);
+  return items.find(item => item.id === PROBLEMS_LINE);
 }
 
-/** Write a page to the checked collection, with the SEO fields given. */
-async function writePage(
-  title: string,
-  seo?: Record<string, unknown>
-): Promise<void> {
-  await ok(
+/** Write a page to the checked collection; answers its id. */
+async function writePage(title: string, slug: string): Promise<string> {
+  const { item } = await ok<{ item: { id: string | number } }>(
     await admin.post(`${API}/collections/${PAGES}/entries`, {
-      data: { title, ...(seo === undefined ? {} : { seo }) },
+      data: { title, slug },
     })
   );
+  return String(item.id);
 }
 
-test("the SEO issues card draws a bar for each issue the pages have", async ({
-  page,
-}) => {
+/**
+ * The problem list `request`'s person is answered, once the save's check of
+ * the page titled `title` has kept its problems: a save's check runs after
+ * the save, so the list is read until it names the page.
+ */
+async function listNaming(
+  request: APIRequestContext,
+  title: string
+): Promise<Problem[]> {
+  let problems: Problem[] = [];
+  await expect(async () => {
+    const body = await ok<{
+      problems?: Problem[];
+      item?: { problems: Problem[] };
+    }>(await request.get(PROBLEMS));
+    problems = body.problems ?? body.item?.problems ?? [];
+    expect(problems.some(p => p.subject.label === title)).toBe(true);
+  }).toPass({ timeout: 15_000 });
+  return problems;
+}
+
+/**
+ * The list as the card counts it: every problem but a redirect chain, which
+ * the list names only to someone holding site-wide SEO and a card cannot ask
+ * about.
+ */
+const counted = (problems: readonly Problem[]) =>
+  problems.filter(problem => problem.kind !== "redirectChain");
+
+test("the SEO issues card draws the problem list by kind", async ({ page }) => {
   const stamp = Date.now().toString(36);
+  const title = `SEO e2e card ${stamp} ${"t".repeat(60)}`;
+  await writePage(title, `seo-e2e-card-${stamp}`);
+  const list = counted(await listNaming(admin, title));
+  expect(list.some(problem => problem.kind === "longTitle")).toBe(true);
+
+  // The card's answer, as the dashboard's query route gives it to the same
+  // person: a bar per kind, as many problems as the list holds.
+  const slot = await askDashboard(page.request, { widget: CARD, settings: {} });
+  expect(slot.ok, JSON.stringify(slot)).toBe(true);
+  const buckets = slot.ok
+    ? ((slot.result as { buckets?: Bucket[] }).buckets ?? [])
+    : [];
+  expect(
+    buckets.find(bucket => bucket.value === LONG_TITLE)?.count ?? 0
+  ).toBeGreaterThan(0);
+  expect(buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(
+    list.length
+  );
+
+  // Drawn on the dashboard: the bars view draws as many rows as the card's
+  // size has room for, each with its count.
   await gotoAdmin(page, "/");
   await placeCard(page);
   await gotoAdmin(page, "/");
@@ -198,75 +254,56 @@ test("the SEO issues card draws a bar for each issue the pages have", async ({
     .getByTestId(`widget-cell-${CARD}`)
     .filter({ visible: true });
   await expect(card).toBeVisible();
-  const before = await drawnBars(card);
-
-  // A bare page has all four gaps; a titled one has three.
-  await writePage(`SEO e2e bare ${stamp}`);
-  await writePage(`SEO e2e titled ${stamp}`, { metaTitle: "Titled" });
-  await gotoAdmin(page, "/");
-  const after = await drawnBars(card);
-
-  // One bar per issue, each risen by what the two pages added. The bars view
-  // orders its rows by count, so the set is asserted, not the order.
-  expect(Object.keys(after).sort()).toEqual([...ALL_MISSING].sort());
-  for (const issue of ALL_MISSING) {
-    const added = issue === "Missing meta title" ? 1 : 2;
-    expect(after[issue], issue).toBe((before[issue] ?? 0) + added);
+  const bars = await drawnBars(card);
+  expect(Object.keys(bars).length).toBeGreaterThan(0);
+  for (const [kind, count] of Object.entries(bars)) {
+    expect(buckets.find(bucket => bucket.value === kind)?.count, kind).toBe(
+      count
+    );
   }
 });
 
-test("its issue count is a Needs attention line naming the pages it checks", async ({
+test("its count is a Needs attention line linked to the problem list", async ({
   page,
 }) => {
   const stamp = Date.now().toString(36);
-  await writePage(`SEO e2e attention ${stamp}`);
-  await gotoAdmin(page, "/");
-  await placeCard(page);
-  await gotoAdmin(page, "/");
-  const bars = await drawnBars(
-    page.getByTestId(`widget-cell-${CARD}`).filter({ visible: true })
-  );
+  const title = `SEO e2e attention ${stamp} ${"t".repeat(60)}`;
+  await writePage(title, `seo-e2e-attention-${stamp}`);
+  const problems = counted(await listNaming(page.request, title)).length;
+  const shown = problems > 99 ? "99+" : String(problems);
 
-  // The same issues the card draws, as one count: the card reads this one
-  // collection, which has this one line. The attention card caps what it shows
-  // at 99, as "99+".
-  const issues = Object.values(bars).reduce((sum, n) => sum + n, 0);
-  const shown = issues > 99 ? "99+" : String(issues);
-
+  await gotoAdmin(page, "/");
   // The line as Needs your attention draws it, found by its label among the
-  // card's rows: other specs' items share the card, and a row past the card's
-  // height waits behind "Show N more".
+  // card's rows: other specs' items share the card, which draws every item,
+  // with nothing folded behind "Show N more".
   const attention = page
     .getByTestId(`widget-cell-${ATTENTION_CARD}`)
     .filter({ visible: true });
   await expect(attention).toBeVisible();
+  await expect(
+    attention.getByRole("button", { name: /^Show \d+ more$/ })
+  ).toHaveCount(0);
   const line = attention
     .getByTestId("needs-attention-item")
-    .filter({ hasText: `SEO issues in ${PAGES}` });
-  const more = attention.getByRole("button", { name: /^Show \d+ more$/ });
-  if (!(await line.isVisible()) && (await more.isVisible())) {
-    await more.click();
-  }
+    .filter({ hasText: "SEO problems" });
   await expect(line).toBeVisible();
-  await expect(line).toContainText(`SEO issues in ${PAGES} · ${shown}`);
+  await expect(line).toContainText(`SEO problems · ${shown}`);
 
-  // Its one Review opens the list the issues are fixed in.
+  // Its one Review opens the problem list.
   const review = line.getByRole("link", { name: /^Review /i });
   await expect(review).toHaveAttribute(
     "href",
-    new RegExp(`/admin/collections/${PAGES}$`)
+    new RegExp(`/admin/${PROBLEMS_SCREEN}$`)
   );
   await review.click();
-  await expect(page).toHaveURL(
-    new RegExp(`/admin/collections/${PAGES}(\\?|$)`)
-  );
+  await expect(page).toHaveURL(new RegExp(`/admin/${PROBLEMS_SCREEN}(\\?|$)`));
 
   // The digest the card draws answers the same line, as the route answers it.
   expect(await seoLineFor(page.request)).toEqual(
     expect.objectContaining({
-      label: `SEO issues in ${PAGES}`,
-      count: issues,
-      link: `collections/${PAGES}`,
+      label: "SEO problems",
+      count: problems,
+      link: PROBLEMS_SCREEN,
     })
   );
 });
@@ -274,8 +311,11 @@ test("its issue count is a Needs attention line naming the pages it checks", asy
 test("a reader who may not read the pages is offered neither the card nor the line", async () => {
   // 🔴 Both read as the person asking. A reader of posts alone is told the card
   // is not available, and is shown no line at all, not even its label, while
-  // the pages hold issues the super-admin is shown.
-  await writePage(`SEO e2e unseen ${Date.now().toString(36)}`);
+  // the pages hold problems the super-admin is shown.
+  const stamp = Date.now().toString(36);
+  const title = `SEO e2e unseen ${stamp} ${"t".repeat(60)}`;
+  await writePage(title, `seo-e2e-unseen-${stamp}`);
+  await listNaming(admin, title);
   expect((await seoLineFor(admin))?.count ?? 0).toBeGreaterThan(0);
 
   const request = outsider.context.request;

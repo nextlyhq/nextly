@@ -155,6 +155,14 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,
   NEXTLY_MIGRATION_RESOLVE_DRIFT: 409,
   NEXTLY_MIGRATION_RESOLVE_PRECONDITION: 409,
+  // A Schema Builder save refused by the migration history checks `nextly
+  // migrate` runs first (an applied file edited or missing, an unfinished
+  // attempt): nothing is written until the history is settled.
+  NEXTLY_MIGRATION_HISTORY_REFUSED: 409,
+  // A Schema Builder save that would also convert a column an earlier version
+  // made to the one field-to-column mapping, which the person did not confirm
+  // in the save's review: the Builder changes only what it said it would.
+  NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED: 409,
   // The Builder's UI schema.
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,

@@ -314,6 +314,29 @@ refused; index fewer, or narrower, fields. An explicit `name` may be at most
 
 Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the database.
 
+### `publicAddress`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Default** | `undefined` |
+
+Where each entry is served on your site, as a path with placeholders: `"/blog/{slug}"`. [`publicAddressOf`](/docs/configuration/public-addresses) reads it, and answers that a collection without one has no address rather than guessing. Experimental: the SEO plugin's sitemap and canonical links don't read it yet, so it changes nothing there.
+
+```ts
+defineCollection({
+  slug: "posts",
+  fields: [text({ name: "title" }), text({ name: "slug" })],
+  publicAddress: "/blog/{slug}",
+});
+```
+
+- It starts with `/`, has no trailing `/`, and no query or fragment.
+- Each placeholder is a whole segment naming one of the collection's fields, or `id`. A collection needs at least one, since each entry has its own address. With `db.slugPaths`, one `{slug}` stands for a slug of several segments.
+- It can't sit under a path Nextly keeps for itself, such as `/admin` or `/api`.
+
+An address that breaks a rule stops the configuration from loading, naming what to fix. See [Public addresses](/docs/configuration/public-addresses).
+
 ## Admin options
 
 Configure how the collection appears in the admin panel via the `admin` property.
@@ -485,7 +508,8 @@ runs differently: its hooks run inside that transaction (after the row is
 locked and matched, where the `delete` rule answers a filter), and `afterDelete`
 runs before the transaction commits. An
 effect made there still happens if the transaction then rolls back, so make it
-once `withTransaction` has resolved.
+once `withTransaction` has resolved. The delete's `collection.<slug>.deleted`
+event waits for the transaction to commit, and is never sent if it rolls back.
 
 ### Publishing or unpublishing every language
 

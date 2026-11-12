@@ -135,6 +135,9 @@ async function boot(
   };
 }
 
+// Every update here says it replaces whatever is stored (`_overwrite`), as an update that read no
+// version must: the writes set the test up, and none of them is about which version they change.
+
 /** A published entry holding a pending change to `guarded`; its id. */
 async function heldEntry(entries: CollectionEntryService): Promise<string> {
   const created = await entries.createEntry(
@@ -144,7 +147,7 @@ async function heldEntry(entries: CollectionEntryService): Promise<string> {
   const id = (created.data as { id: string }).id;
   const held = await entries.updateEntry(
     { collectionName: POSTS, entryId: id, overrideAccess: true },
-    { guarded: "edited" }
+    { guarded: "edited", _overwrite: true }
   );
   expect(held.success, JSON.stringify(held)).toBe(true);
   return id;
@@ -194,7 +197,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(probe.calls, JSON.stringify(published)).toBeGreaterThan(0);
@@ -221,7 +224,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(retried.success, JSON.stringify(retried)).toBe(true);
       expect(await guardedLive(entries, id)).toBe("edited");
@@ -233,12 +236,17 @@ describe.each(getConfiguredTestDialects())(
       const singles = t.getService("singleEntryService");
       await singles.update(
         PREFS,
-        { siteName: "Live", guarded: "live", status: "published" },
+        {
+          siteName: "Live",
+          guarded: "live",
+          status: "published",
+          _overwrite: true,
+        },
         { overrideAccess: true }
       );
       const held = await singles.update(
         PREFS,
-        { guarded: "edited" },
+        { guarded: "edited", _overwrite: true },
         { routeAuthorized: true, user: BOSS }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
@@ -247,7 +255,7 @@ describe.each(getConfiguredTestDialects())(
       const published = await singles
         .update(
           PREFS,
-          { status: "published" },
+          { status: "published", _overwrite: true },
           { routeAuthorized: true, user: BOSS }
         )
         .catch((error: unknown) => error);
@@ -279,6 +287,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         routeAuthorized: false,
         user: BOSS,
+        data: { _overwrite: true },
       });
 
       expect(probe.calls, JSON.stringify(published)).toBeGreaterThan(0);
@@ -296,6 +305,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         routeAuthorized: false,
         user: BOSS,
+        data: { _overwrite: true },
       });
 
       expect(probe.calls).toBeGreaterThan(0);
@@ -315,7 +325,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(probe.calls).toBeGreaterThan(0);

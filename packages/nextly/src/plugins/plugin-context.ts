@@ -9,6 +9,7 @@
  * @since 1.0.0
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   SupportedDialect,
   TransactionContext,
@@ -29,11 +30,26 @@ import type { CollectionRegistryService } from "../domains/collections/services/
 import { collectionFields } from "../domains/collections/services/collection-utils";
 import type { StoredReads } from "../domains/collections/services/stored-field-read";
 import type { ContentEventSubject } from "../domains/content-events/record";
+import {
+  type ForgetSendsInput,
+  forgetPluginSends,
+} from "../domains/email/plugin-send-forgetting";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { JobRegistry } from "../domains/jobs/job-registry";
 import type { JobsPassDatabase } from "../domains/jobs/jobs-runner";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
+import {
+  createDurableEventRecorder,
+  durableEventNames,
+  type DurableEventsAdapter,
+} from "../domains/plugin-events/durable-events";
+import { getDurableEventsKick } from "../domains/plugin-events/kick";
+import {
+  getDurableSubscribers,
+  type DurableHandler,
+} from "../domains/plugin-events/subscribers";
+import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -96,6 +112,7 @@ import {
   type PluginTransaction,
   type PluginTransactionHandles,
 } from "./database/plugin-database";
+import { linkedTransaction } from "./database/plugin-transaction-link";
 import type {
   HookPointContext,
   HookPointNameOf,
@@ -114,10 +131,18 @@ import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import { createPluginCache, type PluginCacheApi } from "./plugin-cache";
 import type { PluginCategory } from "./plugin-categories";
 import { type PluginConfig, pluginConfigView } from "./plugin-config-view";
-import { NO_PLUGIN_GRANTS, type PluginGrants } from "./plugin-consent";
+import {
+  bootNameOf,
+  NO_PLUGIN_GRANTS,
+  type PluginGrants,
+} from "./plugin-consent";
 import { currentDependencies } from "./plugin-dependencies";
 import { createPluginFetchFor } from "./plugin-fetch-provider";
 import { mediaForPlugin, type PluginMediaService } from "./plugin-media";
+import {
+  pluginPublicAddresses,
+  type PluginPublicAddresses,
+} from "./plugin-public-addresses";
 import { createPluginSettings } from "./plugin-settings-provider";
 import { toPluginSingleRecord, wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
@@ -130,6 +155,12 @@ import {
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
+import {
+  createKeyedDigests,
+  type DigestKeyAdapter,
+  type DigestKeyStore,
+  type KeyedDigests,
+} from "./security/keyed-digest";
 import {
   createOneTimeSecrets,
   type OneTimeSecrets,
@@ -637,7 +668,23 @@ export type { PluginMediaService } from "./plugin-media";
 export type PluginEmailService = Pick<
   EmailService,
   (typeof PLUGIN_EMAIL_METHODS)[number]
->;
+> & {
+  /**
+   * @experimental Forget email this plugin sent about something it has
+   * deleted: cancel the queued emails among `queuedIds` that are still
+   * waiting or could be retried, clear the message and recipients of every
+   * one of them, and erase the delivery records of the sends that carried
+   * `idempotencyKeys`. Only this plugin's own: another caller's ids and keys
+   * name nothing. Pass `tx`, the handle a `ctx.db.transaction` callback or an
+   * in-transaction handler received, to commit with your own deletion;
+   * without one it runs in a transaction of its own, and is refused inside
+   * an open one.
+   */
+  forgetSends(
+    input: ForgetSendsInput,
+    options?: { tx?: PluginTransaction }
+  ): Promise<void>;
+};
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
@@ -677,6 +724,58 @@ async function readEventsForPlugin(
       readEventsAs(subject, query, caller)
     )
   );
+}
+
+/** @experimental Where a plugin's event is delivered from. */
+export interface PluginEmitOptions {
+  /**
+   * The handle `ctx.db.transaction` passes its callback: the event is
+   * delivered once that transaction commits, and never if it rolls back,
+   * from whichever code emits it. A handle whose transaction has ended is
+   * refused; emit without `tx` after the transaction returns.
+   */
+  tx?: PluginTransaction;
+}
+
+/**
+ * @public A plugin's events: the event bus's methods, with an `emit` that
+ * waits for the work that emitted it to commit (see `PluginContext.events`).
+ */
+export type PluginEvents = Omit<EventBus, "emit"> & {
+  emit<P = unknown>(
+    name: EventName,
+    payload: P,
+    options?: PluginEmitOptions
+  ): void;
+};
+
+/**
+ * @experimental A plugin's durable events, beside its bus on `ctx.events`.
+ * A type of its own, so `PluginEvents` stays what it was.
+ */
+export interface PluginDurableEvents {
+  /**
+   * @experimental Record one of this plugin's durable events (declared
+   * `durable: true` in `contributes.events`) with the work that emits it, by
+   * the rule `emit` follows: with `{ tx }`, in that plugin transaction; else
+   * in the transaction the calling code is in; else in one of its own. Every
+   * `onDurable` subscriber registered when it is dispatched then receives it,
+   * at least once, retried with backoff, across restarts. Resolves with the
+   * event's id, which a subscriber de-duplicates on.
+   */
+  emitDurable(
+    name: EventName,
+    payload: Record<string, unknown>,
+    options?: PluginEmitOptions
+  ): Promise<{ id: string }>;
+  /**
+   * @experimental Subscribe to a durable event as `subscriber`, a name
+   * unique within this plugin: what a waiting delivery is owed to, so it
+   * reaches this handler after a restart however subscribers were added or
+   * reordered. The handler may run again for one event; de-duplicate on
+   * `event.id`.
+   */
+  onDurable(name: EventName, subscriber: string, handler: DurableHandler): void;
 }
 
 /** The read itself, as the caller resolved from the plugin's options. */
@@ -819,8 +918,14 @@ export interface PluginContext {
   /**
    * @public Post-commit, observe-only, best-effort event bus.
    * Use a hook to modify/abort; use an event to react/notify.
+   *
+   * `emit` delivers once the work that emitted it commits: with `{ tx }`,
+   * when that plugin transaction commits; inside a transaction the calling
+   * flow holds, when its outermost transaction commits; outside any
+   * transaction, at once. Never for work that rolled back, nor for an
+   * attempt that was retried.
    */
-  events: EventBus;
+  events: PluginEvents & PluginDurableEvents;
 
   /**
    * @experimental Running Nextly core version, for feature-detection.
@@ -848,6 +953,12 @@ export interface PluginContext {
    * No first-party plugin registers via `ctx.hooks` yet (see STABILITY.md).
    */
   hooks: PluginHookRegistry;
+  /**
+   * @experimental Take part in keeping every public address to one page:
+   * answer from this plugin's record who holds an address, and be told what
+   * each document holds after a save.
+   */
+  publicAddresses: PluginPublicAddresses;
 
   /** @experimental Typed filter registry. Transform values at named seams. */
   filters: PluginFilterRegistry;
@@ -962,6 +1073,11 @@ export interface PluginSecurityApi {
   readonly opaque: OpaqueSecrets;
   /** One-purpose links and codes, spent once. */
   readonly secrets: OneTimeSecrets;
+  /**
+   * Keyed one-way digests of values to compare without keeping them, under
+   * the plugin's own key, stable across secret rotations.
+   */
+  readonly digests: KeyedDigests;
   /** Verifying the webhooks the plugin receives, in a common scheme or its own. */
   readonly webhooks: PluginReceivedWebhooks;
 }
@@ -1173,6 +1289,37 @@ export interface PluginAdminConfig {
     | "users"
     | "settings";
 
+  /**
+   * Where the plugin's own rail item goes when it is opened, for a plugin
+   * placed `AdminPlacement.STANDALONE`. Written the way a menu item's `to` is:
+   *
+   * - one of the plugin's own pages, as `/admin/plugins/<slug>/<path>`, where
+   *   `<path>` is a `contributes.admin.pages` entry's `path`;
+   * - one of the plugin's own collections, as `/admin/collections/<slug>`,
+   *   with the slug the plugin declares. A host's `rename` is applied, as it
+   *   is to a menu item naming the collection, so the link follows the slug
+   *   the host registered. A sub-path, a query or a hash after either is kept.
+   *
+   * A reader who may not open it (a collection they cannot read, a page whose
+   * `requiredPermission` they lack) is sent where it would go without one.
+   * Without it, the rail item opens the first of the plugin's collections the
+   * reader can see, in the order its panel lists them, and with none, the
+   * first menu item its panel lists. A value naming anything else is ignored,
+   * as if unset, and reported at start-up in development.
+   *
+   * A site can override it per plugin in `admin.pluginOverrides`, as it can
+   * `placement` and `order`.
+   *
+   * @example
+   * ```ts
+   * admin: {
+   *   placement: AdminPlacement.STANDALONE,
+   *   landing: "/admin/plugins/analytics/overview",
+   * }
+   * ```
+   */
+  landing?: string;
+
   /** Plugin description shown on the plugin settings page */
   description?: string;
 
@@ -1225,7 +1372,9 @@ export interface PluginAdminConfig {
 export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   /**
    * Unique plugin name.
-   * Used for identification and error messages.
+   * Used for identification and error messages. `app`, in any letter case, is
+   * reserved: the site's own permissions are stored under that owner, and a
+   * plugin's under its name, so a plugin named `app` is refused at startup.
    */
   name: string;
 
@@ -1577,6 +1726,9 @@ export const PLUGIN_SERVICE_NAMES = [
   // registered, so a plugin's committed event is offered to the drain of the
   // instance that recorded it.
   "webhookFastDrainScheduler",
+  // `nextly_meta`, where each plugin's sealed digest key is kept
+  // (`ctx.security.digests`).
+  "metaService",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1638,7 +1790,7 @@ function buildPluginDatabase(
   ) => Promise<T>;
 } {
   const owner: SchemaOwner = plugin
-    ? { kind: "plugin", id: plugin.name }
+    ? { kind: "plugin", id: bootNameOf(plugin) }
     : { kind: "app" };
 
   // The schema compiled for the dialect this process runs, asked for by name.
@@ -1887,9 +2039,65 @@ function asSecretsAdapter(adapter: AdapterTransactions): SecretsAdapter {
 }
 
 /**
+ * The adapter as keyed digests use it: a session of its own for the first
+ * use, and whether the calling flow is in a transaction. Every adapter core
+ * ships has both; one that does not is refused with a clear error.
+ */
+function isDigestKeyAdapter(value: unknown): value is DigestKeyAdapter {
+  if (typeof value !== "object" || value === null) return false;
+  const methods: readonly (keyof DigestKeyAdapter)[] = [
+    "withSession",
+    "transactionOpenInFlow",
+  ];
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.dialect === "string" &&
+    methods.every(name => typeof record[name] === "function")
+  );
+}
+
+function asDigestKeyAdapter(adapter: AdapterTransactions): DigestKeyAdapter {
+  if (isDigestKeyAdapter(adapter)) return adapter;
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no dialect, withSession or transactionOpenInFlow, which keyed digests need.",
+    logContext: { reason: "digest-adapter-incomplete" },
+  });
+}
+
+/**
  * The resolved adapter as received-webhook claims need it, or a named failure
  * when a stand-in lacks a part of it, rather than a TypeError mid-claim.
  */
+/**
+ * The adapter this context resolves, as a plugin's durable events record
+ * through it: checked for the two methods they use rather than cast, so a
+ * context built over something less refuses plainly instead of failing on
+ * the first event.
+ */
+function asDurableEventsAdapter(
+  adapter: AdapterTransactions
+): DurableEventsAdapter {
+  const value: unknown = adapter;
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).transaction === "function" &&
+    typeof (value as Record<string, unknown>).afterCommit === "function"
+  ) {
+    return value as DurableEventsAdapter;
+  }
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no transaction or afterCommit, which durable events need.",
+    logContext: { reason: "durable-events-adapter-incomplete" },
+  });
+}
+
 function asReceivedWebhooksAdapter(
   adapter: AdapterTransactions
 ): ReceivedWebhooksAdapter {
@@ -1985,6 +2193,11 @@ export interface PluginCapabilities {
    * `login: true` lets the plugin finish logins with
    * `ctx.auth.completeLogin`, which signs in whichever account it names.
    * Its strategy names must begin with `<plugin-slug>:`.
+   *
+   * Declaring it is not enough: the app must also list the plugin in
+   * `auth.loginPlugins`, or the boot refuses, naming the line to add. A
+   * `determineUser` auth hook counts as this capability too, since it decides
+   * who is signed in.
    */
   auth?: { login?: boolean };
 }
@@ -2201,7 +2414,9 @@ export function createPluginContext(
                                     ? JobsPassDatabase
                                     : T extends "webhookFastDrainScheduler"
                                       ? WebhookFastDrainScheduler | null
-                                      : never,
+                                      : T extends "metaService"
+                                        ? DigestKeyStore
+                                        : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2269,7 +2484,10 @@ export function createPluginContext(
 ): PluginContext {
   // Subscriptions made through this context are tracked under the plugin's name
   // so the runtime can clear them before the plugin re-initializes on HMR (B2).
-  const pluginName = plugin?.name;
+  // The boot-time name, not the live one: `init` may rename its own
+  // definition, and the identity this context attributes — hooks, events,
+  // `ctx.self`, the auth grant — is the one the boot resolved.
+  const pluginName = plugin === undefined ? undefined : bootNameOf(plugin);
 
   // Everything registered through this context is attributed to the plugin, so
   // a config reload can rebuild the config's own handlers without deleting a
@@ -2543,7 +2761,7 @@ export function createPluginContext(
   // surface below exposes this handle as `raw`.
   const rawDb = restrictDatabase(
     getServiceFn("db"),
-    plugin !== undefined && grants.rawSql.includes(plugin.name),
+    plugin !== undefined && grants.rawSql.includes(bootNameOf(plugin)),
     // Both resolved when a transaction starts, not now: the context can be
     // built before the database is connected. A closure, so the adapter
     // keeps its receiver.
@@ -2590,7 +2808,7 @@ export function createPluginContext(
   // HMR (B2), and `emit()` refuses every name outside the plugin's own
   // namespace, core's included. Every other method
   // delegates to the shared bus unchanged.
-  const events: EventBus = pluginName
+  const bus: EventBus = pluginName
     ? new Proxy(rawBus, {
         get(target, prop) {
           if (prop === "on") {
@@ -2602,7 +2820,11 @@ export function createPluginContext(
             };
           }
           if (prop === "emit") {
-            return (name: EventName, payload: unknown) => {
+            return (
+              name: EventName,
+              payload: unknown,
+              options?: PluginEmitOptions
+            ) => {
               // Thrown at the plugin author rather than dropped: emitting a
               // core event is a programming error, and a silent no-op would
               // leave them debugging a listener that never fires.
@@ -2626,7 +2848,12 @@ export function createPluginContext(
                   },
                 });
               }
-              target.emit(name, payload);
+              emitAfterCommit(
+                () => target.emit(name, payload),
+                options?.tx,
+                () => getServiceFn("adapter"),
+                logger
+              );
             };
           }
           const value = Reflect.get(target, prop, target);
@@ -2634,6 +2861,21 @@ export function createPluginContext(
         },
       })
     : rawBus;
+  // The durable half, beside the bus: what a plugin records with its work
+  // and delivers until each subscriber has it.
+  const durable = pluginDurableEvents(plugin, () =>
+    asDurableEventsAdapter(getServiceFn("adapter"))
+  );
+  const emitDurable = durable.emitDurable.bind(durable);
+  const onDurable = durable.onDurable.bind(durable);
+  const events = new Proxy(bus as unknown as PluginContext["events"], {
+    get(target, prop) {
+      if (prop === "emitDurable") return emitDurable;
+      if (prop === "onDurable") return onDurable;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 
   // Built once per context rather than per call: it closes over the
   // allowlist, and nothing about it changes between requests.
@@ -2641,8 +2883,10 @@ export function createPluginContext(
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
   const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
   // Whose secrets and webhook types this context reaches: the plugin's, or
-  // core's for a context built without one.
-  const owner = plugin?.name ?? "nextly";
+  // core's for a context built without one. The boot-time name, not the
+  // mutable one: a plugin renaming itself in `init` onto a listed name must
+  // not reach that name's secrets or webhook types.
+  const owner = plugin === undefined ? "nextly" : bootNameOf(plugin);
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -2776,10 +3020,23 @@ export function createPluginContext(
       media: mediaForPlugin(mediaService),
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
-      email: methodFacade(
-        scopedSender(emailService, pluginKeyScope(pluginName)),
-        PLUGIN_EMAIL_METHODS
-      ),
+      email: Object.freeze({
+        ...methodFacade(
+          scopedSender(emailService, pluginKeyScope(pluginName)),
+          PLUGIN_EMAIL_METHODS
+        ),
+        // Its own sends only, by the same scope its keys are claimed in.
+        forgetSends: (
+          input: ForgetSendsInput,
+          options?: { tx?: PluginTransaction }
+        ) =>
+          forgetPluginSends(pluginKeyScope(pluginName), input, {
+            tx: options?.tx,
+            // The context's own adapter, as its other services use.
+            adapter: getServiceFn("adapter"),
+            secrets: pluginSettingsSecrets(env),
+          }),
+      }),
       // Resolved on access, not at construction: `createPluginContext` is
       // exported, and a resolver written before this service existed would
       // otherwise throw while building the context for callers that never
@@ -2833,14 +3090,23 @@ export function createPluginContext(
     self,
     config: pluginConfigView(config),
     hooks: pluginHooks,
+    publicAddresses: pluginPublicAddresses({
+      bindTo: bindToTransaction,
+      owner: hookOwner ?? "app",
+      // Withdrawn at teardown with the plugin's other subscriptions.
+      onTeardown: undo => {
+        if (pluginName) recordPluginSubscription(pluginName, undo);
+      },
+    }),
     filters: pluginFilters,
     actions: pluginActions,
     // A plain property rather than a getter: `runPluginRoute` spreads the base
     // context on every request, which would evaluate a top-level getter each
     // time. The instance itself resolves its dependencies lazily instead.
-    // Bound to the plugin, so `completeLogin` answers to its manifest; a
-    // context built for no plugin is core's own and gets the shared one.
-    auth: plugin ? getPluginAuthApiFor(plugin) : getPluginAuthApi(),
+    // Bound to the plugin and to the boot's verdict, so `completeLogin`
+    // answers to the grant decided at resolution; a context built for no
+    // plugin is core's own and gets the shared one.
+    auth: plugin ? getPluginAuthApiFor(plugin, grants) : getPluginAuthApi(),
     // Built once here and kept as a plain property, like `auth`: it holds no
     // per-request state, so the copy every route spreads is the same helper.
     security: {
@@ -2863,6 +3129,21 @@ export function createPluginContext(
       // outlives a container being cleared, as on a reload while old plugins
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
+      // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
+      // The store and the install's secrets are read per call, as above.
+      digests: createKeyedDigests({
+        owner,
+        store: () => getServiceFn("metaService"),
+        adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
+        // The keyed generations only: a key is sealed and opened with one.
+        secrets: () =>
+          secretGenerations(
+            env.NEXTLY_SECRET,
+            env.NEXTLY_SECRET_PREVIOUS
+          ).filter(
+            (generation): generation is string => typeof generation === "string"
+          ),
+      }),
       secrets: createOneTimeSecrets({
         owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
@@ -2911,5 +3192,104 @@ export function createPluginContext(
     // for `settings`.
     ...(pluginPrincipals ? { principals: pluginPrincipals } : {}),
     ...(pluginLimits ? { limits: pluginLimits } : {}),
+  };
+}
+
+/**
+ * Deliver a plugin's event once the work that emitted it commits, by the one
+ * rule every emit follows: with the plugin's own transaction handle, when
+ * that transaction commits; inside a transaction the calling flow holds,
+ * when its outermost transaction commits (a savepoint that rolls back drops
+ * its own, and a retried attempt's are discarded); outside any transaction,
+ * at once. Never for work that rolled back. Called once the name has passed
+ * every refusal, so a refused event is never held.
+ */
+function emitAfterCommit(
+  deliver: () => void,
+  tx: PluginTransaction | undefined,
+  adapter: () => Pick<DrizzleAdapter, "afterCommit">,
+  logger: Pick<Logger, "error">
+): void {
+  if (tx !== undefined) {
+    try {
+      linkedTransaction(tx, "events.emit").afterCommit(deliver);
+    } catch (error) {
+      // A handle whose transaction has ended, committed or rolled back, is
+      // refused, as every use of it is; the message says what to do instead.
+      if (
+        NextlyError.is(error) &&
+        error.logContext?.reason === "plugin-transaction-finished"
+      ) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "tx",
+              code: "INVALID",
+              message:
+                "This transaction has already finished: emit without `tx` once the transaction has returned, or emit inside its callback.",
+            },
+          ],
+          logContext: { reason: "plugin-transaction-finished" },
+        });
+      }
+      throw error;
+    }
+    return;
+  }
+  // Held while the calling flow is inside a transaction, run now (before
+  // this returns) when it is not: the adapter's own rule for what runs after
+  // a commit, so a plugin's event and core's after-commit work agree.
+  void adapter().afterCommit(deliver, error => {
+    logger.error("A plugin's event could not be delivered after commit", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+/**
+ * A plugin's `emitDurable` and `onDurable`: its durable events, recorded by
+ * the one rule its `emit` follows, and offered for prompt dispatch once
+ * they commit; its subscribers, keyed by its boot-time name and the name it
+ * gives each, and retired when the plugin is torn down. A context built
+ * without a plugin has no events of its own to record, and refuses both.
+ */
+function pluginDurableEvents(
+  plugin: PluginDefinition | undefined,
+  adapter: () => DurableEventsAdapter
+): PluginDurableEvents {
+  if (plugin === undefined) {
+    const refusal = (): NextlyError =>
+      NextlyError.forbidden({
+        logContext: { reason: "durable-events-without-plugin" },
+      });
+    const refuse = (): never => {
+      throw refusal();
+    };
+    return {
+      // Rejects rather than throws, as an emit that is refused for any
+      // other reason does.
+      emitDurable: () => Promise.reject(refusal()),
+      onDurable: refuse,
+    };
+  }
+  const owner = bootNameOf(plugin);
+  const recorder = createDurableEventRecorder({
+    owner,
+    durable: durableEventNames(plugin.contributes?.events),
+    adapter,
+    kick: getDurableEventsKick,
+  });
+  return {
+    emitDurable: (name, payload, options) =>
+      recorder.record(name, payload, options),
+    onDurable(name, subscriber, handler) {
+      getDurableSubscribers().register(owner, name, subscriber, handler);
+      // Torn down with the plugin, as its other subscriptions are: retired,
+      // so a re-initialised plugin registers the same names again, and an
+      // event dispatched before it has is still owed to them.
+      recordPluginSubscription(owner, () =>
+        getDurableSubscribers().retireOwner(owner)
+      );
+    },
   };
 }

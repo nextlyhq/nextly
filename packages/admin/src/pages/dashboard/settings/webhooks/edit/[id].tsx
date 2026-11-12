@@ -201,7 +201,7 @@ export default function EditWebhookPage(): React.JSX.Element {
 
   if (!id) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <SettingsLayout {...WEBHOOK_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -220,7 +220,7 @@ export default function EditWebhookPage(): React.JSX.Element {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         <SettingsLayout {...WEBHOOK_PAGE}>
           <EditWebhookContent id={id} />
         </SettingsLayout>

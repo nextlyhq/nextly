@@ -196,6 +196,41 @@ wins) and call `notFound()` on a genuine miss or a reserved path (`/admin`,
 `/api`, `/_next`, `/static`, and metadata files like `sitemap.xml`). `status`
 behaves as in `resolveContent`.
 
+### One route for every language
+
+On a [translated site](/docs/localization), put the catch-all under a
+`[locale]` segment and the route reads the language from it: one route serves
+every language, each page at its own translated address, and a segment that
+names none of the site's languages answers not found. Leave the route's
+`locale` option out there. List the languages in the segment's layout, and
+each language's paths are pre-rendered in it:
+
+```tsx
+// app/[locale]/layout.tsx
+export function generateStaticParams() {
+  return [{ locale: "en" }, { locale: "de" }];
+}
+```
+
+```tsx
+// app/[locale]/[[...slug]]/page.tsx
+import { createPublicContentRoute } from "nextly/runtime";
+
+const route = createPublicContentRoute({
+  collections: ["pages"],
+  render: (entry, context) => <Page entry={entry} locale={context.locale} />,
+});
+
+export const generateStaticParams = route.generateStaticParams;
+export const generateMetadata = route.generateMetadata;
+export default route.ContentPage;
+```
+
+The addresses the route hands on, a list's first-page redirect and the address
+its head is asked for, are formed by the site's
+[language rule](/docs/localization#each-languages-address). A Single route
+under the segment reads its language the same way: pass the page's props on.
+
 ### A paginated list's pages
 
 Give either factory `listPages`, a function from a resolved entry to how many pages its
@@ -414,6 +449,19 @@ card, and `robots` from `noindex`). Blank `seo` fields fall back to the values
 you pass; caller `openGraph` / `twitter` extras win.
 
 ```ts
+import { buildMetadata, type MetadataEntry } from "nextly/runtime";
+
+// Your own read of one post by its slug, with the fields used below.
+declare function getPostBySlug(slug: string): Promise<
+  | (MetadataEntry & {
+      title: string;
+      excerpt?: string;
+      featuredImage?: { url: string };
+      publishedAt?: string;
+    })
+  | null
+>;
+
 export async function generateMetadata({
   params,
 }: {
@@ -438,6 +486,68 @@ A `canonical` is validated to a root-relative path or an absolute http(s) URL
 (a `mailto:`/`javascript:` value falls back), and a page ships `index, follow`
 unless `seo.noindex` is set.
 
+## When a plugin provides page metadata
+
+A plugin can take over every page's head by providing page metadata (see
+[Providing page metadata](/docs/plugins/api-reference#providing-page-metadata)). With one
+installed, the route helpers ask it for each page they serve: `createContentRoute`,
+`createPublicContentRoute`, `createSingleRoute`, `createPublicSingleRoute`, and the Page
+Builder's `createBlocksPage` and `createContentPage`. A route needs no `buildMetadata` for this.
+
+A route that still passes `buildMetadata`, or `metadata` on a Page Builder route, keeps working,
+but its result becomes one input rather than the answer:
+
+- its title, description and social card values are used where nobody set one for the page;
+- its `robots` and canonical are not used, so the page and the sitemap built from the same answer
+  agree on whether a page is listed and where it lives;
+- anything else it sets, such as an Open Graph `type` or `publishedTime`, is kept.
+
+Without such a plugin, a route's metadata is served exactly as it returns it.
+
+Where the plugin's answer carries structured data, the page's `render` is handed it as
+`context.structuredData`: JSON-LD text, written so that no value can end its script element. Place
+it as the body of a JSON-LD script element, so it is in the HTML a crawler receives rather than
+added in the browser:
+
+```tsx
+render: (entry, context) => (
+  <article>
+    {context.structuredData && (
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: context.structuredData }}
+      />
+    )}
+    <h1>{String(entry.title)}</h1>
+  </article>
+),
+```
+
+A Single route's `render` is handed it the same way. A route that resolves its entries its own way
+asks for it with `contentPageStructuredData(config, entry, context, path)`, beside
+`contentPageMetadata`.
+
+## Metadata in the first HTML
+
+Next.js streams a page's metadata in after the `<head>` to a browser, and waits for it only for the
+crawlers named in `htmlLimitedBots`. Its own list leaves out the main Googlebot, which runs
+scripts but takes its first reading from the HTML it is sent, and the AI crawlers, which run
+none. `nextlyHtmlLimitedBots`, from `nextly/next`, is Next.js's list with those added, so each of
+them reads the page's whole head in the first response. A new app's `next.config` sets it, and so
+does `withNextly()` where the app sets no list of its own. An app made before then adds it:
+
+```ts title="next.config.ts"
+import { nextlyHtmlLimitedBots } from "nextly/next";
+
+const nextConfig = {
+  htmlLimitedBots: nextlyHtmlLimitedBots,
+  // ...the rest of your config
+};
+```
+
+Setting `htmlLimitedBots` replaces Next.js's list rather than adding to it, so a list of your own
+should start from `nextlyHtmlLimitedBots.source`.
+
 ## nextlySitemap and nextlyRobots
 
 `nextlySitemap({ entries, tags })` builds the default export for
@@ -449,7 +559,11 @@ reads uncached (and marks the render dynamic) so it never freezes stale.
 ```ts
 // app/sitemap.ts
 import { nextlySitemap, nextlyTags } from "nextly/runtime";
-import { buildSitemapUrls } from "@nextlyhq/plugin-seo";
+import { buildSitemapUrls, type SitemapServices } from "@nextlyhq/plugin-seo";
+
+// The services your app reads its collections through, and its address.
+declare const services: SitemapServices;
+const baseUrl = "https://example.com";
 
 export default nextlySitemap({
   tags: nextlyTags("posts"),

@@ -80,6 +80,38 @@ describe("buildPluginAdminMeta", () => {
     });
   });
 
+  it("serves a field type's declared settings as declared, for the settings panel", () => {
+    const settings = [
+      { key: "max", label: "Most stars", control: "number" },
+      {
+        key: "shape",
+        label: "Shape",
+        control: "select",
+        tab: "display",
+        options: [{ label: "Star", value: "star" }],
+      },
+    ];
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            fieldTypes: [
+              {
+                type: "rating",
+                storage: "number",
+                component: "@acme/p/admin#Rating",
+                settings,
+              },
+            ],
+          },
+        },
+      ]),
+      undefined
+    );
+    expect(meta[0].fieldTypes?.[0].settings).toEqual(settings);
+  });
+
   it("omits presentation and surfaces keys a field type does not declare", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
@@ -652,6 +684,35 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].collections).toEqual(["forms"]);
     expect(meta[0].singles).toEqual(["form-settings"]);
     expect(meta[0].fieldGroups).toEqual(["form-block"]);
+  });
+});
+
+describe("buildPluginAdminMeta — the slugs a plugin's entities are registered under", () => {
+  it("names each collection, Single and field group by the slug the host's rename gave it", () => {
+    const [meta] = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            collections: [{ slug: "forms" }, { slug: "submissions" }],
+            singles: [{ slug: "settings" }],
+            fieldGroups: [{ slug: "address" }],
+          },
+          // As `plugin.rename({ … })` leaves it: declared slug to registered slug.
+          renameMap: {
+            forms: "contact-forms",
+            settings: "form-settings",
+            address: "postal-address",
+          },
+        },
+      ]),
+      undefined
+    );
+    // What the admin lists, so a renamed entity is found under its plugin
+    // rather than shown among the site's own content.
+    expect(meta.collections).toEqual(["contact-forms", "submissions"]);
+    expect(meta.singles).toEqual(["form-settings"]);
+    expect(meta.fieldGroups).toEqual(["postal-address"]);
   });
 });
 
@@ -1329,5 +1390,62 @@ describe("buildPluginAdminMeta, a plugin's translations", () => {
         undefined
       )
     ).toThrow(NextlyError);
+  });
+});
+
+describe("buildPluginAdminMeta, a standalone plugin's landing", () => {
+  /** A plugin owning `reports` and an `overview` page, naming `landing`. */
+  function reports(landing?: string, extra: object = {}): PluginDefinition {
+    return definePlugin({
+      ...base,
+      ...extra,
+      admin: {
+        placement: "standalone",
+        ...(landing === undefined ? {} : { landing }),
+      },
+      contributes: {
+        collections: [{ slug: "reports" } as never],
+        admin: {
+          pages: [{ path: "overview", component: "@acme/p/admin#Overview" }],
+        },
+      },
+    } as unknown as PluginDefinition);
+  }
+
+  const landingOf = (
+    plugin: PluginDefinition,
+    overrides?: Parameters<typeof buildPluginAdminMeta>[1]
+  ) => buildPluginAdminMeta([plugin], overrides)[0].landing;
+
+  it("serializes a page landing as the address the admin mounts it at", () => {
+    expect(landingOf(reports("/admin/plugins/acme-p/overview"))).toBe(
+      "/admin/plugins/acme-p/overview"
+    );
+  });
+
+  it("serializes a collection landing through the host's rename", () => {
+    const plugin = reports("/admin/collections/reports");
+    // The control: unrenamed, the declared slug is the address.
+    expect(landingOf(plugin)).toBe("/admin/collections/reports");
+    const renamed = plugin.rename?.({ reports: "acme-reports" }) ?? plugin;
+    expect(landingOf(renamed)).toBe("/admin/collections/acme-reports");
+  });
+
+  it("lets the site's override win", () => {
+    expect(
+      landingOf(reports("/admin/collections/reports"), {
+        "acme-p": { landing: "/admin/plugins/acme-p/overview" },
+      })
+    ).toBe("/admin/plugins/acme-p/overview");
+  });
+
+  it("drops a landing naming nothing the plugin owns, and any when disabled", () => {
+    // The control for both: the same plugin with a landing it owns has one.
+    expect(landingOf(reports("/admin/collections/reports"))).toBeDefined();
+    expect(landingOf(reports("/admin/collections/posts"))).toBeUndefined();
+    expect(
+      landingOf(reports("/admin/collections/reports", { enabled: false }))
+    ).toBeUndefined();
+    expect(landingOf(reports())).toBeUndefined();
   });
 });

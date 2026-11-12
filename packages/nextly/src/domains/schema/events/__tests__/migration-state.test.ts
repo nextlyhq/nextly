@@ -34,6 +34,7 @@ const EVENT_TYPES = [
   "core_apply",
   "file_rollback",
   "plugin_lifecycle",
+  "old_builder_file",
   "file_removed",
 ] as const satisfies readonly SchemaEventType[];
 

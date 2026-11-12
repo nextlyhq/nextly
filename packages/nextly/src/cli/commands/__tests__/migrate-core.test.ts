@@ -27,6 +27,7 @@ function deps(over: Record<string, unknown> = {}) {
     runFileMigrationsFn: vi.fn(async () => 0),
     refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
     assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
+    markOldBuilderFilesFn: vi.fn(async () => {}),
     assertAppliedFilesPresentFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
     documentColumnsFn: vi.fn(async () => {}),
@@ -754,6 +755,82 @@ describe("an applied file edited since it ran", () => {
         new CliError("MIGRATION_MISSING", { what: "x", why: "x", next: "x" })
       )
     ).toBe(3);
+  });
+});
+
+describe("a Builder-named file the signature does not recognise", () => {
+  it("is refused again inside the lock, before the core reconcile", async () => {
+    // Checked before the lock too; a file changed while waiting for the lock
+    // must not reach the first write unrefused.
+    const order: string[] = [];
+    const d = deps({
+      refuseUnrecognisedBuilderFiles: true,
+      refuseUnrecognisedBuilderFilesFn: vi.fn(async () => {
+        order.push("refuse");
+      }),
+      assertAppliedFilesUnchangedFn: vi.fn(async () => {
+        order.push("checksums");
+      }),
+      withLock: vi.fn(
+        async (_a: unknown, _d: unknown, fn: () => Promise<unknown>) => {
+          order.push("lock");
+          return { ran: true as const, value: await fn() };
+        }
+      ),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    await migrateCore(d as never);
+    // Ahead of the checksum check, which records a missing checksum: a run
+    // refused for an unrecognised file writes nothing.
+    // Before the lock the checksum check only reads (records nothing), so the
+    // unrecognised file is refused there after it, as it is inside the lock.
+    expect(order).toEqual([
+      "checksums",
+      "refuse",
+      "lock",
+      "refuse",
+      "checksums",
+      "core",
+    ]);
+  });
+});
+
+describe("the marks of old Schema Builder files", () => {
+  it("are written after the core reconcile, the run's first write", async () => {
+    const order: string[] = [];
+    const d = deps({
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+      markOldBuilderFilesFn: vi.fn(async () => {
+        order.push("marks");
+      }),
+      runFileMigrationsFn: vi.fn(async () => {
+        order.push("files");
+        return 0;
+      }),
+    });
+    await migrateCore(d as never);
+    expect(order.slice(0, 2)).toEqual(["core", "marks"]);
+  });
+
+  it("are never written when a history check refuses", async () => {
+    const refusal = new CliError("MIGRATION_TAMPERED", {
+      what: "edited",
+      why: "edited",
+      next: "restore it",
+    });
+    const d = deps({
+      assertAppliedFilesUnchangedFn: vi.fn(async () => {
+        throw refusal;
+      }),
+    });
+    await expect(migrateCore(d as never)).rejects.toBe(refusal);
+    expect(d.markOldBuilderFilesFn).not.toHaveBeenCalled();
   });
 });
 

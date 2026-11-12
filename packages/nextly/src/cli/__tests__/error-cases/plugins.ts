@@ -22,7 +22,13 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { actionRouteRefusal } from "../../../plugins/routes/action-route-check";
 import {
   installTargetUnclear,
+  pluginConfigNotEditable,
+  pluginDeclarationInvalid,
   pluginNotFound,
+  pluginOptionInvalid,
+  pluginOptionMissing,
+  pluginPackageNotInstalled,
+  pluginRegistrationUnknown,
 } from "../../errors/areas/plugins";
 
 import type { CliErrorCode } from "../../errors";
@@ -136,6 +142,36 @@ export const PLUGIN_CASES = {
   PLUGIN_ACTION_ROW_NOT_FOUND: () => actionRefusal(new Map()),
   PLUGIN_NOT_FOUND: () => pluginNotFound("@acme/sitemap"),
   PLUGIN_INSTALL_TARGET_UNCLEAR: () => installTargetUnclear(undefined),
+  // As `nextly plugins add` raises each, with the values it passes.
+  PLUGIN_PACKAGE_NOT_INSTALLED: () => pluginPackageNotInstalled(PLUGIN),
+  PLUGIN_DECLARATION_INVALID: () =>
+    pluginDeclarationInvalid(
+      PLUGIN,
+      "It names the export seoPlugin, which its entry does not have"
+    ),
+  PLUGIN_REGISTRATION_UNKNOWN: () =>
+    pluginRegistrationUnknown(
+      PLUGIN,
+      "It has no `nextly.plugin` declaration, and its entry exports no plugin definition as it is; a function that makes one is not called to find out"
+    ),
+  PLUGIN_OPTION_MISSING: () =>
+    pluginOptionMissing(PLUGIN, [
+      { name: "siteUrl", description: "The site's production address" },
+    ]),
+  PLUGIN_OPTION_INVALID: () =>
+    pluginOptionInvalid(
+      PLUGIN,
+      'siteUrl must be a full web address, such as https://example.com, and "example.com" is not one'
+    ),
+  PLUGIN_CONFIG_NOT_EDITABLE: () =>
+    pluginConfigNotEditable(
+      "nextly.config.ts sets `plugins` to something other than a list written in place",
+      [
+        'import { seoPlugin } from "@acme/seo";',
+        'plugins: [seoPlugin({ siteUrl: "https://example.com" })]',
+      ],
+      PLUGIN
+    ),
   // As `assertEnabled` in `cli/commands/plugin-lifecycle.ts` throws it.
   PLUGIN_DISABLED: () =>
     new NextlyError({
@@ -449,6 +485,17 @@ export const PLUGIN_CASES = {
       publicMessage:
         "Another migration is holding the migrate lock, so @acme/seo was not installed. Nothing was changed — re-run once it finishes.",
       logContext: { reason: "plugin-lifecycle-lock-busy", outcome: "settled" },
+    }),
+  PLUGIN_COMMAND_FROM_OLDER_RELEASE: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        "The preset roles' grants were set by Nextly 0.10.0, newer than this release (0.9.0). Run this command from Nextly 0.10.0 or newer.",
+      logContext: {
+        reason: "preset-grants-set-by-a-newer-release",
+        recorded: "0.10.0",
+        running: "0.9.0",
+      },
     }),
   PLUGIN_HOOK_SERVICES_REGISTERED: () =>
     new NextlyError({

@@ -20,7 +20,9 @@
 
 import type { JSX, ReactNode } from "react";
 
+import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { TargetSlot } from "@admin/components/shared/target-slot";
+import { cn } from "@admin/lib/utils";
 
 import { DOCUMENT_EDITOR_FRAME_ATTRIBUTE } from "./document-bar-height";
 import type { DocumentPanelMode } from "./document-panel-mode";
@@ -40,21 +42,24 @@ import type { DocumentPlace } from "./document-place";
  * scrolls the editor where that is not the page: the translation mode's target
  * pane, which sits under the mode's own bar as well as the top bar. Where
  * nothing declares it, the editor scrolls with the page, whose scroll area is
- * the window less the admin's top bar (4rem). One rule for both, so the
+ * the window less the admin's top bar (`--admin-bar-height`). One rule for both, so the
  * panel's foot is reachable in either without scrolling the page past it.
  * Both are layout knobs rather than palette tokens, so they sit outside the
  * theme's `--nx-*` namespace, as `--sidebar-width` does.
  */
 export const DOCUMENT_PANEL_STICKY =
-  "@4xl/content:sticky @4xl/content:top-[var(--document-bar-height,3.25rem)] @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-4rem))-var(--document-bar-height,3.25rem))]";
+  "@4xl/content:sticky @4xl/content:top-[var(--document-bar-height,3.25rem)] @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))-var(--document-bar-height,3.25rem))]";
 
 /**
  * The field column's inset, shared by everything drawn in it above the fields
  * (the title, the id line, the inline language panel) so each starts where the
- * fields' card does: on the page's own gutter below `@4xl`, and 2rem in from
- * the column's edge from there, where the column runs edge to edge.
+ * fields' card does. An Editor page has no padding of its own, so the column
+ * carries the admin's gutter itself, in the steps the gutter takes with the
+ * content panel's width: 1rem up to 768px, 1.5rem up to 896px (`@4xl`), and
+ * 2rem from there. Utilities rather than `--nx-gutter`, which steps only
+ * inside a page shell or `.nx-page-pad`.
  */
-export const DOCUMENT_COLUMN_INSET = "@4xl/content:px-8";
+export const DOCUMENT_COLUMN_INSET = "px-4 @3xl/content:px-6 @4xl/content:px-8";
 
 export interface DocumentEditorLayoutProps {
   /** The edit page's place, whose blocks the frame draws around its own. */
@@ -85,16 +90,22 @@ export function DocumentEditorLayout({
   frameRef,
   panelMode,
 }: DocumentEditorLayoutProps): JSX.Element {
+  // Inside the shell the document's bar is drawn in the admin's top bar,
+  // above the scroll area, so nothing here sticks under a bar of its own.
+  const inTopBar = useInTopBar();
   return (
-    // Vertical only: from `@4xl` the editor cancels the page's `py-8`, so the
-    // bar reaches the top of the scroll area and the panel the bottom. The
+    // An Editor page has no padding, so the banners start directly under the
+    // admin's bar and the panel reaches the bottom and the window's edge. The
     // floor is the scroll area's height (see `DOCUMENT_PANEL_STICKY`).
     // The frame is also where the bar publishes its height for the panel.
     <div
       ref={frameRef}
       {...{ [DOCUMENT_EDITOR_FRAME_ATTRIBUTE]: "" }}
       {...(panelMode === undefined ? {} : { "data-panel-mode": panelMode })}
-      className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-4rem))]"
+      className={cn(
+        "flex flex-col min-h-[var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))]",
+        inTopBar && "[--document-bar-height:0px]"
+      )}
     >
       <TargetSlot
         {...place}

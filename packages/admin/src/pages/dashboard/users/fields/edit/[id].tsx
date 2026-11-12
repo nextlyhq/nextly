@@ -1,6 +1,12 @@
 "use client";
 
-import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  PageHeader,
+  Skeleton,
+} from "@nextlyhq/ui";
 import { useCallback, type JSX } from "react";
 
 import {
@@ -26,8 +32,9 @@ import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 import { validateUUID } from "@admin/lib/validation";
+import { UserFieldsGuard } from "../user-fields-guard";
 
-export default function EditUserFieldPage(): JSX.Element {
+function EditUserFieldPageContent(): JSX.Element {
   const { route } = useRouter();
   // A caller who may read settings opens a field to see it; only one who may
   // update them is offered the change, which the server refuses to the rest.
@@ -86,9 +93,9 @@ export default function EditUserFieldPage(): JSX.Element {
   // Invalid ID
   if (!fieldId) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
           <Alert variant="destructive">
@@ -109,9 +116,9 @@ export default function EditUserFieldPage(): JSX.Element {
   // Loading state
   if (isLoading) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
           <div className="space-y-6">
@@ -132,22 +139,15 @@ export default function EditUserFieldPage(): JSX.Element {
   // Error state
   if (fetchError) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">
-                Edit User Field
-              </h1>
-              {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-              <p className="text-sm font-normal text-muted-foreground mt-1">
-                Modify attribute properties for user accounts
-              </p>
-            </div>
-          </div>
+          <PageHeader
+            title="Edit User Field"
+            description="Modify attribute properties for user accounts"
+          />
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between">
               <span>
@@ -180,23 +180,16 @@ export default function EditUserFieldPage(): JSX.Element {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields-edit" />
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">
-                Edit User Field
-              </h1>
-              {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-              <p className="text-sm font-normal text-muted-foreground mt-1">
-                Modify attribute properties for user accounts
-              </p>
-            </div>
-          </div>
+          <PageHeader
+            title="Edit User Field"
+            description="Modify attribute properties for user accounts"
+          />
 
           <UserFieldForm
             mode="edit"
@@ -208,5 +201,14 @@ export default function EditUserFieldPage(): JSX.Element {
         </div>
       </PageContainer>
     </QueryErrorBoundary>
+  );
+}
+
+/** The page, opened only to a reader who may also see users (`UserFieldsGuard`). */
+export default function EditUserFieldPage(): JSX.Element {
+  return (
+    <UserFieldsGuard>
+      <EditUserFieldPageContent />
+    </UserFieldsGuard>
   );
 }

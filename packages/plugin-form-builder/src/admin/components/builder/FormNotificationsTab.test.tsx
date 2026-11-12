@@ -47,6 +47,8 @@ vi.mock("../../context/FormBuilderContext", () => ({
     updateNotification,
     deleteNotification,
   }),
+  // No Undo here, so the editors are never asked to open again.
+  useFieldBookkeeping: () => ({ restored: 0 }),
 }));
 
 // Imported after the mock, so the component resolves the mocked context.
@@ -325,7 +327,10 @@ describe("the notification's email template", () => {
     const link = await screen.findByRole("link", {
       name: /open form submitted in email/i,
     });
-    expect(link).toHaveAttribute("href", "/admin/email/messages/edit/tpl-1");
+    expect(link).toHaveAttribute(
+      "href",
+      "/admin/settings/email/messages/edit/tpl-1"
+    );
     // A new tab, so leaving the builder can't lose its unsaved changes.
     expect(link).toHaveAttribute("target", "_blank");
   });
@@ -362,5 +367,91 @@ describe("the notification's email template", () => {
     notifications = [aNotification()];
     await openEditor();
     expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
+  });
+});
+
+describe("the starter messages", () => {
+  async function openEditor() {
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(
+      screen.getByRole("button", {
+        name: /edit notification admin notification/i,
+      })
+    );
+    return user;
+  }
+
+  /** Picks `option` in the "Send to" select. */
+  async function sendTo(
+    user: ReturnType<typeof userEvent.setup>,
+    option: RegExp
+  ) {
+    await user.click(screen.getByRole("combobox", { name: /send to/i }));
+    await user.click(await screen.findByRole("option", { name: option }));
+  }
+
+  it("gives a rule with no message the team's starter in one press", async () => {
+    notifications = [aNotification({ templateSlug: undefined })];
+    const user = await openEditor();
+
+    await user.click(
+      screen.getByRole("button", { name: /use form submission/i })
+    );
+
+    expect(updateNotification).toHaveBeenLastCalledWith(
+      "n1",
+      expect.objectContaining({ templateSlug: "forms-submission" })
+    );
+  });
+
+  it("offers the visitor's starter on a rule addressed to the visitor", async () => {
+    notifications = [
+      aNotification({
+        templateSlug: undefined,
+        recipientType: "field",
+        to: "{{email}}",
+      }),
+    ];
+    const user = await openEditor();
+
+    await user.click(
+      screen.getByRole("button", { name: /use form confirmation/i })
+    );
+
+    expect(updateNotification).toHaveBeenLastCalledWith(
+      "n1",
+      expect.objectContaining({ templateSlug: "forms-confirmation" })
+    );
+  });
+
+  it("moves a rule still on the team's starter to the visitor's when it turns to the visitor", async () => {
+    notifications = [aNotification({ templateSlug: "forms-submission" })];
+    const user = await openEditor();
+
+    await sendTo(user, /the visitor/i);
+
+    expect(updateNotification).toHaveBeenLastCalledWith(
+      "n1",
+      expect.objectContaining({
+        recipientType: "field",
+        templateSlug: "forms-confirmation",
+      })
+    );
+  });
+
+  it("keeps a message the author chose when the recipient changes", async () => {
+    notifications = [aNotification({ templateSlug: "my-own-email" })];
+    const user = await openEditor();
+
+    await sendTo(user, /the visitor/i);
+
+    expect(updateNotification).toHaveBeenLastCalledWith(
+      "n1",
+      expect.objectContaining({
+        recipientType: "field",
+        templateSlug: "my-own-email",
+      })
+    );
   });
 });

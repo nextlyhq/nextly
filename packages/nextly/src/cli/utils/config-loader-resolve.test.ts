@@ -77,6 +77,17 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
     }
   });
 
+  it("fails fast on a plugin named app, the site's own permission owner", () => {
+    try {
+      orderConfigPlugins([plugin("@t/a"), plugin("app")], NO_PLUGIN_CONSENT);
+      throw new Error("expected orderConfigPlugins to throw");
+    } catch (err) {
+      expect(
+        (err as { logContext?: { reason?: string } }).logContext?.reason
+      ).toBe("plugin-name-reserved");
+    }
+  });
+
   it("returns an empty array unchanged", () => {
     expect(orderConfigPlugins([], NO_PLUGIN_CONSENT).plugins).toEqual([]);
   });
@@ -136,6 +147,35 @@ describe("mergeSetupResultIntoConfig (CLI fold — D3/D12/D50)", () => {
     expect(result.webhookRetention).toBeNull();
     expect(result.webhookAuditEnabled).toBe(true);
   });
+
+  // The boot collects the app's permissions from the transformed config, so a setup() that adds
+  // or replaces them must reach every command that reads the loaded config, `migrate:create` and
+  // the loader's own permission check among them; one that removes them all leaves none.
+  it.each([
+    [
+      "replaced",
+      [{ action: "export", resource: "reports" }],
+      [{ action: "archive", resource: "reports" }],
+    ],
+    ["removed", [{ action: "export", resource: "reports" }], undefined],
+  ])(
+    "carries the app permissions a plugin setup() %s",
+    (_how, before, after) => {
+      const baseCfg = {
+        ...base(),
+        permissions: before,
+      } as unknown as SanitizedNextlyConfig;
+      const transformed = {
+        ...base(),
+        plugins: [],
+        permissions: after,
+      } as unknown as SanitizedNextlyConfig;
+
+      const result = mergeSetupResultIntoConfig(baseCfg, transformed, []);
+
+      expect(result.permissions).toEqual(after);
+    }
+  );
 
   it("carries the site dashboard a plugin setup() adds, so the component map lists its widget", () => {
     // The boot registers the dashboard of the transformed config; `generate:types` and its

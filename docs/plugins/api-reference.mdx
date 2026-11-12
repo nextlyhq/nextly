@@ -12,7 +12,7 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 | `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                                                            | no                  |
 | `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                                                               | no                  |
 | `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                                                                | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin`, `ChallengeViewProps`, `ChallengeResolveResult`                                                 | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin` (deprecated), `ChallengeViewProps`, `ChallengeResolveResult`                                    | yes (optional peer) |
 | `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                                                              | no                  |
 | `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them — a declaration a reviewer reads, not a boundary, since a plugin can bundle its own | no                  |
 | `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime                                                    | no                  |
@@ -45,6 +45,11 @@ interface PluginDefinition {
 }
 ```
 
+`name` is unique among the app's plugins, and `app` is reserved, in any letter case: the site's
+own permissions are stored under the owner `app` and a plugin's under its name, so startup and
+every CLI command refuse a plugin named `app` (`PLUGIN_RESOLUTION_ERROR`, `logContext.reason`
+`plugin-name-reserved`). Choose another name.
+
 ## `PluginContributions`
 
 ```ts
@@ -55,7 +60,7 @@ interface PluginContributions {
   extend?: Array<{ target: string | string[]; fields: FieldConfig[] }>;
   permissions?: PluginPermission[]; // { action, resource, label?, description?, group? }
   fieldTypes?: PluginFieldType[]; // custom field types — see below
-  events?: Array<{ name: string }>; // each must begin with your slug and a dot, or boot fails
+  events?: Array<{ name: string; durable?: boolean }>; // each must begin with your slug and a dot, or boot fails; `durable: true` lets you emitDurable it
   routes?: PluginRoute[]; // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore?, formatTimestamps?, mount? }
   auth?: PluginAuthContributions; // hooks, challenges, ui — see Auth extensibility
   settings?: ZodObject; // gives ctx.settings
@@ -128,12 +133,12 @@ interface PluginContext {
   };
   db: PluginDatabase & { raw: PluginRawDatabase }; // typed, owner-checked; .raw = Drizzle builder + transaction, the live instance only with capabilities.db.rawSql AND db.rawSqlPlugins
   dialect: SupportedDialect; // "postgresql" | "mysql" | "sqlite"; read when accessed; @experimental
-  auth: PluginAuthApi; // always present; completeLogin needs capabilities.auth.login
+  auth: PluginAuthApi; // always present; completeLogin needs the boot's login grant: capabilities.auth.login or a determineUser hook, AND the auth.loginPlugins listing
   settings?: PluginSettingsApi; // with contributes.settings
   fetch?: typeof fetch; // with a non-empty capabilities.net.outbound
   audit?: PluginAuditApi; // with contributes.audit
   hooks: PluginHookRegistry; // in-transaction, modify/abort
-  events: EventBus; // post-commit, observe-only, best-effort
+  events: PluginEvents; // post-commit, observe-only, best-effort
   filters: PluginFilterRegistry; // transform values on typed seams (D63)
   actions: PluginActionRegistry; // ordered side-effects on typed seams (D63)
   self: {
@@ -255,8 +260,81 @@ ctx.hooks.on(type, collectionSlug | "*", handler); // beforeCreate/afterCreate/�
 ctx.hooks.onInTransaction(collectionSlug | `single:${slug}` | "*", handler); // @experimental: inside the write's transaction, with a bound `db`; throwing aborts; may run again on a retry
 ctx.hooks.onCollectionDelete({ impact?, inTransaction? }); // @experimental: what deleting a collection takes with it, for the delete dialog, and its removal in the delete's transaction; throwing refuses the delete
 ctx.events.on(eventName, handler); // observe-only; e.g. `collection.${slug}.created`
-ctx.events.emit(eventName, payload); // your own `<slug>.…` names, declared in contributes.events
+ctx.events.emit(eventName, payload, { tx }?); // your own `<slug>.…` names, declared in contributes.events; delivered once the work commits
 ```
+
+`ctx.events.emit` delivers an event once the work that emitted it commits, and
+never for work that was undone:
+
+- With `{ tx }`, the handle `ctx.db.transaction` passes its callback, the event is
+  delivered once that transaction commits, and dropped if it rolls back, from
+  whichever code emits it. A handle whose transaction has already ended is refused:
+  emit without `tx` once the transaction has returned.
+- Called inside a transaction your code is running in without passing `tx`, such
+  as from an `onInTransaction` hook or a service call inside `ctx.db.transaction`,
+  it waits for the outermost transaction to commit. A savepoint that rolls back
+  drops the events emitted inside it, and an attempt that is retried drops its
+  own, so each is delivered once.
+- Outside any transaction, as from a job, a route or `init`, it is delivered at
+  once, as before.
+
+```ts
+await ctx.db.transaction(async tx => {
+  await tx.insert(orders).values(order);
+  ctx.events.emit("acme-billing.charged", { orderId: order.id }, { tx });
+}); // listeners hear `acme-billing.charged` here, after the commit
+```
+
+Before this release `emit` delivered at once wherever it was called, even inside a
+transaction that later rolled back. A listener now hears an event emitted inside a
+transaction only after that transaction commits.
+
+### Durable events (`@experimental`)
+
+An `emit` reaches the listeners running in this process when it is delivered, and
+no further: a handler that throws, or a server that stops, loses it. A **durable**
+event is written to the database with the work that emits it, and handed to every
+subscriber until each has it.
+
+```ts
+// Declared in contributes.events with `durable: true`.
+await ctx.db.transaction(async tx => {
+  await tx.insert(orders).values(order);
+  await ctx.events.emitDurable(
+    "acme-billing.charged",
+    { orderId: order.id },
+    { tx }
+  );
+});
+
+// Any plugin, in its init: a subscriber named within the plugin.
+ctx.events.onDurable("acme-billing.charged", "award-points", async event => {
+  // May run again for one event: de-duplicate on event.id.
+  await awardPointsOnce(event.id, event.payload.orderId);
+});
+```
+
+- `emitDurable(name, payload, { tx }?)` records the event by the same rule as
+  `emit`: in the transaction `tx` names, else in the one your code is running in,
+  else in one of its own. It commits and rolls back with that work, a savepoint
+  included, and resolves with the event's `id`. Only names your plugin declares
+  `durable: true` are accepted; the payload is a JSON object of at most 64 KB.
+- `onDurable(name, subscriber, handler)` subscribes under a name unique within
+  your plugin: 1 to 64 lower-case letters, digits, dots, dashes or underscores,
+  starting with a letter or digit.
+  A delivery is owed to that name, so it reaches the same handler after a restart,
+  however subscribers were added or reordered. Each subscriber registered when an
+  event is dispatched gets one delivery. A plugin reloading in development is
+  still owed what is dispatched before it registers again. In a rolling
+  deployment, an instance still running the previous release dispatches with
+  that release's subscribers, so a subscriber you add receives the events
+  dispatched once every instance runs it.
+- Deliveries run on the `events:dispatch` job, and promptly once the emitting work
+  commits inside a request. A handler that throws is tried again with backoff,
+  across restarts, up to 10 times; a delivery whose subscriber is no longer
+  registered is held for it. `nextly events report` lists the deliveries that need
+  an operator, and `nextly events abandon` gives them up.
+- Finished events are removed 30 days after their last delivery settles.
 
 A hook that learns something true about the state a write leaves behind, rather
 than something that failed, tells the person whose write it is with
@@ -292,12 +370,11 @@ const Can: React.FC<{ permission: string; fallback?: ReactNode; children: ReactN
 ```ts
 registerComponent(path, Component);
 registerComponents({ [path]: Component });
-registerKnownPlugin(packagePrefix, async () => {
-  /* register */
-});
 ```
 
-When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you, with a `plugin-admin-components.generated.ts` listing its paths. The app's admin page imports the first, and its server layout hands the second to `checkAdminComponents` from `nextly/runtime`, which writes the pair again in development when it falls behind, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. `nextly generate:types --check` holds the committed pair to the config in CI. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
+`registerKnownPlugin(packagePrefix, register)` is deprecated, and removed at the next major release after two minor releases. It still runs `register` straight away and says once that it is deprecated. Call `registerComponents` in your admin module instead: the generated component map imports that module, so every component it registers is there before a page asks for it.
+
+When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that registers your components for you, with a `plugin-admin-components.generated.ts` listing its paths. It calls `registerComponentMap` (experimental), which registers them as `registerComponents` does and then tells the admin the map is complete, so a component missing from it draws its fallback rather than loading. The app's admin page imports the first, and its server layout hands the second to `checkAdminComponents` from `nextly/runtime`, which writes the pair again in development when it falls behind, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. `nextly generate:types --check` holds the committed pair to the config in CI. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
 
 ## Testing (`/testing`)
 
@@ -586,6 +663,63 @@ field, or pass none at all. Note that these options reach type generation but
 are not persisted, so a field read back from the database after boot carries
 none of them.
 
+## Providing page metadata
+
+One plugin can work out the head of every page the site serves: its title, description,
+canonical address, whether search engines may list it, its social card and its language links.
+It declares the `page-metadata` capability and contributes its resolver as the `pageMetadata`
+service:
+
+```ts
+import { definePlugin, type PageMetadataResolver } from "@nextlyhq/plugin-sdk";
+
+const resolver: PageMetadataResolver = {
+  resolve: input => ({
+    title: input.code.title ?? input.derived.title,
+    description: input.code.description ?? input.derived.description,
+    robots: { index: true, follow: true },
+  }),
+  // What the answer depends on beyond the page's own document.
+  tags: () => ["acme-seo:settings"],
+};
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-seo",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.74",
+  provides: ["page-metadata"],
+  contributes: { services: { pageMetadata: () => resolver } },
+});
+```
+
+The route helpers in `nextly/runtime` and `@nextlyhq/blocks-react/next` then ask it for every
+page they serve, with no change to the site's routes. `resolve` is told:
+
+| Field     | What it holds                                                                                                                                   |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | The address the page was served at, from `/`. Absent for a Single route, which is never told where the app mounts it.                           |
+| `locale`  | The language the route read the page in, when the route states one.                                                                             |
+| `source`  | The document: `{ kind: "entry", collection, entry }` or `{ kind: "single", slug, document }`, as read for this request.                         |
+| `code`    | The title, description and social values the route's own `buildMetadata` or `metadata` set. A route never supplies visibility or the canonical. |
+| `derived` | What the page's content offers, such as the title, description and picture a Page Builder page's blocks show.                                   |
+
+It answers a `PageMetadataAnswer`: `title`, `description`, `canonical`, `robots`, `social`,
+`languages` and `structuredData`, each optional. The route turns the answer into Next.js
+`Metadata`. Whatever else the route's own metadata set, such as an Open Graph `type`, is kept.
+
+`structuredData` is the page's JSON-LD: a list of nodes, written without `@context`, holding plain
+JSON only. The route hands it to the page's render as `context.structuredData`, one schema.org
+graph written so that no value can end its script element. An answer whose structured data is not
+JSON is refused whole, as any answer of the wrong shape is.
+
+The answer is cached with the page: it expires when the page's document changes, and when any tag
+`tags` names is expired, so a change to the plugin's settings reaches every page without a
+redeploy. If `resolve` throws, the error is logged and the page is served with the route's own
+metadata.
+
+Only one plugin may provide `page-metadata`, and boot refuses a plugin that declares it without a
+`pageMetadata` service. The types are `@experimental`.
+
 ## Secrets
 
 ```ts
@@ -669,8 +803,11 @@ goes in `actorPrincipal` or `targetPrincipal`, never in the user ids.
 
 ### `ctx.auth`
 
-Always present. `completeLogin` requires `capabilities.auth.login` and a
-strategy name beginning with the plugin's own slug.
+Always present. `completeLogin` requires the boot's login grant — the plugin
+declares `capabilities.auth.login` or contributes a `determineUser` hook, and
+the app lists it in `auth.loginPlugins` (an unlisted login-capable plugin
+refuses the boot naming the line to add) — and a strategy name beginning with
+the plugin's own slug.
 
 ```ts
 return ctx.auth.completeLogin(user.id, {
@@ -764,14 +901,30 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
-Settings, a user's detail page, the account page, the entry form, the login
-page, both edit pages and the dashboard draw what is sent to them; the other core places draw nothing
-yet. A plugin draws its own
+A contribution to another plugin's place names that plugin in `dependsOn`, or in
+`optionalDependsOn` where the contributor works without it: while the owner is absent or
+disabled, a contribution to one of its places is left out and the app starts. A place the
+running owner does not declare is still refused (`admin-place-unknown`), as is one of a plugin
+the contributor names in neither.
+
+Every core place draws what is sent to it: settings, a user's detail page, the
+account page, the entry form, the login page, both edit pages, the dashboard
+and the entry list. A plugin draws its own
 place on one of its pages with `TargetSlot` and `PlaceTabs` from
 `@nextlyhq/plugin-sdk/admin` (`@experimental`), the parts core's pages use:
 
 ```tsx
 import { PlaceTabs, TargetSlot } from "@nextlyhq/plugin-sdk/admin";
+
+// The plugin's own invoice view.
+import { Invoice } from "./Invoice";
+
+// The place's type, as declared above, so its id and context are checked.
+declare module "@nextlyhq/plugin-sdk" {
+  interface AdminPlaces {
+    "acme-billing.invoice": { context: { invoiceId: string } };
+  }
+}
 
 export function InvoicePage({ invoiceId }: { invoiceId: string }) {
   const context = { invoiceId };
@@ -899,8 +1052,9 @@ four built-in sections, in order: `status`, `publishing`, `language` and
 banners under it, `document-bar`, and the editor, the fields with the side
 panel, `editor`; settings and a user's detail page name the page's own
 content `content`, the account page names its profile card `profile`, the
-entry form names its fields `fields`, and the login page
-names the sign-in form `form`. A plugin that replaces the login page's `form`
+entry form names its fields `fields`, the entry list names its header
+`toolbar` and its list `table`, and the login page names the sign-in form
+`form`. A plugin that replaces the login page's `form`
 takes over sign-in for the site.
 
 **The dashboard.** Its blocks stand around the page's own two, the welcome
@@ -979,6 +1133,28 @@ not saved, and what it writes through `control` is stored by the bar's Save
 and Publish with everything else. The open tab is kept in the address as
 `?tab=<id>`, so a reload or a shared link opens it again.
 
+A tab on an edit page may take over fields of the document with `fields`
+(`@experimental`), a list of top-level field names. The page then draws those
+fields in the tab instead of among its own content, and draws the tab only on a
+document that has every one of them. Their values stay in the document's form,
+so Save and Publish store them, and any surface that reads the document reads
+them as before. While a past version of the document is on screen, the page
+draws its own content alone and no contributed tab, since a tab reads the live
+document. A contribution to a Single's edit page may name the Singles it
+is for with `singles`, as one on a collection's page names its `collections`:
+
+```ts
+{
+  id: "acme-seo.tab",
+  kind: "tab",
+  place: "single.edit",
+  singles: ["homepage"], // every Single's page when absent
+  label: "SEO",
+  component: "@acme/seo/admin#SeoTab",
+  fields: ["seo"], // drawn in this tab, not among the page's fields
+}
+```
+
 ```tsx
 import { useEffect } from "react";
 import { useWatch } from "react-hook-form";
@@ -1028,9 +1204,13 @@ export function TitleLength() {
 }
 ```
 
-The entry list offers a collection's row actions in each row's menu,
-after its own, on the rows whose `visibleWhen` holds. Columns, bulk actions,
-and blocks at the entry list arrive as data and are not drawn yet.
+The entry list draws blocks around its own header (`toolbar`) and its list
+(`table`); declared columns after the collection's own, a `field` column through
+that field's own cell and a component column one cell at a time, each cell
+behind its own boundary and receiving the place's `context` and its `row`; row
+actions in each row's menu, after its own, on the rows whose `visibleWhen`
+holds; and bulk actions in the bar shown while rows are selected, offered when
+the action's `visibleWhen` holds for every selected row.
 
 **Running an action.** An action that `open`s a component draws it with the
 rows it was run on. In a bundled admin, that component resolves only once
@@ -1081,7 +1261,8 @@ there (`contribution-replace-unknown`), replaced twice
 dashboard's `widgets` is (`contribution-replace-not-allowed`), and one that
 is malformed
 (`admin-contribution-invalid`): a key its kind does not take, no label or
-component, an action that names none of the plugin's own routes, or a route
+component, `fields` that are not top-level field names or are named away from an
+edit page, `singles` away from a Single's page, an action that names none of the plugin's own routes, or a route
 that is public, a signed-in person's, or answers `GET`, a permission
 on the login page, or a rule where there is no entry to judge.
 

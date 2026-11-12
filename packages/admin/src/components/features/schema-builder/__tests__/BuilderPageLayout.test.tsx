@@ -5,9 +5,37 @@
 // them, and the live region speaks only while a save is in flight.
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
+import { convertToFieldDefinition } from "@admin/lib/builder";
+import {
+  buildOutline,
+  flattenOutline,
+} from "@admin/lib/builder/outline/outline-model";
+import type { FieldDefinition } from "@admin/types/collection";
+
+// Where an exit would take the page, watched rather than followed.
+const navigateTo = vi.hoisted(() => vi.fn());
+vi.mock("@admin/lib/navigation", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/lib/navigation")>()),
+  navigateTo,
+}));
+
+// The field groups the outline reads: one, "seo", with one field.
+const seoFields = [
+  { name: "meta_title", label: "Meta title", type: "text" },
+] as FieldDefinition[];
+vi.mock("@admin/services/fieldGroupApi", () => ({
+  fieldGroupApi: {
+    fetchComponents: vi.fn(() =>
+      Promise.resolve({
+        items: [{ slug: "seo", label: "SEO", fields: seoFields }],
+        meta: { hasNext: false },
+      })
+    ),
+  },
+}));
 
 import { BuilderPageLayout } from "../BuilderPageLayout";
 import type { BuilderConfig } from "../builder-config";
@@ -70,9 +98,11 @@ function renderLayout(
   const props: ComponentProps<typeof BuilderPageLayout> = {
     config,
     builder: makeBuilder(),
+    entitySlug: "posts",
     name: "Posts",
     locked: false,
     unsavedCount: 0,
+    savedFieldIds: new Set<string>(),
     onSave: vi.fn(),
     settings,
     onSettingsChange: vi.fn(),
@@ -157,5 +187,179 @@ describe("BuilderPageLayout", () => {
     expect(
       screen.queryByRole("button", { name: /duplicate/i })
     ).not.toBeInTheDocument();
+  });
+
+  describe("the settings panel while a field is edited", () => {
+    /** A screen that matches only the wide-layout query. */
+    function asWideScreen() {
+      const original = window.matchMedia;
+      window.matchMedia = (query: string) =>
+        ({
+          ...original(query),
+          matches: query === "(min-width: 1024px)",
+        }) as MediaQueryList;
+      return () => {
+        window.matchMedia = original;
+      };
+    }
+
+    it("is docked beside the list on a wide screen, not laid over it", async () => {
+      const restore = asWideScreen();
+      try {
+        renderLayout({ active: { kind: "edit", fieldId: "u1" } });
+        const docked = await screen.findByRole("complementary");
+        expect(
+          within(docked).getByRole("heading", { name: "Excerpt" })
+        ).toBeInTheDocument();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        // The list is still there beside it.
+        expect(screen.getAllByText("Excerpt").length).toBeGreaterThan(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("never lays a sheet over the list on a wide screen, even for a moment", () => {
+      const restore = asWideScreen();
+      try {
+        // The page is open, its effects settled inside render's act, before a
+        // field is chosen.
+        const { rerender, props } = renderLayout();
+        rerender(
+          <BuilderPageLayout
+            {...props}
+            active={{ kind: "edit", fieldId: "u1" }}
+          />
+        );
+        // Read straight after the field is chosen, before any effect could
+        // switch a sheet over to the docked panel.
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(screen.getByRole("complementary")).toBeInTheDocument();
+      } finally {
+        restore();
+      }
+    });
+
+    it("opens as a sheet on a narrow screen", () => {
+      renderLayout({ active: { kind: "edit", fieldId: "u1" } });
+      expect(
+        within(screen.getByRole("dialog")).getByRole("heading", {
+          name: "Excerpt",
+        })
+      ).toBeInTheDocument();
+    });
+
+    it("hands each edit to the builder at once", async () => {
+      const user = userEvent.setup();
+      const { props } = renderLayout({
+        active: { kind: "edit", fieldId: "u1" },
+      });
+      await user.click(screen.getByRole("switch", { name: "Required" }));
+      expect(props.builder.handleFieldUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes when asked", async () => {
+      const user = userEvent.setup();
+      const { onActiveChange } = renderLayout({
+        active: { kind: "edit", fieldId: "u1" },
+      });
+      await user.click(
+        screen.getByRole("button", { name: "Close field settings" })
+      );
+      expect(onActiveChange).toHaveBeenCalledWith({ kind: "none" });
+    });
+  });
+
+  // Hiding from the outline changes the field in the Builder's draft, and the
+  // save sends it hidden: the outline's Hide is the same edit as the panel's.
+  it("hides a field from its row's menu, into the draft the save sends", async () => {
+    const { props } = renderLayout();
+    const user = userEvent.setup();
+    screen.getByTestId("field-row-excerpt").focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(await screen.findByRole("menuitem", { name: "Hide" }));
+
+    const update = props.builder.handleFieldUpdate as ReturnType<typeof vi.fn>;
+    expect(update).toHaveBeenCalledTimes(1);
+    const hidden = update.mock.calls[0][0] as BuilderField;
+    expect(hidden).toMatchObject({ id: "u1", admin: { hidden: true } });
+    // Kept by what a save sends.
+    expect(convertToFieldDefinition(hidden).admin?.hidden).toBe(true);
+  });
+
+  describe("opening a field group, which leaves the page", () => {
+    const seo: BuilderField = {
+      id: "u2",
+      name: "seo",
+      label: "SEO",
+      type: "component",
+      component: "seo",
+      validation: {},
+      admin: { width: "100%" },
+    } as BuilderField;
+    const withSeo = (unsavedCount: number) =>
+      renderLayout({
+        builder: { ...makeBuilder(), fields: [...fields, seo] },
+        unsavedCount,
+      });
+    const openFromMenu = async () => {
+      const user = userEvent.setup();
+      screen.getByTestId("field-row-seo").focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      await user.click(
+        await screen.findByRole("menuitem", { name: /Open the field group/ })
+      );
+    };
+
+    beforeEach(() => navigateTo.mockClear());
+    afterEach(() => vi.restoreAllMocks());
+
+    it("asks first while there are unsaved changes, and stays when declined", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      withSeo(2);
+      await openFromMenu();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(confirm.mock.calls[0][0]).toContain("unsaved changes");
+      expect(navigateTo).not.toHaveBeenCalled();
+    });
+
+    it("leaves once the editor agrees", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      withSeo(2);
+      await openFromMenu();
+      expect(navigateTo).toHaveBeenCalledTimes(1);
+      expect(navigateTo.mock.calls[0][0]).toContain("seo");
+    });
+
+    it("leaves without asking when nothing is unsaved", async () => {
+      const confirm = vi.spyOn(window, "confirm");
+      withSeo(0);
+      await openFromMenu();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(navigateTo).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks first from the settings panel too", async () => {
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      // The id the outline gives the field group's own field.
+      const metaTitle = flattenOutline(
+        buildOutline([...fields, seo], {
+          entityReadOnly: false,
+          fieldGroups: new Map([
+            ["seo", { slug: "seo", label: "SEO", fields: seoFields }],
+          ]),
+        })
+      ).find(node => node.path === "seo/meta_title");
+      renderLayout({
+        builder: { ...makeBuilder(), fields: [...fields, seo] },
+        unsavedCount: 1,
+        active: { kind: "edit", fieldId: metaTitle?.id ?? "" },
+      });
+      await userEvent.click(
+        await screen.findByRole("button", { name: /Open the field group/ })
+      );
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(navigateTo).not.toHaveBeenCalled();
+    });
   });
 });

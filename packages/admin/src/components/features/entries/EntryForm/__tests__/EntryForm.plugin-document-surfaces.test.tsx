@@ -25,6 +25,7 @@ import {
 } from "@admin/__tests__/utils";
 import {
   registerComponent,
+  registerComponentMap,
   unregisterComponent,
   type DocumentActionReplacementProps,
   type DocumentPanelSectionProps,
@@ -916,6 +917,25 @@ describe("before a plugin's components have loaded", () => {
 
     expect(await within(region).findByText("Used by 2 pages")).toBeVisible();
     expect(region.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it("draws no loading look for a section the app's component map left out, once the map has registered", async () => {
+    // The generated map imports every module the admin resolves by string at
+    // once: after it has registered, a component still missing is missing,
+    // not on its way.
+    act(() => {
+      registerComponentMap({});
+    });
+    plugins.current = [COLD_PLUGIN];
+    renderEditor("layouts");
+    const panel = await screen.findByRole("complementary", {
+      name: "Document panel",
+    });
+
+    // The section, where it is drawn at all, is not drawn as loading.
+    const region = within(panel).queryByRole("region", { name: "Used by" });
+    expect(region?.querySelector('[aria-busy="true"]') ?? null).toBeNull();
+    expect(within(panel).queryByText("Loading Used by")).toBeNull();
   });
 
   it("holds a replaced action while its component loads, rather than opening it and failing", async () => {

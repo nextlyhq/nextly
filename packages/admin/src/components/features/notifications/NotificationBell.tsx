@@ -35,11 +35,16 @@ export interface NotificationBellProps {
    * journal, a super-admin's alone, only where it is offered.
    */
   journalOffered?: boolean;
+  /** Where the list opens from the bell: to the right of the rail. */
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
 }
 
 export function NotificationBell({
   className,
   journalOffered = true,
+  side = "bottom",
+  align = "end",
 }: NotificationBellProps): JSX.Element | null {
   const { isSuperAdmin, isLoading: permissionsLoading } =
     useCurrentUserPermissions();
@@ -87,11 +92,11 @@ export function NotificationBell({
         >
           {/* Muted foreground so the resting bell icon meets contrast; a faint primary alpha did not. */}
           <Bell className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-          {/* In light the fill is the 600 step rather than `bg-destructive-solid`: white on the solid red is 3.84:1 and a count is text, so the deeper step holds 4.6:1. In dark `text-destructive-foreground` is black on the solid red, 6.90:1. */}
+          {/* The count is text, so the badge draws the danger status's text and surface colours swapped: the pair the contrast suite already holds to 4.5:1 in both modes. White on the solid red would be 3.84:1. */}
           {unread > 0 && (
             <span
               data-testid="notification-bell-badge"
-              className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-sm bg-destructive-600 dark:bg-destructive-solid text-destructive-foreground text-destructive-foreground! text-xs font-bold leading-[18px] text-center"
+              className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-sm bg-danger-text text-danger-surface text-danger-surface! text-xs font-bold leading-[18px] text-center"
             >
               {unread > 9 ? "9+" : String(unread)}
             </span>
@@ -99,7 +104,8 @@ export function NotificationBell({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        align="end"
+        side={side}
+        align={align}
         sideOffset={8}
         className="p-0 w-auto"
         data-testid="notification-bell-popover"
