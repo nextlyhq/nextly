@@ -181,7 +181,7 @@ describe("the list", () => {
     const list = screen.getByRole("list", { name: "Notifications" });
     const [team, visitor] = within(list).getAllByRole("listitem");
 
-    expect(team).toHaveTextContent("Only when Joining is online");
+    expect(team).toHaveTextContent("Only when Joining is Online");
     expect(team).toHaveTextContent("events@example.com, access@example.com");
     expect(
       await within(team!).findByText("Message: Form submission")

@@ -16,8 +16,7 @@
  * @module collections/sends
  */
 
-import type { CollectionConfig } from "nextly";
-import { text } from "nextly";
+import { text, type CollectionConfig } from "@nextlyhq/plugin-sdk";
 
 /** The slug the sends are kept under. */
 export const SUBMISSION_SENDS_SLUG = "form-submission-sends";
