@@ -23,6 +23,7 @@ import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
 
 import { formsCollection } from "./collections/forms";
+import { submissionSendsCollection } from "./collections/sends";
 import { submissionsCollection } from "./collections/submissions";
 import { newSubmissionsWidget } from "./dashboard/widget";
 import {
@@ -41,6 +42,12 @@ import {
   judgeBotCheck,
   warnUncheckedBotChecks,
 } from "./handlers/bot-check";
+import { refuseBlankConsentText } from "./handlers/consent-text-check";
+import {
+  type RecordedSend,
+  recordSend,
+  registerForgettingSends,
+} from "./handlers/forget-sends";
 import {
   registerFormClosing,
   respondedRefusal,
@@ -69,6 +76,12 @@ import {
   type SubmissionOriginMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
+import {
+  RETENTION_SCHEDULE,
+  type RetentionDeps,
+  retentionJob,
+  runRetention,
+} from "./handlers/retention";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
 import { publicFormRoutes } from "./routes/public-forms";
 import type {
@@ -79,6 +92,12 @@ import type {
   FormEmailNotification,
   ResolvedFormBuilderConfig,
 } from "./types";
+import {
+  CONSENT_EDIT_REFUSED,
+  editedConsents,
+  isConsentAnswer,
+  storedConsentNames,
+} from "./utils/consent";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
@@ -151,6 +170,7 @@ function resolveConfig(
       date: options.fields?.date ?? true,
       time: options.fields?.time ?? true,
       hidden: options.fields?.hidden ?? true,
+      consent: options.fields?.consent ?? true,
     },
 
     redirectRelationships: normalizeRedirectRelationships(
@@ -244,6 +264,7 @@ export function formBuilder(
 
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
+  const sendsCol = submissionSendsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
   // until `init` reads the slug the site installed it under.
@@ -264,6 +285,8 @@ export function formBuilder(
   // What the one-response sweep reads and writes with, once `init` has the
   // live context; until then a pass defers its work to the next.
   let rebuildDeps: RebuildDeps | undefined;
+  // What the nightly retention pass deletes with, set the same way.
+  let retentionDeps: RetentionDeps | undefined;
 
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
@@ -281,14 +304,22 @@ export function formBuilder(
     // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
-      collections: [formsCol, submissionsCol],
+      collections: [formsCol, submissionsCol, sendsCol],
       // Gives earlier submissions their one-response keys after a form
       // changes how it tells people apart.
       jobs: [
         rebuildKeysJob(async deadline => {
           if (rebuildDeps) await rebuildResponseKeys(rebuildDeps, deadline);
         }),
+        // Deletes submissions past their form's keeping, and old spam.
+        retentionJob(async (deadline, cursor) => {
+          if (retentionDeps) {
+            await runRetention(retentionDeps, deadline, cursor);
+          }
+        }),
       ],
+      // Runs the retention pass each night.
+      schedules: [RETENTION_SCHEDULE],
       // New form submissions, the one plugin widget core's default dashboard
       // names. Contributed, never suggested: where it goes is core's default's
       // to say, and a site's own default may leave it out.
@@ -701,9 +732,11 @@ export function formBuilder(
       });
 
       // A form saved to compare one response per email has an Email field
-      // it can compare, however it is saved.
+      // it can compare, and each consent has a text to agree to, however it
+      // is saved.
       nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
         refuseOneResponseFieldProblem(context);
+        refuseBlankConsentText(context);
         return (context as { data?: unknown }).data;
       });
 
@@ -713,6 +746,12 @@ export function formBuilder(
       rebuildDeps = {
         collections: nextly.services.collections,
         digests: () => nextly.security.digests,
+        formsSlug,
+        submissionsSlug: submissionSlug,
+      };
+      retentionDeps = {
+        collections: nextly.services.collections,
+        jobs: nextly.services.jobs,
         formsSlug,
         submissionsSlug: submissionSlug,
       };
@@ -758,6 +797,13 @@ export function formBuilder(
         submissions: submissionSlug,
       });
 
+      // What each submission sent, forgotten on every path that deletes it,
+      // a form's deletion among them, in the deleting transaction.
+      registerForgettingSends(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
+      });
+
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").
       nextly.hooks.on("afterRead", formsSlug, (context: unknown) =>
@@ -768,7 +814,7 @@ export function formBuilder(
 
   return {
     plugin,
-    collections: [formsCol, submissionsCol],
+    collections: [formsCol, submissionsCol, sendsCol],
     config: resolvedConfig,
   };
 }
@@ -1266,7 +1312,16 @@ export async function prepareSubmissionForWrite(
   const marks = submissionMarks(submission);
 
   const form = await formToCheckAgainst(marks, formsSlug, formId, nextly);
-  const fields = form.fields as AnyFormField[];
+  // What the visitor sent, as stored, which an update's consents are held to.
+  const storedAnswers =
+    ctx.operation === "create" || stored?.data === undefined
+      ? undefined
+      : submittedPayload(stored.data);
+  const fields = consentsKept(
+    form.fields as AnyFormField[],
+    storedAnswers,
+    incoming
+  );
 
   // Spam is judged HERE, at the seam every door passes through, rather than in
   // the route: the submissions collection grants public create, so the generic
@@ -1300,6 +1355,9 @@ export async function prepareSubmissionForWrite(
   const prepared = prepareSubmission({
     data: incoming,
     fields,
+    // A new submission's consents are checked against the text shown; an
+    // update's are held to what is stored (`consentsKept`).
+    fresh: ctx.operation === "create",
     validate: marks?.keepAsEvidence !== true && spam === undefined,
   });
 
@@ -1313,7 +1371,7 @@ export async function prepareSubmissionForWrite(
 
   ctx.data = {
     ...submission,
-    data: prepared.data,
+    data: { ...prepared.data, ...storedConsents(form, storedAnswers) },
     ...startingStatus(ctx, marks),
   };
   if (spam) {
@@ -1325,7 +1383,14 @@ export async function prepareSubmissionForWrite(
     ctx.data.spamReason = spam.reason ?? null;
   }
   if (ctx.operation !== "create" && submission.data === undefined) {
-    stampDerivedEdit(ctx.data, ctx.user, incoming, prepared.data);
+    // Judged on what is stored, consents carried over: a consent read again
+    // with the form's current text is not an edit.
+    stampDerivedEdit(
+      ctx.data,
+      ctx.user,
+      incoming,
+      ctx.data.data as Record<string, unknown>
+    );
   }
   stampRequestAddress(ctx, ctx.data);
   if (ctx.operation === "create") {
@@ -1346,6 +1411,59 @@ export async function prepareSubmissionForWrite(
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * The fields an update of a submission is checked against, refusing one that
+ * would change a consent. A consent keeps what the visitor agreed to and the
+ * text they were shown, so no edit, by staff or through the API, may change
+ * it. Refused rather than quietly kept, so the editor learns their change did
+ * not happen. A consent with no stored consent (the field was added after this
+ * submission, or was another kind of field when it was made) is left out of
+ * the checks: nobody but the visitor can give one, and they were not asked.
+ */
+function consentsKept(
+  fields: AnyFormField[],
+  stored: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown>
+): AnyFormField[] {
+  if (stored === undefined) return fields;
+  const edited = editedConsents(fields, stored, incoming);
+  if (edited.length > 0) {
+    throw NextlyError.validation({
+      errors: edited.map(path => ({
+        path,
+        code: "INVALID",
+        message: CONSENT_EDIT_REFUSED,
+      })),
+    });
+  }
+  return fields.filter(
+    // Checked only where the field and the stored answer agree on being a
+    // consent: a consent stored under a field that is now something else, or
+    // an earlier answer under a field now a consent, is carried over as it is.
+    field => (field.type === "consent") === isConsentAnswer(stored[field.name])
+  );
+}
+
+/**
+ * The stored consent answers an update carries over as they were. Checking an
+ * update re-reads a consent with the form's current text, and drops one whose
+ * field the form no longer has; this puts back what the visitor agreed to.
+ */
+function storedConsents(
+  form: { fields?: unknown },
+  stored: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  if (stored === undefined) return {};
+  const kept: Record<string, unknown> = {};
+  for (const name of storedConsentNames(
+    form.fields as AnyFormField[],
+    stored
+  )) {
+    if (stored[name] !== undefined) kept[name] = stored[name];
+  }
+  return kept;
 }
 
 /**
@@ -1747,20 +1865,17 @@ async function handleSubmissionCreated(
   // recorded, for a submission a rollback then removes. The hook context's
   // `afterCommit` holds the send until the outermost transaction commits and
   // drops it on rollback; outside a transaction it sends at once, as before.
+  const submissionId = idText(submission.id);
   const send = () =>
     queueNotificationEmails({
       emails: finalEmails,
       emailService,
       logger: nextly.logger,
       formSlug: form.slug,
-      // A submission's id is a string or a number by dialect.
-      submissionId:
-        typeof submission.id === "number"
-          ? `${submission.id}`
-          : typeof submission.id === "string"
-            ? submission.id
-            : "",
+      submissionId,
       fileAttachments,
+      // Kept so deleting the submission can forget what it sent.
+      record: sent => recordSend(nextly, submissionId, sent),
     });
   const { afterCommit } = context as Pick<HookContext, "afterCommit">;
   await (afterCommit ? afterCommit(send) : send());
@@ -1806,6 +1921,8 @@ export async function queueNotificationEmails(input: {
   /** The submission the notifications are for, which keys each one. */
   submissionId: string;
   fileAttachments: Array<{ mediaId: string; filename?: string }>;
+  /** Records each queued notification for the submission, when given. */
+  record?: (sent: RecordedSend) => Promise<void>;
 }): Promise<void> {
   const { emails, emailService, logger, formSlug, fileAttachments } = input;
   for (const [index, email] of emails.entries()) {
@@ -1814,6 +1931,12 @@ export async function queueNotificationEmails(input: {
       templateSlug: email.templateSlug,
       notificationId: email.notificationId,
     };
+    const sendKey = notificationKey(
+      input.submissionId,
+      index,
+      email.notificationId
+    );
+    let queuedId: string | undefined;
     try {
       const queued = await emailService.queueWithTemplate(
         email.templateSlug,
@@ -1826,13 +1949,10 @@ export async function queueNotificationEmails(input: {
           cc: email.cc,
           bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
-          idempotencyKey: notificationKey(
-            input.submissionId,
-            index,
-            email.notificationId
-          ),
+          idempotencyKey: sendKey,
         }
       );
+      queuedId = queued.id;
       // The first attempt has been made: sent, waiting for a retry, or
       // failed for good (a refusal no retry can change).
       if (queued.state === "failed") {
@@ -1859,6 +1979,40 @@ export async function queueNotificationEmails(input: {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    if (queuedId !== undefined) {
+      await recordQueued(input, identity, { queuedId, sendKey });
+    }
+  }
+}
+
+/** A submission's id as text: a string or a number by dialect. */
+function idText(id: unknown): string {
+  if (typeof id === "number") return `${id}`;
+  return typeof id === "string" ? id : "";
+}
+
+/**
+ * Record a queued notification for its submission. A failure is logged
+ * rather than thrown: the notification is queued either way, and only its
+ * forgetting on deletion would miss it.
+ */
+async function recordQueued(
+  input: {
+    record?: (sent: RecordedSend) => Promise<void>;
+    logger: Pick<NextlyInstance["logger"], "error">;
+  },
+  identity: Record<string, unknown>,
+  sent: RecordedSend
+): Promise<void> {
+  if (!input.record) return;
+  try {
+    await input.record(sent);
+  } catch (err) {
+    input.logger.error?.("Form Builder: notification not recorded", {
+      ...identity,
+      queuedId: sent.queuedId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

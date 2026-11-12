@@ -454,6 +454,19 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
  * panel floats or is a sheet at, where it opens only when asked for. Without
  * it a single loses its language workflow whenever the column is away.
  */
+/**
+ * Whether the Single's shared fields hold unpublished changes, as its editor
+ * read says (`_sharedChangesPending`).
+ */
+function sharedChangesPendingOf(document: unknown): boolean {
+  return (
+    typeof document === "object" &&
+    document !== null &&
+    (document as { _sharedChangesPending?: unknown })._sharedChangesPending ===
+      true
+  );
+}
+
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
@@ -463,6 +476,7 @@ function SingleFormLanguagePanel({
   locale,
   onLocaleChange,
   panelDocked,
+  sharedChangesPending,
   translations,
 }: {
   actionsDisabled: boolean;
@@ -474,6 +488,8 @@ function SingleFormLanguagePanel({
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Whether the docked panel, which carries the language panel, is on screen. */
   panelDocked: boolean;
+  /** The Single's shared fields hold unpublished changes (`_sharedChangesPending`). */
+  sharedChangesPending: boolean;
   translations?: Record<string, { translated: boolean; status?: string }>;
 }) {
   if (!enabled) return null;
@@ -488,6 +504,7 @@ function SingleFormLanguagePanel({
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
+        sharedChangesPending={sharedChangesPending}
       />
     </div>
   );
@@ -1425,6 +1442,9 @@ export function SingleForm({
     }
   )._translations;
 
+  // Read once: the rail's language panel and the inline one say it alike.
+  const sharedChangesPending = sharedChangesPendingOf(document);
+
   // Adapt the SingleDocumentData shape into what the document bar and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
@@ -1445,6 +1465,9 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
+    // Forwarded for the rail's language panel, which says while the Single's
+    // shared fields hold unpublished changes, docked as inline.
+    _sharedChangesPending: sharedChangesPending,
   } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.
@@ -1957,6 +1980,9 @@ export function SingleForm({
                                       enabled={localizationEnabled}
                                       hasStatus={hasStatus}
                                       panelDocked={panel.docked}
+                                      sharedChangesPending={
+                                        sharedChangesPending
+                                      }
                                       {...(singleTranslations === undefined
                                         ? {}
                                         : { translations: singleTranslations })}

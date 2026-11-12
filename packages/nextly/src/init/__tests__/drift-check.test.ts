@@ -177,8 +177,14 @@ describe("runDriftCheck", () => {
       expect(fakeLogger.warn).not.toHaveBeenCalled();
     });
 
-    it("returns kind='clean' for empty collections (no previews issued)", async () => {
-      const previewDesiredSchema = vi.fn();
+    // Every preview also compares the tables plugins and the app declare, so
+    // with no collection to ask about, one preview of none still compares them.
+    it("with no collections, compares the plugin and app tables in one preview of none", async () => {
+      const previewDesiredSchema = vi.fn().mockResolvedValue({
+        operations: [],
+        events: [],
+        candidates: [],
+      });
       const result = await runDriftCheck({
         adapter: makeAdapter(),
         collections: [],
@@ -187,7 +193,28 @@ describe("runDriftCheck", () => {
       });
 
       expect(result.kind).toBe("clean");
-      expect(previewDesiredSchema).not.toHaveBeenCalled();
+      expect(previewDesiredSchema).toHaveBeenCalledTimes(1);
+      expect(previewDesiredSchema.mock.calls[0]?.[0].desired).toEqual({
+        collections: {},
+        singles: {},
+        components: {},
+      });
+    });
+
+    it("with no collections, reports drift in a plugin or app table", async () => {
+      const previewDesiredSchema = vi.fn().mockResolvedValue({
+        operations: [{ type: "add_column", table: "plugin_rows" }],
+        events: [],
+        candidates: [],
+      });
+      const result = await runDriftCheck({
+        adapter: makeAdapter(),
+        collections: [],
+        logger: fakeLogger,
+        deps: { previewDesiredSchema },
+      });
+
+      expect(result).toEqual({ kind: "drift", pending: 1 });
     });
   });
 

@@ -95,10 +95,6 @@
     "count": 1,
     "digests": ["2293271bc6e7025c"]
   },
-  "packages/admin/src/components/features/schema-builder/BuilderFieldList.tsx": {
-    "count": 2,
-    "digests": ["17d61c92b33a9638", "89362e16da0f185e"]
-  },
   "packages/admin/src/components/features/schema-builder/SchemaChangeDialog.tsx": {
     "count": 2,
     "digests": ["1ad02fe4ea919816", "743c006b5a84b828"]

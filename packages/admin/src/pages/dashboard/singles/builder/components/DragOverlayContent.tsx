@@ -91,7 +91,10 @@ export function DragOverlayContent({
               page's text, with a dot in the danger status's solid colour. */}
           {isRequired && (
             <span className="inline-flex items-center gap-1.5 text-xs px-2 py-0 bg-card text-foreground font-normal rounded-sm border border-border">
-              <span aria-hidden="true" className="size-1.5 rounded-full bg-danger-solid" />
+              <span
+                aria-hidden="true"
+                className="size-1.5 rounded-full bg-danger-solid"
+              />
               Required
             </span>
           )}

@@ -45,13 +45,23 @@ import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-fiel
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { recordBuildSchemaVersion } from "./domains/schema/build-schema-version";
 import { NextlyError } from "./errors/nextly-error";
-import { runBootTimeApplyIfDev } from "./init/boot-apply";
+import {
+  markNotInLine,
+  recordStartFingerprints,
+  runBootTimeApplyIfDev,
+  unchangedSinceLastStart,
+} from "./init/boot-apply";
 import { awaitBootMigrations } from "./init/boot-migrations-gate";
 import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "./init/build-service-config";
-import { driftCheckCollections, runDriftCheck } from "./init/drift-check";
+import {
+  driftCheckCollections,
+  driftCheckFieldGroups,
+  driftCheckSingles,
+  runDriftCheck,
+} from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import {
   provisionUserFieldsAtStart,
@@ -461,12 +471,86 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
             warn: (msg: string) => consoleLogger.warn(msg),
             error: (msg: string) => consoleLogger.error(msg),
           };
-          // Reduced by the drift check's own helper, which carries every
-          // attribute that changes a table (status, declared indexes).
+          // Reduced by the drift check's own helpers, which carry every
+          // attribute that changes a table (status, declared indexes). An
+          // entity whose declaration a start already brought in line is not
+          // read again: nothing about it changed since. Every changed entity
+          // is, of every kind: a Single's or field group's table is checked
+          // as a collection's is, since nothing else at a start vouches for it
+          // (the start's reload reads no configuration where none is a file).
+          const changed = driftCheckCollections(
+            (config.collections ?? []).filter(
+              collection =>
+                !unchangedSinceLastStart("collection", collection.slug)
+            )
+          );
+          const changedSingles = driftCheckSingles(
+            (config.singles ?? []).filter(
+              single => !unchangedSinceLastStart("single", single.slug)
+            )
+          );
+          const changedFieldGroups = driftCheckFieldGroups(
+            (config.fieldGroups ?? []).filter(
+              group => !unchangedSinceLastStart("fieldGroup", group.slug)
+            )
+          );
+          const [{ previewDesiredSchema }, { operationTargetTable }] =
+            await Promise.all([
+              import("./domains/schema/pipeline/preview"),
+              import("./domains/schema/pipeline/pushschema-pipeline"),
+            ]);
           await runDriftCheck({
             adapter,
-            collections: driftCheckCollections(config.collections ?? []),
+            collections: changed,
+            singles: changedSingles,
+            fieldGroups: changedFieldGroups,
             logger: driftLogger,
+            deps: {
+              // Each entity's own preview, judged on its own: one that fails or finds changes is
+              // left unrecorded, so the next start checks it, and warns, again.
+              previewDesiredSchema: async args => {
+                // The one entity this preview was asked about, by its kind.
+                const asked = (
+                  [
+                    ["collection", args.desired.collections],
+                    ["single", args.desired.singles],
+                    ["fieldGroup", args.desired.components],
+                  ] as const
+                ).flatMap(([kind, entries]) =>
+                  Object.values(entries ?? {}).map(entry => ({
+                    kind,
+                    slug: entry.slug,
+                    own: entry.tableName,
+                  }))
+                )[0];
+                try {
+                  const preview = await previewDesiredSchema(args);
+                  // Only an operation on the entity's own tables (its table,
+                  // its translations, its junctions): every preview also
+                  // reports the plugin and app tables, which are not it.
+                  const own = asked?.own;
+                  if (
+                    asked &&
+                    own &&
+                    preview.operations.some(operation => {
+                      // The pipeline's own reading of the table an operation
+                      // targets (a rename by its source).
+                      const table = operationTargetTable(operation);
+                      return (
+                        table !== null &&
+                        (table === own || table.startsWith(`${own}_`))
+                      );
+                    })
+                  ) {
+                    markNotInLine(asked.kind, asked.slug);
+                  }
+                  return preview;
+                } catch (error) {
+                  if (asked) markNotInLine(asked.kind, asked.slug);
+                  throw error;
+                }
+              },
+            },
           });
         }
 
@@ -507,6 +591,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // served before they load sees the code's user fields alone. Read only
         // in production (`provisionUserFieldsAtStart`).
         await provisionUserFieldsAtStart();
+
+        // What this development start brought in line, for the next to skip. Written only when it
+        // differs from what is recorded, so a start with nothing changed writes nothing here.
+        await recordStartFingerprints(adapter, getService("logger"));
 
         // The remaining post-initialisation tasks (templates, code-field sync,
         // and the like) run in the background so that getNextly() returns as

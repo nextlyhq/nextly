@@ -65,7 +65,8 @@ export function PasswordStrengthIndicator({
                       strength.score > 2 &&
                       strength.score <= 4 &&
                       i <= strength.score,
-                    "bg-success-solid": strength.score > 4 && i <= strength.score,
+                    "bg-success-solid":
+                      strength.score > 4 && i <= strength.score,
                     "bg-muted": i > strength.score,
                   })}
                 />
