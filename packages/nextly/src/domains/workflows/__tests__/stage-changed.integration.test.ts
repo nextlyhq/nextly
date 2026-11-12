@@ -235,9 +235,10 @@ async function subscribe(): Promise<void> {
   const db = app().adapter.getDrizzle() as unknown as {
     insert(table: unknown): { values(row: unknown): Promise<unknown> };
   };
-  // Made a minute back: fan-out sends an endpoint only the events from after it was made, and
-  // MySQL rounds a stored time to the second, which can put an endpoint made in this second after
-  // an event made in it.
+  // Made a minute back: fan-out sends an endpoint only the events from after it was made
+  // (`selectDeliveryTargets` in domains/webhooks/fan-out.ts), and MySQL rounds a stored time to
+  // the second, which can put an endpoint made in this second after an event made in it. Needed
+  // only while fan-out compares the two at MySQL's precision.
   const now = new Date(Date.now() - 60_000);
   await db.insert(nextlyWebhooks).values({
     id: "wh-moves",
@@ -284,7 +285,15 @@ async function delivered(): Promise<Record<string, unknown>[]> {
   await runWebhookDrain(
     app().adapter,
     new WebhookEndpointRegistry(app().adapter),
-    { transport, decryptSecret: ciphertext => ciphertext }
+    {
+      transport,
+      decryptSecret: ciphertext => ciphertext,
+      // A whole-second clock, which MySQL stores unchanged: it rounds a stored time to the
+      // second, so a delivery fan-out makes in the later half of one (`next_attempt_at` in
+      // domains/webhooks/fan-out.ts) is due only from the next, after this single pass has looked
+      // for it. Needed only while fan-out's times round on MySQL.
+      now: () => new Date(Math.floor(Date.now() / 1000) * 1000),
+    }
   );
   return bodies.filter(body => body.type === STAGE_CHANGED);
 }
