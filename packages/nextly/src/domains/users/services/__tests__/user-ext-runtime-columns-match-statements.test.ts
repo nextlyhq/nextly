@@ -9,7 +9,7 @@
  * are compared here character for character, apart from case, for every field shape the builder
  * gives a column, for the table's own columns, and for a field it gives none.
  */
-import { getTableColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import type { UserFieldConfig } from "../../../../users/config/types";
@@ -84,7 +84,7 @@ function runtimeColumn(
 ): { type: string; notNull: boolean } | null {
   const table = builder.generateRuntimeSchema(fields.map(asConfig));
   const declared = Object.values(
-    getTableColumns(table as Parameters<typeof getTableColumns>[0])
+    getColumns(table as Parameters<typeof getColumns>[0])
   ).find(each => each.name === column);
   if (declared === undefined) return null;
   return {
@@ -130,7 +130,7 @@ describe("UserExtSchemaService.generateRuntimeSchema", () => {
           const field = FIELDS.find(each => each.name === "teams")!;
           const table = builder.generateRuntimeSchema([asConfig(field)]);
           const column = Object.values(
-            getTableColumns(table as Parameters<typeof getTableColumns>[0])
+            getColumns(table as Parameters<typeof getColumns>[0])
           ).find(each => each.name === "teams");
           expect(column?.mapToDriverValue(["alpha", "beta"])).toBe(
             JSON.stringify(["alpha", "beta"])
