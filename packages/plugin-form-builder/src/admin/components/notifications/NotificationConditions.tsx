@@ -40,6 +40,84 @@ function testable(fields: readonly AnyFormField[]): AnyFormField[] {
   return fields.filter(field => field.type !== "file");
 }
 
+/** The choices a field offers, for a value picked rather than typed. */
+function choicesOf(
+  field: AnyFormField | undefined
+): Array<{ label: string; value: string }> | undefined {
+  if (field?.type === "checkbox") {
+    return [
+      { label: "checked", value: "true" },
+      { label: "not checked", value: "false" },
+    ];
+  }
+  if (field?.type === "select" || field?.type === "radio") {
+    const { options } = field as { options?: unknown };
+    return Array.isArray(options)
+      ? (options as Array<{ label: string; value: string }>)
+      : undefined;
+  }
+  return undefined;
+}
+
+/** A condition's value as its control shows it. */
+function valueText(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  return typeof value === "boolean" ? String(value) : "";
+}
+
+/**
+ * What a condition compares against: one of the field's choices (a dropdown's
+ * options, a box's checked or not) picked by its label, or a value typed.
+ */
+function ConditionValue({
+  n,
+  condition,
+  field,
+  onChange,
+}: {
+  n: number;
+  condition: ConditionalLogicCondition;
+  field: AnyFormField | undefined;
+  onChange: (value: ConditionalLogicCondition["value"]) => void;
+}): JSX.Element {
+  const choices = choicesOf(field);
+  if (choices) {
+    return (
+      <Select
+        value={valueText(condition.value)}
+        onValueChange={value =>
+          // A box's answer is stored as true or false, not as text.
+          onChange(field?.type === "checkbox" ? value === "true" : value)
+        }
+      >
+        <SelectTrigger
+          aria-label={`Condition ${n} value`}
+          className={`${TRIGGER} text-left sm:flex-1 [&>span]:truncate`}
+        >
+          <SelectValue placeholder="Choose" />
+        </SelectTrigger>
+        <SelectContent>
+          {choices.map(choice => (
+            <SelectItem key={choice.value} value={choice.value}>
+              {choice.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+  return (
+    <Input
+      aria-label={`Condition ${n} value`}
+      value={valueText(condition.value)}
+      onChange={event => onChange(event.target.value)}
+      className="sm:flex-1"
+    />
+  );
+}
+
 function ConditionRow({
   index,
   condition,
@@ -62,7 +140,7 @@ function ConditionRow({
       >
         <SelectTrigger
           aria-label={`Condition ${n} field`}
-          className={`${TRIGGER} sm:w-52`}
+          className={`${TRIGGER} text-left sm:w-52 [&>span]:truncate`}
         >
           <SelectValue placeholder="Choose a field" />
         </SelectTrigger>
@@ -98,20 +176,11 @@ function ConditionRow({
         </SelectContent>
       </Select>
       {!VALUELESS.has(condition.comparison) && (
-        <Input
-          aria-label={`Condition ${n} value`}
-          value={
-            typeof condition.value === "string" ||
-            typeof condition.value === "number"
-              ? String(condition.value)
-              : condition.value === true
-                ? "true"
-                : ""
-          }
-          onChange={event =>
-            onChange({ ...condition, value: event.target.value })
-          }
-          className="sm:flex-1"
+        <ConditionValue
+          n={n}
+          condition={condition}
+          field={fields.find(each => each.name === condition.field)}
+          onChange={value => onChange({ ...condition, value })}
         />
       )}
       <Button

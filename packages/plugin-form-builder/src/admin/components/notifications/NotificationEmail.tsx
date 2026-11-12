@@ -234,19 +234,22 @@ function AttachFiles({
 function inheritedSender(
   message: TemplateOption | undefined,
   defaults: NotificationDefaults | null
-): { address: string; source: string } {
+): { address: string; description: string } {
   if (defaults?.defaultFrom) {
     return {
       address: defaults.defaultFrom,
-      source: "the site's default sender",
+      description: `Leave blank to send from ${defaults.defaultFrom}, the site's default sender.`,
     };
   }
   if (message?.fromOverride) {
-    return { address: message.fromOverride, source: "the message's setting" };
+    return {
+      address: message.fromOverride,
+      description: `Leave blank to send from ${message.fromOverride}, the message's setting.`,
+    };
   }
   return {
-    address: "the provider's address",
-    source: "the provider's setting",
+    address: "The provider's address",
+    description: "Leave blank to send from the provider's own address.",
   };
 }
 
@@ -267,7 +270,7 @@ function FromRow({
   update,
 }: {
   notification: FormNotification;
-  inherited: { address: string; source: string };
+  inherited: { address: string; description: string };
   update: NotificationUpdate;
 }): JSX.Element {
   const error = addressError("senderEmail", notification.senderEmail);
@@ -275,7 +278,7 @@ function FromRow({
     <SettingRow
       label="From"
       htmlFor="notification-from"
-      description={`Leave blank to send from ${inherited.address}, ${inherited.source}.`}
+      description={inherited.description}
     >
       <div className="flex w-full flex-col gap-1 sm:w-72">
         <Input
@@ -327,7 +330,7 @@ function ProviderRow({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="__message">
-            The message&apos;s{inherited}
+            The message&apos;s provider{inherited}
           </SelectItem>
           {providers.map(each => (
             <SelectItem key={each.id} value={each.id}>
@@ -356,11 +359,14 @@ export function NotificationEmail({
   const message = messageOf(notification, sources.templates);
   return (
     <FormSection label="The email">
-      <MessageCard
-        notification={notification}
-        sources={sources}
-        update={update}
-      />
+      {/* A row of the section, padded by it, holding the bordered card. */}
+      <div>
+        <MessageCard
+          notification={notification}
+          sources={sources}
+          update={update}
+        />
+      </div>
       <AttachFiles
         notification={notification}
         fields={fields}

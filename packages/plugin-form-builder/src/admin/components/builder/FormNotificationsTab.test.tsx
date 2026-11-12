@@ -363,6 +363,46 @@ describe("a notification's page", () => {
     expect(lastChange()).toHaveProperty("condition", undefined);
   });
 
+  it("compares a box as checked or not, and a dropdown by its options' labels", async () => {
+    fields = [
+      EMAIL,
+      { type: "checkbox", name: "access", label: "Access needs" },
+      JOIN,
+    ];
+    notifications = [
+      aNotification({
+        conditions: {
+          match: "all",
+          list: [
+            { field: "access", comparison: "equals", value: true },
+            { field: "join", comparison: "equals", value: "online" },
+          ],
+        },
+      }),
+    ];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+
+    expect(
+      screen.getByRole("combobox", { name: "Condition 1 value" })
+    ).toHaveTextContent("checked");
+    expect(
+      screen.getByRole("combobox", { name: "Condition 2 value" })
+    ).toHaveTextContent("Online");
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Condition 1 value" })
+    );
+    await user.click(screen.getByRole("option", { name: "not checked" }));
+    // A box's answer is compared as stored: true or false, not text.
+    expect(lastChange().conditions?.list[0]).toEqual({
+      field: "access",
+      comparison: "equals",
+      value: false,
+    });
+  });
+
   it("attaches the file fields ticked, starting from those a saved rule attached", async () => {
     fields = [EMAIL, { ...CV, attachToEmail: true } as AnyFormField, PHOTO];
     notifications = [aNotification()];
@@ -408,7 +448,7 @@ describe("a notification's page", () => {
     );
     expect(
       screen.getByRole("combobox", { name: "Provider" })
-    ).toHaveTextContent("The message's (Resend)");
+    ).toHaveTextContent("The message's provider (Resend)");
     expect(
       screen.getByRole("combobox", { name: "Reply-To" })
     ).toBeInTheDocument();
