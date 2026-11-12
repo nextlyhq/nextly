@@ -50,6 +50,7 @@ import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { runMigrateDown } from "../migrate-down";
+import { runMigrateStatus } from "../migrate-status";
 import { runMigrateCreate } from "../migrate-create";
 
 /** The config the commands load, set by each step before it runs them. */
@@ -258,6 +259,34 @@ describe.each(getConfiguredTestDialects())(
       // `nextly migrate` records it like any other migration.
       await migrate(postsConfig("Articles for the blog"));
       expect(await applied(instance!, dialect, file)).toBe(true);
+
+      // `migrate:status` lists it applied, and a later run applies it no more.
+      const again = await migrate(postsConfig("Articles for the blog"));
+      expect(again.filter(line => line.includes(file))).toEqual([]);
+      const events = new SchemaEventsRepository(
+        (instance!.adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      );
+      expect(
+        (await events.listFileApplies()).filter(
+          row => row.filename === file && row.status === "applied"
+        )
+      ).toHaveLength(1);
+      const printed: string[] = [];
+      const log = vi.spyOn(console, "log").mockImplementation(message => {
+        printed.push(String(message));
+      });
+      try {
+        await runMigrateStatus({ cwd: dir, json: true }, command().context);
+      } finally {
+        log.mockRestore();
+      }
+      const document = JSON.parse(printed.join("\n")) as {
+        migrations: { filename: string; status: string }[];
+      };
+      expect(document.migrations).toContainEqual(
+        expect.objectContaining({ filename: file, status: "applied" })
+      );
     });
 
     it("migrate:down rolls a settings-only migration back, with no table to undo", async () => {
