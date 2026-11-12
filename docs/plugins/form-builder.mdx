@@ -600,15 +600,11 @@ Admins can also add internal notes to any submission -- these are not visible to
 
 Deleting a submission forgets the notifications it sent, in the same transaction: one not yet sent (waiting, retrying, or failed) is cancelled and its message cleared, so nothing goes out from data that is gone, and the delivery records of one that went out are erased. This holds for deleting one submission, deleting several at once, and deleting a form, which deletes its submissions with it.
 
-<<<<<<< HEAD
 It also deletes the files the submission holds, once the deletion has committed (see [File uploads](#file-uploads)).
 
-The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it. The uploads made through the upload route are kept the same way, in an internal `form-uploads` collection, which existing installations receive through the same migration.
-=======
 Marking a submission as spam calls off its notifications the same way, in the transaction that marks it: one waiting to be sent or retried, or one that failed and could still be retried, is cancelled and its message cleared, so it is not sent and cannot be retried later. One that the provider is sending at that moment finishes: it ends sent if the provider takes it, and cancelled if that attempt fails. The delivery records of what already went out are kept until the submission is deleted.
 
-The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it.
->>>>>>> origin/dev
+The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it. The uploads made through the upload route are kept the same way, in an internal `form-uploads` collection, which existing installations receive through the same migration.
 
 ### Statistics
 
