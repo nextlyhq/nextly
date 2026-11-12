@@ -41,6 +41,7 @@ const LOCALIZED = "seocp_localized";
 const TEAM = "seocp_team";
 const PRIVATE = "seocp_private";
 const HOME = "seocp_home";
+const TEAM_LOCALIZED = "seocp_team_localized";
 const SITE = "https://acme.example";
 const PLUGIN = "@nextlyhq/plugin-seo";
 const CSRF = "c".repeat(64);
@@ -835,6 +836,91 @@ afterAll(() => {
 describe.each(getConfiguredTestDialects())(
   "pages with no entry on a site in several languages (%s)",
   (dialect: TestDialect) => {
+    it("lists each language of an entry only where the person asking may read it in that language", async () => {
+      const t = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: { by: "prefix" },
+        plugins: [
+          seoPlugin({
+            collections: [TEAM_LOCALIZED],
+            baseUrl: SITE,
+            nextBuildDir: LANGUAGE_BUILD,
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: TEAM_LOCALIZED,
+            localized: true,
+            status: true,
+            // Readers see only the open team's pages, the team kept per
+            // language.
+            access: { read: () => ({ team: { equals: "open" } }) },
+            fields: [
+              text({ name: "slug", localized: true }),
+              text({ name: "title", localized: true }),
+              text({ name: "team", localized: true }),
+            ],
+            publicAddress: "/{slug}",
+          }),
+        ],
+        seedPublic: true,
+      });
+      current = t;
+      await lastCatchUp();
+      // Each page open in one language and closed in the other.
+      const page = async (
+        en: Record<string, unknown>,
+        de: Record<string, unknown>
+      ) => {
+        const made = await t.nextly.create({
+          collection: TEAM_LOCALIZED,
+          locale: "en",
+          data: { ...en, status: "published" },
+          overrideAccess: true,
+        });
+        await t.nextly.update({
+          collection: TEAM_LOCALIZED,
+          id: String(made.item.id),
+          locale: "de",
+          data: { ...de, status: "published", _overwrite: true },
+          overrideAccess: true,
+        });
+      };
+      await page(
+        { slug: "open-en", title: "Open in English", team: "open" },
+        { slug: "closed-de", title: "Geschlossen", team: "closed" }
+      );
+      await page(
+        { slug: "closed-en", title: "Closed in English", team: "closed" },
+        { slug: "open-de", title: "Offen", team: "open" }
+      );
+      await lastCatchUp();
+      const owner = await personWith(t, "owner", "all");
+      const manager = await personWith(t, "manager", [
+        "manage-seo",
+        `read-${TEAM_LOCALIZED}`,
+      ]);
+
+      const all = (await addressesFor(owner)).items?.map(item => item.path);
+      const paths = (await addressesFor(manager)).items?.map(item => item.path);
+
+      // The owner reads every version, so each is there to leave out.
+      expect(all).toEqual(
+        expect.arrayContaining([
+          "/en/open-en",
+          "/de/closed-de",
+          "/en/closed-en",
+          "/de/open-de",
+        ])
+      );
+      expect(paths).toEqual(
+        expect.arrayContaining(["/en/open-en", "/de/open-de"])
+      );
+      expect(paths).not.toContain("/de/closed-de");
+      expect(paths).not.toContain("/en/closed-en");
+    });
+
     it("lists each published translation as its entry, in its language, and leaves a page built in code at another language's path its own", async () => {
       const t = await createTestNextly({
         dialect,

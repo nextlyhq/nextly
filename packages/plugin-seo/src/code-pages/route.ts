@@ -15,10 +15,10 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import { readSingle, singleAccessOf } from "../bulk/singles";
 import type { Candidate } from "../outputs/listing";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 import { pageRefKey, type PageRef } from "../problems/check";
-import { singleKey } from "../problems/page-types";
 import { callerReads, readerAs } from "../problems/reader";
 import type { ReadRules } from "../resolver/provider";
 
@@ -56,32 +56,48 @@ function originFor(req: Request, config: CodePageRoutesConfig): string {
 }
 
 /**
- * The entries the route's caller may read, asked of the collections as them,
- * as the problem list asks: none of a type they may not read, a Single's
- * page where they may read the Single, and of a collection whose rule admits
- * only some entries, those it admits.
+ * The entries the route's caller may read in each language, asked as them,
+ * as the collection's own list or the Single's own read asks: none of a type
+ * they may not read, and of a collection whose rule admits only some
+ * entries, those it admits in that language.
  */
 async function readableBy(ctx: PluginRouteContext): Promise<ReadableEntries> {
   const caller = ctx.caller;
   if (caller === null) throw NextlyError.authRequired();
   const types = new Set<string>();
   for (const type of await ctx.publicAddresses.types()) {
-    if (await caller.can("read", type.slug)) {
-      types.add(type.kind === "single" ? singleKey(type.slug) : type.slug);
-    }
+    if (await caller.can("read", type.slug)) types.add(type.slug);
   }
-  // Redirects are never named here, so whether they may see them is moot.
-  const reader = readerAs(callerReads(ctx), types, false);
-  // A page is kept under the key its address is held by.
-  const refOf = ({ holder }: Candidate): PageRef => ({
-    type: holder.collection,
-    id: holder.id,
-  });
-  return async batch => {
-    const allowed = await reader.pages(batch.map(refOf));
-    return batch.filter(candidate => allowed.has(pageRefKey(refOf(candidate))));
+  const single = await singleAccessOf(ctx);
+  return async (batch, language) => {
+    const collections = batch.filter(({ type }) => type.kind === "collection");
+    // Redirects are never named here, so whether they may see them is moot.
+    const allowed = await readerAs(
+      callerReads(ctx, language),
+      types,
+      false
+    ).pages(collections.map(refOf));
+    const kept: Candidate[] = [];
+    for (const candidate of batch) {
+      const { type } = candidate;
+      if (
+        type.kind === "collection"
+          ? allowed.has(pageRefKey(refOf(candidate)))
+          : types.has(type.slug) &&
+            (await readSingle(type.slug, single, language)) !== undefined
+      ) {
+        kept.push(candidate);
+      }
+    }
+    return kept;
   };
 }
+
+/** A collection's entry, as the problem list keys its page. */
+const refOf = ({ holder }: Candidate): PageRef => ({
+  type: holder.collection,
+  id: holder.id,
+});
 
 /** The route that lists every public address the site knows of. */
 function addressesRoute(config: CodePageRoutesConfig): PluginRoute {

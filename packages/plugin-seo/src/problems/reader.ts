@@ -84,15 +84,17 @@ const ID_CHUNK = 100;
 
 /**
  * The reads a plugin route's caller is judged by, each made as them through
- * the collections' own reads, so their row rules decide as they do anywhere.
+ * the collections' own reads, so their row rules decide as they do anywhere:
+ * in `locale` where one is named, as a rule may read a translated field.
  */
-export function callerReads(ctx: PluginRouteContext): ReadsAs {
+export function callerReads(ctx: PluginRouteContext, locale?: string): ReadsAs {
   const asCaller = {
     as: "user" as const,
     user: ctx.user ?? undefined,
     ...(ctx.authenticatedScope === undefined
       ? {}
       : { authenticatedScope: ctx.authenticatedScope }),
+    ...(locale === undefined ? {} : { locale }),
   };
   return {
     readable: (type, ids) =>

@@ -328,7 +328,7 @@ async function entriesIn(
 async function translationsOf(
   ctx: PluginContext,
   batch: readonly Candidate[],
-  options: EntryListing
+  options: EntryListing & { readable: ReadableEntries }
 ): Promise<SiteAddress[]> {
   const [first] = batch;
   if (first === undefined) return [];
@@ -350,17 +350,23 @@ async function translationsOf(
       const document = documents.get(candidate.holder.id);
       return document === undefined ? [] : [{ ...candidate, document }];
     });
-    found.push(...(await entriesIn(ctx, versions, { ...options, language })));
+    // Asked in the version's own language, where a read rule may decide
+    // otherwise than in the site's.
+    const readable = await options.readable(versions, language);
+    if (readable.length === 0) continue;
+    found.push(...(await entriesIn(ctx, readable, { ...options, language })));
   }
   return found;
 }
 
 /**
- * Which of a read's entries a listing names: those the person asking may
- * read, so a page they may not open is not named, nor any of its values.
+ * Which of a read's entries a listing names in `language`: those the person
+ * asking may read in it, so a page they may not open is not named, nor any
+ * of its values.
  */
 export type ReadableEntries = (
-  batch: readonly Candidate[]
+  batch: readonly Candidate[],
+  language: string
 ) => Promise<Candidate[]>;
 
 /**
@@ -381,17 +387,16 @@ async function entryAddresses(
     readRules,
   };
   const found: SiteAddress[] = [];
-  for await (const read of candidates(ctx, { origin })) {
-    // Left out before anything of them is worked out.
-    const batch = await readable(read);
-    if (batch.length === 0) continue;
+  for await (const batch of candidates(ctx, { origin })) {
+    // Each language's versions are left out before anything of them is
+    // worked out, each asked in its own language.
     found.push(
-      ...(await entriesIn(ctx, batch, {
+      ...(await entriesIn(ctx, await readable(batch, defaultLanguage), {
         ...options,
         language: defaultLanguage,
       }))
     );
-    found.push(...(await translationsOf(ctx, batch, options)));
+    found.push(...(await translationsOf(ctx, batch, { ...options, readable })));
   }
   return found;
 }
