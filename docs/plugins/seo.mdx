@@ -1207,38 +1207,69 @@ Keep the site's matcher, written out in the file. A request the site's own rules
 
 The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, so each can be given a redirect. Admin, API and asset requests are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
 
-Log a request from the site's not-found page, with the request headers the Proxy passes on, after the page is sent:
+Log an address where a route decides it has nothing for the request: answer with `notFoundLogged()` from `@nextlyhq/plugin-seo/next` in place of Next.js's `notFound()`. It counts the address once the response is sent, then answers not found as `notFound()` does.
+
+Never log from `app/not-found.tsx`. Next.js renders the not-found file's element on every request for every page under it, so that it is ready should a navigation end in a 404, and a log written there counts every page view as an address not found.
+
+#### With the page builder
+
+Every address goes through the page builder's content route, so pass the helper to it as `notFound`. It is called for each address no page or entry holds, from the page and from its `generateMetadata`:
 
 ```tsx
-// src/app/not-found.tsx
-import { logNotFound } from "@nextlyhq/plugin-seo";
-import { headers } from "next/headers";
-import { after, connection } from "next/server";
-import { Suspense } from "react";
+// src/app/(frontend)/[...slug]/page.tsx
+import { createContentPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
+import { previewDraftGate } from "nextly/runtime";
 
-async function LogThisAddress() {
-  await connection();
-  const requestHeaders = await headers();
-  // Written once the page is sent, so the visitor never waits on the log.
-  after(() => logNotFound(requestHeaders));
-  return null;
-}
+const { ContentPage, generateMetadata } = createContentPage({
+  ...pageBuilderContent(),
+  pages: { collections: ["pages"], field: "content", draft: previewDraftGate() },
+  notFound: notFoundLogged,
+});
 
-export default function NotFound() {
-  return (
-    <main>
-      <h1>Page not found</h1>
-      <Suspense fallback={null}>
-        <LogThisAddress />
-      </Suspense>
-    </main>
-  );
+export { generateMetadata };
+export default ContentPage;
+```
+
+`createPublicContentPage`, `createBlocksPage` and `createSinglePage`, and Nextly's own `createContentRoute` and `createSingleRoute`, take the same `notFound`. Without Cache Components, a public route (`createPublicContentPage` and the other public forms) renders an address once and keeps the answer, so its misses are answered by Next.js's `notFound()` and not logged.
+
+#### Without the page builder
+
+Call it where your own routes decide not found, in a route rendered per request. Without Cache Components, Next.js refuses a read of the request in a page it renders once and keeps (one with `generateStaticParams`, for instance), so answer a miss there with `notFound()`:
+
+```tsx
+// src/app/blog/[slug]/page.tsx
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
+
+declare function getPost(slug: string): Promise<{ title: string } | null>;
+
+export default async function Post({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const post = await getPost((await params).slug);
+  // Returned, so TypeScript knows `post` is found below.
+  if (post === null) return notFoundLogged();
+  return <h1>{post.title}</h1>;
 }
 ```
 
-The headers are read under a `Suspense` boundary because reading them makes that part dynamic, which Cache Components requires to sit inside one. `connection()` keeps a prerender of the page from logging anything: only a visitor's request is counted. `after()` runs the write once the response is finished, so a slow database never holds the page.
+And log the addresses no route matches with a catch-all at the root of `app`, which Next.js chooses only when no other route matches:
 
-A request is counted once, however many times Next.js renders its not-found page. `logNotFound` never throws, and logs nothing for a request the Proxy did not pass on.
+```tsx
+// src/app/[...missing]/page.tsx
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
+
+export default async function Missing(): Promise<never> {
+  return notFoundLogged();
+}
+```
+
+`notFoundLogged` reads the request before it answers, so the answer is made for each request and never kept from a build. With Cache Components on, Next.js then refuses to build the catch-all unless `Missing` renders inside `<Suspense>` from the page, as any part of a page that reads the request must. A not-found answered while the page renders is sent with status 200 and a `noindex` tag rather than a 404, as Next.js answers every request-time not-found under Cache Components; it is logged either way. A site with an optional catch-all at its root (`app/[[...slug]]`) has no addresses left for this one: pass the helper to that route instead.
+
+A request is counted once, though its page and its `generateMetadata` both answer it. A prefetch is not counted (the visit, if it comes, is), and neither is a request the Proxy did not pass on. `notFoundLogged` throws only Next.js's own errors, and on the Edge runtime, where the plugin does not run, it answers not found and logs nothing. `logNotFound(headers)`, from the package root, is what it calls once the response is sent.
 
 ## Problems
 

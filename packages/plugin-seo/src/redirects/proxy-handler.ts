@@ -33,15 +33,33 @@ import { redirectOf, type StoredRedirect } from "./store";
 
 /**
  * The request header a page renders with, naming the address that was asked
- * for, so the site's not-found page can log it (`logNotFound`).
+ * for, so a route that answers not found can log it (`notFoundLogged`).
  */
 export const ASKED_FOR_HEADER = "x-nextly-seo-asked-for";
 
 /**
- * The request header naming one request the Proxy let through, so a
- * not-found page Next.js renders more than once for it is counted once.
+ * The request header naming one request the Proxy let through, so a request
+ * whose page and head both answer not found is counted once.
  */
 export const REQUEST_HEADER = "x-nextly-seo-request";
+
+/**
+ * The request headers the App Router's client sends on a prefetch, which asks
+ * for a page ahead of a visit that may never come. Next.js keeps them from
+ * the render's `headers()`, so only the Proxy can tell a prefetch apart.
+ */
+const PREFETCH_HEADERS = [
+  "next-router-prefetch",
+  "next-router-segment-prefetch",
+];
+
+/** Whether `request` is the App Router prefetching a page rather than showing it. */
+function isPrefetch(request: Request): boolean {
+  return PREFETCH_HEADERS.some(name => request.headers.get(name) !== null);
+}
+
+/** What a request no log is for is passed on with: both headers emptied. */
+const NOT_LOGGED = { [ASKED_FOR_HEADER]: "", [REQUEST_HEADER]: "" };
 
 /** The redirect that answers `address`, if any. */
 async function redirectFor(
@@ -122,9 +140,7 @@ export function redirectsProxyHandler(
       if (address === "not-a-page") {
         // Emptied rather than left alone: a value a visitor sent in this
         // header themselves must never be logged as an address asked for.
-        return {
-          requestHeaders: { [ASKED_FOR_HEADER]: "", [REQUEST_HEADER]: "" },
-        };
+        return { requestHeaders: NOT_LOGGED };
       }
       const redirect = (await keys.mayMeet(ctx, address))
         ? await redirectFor(ctx, address)
@@ -147,8 +163,12 @@ export function redirectsProxyHandler(
           }),
         };
       }
-      // The page is served; should it be found missing, its not-found page
-      // reads which address was asked for from this.
+      // A prefetch is served as any request is, but nobody has asked to see
+      // the page yet, so a miss it meets is not logged: the visit, if it
+      // comes, is its own request.
+      if (isPrefetch(request)) return { requestHeaders: NOT_LOGGED };
+      // The page is served; should a route find it missing, its not-found
+      // answer reads which address was asked for from this.
       return {
         requestHeaders: {
           [ASKED_FOR_HEADER]: `${url.origin}${url.pathname}`,

@@ -206,8 +206,9 @@ test("an address not found is redirected from the Overview, the redirect saved f
 }) => {
   await settle(page, { setupStep: 3 });
   const missing = `/seo-overview-gone-${run}`;
-  // Asked for on the site, as a visitor would: the not-found page logs it.
-  // Its status is the playground's to answer, so only the log is read.
+  // Asked for on the site, as a visitor would: the content route that
+  // answers it not found logs it (`notFoundLogged`). Its status is the
+  // playground's to answer, so only the log is read.
   await page.request.get(`${baseURL}${missing}`);
 
   const card = page.getByRole("region", { name: "Not found, last 7 days" });

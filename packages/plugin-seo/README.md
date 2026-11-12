@@ -5,9 +5,9 @@
 > See the [plugin stability ladder](https://nextlyhq.com/docs/plugins/stability) for
 > which plugin surfaces are stable and which are experimental.
 
-First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (zero `next` dependency), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
+First-party SEO plugin for Nextly. It is **opt-in** and **framework-agnostic** (its root imports no `next`), so it is safe in every deployment mode — an integrated site, a headless setup feeding a separate frontend, or an internal admin tool. You add it only to the collections that need SEO.
 
-This package is **framework-agnostic** (zero `next`): it adds SEO fields to your content and serves the site's sitemap and robots.txt over plain HTTP, nothing Next-specific, so it is safe in headless and admin-only projects. In a Next.js app, content routes get each page's head from the plugin (see [Next.js metadata](#nextjs-metadata) below).
+This package is **framework-agnostic** (zero `next` at its root): it adds SEO fields to your content and serves the site's sitemap and robots.txt over plain HTTP, nothing Next-specific, so it is safe in headless and admin-only projects. The one Next.js helper, `notFoundLogged`, lives at `@nextlyhq/plugin-seo/next`, where `next` is an optional peer dependency. In a Next.js app, content routes get each page's head from the plugin (see [Next.js metadata](#nextjs-metadata) below).
 
 ## Install
 
@@ -104,6 +104,10 @@ export async function generateMetadata({
 ```
 
 Set `metadataBase` once in your root layout so a relative `canonical` resolves to an absolute URL. Pass `languages` (locale → URL) to emit `alternates.languages` (hreflang) for a localized page. `buildMetadata` lives in `nextly/runtime` (Next-only), so it stays out of the agnostic plugin.
+
+## Addresses not found
+
+Where a route decides it has nothing for a request, answer with `notFoundLogged()` from `@nextlyhq/plugin-seo/next` instead of Next.js's `notFound()`, and pass it as a content route's `notFound` (the page builder's `createContentPage`, and Nextly's `createContentRoute`). The plugin then lists the address under **Redirects › Not found**, counted once per request. Never log from the root `not-found.tsx`: Next.js renders it on every page. See the [SEO plugin guide](https://nextlyhq.com/docs/plugins/seo#addresses-not-found).
 
 ## SEO settings
 

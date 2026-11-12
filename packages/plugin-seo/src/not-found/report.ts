@@ -1,11 +1,16 @@
 /**
- * What a site's not-found page calls to log the address that was not found.
+ * What logs the address a request was not found at.
  *
  * The site's Proxy passes the address a page was asked for on to its render
- * in a request header; the not-found page hands its request headers here,
- * and the address is counted in the log. A request the Proxy did not pass
- * on (the admin, the API, an asset, or a site without the Proxy) carries no
- * such header and is not logged.
+ * in a request header; where a route decides it has nothing for the request,
+ * `notFoundLogged` (`@nextlyhq/plugin-seo/next`) hands the request headers
+ * here, and the address is counted in the log. A request the Proxy did not
+ * pass on (the admin, the API, an asset, a prefetch, or a site without the
+ * Proxy) carries no such header and is not logged.
+ *
+ * Never from the site's root `not-found` page: Next.js renders that page's
+ * element on every request, for every page, so the log would count every
+ * page view as a miss.
  *
  * @module not-found/report
  */
@@ -24,11 +29,19 @@ import { notAPageAddress } from "./page-address";
  */
 const shared = globalThis as unknown as {
   __nextly_seoPluginContext?: PluginContext;
+  __nextly_seoLogNotFound?: (headers: HeaderReader) => Promise<void>;
 };
 
-/** Keep the started plugin's context for {@link logNotFound}. */
+/**
+ * Keep the started plugin's context for {@link logNotFound}, and the logger
+ * itself where `notFoundLogged` reaches it: on `globalThis`, so the helper
+ * imports none of the plugin's server code (which a page rendered on the
+ * Edge runtime could not load) and every request is counted by the one
+ * module that remembers which requests it has logged.
+ */
 export function keepSeoContext(ctx: PluginContext): void {
   shared.__nextly_seoPluginContext = ctx;
+  shared.__nextly_seoLogNotFound = logNotFound;
 }
 
 /** How many requests' ids are remembered as logged, the oldest let go first. */
@@ -63,26 +76,15 @@ export interface HeaderReader {
 }
 
 /**
- * Log that the address this request asked for was not found. Call it from
- * the site's not-found page with its request headers:
+ * Log that the address this request asked for was not found, from the
+ * request's headers. A site calls `notFoundLogged` from
+ * `@nextlyhq/plugin-seo/next` where a route decides not found, which calls
+ * this once the response is sent; call this directly only where the headers
+ * are already in hand, from code that runs for a not-found answer alone.
  *
- * ```tsx
- * import { headers } from "next/headers";
- * import { after, connection } from "next/server";
- * import { logNotFound } from "@nextlyhq/plugin-seo";
- *
- * async function LogThisAddress() {
- *   await connection();
- *   const requestHeaders = await headers();
- *   after(() => logNotFound(requestHeaders));
- *   return null;
- * }
- * ```
- *
- * rendered inside `<Suspense>` on the not-found page, the write left to
- * `after` so the page is sent without waiting on it. A request is counted
- * once however many times Next.js renders its not-found page. It never
- * throws: a log that cannot be written must not break the page.
+ * A request is counted once however many times it is called for it (a page
+ * and its `generateMetadata` both answer a miss). It never throws: a log that
+ * cannot be written must not break the page.
  */
 export async function logNotFound(headers: HeaderReader): Promise<void> {
   const ctx = shared.__nextly_seoPluginContext;
