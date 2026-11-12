@@ -18,6 +18,7 @@ import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import type { JSX, ReactNode } from "react";
 import { useMemo } from "react";
 
+import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
@@ -45,7 +46,6 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
-import { mayLeaveBuilder } from "./leave-builder";
 import { FormPreview } from "./outline/FormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
@@ -105,41 +105,47 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     savingLabel,
     children,
   } = props;
+  // While changes are pending, every way out asks first: an in-app link, the
+  // field group's editor, the browser's back, a reload and closing the tab.
+  // The guard is the admin's one, which entries use too. A read-only entity
+  // holds no changes to lose.
   return (
-    <div className="flex flex-col min-h-screen bg-background">
-      <BuilderToolbar
-        config={config}
-        name={name}
-        locked={locked}
-        unsavedCount={unsavedCount}
-        pending={pending}
-        onAddField={() => onActiveChange({ kind: "picker", position: {} })}
-        onOpenSettings={() => onActiveChange({ kind: "settings" })}
-        onSave={onSave}
-      />
-      <BuilderWorkspace {...props} />
+    <UnsavedChangesGuard isDirty={unsavedCount > 0} disabled={locked}>
+      <div className="flex flex-col min-h-screen bg-background">
+        <BuilderToolbar
+          config={config}
+          name={name}
+          locked={locked}
+          unsavedCount={unsavedCount}
+          pending={pending}
+          onAddField={() => onActiveChange({ kind: "picker", position: {} })}
+          onOpenSettings={() => onActiveChange({ kind: "settings" })}
+          onSave={onSave}
+        />
+        <BuilderWorkspace {...props} />
 
-      <BuilderOverlays
-        active={active}
-        onActiveChange={onActiveChange}
-        config={config}
-        builder={builder}
-        settings={settings}
-        onSettingsChange={onSettingsChange}
-        readOnly={locked}
-      />
+        <BuilderOverlays
+          active={active}
+          onActiveChange={onActiveChange}
+          config={config}
+          builder={builder}
+          settings={settings}
+          onSettingsChange={onSettingsChange}
+          readOnly={locked}
+        />
 
-      {children}
+        {children}
 
-      {/* Mounted whether or not a save is running, and only its text changes.
+        {/* Mounted whether or not a save is running, and only its text changes.
           A live region inserted at the same moment as its message is not
           reliably announced: several screen readers only watch regions that
           were already present when the text appeared, so a region that arrives
           with its own content can be skipped entirely. */}
-      <div aria-live="polite" className="sr-only">
-        {isSaving ? savingLabel : ""}
+        <div aria-live="polite" className="sr-only">
+          {isSaving ? savingLabel : ""}
+        </div>
       </div>
-    </div>
+    </UnsavedChangesGuard>
   );
 }
 
@@ -162,7 +168,6 @@ function BuilderWorkspace(
     | "onRowDragEnd"
     | "savedFieldIds"
     | "settings"
-    | "unsavedCount"
     | "pending"
   >
 ): JSX.Element {
@@ -183,10 +188,10 @@ function BuilderWorkspace(
     () => markPending(built, pending.marks, pending.changes),
     [built, pending.marks, pending.changes]
   );
-  // Leaves for a field group's own editor, where its fields are changed:
-  // asked first while there are unsaved changes, which leaving discards.
+  // Leaves for a field group's own editor, where its fields are changed. The
+  // page's guard asks first while changes are pending, as it does for every
+  // other way out.
   const openFieldGroup = (slug: string) => {
-    if (!mayLeaveBuilder(props.unsavedCount, props.config.kind)) return;
     navigateTo(buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug }));
   };
   return (

@@ -355,10 +355,7 @@ export default function FieldGroupBuilderEditPage({
             </Alert>
           ) : null}
           {/* Who a change here reaches, before any change is made. */}
-          <FieldGroupUsedBy
-            slug={fieldGroup.slug}
-            unsavedCount={unsavedCount}
-          />
+          <FieldGroupUsedBy slug={fieldGroup.slug} />
         </>
       }
       isSaving={isSaving || confirmation.isApplying}

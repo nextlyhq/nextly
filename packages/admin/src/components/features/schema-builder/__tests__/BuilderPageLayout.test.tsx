@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { act, render, screen, within } from "@admin/__tests__/utils";
 import { convertToFieldDefinition } from "@admin/lib/builder";
 import {
   buildOutline,
@@ -344,33 +344,20 @@ describe("BuilderPageLayout", () => {
       ).toBeInTheDocument();
     });
 
-    it("asks first while there are unsaved changes, and stays when declined", async () => {
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    // The page's guard asks before any navigation while changes are pending
+    // (see "leaving with pending changes" below), so opening a field group
+    // only navigates: asking here as well would ask twice.
+    it("navigates to the field group's editor without asking itself", async () => {
+      const confirm = vi.spyOn(window, "confirm");
       withSeo(2);
       await openFromMenu();
-      expect(confirm).toHaveBeenCalledTimes(1);
-      expect(confirm.mock.calls[0][0]).toContain("unsaved changes");
-      expect(navigateTo).not.toHaveBeenCalled();
-    });
-
-    it("leaves once the editor agrees", async () => {
-      vi.spyOn(window, "confirm").mockReturnValue(true);
-      withSeo(2);
-      await openFromMenu();
+      expect(confirm).not.toHaveBeenCalled();
       expect(navigateTo).toHaveBeenCalledTimes(1);
       expect(navigateTo.mock.calls[0][0]).toContain("seo");
     });
 
-    it("leaves without asking when nothing is unsaved", async () => {
+    it("navigates from the settings panel too, without asking itself", async () => {
       const confirm = vi.spyOn(window, "confirm");
-      withSeo(0);
-      await openFromMenu();
-      expect(confirm).not.toHaveBeenCalled();
-      expect(navigateTo).toHaveBeenCalledTimes(1);
-    });
-
-    it("asks first from the settings panel too", async () => {
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       // The id the outline gives the field group's own field.
       const metaTitle = flattenOutline(
         buildOutline([...fields, seo], {
@@ -388,8 +375,72 @@ describe("BuilderPageLayout", () => {
       await userEvent.click(
         await screen.findByRole("button", { name: /Open the field group/ })
       );
-      expect(confirm).toHaveBeenCalledTimes(1);
-      expect(navigateTo).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(navigateTo).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Every way out goes through the history the admin's router writes, which
+  // the page's guard watches: an in-app link, the field group's editor, and
+  // the browser's back. A reload and closing the tab are asked about by the
+  // browser itself, and are covered in the browser tests.
+  describe("leaving with pending changes", () => {
+    const start = window.location.pathname;
+    afterEach(() => window.history.replaceState(null, "", start));
+
+    const leave = () =>
+      act(() => window.history.pushState(null, "", "/admin/somewhere-else"));
+
+    it("asks first, and stays when the editor keeps editing", async () => {
+      renderLayout({ unsavedCount: 2 });
+      leave();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(window.location.pathname).toBe(start);
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /keep editing/i })
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(window.location.pathname).toBe(start);
+    });
+
+    it("leaves once the editor chooses to discard", async () => {
+      renderLayout({ unsavedCount: 2 });
+      leave();
+      await userEvent.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
+          name: /discard/i,
+        })
+      );
+      expect(window.location.pathname).toBe("/admin/somewhere-else");
+    });
+
+    // The crumb back to the list is a link like the admin's others: it moves
+    // through the admin's own history, which the guard watches, so it asks
+    // as every other way out does.
+    it("asks first when the crumb back to the list is clicked", async () => {
+      const actual = await vi.importActual<
+        typeof import("@admin/lib/navigation")
+      >("@admin/lib/navigation");
+      navigateTo.mockImplementationOnce(actual.navigateTo);
+      renderLayout({ unsavedCount: 2 });
+      await userEvent.click(
+        screen.getByRole("link", { name: /back to collections/i })
+      );
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(window.location.pathname).toBe(start);
+    });
+
+    it("does not ask with nothing pending", () => {
+      renderLayout({ unsavedCount: 0 });
+      leave();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(window.location.pathname).toBe("/admin/somewhere-else");
+    });
+
+    it("does not ask on a read-only entity, which has nothing to lose", () => {
+      renderLayout({ unsavedCount: 0, locked: true });
+      leave();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
     });
   });
 });
