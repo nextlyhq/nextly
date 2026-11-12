@@ -317,9 +317,11 @@ import {
   findPartDrafts,
   holdsPendingChange,
   partKeysOf,
+  partsPromoted,
   SHARED_DRAFT_SLOT,
   sharedFieldsJudged,
   storePartDrafts,
+  translatedWhenSharedChanged,
 } from "../../versions/part-drafts";
 import {
   judgeSharedValues,
@@ -12119,14 +12121,16 @@ export class CollectionMutationService extends BaseService {
   private async consumeWorkingDraft(
     tx: TransactionContext,
     ref: VersionRef,
-    locale: string | null
+    locale: string | null,
+    /** Whether the shared draft went with it: false for a promote that left it pending. */
+    withShared = true
   ): Promise<void> {
     const repo = new VersionsRepository(tx);
     await repo.deleteWorkingDraft(ref, locale);
     await releaseSharedBase(tx, ref, locale);
-    // Kept by part, a language's promote carries the shared draft with it
+    // Kept by part, a language's publish carries the shared draft with it
     // (`part-drafts`), so the shared draft goes too.
-    if (draftsKeptByPart() && locale !== SHARED_DRAFT_SLOT) {
+    if (withShared && draftsKeptByPart() && locale !== SHARED_DRAFT_SLOT) {
       await repo.deleteWorkingDraft(ref, SHARED_DRAFT_SLOT);
     }
   }
@@ -13149,6 +13153,22 @@ export class CollectionMutationService extends BaseService {
       | ResolvedVersionsConfig
       | null
       | undefined;
+    // Kept by part: the keys this save set, and which part each belongs to,
+    // read once for the store that splits the document and the history that
+    // judges every language's review.
+    const byParts =
+      parts && draftLocale !== SHARED_DRAFT_SLOT
+        ? {
+            parts,
+            touched: new Set([
+              ...Object.keys(ctx.updatePayload),
+              ...Object.keys(ctx.componentFieldData),
+              ...Object.keys(ctx.manyToManyData),
+              ...(ctx.translatedKeys ?? []),
+            ]),
+            keys: await partKeysOf(fields),
+          }
+        : undefined;
     const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
       ref: draftRef,
       // The key the read overlay, the promote and the discard look under,
@@ -13170,21 +13190,16 @@ export class CollectionMutationService extends BaseService {
       createdBy: params.user?.id ?? null,
       sourceVersionNo: params.sourceVersionNo ?? null,
       maxPerDoc: versionsConfig?.maxPerDoc,
-      ...(parts && draftLocale !== SHARED_DRAFT_SLOT
+      ...(byParts
         ? {
             storeWorkingDraft: async (repo: VersionsRepository) =>
               storePartDrafts(repo, {
                 ref: draftRef,
                 locale: draftLocale,
                 document: draftDocument,
-                touched: new Set([
-                  ...Object.keys(ctx.updatePayload),
-                  ...Object.keys(ctx.componentFieldData),
-                  ...Object.keys(ctx.manyToManyData),
-                  ...(ctx.translatedKeys ?? []),
-                ]),
-                keys: await partKeysOf(fields),
-                existing: parts,
+                touched: byParts.touched,
+                keys: byParts.keys,
+                existing: byParts.parts,
                 createdBy: params.user?.id ?? null,
               }),
           }
@@ -13201,14 +13216,24 @@ export class CollectionMutationService extends BaseService {
     );
     // Both update paths hold a draft through here, so the save's history
     // event is recorded here once.
-    await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
-      actor: actorForWrite(params.actor, params.user),
-      personName: params.user?.name ?? null,
-      locale: draftLocale,
-      toState: "draft",
-      versionNo,
-      sourceVersionNo: params.sourceVersionNo ?? null,
-    });
+    await this.recordSaveHistory(
+      tx,
+      params.collectionName,
+      params.entryId,
+      {
+        actor: actorForWrite(params.actor, params.user),
+        personName: params.user?.name ?? null,
+        locale: draftLocale,
+        toState: "draft",
+        versionNo,
+        sourceVersionNo: params.sourceVersionNo ?? null,
+      },
+      // A change to the shared draft goes live with any language's publish,
+      // so every language's review is judged on the shared values it holds.
+      byParts
+        ? translatedWhenSharedChanged(byParts.touched, byParts.keys)
+        : null
+    );
 
     return { workingDraftDocument, priorWorkingDraftDocument };
   }
@@ -15062,6 +15087,10 @@ export class CollectionMutationService extends BaseService {
         // draft is deleted in the same transaction below, so promote is atomic:
         // any failure rolls back the live write and leaves the draft intact.
         let promotedDraft = false;
+        // Kept by part, only a promote that publishes carries the shared
+        // draft: an unpublish puts nothing live, so the shared changes stay
+        // pending for every language still published.
+        const promotesShared = intendedStatus === "published";
         // Whether the request that promoted also carried content of its own,
         // which no earlier save recorded: the trail reads that publish as a
         // save too.
@@ -15074,12 +15103,15 @@ export class CollectionMutationService extends BaseService {
           };
           const promoteRepo = new VersionsRepository(tx);
           // Under the same key the read overlay and the store use. Kept by
-          // part, the change is this language's draft with the shared draft:
-          // a language's publish carries the shared changes with it, and a
-          // fold writes no more than the keys they hold.
+          // part, the change is this language's draft with the shared draft
+          // when it publishes: a language's publish carries the shared
+          // changes with it, and a fold writes no more than the keys they hold.
           const promoteParts =
             draftsKeptByPart() && draftLocaleKey !== SHARED_DRAFT_SLOT
-              ? await findPartDrafts(promoteRepo, promoteRef, draftLocaleKey)
+              ? partsPromoted(
+                  await findPartDrafts(promoteRepo, promoteRef, draftLocaleKey),
+                  promotesShared
+                )
               : undefined;
           const workingDraft = promoteParts
             ? holdsPendingChange(promoteParts)
@@ -15763,7 +15795,9 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                 },
                 // Same key the fetch and store use.
-                draftLocaleKey
+                draftLocaleKey,
+                // The shared draft goes only where the promote carried it.
+                promotesShared
               );
             }
 

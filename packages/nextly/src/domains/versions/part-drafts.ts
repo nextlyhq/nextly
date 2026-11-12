@@ -137,6 +137,39 @@ export function holdsPendingChange(parts: PartDrafts): boolean {
 }
 
 /**
+ * The parts a language's promote carries: its own draft, and the shared draft
+ * only when the promote publishes. An unpublish puts nothing live, so the
+ * shared changes stay pending for every language still published.
+ */
+export function partsPromoted(
+  parts: PartDrafts,
+  publishes: boolean
+): PartDrafts {
+  return publishes ? parts : { language: parts.language };
+}
+
+/** Whether a save that set the keys `touched` changed `part`'s. */
+function touchesPart(
+  touched: ReadonlySet<string>,
+  part: ReadonlySet<string>
+): boolean {
+  return [...touched].some(key => part.has(key));
+}
+
+/**
+ * The translated keys a held save names to its history when it changed the
+ * shared part, else `null`. The shared draft it changed goes live with any
+ * language's publish, so every language's review is judged on the shared
+ * values the save holds, as an in-place save's is.
+ */
+export function translatedWhenSharedChanged(
+  touched: ReadonlySet<string>,
+  keys: PartKeys
+): string[] | null {
+  return touchesPart(touched, keys.shared) ? [...keys.language] : null;
+}
+
+/**
  * The shared draft and `locale`'s draft of a document, read one after the
  * other on the caller's handle, so a transaction reads both on its connection.
  */
@@ -205,7 +238,7 @@ export async function storePartDrafts(
   }
 ): Promise<void> {
   const touches = (part: ReadonlySet<string>) =>
-    [...input.touched].some(key => part.has(key));
+    touchesPart(input.touched, part);
   if (input.existing.shared || touches(input.keys.shared)) {
     await repo.upsertWorkingDraft({
       ref: input.ref,

@@ -305,6 +305,22 @@ describe.each(getConfiguredTestDialects())(
       expect(Object.keys(await drafts())).toEqual(["en"]);
     }, 90_000);
 
+    // Unpublishing a language puts nothing live, so the shared draft stays
+    // pending: the language still published keeps its live shared values.
+    it("keeps the shared draft pending when one language is unpublished", async () => {
+      const singles = await boot(dialect);
+      await publishedInBoth(singles);
+      await save(singles, "es", { views: 40 });
+
+      await save(singles, "es", { status: "draft" });
+
+      expect(await read(singles, "en")).toMatchObject({
+        title: "en title",
+        views: 10,
+      });
+      expect(await drafts()).toMatchObject({ shared: { views: 40 } });
+    }, 90_000);
+
     it("publishes every language with a shared edit made in a non-default language", async () => {
       const singles = await boot(dialect);
       await publishedInBoth(singles);
