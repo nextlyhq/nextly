@@ -15,7 +15,7 @@ import { Input, Textarea } from "@nextlyhq/ui";
 import { EyeOff, Lock } from "lucide-react";
 import { useId, type ReactNode, type Ref } from "react";
 
-import type { SeoLevel, Sourced } from "../resolver/order";
+import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
 import {
   characters,
@@ -86,42 +86,6 @@ export interface SeoPanelProps {
   documentKey?: string;
 }
 
-/**
- * Why the page stays hidden from search whatever its own switch says: its
- * whole type is hidden, or its route's code hides it. Nothing otherwise.
- */
-function HiddenNote({
-  from,
-  typeLabel,
-}: {
-  from: SeoLevel | undefined;
-  typeLabel: string;
-}): ReactNode {
-  if (from === "type") {
-    return (
-      <Note icon={<EyeOff className="size-4" />}>
-        <b className="font-semibold">
-          Every {inSentence(typeLabel)} page is hidden from search.
-        </b>{" "}
-        This page stays hidden whatever its own switch says. People can still
-        share it.
-      </Note>
-    );
-  }
-  if (from === "code") {
-    return (
-      <Note icon={<EyeOff className="size-4" />}>
-        <b className="font-semibold">
-          Hidden from search by the page&apos;s code.
-        </b>{" "}
-        Its route asks search engines to leave it out, so it stays hidden until
-        a developer changes that. People can still share it.
-      </Note>
-    );
-  }
-  return null;
-}
-
 /** The values whose problems the Advanced section holds. */
 const ADVANCED_VALUES: readonly string[] = ["structuredData", "image"];
 
@@ -142,7 +106,15 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
           who manages the site's SEO to change it.
         </Note>
       ) : null}
-      <HiddenNote from={answer?.robots.from} typeLabel={names.typeLabel} />
+      {answer?.robots.from === "type" ? (
+        <Note icon={<EyeOff className="size-4" />}>
+          <b className="font-semibold">
+            Every {inSentence(names.typeLabel)} page is hidden from search.
+          </b>{" "}
+          This page stays hidden whatever its own switch says. People can still
+          share it.
+        </Note>
+      ) : null}
       <PreviewCard
         answer={answer}
         site={context?.site}

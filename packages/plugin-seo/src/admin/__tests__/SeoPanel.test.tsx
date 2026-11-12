@@ -674,20 +674,6 @@ describe("Advanced", () => {
     ).toBeVisible();
   });
 
-  it("says a page its route's code hides stays hidden", () => {
-    render(
-      <Harness
-        context={{
-          ...CONTEXT,
-          levels: { ...LEVELS, code: { ...LEVELS.code, hidden: true } },
-        }}
-      />
-    );
-    expect(
-      screen.getByText("Hidden from search by the page's code.")
-    ).toBeVisible();
-  });
-
   it("judges a typed address against the site's production addresses", async () => {
     const user = userEvent.setup();
     const writes: [string, unknown][] = [];
