@@ -148,6 +148,52 @@ describe("VersionComparePage, its choices", () => {
     ).toBeInTheDocument();
   });
 
+  it("says why there is nothing to compare with, as the server put it", () => {
+    const refusal = Object.assign(new Error("Validation failed."), {
+      status: 400,
+      code: "VALIDATION_ERROR",
+      data: {
+        errors: [
+          {
+            path: "baseline",
+            code: "NO_BASELINE",
+            message: "This part of the document has no current draft.",
+          },
+        ],
+      },
+    });
+    baselineMock.mockReturnValue({
+      data: undefined,
+      error: refusal,
+      isLoading: false,
+      isError: true,
+    });
+
+    renderPage({ from: "draft", to: 5 });
+
+    expect(
+      screen.getByText("This part of the document has no current draft.")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This comparison could not be loaded.")
+    ).toBeNull();
+  });
+
+  it("calls any other failure a comparison that could not be loaded", () => {
+    baselineMock.mockReturnValue({
+      data: undefined,
+      error: Object.assign(new Error("Internal error"), { status: 500 }),
+      isLoading: false,
+      isError: true,
+    });
+
+    renderPage({ from: "draft", to: 5 });
+
+    expect(
+      screen.getByText("This comparison could not be loaded.")
+    ).toBeInTheDocument();
+  });
+
   it("rewrites the address when the reader compares with another baseline", async () => {
     renderPage({ from: 4, to: 5 });
 

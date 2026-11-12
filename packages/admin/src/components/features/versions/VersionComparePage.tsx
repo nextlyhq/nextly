@@ -24,6 +24,7 @@ import {
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
+import { validationIssues } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
@@ -178,11 +179,17 @@ function ComparisonPane({
 
   if (pair.kind === "baseline") {
     if (baselineDiff.isError) {
+      // A baseline with nothing to compare with (no current draft, nothing
+      // published, no earlier visit) is refused with the reason in the
+      // server's words; any other failure is a comparison that did not load.
+      const reason = validationIssues(baselineDiff.error).find(
+        issue => issue.code === "NO_BASELINE"
+      )?.message;
       return (
         <div className="p-4">
-          <Alert variant="destructive">
+          <Alert variant={reason ? "info" : "destructive"}>
             <AlertDescription>
-              This comparison could not be loaded.
+              {reason ?? "This comparison could not be loaded."}
             </AlertDescription>
           </Alert>
         </div>
