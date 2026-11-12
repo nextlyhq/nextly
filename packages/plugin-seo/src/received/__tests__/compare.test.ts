@@ -502,4 +502,29 @@ describe("comparing what crawlers received with what Nextly holds", () => {
       title: "Googlebot was told not to follow this page's links.",
     });
   });
+
+  it("judges the card's difference apart from the page's where both received the same text", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: { ...STORED, automatic: { title: true, cardTitle: false } },
+      fetched: everyone(
+        page(head => {
+          head.title = "Something else";
+          head["og:title"] = "Something else";
+          head["twitter:title"] = "Something else";
+        })
+      ),
+    });
+    const of = (key: "googlebot" | "x") => {
+      const cell = compared.rows.title[key];
+      return compared.differences.find(
+        difference =>
+          cell.kind === "different" && difference.number === cell.difference
+      );
+    };
+    // The page's automatic title may rightly be set by its route; the
+    // card's typed one should have reached the page.
+    expect(of("googlebot")?.expected).toBe(true);
+    expect(of("x")?.expected).toBeUndefined();
+  });
 });

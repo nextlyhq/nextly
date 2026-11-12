@@ -69,6 +69,7 @@ import {
   type SaveStep,
   type StepResult,
   withEdit,
+  withoutEdits,
 } from "./pages-edit";
 import { problemsOf, type ProblemsByPage } from "./pages-view";
 
@@ -447,7 +448,9 @@ export function PagesEditor({
         pages={changedPages}
         saving={saving}
         onDiscard={() => {
-          onEdits({});
+          // The pages shown, as Save saves them: an edit the filters hide stays.
+          const shownPaths = rows.map(row => row.path);
+          onEdits(current => withoutEdits(current, shownPaths));
           setOutcome(null);
         }}
         onSave={() => void save()}

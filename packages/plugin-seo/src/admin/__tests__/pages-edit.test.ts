@@ -17,6 +17,7 @@ import {
   saveSteps,
   typesToRead,
   withEdit,
+  withoutEdits,
   type PageEdits,
   type TypeRows,
 } from "../pages-edit";
@@ -262,5 +263,15 @@ describe("a save", () => {
       "/pricing": { title: "Plans" },
     });
     expect(editsAfter(sent, ["/blog/one"], sent)).toEqual({});
+  });
+
+  it("discards the edits of the pages shown, and keeps those the filters hide", () => {
+    const edits: PageEdits = {
+      "/blog/one": { title: "One" },
+      "/pricing": { title: "Plans" },
+    };
+    expect(withoutEdits(edits, ["/blog/one"])).toEqual({
+      "/pricing": { title: "Plans" },
+    });
   });
 });

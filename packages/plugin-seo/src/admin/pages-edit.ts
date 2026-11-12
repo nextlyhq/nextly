@@ -405,6 +405,17 @@ export function editsAfter(
   );
 }
 
+/** `edits` without those of the pages at `paths`. */
+export function withoutEdits(
+  edits: PageEdits,
+  paths: readonly string[]
+): PageEdits {
+  const dropped = new Set(paths);
+  return Object.fromEntries(
+    Object.entries(edits).filter(([path]) => !dropped.has(path))
+  );
+}
+
 /**
  * The content types whose rows Edit mode reads for `items`: each type of a
  * page shown with an entry in the site's language, in the order first shown.

@@ -722,7 +722,33 @@ function valueCell(
     return note === undefined ? { kind: "same" } : { kind: "same", note };
   }
   const value = shown(row, got);
-  return different(groupFor(groups, row, value, reading, {}), value);
+  return different(
+    groupFor(
+      groups,
+      row,
+      value,
+      reading,
+      {},
+      basisOf(row, reading.key, stored)
+    ),
+    value
+  );
+}
+
+/**
+ * What a crawler's title or description is judged against: the value it
+ * should have received and whether that was worked out, the page's for a
+ * crawler reading the page and the card's for one reading the card. The
+ * same for every crawler where the two agree.
+ */
+function basisOf(row: RowKey, key: CrawlerKey, stored: StoredHead): string {
+  if (row !== "title" && row !== "description") return "";
+  const cardRow = row === "title" ? "cardTitle" : "cardDescription";
+  const page = readsPage(key);
+  const automatic = page
+    ? stored.automatic?.[row]
+    : (stored.automatic?.[cardRow] ?? stored.automatic?.[row]);
+  return JSON.stringify([expectedOf(row, key, stored), automatic === true]);
 }
 
 /** One crawler's cell for a row, grouping the difference where there is one. */
@@ -756,9 +782,12 @@ function groupFor(
   row: Group["row"],
   received: string | undefined,
   reading: Reading,
-  extra: Pick<Group, "noindex" | "nofollow">
+  extra: Pick<Group, "noindex" | "nofollow">,
+  basis = ""
 ): Group {
-  const id = `${row}|${received ?? ""}|${received === undefined ? "none" : "some"}`;
+  // Crawlers judged against different values, or values of different
+  // origins, are kept apart though they received the same thing.
+  const id = `${row}|${basis}|${received ?? ""}|${received === undefined ? "none" : "some"}`;
   const group = groups.get(id) ?? {
     number: groups.size + 1,
     keys: [],
