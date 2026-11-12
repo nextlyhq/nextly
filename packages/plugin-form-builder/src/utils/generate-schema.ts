@@ -29,8 +29,10 @@ import type {
   DateFormField,
   TimeFormField,
   HiddenFormField,
+  ConsentFormField,
 } from "../types";
 
+import { consentAnswerOf } from "./consent";
 import { ENFORCED_VALIDATION_RULES } from "./enforced-validation";
 
 // ============================================================
@@ -130,6 +132,8 @@ function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
       return generateTimeSchema(field);
     case "hidden":
       return generateHiddenSchema(field);
+    case "consent":
+      return generateConsentSchema(field);
     default:
       // Unreachable for a known FormField; plugin types are handled in
       // generateZodSchema before this switch is reached.
@@ -535,6 +539,19 @@ function generateTimeSchema(field: TimeFormField): z.ZodTypeAny {
 }
 
 /**
+ * Generate schema for a consent field: the stored answer, which must say the
+ * visitor agreed. Always required, whatever the field's own flag says, since
+ * a consent nobody has to give records nothing.
+ */
+function generateConsentSchema(field: ConsentFormField): z.ZodTypeAny {
+  return z
+    .object({ agreed: z.boolean(), text: z.string() })
+    .refine(answer => answer.agreed, {
+      message: customMessage(field) || "This field is required",
+    });
+}
+
+/**
  * Generate schema for hidden field.
  */
 function generateHiddenSchema(field: HiddenFormField): z.ZodTypeAny {
@@ -638,6 +655,11 @@ function transformFieldValue(value: unknown, field: FormField): unknown {
         return value.trim();
       }
       return value;
+
+    case "consent":
+      // The answer as stored, with the form's text rather than any the
+      // visitor sent.
+      return consentAnswerOf(value, field);
 
     case "select":
       // Ensure array for multi-select

@@ -30,7 +30,8 @@ interface DashboardHeaderProps {
  * comes before that. The reader's Inbox and account menu are at the foot of the
  * icon rail, so the bar's width belongs to the page, save for one thing: a
  * plugin's own header item (`header.slot`) stays at the bar's far right, on
- * every page, where plugins have always put it. Some draw a button there, and
+ * every page, where plugins have always put it, unless the plugin chose the
+ * rail's foot or the person's menu instead. Some draw a button there, and
  * some draw nothing and register what a page needs, so it is mounted for as
  * long as the bar is.
  *

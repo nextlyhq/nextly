@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PluginDefinition } from "./plugin-context";
-import { pluginLandingWarnings, resolvePluginLanding } from "./plugin-landing";
+import {
+  pluginLandingWarnings,
+  reportPluginLandingWarnings,
+  resolvePluginLanding,
+} from "./plugin-landing";
 
 /**
  * A standalone plugin `@acme/reports` (admin slug `acme-reports`) owning the
@@ -246,5 +250,43 @@ describe("pluginLandingWarnings", () => {
     for (const env of ["production", "test", undefined]) {
       expect(pluginLandingWarnings(plugins, undefined, env)).toEqual([]);
     }
+  });
+});
+
+describe("reportPluginLandingWarnings", () => {
+  const menu = [
+    { label: "Overview", to: "/admin/plugins/acme-reports/overview" },
+  ];
+  const logger = () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  });
+
+  it("hands each development warning to the logger it is given", () => {
+    const host = logger();
+    reportPluginLandingWarnings(
+      [reportsPlugin({ collections: [], menu })],
+      undefined,
+      "development",
+      host
+    );
+    expect(host.warn).toHaveBeenCalledTimes(1);
+    expect(host.warn.mock.calls[0][1]).toEqual({
+      kind: "plugin-landing-missing",
+      plugin: "@acme/reports",
+    });
+  });
+
+  it("says nothing outside development", () => {
+    const host = logger();
+    reportPluginLandingWarnings(
+      [reportsPlugin({ collections: [], menu })],
+      undefined,
+      "production",
+      host
+    );
+    expect(host.warn).not.toHaveBeenCalled();
   });
 });

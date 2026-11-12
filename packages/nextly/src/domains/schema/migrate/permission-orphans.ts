@@ -24,6 +24,7 @@
  * @module domains/schema/migrate/permission-orphans
  */
 import {
+  APP_OWNER,
   collectCustomPermissions,
   type PermissionConfigSource,
 } from "../../../plugins/permissions/collect-permissions";
@@ -36,9 +37,6 @@ import {
 } from "../migrate-create/snapshot-io";
 
 import type { RegistryRecord } from "./registry-record";
-
-/** The owner key the app's own permissions are stored under. */
-const APP_OWNER = "app";
 
 /** What one applied migration orphans and clears, for `markOrphanedPermissions`. */
 export interface MigrationOrphanScope extends OrphanMarkScope {
@@ -74,6 +72,18 @@ function everyPermission(
   return owners.flatMap(owned =>
     Object.values(owned).map(({ action, resource }) => ({ action, resource }))
   );
+}
+
+/**
+ * Every permission `snapshot` declares, by action and resource, or undefined
+ * where it says nothing about permissions: what a migration made live as it
+ * applied, which a rollback to the registry record's point withdraws.
+ */
+export function permissionsDeclaredBy(
+  snapshot: SnapshotPart | null
+): { action: string; resource: string }[] | undefined {
+  const record = declaredBy(snapshot);
+  return record === undefined ? undefined : everyPermission(record);
 }
 
 /** What a record declares for each plugin it records. */

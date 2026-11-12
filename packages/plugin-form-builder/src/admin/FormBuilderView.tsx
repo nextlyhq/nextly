@@ -45,6 +45,7 @@ import {
 
 import { FORM_PAGES, formPageOf, type FormPageId } from "../form-pages";
 import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
+import { blankConsentFields, CONSENT_TEXT_REQUIRED } from "../utils/consent";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import { FieldInspector } from "./components/builder/FieldInspector";
@@ -826,7 +827,8 @@ function editorTab(
 
 /**
  * What stops a save before it is sent, and where it is fixed: a form needs a
- * field, and a notification needs a name and good addresses. A notification is
+ * field, a consent needs its text, and a notification needs a name and good
+ * addresses. A notification is
  * written to the form as it is typed, so nothing between the editor and here
  * refuses one; both preconditions are answered by the module the editor asks.
  */
@@ -836,6 +838,13 @@ function blockedBeforeSave(
 ): SaveRefusal | undefined {
   if (fields.length === 0) {
     return { message: "Add at least one field to the form.", page: "builder" };
+  }
+  const blank = blankConsentFields(fields)[0];
+  if (blank !== undefined) {
+    return {
+      message: `${blank.label || blank.name}: ${CONSENT_TEXT_REQUIRED}`,
+      page: "builder",
+    };
   }
   const blocked = notificationsBlockingSave(notifications);
   return blocked ? { message: blocked, page: "notifications" } : undefined;
