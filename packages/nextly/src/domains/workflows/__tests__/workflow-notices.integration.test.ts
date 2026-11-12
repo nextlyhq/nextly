@@ -293,6 +293,8 @@ describe.each(getConfiguredTestDialects())(
             // The registry's singular label: "Posts" for a collection that names none.
             collection: "Posts",
             title: "Hello",
+            // The field the title came from, for each reader to be judged on.
+            titleField: "title",
             part: "en",
             localized: true,
             step: "Clear",
