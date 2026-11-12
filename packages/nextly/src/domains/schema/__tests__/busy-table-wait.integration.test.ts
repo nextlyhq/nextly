@@ -34,7 +34,9 @@ const PREFIX = `btw_${randomBytes(4).toString("hex")}`;
 const BUSY = `${PREFIX}_busy`;
 const EARLIER = `${PREFIX}_earlier`;
 const FIRST = `${PREFIX}_first`;
-const TABLES = [BUSY, EARLIER, FIRST];
+// The ledger too: on a server every test shares one database, and a file one test recorded
+// applied would be skipped by the next.
+const TABLES = [BUSY, EARLIER, FIRST, "nextly_schema_events"];
 
 /** This slice runs a unit in tries where it runs in one transaction on PostgreSQL or SQLite. */
 const DIALECTS = LOCK_DIALECTS.filter(

@@ -31,8 +31,7 @@ import { readHolders } from "./holder";
 import { judgeStatement } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
-import type { TryWatchdog } from "./types";
-import { startTryWatchdog } from "./watchdog";
+import { prepareTryWatchdog } from "./watchdog";
 
 /** What a run hands every unit it runs in tries. */
 export interface BusyTableRun {
@@ -132,8 +131,10 @@ export async function runUnitInTries(
     },
     async (): Promise<TryResult<number>> => {
       let session: string | undefined;
-      let watchdog: TryWatchdog | undefined;
       let reached = -1;
+      // Made before the unit's transaction opens, so the watch's asks on another connection never
+      // run inside that transaction's flow; it starts once the session is known.
+      const watchdog = prepareTryWatchdog(adapter, dialect, tryMs);
       try {
         const value = await runMigrationStatements(
           adapter,
@@ -144,17 +145,17 @@ export async function runUnitInTries(
             tryMs,
             onSession: id => {
               session = id;
-              watchdog = startTryWatchdog(adapter, dialect, id, tryMs);
+              watchdog.watch(id);
             },
             onStatement: index => {
               reached = index;
             },
           }
         );
-        await watchdog?.stop();
+        await watchdog.stop();
         return { kind: "done", value };
       } catch (error) {
-        const fired = (await watchdog?.stop())?.fired ?? false;
+        const { fired } = await watchdog.stop();
         if (!endedWaiting(error, dialect, fired)) throw error;
         // The transaction was rolled back: nothing of the try stayed, and the next try runs the
         // unit from its start, unless a statement that ran may not run again.

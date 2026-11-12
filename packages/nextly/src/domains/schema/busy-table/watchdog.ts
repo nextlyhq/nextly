@@ -82,23 +82,31 @@ const NO_OP: TryWatchdog = {
   stop: () => Promise.resolve({ fired: false }),
 };
 
+/** A watch made before the try's session is known, given the session once it is. */
+export interface PreparedTryWatchdog extends TryWatchdog {
+  /** Starts watching `session`; a second call is ignored. */
+  watch(session: string): void;
+}
+
 /**
- * Watches `session` on `adapter`'s pool every `pollMs` (100 by default) and ends its statement
- * once the time seen waiting for locks adds up to `tryMs`, once. A poll that fails is let go; the
- * next asks again. On SQLite it does nothing: SQLite's busy timeout bounds its one write lock.
+ * A watchdog made before the try's transaction opens, so its asks never run inside that
+ * transaction's flow: the loop starts here, waits for `watch(session)`, and only then polls.
+ * Every poll and cancel goes through the adapter's pool, another connection than the watched one,
+ * which is the point of the watch, and resumes in the context the loop started in. On SQLite it
+ * does nothing, as `startTryWatchdog` does.
  */
-export function startTryWatchdog(
+export function prepareTryWatchdog(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
-  session: string,
   tryMs: number,
   options: { pollMs?: number } = {}
-): TryWatchdog {
-  if (dialect === "sqlite") return NO_OP;
-  const target = sessionNumber(session);
+): PreparedTryWatchdog {
+  if (dialect === "sqlite") return { ...NO_OP, watch: () => undefined };
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
-  const asking = waitingQuery(dialect, target);
-
+  let given: (session: string | undefined) => void = () => undefined;
+  const sessionGiven = new Promise<string | undefined>(resolve => {
+    given = resolve;
+  });
   let stopped = false;
   let fired = false;
   let waitedMs = 0;
@@ -108,8 +116,10 @@ export function startTryWatchdog(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let wake: (() => void) | undefined;
 
-  async function poll(): Promise<void> {
-    const rows = await adapter.queryStatement<{ state: unknown }>(asking);
+  async function poll(target: number): Promise<void> {
+    const rows = await adapter.queryStatement<{ state: unknown }>(
+      waitingQuery(dialect, target)
+    );
     const now = performance.now();
     if (!rows.some(row => isWaiting(dialect, row.state))) {
       lastSeenWaitingAt = undefined;
@@ -130,11 +140,14 @@ export function startTryWatchdog(
     }
   }
 
-  async function watch(): Promise<void> {
+  async function run(): Promise<void> {
+    const session = await sessionGiven;
+    if (session === undefined || stopped) return;
+    const target = sessionNumber(session);
     while (!stopped && !fired) {
       // A failed ask (a dropped connection, a busy pool) says nothing about the session; the next
       // poll asks again.
-      await poll().catch(() => undefined);
+      await poll(target).catch(() => undefined);
       if (stopped || fired) return;
       await new Promise<void>(resolve => {
         wake = resolve;
@@ -143,10 +156,16 @@ export function startTryWatchdog(
     }
   }
 
-  const watching = watch();
+  const watching = run();
   return {
+    watch(session) {
+      // Checked here, where the caller can still hear of it, rather than in the loop.
+      sessionNumber(session);
+      given(session);
+    },
     async stop() {
       stopped = true;
+      given(undefined);
       if (timer !== undefined) clearTimeout(timer);
       wake?.();
       // A poll already sent is awaited, so no cancel lands after the try has been let go.
@@ -154,4 +173,21 @@ export function startTryWatchdog(
       return { fired };
     },
   };
+}
+
+/**
+ * Watches `session` on `adapter`'s pool every `pollMs` (100 by default) and ends its statement
+ * once the time seen waiting for locks adds up to `tryMs`, once. A poll that fails is let go; the
+ * next asks again. On SQLite it does nothing: SQLite's busy timeout bounds its one write lock.
+ */
+export function startTryWatchdog(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  session: string,
+  tryMs: number,
+  options: { pollMs?: number } = {}
+): TryWatchdog {
+  const watchdog = prepareTryWatchdog(adapter, dialect, tryMs, options);
+  watchdog.watch(session);
+  return watchdog;
 }
