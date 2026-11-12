@@ -250,6 +250,18 @@ function server(options: ServerOptions) {
   let rev = 7;
   const store = options.store ?? { data: DATA };
   const formsSlug = options.formsSlug ?? "forms";
+  // The submission as stored now, as a read or an update answers it.
+  const doc = () => ({
+    ...options.extension?.values,
+    id: "sub-2",
+    form: "form-1",
+    data: store.data,
+    notes: store.notes,
+    asked: ASKED,
+    status,
+    submittedAt: "2026-11-10T14:15:00.000Z",
+    _rev: `rev-${rev}`,
+  });
   const routes: Array<
     [match: string, reply: (url: string) => Promise<Response>]
   > = [
@@ -272,20 +284,7 @@ function server(options: ServerOptions) {
     ],
     [
       "/form-submissions/entries/sub-2",
-      () =>
-        options.failReads
-          ? answer(500, {})
-          : answer(200, {
-              ...options.extension?.values,
-              id: "sub-2",
-              form: "form-1",
-              data: store.data,
-              notes: store.notes,
-              asked: ASKED,
-              status,
-              submittedAt: "2026-11-10T14:15:00.000Z",
-              _rev: `rev-${rev}`,
-            }),
+      () => (options.failReads ? answer(500, {}) : answer(200, doc())),
     ],
     ["/form-submissions/entries?", url => listAnswer(url, options)],
     ["/media/", () => answer(404, {})],
@@ -312,7 +311,7 @@ function server(options: ServerOptions) {
       if (sent.notes !== undefined) store.notes = sent.notes;
       if (sent.data) store.data = sent.data;
       rev += 1;
-      return answer(200, { item: {} });
+      return answer(200, { item: doc() });
     }
     const route = routes.find(([match]) => url.includes(match));
     return route ? route[1](url) : answer(200, {});
@@ -918,6 +917,36 @@ describe("a submission's page, writing", () => {
       expect(patches(fetchMock)).toEqual([
         { notes: "A", _rev: "rev-7" },
         { notes: "AB", _rev: "rev-7" },
+      ])
+    );
+  });
+
+  it("holds a saved note even when reading it again fails", async () => {
+    const store = { data: DATA, notes: "Old" as string | undefined };
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      store,
+    };
+    const fetchMock = server(options);
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toHaveValue("Old"));
+    await user.clear(note);
+    await user.type(note, "New");
+    // The save is stored; reading the submission again then fails.
+    options.failReads = true;
+    await user.tab();
+    expect(await screen.findByText(/could not be read again/)).toBeVisible();
+    // Typing the old note back is a change from what the server now holds.
+    await user.clear(note);
+    await user.type(note, "Old");
+    expect(unsavedWork.get("forms.submission-note")).toBe(true);
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "New", _rev: "rev-7" },
+        { notes: "Old", _rev: "rev-8" },
       ])
     );
   });

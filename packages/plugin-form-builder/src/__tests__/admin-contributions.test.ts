@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { select, text } from "nextly";
+import { group, select, text } from "nextly";
 
 import {
   submissionExtensionFields,
@@ -97,6 +97,11 @@ describe("the fields a host adds to submissions", () => {
           text({ name: "source" }),
           // Kept out of the admin by the host: not shown.
           text({ name: "crmId", admin: { hidden: true } }),
+          // Holds fields of its own, one hidden: not shown whole.
+          group({
+            name: "routing",
+            fields: [text({ name: "secret", admin: { hidden: true } })],
+          }),
         ],
       },
     });

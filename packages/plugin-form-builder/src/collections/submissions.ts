@@ -245,9 +245,22 @@ export function submissionExtensionFields(
     .filter(field => field.name !== "" && !builtIn.has(field.name));
 }
 
-/** Whether a field is configured to stay out of the admin. */
+/**
+ * Whether the page leaves a field out: one configured to stay out of the
+ * admin, or one holding fields of its own (a group, an array, blocks), whose
+ * value the page would show whole, hidden descendants included.
+ */
 function hiddenFromAdmin(field: FieldConfig): boolean {
-  return (field as { admin?: { hidden?: unknown } }).admin?.hidden === true;
+  const shape = field as {
+    admin?: { hidden?: unknown };
+    fields?: unknown;
+    blocks?: unknown;
+  };
+  return (
+    shape.admin?.hidden === true ||
+    shape.fields !== undefined ||
+    shape.blocks !== undefined
+  );
 }
 
 /** A field's name, or "" for a layout field that has none. */

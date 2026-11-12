@@ -1192,6 +1192,13 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
       await refresh();
       refuse(message);
     }
+    // The saved submission, as the update answered it, is what the page
+    // holds now, before reading it again: a read that then fails must not
+    // leave the page holding the version this save replaced.
+    const saved = (await response.json().catch(() => null)) as {
+      item?: SubmissionDocument;
+    } | null;
+    if (saved?.item?.id === id) queryClient.setQueryData(key, saved.item);
     await refresh();
   };
   /**
