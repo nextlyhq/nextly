@@ -29,12 +29,16 @@ const TITLE = field({ name: "title", type: "text" });
 const STATUS = field({ name: "status_label", type: "text", default: "draft" });
 const RANK = field({ name: "rank", type: "number", required: true });
 
-/** The statements that mention `column`, quoting removed. */
+/**
+ * The lines that mention `column`, quoting removed: one per statement, or per column of a CREATE
+ * TABLE, whose other columns carry defaults of their own.
+ */
 const about = (sql: string, column: string) =>
   sql
     .replace(/["`]/g, "")
-    .split(/;\s*/)
-    .filter(statement => statement.includes(column));
+    .split(/;|\n/)
+    .map(line => line.trim())
+    .filter(line => line.includes(column));
 
 describe.each(DIALECTS)("field defaults on %s", dialect => {
   it("creates a Single's table with no DEFAULT from a field's default, and a collection's with it", () => {
