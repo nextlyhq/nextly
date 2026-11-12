@@ -598,3 +598,112 @@ describe("the bulk edit screen, Codex round 1", () => {
     await waitFor(() => expect(titleOf("Surfer vs Rext").value).toBe(""));
   });
 });
+
+/** Two content types to choose from: posts, then pages. */
+function twoTypes(): void {
+  vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+    data:
+      args.path === "/bulk/types"
+        ? {
+            types: [
+              ...TYPES.types,
+              {
+                ...TYPES.types[0]!,
+                slug: "pages",
+                label: "Pages",
+                singular: "Page",
+              },
+            ],
+          }
+        : GROUPS,
+    pending: false,
+    error: null,
+    refetch: vi.fn(),
+    fetching: false,
+  })) as unknown as typeof usePluginRoute);
+}
+
+const chooseType = (slug: string) =>
+  fireEvent.change(screen.getByLabelText("Content type"), {
+    target: { value: slug },
+  });
+
+describe("the bulk edit screen, Codex round 2", () => {
+  it("reads a type opened before an import again when it is chosen after", async () => {
+    twoTypes();
+    let imported = false;
+    vi.mocked(readPluginRoute).mockImplementation((async (args: {
+      path: string;
+    }) => {
+      if (args.path.includes("type=pages")) {
+        return {
+          type: "pages",
+          rows: [{ ...ROWS[0]!, id: "g1", label: "About us" }],
+          total: 1,
+          more: false,
+        };
+      }
+      return {
+        type: "posts",
+        rows: imported
+          ? ROWS.map(row =>
+              row.id === "p1" ? { ...row, title: "Imported title" } : row
+            )
+          : ROWS,
+        total: 4,
+        more: false,
+      };
+    }) as unknown as typeof readPluginRoute);
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    chooseType("pages");
+    await screen.findByLabelText("Title on Google for About us");
+    imported = true;
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Import 2 pages, all or nothing",
+      })
+    );
+    await waitFor(() =>
+      expect(writes.some(write => write.path === "/import/apply")).toBe(true)
+    );
+    chooseType("posts");
+    await waitFor(() =>
+      expect(titleOf("Surfer vs Rext").value).toBe("Imported title")
+    );
+  });
+
+  it("asks before the page is left with changes on any type", async () => {
+    twoTypes();
+    const leave = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    expect(leave()).toBe(false);
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "New" } });
+    chooseType("pages");
+    expect(leave()).toBe(true);
+    chooseType("posts");
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(leave()).toBe(false);
+  });
+
+  it("offers to read the pages again when their first read is refused", async () => {
+    let refuse = true;
+    vi.mocked(readPluginRoute).mockImplementation((async () => {
+      if (refuse) throw new Error("The pages could not be read.");
+      return { type: "posts", rows: ROWS, total: 4, more: false };
+    }) as unknown as typeof readPluginRoute);
+    render(<SeoBulkPage />);
+    const again = await screen.findByRole("button", { name: "Read again" });
+    refuse = false;
+    fireEvent.click(again);
+    expect(
+      await screen.findByLabelText("Title on Google for Surfer vs Rext")
+    ).toBeTruthy();
+  });
+});

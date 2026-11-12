@@ -57,6 +57,7 @@ import {
   type BulkField,
   type BulkFilter,
 } from "./bulk-view";
+import { useLeaveWarning } from "./leave-warning";
 import { ROOT, SeoStyles } from "./styles";
 
 /** The filters the table offers, and their names. */
@@ -91,7 +92,10 @@ function readRows(slug: string, page: number) {
  */
 function useRows(type: string | undefined) {
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
-  const [error, setError] = useState<string | null>(null);
+  // A refused read, with the type it was asked of: shown on that type alone.
+  const [error, setError] = useState<{ slug: string; message: string } | null>(
+    null
+  );
   const [reading, setReading] = useState(false);
   // The latest read asked of each type: only its answer counts, so a later
   // read of one type never puts away another's.
@@ -120,7 +124,7 @@ function useRows(type: string | undefined) {
           [slug]: { rows, total: answer.total, more: answer.more, pages },
         }));
       } catch (failure) {
-        if (current()) setError(apiErrorMessage(failure));
+        if (current()) setError({ slug, message: apiErrorMessage(failure) });
       } finally {
         if (current()) setReading(false);
       }
@@ -135,7 +139,7 @@ function useRows(type: string | undefined) {
 
   return {
     loaded: known ?? null,
-    error,
+    error: error !== null && error.slug === type ? error.message : null,
     reading,
     more: () => {
       if (type !== undefined && known !== undefined) {
@@ -145,6 +149,21 @@ function useRows(type: string | undefined) {
     // Every page read so far, read again from the first.
     again: (slug: string | undefined = type) => {
       if (slug !== undefined) void read(slug, loaded[slug]?.pages ?? 1, []);
+    },
+    // An import may change pages of any type: the type shown is read again,
+    // and every other one is put away, with any read of it on its way, to be
+    // read when it is chosen.
+    afterImport: () => {
+      for (const slug of Object.keys(latest.current)) {
+        if (slug !== type)
+          latest.current[slug] = (latest.current[slug] ?? 0) + 1;
+      }
+      setLoaded(current =>
+        type === undefined || current[type] === undefined
+          ? {}
+          : { [type]: current[type] }
+      );
+      if (type !== undefined) void read(type, loaded[type]?.pages ?? 1, []);
     },
   };
 }
@@ -471,6 +490,8 @@ function useBulkEdits(
     save,
     busy,
     failed: refused !== null && refused.type === type ? refused.message : null,
+    // Any type with a change not yet saved.
+    unsaved: Object.values(edits).some(each => Object.keys(each).length > 0),
     // Discard the refused type's edits, and read that type again.
     readAgain: () => {
       if (refused === null) return;
@@ -586,27 +607,27 @@ function Sheet({
 function Notices({
   failure,
   type,
-  onReadAgain,
+  action,
 }: {
   failure: string | null;
   type: BulkType | undefined;
-  /** Where a save was refused: discard the edits and read the table again. */
-  onReadAgain?: () => void;
+  /** The way out of the refusal, as its button says it. */
+  action?: { label: string; run: () => void };
 }): JSX.Element {
   return (
     <>
       {failure !== null ? (
         <div className="nx-seo-error nx-seo-refused" role="alert">
           <span>{failure}</span>
-          {onReadAgain === undefined ? null : (
+          {action === undefined ? null : (
             <Button
               type="button"
               variant="outline"
               size="sm"
               className="nx-seo-sbtn"
-              onClick={onReadAgain}
+              onClick={action.run}
             >
-              Discard changes and read again
+              {action.label}
             </Button>
           )}
         </div>
@@ -626,6 +647,28 @@ function noTypeText(pending: boolean): string {
   return pending
     ? "Reading the content types…"
     : "No content type has SEO you can read.";
+}
+
+/**
+ * The way out of a refusal: a refused save discards its type's changes and
+ * reads it again; a refused read is only read again, the changes kept.
+ */
+function noticeAction(
+  editing: { failed: string | null; readAgain: () => void },
+  rows: { error: string | null; again: () => void }
+): { action?: { label: string; run: () => void } } {
+  if (editing.failed !== null) {
+    return {
+      action: {
+        label: "Discard changes and read again",
+        run: editing.readAgain,
+      },
+    };
+  }
+  if (rows.error !== null) {
+    return { action: { label: "Read again", run: () => rows.again() } };
+  }
+  return {};
 }
 
 /** The first of the screen's refusals, if any. */
@@ -652,6 +695,7 @@ export function SeoBulkPage(): JSX.Element {
   const editing = useBulkEdits(type?.slug, loaded, rows.again);
   const shown = useMemo(() => shownRows(loaded, filter), [loaded, filter]);
   const failure = failureOf(editing.failed, rows.error, read.error);
+  useLeaveWarning(editing.unsaved);
   return (
     <div className={`${ROOT} nx-seo-page`}>
       <SeoStyles />
@@ -680,11 +724,7 @@ export function SeoBulkPage(): JSX.Element {
           <Notices
             failure={failure}
             type={type}
-            {...(editing.failed === null
-              ? {}
-              : {
-                  onReadAgain: editing.readAgain,
-                })}
+            {...noticeAction(editing, rows)}
           />
           <ChangesBar
             count={changeCount(loaded, editing.edits)}
@@ -709,7 +749,7 @@ export function SeoBulkPage(): JSX.Element {
         <aside className="nx-seo-bulkside" aria-label="Import">
           <ImportPanel
             onImported={() => {
-              rows.again();
+              rows.afterImport();
               read.refetch();
             }}
           />
