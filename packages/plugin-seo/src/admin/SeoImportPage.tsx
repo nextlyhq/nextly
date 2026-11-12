@@ -1125,9 +1125,9 @@ function StepBody({ flow }: { flow: ImportFlow }): JSX.Element {
           // The plugin's own group, as an earlier version kept it: nothing
           // to match, since its fields are the plugin's own places.
           <p className="text-sm text-muted-foreground">
-            Titles and descriptions typed the same as the automatic ones
-            become automatic again, so a change to a pattern reaches them.
-            Every other value stays as it is.
+            Titles and descriptions typed the same as the automatic ones become
+            automatic again, so a change to a pattern reaches them. Every other
+            value stays as it is.
           </p>
         ) : flow.group !== undefined ? (
           <MatchTable

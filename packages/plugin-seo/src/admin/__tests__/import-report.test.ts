@@ -131,3 +131,19 @@ describe("the downloaded report", () => {
     expect(lines).toHaveLength(5);
   });
 });
+
+describe("a downloaded report holding text a spreadsheet would run", () => {
+  it("marks formula-like text as text, and keeps a negative number as it is", () => {
+    const run = runOf([
+      entry({
+        label: '=HYPERLINK("http://x")',
+        set: ["title"],
+        values: { title: "+1 for us", description: "-12" },
+      }),
+    ]);
+    const row = reportCsv(run).split("\r\n")[1] ?? "";
+    expect(row.startsWith(`"'=HYPERLINK(""http://x"")"`)).toBe(true);
+    expect(row).toContain(",'+1 for us,");
+    expect(row).toContain(",-12,");
+  });
+});

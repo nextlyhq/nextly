@@ -320,6 +320,29 @@ describe("importing this site's own field group", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("explains the plugin's own group from an earlier version, with nothing to match", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(
+      () =>
+        ({
+          data: {
+            groups: [{ ...OLD, field: "seo", label: "SEO", own: true }],
+            ownSeo: [],
+            language: "en",
+          },
+          pending: false,
+          error: null,
+          refetch: () => {},
+          fetching: false,
+        }) as ReturnType<typeof usePluginRoute>
+    );
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /^SEO/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    expect(screen.getByText(/become\s+automatic again/)).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
   it("matches another group, chosen from the site's groups", async () => {
     const user = userEvent.setup();
     render(<SeoImportPage />);
@@ -402,6 +425,44 @@ describe("importing a file another tool exported", () => {
       screen.getByRole("button", { name: "Choose another file" })
     );
     expect(screen.queryByText("acme.WordPress.xml")).toBeNull();
+  });
+
+  it("imports a file that only adds redirects", async () => {
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      sent.push({ path: request.path, body });
+      if (request.path.endsWith("/apply"))
+        return { message: "", pages: 0, redirects: 2 };
+      return { ...dryRun(false), documents: [], held: 0, redirects: 2 };
+    });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Rank Math CSV/ }));
+    await choose("redirects.csv", "id,seo_title,redirect_to\n1,,/new");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 redirects" }));
+    await settle();
+    expect(sent.at(-1)?.path).toBe("/import/apply");
+    expect(screen.getByText(/2 redirects added/)).toBeTruthy();
+  });
+
+  it("reads no file until the site's language is known", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(
+      () =>
+        ({
+          data: undefined,
+          pending: true,
+          error: null,
+          refetch: () => {},
+          fetching: true,
+        }) as ReturnType<typeof usePluginRoute>
+    );
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Payload/ }));
+    await choose("export.json", '{"docs":[{"id":1,"meta":{"title":"T"}}]}');
+    expect(dryRuns()).toHaveLength(0);
   });
 
   it("refuses a file that isn't the tool's export, without sending it", async () => {

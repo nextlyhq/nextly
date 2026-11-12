@@ -107,3 +107,13 @@ describe("a file read in the browser", () => {
     expect(tooMuchToSend(parsed(fits * 2))).toBe(true);
   });
 });
+
+describe("whose values a WordPress export holds", () => {
+  it("is read from its meta keys, not from page content naming another tool's", () => {
+    const rankMath = `<?xml version="1.0"?><rss xmlns:wp="http://wordpress.org/export/1.2/"><channel><item>
+<content:encoded><![CDATA[A tutorial on _yoast_wpseo_title and _yoast_wpseo_metadesc.]]></content:encoded>
+<wp:postmeta><wp:meta_key><![CDATA[rank_math_title]]></wp:meta_key><wp:meta_value>T</wp:meta_value></wp:postmeta>
+</item></channel></rss>`;
+    expect(sourceOfFile("wordpress", rankMath)).toBe("rankMath");
+  });
+});
