@@ -525,24 +525,6 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("a shared field held as a draft by part", () => {
-      /** Saves `data` to the post in `locale`, as an editor's save, and says why one failed. */
-      async function saved(
-        post: string,
-        locale: string,
-        data: Record<string, unknown>
-      ): Promise<void> {
-        const result = await handlerOf(app()).updateEntry(
-          {
-            collectionName: "posts",
-            entryId: post,
-            overrideAccess: true,
-            locale,
-          },
-          { ...data, _overwrite: true }
-        );
-        expect(result.success, JSON.stringify(result)).toBe(true);
-      }
-
       // A held edit to a shared field goes to the document's one shared
       // draft, which any language's publish puts live: so it withdraws every
       // language's approval, not only the one it was made in.
@@ -552,8 +534,13 @@ describe.each(getConfiguredTestDialects())(
         const post = await entry(app(), "posts");
         // English published last, so its approval names its own newest
         // version, with no other language's shared values laid over it.
-        await saved(post, "es", { title: "Hola", status: "published" });
-        await saved(post, "en", { status: "published" });
+        await save(
+          "posts",
+          post,
+          { title: "Hola", status: "published" },
+          { locale: "es" }
+        );
+        await save("posts", post, { status: "published" }, { locale: "en" });
         for (const part of ["en", "es"]) {
           await seedState(app(), partOf("posts", post, part), "legal", {
             enteredBy: "alice",
@@ -566,7 +553,7 @@ describe.each(getConfiguredTestDialects())(
         ).not.toBeNull();
 
         // No status: held, in the shared draft, made through Spanish.
-        await saved(post, "es", { code: "X-2" });
+        await save("posts", post, { code: "X-2" }, { locale: "es" });
 
         for (const part of ["en", "es"]) {
           expect(
@@ -581,8 +568,13 @@ describe.each(getConfiguredTestDialects())(
         await boot(dialect, { perLanguageStorage: true });
         const bob = await person(app(), "bob", [["sign-off", "posts"]]);
         const post = await entry(app(), "posts");
-        await saved(post, "en", { status: "published" });
-        await saved(post, "es", { title: "Hola", status: "published" });
+        await save("posts", post, { status: "published" }, { locale: "en" });
+        await save(
+          "posts",
+          post,
+          { title: "Hola", status: "published" },
+          { locale: "es" }
+        );
         for (const part of ["en", "es"]) {
           await seedState(app(), partOf("posts", post, part), "legal", {
             enteredBy: "alice",
@@ -592,7 +584,7 @@ describe.each(getConfiguredTestDialects())(
         }
         const english = await stateOf(app(), partOf("posts", post, "en"));
 
-        await saved(post, "es", { title: "Adiós" });
+        await save("posts", post, { title: "Adiós" }, { locale: "es" });
 
         expect(
           (await stateOf(app(), partOf("posts", post, "es")))?.approval
