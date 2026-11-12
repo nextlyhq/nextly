@@ -2547,6 +2547,13 @@ function registerBootMediaStorage(
  * Each sync registers its entities and gathers the tables they are
  * missing; `createMissingCodeFirstTables` (Layer 6.1) then creates all of
  * them in one pipeline apply, once every registry row exists.
+ *
+ * In `next build` each sync makes only what it publishes in this process
+ * (the collections' database options, the code-defined access rules, the
+ * declared entities, the code-first Singles, the workflows) and writes no
+ * registry row and gathers no table: the build reads the rows `nextly
+ * migrate` wrote. The publishes stay where they are, so a build and a start
+ * publish the same things.
  */
 async function syncCodeFirstEntities(
   adapter: DrizzleAdapter,
@@ -2558,14 +2565,6 @@ async function syncCodeFirstEntities(
    */
   workflows: ReadonlyMap<string, RegisteredWorkflow>
 ): Promise<{ databaseNotSetUp: boolean }> {
-  // `next build` writes no registry row and creates no table: it publishes
-  // what the configuration declares, which is all a read needs beside the
-  // registry rows `nextly migrate` wrote.
-  if (isNextBuildPhase()) {
-    publishCodeFirstDeclarations(transformedConfig, workflows);
-    return { databaseNotSetUp: false };
-  }
-
   // In development only, what each code-first collection's, Single's and field group's registry
   // row records before the syncs below replace it, held for the apply this start runs next: on
   // SQLite a relationship switched between one related entry and many while the server was stopped
@@ -2655,46 +2654,6 @@ async function syncCodeFirstEntities(
   // database, before migrations and `/setup` have run. Reported so a check
   // that reads the registries can tell that apart from a read that failed.
   return { databaseNotSetUp: collectionsNotSetUp || singlesNotSetUp };
-}
-
-/**
- * What the code-first sync publishes in this process, without the sync: the
- * collections' database options, the code-defined access rules, the declared
- * entities, the code-first Singles and the workflows. A start in `next build`
- * runs this in place of `syncCodeFirstEntities`, so its reads see the
- * configuration's declarations while it writes nothing.
- */
-function publishCodeFirstDeclarations(
-  transformedConfig: NextlyServiceConfig,
-  workflows: ReadonlyMap<string, RegisteredWorkflow>
-): void {
-  publishCollectionDbOptions(codeFirstCollectionConfigs(transformedConfig));
-  registerCodeDefinedAccess(transformedConfig);
-  publishDeclaredEntities(transformedConfig);
-  if (transformedConfig.singles && transformedConfig.singles.length > 0) {
-    container
-      .get<SingleRegistryService>("singleRegistryService")
-      .setCodeFirstSingles(transformedConfig.singles);
-  }
-  publishWorkflows(workflows);
-}
-
-/**
- * The code-first collections as every sync route stores and publishes them,
- * each tagged by who contributed it (D14): `plugin:<name>` for a slug a
- * resolved plugin declares in `contributes.collections`, `code` otherwise.
- */
-function codeFirstCollectionConfigs(
-  transformedConfig: NextlyServiceConfig
-): CodeFirstCollectionConfig[] {
-  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
-    pluginCollectionSources(transformedConfig.plugins ?? []);
-  return (transformedConfig.collections ?? []).map(collection =>
-    toCodeFirstCollectionConfig(
-      collection,
-      sourceBySlug.get(collection.slug) ?? "code"
-    )
-  );
 }
 
 /**
@@ -3924,16 +3883,30 @@ async function syncCodeFirstCollections(
     }
   }
 
-  // Provenance (D14) drives locking + `nextly prune`, and is the rule
-  // `nextly migrate`'s registry writer gives a row it creates, too. The
-  // projection every sync route shares, so what boot stores and publishes for
-  // a collection is what reload and `db:sync` store and publish for it.
-  const codeFirstConfigs = codeFirstCollectionConfigs(transformedConfig);
+  // Provenance (D14): tag each collection by who contributed it. A slug that a
+  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
+  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
+  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
+  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
+    pluginCollectionSources(transformedConfig.plugins ?? []);
+
+  // The projection every sync route shares, so what boot stores and publishes
+  // for a collection is what reload and `db:sync` store and publish for it.
+  const codeFirstConfigs: CodeFirstCollectionConfig[] =
+    transformedConfig.collections.map(collection =>
+      toCodeFirstCollectionConfig(
+        collection,
+        sourceBySlug.get(collection.slug) ?? "code"
+      )
+    );
 
   // Boot's one publish of the collection db options, from the same projection
   // the sync stores, and before it: they are the config's, not the
   // database's, so they hold whatever the rows below do.
   publishCollectionDbOptions(codeFirstConfigs);
+
+  // `next build` writes no registry row and creates no table.
+  if (isNextBuildPhase()) return false;
 
   // A start's own seeding ensures every entity's permissions once it has
   // registered the services, so the sync leaves them to it and each is
@@ -4225,6 +4198,9 @@ async function syncCodeFirstComponents(
   ) {
     return;
   }
+  // `next build` writes no registry row and creates no table, and this sync
+  // publishes nothing in this process besides them.
+  if (isNextBuildPhase()) return;
 
   const componentRegistry = container.get<FieldGroupRegistryService>(
     "fieldGroupRegistryService"
@@ -4449,6 +4425,13 @@ async function syncCodeFirstSingles(
   );
   const codeFirstSingleConfigs: CodeFirstSingleConfig[] =
     transformedConfig.singles.map(single => toCodeFirstSingleConfig(single));
+
+  // `next build` writes no registry row and creates no table: it publishes
+  // the code-first Singles alone, as the sync below does once it has written.
+  if (isNextBuildPhase()) {
+    singleRegistry.setCodeFirstSingles(transformedConfig.singles);
+    return false;
+  }
 
   // Declared out here so the per-single failures can be judged AFTER the catch
   // below. Judged inside it, the refusal this raises would be caught by the

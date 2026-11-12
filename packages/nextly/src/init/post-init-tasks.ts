@@ -80,17 +80,17 @@ export async function runPostInitTasks(): Promise<void> {
   // running plugin's contributions, and what the site's code sets. Owned
   // templates follow their owner until the site overrides them, and an edit
   // made before ownership existed is kept as an override. Idempotent.
-  if (!building) {
-    try {
-      const emailTemplateService = getService("emailTemplateService");
-      emailTemplateService.configureOwnership(
-        ownershipFromConfig(getService("config"))
-      );
-      await emailTemplateService.ensureBuiltInTemplates();
-    } catch {
-      // Silently skip — email services may not be registered,
-      // or the email_templates table may not exist yet (migrations not run)
-    }
+  // The ownership is this process's own, so the build configures it too; only
+  // the reconciliation writes.
+  try {
+    const emailTemplateService = getService("emailTemplateService");
+    emailTemplateService.configureOwnership(
+      ownershipFromConfig(getService("config"))
+    );
+    if (!building) await emailTemplateService.ensureBuiltInTemplates();
+  } catch {
+    // Silently skip — email services may not be registered,
+    // or the email_templates table may not exist yet (migrations not run)
   }
 
   // Rewrite timestamps an older SQLite writer stored as text. Runs once and
