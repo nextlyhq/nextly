@@ -171,6 +171,20 @@ export function recordSnapshotNeedsAppMigration(): CliError {
   });
 }
 
+/**
+ * The person at the terminal answered no to the deletions a migration would make. The data-loss
+ * consent's own code, in `migrate:create`'s words: nothing is deleted yet, so what it says is how
+ * to keep the data rather than how to delete it.
+ */
+export function migrationDeletionsDeclined(): CliError {
+  return new CliError("DATA_LOSS_DECLINED", {
+    what: "No migration was written: its deletions were not confirmed.",
+    why: "The migration would delete the data listed above, and the prompt was not answered yes.",
+    next: "To keep the data, put the removed fields or entities back in the config, or run again and accept the rename. To delete it, run again and confirm, or pass --accept-data-loss naming what it deletes.",
+    context: { reason: "migration-deletions-declined" },
+  });
+}
+
 /** The operator closed a prompt; the prompt printed its own cancel line first. */
 export function migrationCreateCancelled(): CliError {
   return new CliError("MIGRATION_CREATE_CANCELLED", {

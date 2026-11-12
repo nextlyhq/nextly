@@ -768,7 +768,7 @@ async function finishKeptColumns(
     );
   }
   if (result.consented && inMigration.length > 0) {
-    await writeReleaseMigration(options, context);
+    await writeReleaseMigration(options, context, inMigration);
   }
 }
 
@@ -776,17 +776,28 @@ async function finishKeptColumns(
  * On a site that keeps migration files, write the migration that drops the
  * kept columns the consent agreed to: every environment then drops them at
  * its next `nextly migrate`, and none is left with a history listing columns
- * its database lacks.
+ * its database lacks. The columns the consent agreed to are handed on, so the
+ * migration is written without asking about them again.
  */
 async function writeReleaseMigration(
   options: PruneCommandOptions,
-  context: CommandContext
+  context: CommandContext,
+  agreed: readonly KeptColumn[]
 ): Promise<void> {
   // Loaded only when a migration is written, not with every prune.
   const { runMigrateCreate } = await import("./migrate-create");
   await runMigrateCreate(
     "drop-columns-kept-for-switched-off-types",
-    { cwd: options.cwd, config: options.config, releaseHeldBack: true },
+    {
+      cwd: options.cwd,
+      config: options.config,
+      releaseHeldBack: true,
+      approvedDeletions: agreed.map(({ table, column }) => ({
+        kind: "column" as const,
+        table,
+        column,
+      })),
+    },
     context
   );
 }

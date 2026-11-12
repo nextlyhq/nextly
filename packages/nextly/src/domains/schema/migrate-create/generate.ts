@@ -83,6 +83,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import type { Deletion } from "../migrate/data-loss-consent";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -153,6 +154,7 @@ import {
   slugify,
 } from "./format-file";
 import { refuseIndexedTextWidening } from "./indexed-text-widening";
+import { plannedDeletions } from "./planned-deletions";
 import type { RenameDecision } from "./prompt-renames";
 import {
   scopedSettingsChanges,
@@ -394,6 +396,15 @@ export interface GenerateArgs {
    * nothing. The result names the files the real run would write.
    */
   dryRun?: boolean;
+  /**
+   * Decides whether the deletions the plan makes (`plannedDeletions`) may be written, called once
+   * the plan is final and before any file is written, a dry run's included. `migrate:create` lists
+   * them, counts them where it can read the database, and asks or refuses as the data-loss consent
+   * says; it throws to refuse, and nothing is written. Not called when nothing is deleted. Without
+   * it (a Schema Builder save, which confirms its deletions in its own review) the file is written
+   * with its destructive mark.
+   */
+  judgeDeletions?: (deletions: readonly Deletion[]) => Promise<void>;
 }
 
 /** A translation-table migration file a run writes beside the main one, by what it is for. */
@@ -429,6 +440,8 @@ export interface GenerateResult {
   settingsChanges: EntitySettingsChange[];
   /** Each app's or plugin's added and removed permissions; empty when none changed. */
   permissionChanges: PermissionChange[];
+  /** What the migration deletes, as its header names it; empty when it deletes nothing. */
+  deletions: Deletion[];
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
@@ -1109,6 +1122,17 @@ export async function generateMigration(
   const namesTouched = (entity: MinimalConfigEntity): boolean =>
     touched.has(entity.tableName);
 
+  // 8a. What the plan deletes, from its final operations and the person's answers: judged before
+  //     any file is written (a refusal throws and nothing is written), and named in the header.
+  const deletions = plannedDeletions({
+    operations,
+    declinedRenames: decisions
+      .filter(decision => !decision.accepted)
+      .map(decision => decision.candidate),
+    resolutions: args.resolutions,
+  });
+  if (deletions.length > 0) await args.judgeDeletions?.(deletions);
+
   const collectionSlugs = args.collections
     .filter(namesTouched)
     .map(c => c.slug)
@@ -1132,6 +1156,7 @@ export async function generateMigration(
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
     settingsChanges: changedSettings.map(describeSettingsChange),
     permissionChanges: changedPermissions.map(describePermissionChange),
+    deletions,
     // A junction table the caller adds is a table this file changes.
     changesNoTable:
       operations.length === 0 &&
@@ -1303,6 +1328,7 @@ export async function generateMigration(
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
     permissionChanges: changedPermissions,
+    deletions,
   };
 }
 
@@ -1559,6 +1585,8 @@ async function recordSnapshot(
     renamesAccepted: 0,
     settingsChanges: [],
     permissionChanges: [],
+    // A record changes nothing, so it deletes nothing.
+    deletions: [],
   };
 }
 

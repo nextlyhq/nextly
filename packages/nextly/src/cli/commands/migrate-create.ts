@@ -54,6 +54,15 @@ import { buildExtensionSchema } from "../../domains/schema/extension/build-exten
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
+  consentCovers,
+  consentToCover,
+  countDeletions,
+  describeDeletion,
+  judgeDataLoss,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
+import {
   orderedMigrations,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
@@ -94,6 +103,7 @@ import type { CommandContext } from "../context";
 import { projectPath, reportDryRun } from "../dry-run";
 import {
   migrationCreateCancelled,
+  migrationDeletionsDeclined,
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
@@ -112,6 +122,12 @@ import {
 } from "../utils/command-prerequisites";
 import { bundleAndRequire } from "../utils/config-bundler";
 import { loadConfig } from "../utils/config-loader";
+import {
+  askToDeleteInTerminal,
+  readDataLossConsent,
+  requireConsented,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { formatDuration } from "../utils/logger";
 
 import { commandRun } from "./command-run";
@@ -176,6 +192,14 @@ export interface MigrateCreateCommandOptions {
    * the files it would write, and write nothing. A refusal of the plan is reported and exits 0.
    */
   dryRun?: boolean;
+
+  /**
+   * `--accept-data-loss[=targets]`: the data-loss consent for a migration that deletes data. Alone it
+   * covers every deletion and the run lists each one; a list (`dc_posts,dc_pages.summary`) covers
+   * those tables and columns only. Without it (or `NEXTLY_ACCEPT_DATA_LOSS`) a run at a terminal
+   * lists the deletions and asks, and a run that cannot ask writes no file.
+   */
+  acceptDataLoss?: AcceptDataLossOption;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
@@ -185,6 +209,11 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
    * prune` sets it, after its data-loss consent.
    */
   releaseHeldBack?: boolean;
+  /**
+   * Deletions the caller already had agreed to in this run (`nextly prune`'s consent for the kept
+   * columns it drops): written without asking again. Not a flag.
+   */
+  approvedDeletions?: readonly Deletion[];
   config?: string;
   verbose?: boolean;
   quiet?: boolean;
@@ -339,6 +368,102 @@ function endNothingToDo(
 }
 
 /**
+ * How long a count waits for the database to open. The counts are for the
+ * listing only and never decide the file, so an unreachable host costs a few
+ * seconds at most rather than the driver's own connect timeout.
+ */
+const COUNT_CONNECT_MS = 3000;
+
+/**
+ * `deletions` with their counts, where the database `DATABASE_URL` names can
+ * be read: opened read-only (nothing is created, no lock taken) and closed
+ * again. Any failure leaves them uncounted, said in one line: `migrate:create`
+ * needs no database, and the listing is asked about either way.
+ */
+async function countWhereReadable(
+  deletions: readonly Deletion[],
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): Promise<Deletion[]> {
+  const opening = openDryRunAdapter({ dialect });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<"timed-out">(settle => {
+    timer = setTimeout(() => settle("timed-out"), COUNT_CONNECT_MS);
+  });
+  const opened = await Promise.race([opening, timedOut]).catch(() => undefined);
+  clearTimeout(timer);
+  if (opened === "timed-out") {
+    // An open that arrives late is closed, so it holds the process open no longer than it must.
+    opening.then(
+      late => ("missing" in late ? undefined : late.disconnect()),
+      () => undefined
+    );
+  }
+  if (opened === undefined || opened === "timed-out" || "missing" in opened) {
+    logger.info("Counts not shown: the database could not be read.");
+    return [...deletions];
+  }
+  try {
+    return await countDeletions(deletions, opened.getDrizzle(), dialect);
+  } finally {
+    await opened.disconnect().catch(() => undefined);
+  }
+}
+
+/**
+ * The judge `generateMigration` calls with what the plan deletes, before it
+ * writes anything: counted where the database can be read, then
+ *
+ * - on a dry run, listed with the consent a real run that cannot ask needs;
+ * - otherwise judged by the data-loss consent: printed and written where it
+ *   covers every deletion, asked about at a terminal, and refused (no file
+ *   written, exit 1) where nobody can be asked or a named consent leaves one
+ *   out. A no at the prompt writes nothing either.
+ *
+ * `approved` is what the caller already agreed to in this run, which is not
+ * asked about again. `counted` receives the deletions as judged.
+ */
+async function judgeMigrationDeletions(
+  deletions: readonly Deletion[],
+  args: {
+    consent: DataLossConsent;
+    dialect: SupportedDialect;
+    dryRun: boolean;
+    approved: readonly Deletion[];
+    logger: CommandContext["logger"];
+    counted: (deletions: readonly Deletion[]) => void;
+  }
+): Promise<void> {
+  const { logger } = args;
+  const listed = await countWhereReadable(deletions, args.dialect, logger);
+  args.counted(listed);
+  if (args.dryRun) {
+    logger.info(
+      `This migration deletes ${String(listed.length)} item(s), which cannot be undone:`
+    );
+    for (const deletion of listed) {
+      logger.info(`  - ${describeDeletion(deletion)}`);
+    }
+    if (listed.some(d => !consentCovers(args.consent, d))) {
+      logger.info(
+        `A real run asks before writing it. A real run that cannot ask needs: ${consentToCover(listed)}.`
+      );
+    }
+    return;
+  }
+  const verdict = await judgeDataLoss({
+    deletions: listed,
+    consent: args.consent,
+    interactive: canPrompt(),
+    ask: askToDeleteInTerminal,
+    print: line => logger.info(line),
+    approved: args.approved,
+  });
+  if (verdict.kind === "declined") throw migrationDeletionsDeclined();
+  requireConsented(verdict);
+}
+
+/**
  * Whether the app stream has nothing it could possibly emit; it lives with the
  * inputs it judges, and is re-exported for the command's tests.
  */
@@ -429,6 +554,13 @@ export async function runMigrateCreate(
     return;
   }
 
+  // The data-loss consent, read before anything is planned, so a malformed
+  // list is refused before a question is asked or a file written.
+  const consent = readDataLossConsent({
+    flag: options.acceptDataLoss,
+    warn: message => logger.warn(message),
+  });
+
   // Whether rename candidates may be asked about: the one answer every
   // prompt takes (terminal on stdin and stdout, no `CI`, no global
   // `--non-interactive`). Without one, renames are declined (DROP + ADD)
@@ -518,6 +650,9 @@ export async function runMigrateCreate(
   // `--record-snapshot` records which fields are translated as the database holds them, so it reads
   // the translations tables, connecting only once it has one to check. Every other run stays offline.
   const live = recordModeReader(options.recordSnapshot, options.dryRun);
+  // The deletions as judged, with their counts where the database could be read, listed again
+  // once the file is written.
+  let counted: readonly Deletion[] = [];
   let result;
   try {
     result = await generateMigration({
@@ -539,6 +674,17 @@ export async function runMigrateCreate(
       liveCompanionColumns: live.read,
       dryRun: options.dryRun === true,
       releaseHeldBack: options.releaseHeldBack === true,
+      judgeDeletions: deletions =>
+        judgeMigrationDeletions(deletions, {
+          consent,
+          dialect,
+          dryRun: options.dryRun === true,
+          approved: options.approvedDeletions ?? [],
+          logger,
+          counted: listed => {
+            counted = listed;
+          },
+        }),
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
@@ -612,6 +758,16 @@ export async function runMigrateCreate(
   }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
+  }
+  // What the file deletes, as consented to; its header names the same, and `nextly migrate` asks
+  // the consent for it again on every database it runs on.
+  if (counted.length > 0) {
+    logger.warn(
+      `It deletes data; \`nextly migrate\` needs consent to apply it: ${consentToCover(counted)}`
+    );
+    for (const deletion of counted) {
+      logger.item(`Deletes: ${describeDeletion(deletion)}`, 1);
+    }
   }
   logger.newline();
   logger.divider();
