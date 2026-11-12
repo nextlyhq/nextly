@@ -46,6 +46,20 @@ export function listWhere(scope: SubmissionListScope): Record<string, unknown> {
  */
 export const LIST_SORT = "-submittedAt,id";
 
+/**
+ * The list a submission's page counts it in: the list's filter, and the
+ * submission itself. Opened from the New tab, the submission is marked Read
+ * and leaves that filter; archiving or recovering it can too. Counted with
+ * it, the page's "3 of 3" stays true to the list it was opened from rather
+ * than reading "3 of 2", and its newer neighbours still count its place.
+ */
+export function listWithWhere(
+  scope: SubmissionListScope,
+  id: string
+): Record<string, unknown> {
+  return { or: [listWhere(scope), { id: { equals: id } }] };
+}
+
 /** A query for one end of the list around a submission. */
 export interface NeighbourQuery {
   where: Record<string, unknown>;

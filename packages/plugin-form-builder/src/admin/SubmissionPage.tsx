@@ -65,7 +65,7 @@ import {
 } from "./components/submissions/submission-fields";
 import {
   LIST_SORT,
-  listWhere,
+  listWithWhere,
   neighbourQueries,
   scopeFromSearch,
   type SubmissionListScope,
@@ -189,7 +189,7 @@ function useListPlace(
           )}`
         );
       const [all, newer, older] = await Promise.all([
-        page(listWhere(scope), LIST_SORT),
+        page(listWithWhere(scope, submission!.id), LIST_SORT),
         page(around.newer.where, around.newer.sort),
         page(around.older.where, around.older.sort),
       ]);
@@ -624,6 +624,8 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
   const [savedText, setSavedText] = useState<string | null>(null);
   const noteNow = useRef(note);
   noteNow.current = note;
+  const storedNow = useRef(stored);
+  storedNow.current = stored;
   // The stored note the textarea's text was last brought up to.
   const shown = useRef(stored);
   // The stored note once the page's own saves have landed, and how many are on their way.
@@ -652,7 +654,11 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
     pending.current += 1;
     void save({ notes: text }, { notes: basis === "" ? null : basis })
       .then(() => setSavedText(text))
-      .catch(() => undefined)
+      .catch(() => {
+        // Not stored: once no other note save is on its way, the next one
+        // replaces the note as stored, so leaving the note retries it.
+        if (pending.current === 1) expected.current = storedNow.current;
+      })
       .finally(() => {
         pending.current -= 1;
       });

@@ -588,6 +588,32 @@ describe("a submission's page, writing", () => {
     expect(await screen.findByText(/Saved\./)).toBeInTheDocument();
   });
 
+  it("saves a note again once a failed save can be sent", async () => {
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      offline: true,
+    };
+    const fetchMock = server(options);
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    await user.type(note, "Book a call");
+    await user.tab();
+    expect(await screen.findByText(/could not be sent/)).toBeInTheDocument();
+    // Back online: leaving the unchanged note sends it again.
+    options.offline = false;
+    await user.click(note);
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "Book a call", _rev: "rev-7" },
+        { notes: "Book a call", _rev: "rev-7" },
+      ])
+    );
+    expect(await screen.findByText(/Saved\./)).toBeInTheDocument();
+  });
+
   it("says when a change could not be sent", async () => {
     server({
       status: "read",
