@@ -4,12 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState, type JSX } from "react";
 
-import {
-  QUERY_GC_TIME,
-  QUERY_RETRY_COUNT,
-  QUERY_STALE_TIME,
-} from "@admin/constants/query";
+import { QUERY_GC_TIME, QUERY_STALE_TIME } from "@admin/constants/query";
 import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
+import { shouldRetryQuery } from "@admin/lib/api/query-retry";
 
 import { beginAdminStartup } from "./admin-startup";
 
@@ -34,9 +31,10 @@ const SHOW_QUERY_DEVTOOLS =
  *   - Keeps recently viewed data in memory for faster navigation
  *   - Set higher than staleTime for memory efficiency
  *
- * - **retry: 1** - Failed queries retry once before showing error
- *   - Conservative retry for faster error feedback in admin UI
- *   - Prevents long waits on persistent failures
+ * - **retry: shouldRetryQuery** - A failed read is retried once, unless the
+ *   server refused it with a 4xx other than 408 or 429: a refusal (signed out,
+ *   not allowed, not found) answers the same again, and retrying it only
+ *   delays the screen that shows it.
  *
  * - **refetchOnWindowFocus: false** - Prevents refetch when tab regains focus
  *   - Admin users frequently switch tabs (documentation, email, etc.)
@@ -100,7 +98,7 @@ export function QueryProvider({
         queries: {
           staleTime: QUERY_STALE_TIME,
           gcTime: QUERY_GC_TIME,
-          retry: QUERY_RETRY_COUNT,
+          retry: shouldRetryQuery,
           refetchOnWindowFocus: false, // Prevent refetch on tab switch (admin CMS UX)
         },
         mutations: {
