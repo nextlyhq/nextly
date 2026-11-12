@@ -27,6 +27,7 @@ import {
   seedPermissions,
 } from "../../direct-api/__tests__/checked-access-fixtures";
 import type { VersionRef } from "../../domains/versions/versions-repository";
+import { registerHook, unregisterHook } from "../../hooks";
 import type { AuthUserId } from "../../types/auth";
 import { definePlugin } from "../index";
 import type { ServiceOpts } from "../service-opts";
@@ -189,6 +190,47 @@ describe.each(getConfiguredTestDialects())(
     afterAll(async () => {
       resetSessionStandingForTests();
       await t?.destroy();
+    });
+
+    it("hands the plugin's request and context to the restore's update, and names the person a trusted one is made for", async () => {
+      const ref = await publishedTwice(POSTS);
+      const seen: { request: boolean; tag: unknown } = {
+        request: false,
+        tag: undefined,
+      };
+      const watch = (ctx: {
+        req?: { http?: unknown };
+        context?: Record<string, unknown>;
+        data?: unknown;
+      }) => {
+        seen.request = seen.request || ctx.req?.http !== undefined;
+        seen.tag = seen.tag ?? ctx.context?.tag;
+        return ctx.data;
+      };
+      registerHook("beforeUpdate", POSTS, watch as never);
+      try {
+        await versions.restore(ref, 1, OVERWRITE, {
+          as: "system",
+          user: {
+            id: editorId as AuthUserId,
+            email: "restore-editor@example.com",
+          },
+          request: new Request("http://localhost/api/restore", {
+            method: "POST",
+          }),
+          context: { tag: "from-the-plugin" },
+        } as ServiceOpts);
+      } finally {
+        unregisterHook("beforeUpdate", POSTS, watch as never);
+      }
+
+      expect(seen).toEqual({ request: true, tag: "from-the-plugin" });
+      const events = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: POSTS, id: ref.entryId },
+      });
+      expect(
+        events.items.filter(e => e.kind === "restored").map(e => e.actorId)
+      ).toContain(editorId);
     });
 
     it("is refused at once inside an open transaction, and the draft stays as it was", async () => {

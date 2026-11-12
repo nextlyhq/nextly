@@ -24,7 +24,8 @@ import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineSingle, text } from "../../../config";
+import { registerHook, unregisterHook } from "../../../hooks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -43,6 +44,10 @@ import {
 const ORIGIN = "http://localhost";
 const POSTS = "dav_posts";
 const ADMIN = "dav-admin";
+/** A collection everyone may read, whose documents only the admin may. */
+const PRIVATE = "dav_private";
+/** A Single nothing has written yet, so no row backs it. */
+const NOTICE = "dav_notice";
 
 /** The namespace as these tests call it. */
 interface VersionsNamespace {
@@ -166,6 +171,32 @@ describe.each(getConfiguredTestDialects())(
             status: true,
             versions: { drafts: true },
             fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: PRIVATE,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              // A filter no document matches, for anyone but the admin: the
+              // collection is readable, each document is not.
+              read: ({ req }) =>
+                req.user?.id === ADMIN
+                  ? true
+                  : ({
+                      title: { equals: "no document is called this" },
+                    } as unknown as boolean),
+              update: () => true,
+              create: () => true,
+            },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: NOTICE,
+            status: true,
+            versions: true,
+            fields: [text({ name: "heading" })],
           }),
         ],
       });
@@ -336,6 +367,116 @@ describe.each(getConfiguredTestDialects())(
           ...asUser(editorId),
         })
       ).resolves.toMatchObject({ item: { versionNo: 1 } });
+    }, 120_000);
+
+    it("refuses a malformed page size on a trusted list, and pages as REST pages", async () => {
+      const id = await publishedTwice();
+
+      await expect(
+        versions().list({ collection: POSTS, id, limit: -2 })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      const page = (await versions().list({ collection: POSTS, id })) as {
+        meta: { limit: number };
+      };
+      const viaRest = (await rest("GET", history(id))) as {
+        meta: { limit: number };
+      };
+      expect(page.meta.limit).toBe(viaRest.meta.limit);
+    }, 120_000);
+
+    it("records who named a version on a trusted call made for a person, and returns no snapshot", async () => {
+      const id = await publishedTwice();
+
+      const named = await versions().name({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        label: "Kept for later",
+        user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+      });
+
+      expect(Object.hasOwn(named.item, "snapshot")).toBe(false);
+      const events = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: POSTS, id },
+      });
+      expect(
+        events.items
+          .filter(e => e.kind === "named")
+          .map(e => [e.payload?.label, e.actorId])
+      ).toContainEqual(["Kept for later", ADMIN]);
+    }, 120_000);
+
+    it("hands a trusted restore's request and person to the update it makes", async () => {
+      const id = await publishedTwice();
+      let sawRequest = false;
+      const watch = (ctx: { req?: { http?: unknown }; data?: unknown }) => {
+        sawRequest = sawRequest || ctx.req?.http !== undefined;
+        return ctx.data;
+      };
+      registerHook("beforeUpdate", POSTS, watch as never);
+      try {
+        await versions().restore({
+          collection: POSTS,
+          id,
+          versionNo: 1,
+          _overwrite: true,
+          request: new Request(`${ORIGIN}/api/restore`, { method: "POST" }),
+          user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+        });
+      } finally {
+        unregisterHook("beforeUpdate", POSTS, watch as never);
+      }
+
+      expect(sawRequest).toBe(true);
+      const events = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: POSTS, id },
+      });
+      expect(
+        events.items.filter(e => e.kind === "restored").map(e => e.actorId)
+      ).toContain(ADMIN);
+    }, 120_000);
+
+    it("marks a version seen on a trusted call, for a person the read rules would refuse", async () => {
+      const created = await handler().createEntry(
+        { collectionName: PRIVATE, overrideAccess: true },
+        { title: "one", status: "published" }
+      );
+      const id = created.data!.id;
+      // May read the collection, but its read rule refuses them each document.
+      const readerId = await account(t, "dav-private-reader@example.com", [
+        await role(t, "dav-private-readers", [`read-${PRIVATE}`]),
+      ]);
+
+      // Judged as themselves, the person may not read it.
+      await expect(
+        versions().markSeen({
+          collection: PRIVATE,
+          id,
+          versionNo: 1,
+          ...asUser(readerId),
+        })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      // The server showed this version under its own bypass; the person's
+      // marker is recorded as shown, whatever their own rules would say.
+      await expect(
+        versions().markSeen({
+          collection: PRIVATE,
+          id,
+          versionNo: 1,
+          user: {
+            id: readerId as AuthUserId,
+            email: `${readerId}@example.com`,
+          },
+        })
+      ).resolves.toMatchObject({ item: { versionNo: 1 } });
+    }, 120_000);
+
+    it("refuses a person who may not read a Single before looking for its row", async () => {
+      // The same answer whether or not the Single has a row yet, so a refused
+      // caller cannot tell which.
+      await expect(
+        versions().list({ single: NOTICE, ...asUser(blindId) })
+      ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
     }, 120_000);
   }
 );
