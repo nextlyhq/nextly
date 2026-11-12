@@ -28,6 +28,12 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
  * A runtime collection opened in the Builder with one pending change: a
  * field's label edited and not saved. Runs `body`, then removes the
  * collection.
+ *
+ * The Builder is reached from its list inside the app, so Back has an in-app
+ * entry to go to: opened as the tab's first page, Back would leave the admin
+ * altogether, which is the browser's own prompt rather than the guard's.
+ * Through `history.pushState`, which is how the admin's own links move: its
+ * router hears it and draws the page.
  */
 async function withPendingChange(
   page: Page,
@@ -45,7 +51,11 @@ async function withPendingChange(
         index: false,
       },
     ]);
-    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await gotoAdmin(page, "/builder/collections");
+    await page.evaluate(
+      path => window.history.pushState(null, "", path),
+      `/admin/builder/collections/${slug}`
+    );
     await page.getByTestId("field-row-summary").click();
     await page
       .getByRole("textbox", { name: "Label", exact: true })
