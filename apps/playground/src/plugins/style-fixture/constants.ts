@@ -24,3 +24,28 @@ export const FRAME_PAGE_PATHS = {
   "frame-workspace": "playground/style-fixture#FrameWorkspacePage",
   "frame-none": "playground/style-fixture#UnframedPage",
 } as const;
+
+/**
+ * The fixture's own collection, hidden from the navigation and counted by
+ * its standalone panel, for e2e/tests/plugin-panel-declarations.spec.ts.
+ * Registered with the fixture, so only on the e2e server.
+ */
+export const SWATCHES_SLUG = "style-fixture-swatches";
+
+/**
+ * The fixture's checks, listed in its panel and counted by its Needs your
+ * attention items. Not hidden: Needs your attention shows an item gated on
+ * collections only to a reader of one of them as the dashboard lists them,
+ * and the dashboard leaves a hidden collection out.
+ */
+export const CHECKS_SLUG = "style-fixture-checks";
+
+/** A swatch or a check whose `state` is this is one the panel counts. */
+export const SWATCH_TO_FIX = "to-fix";
+
+/** The panel's own pages, under `/admin/plugins/style-fixture/`. */
+export const PANEL_PAGE_PATHS = {
+  overview: "panel-overview",
+  checks: "panel-checks",
+  quiet: "panel-quiet",
+} as const;

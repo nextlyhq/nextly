@@ -231,6 +231,7 @@ import {
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
 import { reportPluginLandingWarnings } from "../plugins/plugin-landing";
+import { reportPluginPanelWarnings } from "../plugins/plugin-panel";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
@@ -1717,7 +1718,8 @@ function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
 
 /**
  * Name the boot's plugins, and warn about any without a description, and in
- * development about a landing a plugin or the site names wrongly or leaves out.
+ * development about a landing a plugin or the site names wrongly or leaves
+ * out, and about what a plugin's panel declares that the admin is not sent.
  */
 function logRegisteredPlugins(
   transformedConfig: NextlyServiceConfig,
@@ -1746,6 +1748,15 @@ function logRegisteredPlugins(
   reportPluginLandingWarnings(
     transformedConfig.plugins,
     transformedConfig.admin?.pluginOverrides,
+    process.env.NODE_ENV,
+    logger
+  );
+  // And what a plugin's panel declares that the admin is not sent or can
+  // never draw: a menu item for a page it does not register, a group, count
+  // or badge naming nothing it declares or owns. Reported as the landing is,
+  // for the same reasons, through the host's own logger.
+  reportPluginPanelWarnings(
+    transformedConfig.plugins,
     process.env.NODE_ENV,
     logger
   );
