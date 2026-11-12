@@ -48,6 +48,17 @@ import { formAvailabilityNow } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
 /**
+ * The refusal for a form that is absent, not published, or not open: one
+ * message whatever the reason, so the answer does not say which forms exist.
+ */
+export function noSuchForm(slug: string): NextlyError {
+  return NextlyError.notFound({
+    message: NO_SUCH_FORM,
+    logContext: { entity: "form", slug },
+  });
+}
+
+/**
  * These routes read and write as the anonymous visitor on the other end.
  *
  * `public: true` waives the ROUTE's authentication and says nothing about the
@@ -203,11 +214,27 @@ async function availabilityNow(
   return formAvailabilityNow(form, settings, { now: new Date(), taken });
 }
 
-async function readFormBySlug(
+/** A form as the public reads it: what judging its availability needs. */
+export type PublicForm = FormAvailabilityInput & {
+  id?: unknown;
+  settings?: unknown;
+  fields?: unknown;
+};
+
+/**
+ * The form at `slug`, read as the visitor, and what a visitor is told about
+ * it now: absent, closed (with its message), or open. One reading for every
+ * public endpoint that names a form by its slug, so they cannot come to
+ * disagree about which forms are open.
+ */
+export async function formAt(
   slug: string,
   ctx: PluginRouteContext,
   config: ResolvedFormBuilderConfig
-): Promise<Response> {
+): Promise<{
+  doc: PublicForm | undefined;
+  availability: ReturnType<typeof formAvailability>;
+}> {
   const slugs = installedSlugs(config, ctx.self);
 
   // Fetched by slug alone, then judged. A status filter in the query would
@@ -220,12 +247,19 @@ async function readFormBySlug(
     PUBLIC
   );
 
-  const doc = result.data?.[0] as
-    | (FormAvailabilityInput & { id?: unknown; settings?: unknown })
-    | undefined;
+  const doc = result.data?.[0] as PublicForm | undefined;
   const availability = doc
     ? await availabilityNow(doc, ctx, slugs)
     : formAvailability(doc);
+  return { doc, availability };
+}
+
+async function readFormBySlug(
+  slug: string,
+  ctx: PluginRouteContext,
+  config: ResolvedFormBuilderConfig
+): Promise<Response> {
+  const { doc, availability } = await formAt(slug, ctx, config);
 
   if (availability.kind === "absent") {
     // The same sentence every other door gives. The canonical "Not found."

@@ -1,12 +1,12 @@
 /**
  * What the "What search engines received" screen and its routes agree on:
  * where they are, the crawlers a page is fetched as, and the shape of what
- * the check answers. A leaf, importing nothing that runs, so the admin
- * bundle reads it without the server's code.
+ * the check answers. It imports only another contract, so the admin bundle
+ * reads it without the server's code.
  *
  * @module received/contract
  */
-import { SEO_ADMIN_SLUG } from "../settings/contract";
+import { INSPECT_PAGE_HREF } from "../overview/contract";
 
 /** Where a page is checked, under the plugin's routes. */
 export const RECEIVED_ROUTE_PATH = "/received";
@@ -14,17 +14,17 @@ export const RECEIVED_ROUTE_PATH = "/received";
 /** Where the screen reads the pages it offers and the addresses allowed. */
 export const RECEIVED_PAGES_ROUTE_PATH = "/received/pages";
 
-/** The screen: its path under the plugin, and its component. */
+/**
+ * The screen's old address: its path under the plugin, and the component
+ * that sends a bookmark on to Inspect, or to Pages.
+ */
 export const RECEIVED_PAGE: {
   readonly path: "received";
-  readonly component: "@nextlyhq/plugin-seo/admin#SeoReceivedPage";
+  readonly component: "@nextlyhq/plugin-seo/admin#SeoReceivedMoved";
 } = {
   path: "received",
-  component: "@nextlyhq/plugin-seo/admin#SeoReceivedPage",
+  component: "@nextlyhq/plugin-seo/admin#SeoReceivedMoved",
 };
-
-/** Where the screen is, for a link; `?address=` names the page to check. */
-export const RECEIVED_PAGE_HREF: string = `/admin/plugins/${SEO_ADMIN_SLUG}/${RECEIVED_PAGE.path}`;
 
 /** Names joined for a sentence: "a", "a and b", "a, b and c". */
 export function inSentence(names: readonly string[]): string {
@@ -42,9 +42,12 @@ export function fileOf(address: string): string {
   }
 }
 
-/** Where the screen checks the page at `address`. */
+/**
+ * Where the page at `address` is checked: Inspect, under Pages, which took
+ * over this screen's old address.
+ */
 export function receivedHrefFor(address: string): string {
-  return `${RECEIVED_PAGE_HREF}?address=${encodeURIComponent(address)}`;
+  return `${INSPECT_PAGE_HREF}?address=${encodeURIComponent(address)}`;
 }
 
 /** The crawlers a page is fetched as, in the order they are shown. */

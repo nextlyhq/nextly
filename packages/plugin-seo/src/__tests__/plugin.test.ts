@@ -134,7 +134,7 @@ describe("seoPlugin", () => {
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
-      // The Pages and addresses screen's list, and its save.
+      // The Pages screen's list, and its save.
       ["GET", "/pages", undefined, undefined],
       ["POST", "/pages/seo", undefined, undefined],
       // The bulk edit table, for a signed-in reader of each type.
@@ -145,6 +145,9 @@ describe("seoPlugin", () => {
       ["GET", "/import/groups", undefined, undefined],
       ["POST", "/import/dry-run", undefined, undefined],
       ["POST", "/import/apply", undefined, undefined],
+      // The Overview's setup checklist, read and hidden or shown.
+      ["GET", "/overview/checklist", undefined, undefined],
+      ["POST", "/overview/checklist", undefined, undefined],
     ]);
   });
 
@@ -239,6 +242,8 @@ describe("seoPlugin", () => {
       "/import/groups",
       "/import/dry-run",
       "/import/apply",
+      "/overview/checklist",
+      "/overview/checklist",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -282,6 +287,8 @@ describe("seoPlugin", () => {
       "/import/groups",
       "/import/dry-run",
       "/import/apply",
+      "/overview/checklist",
+      "/overview/checklist",
     ]);
   });
 
@@ -692,5 +699,67 @@ describe("the optional connections the plugin declares", () => {
         searchConsole: { clientId: "id", clientSecret: "" },
       })
     ).toThrow(/clientId and a clientSecret/);
+  });
+});
+
+describe("the SEO section", () => {
+  const SECTION = "/admin/plugins/nextlyhq-plugin-seo";
+
+  it("lists its five screens in the order they are used, Overview first", () => {
+    const admin = seoPlugin({ collections: ["posts"] }).contributes?.admin;
+    expect((admin?.menu ?? []).map(item => [item.label, item.to])).toEqual([
+      ["Overview", `${SECTION}/overview`],
+      ["Pages", `${SECTION}/pages`],
+      ["Problems", `${SECTION}/problems`],
+      ["Redirects", `${SECTION}/redirects`],
+      ["Settings", `${SECTION}/settings`],
+    ]);
+  });
+
+  it("badges Problems with the count of its Needs attention line", () => {
+    const plugin = seoPlugin({ collections: ["posts"] });
+    const problems = plugin.contributes?.admin?.menu?.find(
+      item => item.label === "Problems"
+    );
+    expect(problems?.badge).toEqual({ attention: "seo/problems" });
+    expect(
+      plugin.contributes?.dashboard?.attention?.map(item => item.id)
+    ).toEqual(["seo/problems"]);
+  });
+
+  it("names no badge where no collection carries SEO, and so no line exists", () => {
+    const problems = seoPlugin({
+      collections: [],
+      singles: ["home"],
+    }).contributes?.admin?.menu?.find(item => item.label === "Problems");
+    expect(problems?.badge).toBeUndefined();
+  });
+
+  it("opens on its Overview", () => {
+    expect(seoPlugin({ collections: ["posts"] }).admin?.landing).toBe(
+      `${SECTION}/overview`
+    );
+  });
+
+  it("serves each screen, and the old addresses that send bookmarks on", () => {
+    const pages = seoPlugin({ collections: ["posts"] }).contributes?.admin
+      ?.pages;
+    expect(
+      (pages ?? []).map(page => [
+        page.path,
+        page.component.split("#")[1],
+        page.requiredPermission,
+      ])
+    ).toEqual([
+      ["overview", "SeoOverviewPage", "manage-seo"],
+      ["pages", "SeoPagesPage", "manage-seo"],
+      ["pages/import", "SeoImportPage", "manage-seo"],
+      ["pages/inspect", "SeoInspectPage", "check-seo"],
+      ["problems", "SeoProblemsPage", undefined],
+      ["redirects", "SeoRedirectsPage", "manage-seo"],
+      ["settings", "SeoSettingsPage", "manage-seo"],
+      ["bulk", "SeoBulkPage", undefined],
+      ["received", "SeoReceivedMoved", undefined],
+    ]);
   });
 });

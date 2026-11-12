@@ -11,6 +11,9 @@
  * leaves every value as it was. Only whoever holds site-wide SEO
  * (`manage-seo`) may import.
  *
+ * The Overview's setup checklist is read here too, since its import item
+ * depends on the old values these fixtures hold and on an import applied.
+ *
  * nextlyhq.com's component is named `seo`; a type with a field of its own
  * named `seo` cannot take the plugin's group, so here it sits under another
  * name with the same fields.
@@ -42,6 +45,7 @@ import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { typedCanonical } from "../../canonical";
+import type { ChecklistBody } from "../../overview/contract";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../../redirects/collection";
 import { MANAGE_SEO_PERMISSION } from "../../permissions";
@@ -1013,6 +1017,129 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(applied.status).toBe(403);
   });
 });
+
+/** The Overview's checklist as `key` reads it, each item's state by id. */
+async function checklist(
+  key: string
+): Promise<{ body: ChecklistBody; done: Record<string, boolean> }> {
+  const response = await call(key, "GET", "/overview/checklist");
+  expect(response.status, await response.clone().text()).toBe(200);
+  const body = (await response.json()) as ChecklistBody;
+  return {
+    body,
+    done: Object.fromEntries(body.items.map(item => [item.id, item.done])),
+  };
+}
+
+describe.each(getConfiguredTestDialects())(
+  "the Overview's setup checklist (%s)",
+  dialect => {
+    it("works out each item from what the plugin stores, the import included where old values wait", async () => {
+      const { t, staff } = await boot(dialect);
+      // Nothing set but the name and production address `boot` saves, and
+      // no old values yet.
+      let read = await checklist(staff.importer);
+      expect(read.body.items.map(item => item.id)).toEqual([
+        "site",
+        "patterns",
+        "shareImage",
+        "brand",
+        "searchConsole",
+      ]);
+      expect(read.done).toEqual({
+        site: true,
+        patterns: false,
+        shareImage: false,
+        brand: false,
+        searchConsole: false,
+      });
+      expect(read.body.items[1]).toMatchObject({ types: 2 });
+
+      // Old values in Rext's meta-data group: the import is offered.
+      await post(t, {
+        title: "Surfer vs Rext",
+        slug: "surfer",
+        metaData: { seoTitle: "Surfer SEO vs Rext AI" },
+      });
+      read = await checklist(staff.importer);
+      expect(read.done.import).toBe(false);
+
+      // Each item completed where it is done.
+      const image = await t.nextly.media.upload({
+        file: {
+          data: PNG,
+          name: "share.png",
+          mimetype: "image/png",
+          size: PNG.length,
+        },
+      });
+      stored.push(String(image.id));
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          patterns: {
+            posts: { title: "{Title} | {Site name}" },
+            pages: { title: "{Title}" },
+          },
+          image: String(image.id),
+          brandName: "Rext AI",
+          logo: String(image.id),
+        },
+      });
+      const source: ImportSource = {
+        kind: "group",
+        field: "metaData",
+        map: { ...META_MAP },
+      };
+      const dry = await dryRun(staff.importer, source);
+      expect((await apply(staff.importer, source, dry.plan)).status).toBe(200);
+
+      read = await checklist(staff.importer);
+      expect(read.done).toEqual({
+        site: true,
+        patterns: true,
+        shareImage: true,
+        brand: true,
+        import: true,
+        searchConsole: false,
+      });
+
+      // A site with no name is not named, whatever else it has.
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, siteName: "" },
+      });
+      expect((await checklist(staff.importer)).done.site).toBe(false);
+    });
+
+    it("keeps the checklist hidden once hidden, until shown again", async () => {
+      const { staff } = await boot(dialect);
+      expect((await checklist(staff.importer)).body.hidden).toBe(false);
+
+      const hidden = await call(staff.importer, "POST", "/overview/checklist", {
+        hidden: true,
+      });
+      expect(hidden.status, await hidden.clone().text()).toBe(200);
+      expect((await checklist(staff.importer)).body.hidden).toBe(true);
+
+      await call(staff.importer, "POST", "/overview/checklist", {
+        hidden: false,
+      });
+      expect((await checklist(staff.importer)).body.hidden).toBe(false);
+    });
+
+    it("refuses the checklist to anyone without site-wide SEO", async () => {
+      const { staff } = await boot(dialect);
+      const read = await call(staff.editorOnly, "GET", "/overview/checklist");
+      expect(read.status).toBe(403);
+      const hide = await call(staff.editorOnly, "POST", "/overview/checklist", {
+        hidden: true,
+      });
+      expect(hide.status).toBe(403);
+    });
+  }
+);
 
 describe.each(getConfiguredTestDialects())(
   "the SEO import where a field of the site's own group can't be read (%s)",

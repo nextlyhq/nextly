@@ -13,25 +13,24 @@ import {
   Button,
   navigateTo,
   toastMutationResult,
-  usePluginRoute,
-  usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
 import {
   fixHref,
-  PROBLEMS_CHECK_ROUTE_PATH,
-  PROBLEMS_ROUTE_PATH,
+  KIND_SEVERITY,
+  problemsHref,
+  problemTotal,
+  severityIn,
   type Problem,
   type ProblemListBody,
+  type ProblemSeverity,
 } from "../problems/contract";
-import { SEO_PLUGIN_NAME } from "../settings/contract";
 
+import { useCheckedProblemList } from "./problem-list";
 import { checkedWords, groupsOf, type ProblemGroup } from "./problem-view";
+import { AdminLink } from "./section";
 import { Icon, ROOT, SeoStyles } from "./styles";
-
-/** What the check route answers: the list it leaves, and what it did. */
-type CheckBody = ProblemListBody & { message: string };
 
 /** `n problems`, `1 problem`. */
 const problemCount = (count: number) =>
@@ -163,7 +162,7 @@ function Meta({
     <div className="nx-seo-pmeta">
       {list === undefined ? null : (
         <>
-          <span>{problemCount(list.problems.length)}</span>
+          <span>{problemCount(problemTotal(list.problems))}</span>
           <span aria-hidden="true">·</span>
         </>
       )}
@@ -218,48 +217,33 @@ function Body({
 }
 
 /** The problem list's screen, as the admin mounts it. */
+/** Each severity's name, as the list says it is narrowed to it. */
+const SEVERITY_NAMES: Record<ProblemSeverity, string> = {
+  error: "errors",
+  warning: "warnings",
+  notice: "notices",
+};
+
 export function SeoProblemsPage(): JSX.Element {
-  const read = usePluginRoute<ProblemListBody>({
-    plugin: SEO_PLUGIN_NAME,
-    path: PROBLEMS_ROUTE_PATH,
-    // Pages change elsewhere in the admin, so each visit reads afresh.
-    staleTime: 0,
-  });
-  const recheck = usePluginRouteMutation<undefined, CheckBody>({
-    plugin: SEO_PLUGIN_NAME,
-    path: PROBLEMS_CHECK_ROUTE_PATH,
-    invalidates: [PROBLEMS_ROUTE_PATH],
-  });
-  // The list a check answered, with the read it was answered over: shown
-  // until a read newer than that one arrives, so a refresh that fails never
-  // puts the older list back.
-  const [checked, setChecked] = useState<
-    { list: ProblemListBody; over: ProblemListBody | undefined } | undefined
-  >();
+  const checked = useCheckedProblemList();
+  const { checking, failed, check } = checked;
+  // A link from the Overview's counts narrows the list to one severity; the
+  // address is read once, as the admin remounts the page when it changes.
+  const [severity] = useState(() =>
+    typeof window === "undefined"
+      ? undefined
+      : severityIn(window.location.search)
+  );
   const list =
-    checked !== undefined && read.data === checked.over
+    checked.list === undefined || severity === undefined
       ? checked.list
-      : (read.data ?? checked?.list);
-
-  const check = () => {
-    const over = read.data;
-    void recheck.write().then(answer => {
-      if (answer === undefined) return;
-      setChecked({ list: answer, over });
-      toastMutationResult(answer.message, []);
-    });
-  };
-
-  // A list a day old, or never checked whole, is checked once as it opens.
-  const asked = useRef(false);
-  useEffect(() => {
-    if (asked.current || read.data?.due !== true) return;
-    asked.current = true;
-    check();
-  });
-
+      : {
+          ...checked.list,
+          problems: checked.list.problems.filter(
+            problem => KIND_SEVERITY[problem.kind] === severity
+          ),
+        };
   const site = list?.site ?? "the site";
-  const failed = recheck.error ?? read.error;
   return (
     <div className={`${ROOT} nx-seo-page`}>
       <SeoStyles />
@@ -271,8 +255,14 @@ export function SeoProblemsPage(): JSX.Element {
             Each one links to its fix. Nothing here stops anyone publishing.
           </p>
         </div>
-        <Meta list={list} checking={recheck.pending} check={check} />
+        <Meta list={list} checking={checking} check={() => check()} />
       </div>
+      {severity === undefined ? null : (
+        <p className="nx-seo-help">
+          {`Showing ${SEVERITY_NAMES[severity]} only. `}
+          <AdminLink href={problemsHref()}>Show all problems</AdminLink>
+        </p>
+      )}
       {failed !== null && list !== undefined ? (
         <p className="nx-seo-alert" role="alert">
           {apiErrorMessage(failed)}

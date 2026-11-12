@@ -180,6 +180,20 @@ function declaredGroups(
   return groups;
 }
 
+/**
+ * Whether `types` declare a group or component field other than the
+ * plugin's own: old SEO values can only be in one. Read from the
+ * declarations alone, before any page is.
+ */
+export function declaresOtherGroups(
+  ctx: PluginContext,
+  types: readonly { slug: string; label: string; fields: unknown }[]
+): boolean {
+  return [...declaredGroups(ctx, types).keys()].some(
+    name => name !== SEO_GROUP
+  );
+}
+
 /** One declared group as the panel offers it, counted over its pages. */
 function offeredGroup(
   name: string,

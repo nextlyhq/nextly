@@ -193,8 +193,8 @@
       "compiled": 7
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 26,
-      "compiled": 14
+      "samples": 31,
+      "compiled": 19
     },
     "docs/plugins/api-reference.mdx": {
       "samples": 37,
@@ -488,10 +488,10 @@
       "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "uninstalled #25 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "uninstalled #30 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
-      "reader-file #22 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
+      "reader-file #27 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1
     },

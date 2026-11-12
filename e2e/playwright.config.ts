@@ -283,7 +283,8 @@ export default defineConfig({
       NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS: "off",
       // The first-party plugins the playground registers only when named
       // (`apps/playground/nextly.config.ts`): the SEO plugin, as it ships, for
-      // dashboard-seo-issues.spec.ts. It extends a collection of its own there,
+      // dashboard-seo-issues.spec.ts, seo-tab.spec.ts and seo-overview.spec.ts.
+      // It extends a collection of its own there,
       // so no other spec meets its fields.
       NEXTLY_PLAYGROUND_PLUGINS: "seo",
       // Registers the slow-card fixture, which dashboard-slow-card.spec.ts

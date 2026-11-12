@@ -505,12 +505,14 @@ export type {
 /**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build
  * the fields it contributes (`contributes.collections` / `contributes.extend`).
- * @public Exercised by `plugin-seo` (its `seo` field group). Field factories
- *   graduate here as first-party plugins exercise them (D55); more can be added
- *   the same way.
+ * @public Exercised by `plugin-seo` (its `seo` field group) and
+ *   `plugin-form-builder` (its internal `form-uploads` and
+ *   `form-submission-sends` collections, typed `CollectionConfig`, with a
+ *   `date` field). Field factories graduate here as first-party plugins
+ *   exercise them; more can be added the same way.
  */
-export { text, textarea, checkbox, upload, group } from "nextly";
-export type { FieldConfig } from "nextly";
+export { text, textarea, checkbox, upload, group, date } from "nextly";
+export type { FieldConfig, CollectionConfig } from "nextly";
 
 /**
  * Which fields a level addresses, with presentational groups flattened.
@@ -731,6 +733,13 @@ export type {
   PluginMediaService,
   PluginEmailService,
   ForgetSendsInput,
+  QueuedEmailChangeHandler,
+  QueuedEmailChange,
+  QueuedEmailCancelCause,
+  QueuedEmailRecipient,
+  QueuedRecipientOutcome,
+  QueuedEmailStanding,
+  QueuedEmailStatus,
   PluginVersionsService,
   PluginCollectionTransaction,
   PluginVersionPins,

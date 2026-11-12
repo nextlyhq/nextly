@@ -125,13 +125,13 @@ service's database adapter, Drizzle handle, sub-services and logger are not on
 it, so a plugin cannot reach the database through a service except by calling
 its methods.
 
-| Service       | Type                      | Methods                                                                                                                                                                                                                                                                                                         |
-| ------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `collections` | `PluginCollectionService` | the methods above                                                                                                                                                                                                                                                                                               |
-| `users`       | `PluginUserService`       | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile`                                                                                                                                                        |
+| Service       | Type                      | Methods                                                                                                                                                                                                                                                                                                                    |
+| ------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collections` | `PluginCollectionService` | the methods above                                                                                                                                                                                                                                                                                                          |
+| `users`       | `PluginUserService`       | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile`                                                                                                                                                                   |
 | `media`       | `PluginMediaService`      | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions`, `isInUse` |
-| `email`       | `PluginEmailService`      | `send`, `sendWithTemplate`, `queue`, `queueWithTemplate`, `forgetSends`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate`                                                                                                                          |
-| `versions`    | `PluginVersionsService`   | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows`, and `pins` (version pins on the plugin's own transaction; see [Pinning a version](/docs/versions#from-a-plugin))                                                                                                 |
+| `email`       | `PluginEmailService`      | `send`, `sendWithTemplate`, `queue`, `queueWithTemplate`, `forgetSends`, `onQueuedEmailChange`, `readQueued`, `recipientDigest`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate`                                                                             |
+| `versions`    | `PluginVersionsService`   | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows`, and `pins` (version pins on the plugin's own transaction; see [Pinning a version](/docs/versions#from-a-plugin))                                                                                                            |
 
 `ctx.services` also has `singles` (the declared Singles), `jobs` (queue
 background work) and `plugins` (services other plugins contribute). The
@@ -719,6 +719,71 @@ ctx.hooks.onInTransaction("orders", async write => {
   );
 });
 ```
+
+## Knowing what became of what you sent
+
+A plugin that keeps its own record of each email it queued (a form showing,
+on a submission, who its notification reached) is told of every change of
+its own queued emails, inside the transaction that makes it. What your
+handler writes through `db`, or through the collection services'
+`*InTransaction` methods with `transaction`, commits or rolls back with the
+change, so your record never falls behind the send or runs ahead of it. A
+handler that throws undoes the change, and the next attempt makes it again
+(an attempt with the same key never sends twice), so write as an upsert keyed
+by the queued email's id and each recipient's digest.
+
+Each change (`QueuedEmailChange`, `@experimental`) has the queued email's id,
+the key you queued it with, the attempt and its time, and a `state`:
+
+- `sending`: an attempt is starting; with `cancelRequested`, a cancel reached
+  the attempt already with the provider, which ends `sent` if the provider
+  takes it and `cancelled` if it fails;
+- `retrying`: the attempt failed in a way a retry can help (`failure` says
+  why), and another follows;
+- `sent`, `failed`, or `cancelled` with `cancel`: by a person (their user
+  id), by your own `forgetSends` (`sender`), or by a request made during an
+  attempt (`request`).
+
+Where a provider was asked, `recipients` lists every recipient the send went
+to after `email.beforeSend` filters ran, each with its line (`to`, `cc`,
+`bcc`), what became of it (`accepted`, `refused`, `unknown`, or `skipped`
+when you excluded it), a masked hint for a screen (`j•••@example.com`) and
+your plugin's digest of it. No address is ever handed over. The digest is
+what `ctx.services.email.recipientDigest(address)` gives: keyed by your
+plugin's own key, it stays the same across rotations of the install's
+secret. Take the first one outside a transaction.
+
+```ts
+ctx.services.email.onQueuedEmailChange(async (change, { transaction }) => {
+  for (const recipient of change.recipients ?? []) {
+    await ctx.services.collections.createEntryInTransaction(
+      transaction,
+      "my-send-outcomes",
+      { queuedId: change.queuedId, state: change.state, ...recipient }
+    );
+  }
+});
+```
+
+An erasure cancels queued email in the erasure's own transaction and does not
+call your handler: a person's erasure never waits on a plugin. Read where your
+emails stand with `ctx.services.email.readQueued(ids)` (at most 500): each of
+your own is `waiting`, `retrying`, `sending`, `sent`, `failed` or
+`cancelled`, with its attempts and whether its message is still held; an id
+that is not yours is left out. Use it to say a send is still in progress
+before offering to send it again.
+
+To send an email again to the recipients who did not get it, pass
+`excludeRecipients`, the digests of those who did, on `queue`,
+`queueWithTemplate`, `send` or `sendWithTemplate`. They are compared with the
+recipients `email.beforeSend` filters return, so a recipient a filter adds is
+left out too. When no `to` is left, each remaining copy gets a message of its
+own with itself as the only `to`, so a blind copy is never shown to another.
+When nobody is left, nothing is sent. It cannot be combined with `person`.
+
+People cancel a queued email with the Direct API's
+`nextly.email.cancelQueued({ id })`, which asks `manage-email-deliveries` of
+a checked call (see [Direct API](/docs/api-reference/direct-api)).
 
 ## Freeing media nothing uses
 

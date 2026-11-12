@@ -131,6 +131,10 @@ import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import {
+  useEditorRestoreSurface,
+  useFormRestore,
+} from "@admin/components/features/versions/useEditorRestoreSurface";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
 import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
@@ -745,6 +749,8 @@ export function SingleForm({
     defaultValues,
     mode: "onSubmit",
   });
+  // The values a restore puts into this form, whose sources the save names.
+  const formRestore = useFormRestore(form);
 
   // Keep the latest computed defaultValues in a ref so the reset effect can read
   // them without depending on the `defaultValues` object identity: React Query
@@ -1006,10 +1012,26 @@ export function SingleForm({
       }),
     [locale, shownDefaultLocale, version, schema.slug, schema.draftsEnabled]
   );
+  // What a restore puts values back into: this form, under its lock.
+  const { getLocale: localeOf, defaultLocale: editingDefault } =
+    useLocalization();
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? editingDefault;
+  const editingLanguage = localeOf(editingLocale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    restore: formRestore,
+    form,
+    fields: allFields,
+    readOnly: () => lock.readOnly,
+    localized: schema.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
+  });
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
-    versionFor
+    versionFor,
+    editorRestore
   );
   const {
     viewingVersion,
@@ -1174,6 +1196,8 @@ export function SingleForm({
           mayWrite: () => !writesHeldNow.current,
           // And the editor can move to another language.
           stillShown: () => scopeNow.current === startedIn,
+          // The values a restore put in, whose sources the save names.
+          restore: formRestore,
           // This Single's recovery points, addressed as its recorder does.
           recordingsFor,
           // Why: shared intent→payload helper mirrors the EntryForm
@@ -1234,6 +1258,7 @@ export function SingleForm({
     },
     [
       form,
+      formRestore,
       onSubmit,
       refusedForm,
       blankPasswordFields,
