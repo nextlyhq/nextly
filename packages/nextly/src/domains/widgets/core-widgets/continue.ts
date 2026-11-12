@@ -5,16 +5,14 @@
  * Its `load` reads `system:continue` as the caller its read services were
  * bound for, on the tab its reader chose: their pins first, then their saves
  * (Mine), or what other people saved (Team), as the reader may read each of
- * them now. Asked as core's own lists are: the rows the card's size and
- * density hold, at most its "Number of items", and one more, so the card can
- * say more exist at every size.
+ * them now. Asked as core's own lists are: its "Number of entries"
+ * (`listEntries`), and one more, so the card can say more exist.
  *
  * @module domains/widgets/core-widgets/continue
  */
 
-import { rowsThatFit } from "../card-geometry";
 import { defineWidget } from "../declaration/define-widget";
-import { effectiveWidgetLimit } from "../query-limits";
+import { listEntries } from "../query-limits";
 import { CONTINUE_SOURCE_ID } from "../system-source-ids";
 
 import type { CoreListWidgetData } from "./data";
@@ -24,9 +22,11 @@ import { readCoreList } from "./system-read";
 
 export const continueWidget = defineWidget({
   id: CORE_WIDGET_ID.continue,
+  // Drawn beside its name in the add panel.
+  icon: "History",
   title: "Continue where you left off",
-  description:
-    "Your pinned entries and your latest saves, or what other people saved, one row per entry.",
+  // One line, as the add panel lists it.
+  description: "Entries you saved or pinned, to pick up again.",
   // Half the row by default; from a third, where its rows still read, to the
   // full width. Five rows tall at the default density (h 5), from four (h 4)
   // to the ten a list draws (h 8).
@@ -45,7 +45,6 @@ export const continueWidget = defineWidget({
   load: async ({
     settings,
     services,
-    size,
     signal,
     now,
   }): Promise<CoreListWidgetData> =>
@@ -73,13 +72,9 @@ export const continueWidget = defineWidget({
         ],
         // The source narrows by the tab its reader chose, Mine unless chosen.
         where: { tab: settings.tab },
-        // The rows the card's height holds at its density, at most its "Number of items", and
-        // the one more that says more exist: the rule the card's own rows are drawn by.
-        limit:
-          Math.min(
-            effectiveWidgetLimit(settings.limit),
-            rowsThatFit(size, { density: settings.density })
-          ) + 1,
+        // Its "Number of entries", and the one more that says more exist: the rule the card's
+        // own rows are drawn by (`listEntries`).
+        limit: listEntries(settings.limit) + 1,
       },
       { services, signal, now }
     ),

@@ -20,7 +20,8 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getSQLiteDrizzleKit } from "../../../../database/drizzle-kit-lazy";
-import { SchemaRegistry } from "../../../../database/schema-registry";
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { dynamicFieldGroupsSqlite } from "../../../../schemas/dynamic-field-groups/sqlite";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive";
 import { FieldGroupRegistryService } from "../../../field-groups/services/field-group-registry-service";
@@ -96,11 +97,14 @@ beforeEach(async () => {
   adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
 
-  const schemaRegistry = new SchemaRegistry();
-  schemaRegistry.registerStaticSchemas({
-    dynamicFieldGroups: dynamicFieldGroupsSqlite,
-  });
-  adapter.setTableResolver(schemaRegistry);
+  // The static resolver every production adapter carries: a field group's
+  // delete holds the schema lock, which seeds its row through a transaction
+  // insert, and an adapter refuses that for a table its resolver does not hold.
+  // Its tables include the field-group registry this suite writes through.
+  await loadDialectTables("sqlite");
+  installRegistryResolver(
+    adapter as unknown as Parameters<typeof installRegistryResolver>[0]
+  );
 });
 
 afterEach(async () => {

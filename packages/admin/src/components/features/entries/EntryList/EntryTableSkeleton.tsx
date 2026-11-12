@@ -1,103 +1,23 @@
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@nextlyhq/ui";
 import type React from "react";
 
-/** Shared animated gray bar */
-const GrayBar = ({ className }: { className?: string }) => (
-  <div
-    aria-hidden="true"
-    className={`animate-pulse rounded-md bg-primary/5 ${className ?? ""}`}
-  />
+import {
+  ScreenOutline,
+  TableOutline,
+} from "@admin/components/shared/loading-frame/outlines";
+
+/**
+ * The entries table while its rows load: the table's real head, from the
+ * columns already known, over five still outline rows. Part of the screen's
+ * wait, so it appears only after the frame's delay and the frame draws the
+ * line under the bar meanwhile.
+ */
+export const EntryTableSkeleton: React.FC<{
+  /** The heads of the columns the table will draw. */
+  headers?: readonly React.ReactNode[];
+}> = ({ headers }) => (
+  <ScreenOutline>
+    <TableOutline headers={headers} />
+  </ScreenOutline>
 );
-
-export const EntryTableSkeleton: React.FC = () => {
-  const SKELETON_ROW_COUNT = 8;
-  const columns = ["select", "title", "slug", "updatedAt", "actions"];
-
-  return (
-    <div className="table-wrapper rounded-md  border border-border bg-card overflow-hidden">
-      {/* Square corners: this fills the bordered table wrapper edge to edge. */}
-      <div className="border-0 rounded-none shadow-none">
-        <Table>
-          {/* Header Skeleton */}
-          <TableHeader>
-            <TableRow>
-              {columns.map(col => (
-                <TableHead key={`skeleton-header-${col}`} className="py-3">
-                  {col === "select" ? (
-                    <GrayBar className="h-4 w-4" />
-                  ) : col === "actions" ? (
-                    <div className="h-4 w-8 rounded-sm opacity-0" />
-                  ) : col === "title" ? (
-                    <GrayBar className="h-4 w-[70%] max-w-[180px]" />
-                  ) : (
-                    <GrayBar className="h-4 w-[60%] max-w-[120px]" />
-                  )}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-
-          {/* Body Skeleton */}
-          <TableBody>
-            {Array.from({ length: SKELETON_ROW_COUNT }).map((_, rowIdx) => (
-              <TableRow
-                key={`skeleton-${rowIdx}`}
-                className="border-b border-border"
-              >
-                {columns.map(col => (
-                  <TableCell key={`skeleton-cell-${col}`} className="py-3">
-                    {col === "select" ? (
-                      <GrayBar className="h-4 w-4" />
-                    ) : col === "actions" ? (
-                      <div className="h-4 w-8 rounded-sm opacity-0" />
-                    ) : col === "title" ? (
-                      <GrayBar className="h-4 w-[70%] max-w-[200px]" />
-                    ) : (
-                      <GrayBar className="h-4 w-[60%] max-w-[130px]" />
-                    )}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-
-      {/* Footer Skeleton */}
-      <div className="table-footer border-t border-border bg-[var(--nx-table-header-bg)]">
-        {/* Axis utilities rather than the `p-4` shorthand: Tailwind emits `.px-2`
-            and `.py-4` AFTER `.p-4`, so at equal specificity the shorthand loses
-            both axes and contributes nothing. The footer is deliberately tighter
-            horizontally than vertically. */}
-        <div className="flex items-center justify-between px-2 py-4">
-          <div className="flex items-center gap-2 text-sm">
-            <GrayBar className="h-4 w-[120px]" />
-          </div>
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2">
-              <GrayBar className="h-4 w-20" />
-              <GrayBar className="h-8 w-[70px]" />
-            </div>
-            <div className="flex items-center gap-1">
-              <GrayBar className="h-8 w-8" />
-              <GrayBar className="h-8 w-8" />
-              <GrayBar className="h-8 w-8" />
-              <GrayBar className="h-8 w-8" />
-              <GrayBar className="h-8 w-8" />
-            </div>
-            <GrayBar className="h-4 w-[120px]" />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 EntryTableSkeleton.displayName = "EntryTableSkeleton";

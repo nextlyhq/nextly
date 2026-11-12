@@ -31,7 +31,10 @@ import {
 
 import { Pencil, Trash2 } from "@admin/components/icons";
 import { RangeField } from "@admin/components/shared/range-field";
-import type { RowAction } from "@admin/components/ui/table/data-table";
+import type {
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
 import {
   ListView,
   type ListColumnsControl,
@@ -48,6 +51,7 @@ import {
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import type { OfferedListFilter } from "./plugin-filters";
+import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import {
   rowId,
@@ -74,6 +78,10 @@ export interface TablePaginationState {
   total: number;
   /** Total number of pages */
   totalPages: number;
+  /** The total is a lower bound: more entries match than were counted. */
+  totalCapped?: boolean;
+  /** How many entries the current page holds. */
+  pageItemCount?: number;
 }
 
 /**
@@ -151,6 +159,16 @@ export interface EntryTableProps {
    * rows its rule holds for.
    */
   declaredRowActions?: readonly RowAction<EntryRow>[];
+  /**
+   * Plugins' declared bulk actions, offered in the bulk bar on the rows
+   * selected, after the built-in ones.
+   */
+  declaredBulkActions?: readonly DeclaredBulkAction[];
+  /**
+   * Plugins' declared columns, in the order delivered, drawn after the
+   * collection's own columns.
+   */
+  declaredColumns?: readonly NextlyColumn<Record<string, unknown>>[];
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
   /** Created date upper bound (YYYY-MM-DD) */
@@ -229,6 +247,39 @@ function PluginFilterMenuSections({
   ));
 }
 
+/**
+ * The table's row selection, and the bulk actions it is offered for. Rows are
+ * selectable only when some bulk action is offered on them, and a row's
+ * Delete only with the delete permission. A plugin's declared bulk action
+ * counts as one: the server sends it only to a reader who may run it, and a
+ * reader holding none of the built-in ones still needs the checkboxes to
+ * reach it.
+ */
+function useEntryTableSelection(
+  collection: EntryTableProps["collection"],
+  declaredBulkActions: readonly DeclaredBulkAction[] = []
+) {
+  const offered = useEntryBulkActions(collection);
+  return {
+    offered,
+    ...useEntrySelection(offered.any || declaredBulkActions.length > 0),
+  };
+}
+
+/** Plugins' declared bulk actions as the bulk bar draws them, judged on `selected`. */
+function declaredBarActions(
+  declaredBulkActions: readonly DeclaredBulkAction[] = [],
+  selected: readonly string[]
+) {
+  return declaredBulkActions.map(action => ({
+    id: action.id,
+    label: action.label,
+    disabled: action.isDisabled(selected),
+    note: action.heldBackNote(selected),
+    onSelect: () => action.onSelect(selected),
+  }));
+}
+
 export const EntryTable: ForwardRefExoticComponent<
   EntryTableProps & RefAttributes<EntryTableRef>
 > = forwardRef<EntryTableRef, EntryTableProps>(function EntryTable(
@@ -259,6 +310,8 @@ export const EntryTable: ForwardRefExoticComponent<
     chosenPluginFilters,
     onPluginFilterChange,
     declaredRowActions,
+    declaredBulkActions,
+    declaredColumns,
     createdFrom = "",
     createdTo = "",
     updatedFrom = "",
@@ -275,23 +328,27 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   const [globalFilter, setGlobalFilter] = useState("");
-  // Rows are selectable only when some bulk action is offered on them, and a
-  // row's Delete only with the delete permission.
-  const offered = useEntryBulkActions(collection);
-  const { selection, selected, versions, selectAll, clear } = useEntrySelection(
-    offered.any
-  );
+  const { offered, selection, selected, versions, selectAll, clear } =
+    useEntryTableSelection(collection, declaredBulkActions);
 
   // -------------------------------------------------------------------------
   // Columns
   // -------------------------------------------------------------------------
 
-  const columns = useMemo(
+  // The collection's own columns, which the column chooser offers and hides.
+  const ownColumns = useMemo(
     () =>
       buildEntryColumns(collection, columnsControl?.isColumnVisible, {
         openInLocale: (entryId, locale) => onEdit(entryId, locale),
       }),
     [collection, columnsControl, onEdit]
+  );
+  // Plugins' declared columns are drawn after them and always shown: they
+  // arrive only once the reader is known, and the chooser's stored choice is
+  // kept against a fixed set of columns, so they are not offered there.
+  const columns = useMemo(
+    () => [...ownColumns, ...(declaredColumns ?? [])],
+    [ownColumns, declaredColumns]
   );
 
   const titleField = useMemo(
@@ -438,7 +495,9 @@ export const EntryTable: ForwardRefExoticComponent<
         placeholder: `Search ${collection.label}...`,
         inputProps: { "data-entry-search-input": true },
       }}
-      columnsControl={columnsControl && { ...columnsControl, columns }}
+      columnsControl={
+        columnsControl && { ...columnsControl, columns: ownColumns }
+      }
       hasActiveFilters={hasAnyActiveFilters}
       filters={
         showFilterDropdown ? (
@@ -582,10 +641,19 @@ export const EntryTable: ForwardRefExoticComponent<
             }
             isPublishing={isBulkPublishing}
             onClear={clear}
+            declaredActions={declaredBarActions(declaredBulkActions, selected)}
           />
         ) : undefined
       }
-      skeleton={<EntryTableSkeleton />}
+      // The real heads over the outline rows: the columns are known before
+      // the rows are.
+      skeleton={
+        <EntryTableSkeleton
+          headers={columns
+            .filter(column => !column.hidden)
+            .map(column => column.header)}
+        />
+      }
       loading={isLoading}
       columns={columns}
       rows={entries}
@@ -616,6 +684,8 @@ export const EntryTable: ForwardRefExoticComponent<
         currentPage: pagination.page,
         totalPages: pagination.totalPages,
         totalItems: pagination.total,
+        totalCapped: pagination.totalCapped,
+        pageItemCount: pagination.pageItemCount,
         pageSize: pagination.limit,
         onPageChange,
         onPageSizeChange: onLimitChange,

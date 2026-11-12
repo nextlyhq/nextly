@@ -62,9 +62,7 @@ async function seedTranslated(
 async function makeHeadlineShared(page: Page, slug: string): Promise<void> {
   await gotoAdmin(page, `/builder/collections/${slug}`);
   // Exact: the field row's own button names its actions too ("… Edit headline …").
-  await page
-    .getByRole("button", { name: "Edit headline", exact: true })
-    .click();
+  await page.getByTestId("field-row-headline").click();
   await page.getByRole("tab", { name: "Advanced" }).click();
   await page.getByRole("switch", { name: "Localized" }).click();
   // No Apply: the settings panel keeps each change as it is made.

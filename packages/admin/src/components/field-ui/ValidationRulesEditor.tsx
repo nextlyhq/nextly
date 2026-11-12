@@ -99,6 +99,10 @@ const NUMERIC_PAIRS: readonly (readonly [NumericRule, NumericRule])[] = [
  * Named as core names the rules, so a surface storing them under these keys
  * passes its object straight through and one storing them differently maps at
  * the call site rather than inside a component that cannot know which it has.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export interface ValidationRuleValues {
   minLength?: number | undefined;
@@ -118,6 +122,10 @@ export interface ValidationRuleValues {
  * restating the list — a caller that says "checkbox and hidden have no options"
  * is the same hardcoded-type reasoning this component exists to remove, one
  * level out. `required` is absent because every surface offers it elsewhere.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export const EDITABLE_VALIDATION_RULES: readonly FieldValidationRule[] = [
   ...(Object.keys(NUMERIC_RULES) as NumericRule[]),
@@ -126,12 +134,22 @@ export const EDITABLE_VALIDATION_RULES: readonly FieldValidationRule[] = [
 ];
 
 /** Whether this editor would draw anything at all for an allowed set. */
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export function drawsAnyValidationRule(
   allowed: readonly FieldValidationRule[]
 ): boolean {
   return allowed.some(rule => EDITABLE_VALIDATION_RULES.includes(rule));
 }
 
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface ValidationRulesEditorProps {
   /**
    * Which rules this field accepts.
@@ -159,6 +177,11 @@ export interface ValidationRulesEditorProps {
   disabled?: boolean;
 }
 
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export function ValidationRulesEditor({
   allowed,
   value,

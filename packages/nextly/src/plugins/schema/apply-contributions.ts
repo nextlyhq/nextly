@@ -23,9 +23,14 @@
 import type { FieldConfig } from "../../collections/fields/types";
 import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
 import type { NextlyServiceConfig } from "../../di/register";
+import {
+  publishWithheldScopeFields,
+  scopedTypeKey,
+} from "../../domains/schema/pipeline/withheld-scope-fields";
 import { NextlyError } from "../../errors";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
+  isContentTypeScope,
   typesReachedBy,
   type ContentTypeCandidate,
   type ContentTypeScope,
@@ -553,6 +558,180 @@ function applyScopeClause<
   };
 }
 
+/**
+ * The fields each scope holds back from a type the site switched off: one its
+ * `except` names that its kinds would otherwise reach. Published for the
+ * schema changes that keep the column of a type switched off after it was
+ * made (`kept-scope-fields.ts`), which leave alone a type declaring a field of
+ * that name itself.
+ *
+ * A type in the configuration is held back what it would have with every
+ * `except` lifted: the same fold run again, so the fields are the ones that
+ * made its columns, after every plugin's transforms (a rename included) and
+ * with one field to a name. A type made in the Schema Builder is not in the
+ * configuration; it takes the clauses' own fields, as the Builder pass gives
+ * them to it, the first of a name.
+ */
+function publishWithheld(
+  config: NextlyServiceConfig,
+  folded: Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups">,
+  plugins: PluginDefinition[],
+  owners: ReadonlyMap<string, string>
+): void {
+  const clauses = flattenExtends(plugins).filter(
+    (clause): clause is DeferredExtend & { target: ContentTypeScope } =>
+      typeof clause.target !== "string" && clause.target.except !== undefined
+  );
+  if (clauses.length === 0) {
+    publishWithheldScopeFields(new Map());
+    return;
+  }
+  const configured = new Map(
+    scopeCandidates(
+      folded.collections ?? [],
+      folded.singles ?? [],
+      folded.fieldGroups ?? [],
+      configuredScope(owners),
+      new Set()
+    ).map(type => [type.slug, type])
+  );
+  const allOn = foldedWithEveryTypeOnIfItFolds(config, plugins);
+  const withheld = new Map<string, FieldConfig[]>();
+  for (const clause of clauses) {
+    for (const slug of clause.target.except ?? []) {
+      holdBack(withheld, clause, slug, {
+        type: configured.get(slug),
+        allOn,
+        folded,
+      });
+    }
+  }
+  publishWithheldScopeFields(withheld);
+}
+
+/**
+ * Records in `withheld` what `clause` holds back from the type `slug`. A
+ * configured type is held back what it has with every type on and lacks now.
+ * A Builder type's kind is known only once its row is read: held back under
+ * each kind the scope reaches, of which it has one, the clause's own fields.
+ * A configured type takes those too when the configuration does not fold with
+ * every type on, less what the type declares itself (`keptScopeFields`).
+ */
+function holdBack(
+  withheld: Map<string, FieldConfig[]>,
+  clause: DeferredExtend & { target: ContentTypeScope },
+  slug: string,
+  judged: {
+    type: ContentTypeCandidate | undefined;
+    allOn: Pick<NextlyServiceConfig, "collections" | "singles"> | undefined;
+    folded: Pick<NextlyServiceConfig, "collections" | "singles">;
+  }
+): void {
+  const { type, allOn, folded } = judged;
+  const { target, fields } = clause;
+  const candidates: ContentTypeCandidate[] =
+    type === undefined ? target.every.map(kind => ({ slug, kind })) : [type];
+  // Judged as the scope judges a type it adds to: an `except` naming a type
+  // of another kind, a plugin's or a system one holds nothing back from it.
+  for (const reached of typesReachedBy({ every: target.every }, candidates)) {
+    if (reached.kind === "fieldGroup") continue;
+    const key = scopedTypeKey(reached.kind, slug);
+    // A configured type: the fold's answer first, then the clause's own
+    // declaration, in case the column was made by a scope the fold with
+    // every type on passes over (`keptScopeFields` keeps the one the column
+    // matches).
+    const held =
+      withheld.get(key) ??
+      (type !== undefined && allOn !== undefined
+        ? fieldsOnlyIn(allOn, folded, reached.kind, slug)
+        : []);
+    withheld.set(key, [...held, ...fields]);
+  }
+}
+
+/**
+ * {@link foldedWithEveryTypeOn}, or undefined when that fold is refused. It is
+ * a fold the configuration never runs: lifting an `except` can give a type the
+ * same field twice, from the scope and from a clause that names the type, and
+ * the refusal is about that what-if, not about the configuration. The real
+ * fold has already accepted it, so it still loads.
+ */
+function foldedWithEveryTypeOnIfItFolds(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles"> | undefined {
+  try {
+    return foldedWithEveryTypeOn(config, plugins);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The configuration's types as they would be with no type switched off: the
+ * fold's merge, `extend` and transforms over plugins whose scopes keep their
+ * kinds and drop their `except`.
+ */
+function foldedWithEveryTypeOn(
+  config: NextlyServiceConfig,
+  plugins: PluginDefinition[]
+): Pick<NextlyServiceConfig, "collections" | "singles"> {
+  const lifted = plugins.map(plugin => {
+    const extend = plugin.contributes?.extend;
+    if (extend === undefined) return plugin;
+    return {
+      ...plugin,
+      contributes: {
+        ...plugin.contributes,
+        extend: extend.map(clause =>
+          isContentTypeScope(clause.target)
+            ? { ...clause, target: { every: clause.target.every } }
+            : clause
+        ),
+      },
+    };
+  });
+  const { collections, singles, fieldGroups, owners } = mergeRenamed(
+    config,
+    lifted
+  );
+  const r = applyExtendClauses(
+    collections,
+    singles,
+    fieldGroups,
+    flattenExtends(lifted),
+    "collect",
+    configuredScope(owners)
+  );
+  return applyTransforms(
+    {
+      collections: r.collections,
+      singles: r.singles,
+      fieldGroups: r.fieldGroups,
+    },
+    lifted,
+    owners,
+    r.scopeAdded
+  ).entities;
+}
+
+/** The fields the type has in `on` and not in `off`, by name. */
+function fieldsOnlyIn(
+  on: Pick<NextlyServiceConfig, "collections" | "singles">,
+  off: Pick<NextlyServiceConfig, "collections" | "singles">,
+  kind: "collection" | "single",
+  slug: string
+): FieldConfig[] {
+  const of = (entities: Pick<NextlyServiceConfig, "collections" | "singles">) =>
+    (
+      (kind === "collection" ? entities.collections : entities.singles) ?? []
+    ).find(entity => entity.slug === slug)?.fields ?? [];
+  const nameOf = (field: unknown) =>
+    (field as { name?: string }).name?.toLowerCase();
+  const kept = new Set(of(off).map(nameOf));
+  return of(on).filter(field => !kept.has(nameOf(field)));
+}
+
 /** Records `fields` as `owner`'s on the type `slug`, in `added`. */
 function recordAdded(
   added: Map<string, Map<string, string>>,
@@ -978,10 +1157,14 @@ export function applyPluginSchemaContributions(
   );
 
   const { leftAlone: _leftAlone, scopeAdded, ...entities } = extended;
-  return {
-    ...config,
-    ...applyTransforms(entities, plugins, owners, scopeAdded).entities,
-  };
+  const transformed = applyTransforms(
+    entities,
+    plugins,
+    owners,
+    scopeAdded
+  ).entities;
+  publishWithheld(config, transformed, plugins, owners);
+  return { ...config, ...transformed };
 }
 
 /**
@@ -1022,6 +1205,7 @@ export function applyPluginSchemaContributionsDeferred(
     owners,
     r.scopeAdded
   );
+  publishWithheld(config, transformed.entities, plugins, owners);
   return {
     config: { ...config, ...transformed.entities },
     // A scope is deferred whole, beside the slugs no configured entity had:

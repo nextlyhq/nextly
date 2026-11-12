@@ -43,9 +43,6 @@ import {
 import { MIGRATION_TARGET } from "../migration/manifest";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
-/** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
-const DEFAULT_MAX_DEPTH = 10;
-
 /**
  * Registry table holding one row per component, including its physical table
  * name. Resolved rather than constant: the field-group storage migration
@@ -84,8 +81,6 @@ export interface TeardownEntityComponentDataArgs {
    * component instance whose `_parent_table` is this table belongs to the entity.
    */
   parentTable: string;
-  /** Override the nesting bound; primarily for tests. */
-  maxDepth?: number;
 }
 
 export interface TeardownEntityComponentDataResult {
@@ -292,7 +287,7 @@ async function listRegisteredComponentTables(
 export async function teardownEntityComponentData(
   args: TeardownEntityComponentDataArgs
 ): Promise<TeardownEntityComponentDataResult> {
-  const { adapter, parentTable, maxDepth = DEFAULT_MAX_DEPTH } = args;
+  const { adapter, parentTable } = args;
 
   // Component data tables: `comp_` prefixed by convention, plus every table the
   // registry has registered — a row written before names resolved canonically can
@@ -328,21 +323,30 @@ export async function teardownEntityComponentData(
 
   const tablesTouched = new Set<string>();
   const skippedTables = new Set<string>();
-  // Resolvability is a property of the table, so it is established once; whether such a
-  // table is SAFE to skip depends on the frontier and is re-checked at every level.
+  // Resolvability is a property of the table, so it is established once, either way; whether an
+  // unresolvable table is SAFE to skip depends on the frontier and is re-checked at every level.
   const unresolvable = new Set<string>();
+  const resolvable = new Set<string>();
   let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
-  let depth = 0;
+  // Field groups nest to any depth, so the walk goes down until a level finds nothing. Each
+  // instance is followed once: a level deletes what it finds, and an id already reached in a
+  // table is not reached again even if its delete removed nothing, so the walk ends.
+  const reached = new Map<string, Set<string>>();
 
-  while (frontier.length > 0 && depth < maxDepth) {
+  while (frontier.length > 0) {
     const nextFrontier: Frontier[] = [];
 
+    // Every component table, at every level: a row's parent is where it was written, which a
+    // definition as it stands now cannot vouch for — one that has since stopped placing a field
+    // group leaves that field group's rows stored beneath its own. Each read is a lookup on the
+    // parent index.
     for (const componentTable of componentTables) {
       if (
-        unresolvable.has(componentTable) ||
-        !(await isResolvable(adapter, componentTable))
+        !resolvable.has(componentTable) &&
+        (unresolvable.has(componentTable) ||
+          !(await isResolvable(adapter, componentTable)))
       ) {
         unresolvable.add(componentTable);
         // Skipping is only safe when the table holds nothing owned by THIS level. An
@@ -356,6 +360,7 @@ export async function teardownEntityComponentData(
         skippedTables.add(componentTable);
         continue;
       }
+      resolvable.add(componentTable);
 
       for (const parent of frontier) {
         // Match on parent id as well as parent table for nested levels — without it the
@@ -415,15 +420,21 @@ export async function teardownEntityComponentData(
             }
           }
 
-          if (instanceIds.length > 0) {
-            nextFrontier.push({ table: componentTable, ids: instanceIds });
+          let reachedHere = reached.get(componentTable);
+          if (reachedHere === undefined) {
+            reachedHere = new Set();
+            reached.set(componentTable, reachedHere);
+          }
+          const newIds = instanceIds.filter(id => !reachedHere.has(id));
+          for (const id of newIds) reachedHere.add(id);
+          if (newIds.length > 0) {
+            nextFrontier.push({ table: componentTable, ids: newIds });
           }
         }
       }
     }
 
     frontier = nextFrontier;
-    depth += 1;
   }
 
   return {

@@ -30,14 +30,9 @@
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import { useContext, useRef } from "react";
 
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { CardFigure } from "@admin/components/features/widgets/frame/figure";
-import {
-  leavesRowsEmpty,
-  useCardFitsContent,
-} from "@admin/components/features/widgets/frame/fit";
 import {
   ListCard,
   type ListModel,
@@ -45,10 +40,9 @@ import {
 import { useListDensity } from "@admin/components/features/widgets/frame/list-rows";
 import {
   LeadingChip,
-  StatusPill,
+  StatusChip,
 } from "@admin/components/features/widgets/frame/row-parts";
 import {
-  CardHeightContext,
   useCardTier,
   useRowsDrawn,
 } from "@admin/components/features/widgets/frame/tier";
@@ -95,13 +89,6 @@ function attentionHref(reason: Reason): string {
   return `${ROUTES.RELEASES}?tab=attention&reason=${reason}`;
 }
 
-/**
- * The attention line's height and the gap under it, in pixels: what the rows under it may not
- * take. One line that never wraps (20 px, `h-5`) and a 12 px gap (`gap-3`), so the room it takes
- * is known before it is drawn.
- */
-const ATTENTION_LINE_PX = 20 + 12;
-
 /** "1 stopped · 2 overdue": one part per reason with any, each a link to its list. */
 const AttentionLine: React.FC<{
   counts: readonly { reason: Reason; count: number }[];
@@ -132,39 +119,15 @@ export type UpcomingReleasesCardProps = Omit<DeclaredComponentProps, "data"> & {
 
 export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
   data,
+  settings,
 }) => {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
-  // At most five rows, the most its `load` asks for before the one that says more exist: the
-  // card declares no "Number of items", so the rule's own default stands for it here and there.
-  const drawn = useRowsDrawn(tier, undefined, density);
-  // With the attention line above them, the rows have its room the less.
-  const drawnUnderLine = useRowsDrawn(
-    tier,
-    undefined,
-    density,
-    ATTENTION_LINE_PX
-  );
+  // Its "Number of entries", the rows its `load` asked for before the one that says more exist.
+  const drawn = useRowsDrawn(settings.limit);
 
   const { attention, releases } = rowsOf(data.items);
-  const rowsUnder = attention.length > 0 ? drawnUnderLine : drawn;
-  // What the body draws, the line and the rows, for its height to be asked for while the rows
-  // drawn leave at least one whole row of the stored body empty under the line's room. None for
-  // the empty state, which holds no element here.
-  const content = useRef<HTMLDivElement | null>(null);
-  const storedRows = useContext(CardHeightContext);
-  const shown = Math.min(releases.length, rowsUnder);
-  useCardFitsContent(
-    content,
-    leavesRowsEmpty(
-      shown,
-      storedRows,
-      density,
-      attention.length > 0 ? ATTENTION_LINE_PX : 0
-    ),
-    `${shown} ${attention.length} ${tier} ${density}`
-  );
   if (attention.length === 0 && releases.length === 0) {
     return (
       <FrameState
@@ -182,7 +145,7 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
     );
   }
   return (
-    <div ref={content} className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       {attention.length > 0 && <AttentionLine counts={attention} />}
       {releases.length > 0 && (
         // The release rows alone, so the footer counts releases and never the attention line's
@@ -190,7 +153,7 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
         <ListCard
           model={RELEASE_LIST_MODEL}
           rows={releases}
-          drawn={rowsUnder}
+          drawn={drawn}
           viewAllHref={ROUTES.RELEASES}
           tier={tier}
           density={density}
@@ -224,11 +187,11 @@ function entriesText(value: unknown): string | undefined {
 function statusOf(value: unknown): React.ReactNode {
   const issues = countOf(value);
   if (issues === undefined) return undefined;
-  if (issues === 0) return <StatusPill tone="good">Ready</StatusPill>;
+  if (issues === 0) return <StatusChip tone="good">Ready</StatusChip>;
   return (
-    <StatusPill tone="bad">
+    <StatusChip tone="bad">
       {issues} {issues === 1 ? "issue" : "issues"}
-    </StatusPill>
+    </StatusChip>
   );
 }
 

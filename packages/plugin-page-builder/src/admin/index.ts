@@ -25,10 +25,7 @@
  * @module @nextlyhq/plugin-page-builder/admin
  */
 
-import {
-  registerComponents,
-  registerKnownPlugin,
-} from "@nextlyhq/plugin-sdk/admin";
+import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
 
 import {
   BINDINGS_TO_FIX_CARD_COMPONENT,
@@ -158,14 +155,6 @@ registerExportActions();
 
 // The Design column on the lists of collections that have a template.
 registerEntryDesignColumn();
-
-// Lazy fallback: the host can trigger registration on demand by package prefix.
-registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
-  registerComponents(COMPONENTS);
-  registerExportActions();
-  registerEntryDesignColumn();
-  return Promise.resolve();
-});
 
 export {
   BindingsToFixCard,

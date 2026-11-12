@@ -167,6 +167,47 @@ describe("the owner registry", () => {
     ]);
   });
 
+  it("registers a plugin template with unparseable variable presentation and records it in unread", () => {
+    const { registry, refused, unread } = buildTemplateOwnerRegistry({
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: [
+        {
+          name: "@acme/plugin-orders",
+          templates: [
+            {
+              slug: "orders-bad-vars",
+              name: "Orders with bad vars",
+              subject: "Order",
+              htmlContent: "<p>Hello</p>",
+              variables: [
+                {
+                  name: "orderId",
+                  description: "The order ID",
+                  required: true,
+                  example: 10n as unknown as string,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      complete: true,
+    });
+    expect(refused).toEqual([]);
+    expect(registry.owned.has("orders-bad-vars")).toBe(true);
+    const registered = registry.owned.get("orders-bad-vars");
+    expect(registered?.defaults.variables).toEqual([
+      { name: "orderId", description: "The order ID", required: true },
+    ]);
+    expect(unread).toEqual([
+      {
+        slug: "orders-bad-vars",
+        plugin: "@acme/plugin-orders",
+        reason: expect.stringContaining("0.example"),
+      },
+    ]);
+  });
+
   it("reads a stored owner, and a plugin's template as not installed when it isn't running", () => {
     const { registry } = buildTemplateOwnerRegistry({
       builtIns: BUILT_IN_TEMPLATES,

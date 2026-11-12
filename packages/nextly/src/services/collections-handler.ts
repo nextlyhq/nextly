@@ -26,6 +26,7 @@ import {
   buildRetentionRunner,
   retentionPoliciesFrom,
 } from "../domains/retention/passes";
+import type { BuilderSaveSetup } from "../domains/schema/builder-save/collection-save";
 import {
   draftSplitResponseFields,
   schemaDraftSplit,
@@ -289,6 +290,13 @@ export class CollectionsHandler {
       this.fileManager,
       this.collectionService
     );
+    // A save through this handler writes where every Builder save writes:
+    // the app's definition file and migrations folder, as registered at boot.
+    if (container.has("builderSaveSetup")) {
+      this.metadataService.setBuilderSave(
+        container.get<BuilderSaveSetup>("builderSaveSetup")
+      );
+    }
 
     const fieldGroupDataService = container.has("fieldGroupDataService")
       ? container.get<FieldGroupDataService>("fieldGroupDataService")
@@ -562,6 +570,14 @@ export class CollectionsHandler {
     this.fileManager.invalidateSchemaForSlug(slug);
   }
 
+  // Drop every Drizzle table the FileManager built from registry rows, so each
+  // collection's next read builds it from the rows as they are now: the
+  // registry changed in a way this process did not make (another server
+  // copy's save, a migration), and any cached table may predate it.
+  forgetCollectionSchemas(): void {
+    this.fileManager.forgetBuiltSchemas();
+  }
+
   /**
    * Register dynamic schemas with the file manager.
    * @param schemas - Map of schema names to schema objects
@@ -617,6 +633,11 @@ export class CollectionsHandler {
      * caller may see.
      */
     slugAllowlist?: string[];
+    /**
+     * Leave out these slugs, carried to the same WHERE clause: the plugins'
+     * collections, on the list of the site's own.
+     */
+    slugDenylist?: string[];
   }) {
     return this.metadataService.listCollections(options);
   }
@@ -739,6 +760,11 @@ export class CollectionsHandler {
     collectionName: string;
     /** Page number (1-indexed, default: 1) */
     page?: number;
+    /**
+     * Count the total no further than this; above it the total is the cap
+     * and `totalCapped` is set. See the query service's `countUpTo`.
+     */
+    countUpTo?: number;
     /** Rows to skip before the first returned, instead of a page. */
     offset?: number;
     /** Refuse a sort key that names no sortable field instead of dropping it. */

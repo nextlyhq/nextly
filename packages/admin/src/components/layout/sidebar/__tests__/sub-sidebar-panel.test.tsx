@@ -75,17 +75,15 @@ function widthClasses(): string[] {
 }
 
 describe("SubSidebarPanel's track on the wide layout", () => {
-  it("keeps the open panel's width on a surface that owns no panel", () => {
-    // The separating property: the main column starts where this box ends, so
-    // a track as wide as the open panel on the dashboard and on a collection
-    // is what keeps the column still between them.
+  it("takes width on a section with a panel and none on a page without one", () => {
+    // The separating property: the main column starts where this box ends.
+    // A page with a panel holds its track; the dashboard, which owns none,
+    // draws no empty column beside the rail.
     renderPanel({ suppress: false, selectedMain: "settings" });
-    const open = widthClasses();
+    expect(widthClasses()).toEqual(["w-64"]);
     cleanup();
     renderPanel({ suppress: false, selectedMain: "dashboard" });
-
-    expect(open).toEqual(["w-64"]);
-    expect(widthClasses()).toEqual(open);
+    expect(widthClasses()).toEqual(["w-0"]);
   });
 
   it("holds nothing in the track while the selection owns no panel", () => {

@@ -3,6 +3,11 @@
 import { Input, Label } from "@nextlyhq/ui";
 import { useId, type JSX } from "react";
 
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface ValidationNumberFieldProps {
   /** Visible name of the rule, e.g. "Min length". */
   label: string;
@@ -39,6 +44,10 @@ export interface ValidationNumberFieldProps {
  * The id is generated rather than derived from the label. A label-derived id is
  * document-global, so two editors open at once mint the same one and `htmlFor`
  * resolves to whichever control rendered first.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export function ValidationNumberField({
   label,

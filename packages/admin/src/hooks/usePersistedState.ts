@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  recallPreference,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
+
 /**
  * React state persisted to localStorage under a `nextly:admin:*` key.
  *
@@ -24,7 +29,8 @@ export function usePersistedState<T extends string>(
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(key);
+      // Through the device memory, which reads storage that throws as nothing.
+      const stored = recallPreference(key);
       if (stored !== null && validateRef.current(stored)) {
         setValueState(stored);
       }
@@ -37,7 +43,9 @@ export function usePersistedState<T extends string>(
     (next: T) => {
       setValueState(next);
       try {
-        window.localStorage.setItem(key, next);
+        // Kept through the device memory, which keeps nothing where the site
+        // turned remembering off.
+        rememberPreference(key, next);
       } catch {
         // ignore - the UI still updates in memory.
       }
@@ -73,7 +81,7 @@ export function usePersistedStringSet(
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(key);
+      const stored = recallPreference(key);
       if (stored === null) return;
       const parsed: unknown = JSON.parse(stored);
       if (Array.isArray(parsed)) {
@@ -99,7 +107,7 @@ export function usePersistedStringSet(
       // Persisting here (the event handler) keeps the write out of React's
       // render phase entirely.
       try {
-        window.localStorage.setItem(key, JSON.stringify([...next]));
+        rememberPreference(key, JSON.stringify([...next]));
       } catch {
         // ignore - the UI still updates in memory.
       }

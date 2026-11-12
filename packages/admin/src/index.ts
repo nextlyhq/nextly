@@ -331,6 +331,9 @@ export {
   type SidebarSectionProps,
   type DocumentViewProps,
 } from "./lib/plugins/component-registry";
+// The app's generated component map registers through this, not a plugin:
+// it is not part of the plugin SDK's surface.
+export { registerComponentMap } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
 // Navigation a plugin may perform: a page of this admin, judged before it moves.
 export { navigateWithinAdmin } from "./lib/navigation";
@@ -421,6 +424,7 @@ export type {
   FieldSettingsField,
   FieldSettingsPanelProps,
   FieldSettingsSurface,
+  FieldSettingsConditionsProps,
   FieldSettingsSurfaceControlProps,
   FieldSettingsTab,
   FieldTypeSettings,
@@ -552,6 +556,38 @@ export type {
  * `@nextlyhq/builder`) may import.
  */
 export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
+export { useFoldedPanel } from "./components/layout/PanelFold";
+/**
+ * A store for one of the person's interface preferences that follows the
+ * device memory's rules: nothing written while the site turns remembering
+ * off, forgotten with the person on sign-out. Exported for
+ * `plugin-sdk/admin`, so an editor a plugin mounts keeps its choices by them.
+ */
+export { devicePreferenceStore } from "./lib/device-memory/preference-store";
+export type {
+  DevicePreferenceOptions,
+  DevicePreferenceStore,
+} from "./lib/device-memory/preference-store";
+export { TopBarPlace } from "./components/layout/header/TopBarPlaces";
+export type {
+  TopBarPlaceName,
+  TopBarPlaceProps,
+} from "./components/layout/header/TopBarPlaces";
+/**
+ * A page's frame by its type and its header, forwarded so `plugin-sdk/admin`
+ * can reach them: a plugin's page is drawn from the pieces core's pages are.
+ * Both carry `@experimental` in `ui` and keep it here.
+ */
+/** @experimental */
+export { PageFrame, PageHeader, PageTab, PageTabs } from "@nextlyhq/ui";
+/** @experimental */
+export type {
+  PageFrameProps,
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+  PageType,
+} from "@nextlyhq/ui";
 /**
  * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
  * plugin's own page draws the contributions sent to a place it declared with

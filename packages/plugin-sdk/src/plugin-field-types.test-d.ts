@@ -1,6 +1,13 @@
 import { defineFieldGroup } from "nextly";
 
-import type { PluginContributions } from "@nextlyhq/plugin-sdk";
+import { expectTypeOf } from "vitest";
+
+import type {
+  PluginContributions,
+  PluginFieldType,
+  PluginFieldTypeSetting,
+  PluginFieldTypeSettingBase,
+} from "@nextlyhq/plugin-sdk";
 import { pluginField } from "@nextlyhq/plugin-sdk";
 
 // A plugin declares a field of a type it contributes itself. Reached through
@@ -34,6 +41,26 @@ const group = defineFieldGroup({
 // its own required shape is never checked.
 // @ts-expect-error `select` is built in; its own factory checks its `options`.
 const builtIn = pluginField({ name: "status", type: "select" });
+
+// A field type's declared settings (@experimental): the list the settings
+// panel draws, asserted EXACTLY so a control added, a key renamed or the
+// options loosened is a deliberate change to this file.
+expectTypeOf<PluginFieldType["settings"]>().toEqualTypeOf<
+  readonly PluginFieldTypeSetting[] | undefined
+>();
+expectTypeOf<PluginFieldTypeSettingBase>().toEqualTypeOf<{
+  key: string;
+  label: string;
+  help?: string;
+  tab?: "general" | "validation" | "display" | "advanced";
+}>();
+expectTypeOf<PluginFieldTypeSetting>().toEqualTypeOf<
+  | (PluginFieldTypeSettingBase & { control: "text" | "number" | "boolean" })
+  | (PluginFieldTypeSettingBase & {
+      control: "select";
+      options: readonly { label: string; value: string }[];
+    })
+>();
 
 // Exported so eslint does not flag the assertions as unused.
 export const __pluginFieldTypeCheck = {

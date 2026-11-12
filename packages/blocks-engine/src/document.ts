@@ -105,8 +105,20 @@ export type SeoBinding = Binding & {
 export interface DocumentSeo {
   title?: SeoTextSegment[];
   description?: SeoTextSegment[];
+  /** The title a shared link shows, where it differs from `title`. */
+  socialTitle?: SeoTextSegment[];
   image?: SeoBinding;
 }
+
+/**
+ * The text values of a document's metadata, in the order they are read: the
+ * one list every reader of them walks, so a value added here is validated,
+ * judged against the schema, read for and filled alike.
+ */
+export const SEO_TEXT_FIELDS = ["title", "description", "socialTitle"] as const;
+
+/** One of {@link SEO_TEXT_FIELDS}. */
+export type SeoTextField = (typeof SEO_TEXT_FIELDS)[number];
 
 /** The most segments one metadata text value holds. */
 export const MAX_SEO_SEGMENTS = 32;

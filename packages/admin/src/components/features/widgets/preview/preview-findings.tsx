@@ -69,7 +69,7 @@ export function StateFindings({ stateKey }: { stateKey: string }): JSX.Element {
           data-impact={finding.impact ?? "unknown"}
           className={
             isBlockingFinding(finding)
-              ? "font-medium text-destructive"
+              ? "font-medium text-danger-text"
               : "text-muted-foreground"
           }
         >

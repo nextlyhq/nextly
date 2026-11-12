@@ -33,3 +33,32 @@ export function getService<T extends keyof ServiceMap>(name: T): ServiceMap[T] {
 export function isServicesRegistered(): boolean {
   return registration.__nextly_isRegistered ?? false;
 }
+
+/**
+ * Who waits for registration to finish, kept beside the flag on `globalThis`
+ * so every copy of this module shares the waiters.
+ */
+const waiting = globalThis as unknown as {
+  __nextly_registeredWaiters?: (() => void)[];
+};
+
+/**
+ * Resolves once services are registered: at once when they are, else when
+ * `registerServices()` finishes. For work a plugin starts during the boot
+ * without awaiting it, which can then wait for the boot instead of failing.
+ * Awaited inside the boot itself (a plugin's `init` or `onReady`), it would
+ * wait for its own boot and never resolve.
+ */
+export function whenServicesRegistered(): Promise<void> {
+  if (isServicesRegistered()) return Promise.resolve();
+  return new Promise(resolve => {
+    (waiting.__nextly_registeredWaiters ??= []).push(resolve);
+  });
+}
+
+/** Release everyone waiting; `register.ts` calls it as it sets the flag. */
+export function announceServicesRegistered(): void {
+  const waiters = waiting.__nextly_registeredWaiters ?? [];
+  waiting.__nextly_registeredWaiters = [];
+  for (const resolve of waiters) resolve();
+}

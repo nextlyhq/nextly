@@ -102,6 +102,43 @@ function reader(
 }
 
 describe("contributionsForReader", () => {
+  it("names a Single the plugin contributes by the slug the host renamed it to", async () => {
+    const SETTINGS: PluginDefinition = {
+      name: "@acme/settings",
+      version: "1.0.0",
+      nextly: "*",
+      renameMap: { "acme-settings": "site-settings" },
+      contributes: {
+        singles: [{ slug: "acme-settings", fields: [] }],
+        admin: {
+          contributions: [
+            {
+              id: "acme-settings.tab",
+              kind: "tab",
+              place: "single.edit",
+              label: "Settings",
+              component: "x#Tab",
+              singles: ["acme-settings", "homepage"],
+            },
+          ] as AdminContribution[],
+        },
+      },
+    };
+    const { audience } = reader([]);
+    const meta = await contributionsForReader(
+      [SETTINGS],
+      audience,
+      "workspace"
+    );
+    // Its own Single under its served slug; the host's own as written.
+    expect(meta["single.edit"]?.tab).toEqual([
+      expect.objectContaining({
+        id: "acme-settings.tab",
+        singles: ["site-settings", "homepage"],
+      }),
+    ]);
+  });
+
   it("sends a reader holding every permission each place's lists in order, login's left out", async () => {
     const { audience } = reader(["read-audit"]);
     const meta = await contributionsForReader([SUPPORT], audience, "workspace");

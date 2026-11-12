@@ -107,6 +107,109 @@ describe("parseUiSchema", () => {
     expect(r.success).toBe(false);
   });
 
+  it("keeps a relationship's options as the registry stores them, whole", () => {
+    // A plugin or API save sends a relationship as the registry stores it; the
+    // definition holds it as sent, so a deploy's registry row keeps its
+    // foreign-key actions and its junction table.
+    const options = {
+      target: "people",
+      relationType: "manyToOne",
+      onDelete: "set null",
+      onUpdate: "cascade",
+    };
+    const tags = {
+      target: "tags",
+      relationType: "manyToMany",
+      junctionTable: "posts_tags",
+    };
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            { name: "author", type: "relationship", options },
+            { name: "tags", type: "relationship", options: tags },
+          ],
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.collections[0]?.fields.map(f => f.options)).toEqual([
+        options,
+        tags,
+      ]);
+    }
+  });
+
+  it("keeps any field's registry options as stored, whole", () => {
+    // A plugin or API save sends a long text or a formatted number with the
+    // registry's options object; the definition holds it as sent.
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "x",
+          fields: [
+            { name: "bio", type: "text", options: { variant: "long" } },
+            { name: "price", type: "number", options: { format: "float" } },
+          ],
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.collections[0]?.fields.map(f => f.options)).toEqual([
+        { variant: "long" },
+        { format: "float" },
+      ]);
+    }
+  });
+
+  it("still requires a select's choices as a list", () => {
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "x",
+          fields: [{ name: "a", type: "select", options: { variant: "long" } }],
+        },
+      ],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("refuses a relationship whose options name no target and that has no relationTo", () => {
+    const r = parseUiSchema({
+      collections: [
+        {
+          slug: "x",
+          fields: [
+            {
+              name: "a",
+              type: "relationship",
+              options: { relationType: "manyToOne" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("still accepts a file written before relationships carried options", () => {
+    expect(parseUiSchema(VALID).success).toBe(true);
+  });
+
+  it("accepts a field named with capitals, as the registry does", () => {
+    const named = (name: string) =>
+      parseUiSchema({
+        collections: [{ slug: "x", fields: [{ name, type: "text" }] }],
+      }).success;
+    expect(named("firstName")).toBe(true);
+    expect(named("first_name")).toBe(true);
+    expect(named("1stName")).toBe(false);
+    expect(named("first-name")).toBe(false);
+  });
+
   it("rejects a relationship without relationTo", () => {
     const r = parseUiSchema({
       collections: [
@@ -252,5 +355,43 @@ describe("a manifest hook is validated as the executor requires it", () => {
         manifestWithHooks([{ ...RUNNABLE, hookType: "beforeSave" }])
       ).success
     ).toBe(false);
+  });
+});
+
+describe("a field with no name", () => {
+  /** A collection whose `meta` group holds `inner`. */
+  const withInner = (inner: Record<string, unknown>) => ({
+    collections: [
+      {
+        slug: "pages",
+        labels: { singular: "Page", plural: "Pages" },
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [inner],
+          },
+        ],
+      },
+    ],
+  });
+
+  it("is a group that lays fields out, which the Builder saves", () => {
+    const parsed = parseUiSchema(
+      withInner({
+        type: "group",
+        label: "Layout",
+        fields: [{ name: "seo", type: "text" }],
+      })
+    );
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+  });
+
+  it("is refused for a field that stores a value", () => {
+    const parsed = parseUiSchema(withInner({ type: "text", label: "Seo" }));
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map(issue => issue.path.join("."))).toEqual([
+      "collections.0.fields.0.fields.0.name",
+    ]);
   });
 });

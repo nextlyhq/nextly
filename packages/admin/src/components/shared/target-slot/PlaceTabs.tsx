@@ -41,6 +41,7 @@ import {
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useT } from "@admin/lib/i18n/I18nProvider";
+import { tabFitsDocument } from "@admin/lib/plugins/place-entries";
 import { cn } from "@admin/lib/utils";
 
 import { IsolatedContribution } from "./IsolatedContribution";
@@ -108,6 +109,19 @@ export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
    * content. Left out, the strip keeps it.
    */
   openTab?: string | null;
+  /**
+   * On an edit page, the document's top-level field names: a tab that edits
+   * fields of the document (`fields`) is drawn only where it has every one of
+   * them, and nowhere when this is left out.
+   */
+  fieldNames?: readonly string[];
+  /**
+   * Draw the page's own content alone, with no contributed tab, while it
+   * shows something a tab does not read, such as a past version of an edit
+   * page's document: a tab reads the live document, and would show today's
+   * values under the past version's banner.
+   */
+  withheld?: boolean;
   /** Told the tab the reader opens, by the same values `openTab` takes. */
   onOpenTabChange?: (tab: string | null) => void;
   /**
@@ -202,18 +216,24 @@ function useShownTab(
 }
 
 /**
- * The tabs delivered to the place, none while the page's context is `null`:
+ * The tabs delivered to the place that fit the page, none while the page's
+ * context is `null` or the page withholds them:
  * nothing contributed is drawn until the page knows its ids.
  */
 function useDeliveredTabs<P extends AdminPlaceId>(
   place: P,
   context: PlaceProps<P>["context"],
-  entry: PlaceProps<P>["entry"]
+  entry: PlaceProps<P>["entry"],
+  page: { fieldNames?: readonly string[]; withheld?: boolean | undefined }
 ) {
   const delivered = usePlaceContributions(place, "tab", { context, entry });
-  if (context === null) return [];
+  if (context === null || page.withheld === true) return [];
   return delivered.flatMap(item =>
-    "builtIn" in item || item.kind !== "tab" ? [] : [item]
+    "builtIn" in item ||
+    item.kind !== "tab" ||
+    !tabFitsDocument(item, page.fieldNames)
+      ? []
+      : [item]
   );
 }
 
@@ -243,60 +263,109 @@ export function PlaceTabs<P extends AdminPlaceId>({
   openTab,
   onOpenTabChange,
   onShownTabChange,
+  fieldNames,
+  withheld,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const tabs = useDeliveredTabs(place, context, entry);
-  const { badges, setterFor } = useTabBadges();
+  const tabs = useDeliveredTabs(place, context, entry, {
+    fieldNames,
+    withheld,
+  });
   const { shown, choose } = useShownTab(
     tabs.map(tab => tab.id),
     openTab,
     onOpenTabChange
   );
   useShownTabReport(shown, onShownTabChange);
+  const handed = handedTo(tabProps, context, entry);
   return (
     <>
-      {context === null || tabs.length === 0 ? null : (
-        <Tabs
-          value={shown}
-          onValueChange={choose}
-          {...(className === undefined ? {} : { className })}
-        >
-          <TabsList scrollable>
-            {/* The page's content is not one of the strip's panels, since
-                wrapping it in one would change the page with no tab or
-                remount it when a tab arrives, so this tab names no panel. */}
-            <TabsTrigger value={CONTENT_TAB} aria-controls={undefined}>
-              {contentLabel}
-            </TabsTrigger>
-            {tabs.map(tab => (
-              <PlaceTabTrigger
-                key={tab.id}
-                value={tab.id}
-                label={tab.label}
-                badge={drawnBadge(badges[tab.id])}
-              />
-            ))}
-          </TabsList>
-          {tabs.map(tab => (
-            <PlaceTabPanel<P>
-              key={tab.id}
-              id={tab.id}
-              component={tab.component}
-              open={shown === tab.id}
-              props={{
-                ...tabProps,
-                context,
-                ...(entry === undefined ? {} : { entry }),
-                setBadge: setterFor(tab.id),
-              }}
-            />
-          ))}
-        </Tabs>
+      {handed === undefined || tabs.length === 0 ? null : (
+        <PlaceTabStrip<P>
+          tabs={tabs}
+          shown={shown}
+          choose={choose}
+          contentLabel={contentLabel}
+          className={className}
+          handed={handed}
+        />
       )}
       <Activity mode={shown === CONTENT_TAB ? "visible" : "hidden"}>
         {children}
       </Activity>
     </>
+  );
+}
+
+/**
+ * What every contributed tab is handed besides its own `setBadge`, or
+ * nothing while the page does not know its ids.
+ */
+function handedTo<P extends AdminPlaceId>(
+  tabProps: Readonly<Record<string, unknown>> | undefined,
+  context: PlaceProps<P>["context"],
+  entry: PlaceProps<P>["entry"]
+):
+  | (Omit<PlaceTabProps<P>, "setBadge"> & Readonly<Record<string, unknown>>)
+  | undefined {
+  if (context === null) return undefined;
+  return { ...tabProps, context, ...(entry === undefined ? {} : { entry }) };
+}
+
+/**
+ * The strip and each contributed tab's panel, drawn once the page knows its
+ * ids and a tab is delivered. `handed` is what every tab receives besides its
+ * own `setBadge`.
+ */
+function PlaceTabStrip<P extends AdminPlaceId>({
+  tabs,
+  shown,
+  choose,
+  contentLabel,
+  className,
+  handed,
+}: {
+  tabs: ReturnType<typeof useDeliveredTabs<P>>;
+  shown: string;
+  choose: (value: string) => void;
+  contentLabel: string;
+  className: string | undefined;
+  handed: Omit<PlaceTabProps<P>, "setBadge"> &
+    Readonly<Record<string, unknown>>;
+}): ReactNode {
+  const { badges, setterFor } = useTabBadges();
+  return (
+    <Tabs
+      value={shown}
+      onValueChange={choose}
+      {...(className === undefined ? {} : { className })}
+    >
+      <TabsList scrollable>
+        {/* The page's content is not one of the strip's panels, since
+            wrapping it in one would change the page with no tab or remount
+            it when a tab arrives, so this tab names no panel. */}
+        <TabsTrigger value={CONTENT_TAB} aria-controls={undefined}>
+          {contentLabel}
+        </TabsTrigger>
+        {tabs.map(tab => (
+          <PlaceTabTrigger
+            key={tab.id}
+            value={tab.id}
+            label={tab.label}
+            badge={drawnBadge(badges[tab.id])}
+          />
+        ))}
+      </TabsList>
+      {tabs.map(tab => (
+        <PlaceTabPanel<P>
+          key={tab.id}
+          id={tab.id}
+          component={tab.component}
+          open={shown === tab.id}
+          props={{ ...handed, setBadge: setterFor(tab.id) }}
+        />
+      ))}
+    </Tabs>
   );
 }
 
@@ -371,7 +440,7 @@ function PlaceTabTrigger({
           className={cn(
             "ml-2 inline-flex min-w-5 justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5",
             attention
-              ? "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100"
+              ? "bg-warning-text text-warning-surface"
               : "bg-muted text-muted-foreground"
           )}
         >

@@ -3,15 +3,20 @@
 /**
  * Field Cards
  *
- * The form builder's field list: one collapsible card per field, edited
- * inline. This is the whole field-editing surface — there is no separate
- * palette or properties sidebar.
+ * The form builder's fields as one outline: a row per field showing its
+ * label, type and name, with badges for what it would otherwise take opening
+ * it to see (required, width, a condition, a default). Selecting a row opens
+ * the shared settings panel (`FieldInspector`): docked at the window's edge
+ * where the window is wide enough, and under the row where it is not.
+ *
+ * A field is added through the shared field picker, from the toolbar, from
+ * between two rows, or with "/" on a row, which adds below it.
  *
  * Reordering is triple-redundant on purpose: drag handles (pointer), the
  * same handle with Space + arrow keys (dnd-kit keyboard sensor), and
  * explicit Move up / Move down menu items. Deleting a field that another
- * field's condition or a notification references is blocked with the list
- * of referrers instead of silently breaking them.
+ * field's condition, a notification or a form setting references is blocked
+ * with the list of referrers instead of silently breaking them.
  *
  * @module admin/components/builder/FieldCards
  */
@@ -32,7 +37,12 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { usePluginFieldTypeEntries } from "@nextlyhq/plugin-sdk/admin";
+import {
+  describeFieldTypes,
+  FieldPicker,
+  type FieldPickerChoice,
+  type FieldPickerConfig,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
   DropdownMenu,
@@ -50,14 +60,25 @@ import type {
   FormFieldCatalogType,
 } from "nextly/field-catalog";
 import { FORM_FIELD_TYPE_CATALOG } from "nextly/field-catalog";
-import { type JSX, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type JSX,
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useMemo,
+  useState,
+} from "react";
 
 import type { AnyFormField, FormFieldTypeId } from "../../../types";
 import { buildFieldReferenceMap } from "../../../utils/field-references";
-import { useFormBuilder } from "../../context/FormBuilderContext";
+import {
+  useFieldBookkeeping,
+  useFormBuilder,
+} from "../../context/FormBuilderContext";
 
-import { AddFieldDialog } from "./AddFieldDialog";
-import { FieldEditor } from "./FieldEditor";
+import { fieldBadges, type FieldBadge } from "./field-badges";
+import { DOCKED_PANEL_ID, useDocked, useFieldPanel } from "./FieldInspector";
+import { formFieldName } from "./forms-field-surface";
 
 // ---------------------------------------------------------------------------
 // Catalog helpers
@@ -82,36 +103,181 @@ function CatalogIcon({
 }
 
 // ---------------------------------------------------------------------------
-// One field card
+// One row
 // ---------------------------------------------------------------------------
 
-interface FieldCardProps {
-  field: AnyFormField;
+/** A row's badges, quiet chips; Required reads in the foreground colour. */
+function Badges({ badges }: { badges: readonly FieldBadge[] }) {
+  if (badges.length === 0) return null;
+  return (
+    <span className="hidden shrink-0 flex-wrap justify-end gap-1 sm:flex">
+      {badges.map(badge => (
+        <span
+          key={badge.kind}
+          title={badge.title}
+          className={`inline-flex h-5 items-center gap-1 whitespace-nowrap rounded border border-border bg-card px-1.5 text-[11px] font-medium ${
+            badge.kind === "required"
+              ? "text-foreground"
+              : "text-muted-foreground"
+          }`}
+        >
+          {badge.kind === "condition" ? (
+            <Lucide.GitBranch className="h-3 w-3" aria-hidden="true" />
+          ) : null}
+          {badge.label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+interface FieldActionsProps {
+  label: string;
   index: number;
   total: number;
-  expanded: boolean;
-  onToggle: () => void;
-  allFields: AnyFormField[];
-  deleteBlockers: string[];
-  onUpdate: (updates: Partial<AnyFormField>) => void;
+  deleteBlockers: readonly string[];
   onDuplicate: () => void;
   onDelete: () => void;
   onMove: (direction: -1 | 1) => void;
 }
 
-function FieldCard({
-  field,
+/** A row's menu: move, duplicate, and delete unless something refers to it. */
+function FieldActions({
+  label,
   index,
   total,
-  expanded,
-  onToggle,
-  allFields,
   deleteBlockers,
-  onUpdate,
   onDuplicate,
   onDelete,
   onMove,
-}: FieldCardProps) {
+}: FieldActionsProps) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label={`Actions for ${label}`}
+        >
+          <Lucide.MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem
+          disabled={index === 0}
+          onClick={() => onMove(-1)}
+          className="gap-2"
+        >
+          <Lucide.ArrowUp className="h-4 w-4 text-muted-foreground" />
+          Move up
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={index === total - 1}
+          onClick={() => onMove(1)}
+          className="gap-2"
+        >
+          <Lucide.ArrowDown className="h-4 w-4 text-muted-foreground" />
+          Move down
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onDuplicate} className="gap-2">
+          <Lucide.Copy className="h-4 w-4 text-muted-foreground" />
+          Duplicate
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {deleteBlockers.length > 0 ? (
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <div>
+                <DropdownMenuItem
+                  disabled
+                  className="gap-2 text-muted-foreground"
+                >
+                  <Lucide.Trash2 className="h-4 w-4" />
+                  Delete
+                </DropdownMenuItem>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="max-w-64">
+              Used by {deleteBlockers.join(", ")}. Remove those references
+              first.
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <DropdownMenuItem
+            onClick={onDelete}
+            className="gap-2 text-destructive focus:text-destructive"
+          >
+            <Lucide.Trash2 className="h-4 w-4" />
+            Delete
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * "Add here", on the edge above a row: a field goes where it belongs rather
+ * than at the end and dragged up. Shown on hover of that row and on keyboard
+ * focus, and absent above the first row.
+ */
+function AddHere({
+  label,
+  onAdd,
+}: {
+  label: string;
+  onAdd: (() => void) | undefined;
+}) {
+  if (onAdd === undefined) return null;
+  return (
+    <button
+      type="button"
+      onClick={onAdd}
+      aria-label={`Add a field above ${label}`}
+      // 24px tall, the smallest target a pointer is asked to hit, and shown
+      // only for the row under the pointer, so the list does not fill with
+      // them at once.
+      className="absolute left-1/2 top-0 z-10 inline-flex h-6 min-w-6 -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border border-border bg-card px-2.5 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/row:opacity-100"
+    >
+      <Lucide.Plus className="h-3 w-3" aria-hidden="true" />
+      Add here
+    </button>
+  );
+}
+
+interface OutlineRowProps extends Omit<FieldActionsProps, "label"> {
+  field: AnyFormField;
+  /** Its key while edited: React's, and the inline panel's id. */
+  rowKey: string;
+  badges: readonly FieldBadge[];
+  selected: boolean;
+  /** The panel under the row, where the window is too narrow to dock it. */
+  settings: ReactNode;
+  /** Where a selected row's settings open, for `aria-controls`. */
+  settingsId: string | undefined;
+  onSelect: () => void;
+  /** "/" on the row: add a field below it. */
+  onAddBelow: () => void;
+  /** "Add here", above this row; absent on the first. */
+  onAddAbove: (() => void) | undefined;
+  readOnly: boolean;
+}
+
+function OutlineRow({
+  field,
+  rowKey,
+  badges,
+  selected,
+  settings,
+  settingsId,
+  onSelect,
+  onAddBelow,
+  onAddAbove,
+  readOnly,
+  ...actions
+}: OutlineRowProps) {
   const {
     attributes,
     listeners,
@@ -123,168 +289,89 @@ function FieldCard({
   } = useSortable({ id: field.name });
 
   const entry = CATALOG_BY_TYPE.get(field.type);
-  const headerId = `field-card-header-${field.name}`;
-  const bodyId = `field-card-body-${field.name}`;
-  const deleteBlocked = deleteBlockers.length > 0;
+  const label = field.label || field.name;
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "/" || readOnly) return;
+    event.preventDefault();
+    onAddBelow();
+  };
 
   return (
-    <div
+    <li
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={
-        // Dragging uses full-strength border-primary so the lifted card stands out; the resting state uses border-border, keeping the two distinct.
-        isDragging
-          ? "border border-primary bg-card opacity-80 relative z-10"
-          : "border border-border bg-card"
-      }
+      className={`group/row relative border-b border-border last:border-b-0 ${
+        isDragging ? "z-10 bg-card opacity-80" : ""
+      }`}
     >
-      {/* Header row: every control is a real, separate interactive element —
-          no nested-button markup. */}
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      {readOnly ? null : <AddHere label={label} onAdd={onAddAbove} />}
+      <div
+        className={`relative flex min-h-[52px] items-center gap-2 pl-1.5 pr-2.5 ${
+          selected
+            ? "bg-accent shadow-[inset_0_0_0_1.5px_var(--nx-foreground)]"
+            : "hover:bg-muted"
+        }`}
+      >
         <button
           type="button"
           ref={setActivatorNodeRef}
           {...attributes}
           {...listeners}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-none text-muted-foreground hover:text-foreground hover:bg-primary/5 cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          aria-label={`Reorder ${field.label || field.name}. Press Space to lift, arrow keys to move, Space to drop.`}
+          className="flex h-8 w-6 shrink-0 cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={`Reorder ${label}. Press Space to lift, arrow keys to move, Space to drop.`}
         >
           <Lucide.GripVertical className="h-4 w-4" aria-hidden="true" />
         </button>
-
         <button
           type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          aria-controls={bodyId}
-          id={headerId}
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-none py-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          onClick={onSelect}
+          onKeyDown={onKeyDown}
+          aria-expanded={selected}
+          aria-controls={selected ? settingsId : undefined}
+          aria-keyshortcuts="/"
+          className="flex min-w-0 flex-1 items-center gap-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-primary/5 text-primary">
-            <CatalogIcon name={entry?.icon} className="h-3.5 w-3.5" />
+          <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-md border border-border bg-background text-foreground">
+            <CatalogIcon name={entry?.icon} className="h-4 w-4" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-foreground">
-              {field.label || field.name}
+              {label}
             </span>
             <span className="block truncate text-xs text-muted-foreground">
               {entry?.label ?? field.type}
-              <span className="mx-1.5 text-muted-foreground">·</span>
-              <span className="font-mono">{field.name}</span>
+              <span className="mx-1.5">·</span>
+              <code className="font-mono text-[11.5px]">{field.name}</code>
             </span>
           </span>
-          {field.required && (
-            <span className="shrink-0 border border-border bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
-              Required
-            </span>
-          )}
-          <Lucide.ChevronDown
-            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`}
-            aria-hidden="true"
-          />
+          <Badges badges={badges} />
         </button>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              className="h-8 w-8 shrink-0 rounded-none text-muted-foreground hover:text-foreground"
-              aria-label={`Actions for ${field.label || field.name}`}
-            >
-              <Lucide.MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            className="w-56 shadow-none border-border"
-          >
-            <DropdownMenuItem
-              disabled={index === 0}
-              onClick={() => onMove(-1)}
-              className="gap-2 cursor-pointer"
-            >
-              <Lucide.ArrowUp className="h-4 w-4 text-muted-foreground" />
-              Move up
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={index === total - 1}
-              onClick={() => onMove(1)}
-              className="gap-2 cursor-pointer"
-            >
-              <Lucide.ArrowDown className="h-4 w-4 text-muted-foreground" />
-              Move down
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={onDuplicate}
-              className="gap-2 cursor-pointer"
-            >
-              <Lucide.Copy className="h-4 w-4 text-muted-foreground" />
-              Duplicate
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            {deleteBlocked ? (
-              <Tooltip delayDuration={0}>
-                <TooltipTrigger asChild>
-                  <div>
-                    <DropdownMenuItem
-                      disabled
-                      className="gap-2 text-muted-foreground"
-                    >
-                      <Lucide.Trash2 className="h-4 w-4" />
-                      Delete
-                    </DropdownMenuItem>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="left" className="max-w-64">
-                  Used by {deleteBlockers.join(", ")}. Remove those references
-                  first.
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <DropdownMenuItem
-                onClick={onDelete}
-                className="gap-2 cursor-pointer text-destructive focus:text-destructive"
-              >
-                <Lucide.Trash2 className="h-4 w-4" />
-                Delete
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <FieldActions label={label} {...actions} />
       </div>
-
-      {/* Inline properties: the card IS the properties panel. */}
-      {expanded && (
+      {selected && settings ? (
         <div
-          id={bodyId}
+          id={`field-settings-${rowKey}`}
           role="region"
-          aria-labelledby={headerId}
+          aria-label={`${label} settings`}
           className="border-t border-border"
         >
-          <FieldEditor
-            field={field}
-            allFields={allFields}
-            onUpdate={onUpdate}
-          />
+          {settings}
         </div>
-      )}
-    </div>
+      ) : null}
+    </li>
   );
 }
 
 // ---------------------------------------------------------------------------
-// The list
+// The outline
 // ---------------------------------------------------------------------------
 
 export interface FieldCardsProps {
   /**
    * Form-surface types the host has NOT excluded (the plugin's field
    * enable/disable option). `null` while the host configuration is still
-   * loading — the Add dialog waits rather than flashing the unfiltered set.
-   * Types outside this set stay renderable on existing fields but cannot be
-   * added.
+   * loading: Add field waits rather than offering the unfiltered set. Types
+   * outside this set stay editable on existing fields but cannot be added.
    */
   enabledTypes: readonly FormFieldCatalogType[] | null;
   /**
@@ -293,95 +380,123 @@ export interface FieldCardsProps {
    * contributed types.
    */
   disabledFieldTypes?: ReadonlySet<string>;
-  /** Creates a field of the given type and returns it (context helper). */
-  onAddField: (type: FormFieldTypeId) => void;
+  /**
+   * Creates and selects a field of the chosen type. The picker's whole choice
+   * comes second (the label the person typed and the name it gives), so a host
+   * written for the type alone keeps working and one that wants the label
+   * reads it there. The third is where in the list it goes, when it was added
+   * between two rows or below one; absent for the end.
+   */
+  onAddField: (
+    type: FormFieldTypeId,
+    choice?: FieldPickerChoice,
+    index?: number
+  ) => void;
+  /**
+   * Where the selected field's settings dock from 1024px: `"beside"` the list
+   * (the default, for a list drawn on its own), or by the `"host"` page,
+   * which draws `FieldInspector` against the window's edge itself. Below
+   * 1024px they open under the row either way.
+   */
+  dockedSettings?: "beside" | "host";
+}
+
+/**
+ * The list with the selected field's settings docked beside it, for a list
+ * drawn on its own; the column scrolls on its own body.
+ */
+function BesideSettings({
+  list,
+  panel,
+}: {
+  list: JSX.Element;
+  panel: ReactNode;
+}): JSX.Element {
+  if (panel === null) return list;
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)] items-start gap-4">
+      {list}
+      <aside
+        id={DOCKED_PANEL_ID}
+        aria-label="Field settings"
+        className="sticky top-4 flex max-h-[calc(100vh-8rem)] flex-col overflow-hidden rounded-md border border-border bg-card"
+      >
+        {panel}
+      </aside>
+    </div>
+  );
+}
+
+/**
+ * What every submission stores beside a form's own fields: its IP address
+ * and browser only while the form keeps them (Settings › Privacy).
+ */
+function storedWithEverySubmission(storesAddress: boolean): string {
+  return storesAddress
+    ? "Every submission also stores when it was submitted, its status, internal notes, and the IP address and browser it came from."
+    : "Every submission also stores when it was submitted, its status and internal notes. This form keeps no IP address or browser.";
 }
 
 export function FieldCards({
   enabledTypes,
   disabledFieldTypes,
   onAddField,
+  dockedSettings = "beside",
 }: FieldCardsProps): JSX.Element {
   const {
     fields,
     notifications,
+    settings,
     selectedFieldId,
     selectField,
-    updateField,
     deleteField,
     duplicateField,
     moveField,
   } = useFormBuilder();
+  const { readOnly, fieldKey } = useFieldBookkeeping();
 
-  const [isAddOpen, setIsAddOpen] = useState(false);
-
-  // A card's React key cannot be the field's name: the name is the one
-  // property the Field Name input rewrites on every keystroke, and a list
-  // keyed by it unmounts the renamed card mid-word, destroying the input and
-  // the focus in it. Keys are minted per card here and follow the field
-  // through a rename (handleUpdate below), so editing a name never remounts
-  // the card.
-  const cardKeysRef = useRef(new Map<string, string>());
-  const nextCardKeyRef = useRef(0);
-
-  const cardKeyFor = (name: string): string => {
-    let key = cardKeysRef.current.get(name);
-    if (key === undefined) {
-      key = `card-${++nextCardKeyRef.current}`;
-      cardKeysRef.current.set(name, key);
-    }
-    return key;
-  };
-
-  const handleUpdate = useCallback(
-    (field: AnyFormField, updates: Partial<AnyFormField>) => {
-      // Move the card's key to the field's incoming name before the state
-      // update re-renders the list, so the renamed field keeps its mounted
-      // card.
-      if (updates.name !== undefined && updates.name !== field.name) {
-        const key = cardKeysRef.current.get(field.name);
-        if (key !== undefined) {
-          cardKeysRef.current.delete(field.name);
-          cardKeysRef.current.set(updates.name, key);
-        }
-      }
-      updateField(field.name, updates);
-    },
-    [updateField]
-  );
+  // Where the picker adds, while it is open: an index, or the end.
+  const [addAt, setAddAt] = useState<number | "end" | null>(null);
+  const docked = useDocked();
+  const inlinePanel = useFieldPanel(false);
+  const besidePanel = useFieldPanel(true);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Plugin field types that opted into the forms surface, offered alongside the
-  // enabled built-ins. A plugin reusing a built-in id never shadows it.
-  const pluginEntries = usePluginFieldTypeEntries("forms");
-
-  const entries = useMemo(() => {
+  // The picker offers the enabled built-ins, then the plugin types that opted
+  // into the forms surface; a plugin reusing a built-in's id never shadows it,
+  // and a type the host disabled is left out whoever declared it.
+  const pickerConfig = useMemo<FieldPickerConfig | null>(() => {
     if (enabledTypes === null) return null;
     const allowed = new Set<string>(enabledTypes);
-    const builtinTypes = new Set<string>(
-      FORM_FIELD_TYPE_CATALOG.map(entry => entry.type)
-    );
-    const builtins: FieldTypeCatalogEntry<FormFieldTypeId>[] =
-      FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type));
-    return [
-      ...builtins,
-      // A plugin type a built-in shadows, or one the host disabled, is excluded.
-      ...pluginEntries.filter(
-        entry =>
-          !builtinTypes.has(entry.type) && !disabledFieldTypes?.has(entry.type)
+    return {
+      surface: "forms",
+      types: describeFieldTypes(
+        FORM_FIELD_TYPE_CATALOG.filter(entry => allowed.has(entry.type))
       ),
-    ];
-  }, [enabledTypes, pluginEntries, disabledFieldTypes]);
+      exclude: [
+        ...FORM_FIELD_TYPE_CATALOG.filter(
+          entry => !allowed.has(entry.type)
+        ).map(entry => entry.type),
+        ...(disabledFieldTypes ?? []),
+      ],
+      deriveName: formFieldName,
+    };
+  }, [enabledTypes, disabledFieldTypes]);
 
-  // One O(N^2) pass per fields/notifications change; each card then looks
+  // One O(N^2) pass per fields/notifications change; each row then looks
   // its blockers up in O(1) instead of re-walking everything per render.
   const referenceMap = useMemo(
-    () => buildFieldReferenceMap(fields, notifications),
-    [fields, notifications]
+    () => buildFieldReferenceMap(fields, notifications, settings),
+    [fields, notifications, settings]
+  );
+
+  const labels = useMemo(
+    () => new Map(fields.map(field => [field.name, field.label || field.name])),
+    [fields]
   );
 
   const handleDragEnd = useCallback(
@@ -395,11 +510,36 @@ export function FieldCards({
     [fields, moveField]
   );
 
-  return (
-    <div className="space-y-3">
+  const canAdd = pickerConfig !== null && !readOnly;
+  const addButton = (
+    <Button
+      type="button"
+      variant={fields.length === 0 ? "default" : "outline"}
+      size="sm"
+      disabled={!canAdd}
+      onClick={() => setAddAt("end")}
+    >
+      <Lucide.Plus className="h-4 w-4" aria-hidden="true" />
+      {pickerConfig === null ? "Loading field types…" : "Add field"}
+    </Button>
+  );
+
+  const list = (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-sm font-semibold text-foreground">Fields</h2>
+        {fields.length > 0 ? (
+          <span className="hidden text-xs text-muted-foreground md:inline">
+            Drag to reorder. Press / on a field to add one below it.
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        {fields.length > 0 ? addButton : null}
+      </div>
+
       {fields.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 border border-dashed border-border bg-card px-6 py-14 text-center">
-          <span className="flex h-10 w-10 items-center justify-center bg-primary/10 text-primary">
+        <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border bg-card px-6 py-14 text-center">
+          <span className="flex h-10 w-10 items-center justify-center rounded-md bg-muted text-foreground">
             <Lucide.ListPlus className="h-5 w-5" aria-hidden="true" />
           </span>
           <div>
@@ -408,68 +548,91 @@ export function FieldCards({
               Add the first field to start building this form.
             </p>
           </div>
-          <Button type="button" size="sm" onClick={() => setIsAddOpen(true)}>
-            Add field
-          </Button>
+          {addButton}
         </div>
       ) : (
-        <>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={fields.map(f => f.name)}
+            strategy={verticalListSortingStrategy}
           >
-            <SortableContext
-              items={fields.map(f => f.name)}
-              strategy={verticalListSortingStrategy}
+            <ul
+              aria-label="Form fields"
+              className="overflow-visible rounded-md border border-border bg-card"
             >
-              <ul className="space-y-2" aria-label="Form fields">
-                {fields.map((field, index) => (
-                  <li key={cardKeyFor(field.name)}>
-                    <FieldCard
-                      field={field}
-                      index={index}
-                      total={fields.length}
-                      expanded={selectedFieldId === field.name}
-                      onToggle={() =>
-                        selectField(
-                          selectedFieldId === field.name ? null : field.name
-                        )
-                      }
-                      allFields={fields}
-                      deleteBlockers={(referenceMap.get(field.name) ?? []).map(
-                        ref => ref.label
-                      )}
-                      onUpdate={updates => handleUpdate(field, updates)}
-                      onDuplicate={() => duplicateField(field.name)}
-                      onDelete={() => deleteField(field.name)}
-                      onMove={direction => moveField(index, index + direction)}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </SortableContext>
-          </DndContext>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setIsAddOpen(true)}
-            className="w-full border-dashed"
-          >
-            <Lucide.Plus className="h-4 w-4" aria-hidden="true" />
-            Add field
-          </Button>
-        </>
+              {fields.map((field, index) => {
+                const key = fieldKey(field.name);
+                const selected = selectedFieldId === field.name;
+                return (
+                  <OutlineRow
+                    key={key}
+                    rowKey={key}
+                    field={field}
+                    index={index}
+                    total={fields.length}
+                    badges={fieldBadges(
+                      field,
+                      name => labels.get(name) ?? name
+                    )}
+                    selected={selected}
+                    settings={!docked && selected ? inlinePanel : null}
+                    settingsId={
+                      docked ? DOCKED_PANEL_ID : `field-settings-${key}`
+                    }
+                    onSelect={() => selectField(selected ? null : field.name)}
+                    onAddBelow={() => canAdd && setAddAt(index + 1)}
+                    onAddAbove={
+                      index === 0 || !canAdd ? undefined : () => setAddAt(index)
+                    }
+                    readOnly={readOnly}
+                    deleteBlockers={(referenceMap.get(field.name) ?? []).map(
+                      ref => ref.label
+                    )}
+                    onDuplicate={() => duplicateField(field.name)}
+                    onDelete={() => deleteField(field.name)}
+                    onMove={direction => moveField(index, index + direction)}
+                  />
+                );
+              })}
+            </ul>
+          </SortableContext>
+        </DndContext>
       )}
 
-      <AddFieldDialog
-        open={isAddOpen}
-        onOpenChange={setIsAddOpen}
-        entries={entries}
-        onAdd={onAddField}
-      />
+      <p className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">
+        <Lucide.Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        {storedWithEverySubmission(settings.storeIpAndBrowser !== false)}
+      </p>
+
+      {pickerConfig && (
+        <FieldPicker
+          open={addAt !== null}
+          config={pickerConfig}
+          onCancel={() => setAddAt(null)}
+          onAdd={(choice, how) => {
+            const at = addAt;
+            onAddField(
+              choice.type,
+              choice,
+              typeof at === "number" ? at : undefined
+            );
+            // A field added between rows moves the next one down, so another
+            // goes below it.
+            if (typeof at === "number")
+              setAddAt(how.addAnother ? at + 1 : null);
+            else if (!how.addAnother) setAddAt(null);
+          }}
+        />
+      )}
     </div>
+  );
+  return docked && dockedSettings === "beside" ? (
+    <BesideSettings list={list} panel={besidePanel} />
+  ) : (
+    list
   );
 }

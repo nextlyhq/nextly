@@ -79,7 +79,7 @@ function ProblemList({ problems }: { problems: LiquidProblem[] }) {
     <div
       role="alert"
       data-testid="body-problems"
-      className="shrink-0 border-t border-destructive bg-destructive/5 px-3 py-2 text-xs"
+      className="shrink-0 border-t border-danger-border bg-danger-surface px-3 py-2 text-xs"
     >
       {problems.map(problem => (
         <p
@@ -104,6 +104,7 @@ export function BodyEditor({
   readOnly,
   completion,
   liquid,
+  suppliedNames,
 }: {
   control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
   editorTab: "html" | "text";
@@ -119,6 +120,7 @@ export function BodyEditor({
   completion: CompletionData;
   /** False for a template kept on the previous engine, sent without Liquid. */
   liquid: boolean;
+  suppliedNames?: ReadonlySet<string>;
 }): JSX.Element {
   const [problems, setProblems] = useState<LiquidProblem[]>([]);
   return (
@@ -184,6 +186,7 @@ export function BodyEditor({
               disabled={isPending}
               completion={completion}
               liquid={liquid}
+              suppliedNames={suppliedNames}
               placeholder={
                 editorTab === "html"
                   ? "<h1>Hello {{userName}}</h1>\n<p>Welcome to {{appName}}.</p>"

@@ -6,8 +6,8 @@
  * under the card's Filter, in its Sort, each row asked by the collection's own
  * title field, its status where it has one and when it was updated, or
  * by the fields the reader chose instead of the last two. Asked as core's own
- * lists are: the rows the card's size and density hold, at most its "Number
- * of items", and one more, so the card can say more exist at every size.
+ * lists are: its "Number of entries" (`listEntries`), and one more, so the
+ * card can say more exist.
  *
  * Through the public read services alone, as a plugin's card reads: the
  * collection as `describe` answers it (its title field, whether it has a draft
@@ -19,10 +19,9 @@
  * @module domains/widgets/core-widgets/recent-entries
  */
 
-import { rowsThatFit } from "../card-geometry";
 import { defineWidget } from "../declaration/define-widget";
 import { setting } from "../declaration/setting-builders";
-import { effectiveWidgetLimit } from "../query-limits";
+import { listEntries } from "../query-limits";
 
 import { askedQuery } from "./asked";
 import type { RecentEntriesWidgetData } from "./data";
@@ -54,9 +53,11 @@ const RECENT_ENTRIES_SETTINGS = {
 
 export const recentEntriesWidget = defineWidget({
   id: CORE_WIDGET_ID.recentEntries,
+  // Drawn beside its name in the add panel.
+  icon: "List",
   title: "Recent entries",
-  description:
-    "A collection's entries changed most recently, each linking to its entry.",
+  // One line, as the add panel lists it.
+  description: "The latest changed entries of one collection, or of all.",
   // Added from a collection's group of the add panel, once per collection or
   // more, and never placed on the default dashboard.
   offered: "per-collection",
@@ -68,20 +69,10 @@ export const recentEntriesWidget = defineWidget({
     max: { w: 12, h: 8 },
   },
   settings: RECENT_ENTRIES_SETTINGS,
-  load: async ({
-    settings,
-    services,
-    size,
-  }): Promise<RecentEntriesWidgetData> => {
+  load: async ({ settings, services }): Promise<RecentEntriesWidgetData> => {
     const described = await services.describe(settings.collection);
-    // The rows the card's height holds at its density, at most its "Number of
-    // items", and the one more that says more exist: the rule the card's own
-    // rows are drawn by.
-    const rows =
-      Math.min(
-        effectiveWidgetLimit(settings.limit),
-        rowsThatFit(size, { density: settings.density })
-      ) + 1;
+    // Its "Number of entries", and the one more that says more exist (`listEntries`).
+    const rows = listEntries(settings.limit) + 1;
     const asked = askedQuery(
       { op: "list", sort: "-updatedAt" },
       RECENT_ENTRIES_SETTINGS,
