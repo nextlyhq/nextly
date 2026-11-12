@@ -14,7 +14,6 @@ import { createRequire } from "node:module";
 import {
   type AuthUser,
   definePlugin,
-  type HookContext,
   NextlyError,
   type PluginDefinition,
   type PluginEmailService,
@@ -720,15 +719,6 @@ export function formBuilder(
           prepareSubmissionForWrite(context, formsSlug, nextly)
       );
 
-      // Register afterCreate hook for email notifications
-      nextly.hooks.on(
-        "afterCreate",
-        submissionSlug,
-        async (context: unknown) => {
-          await handleSubmissionCreated(context, resolvedConfig, nextly);
-        }
-      );
-
       // Stamp admin edits of submitted data: changing what the visitor
       // submitted must leave a visible trace. Registered directly on the
       // registry (like the notification hook) so it runs for every API
@@ -827,6 +817,12 @@ export function formBuilder(
         forms: formsSlug,
         submissions: submissionSlug,
       });
+
+      // Each notification queued inside the transaction that stores its
+      // submission, after the closing hold has let the submission in.
+      nextly.hooks.onInTransaction(submissionSlug, write =>
+        queueSubmissionNotifications(write, resolvedConfig, nextly, formsSlug)
+      );
 
       // What each submission sent, forgotten on every path that deletes it,
       // a form's deletion among them, in the deleting transaction.
@@ -1852,32 +1848,75 @@ function stampDerivedEdit(
   row.editedBy = user?.id ?? null;
 }
 
-async function handleSubmissionCreated(
-  context: unknown,
+/** The write an in-transaction handler on the submissions is handed. */
+type SubmissionWrite = Parameters<
+  Parameters<NextlyInstance["hooks"]["onInTransaction"]>[1]
+>[0];
+
+/**
+ * The parent form, read on the submission's own transaction, so a form the
+ * same transaction wrote is seen and no second connection is taken. Read
+ * with no lock: the closing hold takes the one the form needs. Null for a
+ * form that is not there, which sends nothing.
+ */
+async function formInTransaction(
+  nextly: NextlyInstance,
+  write: SubmissionWrite,
+  formsSlug: string,
+  formId: string
+): Promise<Record<string, unknown> | null> {
+  try {
+    return (await nextly.services.ownCollections.findEntryByIdInTransaction(
+      write.transaction,
+      formsSlug,
+      formId,
+      { lock: "none" }
+    )) as unknown as Record<string, unknown>;
+  } catch (err) {
+    if (!NextlyError.isNotFound(err)) throw err;
+    nextly.logger.error?.("Form Builder: form not found", { formId });
+    return null;
+  }
+}
+
+/**
+ * Queue a new submission's notifications in the transaction that stores it.
+ *
+ * Each active notification whose conditions the answers meet is queued
+ * through the email service's queued send with the write's transaction, and
+ * recorded with the submission in it too, so the submission, its queued
+ * emails and their records commit together or not at all: a stop between
+ * the insert and the commit leaves none of them, and one after it leaves the
+ * emails queued for the jobs trigger to send. Nothing is sent here: each
+ * email's first attempt starts once the outermost transaction commits.
+ *
+ * The `form-builder.beforeEmail` filter runs here, inside the transaction,
+ * so a handler that throws refuses the submission, and a transaction retried
+ * after a version conflict runs it again.
+ */
+async function queueSubmissionNotifications(
+  write: SubmissionWrite,
   config: ResolvedFormBuilderConfig,
-  nextly: NextlyInstance
+  nextly: NextlyInstance,
+  formsSlug: string
 ): Promise<void> {
+  if (write.operation !== "create") return;
   // The plugin-level kill switch: `notifications.enabled: false` turns off
   // all form emails regardless of per-rule state.
   if (!config.notifications.enabled) return;
 
-  const submission = (context as { data?: Record<string, unknown> }).data;
+  const submission = write.data;
   if (!submission) return;
 
   // Spam is stored for review, but nobody gets emailed about it — otherwise
-  // every bot hit would trigger the form's notification rules.
+  // every bot hit would trigger the form's notification rules. Marking it
+  // Not spam later queues nothing either.
   if (submission.status === "spam") return;
 
   const formId = parentFormId(submission);
   if (!formId) return;
 
-  // Fetch the parent form
-  const declaredFormsSlug = config.formOverrides.slug;
-  const form = await fetchParentForm(
-    nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug,
-    formId,
-    nextly
-  );
+  const form = await formInTransaction(nextly, write, formsSlug, formId);
   if (!form) return;
 
   const notifications = Array.isArray(form.notifications)
@@ -1888,10 +1927,10 @@ async function handleSubmissionCreated(
   const emailService = nextly.services.email;
   if (!emailService) return;
 
-  // The afterCreate hook receives the raw DB row, so on dialects that store
-  // JSON columns as text (e.g. SQLite) `data` arrives serialized. Without
-  // parsing it, {{field}} recipients, reply-to references, and send
-  // conditions all silently see an empty submission.
+  // Read either way: as an object, or serialized as a dialect that stores
+  // JSON columns as text keeps it. Without parsing a serialized one,
+  // {{field}} recipients, reply-to references, and send conditions all
+  // silently see an empty submission.
   const submittedData = parseJsonColumn(submission.data);
 
   // Collect mediaIds from file fields marked for email attachment
@@ -1906,7 +1945,7 @@ async function handleSubmissionCreated(
     notifications,
     submittedData,
     formName: form.name,
-    submissionId: submission.id,
+    submissionId: write.id,
     defaultFrom: config.notifications.defaultFrom,
     fields: Array.isArray(form.fields) ? (form.fields as AnyFormField[]) : [],
   });
@@ -1937,27 +1976,24 @@ async function handleSubmissionCreated(
     BeforeEmailFilterContext
   >("form-builder.beforeEmail", emails, { form, submission });
 
-  // -- Send phase: queue the (possibly transformed) outgoing notifications,
-  // once the submission is durable. An email cannot be taken back, and a
-  // submission saved inside a caller's transaction runs this hook before that
-  // transaction commits: sent here, it would go out, and its delivery be
-  // recorded, for a submission a rollback then removes. The hook context's
-  // `afterCommit` holds the send until the outermost transaction commits and
-  // drops it on rollback; outside a transaction it sends at once, as before.
-  const submissionId = idText(submission.id);
-  const send = () =>
-    queueNotificationEmails({
-      emails: finalEmails,
-      emailService,
-      logger: nextly.logger,
-      formSlug: form.slug,
-      submissionId,
-      fileAttachments,
-      // Kept so deleting the submission can forget what it sent.
-      record: sent => recordSend(nextly, submissionId, sent),
-    });
-  const { afterCommit } = context as Pick<HookContext, "afterCommit">;
-  await (afterCommit ? afterCommit(send) : send());
+  // -- Queue phase: store the (possibly transformed) outgoing notifications
+  // in the submission's transaction. An email cannot be taken back, so none
+  // is attempted until that transaction (or the caller's, when the
+  // submission is saved inside one) commits, and a rollback leaves nothing
+  // queued.
+  const submissionId = write.id;
+  await queueNotificationEmails({
+    emails: finalEmails,
+    emailService,
+    logger: nextly.logger,
+    formSlug: form.slug,
+    submissionId,
+    fileAttachments,
+    tx: write.db,
+    // Kept so marking the submission Spam, or deleting it, can call off or
+    // forget what it sent.
+    record: sent => recordSend(nextly, write.transaction, submissionId, sent),
+  });
 }
 
 /**
@@ -1983,13 +2019,20 @@ function notificationKey(
  * Queue each notification, and log where it stands.
  *
  * Queued through the email service's queued send rather than sent once: the
- * queue makes the first attempt at once, and a failure a retry can help is
- * tried again through the job queue, with backoff, until it is sent or fails
- * for good, never dropped. Each carries an idempotency key from its
- * submission and notification (`notificationKey`), so a provider that takes keys delivers it
- * once even if this hook runs again. No log line names a recipient: an
- * address in a log outlives the submission it came from, and the
- * notification's id and the queued email's id are enough to find it.
+ * queue makes the first attempt at once (with `tx`, once that transaction
+ * commits), and a failure a retry can help is tried again through the job
+ * queue, with backoff, until it is sent or fails for good, never dropped.
+ * Each carries an idempotency key from its submission and notification
+ * (`notificationKey`), so a provider that takes keys delivers it once even if
+ * this runs again. No log line names a recipient: an address in a log
+ * outlives the submission it came from, and the notification's id and the
+ * queued email's id are enough to find it.
+ *
+ * A refusal of the email itself (an invalid address) is logged and the
+ * others are still queued. With `tx`, any other failure, and a failure to
+ * record a queued one, is thrown as well as logged: the transaction then
+ * rolls back with the submission, rather than keeping a submission whose
+ * notification was silently never queued.
  */
 export async function queueNotificationEmails(input: {
   emails: FormEmailNotification[];
@@ -2000,6 +2043,8 @@ export async function queueNotificationEmails(input: {
   /** The submission the notifications are for, which keys each one. */
   submissionId: string;
   fileAttachments: Array<{ mediaId: string; filename?: string }>;
+  /** The transaction to queue in, which then decides what is kept. */
+  tx?: QueueTransaction;
   /** Records each queued notification for the submission, when given. */
   record?: (sent: RecordedSend) => Promise<void>;
 }): Promise<void> {
@@ -2032,11 +2077,13 @@ export async function queueNotificationEmails(input: {
           bcc: email.bcc,
           attachments: files.length > 0 ? files : undefined,
           idempotencyKey: sendKey,
+          ...(input.tx !== undefined ? { tx: input.tx } : {}),
         }
       );
       queuedId = queued.id;
-      // The first attempt has been made: sent, waiting for a retry, or
-      // failed for good (a refusal no retry can change).
+      // Waiting for its first attempt when queued in a transaction; else
+      // that attempt has been made: sent, waiting for a retry, or failed for
+      // good (a refusal no retry can change).
       if (queued.state === "failed") {
         logger.error?.("Form Builder: notification failed", {
           ...identity,
@@ -2055,11 +2102,13 @@ export async function queueNotificationEmails(input: {
       // Thrown rather than returned: nothing was queued. A refusal of the
       // email itself (an invalid address) would be refused again, so it is
       // not retryable; anything else may pass on another submission.
+      const refused = NextlyError.isCode(err, "VALIDATION_ERROR");
       logger.error?.("Form Builder: notification failed", {
         ...identity,
-        retryable: !NextlyError.isCode(err, "VALIDATION_ERROR"),
+        retryable: !refused,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (!refused && input.tx !== undefined) throw err;
     }
     if (queuedId !== undefined) {
       await recordQueued(input, identity, { queuedId, sendKey });
@@ -2067,21 +2116,22 @@ export async function queueNotificationEmails(input: {
   }
 }
 
-/** A submission's id as text: a string or a number by dialect. */
-function idText(id: unknown): string {
-  if (typeof id === "number") return `${id}`;
-  return typeof id === "string" ? id : "";
-}
+/** The transaction handle the queued send takes as `tx`. */
+type QueueTransaction = NonNullable<
+  NonNullable<Parameters<PluginEmailService["queueWithTemplate"]>[3]>["tx"]
+>;
 
 /**
- * Record a queued notification for its submission. A failure is logged
- * rather than thrown: the notification is queued either way, and only its
- * forgetting on deletion would miss it.
+ * Record a queued notification for its submission. A failure is logged; in
+ * a transaction it is thrown too, so the submission and its queued email
+ * roll back with the record. Outside one, the notification is queued either
+ * way, and only its forgetting on deletion would miss it.
  */
 async function recordQueued(
   input: {
     record?: (sent: RecordedSend) => Promise<void>;
     logger: Pick<NextlyInstance["logger"], "error">;
+    tx?: QueueTransaction;
   },
   identity: Record<string, unknown>,
   sent: RecordedSend
@@ -2095,6 +2145,7 @@ async function recordQueued(
       queuedId: sent.queuedId,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (input.tx !== undefined) throw err;
   }
 }
 
