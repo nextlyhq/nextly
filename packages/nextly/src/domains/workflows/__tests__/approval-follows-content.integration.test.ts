@@ -371,6 +371,37 @@ describe.each(getConfiguredTestDialects())(
         expect(await withdrawals("posts", post)).toEqual([]);
       });
 
+      it("keeps one language's approval through another language's held edit, whatever second its first publish stored", async () => {
+        await boot(dialect);
+        const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+        const post = await entry(app(), "posts");
+        // English published first, then Spanish: the document's first-published time is written
+        // to the millisecond in English's version and read back, on SQLite and MySQL, to the
+        // second in Spanish's.
+        await save("posts", post, { status: "published" }, { locale: "en" });
+        await save(
+          "posts",
+          post,
+          { title: "Hola", status: "published" },
+          { locale: "es" }
+        );
+        for (const part of ["en", "es"]) {
+          await seedState(app(), partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+          await take("posts", post, part, "clear", bob);
+        }
+        const english = await stateOf(app(), partOf("posts", post, "en"));
+
+        // A held edit of the Spanish translation, touching nothing English shows.
+        await save("posts", post, { title: "Adiós" }, { locale: "es" });
+
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toEqual(
+          english
+        );
+      });
+
       it("keeps the approval on an edit to an exempt field, and withdraws it on another field's", async () => {
         await boot(dialect);
         const carol = await person(app(), "carol", [["sign-off", "briefs"]]);
