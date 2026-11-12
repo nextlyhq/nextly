@@ -65,12 +65,7 @@ import {
   siteDatabase,
   type SiteDatabase,
 } from "./site-database-harness";
-import {
-  isWrite,
-  recordStatements,
-  writtenTable,
-  type Recorded,
-} from "./statement-recorder";
+import { isWrite, recordStatements, writtenTable } from "./statement-recorder";
 
 /** The page builder's options for every boot of a case. */
 type Options = NonNullable<Parameters<typeof pageBuilder>[0]>;
@@ -100,18 +95,6 @@ const PAGE_BUILDER_WRITES =
  */
 const STORE_OR_PAGES =
   /\b[`"]?(dc_nx_pb_address_claims|dc_pages|page_builder__site_options)[`"]?/;
-
-/**
- * The composition graph lock's insert-if-absent, which every start on
- * PostgreSQL and MySQL tries: no part of the address store, and refused by
- * the row's unique name once the row is there, so it writes nothing.
- */
-function seedsGraphLock(call: Recorded): boolean {
-  return (
-    writtenTable(call.text) === "page_builder__site_options" &&
-    call.values.includes("composition-graph-lock")
-  );
-}
 
 describe.each(getConfiguredTestDialects())(
   "the address store at start (%s)",
@@ -213,8 +196,7 @@ describe.each(getConfiguredTestDialects())(
           .filter(
             call =>
               isWrite(call.text) &&
-              PAGE_BUILDER_WRITES.test(writtenTable(call.text) ?? "") &&
-              !seedsGraphLock(call)
+              PAGE_BUILDER_WRITES.test(writtenTable(call.text) ?? "")
           )
           .map(call => call.text),
         // Every statement of the start, the boot's own included: they are

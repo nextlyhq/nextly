@@ -19,8 +19,6 @@ import type { Adapter } from "./site-database-harness";
 /** One statement the driver was handed. */
 export interface Recorded {
   readonly text: string;
-  /** Its bound values, where the call carried any. */
-  readonly values: readonly unknown[];
   /** Where it was handed from: Node keeps the awaiting functions in it. */
   readonly stack: string;
 }
@@ -40,17 +38,6 @@ function textOf(arg: unknown): string | undefined {
     if (typeof shaped.sql === "string") return shaped.sql;
   }
   return undefined;
-}
-
-/** The values a driver call carries, in the argument or on the query object. */
-function valuesOf(args: readonly unknown[]): readonly unknown[] {
-  const [first, second] = args;
-  if (Array.isArray(second)) return second;
-  if (first !== null && typeof first === "object") {
-    const shaped = first as { values?: unknown };
-    if (Array.isArray(shaped.values)) return shaped.values;
-  }
-  return [];
 }
 
 /** The prototype in `start`'s chain that defines `method` itself. */
@@ -127,11 +114,7 @@ export async function recordStatements(
             ? (this as { source?: string }).source
             : textOf(args[0]);
         if (text !== undefined) {
-          calls.push({
-            text,
-            values: sqlite === true ? args : valuesOf(args),
-            stack: new Error().stack ?? "",
-          });
+          calls.push({ text, stack: new Error().stack ?? "" });
         }
         return original.apply(this, args);
       };
