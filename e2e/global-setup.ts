@@ -3,6 +3,7 @@ import type { FullConfig } from "@playwright/test";
 import { e2eDatabase } from "./support/e2e-database.mjs";
 import { startFontCatalogue } from "./support/font-catalogue-server.mjs";
 import { dropServerDatabase } from "./support/server-database.mjs";
+import { removeOwedMigrations } from "./tests/support/runtime-collection";
 import { signIn } from "./tests/support/session.mjs";
 
 export { STORAGE_STATE } from "./tests/support/session.mjs";
@@ -19,8 +20,9 @@ export { STORAGE_STATE } from "./tests/support/session.mjs";
  * seeds the user this depends on.
  *
  * Also starts the stand-in Google Fonts catalogue, which nothing reaches until
- * a spec adds a font. The run's teardown stops it and, on PostgreSQL and
- * MySQL, drops the database `scripts/reset-e2e-db.mjs` created for the run.
+ * a spec adds a font. The run's teardown removes the migrations the run's
+ * tests wrote (`removeOwedMigrations`), stops the catalogue and, on PostgreSQL
+ * and MySQL, drops the database `scripts/reset-e2e-db.mjs` created for the run.
  */
 async function globalSetup(config: FullConfig): Promise<() => Promise<void>> {
   const baseURL = config.projects[0]?.use?.baseURL;
@@ -28,10 +30,13 @@ async function globalSetup(config: FullConfig): Promise<() => Promise<void>> {
   // The run's database, by the port the server was started on, as the
   // config named it.
   const database = e2eDatabase({ port: Number(new URL(baseURL).port) });
+  // A run stopped before its teardown leaves its owed migrations listed.
+  await removeOwedMigrations();
   const stopCatalogue = await startFontCatalogue();
   await signIn(baseURL);
   return async () => {
     try {
+      await removeOwedMigrations();
       await stopCatalogue();
     } finally {
       if (database.dialect !== "sqlite") await dropServerDatabase(database);

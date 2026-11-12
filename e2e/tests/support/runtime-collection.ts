@@ -4,7 +4,7 @@
  *
  * @module tests/support/runtime-collection
  */
-import { readdir, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,14 +36,45 @@ export async function removeRuntimeCollection(
   await expectOk(removed, "removing the collection");
 }
 
+// The slugs whose migrations the run removes once it ends, one per line,
+// written by any worker and read by the run's teardown.
+const OWED_MIGRATIONS = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../.playwright/runtime-migrations-owed.txt"
+);
+
 /**
- * Remove the migrations this run caused. Making a collection at runtime writes
- * its SQL into the playground's migrations folder, which the suite's fresh
- * database never needs again; left there, they would pile up with every run and
- * wait for the next migrate against the dev database. Matched by the run's own
- * unique slug, so nothing another run or person wrote is touched.
+ * Remove the migrations this run caused, once the run ends. Making a collection
+ * at runtime writes its SQL into the playground's migrations folder, which the
+ * suite's fresh database never needs again; left there, they would pile up
+ * with every run and wait for the next migrate against the dev database.
+ *
+ * Not removed here and now: the running server's migration ledger records
+ * each file it applied, and refuses the next Schema Builder save while one it
+ * recorded is missing from the folder, so a later test's save would fail. The
+ * slug is noted, and the run's teardown (`removeOwedMigrations`) removes its
+ * files after the last test.
  */
 export async function removeMigrationsOf(slug: string): Promise<void> {
+  await mkdir(dirname(OWED_MIGRATIONS), { recursive: true });
+  await appendFile(OWED_MIGRATIONS, `${slug}\n`);
+}
+
+/**
+ * Remove the migrations of every slug a test noted with `removeMigrationsOf`.
+ * Called at the end of the run, and at its start for a list a stopped run left
+ * behind. Matched by each run's own unique slug, so nothing another run or
+ * person wrote is touched.
+ */
+export async function removeOwedMigrations(): Promise<void> {
+  const listed = await readFile(OWED_MIGRATIONS, "utf8").catch(() => "");
+  const slugs = new Set(listed.split("\n").filter(slug => slug !== ""));
+  for (const slug of slugs) await deleteMigrationsOf(slug);
+  await rm(OWED_MIGRATIONS, { force: true });
+}
+
+/** Delete the SQL files whose name or text names `slug`'s table. */
+async function deleteMigrationsOf(slug: string): Promise<void> {
   const table = slug.replace(/-/g, "_");
   for (const dir of [MIGRATIONS_DIR, join(MIGRATIONS_DIR, "dynamic")]) {
     const names = await readdir(dir).catch(() => [] as string[]);
