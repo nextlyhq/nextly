@@ -211,14 +211,15 @@ async function removeRows(
     deps.adapter,
     async tx => {
       const view = adapterForReads(deps.adapter);
-      // Asked as steps of their own, so a probe that fails cannot abort the
-      // transaction the rows are removed in.
+      // Asked on the transaction the rows are removed in (`view`), never on
+      // a second connection that cannot see it, each as a step of its own so
+      // a probe that fails cannot abort it.
       const tables = {
         dashboardPinsPresent: await inRegistryStep(deps.adapter, () =>
-          dashboardPinsPresent(deps.adapter)
+          dashboardPinsPresent(deps.adapter, undefined, view)
         ),
         mediaUsagePresent: await inRegistryStep(deps.adapter, () =>
-          mediaUsageTablePresent(deps.adapter)
+          mediaUsageTablePresent(deps.adapter, undefined, view)
         ),
       };
       for (const { kind, slug } of doomed) {
