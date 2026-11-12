@@ -196,6 +196,64 @@ describe("resolveMigration", () => {
       }
     );
 
+    // A marked old Schema Builder file accepted as it now stands: its
+    // checksum is recorded and its mark withdrawn in the same write, so the
+    // file and its rows are judged as any after it. Each control is the
+    // same call on a file no mark names, which leaves the marks alone.
+    it.each([
+      ["its content changed", "b".repeat(64)],
+      ["a snapshot placed beside it, its content unchanged", SUM],
+    ] as const)(
+      "withdraws the mark of an old Builder file accepted after %s",
+      async (_name, recorded) => {
+        const { repo, base } = makeDeps(testDb);
+        const file = "1730000000000_create_posts.sql";
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: file,
+          sha256: recorded,
+          startedAt: new Date(1),
+        });
+        await repo.recordOldBuilderMark({
+          filename: file,
+          sha256: recorded,
+          source: "cli-migrate",
+        });
+        const r = await resolveMigration({
+          mode: "applied",
+          filename: file,
+          ...base,
+        });
+        expect(r.kind).toBe("checksum-accepted");
+        expect(
+          (await repo.findFileApplies(file)).map(row => row.sha256)
+        ).toEqual([SUM]);
+        expect((await repo.currentOldBuilderMarks()).get(file)).toMatchObject({
+          status: "superseded",
+        });
+      }
+    );
+
+    it("leaves the marks alone when the file accepted has none", async () => {
+      const { repo, base } = makeDeps(testDb);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        sha256: "b".repeat(64),
+        startedAt: new Date(1),
+      });
+      await resolveMigration({
+        mode: "applied",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect((await repo.currentOldBuilderMarks()).size).toBe(0);
+    });
+
     it("refuses to accept an edit the live schema does not stand at, changing nothing; --skip-verify accepts it", async () => {
       const { repo, base } = makeDeps(testDb, {
         introspectLive: () => Promise.resolve(EMPTY),
@@ -530,6 +588,7 @@ describe("resolveMigration", () => {
           repo.recordRemoval(input),
         listFileRemovals: () => repo.listFileRemovals(),
         supersede: () => Promise.reject(new Error("process stopped")),
+        currentOldBuilderMarks: () => repo.currentOldBuilderMarks(),
       };
       await expect(
         resolveMigration({

@@ -61,13 +61,13 @@ export default defineCollection({
   slug: "posts",
   labels: { singular: "Post", plural: "Posts" },
   admin: {
-    icon: "FileText",                            // Lucide icon name
-    group: "Content",                            // Sidebar group label
-    hidden: false,                               // Hide from the sidebar (still reachable by URL)
-    order: 10,                                   // Sort position (lower = higher; default 100)
-    useAsTitle: "title",                         // Field used as the entry title in list views
+    icon: "FileText", // Lucide icon name
+    group: "Content", // Sidebar group label
+    hidden: false, // Hide from the sidebar (still reachable by URL)
+    order: 10, // Sort position (lower = higher; default 100)
+    useAsTitle: "title", // Field used as the entry title in list views
     defaultColumns: ["title", "status", "createdAt"],
-    sidebarGroup: "marketing",                   // Optional custom group slug — moves the entry out of "Collections" into a custom inner section
+    sidebarGroup: "marketing", // Optional custom group slug — moves the entry out of "Collections" into a custom inner section
   },
   fields: [
     text({ name: "title", required: true }),
@@ -76,15 +76,15 @@ export default defineCollection({
 });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `icon` | `string` | `"FileText"` | Lucide icon name shown in the sidebar |
-| `group` | `string` | — | Group label inside the Collections section |
-| `hidden` | `boolean` | `false` | Hide from sidebar navigation |
-| `order` | `number` | `100` | Sort order within the section (lower = higher) |
-| `useAsTitle` | `string` | — | Field name displayed as the entry title in list views |
-| `defaultColumns` | `string[]` | — | Columns shown by default in the list view |
-| `sidebarGroup` | `string` | — | Custom group slug — moves this collection out of `Collections` into its own inner section |
+| Option           | Type       | Default      | Description                                                                               |
+| ---------------- | ---------- | ------------ | ----------------------------------------------------------------------------------------- |
+| `icon`           | `string`   | `"FileText"` | Lucide icon name shown in the sidebar                                                     |
+| `group`          | `string`   | —            | Group label inside the Collections section                                                |
+| `hidden`         | `boolean`  | `false`      | Hide from sidebar navigation                                                              |
+| `order`          | `number`   | `100`        | Sort order within the section (lower = higher)                                            |
+| `useAsTitle`     | `string`   | —            | Field name displayed as the entry title in list views                                     |
+| `defaultColumns` | `string[]` | —            | Columns shown by default in the list view                                                 |
+| `sidebarGroup`   | `string`   | —            | Custom group slug — moves this collection out of `Collections` into its own inner section |
 
 Singles accept the same `admin` shape on `defineSingle()`.
 
@@ -99,11 +99,11 @@ export default defineConfig({
   admin: {
     pluginOverrides: {
       "form-builder": {
-        placement: "settings",       // Move the plugin's admin pages into Settings
-        order: 80,                   // Sort order within the target section
-        after: "media",              // For STANDALONE plugins: which built-in section to render after
+        placement: "settings", // Move the plugin's admin pages into Settings
+        order: 80, // Sort order within the target section
+        after: "media", // For STANDALONE plugins: which built-in section to render after
         appearance: {
-          icon: "FileText",          // Override the sidebar icon (Lucide name)
+          icon: "FileText", // Override the sidebar icon (Lucide name)
         },
       },
     },
@@ -115,24 +115,25 @@ The override key is the plugin slug (derived from the plugin name). Overrides us
 
 ### Override fields
 
-| Field | Type | Description |
-|---|---|---|
-| `placement` | `AdminPlacement` | Target sidebar section. One of `"collections"`, `"singles"`, `"users"`, `"settings"`, `"plugins"`, or `"standalone"`. |
-| `order` | `number` | Sort position within the target section. |
-| `after` | `string` | Only meaningful when `placement` is `"standalone"`. Names the built-in top-level section the plugin's icon should appear after: `"dashboard"`, `"collections"`, `"singles"`, `"media"`, `"plugins"`, `"users"`, or `"settings"`. |
-| `appearance` | `Partial<PluginAdminAppearance>` | Shallow-merged override of the plugin's sidebar appearance (icon, label, etc.). |
+| Field        | Type                             | Description                                                                                                                                                                                                                                                                                     |
+| ------------ | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `placement`  | `AdminPlacement`                 | Target sidebar section. One of `"collections"`, `"singles"`, `"users"`, `"settings"`, `"plugins"`, or `"standalone"`.                                                                                                                                                                           |
+| `order`      | `number`                         | Sort position within the target section.                                                                                                                                                                                                                                                        |
+| `after`      | `string`                         | Only meaningful when `placement` is `"standalone"`. Names the built-in top-level section the plugin's icon should appear after: `"dashboard"`, `"collections"`, `"singles"`, `"media"`, `"plugins"`, `"users"`, or `"settings"`.                                                                |
+| `landing`    | `string`                         | Only meaningful when `placement` is `"standalone"`. The page the plugin's icon opens: one of its pages (`/admin/plugins/<slug>/<path>`) or one of its collections (`/admin/collections/<slug>`, by the slug it declares or the one you renamed it to). A value naming anything else is ignored. |
+| `appearance` | `Partial<PluginAdminAppearance>` | Shallow-merged override of the plugin's sidebar appearance (icon, label, etc.).                                                                                                                                                                                                                 |
 
 The `AdminPlacement` constants ship from the package root for autocomplete:
 
 ```typescript
 import { AdminPlacement } from "nextly";
 
-AdminPlacement.COLLECTIONS;  // "collections"
-AdminPlacement.SINGLES;      // "singles"
-AdminPlacement.USERS;        // "users"
-AdminPlacement.SETTINGS;     // "settings"
-AdminPlacement.PLUGINS;      // "plugins"
-AdminPlacement.STANDALONE;   // "standalone"
+AdminPlacement.COLLECTIONS; // "collections"
+AdminPlacement.SINGLES; // "singles"
+AdminPlacement.USERS; // "users"
+AdminPlacement.SETTINGS; // "settings"
+AdminPlacement.PLUGINS; // "plugins"
+AdminPlacement.STANDALONE; // "standalone"
 ```
 
 A plugin only contributes admin entries if its definition declares them. Plugin-driven sidebar items appear only when that plugin is registered in `nextly.config.ts`.
@@ -141,20 +142,20 @@ A plugin only contributes admin entries if its definition declares them. Plugin-
 
 The admin sidebar is permission-gated. Items only render for users who have the matching permission on their assigned roles:
 
-| Sidebar item | Required permission |
-|---|---|
-| Dashboard | Always visible |
-| Per-collection entries | Per-collection `read-<slug>` |
-| Per-Single entries | Per-Single `read-<slug>` |
-| Media Library | `read-media` |
-| Users | `read-users` |
-| Roles | `read-roles` |
-| Custom Fields | `read-settings` |
-| General Settings | `read-settings` |
-| API Keys | `update-api-keys` |
-| Email Providers / Templates / Layout | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
-| Plugins overview | `create-settings`, `update-settings` or `delete-settings` |
-| Builders (Collections / Singles / Components) | Gated by `admin.branding.showBuilder` |
+| Sidebar item                                      | Required permission                                                           |
+| ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Dashboard                                         | Always visible                                                                |
+| Per-collection entries                            | Per-collection `read-<slug>`                                                  |
+| Per-Single entries                                | Per-Single `read-<slug>`                                                      |
+| Media Library                                     | `read-media`                                                                  |
+| Users                                             | `read-users`                                                                  |
+| Roles                                             | `read-roles`                                                                  |
+| User fields (the Fields button on the Users page) | `read-settings`                                                               |
+| General Settings                                  | `read-settings`                                                               |
+| API Keys                                          | `update-api-keys`                                                             |
+| Email (under Settings)                            | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
+| Plugins overview                                  | `create-settings`, `update-settings` or `delete-settings`                     |
+| Builders (Collections / Singles / Components)     | Off in production; elsewhere off when `admin.branding.showBuilder` is `false` |
 
 Permissions are stored as `<action>-<resource>` slugs and can be assigned to roles from `/admin/security/roles`. The default seeded roles and permissions are documented in [Admin Panel Overview](/docs/admin#permissions).
 

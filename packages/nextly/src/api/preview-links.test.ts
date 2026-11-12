@@ -53,6 +53,12 @@ const localizedSingles = new Set<string>();
  */
 const statusSingles = new Set<string>();
 
+/**
+ * Each Single's fields where a test names them; otherwise one translatable text field, so a
+ * Single the setting keeps per language has a value to keep.
+ */
+const singleFields = new Map<string, { name: string; type: string }[]>();
+
 vi.mock("../init", () => ({
   // Carries findSingle, because the Single mint path reads the document through
   // the Direct API rather than the collections handler.
@@ -95,6 +101,7 @@ vi.mock("../di", () => ({
       Promise.resolve({
         localized: localizedSingles.has(slug),
         status: statusSingles.has(slug),
+        fields: singleFields.get(slug) ?? [{ name: "heading", type: "text" }],
       }),
   })),
 }));
@@ -137,6 +144,10 @@ vi.mock("../lib/env", () => ({
 import { verifyPreviewToken } from "../auth/preview/preview-token";
 import { container } from "../di";
 import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../domains/i18n/per-language-storage";
 
 import {
   requireRouteCollectionAccess,
@@ -172,6 +183,7 @@ beforeEach(() => {
   // correct for the singles that genuinely have one document.
   localizedSingles.clear();
   statusSingles.clear();
+  singleFields.clear();
   // The default: the caller can see the entry they named AND may edit it, so
   // the draft the token hands out is one they could already open. Tests about
   // the entry gate override whichever half they are about.
@@ -401,6 +413,36 @@ describe("mintPreviewLink for a Single", () => {
    * very grant the refusal exists to withhold.
    */
   describe("a localized single with no locale named", () => {
+    // Under `experimental.perLanguageStorage` an untranslated Single keeps its values per
+    // language too, so a token with no locale would cover each of them.
+    it("refuses an untranslated Single the site keeps per language under the setting", async () => {
+      statusSingles.add("homepage");
+      setPerLanguageStorage(true);
+      try {
+        const response = await mintPreviewLink(post({ single: "homepage" }));
+        expect(response.status).toBe(400);
+        expect(JSON.stringify(await json(response))).toContain(
+          "needs a locale"
+        );
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    });
+
+    // The setting keeps TRANSLATABLE values per language: an untranslated Single whose every field
+    // is shared is the same in every language, so a token with no locale covers nothing more.
+    it("mints for an untranslated Single with no translatable field, under the setting", async () => {
+      statusSingles.add("homepage");
+      singleFields.set("homepage", [{ name: "views", type: "number" }]);
+      setPerLanguageStorage(true);
+      try {
+        const response = await mintPreviewLink(post({ single: "homepage" }));
+        expect(response.status).toBeLessThan(300);
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    });
+
     it("refuses rather than minting a token covering every translation", async () => {
       localizedSingles.add("homepage");
 

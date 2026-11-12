@@ -40,7 +40,7 @@ import { Button } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { Plus } from "lucide-react";
 import { CARD_FRAME_PX } from "nextly/card-geometry";
-import { MAX_WIDGET_ROWS, type ListDensity } from "nextly/config";
+import type { ListDensity } from "nextly/config";
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 import type {
   ActivityEvent,
@@ -278,7 +278,8 @@ function DraftCount({
     <Link
       href={href}
       aria-label={`${draft} drafts in ${label}`}
-      className="font-medium text-foreground hover:underline"
+      // A 24px target however few digits it holds, its figure kept at the cell's right edge.
+      className="inline-flex min-h-6 min-w-6 items-center justify-end font-medium text-foreground hover:underline"
     >
       <CardFigure value={draft} />
     </Link>
@@ -407,7 +408,8 @@ function RowName({
     <Link
       href={rowHref(row)}
       className={cn(
-        "block truncate hover:underline",
+        // A 24px line, so the name is a target a finger can hit.
+        "block truncate leading-6 hover:underline",
         isEmptyRow(row)
           ? "text-muted-foreground"
           : "font-medium text-foreground",
@@ -625,10 +627,12 @@ export type ContentTableProps = Omit<DeclaredComponentProps, "data"> & {
   data: CoreListWidgetData;
 };
 
-export function ContentTable({ data }: ContentTableProps): JSX.Element {
-  // At most the ten a list draws: the card offers no "Number of items", and its `load` asked the
-  // rows its size holds up to that.
-  const { tier, drawn, density, now } = useListCard(MAX_WIDGET_ROWS);
+export function ContentTable({
+  data,
+  settings,
+}: ContentTableProps): JSX.Element {
+  // Its "Number of entries", the rows its `load` asked for before the one that says more exist.
+  const { tier, drawn, density, now } = useListCard(settings.limit);
   // The body's own width, measured by the frame's hook once the rows are drawn: held as state,
   // so the measurement starts when the element appears rather than at the first render.
   const [body, setBody] = useState<HTMLDivElement | null>(null);

@@ -358,7 +358,7 @@ describe.each(LOCK_DIALECTS)(
     describe("a file whose second statement fails", () => {
       const one = `${P}_one`;
       // Fails on every dialect: the table it writes to does not exist.
-      const failing = `INSERT INTO ${P}_missing (id) VALUES (1)`;
+      const failing = `SELECT id FROM ${P}_missing`;
 
       /** Runs the file, and returns the error `nextly migrate` ended with. */
       async function failedRun(marked: boolean): Promise<unknown> {

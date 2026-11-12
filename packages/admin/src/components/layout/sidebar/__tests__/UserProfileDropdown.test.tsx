@@ -1,8 +1,10 @@
+import type React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import { AdminI18nProvider } from "@admin/context/providers/AdminI18nProvider";
+import { navigateTo } from "@admin/lib/navigation";
 
 import { UserProfileDropdown } from "../UserProfileDropdown";
 
@@ -103,9 +105,11 @@ describe("the user menu's interface language", () => {
     await openMenu(user);
 
     expect(await screen.findByText("Interface language")).toBeTruthy();
+    // The language radios only: the menu's Theme choice is radios too.
     const choices = screen
       .getAllByRole("menuitemradio")
-      .map(item => item.textContent);
+      .map(item => item.textContent)
+      .filter(name => !["Light", "Dark", "System"].includes(name ?? ""));
     expect(choices).toEqual(["Follow the browser", "English", "Français"]);
     expect(
       screen
@@ -192,5 +196,85 @@ describe("the user menu's interface language", () => {
       )
     );
     expect(me.written).toEqual([]);
+  });
+});
+
+describe("the user menu's My Account", () => {
+  it("My Account opens /admin/account", async () => {
+    // The person's own page, which they may always open; the users edit page
+    // asks a permission many of them lack.
+    const user = userEvent.setup();
+    renderMenu();
+    await openMenu(user);
+
+    await user.click(
+      await screen.findByRole("menuitem", { name: "My Account" })
+    );
+
+    expect(navigateTo).toHaveBeenCalledWith("/admin/account");
+  });
+});
+
+describe("the user menu's theme and help", () => {
+  function renderWith(
+    props: Partial<React.ComponentProps<typeof UserProfileDropdown>> = {}
+  ) {
+    vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
+    return render(
+      <AdminI18nProvider signedIn>
+        <UserProfileDropdown
+          user={{ id: "u1", name: "Ada", email: "ada@example.com" }}
+          onLogout={() => {}}
+          {...props}
+        />
+      </AdminI18nProvider>
+    );
+  }
+
+  it("offers the theme as a choice of three", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openMenu(user);
+    expect(await screen.findByText("Theme")).toBeTruthy();
+    for (const name of ["Light", "Dark", "System"]) {
+      expect(
+        screen.getByRole("menuitemradio", { name: new RegExp(name) })
+      ).toBeTruthy();
+    }
+  });
+
+  it("lists Documentation, GitHub and Discord as links that open apart", async () => {
+    const user = userEvent.setup();
+    renderWith();
+    await openMenu(user);
+    expect(await screen.findByText("Help and community")).toBeTruthy();
+    for (const [name, href] of [
+      ["Documentation", "https://nextlyhq.com/docs"],
+      ["GitHub", "https://github.com/nextlyhq/nextly"],
+      ["Discord", "https://discord.gg/hJUg9AZMn"],
+    ]) {
+      const link = screen.getByRole("menuitem", { name });
+      expect(link.getAttribute("href")).toBe(href);
+      expect(link.getAttribute("target")).toBe("_blank");
+    }
+  });
+
+  it("leaves out the links a plugin hides", async () => {
+    const user = userEvent.setup();
+    renderWith({ hidden: new Set(["github", "discord"]) });
+    await openMenu(user);
+    expect(
+      await screen.findByRole("menuitem", { name: "Documentation" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "GitHub" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Discord" })).toBeNull();
+  });
+
+  it("drops the group when every link is hidden and no plugin adds one", async () => {
+    const user = userEvent.setup();
+    renderWith({ hidden: new Set(["github", "discord", "docs"]) });
+    await openMenu(user);
+    expect(await screen.findByText("Theme")).toBeTruthy();
+    expect(screen.queryByText("Help and community")).toBeNull();
   });
 });

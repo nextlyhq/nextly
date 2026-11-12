@@ -15,7 +15,15 @@
  *   with exit 1, and changes nothing;
  * - while the prompt is open, no lock is held: this process takes it at once.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -251,6 +259,41 @@ describe.each(LOCK_DIALECTS)(
         "nextly db:sync --promote"
       );
       expect(await state()).toEqual(before);
+    }, 90_000);
+
+    it("refuses a promote whose configuration file moved or vanished while the prompt was open", async () => {
+      const root = join(project, "nextly.config.ts");
+      const moved = join(project, "src", "nextly.config.ts");
+      for (const change of ["moved", "deleted"] as const) {
+        writeFileSync(root, CONFIG);
+        const builtBefore = await elsewhere.getCollectionBySlug(BUILT);
+        const error = await promote(async () => {
+          if (change === "moved") {
+            mkdirSync(join(project, "src"), { recursive: true });
+            renameSync(root, moved);
+          } else {
+            rmSync(root);
+          }
+          return true;
+        }).then(
+          () => undefined,
+          (e: unknown) => e
+        );
+        expectPlanChanged(error);
+        expect(String((error as NextlyError).publicMessage), change).toContain(
+          root
+        );
+        // Nothing was written at the old path, so no file holding only the snippet appears there,
+        // and the registry row the promote would remove is still in place.
+        expect(existsSync(root), change).toBe(false);
+        expect(await elsewhere.getCollectionBySlug(BUILT), change).toEqual(
+          builtBefore
+        );
+        if (change === "moved") {
+          expect(readFileSync(moved, "utf8")).toBe(CONFIG);
+          rmSync(moved);
+        }
+      }
     }, 90_000);
 
     it("refuses a promote whose template address changed while the prompt was open", async () => {

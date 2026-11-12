@@ -271,39 +271,11 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
   {
     fg: "destructive",
     bg: "destructive",
-    bgAlpha: 0.1,
-    bgOver: "muted",
-    mode: "light",
-    ratio: 3.11,
-    reason:
-      "Error-panel text on a 10% destructive tint over the muted surface. The lowest ratio the palette ships, and it is a message someone reads when something has already gone wrong.",
-  },
-  {
-    fg: "destructive",
-    bg: "destructive",
-    bgAlpha: 0.1,
-    bgOver: "page-background",
-    mode: "light",
-    ratio: 3.11,
-    reason:
-      "10% tint over the page container, which `.admin-page-container` paints. Ties with the muted surface for the lowest ratio the palette ships.",
-  },
-  {
-    fg: "destructive",
-    bg: "destructive",
     bgAlpha: 0.05,
     bgOver: "page-background",
     mode: "light",
     ratio: 3.31,
     reason: "5% tint over the page container.",
-  },
-  {
-    fg: "destructive-600",
-    bg: "page-background",
-    mode: "light",
-    ratio: 4.23,
-    reason:
-      "The entry meta strip's 600 shade against the page container. Only measurable once the surface resolved; it was skipped entirely before.",
   },
   {
     fg: "destructive",
@@ -315,48 +287,12 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
     reason:
       "Destructive ink on a 5% tint over the muted surface: dashboard widget counts and empty states.",
   },
-  // The same two tints over the remaining surfaces. Listed rather than reduced
+  // The same tint over the remaining surfaces. Listed rather than reduced
   // to a rule, because each is a distinct measured colour and the file's whole
   // purpose is that a reader can see the number without recomputing it. The
-  // spread is narrow (3.11 to 3.60) and every one of them fails, which is the
+  // spread is narrow (3.31 to 3.60) and every one of them fails, which is the
   // useful summary: nowhere in the admin does destructive ink on its own tint
   // reach the text minimum.
-  {
-    fg: "destructive",
-    bg: "destructive",
-    bgAlpha: 0.1,
-    bgOver: "background",
-    mode: "light",
-    ratio: 3.29,
-    reason: "10% tint over the page.",
-  },
-  {
-    fg: "destructive",
-    bg: "destructive",
-    bgAlpha: 0.1,
-    bgOver: "card",
-    mode: "light",
-    ratio: 3.38,
-    reason: "10% tint over a card, the best of the tinted set.",
-  },
-  {
-    fg: "destructive",
-    bg: "destructive",
-    bgAlpha: 0.1,
-    bgOver: "popover",
-    mode: "light",
-    ratio: 3.29,
-    reason: "10% tint inside a popover.",
-  },
-  {
-    fg: "destructive",
-    bg: "destructive",
-    bgAlpha: 0.1,
-    bgOver: "sidebar-background",
-    mode: "light",
-    ratio: 3.29,
-    reason: "10% tint on the sidebar surface.",
-  },
   {
     fg: "destructive",
     bg: "destructive",
@@ -416,20 +352,6 @@ export const ACCEPTED_REGRESSIONS: AcceptedRegression[] = [
     ratio: 4.48,
     reason:
       "The same meta-strip ink against the page. Two hundredths short, and the closest entries in this file to passing.",
-  },
-  {
-    fg: "destructive-600",
-    bg: "popover",
-    mode: "light",
-    ratio: 4.48,
-    reason: "The meta-strip ink inside a popover; same colour as on the page.",
-  },
-  {
-    fg: "destructive-600",
-    bg: "sidebar-background",
-    mode: "light",
-    ratio: 4.48,
-    reason: "The meta-strip ink on the sidebar surface.",
   },
   {
     fg: "destructive-600",

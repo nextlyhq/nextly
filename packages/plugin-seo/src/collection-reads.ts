@@ -4,8 +4,9 @@
  * The sitemap builder enumerates published entries as `system`, because the
  * sitemap is a public document. The identity a read is asked under is the type
  * parameter, so the shape says nothing about who reads. The dashboard card and
- * its Needs attention line do not read through this: they read through the
- * services core hands a widget, bound to the person asking (`widget-source`).
+ * its Needs attention lines do not read through this: they read the problem
+ * list through the services core hands a widget, bound to the person asking
+ * (`problems/card-source`).
  *
  * Declared structurally rather than as `Pick<PluginCollectionService, ...>` so
  * a test can satisfy it with a plain object, while the real, richer service

@@ -23,6 +23,16 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
  */
 const bound: string[] = [];
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../schema/schema-version")>()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../field-group-table-provisioning", () => ({
   registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
     bound.push(tableName);
@@ -103,6 +113,8 @@ const INPUT: CreateFieldGroupInput = {
 function registryDouble() {
   return {
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     registerComponent: vi.fn(async (row: unknown) => row),
   };
 }
@@ -499,6 +511,8 @@ function registryWithGroup(args: {
   };
   return {
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No other field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     registerComponent: vi.fn(async (row: unknown) => row),
     getComponentForWrite: vi.fn().mockResolvedValue(record),
     updateComponent: vi.fn(async () => record),
@@ -1104,6 +1118,8 @@ describe("an update whose row write fails after the tables moved", () => {
     return {
       record,
       getAllComponents: vi.fn().mockResolvedValue([]),
+      // No other field group stored, so a save's cycle check finds nothing to close a cycle with.
+      getAllFieldLists: vi.fn().mockResolvedValue([]),
       registerComponent: vi.fn(async (row: unknown) => row),
       getComponentForWrite: vi.fn().mockResolvedValue(record),
       // Fails the real write and accepts the narrow status mark that follows it, which is the whole

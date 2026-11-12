@@ -57,21 +57,13 @@ import {
   orderedMigrations,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
-import { assertMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
+import { appMigrationInputs } from "../../domains/schema/migrate-create/app-migration-inputs";
+import { contributedElementsOf } from "../../domains/schema/migrate-create/app-stream";
 import {
-  compileAppStreamTables,
-  contributedElementsOf,
-  hasAppStreamTables,
-  type AppStreamTables,
-} from "../../domains/schema/migrate-create/app-stream";
-import {
-  toMinimalEntities,
-  withBuilderSettingsAll,
-} from "../../domains/schema/migrate-create/config-entities";
-import {
-  describeSettingsChange,
-  type EntitySettingsRecord,
-} from "../../domains/schema/migrate-create/entity-settings";
+  declaredPermissionsOf,
+  describePermissionChange,
+} from "../../domains/schema/migrate-create/declared-permissions";
+import { describeSettingsChange } from "../../domains/schema/migrate-create/entity-settings";
 import {
   formatBlankFile,
   formatTimestamp,
@@ -79,7 +71,6 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   generateMigration,
-  removedCollectionTables,
   type GenerateResult,
 } from "../../domains/schema/migrate-create/generate";
 import {
@@ -88,41 +79,19 @@ import {
   type GeneratePluginMigrationResult,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import { assertMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
-import {
-  EMPTY_SNAPSHOT,
-  loadLatestSnapshot,
-} from "../../domains/schema/migrate-create/snapshot-io";
+import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type {
   ContributedElements,
   TableSpec,
 } from "../../domains/schema/pipeline/diff/types";
-import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
-import {
-  applyDeferredExtendsToManifest,
-  mergeUiEntities,
-} from "../../domains/schema/ui-schema/merge";
-import {
-  buildCollectionMetadataUpsert,
-  buildComponentMetadataUpsert,
-  buildSingleMetadataUpsert,
-} from "../../domains/schema/ui-schema/metadata-sql";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../../domains/schema/utils/resolve-table-name";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
 import { topoSortPlugins } from "../../plugins/topo-sort";
-import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import type { CommandContext } from "../context";
-import { reportDryRun, shownPath } from "../dry-run";
+import { projectPath, reportDryRun } from "../dry-run";
 import {
   migrationCreateCancelled,
   migrationNameRequired,
@@ -146,6 +115,7 @@ import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import { commandRun } from "./command-run";
+import { isPluginDefinition } from "./plugin-definition-shape";
 
 // ============================================================================
 // Types
@@ -209,6 +179,12 @@ export interface MigrateCreateCommandOptions {
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
+  /**
+   * Drop the columns a plugin's scope keeps on types switched off, rather
+   * than keep them (`GenerateArgs.releaseHeldBack`). Not a flag: `nextly
+   * prune` sets it, after its data-loss consent.
+   */
+  releaseHeldBack?: boolean;
   config?: string;
   verbose?: boolean;
   quiet?: boolean;
@@ -319,16 +295,16 @@ function reportMigrationDryRun(
   cwd: string,
   logger: CommandContext["logger"]
 ): void {
-  const sqlFile = shownPath(cwd, result.sqlPath);
+  const sqlFile = projectPath(cwd, result.sqlPath);
   logger.info(`${sqlFile} would hold:\n${result.sqlContent.trimEnd()}`);
   reportDryRun(logger, {
     changes: [
       { action: "write", target: sqlFile },
-      { action: "write", target: shownPath(cwd, result.snapshotPath) },
+      { action: "write", target: projectPath(cwd, result.snapshotPath) },
       // The translation-table migration files, written after the pair.
       ...result.companionFiles.map(file => ({
         action: "write" as const,
-        target: shownPath(cwd, file.path),
+        target: projectPath(cwd, file.path),
       })),
     ],
   });
@@ -363,25 +339,10 @@ function endNothingToDo(
 }
 
 /**
- * Whether the app stream has nothing it could possibly emit.
- *
- * Needs BOTH sides empty. A config that has just removed its last entity or
- * its last contribution still has something to emit — the drop — and only the
- * latest snapshot says so. Deciding on the config alone skipped exactly that
- * migration, while `migrate:check`, which compares against the snapshot, kept
- * reporting it as pending.
+ * Whether the app stream has nothing it could possibly emit; it lives with the
+ * inputs it judges, and is re-exported for the command's tests.
  */
-export function nothingToGenerate(input: {
-  entityCount: number;
-  appStream: AppStreamTables;
-  recordedTableCount: number;
-}): boolean {
-  return (
-    input.entityCount === 0 &&
-    !hasAppStreamTables(input.appStream) &&
-    input.recordedTableCount === 0
-  );
-}
+export { nothingToGenerate } from "../../domains/schema/migrate-create/app-migration-inputs";
 
 export async function runMigrateCreate(
   nameArg: string | undefined,
@@ -486,211 +447,63 @@ export async function runMigrateCreate(
     );
   }
 
-  // Convert config entries to the minimal shape the orchestrator needs. Each
-  // kind resolves its table name through the same helper the runtime uses, so
-  // generated names match the live database (collections, singles, and
-  // components each normalize differently).
-  const codeCollections = toMinimalEntities(
-    configResult.config.collections,
-    e => resolveCollectionTableName(e.slug, e.dbName)
-  );
-  const codeSingles = toMinimalEntities(configResult.config.singles ?? [], e =>
-    resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-  );
-  const codeComponents = toMinimalEntities(
-    configResult.config.fieldGroups ?? [],
-    e => resolveComponentTableName(e.slug)
-  );
-
-  // Load + merge UI-built entities (code-first wins on slug collision).
-  let manifest;
+  // The inputs every app migration is generated from, read and checked as
+  // the server reads them for a Schema Builder save (`appMigrationInputs`).
+  // A dry run reports a refusal of the plan and exits 0. A real run throws
+  // that refusal on, for the command's handler to print; anything else (a
+  // definition that cannot be read, a removed collection something still
+  // depends on) ends the run here, printed in the error shape.
+  let inputs: Awaited<ReturnType<typeof appMigrationInputs>>;
   try {
-    manifest = await loadUiSchema({
+    inputs = await appMigrationInputs({
+      config: configResult.config,
+      ...(configResult.deferredExtends === undefined
+        ? {}
+        : { deferredExtends: configResult.deferredExtends }),
       projectRoot: cwd,
-      uiSchemaFile: configResult.config.db.uiSchemaFile,
+      migrationsDir,
+      dialect,
+      logger,
     });
   } catch (error) {
-    exitWithError(logger, error);
-  }
-
-  // Materialize plugin extends that target Builder-made entities (P8): append
-  // the deferred extend fields onto the matching ui-schema entity so they land
-  // in BOTH the table diff (below) and the dynamic_collections.fields metadata.
-  manifest = applyDeferredExtendsToManifest(
-    manifest,
-    configResult.deferredExtends ?? []
-  );
-
-  const merged = mergeUiEntities({
-    codeCollections,
-    codeSingles,
-    codeComponents,
-    manifest,
-  });
-  for (const slug of merged.droppedUiSlugs) {
-    logger.warn(
-      `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
-    );
-  }
-  // Each Builder entity carries its manifest entry as its settings, as each
-  // code-first one carries its config entry, so the snapshot records both.
-  const { collections, singles, components } = withBuilderSettingsAll(
-    merged,
-    manifest
-  );
-
-  // Checked on the config's and the manifest's own entries rather than the
-  // merged ones: the merge has already dropped shadowed Builder entities by
-  // slug, and those are filtered per kind below instead.
-  //
-  // A migration is the one artifact that outlives the process that wrote it, so
-  // a declaration its own field type rejects would become a deployment that
-  // materializes the schema and then cannot boot on it.
-  //
-  // A Builder entity shadowed by a code-first one of the same slug contributes
-  // nothing to this migration, so it is skipped rather than failed on — a
-  // cleanup that changes no DDL is not worth blocking on.
-  // Shadowing is per KIND: the manifest allows the same slug on a collection, a
-  // single and a field group, and the merge resolves each kind separately. A
-  // single set of dropped slugs would filter out an unshadowed single named
-  // `home` because a collection of that name was shadowed, and it would then
-  // reach the migration unchecked.
-  const survivingOf = <T extends { slug: string }>(
-    list: readonly T[],
-    codeFirst: ReadonlyArray<{ slug: string }>
-  ): T[] => {
-    const shadowed = new Set(codeFirst.map(e => e.slug));
-    return list.filter(e => !shadowed.has(e.slug));
-  };
-
-  try {
-    assertPluginFieldDeclarations({
-      collections: configResult.config.collections,
-      singles: configResult.config.singles,
-      fieldGroups: configResult.config.fieldGroups,
+    stopOnPlanError(error, logger, options.dryRun, () => {
+      if (dryRunRefusalOf(error) !== undefined) throw error;
+      exitWithError(logger, error);
     });
-    assertPluginFieldDeclarations({
-      collections: survivingOf(
-        manifest.collections,
-        configResult.config.collections
-      ),
-      singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
-      fieldGroups: survivingOf(
-        manifest.components,
-        configResult.config.fieldGroups ?? []
-      ),
-    });
-  } catch (error) {
-    stopOnPlanError(error, logger, options.dryRun);
   }
-
-  // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
-  // survived the merge (code-first wins → shadowed UI slugs are skipped).
-  // Shadowing is per kind, as above: `merged.droppedUiSlugs` is one list for
-  // every kind, and filtering by it would leave out the row of an unshadowed
-  // Single whose slug a shadowed collection shares.
-  const metadataUpserts = builderMetadataUpserts(
-    {
-      collections: survivingOf(
-        manifest.collections,
-        configResult.config.collections
-      ),
-      singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
-      components: survivingOf(
-        manifest.components,
-        configResult.config.fieldGroups ?? []
-      ),
-    },
-    dialect
-  );
-
-  // The APP stream's extension schema, compiled the way boot compiles it:
-  // tables the app declares through `db.schema.extend`, and elements it
-  // contributes to a plugin's table. Plugins are compiled alongside because an
-  // app hook may extend a plugin's table and would not resolve without them.
-  //
-  // Computed BEFORE the empty-entities check, because an app can have nothing
-  // but extension schema. Taking that early return first meant an
-  // extension-only configuration wrote no migration at all and production
-  // never received the table.
-  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
-
-  // Before the app stream compiles: a plugin hook still extending a removed
-  // collection's table would stop that compile with a bare "does not exist",
-  // where this names what the hook adds. A drop of a collection something
-  // still depends on is refused with the message a delete gets. The check and
-  // its readers are loaded only when the migration would drop a collection,
-  // which most runs do not.
-  const removedTables = removedCollectionTables({
-    previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+  const {
     collections,
     singles,
     components,
-    dialect,
-  });
-  if (removedTables.length > 0) {
-    try {
-      const [
-        { assertRemovedCollectionsUnused },
-        { compileExtensionSchemaWith },
-      ] = await Promise.all([
-        import("../../domains/schema/migrate-create/removed-collections"),
-        import(
-          "../../domains/collections/services/collection-dependents-schema"
-        ),
-      ]);
-      await assertRemovedCollectionsUnused({
-        removedTables,
-        collections,
-        singles,
-        components,
-        dialect,
-        extensionSchema: removed =>
-          compileExtensionSchemaWith({
-            config: configResult.config,
-            dialect,
-            removedCollections: removed,
-            logger: { warn: m => logger.warn(m) },
-          }),
-      });
-    } catch (error) {
-      stopOnPlanError(error, logger, options.dryRun, () =>
-        exitWithError(logger, error)
-      );
-    }
-  }
-
-  const appStream = await compileAppStreamTables({
-    config: configResult.config,
-    dialect,
-    logger: { warn: m => logger.warn(m) },
-  });
-
-  try {
-    // A new address is judged by the one address rule before anything is written.
-    assertMigrationAddresses(merged, latest, logger);
-    // And each new pair of sibling fields, against the fields the latest snapshot records.
-    assertMigrationSiblingFields(merged, latest, logger);
-  } catch (error) {
-    stopOnPlanError(error, logger, options.dryRun);
-  }
-  // The rows as the previous snapshot recorded each Builder entity, for a
-  // migration that writes a row for its settings alone to write back on the
-  // way down. A snapshot with no settings record has none to offer.
-  const previousMetadataUpserts = builderMetadataUpserts(
-    builderEntriesOf(latest?.data.entities),
-    dialect
-  );
-  const nothing = nothingToGenerate({
-    entityCount: collections.length + singles.length + components.length,
+    metadataUpserts,
+    previousMetadataUpserts,
     appStream,
-    recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
+    nothing,
+  } = inputs;
+  // Every permission the config declares, by owner, which every snapshot records; a plugin
+  // release that only adds or removes one is a migration of its own. Read before the empty-schema
+  // check: an app with no table yet may still declare permissions, which travel as a migration.
+  const permissions = declaredPermissionsOf(configResult.config, {
+    collections,
+    singles,
   });
+  // Either side counts: the config declaring one now, or the newest snapshot recording one the
+  // config no longer declares, whose removal is a change too.
+  const ownsAny = (record: { app: object; plugins: object } | undefined) =>
+    record !== undefined &&
+    (Object.keys(record.app).length > 0 ||
+      Object.keys(record.plugins).length > 0);
+  const declaresPermissions =
+    ownsAny(permissions) ||
+    ownsAny(
+      (await loadLatestSnapshot(resolve(migrationsDir, "meta")))?.data
+        .permissions
+    );
   // A project with no tables has no translated field to record, and says so as any recording run
   // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
   if (nothing && options.recordSnapshot === true)
     nothingToRecord(logger, options.dryRun);
-  if (nothing) {
+  if (nothing && !declaresPermissions) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
@@ -719,11 +532,13 @@ export async function runMigrateCreate(
       components,
       metadataUpserts,
       previousMetadataUpserts,
+      permissions,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
       recordSnapshot: options.recordSnapshot === true,
       liveCompanionColumns: live.read,
       dryRun: options.dryRun === true,
+      releaseHeldBack: options.releaseHeldBack === true,
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
@@ -762,12 +577,15 @@ export async function runMigrateCreate(
   }
 
   const duration = Date.now() - startTime;
-  // A settings change is written as the settings-only migration it is, below; its snapshot is
+  // A settings or permissions change is written as the migration it is, below; its snapshot is
   // the record.
-  if (options.recordSnapshot === true && result.settingsChanges.length > 0) {
+  if (
+    options.recordSnapshot === true &&
+    result.settingsChanges.length + result.permissionChanges.length > 0
+  ) {
     logger.newline();
     logger.info(
-      "The config's settings have changes to migrate, so they are written as a settings-only migration, whose snapshot records which fields are translated."
+      "The config's settings or permissions have changes to migrate, so they are written as a migration with no table statements, whose snapshot records which fields are translated."
     );
   } else if (options.recordSnapshot === true) {
     logger.newline();
@@ -789,6 +607,9 @@ export async function runMigrateCreate(
   for (const change of result.settingsChanges) {
     logger.item(`Settings: ${describeSettingsChange(change)}`, 1);
   }
+  for (const change of result.permissionChanges) {
+    logger.item(`Permissions: ${describePermissionChange(change)}`, 1);
+  }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
   }
@@ -800,66 +621,6 @@ export async function runMigrateCreate(
   logger.item("Review the generated .sql file", 1);
   logger.item("Commit it to git alongside your nextly.config.ts changes", 1);
   logger.item("Run `nextly migrate` to apply it", 1);
-}
-
-/**
- * The registry-row upserts for UI-built entities (spec §4.12.7), keyed by data
- * table. The caller hands in only the entries no code-first entity of the
- * same kind shadows.
- */
-function builderMetadataUpserts(
-  entries: {
-    collections: readonly UiSchemaEntity[];
-    singles: readonly UiSchemaEntity[];
-    components: readonly UiSchemaEntity[];
-  },
-  dialect: SupportedDialect
-): { tableName: string; sql: string }[] {
-  const tn = (
-    slug: string,
-    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-  ) => `${prefix}${slug.replace(/-/g, "_")}`;
-  const upserts: { tableName: string; sql: string }[] = [];
-  for (const c of entries.collections) {
-    upserts.push({
-      tableName: tn(c.slug, "dc_"),
-      sql: buildCollectionMetadataUpsert(c, dialect),
-    });
-  }
-  for (const s of entries.singles) {
-    upserts.push({
-      tableName: tn(s.slug, "single_"),
-      sql: buildSingleMetadataUpsert(s, dialect),
-    });
-  }
-  for (const cp of entries.components) {
-    upserts.push({
-      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
-      sql: buildComponentMetadataUpsert(cp, dialect),
-    });
-  }
-  return upserts;
-}
-
-/**
- * The Builder entities a snapshot's settings record holds, as the manifest
- * entries they were recorded from: the record is the manifest entry with only
- * functions left out, and a manifest holds none.
- */
-function builderEntriesOf(record: EntitySettingsRecord | undefined): {
-  collections: UiSchemaEntity[];
-  singles: UiSchemaEntity[];
-  components: UiSchemaEntity[];
-} {
-  const of = (byslug: EntitySettingsRecord["collections"] | undefined) =>
-    Object.values(byslug ?? {})
-      .filter(entry => entry.source === "builder")
-      .map(entry => entry.settings as unknown as UiSchemaEntity);
-  return {
-    collections: of(record?.collections),
-    singles: of(record?.singles),
-    components: of(record?.fieldGroups),
-  };
 }
 
 // ============================================================================
@@ -890,7 +651,7 @@ async function runBlankPath(
   });
   // A dry run prints the file and its path, and writes neither the file nor its folder.
   if (dryRun) {
-    const sqlFile = shownPath(context.cwd, sqlPath);
+    const sqlFile = projectPath(context.cwd, sqlPath);
     logger.info(`${sqlFile} would hold:\n${content.trimEnd()}`);
     reportDryRun(logger, { changes: [{ action: "write", target: sqlFile }] });
     return;
@@ -1113,21 +874,6 @@ export function missingExtendTarget(error: unknown): string | undefined {
     if (match) return match[1];
   }
   return undefined;
-}
-
-/** Whether a module export is a plugin definition rather than, say, a table. */
-function isPluginDefinition(
-  value: unknown
-): value is Partial<PluginDefinition> {
-  // `name` alone is not enough: a `defineTable` result carries a name too.
-  // `version` is required of every plugin and of no table.
-  const candidate = value as { name?: unknown; version?: unknown } | null;
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    typeof candidate.name === "string" &&
-    typeof candidate.version === "string"
-  );
 }
 
 /**
@@ -1496,14 +1242,14 @@ function reportPluginDryRun(
   cwd: string,
   logger: CommandContext["logger"]
 ): void {
-  const moduleFile = shownPath(cwd, planned.modulePath);
+  const moduleFile = projectPath(cwd, planned.modulePath);
   logger.info(`${moduleFile} would hold:\n${planned.moduleContent.trimEnd()}`);
   reportDryRun(logger, {
     changes: [
       { action: "write", target: moduleFile },
       {
         action: existsSync(planned.indexPath) ? "edit" : "write",
-        target: shownPath(cwd, planned.indexPath),
+        target: projectPath(cwd, planned.indexPath),
       },
     ],
   });

@@ -12,6 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const navigateTo = vi.fn();
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   navigateTo: (href: string) => navigateTo(href),
+  // The admin's preference store, as this browser's storage: these cases
+  // read the history it keeps, and its own rules are the admin's to test.
+  devicePreferenceStore: (key: string) => ({
+    read: () => window.localStorage.getItem(key),
+    write: (value: string) => window.localStorage.setItem(key, value),
+    remove: () => window.localStorage.removeItem(key),
+  }),
 }));
 
 const { PageTitleSwitcher } = await import("./page-title-switcher");

@@ -62,7 +62,7 @@ import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
-import { reportDryRun, shownPath, type DryRunChange } from "../dry-run";
+import { projectPath, reportDryRun, type DryRunChange } from "../dry-run";
 import { configDeclarationError, exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { loadConfigOrExit } from "../utils/command-prerequisites";
@@ -306,6 +306,8 @@ export async function runGenerateTypes(
     // component against its widget. None for a site running on the default config.
     configResult.configPath,
     configResult.config.admin?.dashboard,
+    // The site's own collections, whose own views the map lists too.
+    configResult.config.collections,
   ];
   // A dry run names each file of the pair the real run would rewrite, from the
   // plan the writer writes from.
@@ -314,7 +316,7 @@ export async function runGenerateTypes(
       if (each.previous === each.code) continue;
       dryRunChanges.push({
         action: "write",
-        target: shownPath(manifestCwd, each.file),
+        target: projectPath(manifestCwd, each.file),
       });
     }
   }
@@ -362,7 +364,7 @@ export async function runGenerateTypes(
           ...dryRunChanges,
           ...plannedFiles(plan).map(file => ({
             action: "write" as const,
-            target: shownPath(manifestCwd, file.path),
+            target: projectPath(manifestCwd, file.path),
           })),
         ],
       });

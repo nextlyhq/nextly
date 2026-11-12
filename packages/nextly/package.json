@@ -255,7 +255,8 @@
     },
     "./next": {
       "types": "./dist/next.d.mts",
-      "import": "./dist/next.mjs"
+      "import": "./dist/next.mjs",
+      "default": "./dist/next.mjs"
     },
     "./api/email-provider-types": {
       "types": "./dist/api/email-provider-types.d.mts",

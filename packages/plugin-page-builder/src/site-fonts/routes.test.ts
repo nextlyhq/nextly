@@ -134,6 +134,34 @@ describe("the catalogue route's popularity", () => {
     expect(asked.filter(path => path === "/v1/stats")).toHaveLength(2);
     expect(items.find(item => item.id === "lora")?.popularity).toBe(52_000);
   });
+
+  it("settles the stats it asked for before answering, when a refresh of the list fails", async () => {
+    let listAnswer: Answer = json(LIST);
+    let statsAnswered = 0;
+    const { fetch } = catalogueAt({
+      "/v1/fonts?type=google": () => listAnswer(),
+      "/v1/stats": json(STATS),
+    });
+    // The stats answer a moment after the list, as a slower host would.
+    const slowStats = async (input: string): Promise<Response> => {
+      if (!input.endsWith("/v1/stats")) return fetch(input);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const answer = await fetch(input);
+      statsAnswered += 1;
+      return answer;
+    };
+    const clock = { now: 0 };
+    const route = catalogueRoute(clock);
+    await readItems(route, slowStats);
+    expect(statsAnswered).toBe(1);
+
+    listAnswer = () => new Response(null, { status: 503 });
+    clock.now += 25 * 60 * 60 * 1000;
+    const items = await readItems(route, slowStats);
+    // The last good copy, and no stats read still running behind it.
+    expect(items.find(item => item.id === "lora")?.popularity).toBe(52_000);
+    expect(statsAnswered).toBe(2);
+  });
 });
 
 /** A face of Lora at `weight`, its file at `id`. */

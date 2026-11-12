@@ -102,13 +102,55 @@ function reader(
 }
 
 describe("contributionsForReader", () => {
+  it("names a Single the plugin contributes by the slug the host renamed it to", async () => {
+    const SETTINGS: PluginDefinition = {
+      name: "@acme/settings",
+      version: "1.0.0",
+      nextly: "*",
+      renameMap: { "acme-settings": "site-settings" },
+      contributes: {
+        singles: [{ slug: "acme-settings", fields: [] }],
+        admin: {
+          contributions: [
+            {
+              id: "acme-settings.tab",
+              kind: "tab",
+              place: "single.edit",
+              label: "Settings",
+              component: "x#Tab",
+              singles: ["acme-settings", "homepage"],
+            },
+          ] as AdminContribution[],
+        },
+      },
+    };
+    const { audience } = reader([]);
+    const meta = await contributionsForReader(
+      [SETTINGS],
+      audience,
+      "workspace"
+    );
+    // Its own Single under its served slug; the host's own as written.
+    expect(meta["single.edit"]?.tab).toEqual([
+      expect.objectContaining({
+        id: "acme-settings.tab",
+        singles: ["site-settings", "homepage"],
+      }),
+    ]);
+  });
+
   it("sends a reader holding every permission each place's lists in order, login's left out", async () => {
     const { audience } = reader(["read-audit"]);
     const meta = await contributionsForReader([SUPPORT], audience, "workspace");
     expect(Object.keys(meta).sort()).toEqual(["collection.edit", "dashboard"]);
     expect(
       meta.dashboard?.block?.map(e => ("id" in e ? e.id : e.builtIn))
-    ).toEqual(["acme-support.audit", "acme-support.totals"]);
+    ).toEqual([
+      "welcome",
+      "widgets",
+      "acme-support.audit",
+      "acme-support.totals",
+    ]);
     expect(meta["collection.edit"]?.sidebarSection).toEqual([
       expect.objectContaining({
         id: "acme-support.status",
@@ -288,7 +330,10 @@ describe("contributionsForReader", () => {
     const { audience } = reader(["read-audit"]);
     const meta = await contributionsForReader([SUPPORT], audience, "login");
     expect(Object.keys(meta)).toEqual(["login"]);
+    // The sign-in form is the login page's built-in block, so the list
+    // places the contribution after it.
     expect(meta.login?.block).toEqual([
+      { builtIn: "form" },
       expect.objectContaining({ id: "acme-support.hello" }),
     ]);
   });

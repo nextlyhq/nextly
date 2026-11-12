@@ -25,6 +25,7 @@ import {
 } from "@admin/__tests__/utils";
 import {
   registerComponent,
+  registerComponentMap,
   unregisterComponent,
   type DocumentActionReplacementProps,
   type DocumentPanelSectionProps,
@@ -117,6 +118,7 @@ import {
 
 import { EntryForm } from "../EntryForm";
 import { useDocumentLocale } from "../EntryFormContext";
+import { useDocumentValues } from "../document-values";
 import { useDocumentActions } from "../useDocumentActionHooks";
 
 const REMOVE = "test/layouts#RemoveLayoutDialog";
@@ -129,7 +131,8 @@ const replacement: { current: DocumentActionReplacementProps | null } = {
 const drawnIn: {
   locale: ReturnType<typeof useDocumentLocale>;
   actions: boolean;
-} = { locale: null, actions: false };
+  values: ReturnType<typeof useDocumentValues>;
+} = { locale: null, actions: false, values: null };
 const section: { current: DocumentPanelSectionProps | null } = {
   current: null,
 };
@@ -138,6 +141,7 @@ function RemoveLayoutDialog(props: DocumentActionReplacementProps) {
   replacement.current = props;
   drawnIn.locale = useDocumentLocale();
   drawnIn.actions = useDocumentActions() !== null;
+  drawnIn.values = useDocumentValues(["title"]);
   return <div role="dialog" aria-label="Remove layout" />;
 }
 
@@ -293,6 +297,8 @@ describe("a plugin's document actions", () => {
 
     expect(drawnIn.locale).toMatchObject({ code: "es" });
     expect(drawnIn.actions).toBe(true);
+    // And the document's live values, as any surface of the editor reads them.
+    expect(drawnIn.values).toEqual({ title: "Site layout" });
   });
 
   it("answers every caller of a replacement that is already open, once it closes", async () => {
@@ -911,6 +917,25 @@ describe("before a plugin's components have loaded", () => {
 
     expect(await within(region).findByText("Used by 2 pages")).toBeVisible();
     expect(region.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it("draws no loading look for a section the app's component map left out, once the map has registered", async () => {
+    // The generated map imports every module the admin resolves by string at
+    // once: after it has registered, a component still missing is missing,
+    // not on its way.
+    act(() => {
+      registerComponentMap({});
+    });
+    plugins.current = [COLD_PLUGIN];
+    renderEditor("layouts");
+    const panel = await screen.findByRole("complementary", {
+      name: "Document panel",
+    });
+
+    // The section, where it is drawn at all, is not drawn as loading.
+    const region = within(panel).queryByRole("region", { name: "Used by" });
+    expect(region?.querySelector('[aria-busy="true"]') ?? null).toBeNull();
+    expect(within(panel).queryByText("Loading Used by")).toBeNull();
   });
 
   it("holds a replaced action while its component loads, rather than opening it and failing", async () => {

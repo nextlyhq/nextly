@@ -83,8 +83,17 @@ export type { DocumentViewProps } from "@nextlyhq/admin";
  *   `collectionSlug` and `entryId`, `documentLock` (hold writes while
  *   `actionsDisabled`), `mayWrite()`, and `documentChanged(result)`, the same
  *   two results.
+ * - `SidebarSectionProps`: a side panel section declared at an edit page's
+ *   place (`kind: "sidebarSection"`): the place's `context` and `entry`, as
+ *   every contributed component receives them, and on a collection entry's
+ *   page also every field of `DocumentPanelSectionProps`.
+ * - `DocumentTabProps`: a tab declared at an edit page's place
+ *   (`kind: "tab"`): the place's `context` and `entry`, `setBadge` to show a
+ *   count beside the tab's label, the document form's `control` to read what
+ *   the author typed and write values the bar's Save stores, and
+ *   `documentLock`. Handed on a saved entry, a new one and a Single alike.
  *
- * Both are drawn inside the document's editor, so `useDocumentLocale()` names
+ * All are drawn inside the document's editor, so `useDocumentLocale()` names
  * the language being edited — the one a replaced Unpublish acts on — and
  * `useDocumentActions()` answers for the same document.
  *
@@ -107,6 +116,8 @@ export type {
   DocumentActionReplacementProps,
   DocumentChangeResult,
   DocumentPanelSectionProps,
+  DocumentTabProps,
+  SidebarSectionProps,
 } from "@nextlyhq/admin";
 
 /**
@@ -641,6 +652,123 @@ export { useSuppressAdminChrome } from "@nextlyhq/admin";
 export type { AdminChromeLayer } from "@nextlyhq/admin";
 
 /**
+ * Ask for the admin's content panel to start folded away while this page is
+ * mounted (@experimental), for a page that needs the width: a builder with a
+ * field list, a preview and a settings panel. The icon rail stays, the top
+ * bar shows a toggle that brings the panel back, and the reader's choice is
+ * remembered under `key` (name the page, `"forms.builder"`, not the record it
+ * shows), so the next visit starts the way they left it.
+ */
+export { useFoldedPanel } from "@nextlyhq/admin";
+
+/**
+ * A store for one of the person's interface preferences, kept by the admin's
+ * own rules (@experimental): for a plugin that remembers a choice in the
+ * browser, such as an editor's panels or its recently opened pages.
+ *
+ * - Where the site turns remembering off (`NEXTLY_ADMIN_DEVICE_MEMORY=off`),
+ *   nothing is written to the browser's storage, and the choice holds for
+ *   the page alone.
+ * - Signing out forgets it, in every open tab, with everything else the
+ *   admin kept about the person.
+ * - `lifetime: "tab"` keeps it for the tab alone, in its session storage.
+ *
+ * `read`, `write` and `remove` never throw. Key it per person (with
+ * `useCurrentUserId`) where two people may share a browser.
+ */
+export { devicePreferenceStore } from "@nextlyhq/admin";
+export type {
+  DevicePreferenceOptions,
+  DevicePreferenceStore,
+} from "@nextlyhq/admin";
+
+/**
+ * Draw a page's own content into the admin's one top bar (@experimental):
+ * `name="start"` is the bar's left part (where a breadcrumb goes) and
+ * `name="end"` its right part, for the page's own actions such as Save. The
+ * children stay in the page's tree, so they keep its state and context, and
+ * are drawn in the bar for as long as the page is mounted. Outside the admin's
+ * shell (a unit test) they render where they stand.
+ */
+export { TopBarPlace } from "@nextlyhq/admin";
+export type { TopBarPlaceName, TopBarPlaceProps } from "@nextlyhq/admin";
+
+/**
+ * A page's frame and its header, the pieces core's pages are drawn from
+ * (@experimental), so a plugin's page looks like a core one.
+ *
+ * - `PageFrame` takes the page's `type`, and the type decides its width:
+ *   `"list"` runs full width within the gutter, `"form"` is a 56rem column
+ *   under the page's left edge, `"editor"` runs full width with no gutter so
+ *   a side panel meets the window's edge, and `"workspace"` takes no gutter and
+ *   no padding, for a page that lays out its own surface.
+ * - `PageHeader` draws the page's title as its `h1`, with an optional
+ *   `description`, `actions` trailing the title, `meta` chips beside it, a
+ *   leading `media` visual and a `tabs` row (`PageTabs` with a `PageTab` per
+ *   section, each a link with its own address).
+ *
+ * A plugin page that draws no `PageFrame` is drawn as a Workspace page. A page
+ * that draws one gets no second frame from the admin. Content for the admin's
+ * top bar still goes through `TopBarPlace`.
+ */
+export { PageFrame, PageHeader, PageTab, PageTabs } from "@nextlyhq/admin";
+export type {
+  PageFrameProps,
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+  PageType,
+} from "@nextlyhq/admin";
+
+/**
+ * The live values of the document being edited (@experimental), for any
+ * component a plugin draws inside the editor: a block, a side panel section
+ * or a tab, on an entry, a new one or a Single. A place's `entry` prop is the
+ * document as it was read; these are the document as it is being typed.
+ *
+ * - `useDocumentValues(paths)`: the named fields by their dot paths
+ *   (`"seo.title"`), drawing again only when one of them changes.
+ * - `useDocumentField(path)`: one field's value, whether it may be written
+ *   now, and `set(next)`, which writes as the author typing would and marks the
+ *   document changed, or writes nothing and answers `false` while the
+ *   document's content is held. `set(null)` returns a field to automatic.
+ *
+ * Both read the editor's own form, never the nearest form context, so a
+ * plugin component with a form of its own still reads the document. Both
+ * answer `null` outside a document editor.
+ */
+export { useDocumentField, useDocumentValues } from "@nextlyhq/admin";
+export type { DocumentField } from "@nextlyhq/admin";
+
+/**
+ * Draw the contributions sent to an admin place (@experimental): blocks with
+ * `TargetSlot`, tabs with `PlaceTabs`, in the order the server sent them and
+ * each behind its own error boundary, as core's pages draw theirs.
+ *
+ * For a place the plugin declared under `contributes.admin.places`, on one of
+ * its own pages: other plugins' blocks and tabs added there arrive already
+ * filtered for the signed-in reader, and each receives the place's `context`
+ * and the page's `entry` when it passes one. Pass `context={null}` while the
+ * page does not know its ids yet; nothing contributed is drawn until it does.
+ * A plugin's place has no built-in parts, so the page draws its own content
+ * beside the slot.
+ *
+ * A contributed tab receives `PlaceTabProps`: the place's `context` and
+ * `entry`, and `setBadge`, which shows a count beside the tab's label
+ * (`PlaceTabBadge`) or none with `null`. A tab stays mounted while another is
+ * open, so its count stays current and what it holds is kept.
+ */
+export { PlaceTabs, TargetSlot } from "@nextlyhq/admin";
+export type {
+  PlaceContributionProps,
+  PlaceProps,
+  PlaceTabBadge,
+  PlaceTabProps,
+  PlaceTabsProps,
+  TargetSlotProps,
+} from "@nextlyhq/admin";
+
+/**
  * The unified admin data table + its extension points (@experimental). Render
  * `DataTable` (batteries-included) or `DataTableView` (controlled) to match the
  * admin's lists, and contribute cell renderers, columns, column transforms, and
@@ -745,6 +873,39 @@ export type {
   FieldPickerChoice,
   FieldGroupOption,
   FieldTypeDescription,
+} from "@nextlyhq/admin";
+
+/**
+ * The shared field settings panel (@experimental): the one panel every surface
+ * uses to add and edit a field, the same for a field just added and one that
+ * already existed. Five tabs (General, Validation, Display, Conditions,
+ * Advanced), with the settings that make the field its type first in General,
+ * and every setting it shows kept in the definition. Each change reaches your
+ * `onChange` at once with the whole field, so there is no Apply step: your
+ * surface stores it, and the panel writes nothing.
+ *
+ * Your surface configures it with `FieldSettingsSurface`: the `surface` whose
+ * plugin types it names, `deriveName` (a name follows its label until the
+ * field is saved), the settings it `fixed` and why (shown beside them), its
+ * `extraSettings` by tab, and its `conditions`. Pass `saved` for a field your
+ * surface has saved, `ancestors` for where it sits (its API path is shown, such
+ * as `authors[].social[].url`), and `siblings` for the fields its condition may
+ * read.
+ * - `FieldTypeSettings` is what a type shows of its own settings: its
+ *   `defining` settings, first in General, and the rest by tab.
+ * Experimental until every built-in surface uses it.
+ */
+export { FieldSettingsPanel } from "@nextlyhq/admin";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsConditionsProps,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
 } from "@nextlyhq/admin";
 
 /**

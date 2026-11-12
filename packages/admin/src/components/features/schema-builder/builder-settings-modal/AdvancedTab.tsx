@@ -27,6 +27,10 @@ import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
+import {
+  recallPreference,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
 
 import {
   BUILDER_KIND_NOUN,
@@ -314,7 +318,8 @@ function ShowSystemFieldsSwitch() {
   // dismissal across sessions.
   const [checked, setChecked] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
-    const v = window.localStorage.getItem(SHOW_SYSTEM_STORAGE_KEY);
+    // Through the device memory, which guards storage that throws.
+    const v = recallPreference(SHOW_SYSTEM_STORAGE_KEY);
     return v === null ? true : v === "true";
   });
 
@@ -332,7 +337,9 @@ function ShowSystemFieldsSwitch() {
   const set = (next: boolean) => {
     setChecked(next);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(next));
+      // Kept through the device memory, which guards storage that throws
+      // and keeps nothing where the site turned remembering off.
+      rememberPreference(SHOW_SYSTEM_STORAGE_KEY, String(next));
       window.dispatchEvent(
         new CustomEvent("builder:show-system-fields", { detail: next })
       );

@@ -14,11 +14,9 @@
  */
 
 import {
-  Badge,
   Button,
   Checkbox,
   Input,
-  Card,
   Label,
   RadioGroup,
   RadioGroupItem,
@@ -27,9 +25,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Tabs,
-  TabsList,
-  TabsTrigger,
+  Switch,
   Textarea,
 } from "@nextlyhq/ui";
 import { Eye, Monitor, Paperclip, RotateCcw, Smartphone } from "lucide-react";
@@ -37,10 +33,14 @@ import { type JSX, useMemo, useState } from "react";
 
 import type { AnyFormField, CustomFormField, FormField } from "../../../types";
 import { isKnownFormField } from "../../../types";
-import { evaluateConditions } from "../../../utils/evaluate-conditions";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
 import { hasStoredRedirectPage } from "./FormSettingsTab";
+import {
+  previewFields,
+  previewIssues,
+  type HiddenBecause,
+} from "./preview-checks";
 
 // ---------------------------------------------------------------------------
 // Field rendering
@@ -269,118 +269,161 @@ function Confirmation({
   );
 }
 
+/** The widths the preview draws the form at. */
+const DEVICES = [
+  { value: "desktop", label: "Desktop", icon: Monitor },
+  { value: "phone", label: "Phone", icon: Smartphone },
+] as const;
+
+type Device = (typeof DEVICES)[number]["value"];
+
+/** Desktop or Phone, as a pair of pressed buttons rather than tabs. */
+function DeviceSwitch({
+  device,
+  onChange,
+}: {
+  device: Device;
+  onChange: (device: Device) => void;
+}): JSX.Element {
+  return (
+    <div
+      role="group"
+      aria-label="Preview width"
+      className="inline-flex rounded-md border border-border bg-card p-0.5"
+    >
+      {DEVICES.map(each => (
+        <button
+          key={each.value}
+          type="button"
+          aria-pressed={device === each.value}
+          onClick={() => onChange(each.value)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-muted aria-pressed:text-foreground"
+        >
+          <each.icon className="h-3.5 w-3.5" aria-hidden="true" />
+          {each.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Why a shown-anyway field is not on the visitor's page. */
+const HIDDEN_NOTE: Record<HiddenBecause, string> = {
+  "hidden-field": "Hidden field: sent with every submission, never shown.",
+  condition: "Hidden by a condition: shown once its condition is met.",
+};
+
+/** One field on the preview's page, with what the checks said about it. */
+function PreviewFieldRow({
+  field,
+  hidden,
+  value,
+  issue,
+  onChange,
+}: {
+  field: AnyFormField;
+  hidden: HiddenBecause | undefined;
+  value: unknown;
+  issue: string | undefined;
+  onChange: (value: unknown) => void;
+}): JSX.Element {
+  if (!isKnownFormField(field)) return <PluginFieldPreview field={field} />;
+  const label = (
+    <Label htmlFor={`preview-${field.name}`}>
+      {field.label || field.name}
+      {field.required && <span className="ml-1 text-destructive">*</span>}
+    </Label>
+  );
+  return (
+    <div
+      className={`space-y-1.5 ${hidden === undefined ? "" : "rounded-md border border-dashed border-border p-3 opacity-70"}`}
+    >
+      {field.type === "checkbox" ? (
+        <div className="flex items-center gap-2">
+          <PreviewFieldInput field={field} value={value} onChange={onChange} />
+          {label}
+        </div>
+      ) : (
+        <>
+          {label}
+          <PreviewFieldInput field={field} value={value} onChange={onChange} />
+        </>
+      )}
+      {field.helpText && (
+        <p className="text-xs text-muted-foreground">{field.helpText}</p>
+      )}
+      {issue === undefined ? null : (
+        <p className="text-xs text-destructive">{issue}</p>
+      )}
+      {hidden === undefined ? null : (
+        <p className="text-xs text-muted-foreground">{HIDDEN_NOTE[hidden]}</p>
+      )}
+    </div>
+  );
+}
+
 export function FormPreview({
   fields,
   formData,
 }: FormPreviewProps): JSX.Element {
   const { settings } = useFormBuilder();
   const [values, setValues] = useState<Record<string, unknown>>({});
-  const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
+  const [device, setDevice] = useState<Device>("desktop");
+  const [showHidden, setShowHidden] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const [missingRequired, setMissingRequired] = useState<Set<string>>(
-    new Set()
+  const [issues, setIssues] = useState<ReadonlyMap<string, string>>(
+    () => new Map()
   );
 
-  // Conditional logic runs against the live values with the SAME evaluator
-  // the runtime uses — typing into the preview shows/hides fields for real.
-  // Visibility is computed in field order against the values of fields that
-  // are themselves visible: a hidden field's leftover value must not keep
-  // satisfying a downstream condition (chained show/hide would misbehave).
-  const visibleFields = useMemo(() => {
-    const effectiveValues: Record<string, unknown> = {};
-    const visible: AnyFormField[] = [];
-    for (const field of fields) {
-      if (field.type === "hidden") continue;
-      const isVisible =
-        !field.conditionalLogic?.enabled ||
-        evaluateConditions(field.conditionalLogic, effectiveValues);
-      if (isVisible) {
-        visible.push(field);
-        if (field.name in values) {
-          effectiveValues[field.name] = values[field.name];
-        }
-      }
-    }
-    return visible;
-  }, [fields, values]);
-
-  const hiddenCount = fields.filter(field => field.type === "hidden").length;
+  // The fields as the visitor meets them, with their conditions run against
+  // what has been typed (the same evaluator the site runs).
+  const all = useMemo(() => previewFields(fields, values), [fields, values]);
+  const onPage = all.filter(each => each.hidden === undefined);
+  const drawn = showHidden ? all : onPage;
 
   const reset = () => {
     setValues({});
     setConfirmed(false);
-    setMissingRequired(new Set());
+    setIssues(new Map());
   };
 
-  // The real form would refuse an empty required field, so the simulation
-  // does too — an admin previewing required fields sees the requirement.
+  // The site's own checks over the fields on the page: what it would refuse,
+  // the preview refuses, field by field. Nothing is sent anywhere.
   const simulateSubmit = () => {
-    const missing = new Set(
-      visibleFields
-        .filter(field => {
-          // A plugin field renders a non-interactive placeholder in the preview
-          // (its real input lives in the plugin's component in the live form),
-          // so it can never be filled here — excluded like `file`, otherwise the
-          // simulated submit would block forever with no way to satisfy it.
-          if (!field.required || field.type === "file") return false;
-          if (!isKnownFormField(field)) return false;
-          const value = values[field.name];
-          return value === undefined || value === "" || value === false;
-        })
-        .map(field => field.name)
+    const refused = previewIssues(
+      onPage.map(each => each.field),
+      values
     );
-    setMissingRequired(missing);
-    if (missing.size === 0) setConfirmed(true);
+    setIssues(refused);
+    if (refused.size === 0) setConfirmed(true);
   };
 
   return (
-    // One surface for the whole tab. The chrome and the stage are the same
-    // panel seen twice, and leaving the chrome unbacked put it on the page's
-    // grey while the stage below it had a frame — reading as a control strip
-    // that had lost its box.
-    <Card className="overflow-hidden p-0">
-      {/* Preview chrome: honest framing + device toggle + reset */}
-      <div className="flex flex-col gap-3 border-b border-border px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Eye className="h-4 w-4" aria-hidden="true" />
-          Preview — a simulation of this form. Nothing here submits anywhere.
-        </div>
-        {/* Wraps rather than holding one row. The card around this clips, and
-            at a ~360px panel the inset leaves less width than the device
-            toggle and Reset need side by side — so an unwrapped row loses its
-            right edge instead of overflowing visibly. */}
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Tabs
-            value={device}
-            onValueChange={value => setDevice(value as "desktop" | "mobile")}
-          >
-            {/* No corner override: the primitive already guarantees square,
-                and a call site restating it is how the guarantee gets forked. */}
-            <TabsList>
-              <TabsTrigger value="desktop" className="gap-1.5">
-                <Monitor className="h-3.5 w-3.5" aria-hidden="true" />
-                Desktop
-              </TabsTrigger>
-              <TabsTrigger value="mobile" className="gap-1.5">
-                <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
-                Mobile
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <Button type="button" variant="outline" size="sm" onClick={reset}>
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            Reset
-          </Button>
-        </div>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <DeviceSwitch device={device} onChange={setDevice} />
+        <label className="inline-flex items-center gap-2 text-sm text-foreground">
+          <Switch
+            checked={showHidden}
+            onCheckedChange={setShowHidden}
+            aria-label="Show hidden fields"
+          />
+          Show hidden fields
+        </label>
+        <span className="flex-1" />
+        <Button type="button" variant="outline" size="sm" onClick={reset}>
+          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+          Reset
+        </Button>
       </div>
 
-      {/* The simulated form, on a tinted stage so the sheet inside reads as a
-          page rather than as more of this panel. The stage draws no border of
-          its own — the card around it already does. */}
-      <div className="flex justify-center bg-muted/30 p-6">
+      {/* The form on a tinted stage, so the sheet inside reads as the
+          visitor's page rather than as more of the admin. */}
+      <div className="flex justify-center rounded-md border border-border bg-muted/30 p-4 sm:p-6">
         <div
-          className={`w-full space-y-5 border border-border bg-background p-6 ${
-            device === "mobile" ? "max-w-95" : "max-w-2xl"
+          data-preview-device={device}
+          className={`w-full space-y-5 rounded-md border border-border bg-background p-6 ${
+            device === "phone" ? "max-w-95" : "max-w-2xl"
           }`}
         >
           <div>
@@ -403,91 +446,42 @@ export function FormPreview({
             </div>
           ) : (
             <>
-              {visibleFields.length === 0 && (
+              {onPage.length === 0 && (
                 <p className="text-sm text-muted-foreground">
-                  No visible fields — add fields in the Builder tab.
+                  No fields to show yet. Add them on Builder.
                 </p>
               )}
-              {visibleFields.map(field =>
-                !isKnownFormField(field) ? (
-                  <PluginFieldPreview key={field.name} field={field} />
-                ) : (
-                  <div key={field.name} className="space-y-1.5">
-                    {field.type !== "checkbox" && (
-                      <Label htmlFor={`preview-${field.name}`}>
-                        {field.label || field.name}
-                        {field.required && (
-                          <span className="ml-1 text-destructive">*</span>
-                        )}
-                      </Label>
-                    )}
-                    {field.type === "checkbox" ? (
-                      <div className="flex items-center gap-2">
-                        <PreviewFieldInput
-                          field={field}
-                          value={values[field.name]}
-                          onChange={value =>
-                            setValues(prev => ({
-                              ...prev,
-                              [field.name]: value,
-                            }))
-                          }
-                        />
-                        <Label htmlFor={`preview-${field.name}`}>
-                          {field.label || field.name}
-                          {field.required && (
-                            <span className="ml-1 text-destructive">*</span>
-                          )}
-                        </Label>
-                      </div>
-                    ) : (
-                      <PreviewFieldInput
-                        field={field}
-                        value={values[field.name]}
-                        onChange={value =>
-                          setValues(prev => ({ ...prev, [field.name]: value }))
-                        }
-                      />
-                    )}
-                    {field.helpText && (
-                      <p className="text-xs text-muted-foreground">
-                        {field.helpText}
-                      </p>
-                    )}
-                    {missingRequired.has(field.name) && (
-                      <p className="text-xs text-destructive">
-                        This field is required.
-                      </p>
-                    )}
-                  </div>
-                )
-              )}
-
+              {drawn.map(({ field, hidden }) => (
+                <PreviewFieldRow
+                  key={field.name}
+                  field={field}
+                  hidden={hidden}
+                  value={values[field.name]}
+                  issue={issues.get(field.name)}
+                  onChange={value =>
+                    setValues(prev => ({ ...prev, [field.name]: value }))
+                  }
+                />
+              ))}
               <Button
                 type="button"
                 onClick={simulateSubmit}
-                disabled={visibleFields.length === 0}
+                disabled={onPage.length === 0}
               >
                 {settings.submitButtonText || "Submit"}
               </Button>
             </>
           )}
-
-          {hiddenCount > 0 && !confirmed && (
-            <p className="text-xs text-muted-foreground">
-              <Badge
-                variant="outline"
-                className="mr-1.5 rounded-none border-border px-1 py-0 text-[10px]"
-              >
-                {hiddenCount}
-              </Badge>
-              hidden {hiddenCount === 1 ? "field" : "fields"} will be submitted
-              invisibly.
-            </p>
-          )}
         </div>
       </div>
-    </Card>
+
+      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        {
+          "Answers here run the form's conditions and checks, but are never saved and send no email."
+        }
+      </p>
+    </div>
   );
 }
 

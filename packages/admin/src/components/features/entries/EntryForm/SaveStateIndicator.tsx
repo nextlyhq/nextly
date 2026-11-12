@@ -37,6 +37,7 @@ import {
 import { cn } from "@admin/lib/utils";
 
 import { OLDER_VERSION_WARNING } from "./AutosaveRecoveryBanner";
+import { WORDS_IN_NARROW_BAR } from "./narrow-bar";
 import {
   useClaimRecoveryOffer,
   type HostedRecoveryOffer,
@@ -160,10 +161,17 @@ function FailedSaveState({
   return (
     <>
       <AlertCircle
-        className="h-4 w-4 shrink-0 text-destructive"
+        className="h-4 w-4 shrink-0 text-danger-text"
         aria-hidden="true"
       />
-      <span className="whitespace-nowrap text-destructive">{view.label}</span>
+      <span
+        className={cn(
+          "whitespace-nowrap text-danger-text",
+          WORDS_IN_NARROW_BAR
+        )}
+      >
+        {view.label}
+      </span>
       <span id={detailId} className="sr-only">
         {view.detail}
       </span>
@@ -230,7 +238,9 @@ function SettledSaveState({
           <div className="flex items-center gap-1.5">
             {SETTLED_ICON[view.tone]}
             {/* One line at every width: a label that wraps grows the bar. */}
-            <span className="whitespace-nowrap">{view.label}</span>
+            <span className={cn("whitespace-nowrap", WORDS_IN_NARROW_BAR)}>
+              {view.label}
+            </span>
           </div>
         </TooltipTrigger>
         {detail === null ? null : (
@@ -273,7 +283,9 @@ function RecoveryOfferChip({
           className="-mx-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground hover:bg-muted data-[state=open]:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span className="whitespace-nowrap">{label}</span>
+          <span className={cn("whitespace-nowrap", WORDS_IN_NARROW_BAR)}>
+            {label}
+          </span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         </button>
       </PopoverTrigger>
@@ -334,7 +346,7 @@ export function SaveStateIndicator({
     // width: the status line has the room a phone's action row did not.
     <div
       className={cn(
-        "flex min-w-[11rem] items-center justify-start gap-1.5 text-muted-foreground",
+        "flex min-w-[11rem] items-center justify-start gap-1.5 text-muted-foreground in-data-[state-compact]:@max-lg/toolbar:min-w-fit",
         className
       )}
       data-testid="save-state-indicator"

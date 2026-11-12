@@ -6,8 +6,11 @@
  * silence, and the first document delete failed on the missing table. The
  * boot's core-schema check now names every missing core table and the command
  * that creates them, in one warning, beside the warning for missing columns.
+ *
+ * In a development start: a production start compares nothing of the core
+ * schema with the database, and `nextly migrate` is what brings it up to date.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTestNextly,
@@ -15,6 +18,14 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { warnIfCoreSchemaIsBehind } from "../first-run";
+
+// The core schema is compared in a development start only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 let current: TestNextly | undefined;
 

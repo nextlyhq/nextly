@@ -175,6 +175,7 @@ export default function CollectionBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    savedFieldIds,
     pinFields,
     pinSettings,
   } = useBuilderEntityState({
@@ -377,10 +378,12 @@ export default function CollectionBuilderEditPage({
     <BuilderPageLayout
       config={COLLECTION_BUILDER_CONFIG}
       builder={builder}
+      entitySlug={entitySlug}
       name={settings.singularName || slug}
       locked={isLocked}
       configPath={collection?.configPath}
       unsavedCount={unsavedCount}
+      savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
       onSettingsChange={setSettings}

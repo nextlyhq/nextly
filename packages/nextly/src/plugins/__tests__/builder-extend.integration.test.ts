@@ -401,3 +401,67 @@ describe("plugin relation → UI-Builder collection", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("ghost"));
   });
 });
+
+// With `experimental.perLanguageStorage` on, a collection that is not marked translatable still
+// keeps its translatable values per language, in its `<table>_locales` companion. A plugin's text
+// field extended onto such a Builder collection belongs there too: added to the main table, it
+// would leave the companion a column short while every write splits the value into it.
+describe("plugin extend → untranslated UI-Builder collection under per-language storage", () => {
+  it("adds the plugin's translatable field to the per-language table, not the main one", async () => {
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "articles",
+      fields: [{ name: "body", type: "text", source: "ui" }],
+      storedPerLanguage: true,
+    });
+
+    handle = await createTestNextly({
+      adapter,
+      perLanguageStorage: true,
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      plugins: [seoPlugin(["articles"])],
+    });
+
+    expect(await columnsOf(adapter, "dc_articles")).not.toContain("meta_title");
+    expect(await columnsOf(adapter, "dc_articles_locales")).toContain(
+      "meta_title"
+    );
+    const created = await handle.nextly.create({
+      collection: "articles",
+      data: { title: "T", body: "hello", meta_title: "My Meta" },
+    });
+    const id = (created.item as { id: string }).id;
+    const got = await handle.nextly.findByID({ collection: "articles", id });
+    expect((got as { meta_title?: string } | null)?.meta_title).toBe("My Meta");
+  });
+
+  // A collection whose every field is shared has no per-language table yet, so the first
+  // translatable field a plugin adds has to create it, or every write in a language fails.
+  it("creates the per-language table for the first translatable field a plugin adds", async () => {
+    const adapter = await seededAdapter();
+    await seedBuilderCollection(adapter, {
+      slug: "articles",
+      fields: [{ name: "views", type: "number", source: "ui" }],
+      storedPerLanguage: true,
+    });
+
+    handle = await createTestNextly({
+      adapter,
+      perLanguageStorage: true,
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      plugins: [seoPlugin(["articles"])],
+    });
+
+    expect(await columnsOf(adapter, "dc_articles")).not.toContain("meta_title");
+    expect(await columnsOf(adapter, "dc_articles_locales")).toContain(
+      "meta_title"
+    );
+    const created = await handle.nextly.create({
+      collection: "articles",
+      data: { title: "T", views: 3, meta_title: "My Meta" },
+    });
+    const id = (created.item as { id: string }).id;
+    const got = await handle.nextly.findByID({ collection: "articles", id });
+    expect((got as { meta_title?: string } | null)?.meta_title).toBe("My Meta");
+  });
+});

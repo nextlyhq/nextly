@@ -825,7 +825,7 @@ describe("running the command", () => {
     const result = await runGenerateWidget(dir, { id: "open-orders" });
     if (!result.ok) throw new Error(result.reason);
     expect(result.nextSteps.join("\n")).toMatch(
-      /src\/dashboard\/open-orders\.widget\.ts[\s\S]*\/admin\/dev\/widget-previews[\s\S]*vitest run src\/dashboard\/open-orders\.widget\.test\.ts/
+      /src\/dashboard\/open-orders\.widget\.ts[\s\S]*its test draws the card from its preview case[\s\S]*vitest run src\/dashboard\/open-orders\.widget\.test\.ts/
     );
   });
 

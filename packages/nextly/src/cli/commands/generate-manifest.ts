@@ -47,7 +47,7 @@ import {
 } from "../../plugins/codegen/block-manifest";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
-import { reportDryRun, shownPath, type DryRunChange } from "../dry-run";
+import { projectPath, reportDryRun, type DryRunChange } from "../dry-run";
 import { exitWithError } from "../errors";
 import { blockManifestStale } from "../errors/areas/commands";
 import { createContext, type CommandContext } from "../program";
@@ -139,7 +139,7 @@ export function blockManifestDryRunChanges(
   const change = blockManifestChange(state);
   return change === undefined
     ? []
-    : [{ action: change.action, target: shownPath(cwd, state.path) }];
+    : [{ action: change.action, target: projectPath(cwd, state.path) }];
 }
 
 /** A one-line account of a mismatch, for a CI log read without the diff. */

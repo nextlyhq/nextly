@@ -72,6 +72,20 @@ export interface BaseListOptions {
    */
   slugAllowlist?: string[];
 
+  /**
+   * Leave out records whose `slug` is in this list: the plugins' entities, on
+   * the list of the site's own.
+   *
+   * A condition on the query, like the allowlist, so the `total` counts only
+   * the rows the page can show. It only ever removes rows: with an allowlist
+   * both apply, so nothing the allowlist leaves out comes back.
+   *
+   * Semantics:
+   *  - `undefined` or `[]` means nothing is denied, and adds no condition
+   *    (never a `NOT IN ()`, whose meaning differs by dialect).
+   */
+  slugDenylist?: string[];
+
   /** Maximum number of results */
   limit?: number;
 
@@ -159,6 +173,35 @@ export interface SchemaSyncSubject {
   webhooks?: unknown;
 }
 
+/**
+ * A registry list paginates or it does not: an `offset` that skips rows needs
+ * the `limit` that bounds the page. The refusal lives before any query,
+ * because the query builder emits `OFFSET` as its own clause: SQLite and MySQL
+ * refuse a bare `OFFSET` in SQL — a dialect-grammar database error — while
+ * PostgreSQL silently returns the unbounded tail. One contract, refused once,
+ * on every dialect. An offset of 0 skips nothing and is not a refusal.
+ *
+ * Exported because a caller that reads the registry BEFORE its paginated list —
+ * `findSingles` building a principal's allowlist, most notably — owes the same
+ * refusal before those reads, so a refused call issues no query at all.
+ */
+export function assertPaginationIsComplete(
+  options?: BaseListOptions,
+  resourceType?: string
+): void {
+  if (
+    options?.offset !== undefined &&
+    options.offset !== 0 &&
+    options.limit === undefined
+  ) {
+    throw NextlyError.invalidInput({
+      message:
+        "An offset requires a limit: pass limit alongside offset to paginate.",
+      logContext: { resourceType, offset: options.offset },
+    });
+  }
+}
+
 export abstract class BaseRegistryService<
   TRecord extends BaseRegistryRecord,
   TMigrationStatus extends string = string,
@@ -196,7 +239,7 @@ export abstract class BaseRegistryService<
   /** Table name prefix for this domain (e.g., "dc_", "single_", "comp_"). */
   protected abstract readonly tableNamePrefix: string;
 
-  /** Column names to search via ILIKE when `search` is provided in list options. */
+  /** Column names the registry's search matches case-insensitively, as literal text, when `search` is provided in list options. */
   protected abstract getSearchColumns(): string[];
 
   /** Deserialize a raw DB row into the typed record. */
@@ -302,10 +345,16 @@ export abstract class BaseRegistryService<
     return this.getRecordBySlug(slug, this.adapter.getDrizzle());
   }
 
+  /** The registry list boundary's share of the pagination contract; see {@link assertPaginationIsComplete}. */
+  protected assertPaginationIsComplete(options?: BaseListOptions): void {
+    assertPaginationIsComplete(options, this.resourceType);
+  }
+
   /**
    * Get all records, optionally filtered by source, migration status, and locked.
    */
   protected async getAllRecords(options?: BaseListOptions): Promise<TRecord[]> {
+    this.assertPaginationIsComplete(options);
     const conditions = this.buildFilterConditions(options);
     return this.selectRecords({
       where: conditions.length > 0 ? { and: conditions } : undefined,
@@ -376,6 +425,7 @@ export abstract class BaseRegistryService<
   protected async listRecords(
     options?: BaseListOptions
   ): Promise<BaseListResult<TRecord>> {
+    this.assertPaginationIsComplete(options);
     // Short-circuit when the caller passed an explicit empty allowlist
     // (e.g. a user with no read permissions on any record). Returning early
     // keeps `total` honest, avoids hitting the DB with a no-op query, and
@@ -764,6 +814,16 @@ export abstract class BaseRegistryService<
         column: "slug",
         op: "IN",
         value: options.slugAllowlist as SqlParam[],
+      });
+    }
+
+    // The denylist the same way: a `NOT IN` only when it names a slug, since
+    // an empty one denies nothing.
+    if (options?.slugDenylist && options.slugDenylist.length > 0) {
+      conditions.push({
+        column: "slug",
+        op: "NOT IN",
+        value: options.slugDenylist as SqlParam[],
       });
     }
 

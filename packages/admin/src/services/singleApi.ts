@@ -27,6 +27,7 @@ import {
   type EveryLanguageVersion,
 } from "../lib/document-version";
 
+import { withListOwner, type ListOwner } from "./list-owner";
 import type {
   PublishAllLanguageOutcome,
   PublishAllPreview,
@@ -54,13 +55,27 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
+ * The path a list of singles is read from, for `params`: the one place it is
+ * spelled, shared by the list's own read and the admin's startup request,
+ * which must name exactly the path the read will ask for.
+ */
+export function singlesListPath(
+  params: TableParams,
+  owner?: ListOwner
+): string {
+  const query = withListOwner(buildQuery(params), owner);
+  return `/singles${query ? `?${query}` : ""}`;
+}
+
+/**
  * Fetch Singles with pagination and filters.
  */
 export const fetchSingles = async (
-  params: TableParams
+  params: TableParams,
+  // The site's Singles or the plugins'; none lists both.
+  owner?: ListOwner
 ): Promise<ListResponse<ApiSingle>> => {
-  const query = buildQuery(params);
-  const url = `/singles${query ? `?${query}` : ""}`;
+  const url = singlesListPath(params, owner);
   return fetcher<ListResponse<ApiSingle>>(url, {}, true);
 };
 

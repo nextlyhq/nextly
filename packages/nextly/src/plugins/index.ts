@@ -33,6 +33,9 @@ export {
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
+  type PluginDurableEvents,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginDatabase,
   type PluginDefinition,
   type PluginEmailService,
@@ -51,6 +54,9 @@ export {
   type InTransactionHandler,
   type PluginSettingsApi,
 } from "./plugin-context";
+// `ctx.cache`, and the tag spelling its reads and expiries share.
+export type { PluginCacheApi } from "./plugin-cache";
+export { pluginCacheTag } from "../revalidation/compute-tags";
 export type {
   PluginPinOptions,
   PluginPinTransaction,
@@ -69,13 +75,18 @@ export type {
   SecretData,
   TxOption,
 } from "./security/one-time-secrets";
+export type { KeyedDigests } from "./security/keyed-digest";
 export type { OpaqueSecrets } from "./security/opaque-secrets";
 export {
   standardWebhooks,
   type InboundWebhookDelivery,
   type InboundWebhookReading,
   type InboundWebhookScheme,
+  type ClaimDeliveryOptions,
+  type DeliveryClaim,
+  type DeliveryClaimResult,
   type PluginReceivedWebhooks,
+  type VerifiedWebhook,
   type VerifyWebhookOptions,
   type WebhookRefusal,
   type WebhookVerification,
@@ -175,6 +186,9 @@ export type {
   Middleware,
   RouteMethod,
 } from "./routes/route-types";
+
+// Proxy handlers: `contributes.proxy`, asked by the app's Proxy.
+export type { PluginProxyHandler, ProxyAnswer } from "./proxy/proxy-types";
 
 // Plugin-defined kinds of signed-in person: `contributes.principals`, a
 // route's `principal`, `ctx.principals` and `nextly.principals`.

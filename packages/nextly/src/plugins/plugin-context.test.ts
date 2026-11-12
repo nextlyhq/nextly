@@ -13,8 +13,14 @@ import {
   resetPluginAuthApi,
   setPluginAuthDepsResolver,
 } from "./plugin-auth-provider";
-import type { PluginGrants } from "./plugin-consent";
-import { createPluginContext } from "./plugin-context";
+import { recordPreSetupPlugins, type PluginGrants } from "./plugin-consent";
+import {
+  createPluginContext,
+  type PluginContext,
+  type PluginDefinition,
+  type PluginEvents,
+} from "./plugin-context";
+import { resolveTransformedPlugins } from "./resolve";
 import { standardWebhooks } from "./security/inbound-webhooks";
 import {
   clearPluginDependencies,
@@ -70,6 +76,11 @@ function makeCtx(
     // Answers "open" so a write the secrets helper starts is refused at its
     // first question, which shows which adapter it asked.
     transactionOpenInFlow: vi.fn(() => true),
+    // A plugin's emit inside an open transaction is held for its commit;
+    // the double commits at once.
+    afterCommit: vi.fn(async (effect: () => unknown) => {
+      await effect();
+    }),
     select: vi.fn(async () => []),
   };
   const services: Record<string, () => unknown> = {
@@ -186,7 +197,7 @@ describe("createPluginContext (P1 reshape)", () => {
         capabilities: { db: { rawSql: true } },
       },
       undefined,
-      { rawSql: ["@test/raw"] }
+      { rawSql: ["@test/raw"], login: [] }
     );
     // The live instance's own members, raw SQL included, are reachable.
     expect((ctx.db.raw as unknown as typeof db).__db).toBe(true);
@@ -442,7 +453,10 @@ describe("ctx.db.raw.transaction", () => {
         nextly: "*",
         capabilities,
       } as never,
-      { rawSql: capabilities.db === undefined ? [] : ["@test/tx"] }
+      {
+        rawSql: capabilities.db === undefined ? [] : ["@test/tx"],
+        login: [],
+      }
     );
     return { ctx, calls };
   }
@@ -540,9 +554,10 @@ describe("ctx.db.raw.transaction", () => {
 });
 
 describe("ctx.auth in a plugin's context", () => {
-  it("holds completeLogin to that plugin's manifest", async () => {
+  it("holds completeLogin to the boot's login grant", async () => {
     // The shared instance answered every plugin alike, so a plugin that
-    // declared nothing could sign anyone in.
+    // declared nothing could sign anyone in. A context built outside a boot
+    // holds no verdict, so it holds no grant either.
     const { ctx } = makeCtx({
       name: "@test/analytics",
       version: "1.0.0",
@@ -558,6 +573,176 @@ describe("ctx.auth in a plugin's context", () => {
         reason: "plugin-login-undeclared",
       }),
     });
+  });
+
+  it("refuses a plugin whose init flips capabilities.auth.login on", async () => {
+    // The bypass: `init` runs as a method on the resolved definition, so
+    // `this` is the very object the context's auth wrapper can reach, and a
+    // plugin that booted without the capability could flip the flag on and
+    // then call. The wrapper answers to the verdict the boot decided, not to
+    // this mutable manifest — so the refusal must stand even though the flag
+    // the init left behind reads true.
+    setPluginAuthDepsResolver(
+      () =>
+        ({
+          secret: "test-secret-that-is-at-least-32-characters-long!!",
+          findUserById: async () => null,
+          auditLog: { write: async () => undefined },
+          trustProxy: false,
+          trustedProxyIps: [],
+        }) as unknown as CompleteLoginDeps
+    );
+    type LateLoginPlugin = {
+      name: string;
+      version: string;
+      nextly: string;
+      capabilities?: { auth?: { login?: boolean } };
+      init(ctx?: PluginContext): void;
+    };
+    const plugin: LateLoginPlugin = {
+      name: "@test/late-login",
+      version: "1.0.0",
+      nextly: "*",
+      init(this: LateLoginPlugin) {
+        this.capabilities = { auth: { login: true } };
+      },
+    };
+    const { ctx } = makeCtx(plugin);
+    // As the boot initializes: a method call, so `this` is the definition.
+    plugin.init();
+    expect(plugin.capabilities?.auth?.login).toBe(true);
+
+    await expect(
+      ctx.auth.completeLogin("u1", {
+        request: new Request("http://localhost/x"),
+        strategy: "test-late-login:sso",
+      })
+    ).rejects.toMatchObject({
+      logContext: expect.objectContaining({
+        reason: "plugin-login-undeclared",
+      }),
+    });
+    await resetPluginAuthApi();
+  });
+
+  it("refuses a plugin whose init renames itself onto a listed plugin", async () => {
+    // The name is part of the verdict, recorded when the boot resolved the
+    // plugin — NOT read back off the mutable definition, and NOT frozen
+    // either: an `init` that renames itself is plugin code assigning a
+    // property, and must not fail the boot. The assignment therefore takes
+    // effect on the definition and changes nothing the grant check reads:
+    // judged through a context built AFTER `init` ran, as the auth bridge
+    // builds its hook contexts, the call still answers for the ungranted
+    // plugin the boot resolved.
+    setPluginAuthDepsResolver(
+      () =>
+        ({
+          secret: "test-secret-that-is-at-least-32-characters-long!!",
+          findUserById: async () => null,
+          auditLog: { write: async () => undefined },
+          trustProxy: false,
+          trustedProxyIps: [],
+        }) as unknown as CompleteLoginDeps
+    );
+    const plugin = {
+      name: "@test/renames",
+      version: "1.0.0",
+      nextly: "*",
+      init(this: { name: string }) {
+        this.name = "@acme/listed";
+      },
+    };
+    const definition = plugin as unknown as PluginDefinition;
+    const { config } = resolveTransformedPlugins(
+      { plugins: [definition] },
+      {
+        coreVersion: "1.0.0",
+        consent: {
+          rawSql: ["@acme/listed"],
+          login: ["@acme/listed"],
+        },
+        declared: recordPreSetupPlugins([definition]),
+      }
+    );
+    const resolved = config.plugins[0]!;
+    const { ctx } = makeCtx(resolved, undefined, {
+      rawSql: ["@acme/listed"],
+      login: ["@acme/listed"],
+    });
+    // As the boot initializes: `init` receives its own context, and as a
+    // method call its `this` is the definition.
+    const init = resolved.init;
+    if (!init) throw new Error("the fixture declares no init");
+    init.call(resolved, ctx);
+    // The rename took effect on the definition — and granted nothing. The
+    // renamed name is raw-SQL-listed too, so every grant and owner identity
+    // reading it live would hand the plugin the other plugin's grants; the
+    // boot-time name keeps `ctx.db.raw` restricted.
+    expect(resolved.name).toBe("@acme/listed");
+    expect((ctx.db.raw as { execute?: unknown }).execute).toBeUndefined();
+
+    await expect(
+      ctx.auth.completeLogin("u1", {
+        request: new Request("http://localhost/x"),
+        strategy: "test-renames:sso",
+      })
+    ).rejects.toMatchObject({
+      logContext: expect.objectContaining({
+        reason: "plugin-login-undeclared",
+      }),
+    });
+    await resetPluginAuthApi();
+  });
+
+  it("survives an init assigning this.name to itself, grant unaffected", async () => {
+    // The freeze this replaces threw on ANY `name` assignment — even an
+    // idempotent one — failing a plugin's initialization for touching its
+    // own definition. Recording the boot-time name instead makes the
+    // assignment harmless: the boot resolves, `init` assigns, nothing
+    // crashes, and the plugin's own grant answers for it as before.
+    setPluginAuthDepsResolver(
+      () =>
+        ({
+          secret: "test-secret-that-is-at-least-32-characters-long!!",
+          findUserById: async () => null,
+          auditLog: { write: async () => undefined },
+          trustProxy: false,
+          trustedProxyIps: [],
+        }) as unknown as CompleteLoginDeps
+    );
+    const plugin = {
+      name: "@acme/selfassign",
+      version: "1.0.0",
+      nextly: "*",
+      capabilities: { auth: { login: true } },
+      init(this: { name: string }) {
+        this.name = this.name;
+      },
+    };
+    const definition = plugin as unknown as PluginDefinition;
+    const { config } = resolveTransformedPlugins(
+      { plugins: [definition] },
+      {
+        coreVersion: "1.0.0",
+        consent: { rawSql: [], login: ["@acme/selfassign"] },
+        declared: recordPreSetupPlugins([definition]),
+      }
+    );
+    const resolved = config.plugins[0]!;
+    const { ctx } = makeCtx(resolved, undefined, {
+      rawSql: [],
+      login: ["@acme/selfassign"],
+    });
+    const init = resolved.init;
+    if (!init) throw new Error("the fixture declares no init");
+    init.call(resolved, ctx);
+
+    const res = await ctx.auth.completeLogin("u1", {
+      request: new Request("http://localhost/x"),
+      strategy: "acme-selfassign:sso",
+    });
+    expect(res.status).toBe(302);
+    await resetPluginAuthApi();
   });
 
   describe("with two plugins that may both finish logins", () => {
@@ -596,8 +781,18 @@ describe("ctx.auth in a plugin's context", () => {
             trustedProxyIps: [],
           }) as unknown as CompleteLoginDeps
       );
-      const acme = makeCtx(declaringLogin("acme")).ctx;
-      const acmeGoogle = makeCtx(declaringLogin("@acme/google")).ctx;
+      // The verdict the boot decided once for both plugins; a context reads
+      // this, never the manifest it could reach back through.
+      const grants: PluginGrants = {
+        rawSql: [],
+        login: ["acme", "@acme/google"],
+      };
+      const acme = makeCtx(declaringLogin("acme"), undefined, grants).ctx;
+      const acmeGoogle = makeCtx(
+        declaringLogin("@acme/google"),
+        undefined,
+        grants
+      ).ctx;
 
       await expect(login(acme, "acme-google:google")).rejects.toMatchObject({
         code: "VALIDATION_ERROR",
@@ -710,5 +905,18 @@ describe("the plugins ctx.db lets a plugin reach", () => {
     const ctx = await bootedReader();
     publishPluginDependencies([owner as never]);
     expect(() => ctx.db.table(notes)).toThrow(NextlyError);
+  });
+});
+
+describe("PluginEvents", () => {
+  it("is still what it was: an object with the bus's methods alone is one", () => {
+    // Checked by the compiler: a mock or wrapper written against the type
+    // before durable events existed keeps compiling. The durable methods are
+    // on `ctx.events` through a type of their own.
+    const bus = new EventBus() as Omit<EventBus, "emit"> & {
+      emit: PluginEvents["emit"];
+    };
+    const events: PluginEvents = bus;
+    expect(events).toBe(bus);
   });
 });

@@ -21,18 +21,17 @@ The admin uses a dual-sidebar layout on desktop. A narrow icon strip on the far 
 
 The top-level sections (in order) are:
 
-| Section | Route | What it contains |
-|---|---|---|
-| Dashboard | `/admin` | Landing page after login |
-| Builder | `/admin/builder/collections` | Schema management for Collections / Singles / Components — the [Visual Schema Builder](/docs/schema-builder) |
-| Collections | `/admin/collections/[slug]` | Per-collection content surface; the icon appears in the sidebar once at least one collection exists and lands on the most-recently-created collection |
-| Singles | `/admin/singles/[slug]` | Per-single content surface; same dynamic visibility rule as Collections |
-| Media Library | `/admin/media` | Upload, browse, and edit files referenced by `upload` fields |
-| Plugins | `/admin/plugins` | Only visible when at least one plugin is installed and registers admin pages |
-| Users | `/admin/users` | Users, Roles, Custom user fields |
-| Settings | `/admin/settings` | General, API keys, Email providers, Email templates, Email layout |
+| Section       | Route                        | What it contains                                                                                                                                      |
+| ------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dashboard     | `/admin`                     | Landing page after login                                                                                                                              |
+| Builder       | `/admin/builder/collections` | Schema management for Collections / Singles / Components — the [Visual Schema Builder](/docs/schema-builder)                                          |
+| Collections   | `/admin/collections/[slug]`  | Per-collection content surface; the icon appears in the sidebar once at least one collection exists and lands on the most-recently-created collection |
+| Singles       | `/admin/singles/[slug]`      | Per-single content surface; same dynamic visibility rule as Collections                                                                               |
+| Media Library | `/admin/media`               | Upload, browse, and edit files referenced by `upload` fields                                                                                          |
+| Plugins       | `/admin/plugins`             | Only visible when at least one plugin is installed and registers admin pages                                                                          |
+| Settings      | `/admin/settings`            | Site (General, Email), People (Users, Roles), Developers (API keys, Webhooks, Background jobs), then any plugin's settings                            |
 
-Collection and Single icons are added to the primary sidebar dynamically as you register collections / singles in `nextly.config.ts` (or create them via the Visual Schema Builder). The Builder icon is always present but can be hidden in production; see [Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the `admin.branding.showBuilder` toggle.
+Collection and Single icons are added to the primary sidebar dynamically as you register collections / singles in `nextly.config.ts` (or create them via the Visual Schema Builder). The Builder icon is present outside production unless `admin.branding.showBuilder` is `false`, and never in production, where schema arrives through migrations; see [Schema Builder visibility](/docs/admin/branding#schema-builder-visibility).
 
 ## What you can do in each section
 
@@ -50,20 +49,15 @@ A central media library at `/admin/media` supports drag-and-drop uploads, thumbn
 
 The Visual Schema Builder lets you create and edit Collections, Singles, and Field Groups without writing TypeScript. It generates the same artifacts the code-first approach produces. See [Visual Schema Builder](/docs/schema-builder) for the full reference.
 
-### Users, Roles, and Custom Fields
-
-The Users section groups three pages:
-
-- **Users** (`/admin/users`) — list, create, edit, and disable user accounts.
-- **Roles** (`/admin/security/roles`) — create roles and assign permissions to them. The setup wizard seeds a `Super Admin` role that holds every permission and assigns it to the first user.
-- **Custom Fields** (`/admin/users/fields`) — add extra fields to the user model. Only scalar field types are accepted on user records; see the [`users` reference](/docs/configuration/nextly-config#users) in `nextly.config.ts`.
-
 ### Settings
 
-The Settings inner sidebar is split into sub-groups:
+The Settings inner sidebar is split into groups, each shown only when you can open something in it:
 
-- **System.** General (site-wide settings) and API Keys.
-- **Email.** Email Providers (Resend, SMTP, etc.), Email Templates, and Email Layout.
+- **Site.** General (site-wide settings) and Email (`/admin/settings/email`), whose tabs cover the emails your site sends, how they look and how they are sent. Email used to live at `/admin/email`; links to the old addresses redirect.
+- **People.** Users (`/admin/users`) — list, create, edit, and disable user accounts — and Roles (`/admin/security/roles`) — create roles and assign permissions to them. The setup wizard seeds a `Super Admin` role that holds every permission and assigns it to the first user. The **Fields** button on the Users page opens the user fields screen (`/admin/users/fields`), where you add extra fields to the user model. Only scalar field types are accepted on user records; see the [`users` reference](/docs/configuration/nextly-config#users) in `nextly.config.ts`.
+- **Developers.** API Keys, Webhooks and Background Jobs.
+
+Plugin settings follow these groups.
 
 The (programmatic) Permissions page also lives under settings.
 
@@ -75,20 +69,20 @@ Nextly's RBAC model uses permission slugs in the form `<action>-<resource>` (e.g
 
 The admin sidebar is permission-gated. The built-in mapping is:
 
-| Sidebar item | Required permission |
-|---|---|
-| Dashboard | Always visible |
-| Collections list / entries | Per-collection read permissions |
-| Singles list / entries | Per-Single read permissions |
-| Media Library | `read-media` |
-| Users | `read-users` |
-| Roles | `read-roles` |
-| Custom Fields | `read-settings` |
-| General settings | `read-settings` |
-| API Keys | `update-api-keys` |
-| Email Providers / Templates / Layout | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
-| Plugins overview | `create-settings`, `update-settings` or `delete-settings` |
-| Builders (Collections / Singles / Field Groups Builder) | Gated by the `admin.branding.showBuilder` toggle |
+| Sidebar item                                            | Required permission                                                           |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Dashboard                                               | Always visible                                                                |
+| Collections list / entries                              | Per-collection read permissions                                               |
+| Singles list / entries                                  | Per-Single read permissions                                                   |
+| Media Library                                           | `read-media`                                                                  |
+| Users                                                   | `read-users`                                                                  |
+| Roles                                                   | `read-roles`                                                                  |
+| User fields (the Fields button on the Users page)       | `read-settings`                                                               |
+| General settings                                        | `read-settings`                                                               |
+| API Keys                                                | `update-api-keys`                                                             |
+| Email (under Settings)                                  | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
+| Plugins overview                                        | `create-settings`, `update-settings` or `delete-settings`                     |
+| Builders (Collections / Singles / Field Groups Builder) | Off in production; elsewhere off when `admin.branding.showBuilder` is `false` |
 
 Permissions for collections you define in `nextly.config.ts` follow the same slug pattern (`read-posts`, `update-posts`, etc.); they are wired up automatically when the collection is registered. Assign permissions to roles from `/admin/security/roles`.
 

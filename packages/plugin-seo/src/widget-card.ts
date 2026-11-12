@@ -1,25 +1,20 @@
 /**
- * What this plugin puts on the dashboard: the SEO issues card, and its issue
- * count as a line of the Needs attention card.
+ * What this plugin puts on the dashboard: the SEO issues card, and its count
+ * as a line of the Needs attention card.
  *
  * Both are declarations the host reads through `contributes.dashboard`, built
  * from `@nextlyhq/plugin-sdk` alone. The card is drawn by core's `bars` view,
  * so this plugin ships no admin component: nothing of its code enters the admin
  * bundle, and the card cannot break a dashboard it is placed on.
  *
- * ## Why one bar per issue
+ * ## What they count
  *
- * The breakdown is what a reader acts on: "eleven pages have no title" says
- * what to do, where "twenty-three SEO issues" does not. The Needs attention
- * line is the opposite case: one number saying there is something to look at,
- * beside the other things that need the reader.
- *
- * ## Why the issues are computed
- *
- * From the same {@link IssueChecks} the scan counts by, so a project that
- * replaced the default fields is shown only what it installed. A hand written
- * list would offer a bar for a field nobody stores, and it would sit at zero
- * forever with nothing to say why.
+ * The problem list's findings, as the person asking may read the list
+ * (`problems/card-source`): the same kept rows, read by the same reader, so a
+ * number on the dashboard is the number of problems the list shows them. One
+ * bar per kind, named as the list names its groups, since the breakdown is
+ * what a reader acts on; one Needs attention line, the whole count, since it
+ * says only that there is something to look at.
  *
  * @module widget-card
  */
@@ -27,35 +22,33 @@
 import {
   defineAttentionItem,
   defineWidget,
-  MAX_ATTENTION_ITEMS_PER_PLUGIN,
-  type AttentionCount,
   type AttentionItem,
-  type FieldConfig,
   type PluginContributions,
 } from "@nextlyhq/plugin-sdk";
 
+import type { ProblemsFor } from "./problems/card-source";
 import {
-  checksFor,
-  reportableIssues,
-  scanBudget,
-  tallyIssues,
-  type IssueChecks,
-  type IssueTally,
-  type ScanBudget,
-} from "./widget-source";
+  KIND_ORDER,
+  KIND_TEXT,
+  PROBLEMS_PAGE_HREF,
+  type Problem,
+} from "./problems/contract";
 
 /** The card's id, in the `namespace/name` shape every widget id takes. */
 export const SEO_ISSUES_WIDGET_ID = "seo/issues";
 
 /**
- * The key the Needs attention lines' shared page budget is kept under, in the
- * scope core hands this plugin's items; scopes are per owner, so it need only
- * be unique among this plugin's own keys.
+ * The key the list read for one answer is kept under, in the scope core
+ * hands this plugin's card and line; scopes are per owner and per person,
+ * so what one answer asks reads the list once.
  */
-const SCAN_BUDGET_KEY = "issue-scan-budget";
+const PROBLEMS_KEY = "problem-list";
 
-/** The scope core hands an attention item's `count`. */
-type AttentionScope = Parameters<AttentionItem["count"]>[0]["scope"];
+/** The scope core hands a card's `load` and the line's `count`. */
+type CardScope = Parameters<AttentionItem["count"]>[0]["scope"];
+
+/** What a card's `load` and the line's `count` are handed. */
+type CardInput = Parameters<AttentionItem["count"]>[0];
 
 /**
  * A widget as `contributes.dashboard.widgets` holds it, named from the SDK's
@@ -66,194 +59,138 @@ type DashboardWidget = NonNullable<
 >[number];
 
 /**
- * One bar of the card: an issue, and how many there are. A type rather than an
- * interface, so it has the implicit index signature the check of what JSON
- * carries reads a widget's data through.
+ * One bar of the card: a kind of problem, and how many there are. A type
+ * rather than an interface, so it has the implicit index signature the check
+ * of what JSON carries reads a widget's data through.
  */
 type IssueBucket = { value: string; count: number };
 
+/** What the card and its line are built from. */
+export interface SeoIssuesSetup {
+  /** The collections SEO is added to. */
+  collections: readonly string[];
+  /** The problem list as the person asking may read it. */
+  problemsFor: ProblemsFor;
+}
+
+/** Where the problem list is, as a path relative to the admin. */
+const PROBLEMS_LINK = PROBLEMS_PAGE_HREF.replace(/^\/admin\//, "");
+
 /**
- * The card's data from a tally: each kind found, in the order `issues` lists
- * them, and whether the counts are floors. The bars view draws its rows by
- * count, largest first, so that order is the answer's and not the drawn one.
- *
- * A kind counted at zero is left out, so a site with nothing to fix answers no
- * bars and the frame draws the card's empty state, rather than a chart of
- * zeros.
+ * The card's bars for `problems`: one per kind found, in the list's order,
+ * named as the list names its group. A kind with none is left out, so a site
+ * with nothing to fix answers no bars and the frame draws the card's empty
+ * state, rather than a chart of zeros.
  */
-function issueBuckets(
-  tally: IssueTally,
-  issues: readonly { label: string }[]
-): { buckets: IssueBucket[]; atLeast?: true } {
-  const buckets = issues
-    .map(({ label }) => ({
-      value: label,
-      count: tally.byIssue.get(label) ?? 0,
-    }))
-    .filter(bucket => bucket.count > 0);
-  return tally.bounded ? { buckets, atLeast: true } : { buckets };
+function issueBuckets(problems: readonly Problem[]): {
+  buckets: IssueBucket[];
+} {
+  const buckets = KIND_ORDER.map(kind => ({
+    value: KIND_TEXT[kind].title,
+    count: problems.filter(problem => problem.kind === kind).length,
+  })).filter(bucket => bucket.count > 0);
+  return { buckets };
 }
 
 /**
- * A tally for the preview page to draw: each issue the configured fields can
- * report, with a sample count, fewer for each issue further down the list.
- *
- * Built from the same `issues` the card's `load` draws, and drawn through the
- * same `issueBuckets`, so the preview offers a bar only for a check the project
- * installed.
+ * The preview page's sample: a few kinds of problem with sample counts, drawn
+ * through the same `issueBuckets` the card's `load` answers by.
  */
-function sampleTally(issues: readonly { label: string }[]): IssueTally {
-  return {
-    byIssue: new Map(
-      issues.map(({ label }, index) => [label, (issues.length - index) * 3])
-    ),
-    bounded: false,
-  };
-}
-
-/** Every issue in a tally, as one count, said as a floor when the scan was. */
-function issueCount(tally: IssueTally): AttentionCount {
-  let count = 0;
-  for (const found of tally.byIssue.values()) count += found;
-  return tally.bounded ? { count, atLeast: true } : count;
+function sampleProblems(): Problem[] {
+  const sample: Problem[] = [];
+  const counts = { noDescription: 6, longTitle: 4, shareImage: 3, imageAlt: 2 };
+  for (const [kind, count] of Object.entries(counts)) {
+    for (let at = 0; at < count; at++) {
+      sample.push({
+        kind: kind as Problem["kind"],
+        subject: { label: "Sample page" },
+        what: "",
+        action: "",
+        fix: { place: "page", tab: "seo" },
+      });
+    }
+  }
+  return sample;
 }
 
 /**
- * The card, or nothing when it would have nothing to say.
+ * The list as `input`'s person may read it, read once for every card and
+ * line of one answer.
+ */
+function listFor(
+  setup: SeoIssuesSetup,
+  input: Pick<CardInput, "user" | "services"> & { scope: CardScope }
+): Promise<readonly Problem[]> {
+  return input.scope.getOrCompute(PROBLEMS_KEY, () =>
+    setup.problemsFor({ user: input.user, services: input.services })
+  );
+}
+
+/**
+ * The card, or nothing when no collection carries SEO: a plugin registered
+ * with no collections checks no page of one.
  *
- * Withheld when no installed field can be checked, and when no collection
- * carries the fields: a plugin registered with no collections extends nothing,
- * so every bar would answer zero and the card would report a clean site for a
- * plugin that is doing nothing at all.
- *
- * 🔴 `access` names the collections it reads, so only a person who may read
- * every one of them is offered the card; anyone else is told it is not
- * available, never shown a number about content they cannot see. Its `load`
- * reads through the services it is handed, bound to that person, so the
- * number is theirs.
+ * 🔴 `access` names the collections the list reads, so only a person who may
+ * read every one of them is offered the card; anyone else is told it is not
+ * available. Its `load` reads the list as that person, so the number is
+ * theirs.
  */
 export function seoIssuesWidget(
-  collections: readonly string[],
-  installed: readonly FieldConfig[]
+  setup: SeoIssuesSetup
 ): DashboardWidget | undefined {
-  const checks = checksFor(installed);
-  const issues = reportableIssues(checks);
-  if (issues.length === 0 || collections.length === 0) return undefined;
+  if (setup.collections.length === 0) return undefined;
 
   return defineWidget({
     id: SEO_ISSUES_WIDGET_ID,
     title: "SEO issues",
-    description: "Published pages missing search and social metadata",
+    description: "What the SEO problem list finds, by kind",
     icon: "search",
     category: "SEO",
     // A third of the row by default and three rows tall, room for a bar per
-    // issue; from a quarter, where the five still read, to half the row.
+    // kind; from a quarter to half the row.
     size: {
       default: { w: 4, h: 3 },
       min: { w: 3, h: 3 },
       max: { w: 6, h: 4 },
     },
-    access: { collections: [...collections] },
-    load: async ({ services }) =>
-      issueBuckets(await tallyIssues(services, collections, checks), issues),
+    access: { collections: [...setup.collections] },
+    load: async input => issueBuckets(await listFor(setup, input)),
     view: "bars",
     skeleton: "bars",
-    empty: { message: "No SEO issues in published pages." },
+    empty: { message: "The SEO problem list has nothing to fix." },
     preview: [
       {
         name: "Some pages need work",
-        data: issueBuckets(sampleTally(issues), issues),
+        data: issueBuckets(sampleProblems()),
       },
     ],
   });
 }
 
-/**
- * The card's issue count, as lines of the Needs attention card: one per
- * configured collection, each naming that collection alone, linking to its
- * list and counting its issues; none when the card would have nothing to say
- * (see {@link seoIssuesWidget}).
- *
- * 🔴 One per collection, because an item's link is one path for every reader
- * it shows to. Core shows an item naming one collection only to a reader of
- * it, and reads its count as that reader, so every line a reader is shown
- * links to a list they can open and counts what they may read there.
- *
- * Needs attention lists up to ten SEO collections, the most items core takes
- * from one plugin: the first ten configured get a line each, and a collection
- * past them gets none. The card covers all of them, so no issue goes uncounted
- * where a reader may see it.
- */
-export function seoIssuesAttentionItems(
-  collections: readonly string[],
-  installed: readonly FieldConfig[]
-): AttentionItem[] {
-  const checks = checksFor(installed);
-  if (reportableIssues(checks).length === 0) return [];
-
-  const listed = collections.slice(0, MAX_ATTENTION_ITEMS_PER_PLUGIN);
-  const ids = attentionIds(listed);
-  return listed.map((slug, index) =>
-    issuesItem(ids[index], `SEO issues in ${slug}`, [slug], checks)
-  );
-}
+/** The Needs attention line's id. */
+export const SEO_PROBLEMS_ATTENTION_ID = "seo/problems";
 
 /**
- * One line counting the issues in `collections`, linked to the first's list.
+ * The card's count as one line of the Needs attention card: every problem
+ * the list shows the person, linked to the list; none where the card is
+ * withheld.
  *
- * 🔴 Its scan spends the budget every line shares for one answer, not one of
- * its own. Core answers all of a plugin's lines in one request, at once, and
- * hands each the same scope for that answer, so the budget kept there bounds
- * the whole digest load: ten large collections read one budget's pages
- * between them, not ten budgets', and the lines left short say floors.
+ * 🔴 It names every collection SEO is added to, so core shows it to anyone
+ * who may read one of them and lets it read those, as that person. The list
+ * it counts asks only of the types that person may read, so a reader of one
+ * collection is counted that collection's pages and the whole site's
+ * problems, as the list shows them.
  */
-function issuesItem(
-  id: string,
-  label: string,
-  collections: readonly [string, ...string[]],
-  checks: IssueChecks
-): AttentionItem {
+export function seoProblemsAttentionItem(
+  setup: SeoIssuesSetup
+): AttentionItem | undefined {
+  const [first, ...rest] = setup.collections;
+  if (first === undefined) return undefined;
   return defineAttentionItem({
-    id,
-    label,
-    collections,
-    count: async ({ services, scope }) =>
-      issueCount(
-        await tallyIssues(
-          services,
-          collections,
-          checks,
-          await sharedBudget(scope)
-        )
-      ),
-    link: `collections/${collections[0]}`,
-  });
-}
-
-/** The page budget this plugin's lines share within one answer, made by the first to ask. */
-function sharedBudget(scope: AttentionScope): Promise<ScanBudget> {
-  return scope.getOrCompute(SCAN_BUDGET_KEY, () =>
-    Promise.resolve(scanBudget())
-  );
-}
-
-/**
- * An item id for each name, `seo/issues-<name>`: lowercase letters, digits and
- * dashes, which is all an item id may hold, and each one distinct, so two
- * slugs that read alike (`blog_posts`, `blog-posts`) cannot become one id,
- * which core would refuse at startup.
- *
- * 🔴 A repeat takes the first `-2`, `-3`, ... that no id holds yet, checked
- * against every id already taken. A suffix chosen without that check can be
- * an id another slug already has (`blog-posts-3` beside `blog-posts`).
- */
-function attentionIds(names: readonly string[]): string[] {
-  const taken = new Set<string>();
-  return names.map(name => {
-    const base = `seo/issues-${name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`;
-    let id = base;
-    for (let suffix = 2; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
-    taken.add(id);
-    return id;
+    id: SEO_PROBLEMS_ATTENTION_ID,
+    label: "SEO problems",
+    collections: [first, ...rest],
+    count: async input => (await listFor(setup, input)).length,
+    link: PROBLEMS_LINK,
   });
 }

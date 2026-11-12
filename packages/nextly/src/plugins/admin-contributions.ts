@@ -394,6 +394,11 @@ interface AdminContributionBase {
    * slug; every collection's when absent.
    */
   collections?: string[];
+  /**
+   * On a Single's edit page, the Singles it is added to, by slug; every
+   * Single's when absent.
+   */
+  singles?: string[];
 }
 
 /**
@@ -424,18 +429,27 @@ export interface AdminTabContribution extends AdminContributionBase {
   kind: "tab";
   label: string;
   component: ComponentPath;
+  /**
+   * @experimental On an edit page, the document's top-level fields this tab
+   * edits. The page draws them in the tab instead of among its own content,
+   * and draws the tab only on a document that has every one of them. Their
+   * values stay in the document's form and are saved with it.
+   */
+  fields?: string[];
 }
 
 /**
  * @experimental A section of the edit page's side panel.
  *
- * On a collection entry's edit page (`collection.edit`) the admin draws it
- * where it is placed among the panel's own sections (`status`, `publishing`,
- * `language`, `details`), under `label` as its heading, framed as they are;
- * the component draws the body and receives `DocumentPanelSectionProps`. A
+ * On a collection entry's (`collection.edit`) and a Single's (`single.edit`)
+ * edit pages the admin draws it where it is placed among the panel's own
+ * sections (`status`, `publishing`, `language`, `details`), under `label` as
+ * its heading, framed as they are; the component draws the body and receives
+ * `SidebarSectionProps`: the place's `context` and `entry`, and on a
+ * collection entry's page also every field of `DocumentPanelSectionProps`. A
  * component that draws nothing for an entry leaves no section, heading
  * included, so a section may apply to some entries and not others. Not drawn
- * while an entry is being created, nor yet on a Single's edit page.
+ * while an entry is being created.
  */
 export interface AdminSidebarSectionContribution extends AdminContributionBase {
   kind: "sidebarSection";

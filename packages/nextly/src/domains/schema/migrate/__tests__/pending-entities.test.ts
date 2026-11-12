@@ -59,6 +59,7 @@ describe("readPendingEntities", () => {
     migration("0003_c.sql", ["-- Field groups: hero"]);
 
     const pending = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: dir,
       isApplied: async () => false,
       logger: silent,
@@ -75,6 +76,7 @@ describe("readPendingEntities", () => {
     migration("0001_a.sql", ["-- Collections: posts"]);
 
     const pending = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: dir,
       isApplied: async () => true,
       logger: silent,
@@ -94,6 +96,7 @@ describe("readPendingEntities", () => {
     migration("0002_named.sql", ["-- Collections: posts"]);
 
     const pending = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: dir,
       isApplied: async () => false,
       logger: silent,
@@ -110,6 +113,7 @@ describe("readPendingEntities", () => {
     migration("0001_blank.sql", []);
 
     const pending = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: dir,
       isApplied: async () => true,
       logger: silent,
@@ -136,10 +140,11 @@ describe("readPendingEntities", () => {
     });
     expect([...forMysql.collections]).toEqual(["posts"]);
 
-    // The control: without a dialect the base file is read, which names
-    // nothing — so the assertion above is about variant selection rather than
-    // about the reader finding the slug wherever it happens to be.
+    // The control: on a dialect with no variant the base file is read, which
+    // names nothing — so the assertion above is about variant selection rather
+    // than about the reader finding the slug wherever it happens to be.
     const noDialect = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: dir,
       isApplied: async () => false,
       logger: silent,
@@ -181,6 +186,7 @@ describe("readPendingEntities", () => {
     ]);
 
     const pending = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: dir,
       isApplied: async () => false,
       logger: silent,
@@ -198,6 +204,7 @@ describe("readPendingEntities", () => {
     migration("0001_scoped.sql", ["-- Collections: posts"]);
 
     const pending = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: dir,
       isApplied: async () => false,
       logger: silent,
@@ -209,6 +216,7 @@ describe("readPendingEntities", () => {
 
   it("returns nothing for a directory that does not exist", async () => {
     const pending = await readPendingEntities({
+      dialect: "postgresql",
       migrationsDir: join(dir, "absent"),
       isApplied: async () => false,
       logger: silent,

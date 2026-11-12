@@ -2,13 +2,19 @@
  * The secondary panel's layout, as one decision.
  *
  * On the wide layout the panel sits in flow between the icon rail and the main
- * column, and its track keeps the open panel's width whether or not the current
- * selection owns a panel: the main column starts where the track ends, so a
- * track that opened and closed with the selection slid the column sideways on
- * every move between the dashboard and a collection. Only a surface that
- * releases the panel (chrome suppression's `subSidebar` layer, asked for by an
- * immersive editor) takes the width back, and that is a deliberate full-screen
- * change rather than a reflow.
+ * column, and its track has width when the page's own section owns a panel, or
+ * a panel is open. A page with no panel (the dashboard, Releases, Translations)
+ * draws no empty column beside the rail.
+ *
+ * The section comes from the route, so it is known at the first paint, before
+ * the reader's permissions and content lists arrive: a collection's page holds
+ * its panel's track from its first frame and nothing shifts while the panel's
+ * links load. Moving between a page with a panel and one without moves the
+ * main column once, as part of the navigation the reader started, and each
+ * page is drawn at the geometry a direct load of it draws.
+ *
+ * A surface that releases the panel (chrome suppression's `subSidebar` layer,
+ * asked for by an immersive editor) takes the width back whatever the section.
  *
  * On the narrow layout the panel overlays inside the navigation drawer, so it
  * has width only while it is open.
@@ -26,6 +32,12 @@ export interface SubSidebarClassInput {
   isMobile: boolean | undefined;
   /** Whether the current rail selection owns a panel to show. */
   hasSubSidebar: boolean;
+  /**
+   * Whether the section the route is in owns a panel at all, whatever the
+   * reader turns out to be allowed to see in it. Decided from the route alone,
+   * so the track is held from the first paint.
+   */
+  sectionHasPanel: boolean;
   /** Whether a mounted surface has asked for the panel to go. */
   released: boolean;
 }
@@ -34,10 +46,11 @@ export interface SubSidebarClassInput {
 export function subSidebarHoldsWidth({
   isMobile,
   hasSubSidebar,
+  sectionHasPanel,
   released,
 }: SubSidebarClassInput): boolean {
   if (released) return false;
-  return isMobile ? hasSubSidebar : true;
+  return isMobile ? hasSubSidebar : sectionHasPanel || hasSubSidebar;
 }
 
 /**

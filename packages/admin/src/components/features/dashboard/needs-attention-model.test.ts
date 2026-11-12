@@ -49,6 +49,25 @@ describe("attentionRows", () => {
     ]);
   });
 
+  it("marks core's release items with the part of Needs attention they count, and no other item", () => {
+    const rows = attentionRows({
+      items: [
+        item({ id: "core/stopped-releases" }),
+        item({ id: "core/overdue-releases" }),
+        item({ id: "seo/overdue-releases" }),
+        item({ id: "toString" }),
+        item({ id: "core/overdue-releases", failed: true }),
+      ],
+    });
+    expect(rows.map(row => row.releases)).toEqual([
+      "stopped",
+      "overdue",
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
   it("draws a failed item by its label alone, with no count", () => {
     const [row] = attentionRows({ items: [item({ count: 0, failed: true })] });
     expect(row).toMatchObject({ failed: true, title: "Overdue releases" });
@@ -101,5 +120,31 @@ describe("attentionRows", () => {
     const rows = attentionRows({ items });
     expect(rows.map(row => row.id)).toEqual(["a/1", "a/2"]);
     expect(rows).toHaveLength(digestTotal(items).count);
+  });
+
+  it("draws a single item by its label alone, with how to fix it from Nextly's documentation only", () => {
+    const docs = "https://nextlyhq.com/docs/database/encrypted-connections";
+    const rows = attentionRows({
+      items: [
+        item({
+          id: "core/system-connection-unencrypted",
+          label: "Database connection is not encrypted",
+          count: 1,
+          single: true,
+          help: docs,
+        }),
+        item({ id: "a/2", help: "https://elsewhere.example/docs" }),
+        item({ id: "a/3", help: "http://nextlyhq.com/docs" }),
+        item({ id: "a/4", help: "javascript:alert(1)" }),
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      title: "Database connection is not encrypted",
+      spoken: "Database connection is not encrypted",
+      help: docs,
+    });
+    for (const row of rows.slice(1)) expect(row).not.toHaveProperty("help");
+    // Not single: the count is said.
+    expect(rows[1].title).toBe("Overdue releases · 2");
   });
 });

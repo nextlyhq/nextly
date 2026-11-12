@@ -12,12 +12,13 @@
 import {
   Activity,
   Key,
-  List,
+  Mail,
   Settings,
   ShieldAlert,
   Users,
   Webhook,
 } from "@admin/components/icons";
+import { EMAIL_HUB_PERMISSIONS } from "@admin/constants/email-hub";
 import { API_KEYS_LIST_PERMISSIONS } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
@@ -26,12 +27,14 @@ import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
  * What a destination needs before it is shown.
  *
  * Kept as data rather than a predicate so the whole table stays comparable and
- * assertable without a renderer. `capability` covers the two access answers the
- * panel receives already resolved, because they are computed from more than a
- * single permission name.
+ * assertable without a renderer. `anyOf` is for a destination several grants
+ * reach, any one of which shows it. `capability` covers the two access answers
+ * the panel receives already resolved, because they are computed from more
+ * than a single permission name.
  */
 export type SettingsNavGate =
   | { kind: "permission"; permission: string }
+  | { kind: "anyOf"; permissions: readonly string[] }
   | { kind: "capability"; capability: "apiKeys" | "webhooks" };
 
 export interface SettingsNavItem {
@@ -56,11 +59,6 @@ export interface SettingsNavItem {
    * is a prefix of its siblings'.
    */
   exact?: boolean;
-  /**
-   * Sibling routes that own a path nested under this one. Without it, a parent
-   * highlights alongside the child the reader actually navigated to.
-   */
-  excludedBy?: readonly string[];
 }
 
 export interface SettingsNavGroup {
@@ -75,18 +73,18 @@ export interface SettingsNavGroup {
 }
 
 /**
- * Configuration of the system comes before configuration of the people in it.
+ * The site itself first, then the people who use it, then the machinery that
+ * developers connect to it.
  *
- * The two groups that configure the installation sit together rather than being
- * separated by the group that administers accounts, which is also the split
- * every comparable admin makes: Strapi declares its global application settings
- * ahead of its administration-panel settings, and Directus keeps project
- * settings apart from roles and permissions.
+ * Site holds what an owner configures about the installation: its general
+ * settings and the email it sends. People holds accounts and what they may do.
+ * Developers holds the integration surfaces (API keys, webhooks) and the job
+ * queue an operator watches. Plugins' own settings follow all three.
  */
 export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
   {
-    id: "system",
-    label: "System Settings",
+    id: "site",
+    label: "Site",
     items: [
       {
         id: "general",
@@ -96,6 +94,45 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         gate: { kind: "permission", permission: READ_SETTINGS },
         exact: true,
       },
+      {
+        id: "email",
+        label: "Email",
+        icon: Mail,
+        href: ROUTES.EMAIL,
+        // Any grant that shows one of the hub's tabs, which is also what the
+        // hub's landing route admits: it moves a reader who may not see
+        // Messages on to a tab they may see.
+        gate: { kind: "anyOf", permissions: EMAIL_HUB_PERMISSIONS },
+      },
+    ],
+  },
+  {
+    id: "people",
+    label: "People",
+    pluginPlacement: "users",
+    items: [
+      {
+        id: "users",
+        label: "Users",
+        icon: Users,
+        href: ROUTES.USERS,
+        // Highlighted on the user fields screens too: they are reached from
+        // the Users page and their trail runs Settings › Users › Fields.
+        gate: { kind: "permission", permission: "read-users" },
+      },
+      {
+        id: "roles",
+        label: "Roles",
+        icon: ShieldAlert,
+        href: ROUTES.SECURITY_ROLES,
+        gate: { kind: "permission", permission: "read-roles" },
+      },
+    ],
+  },
+  {
+    id: "developers",
+    label: "Developers",
+    items: [
       {
         id: "api-keys",
         label: "API Keys",
@@ -127,35 +164,6 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
       },
     ],
   },
-  {
-    id: "users",
-    label: "User Management",
-    pluginPlacement: "users",
-    items: [
-      {
-        id: "users",
-        label: "Users",
-        icon: Users,
-        href: ROUTES.USERS,
-        gate: { kind: "permission", permission: "read-users" },
-        excludedBy: [ROUTES.USERS_FIELDS],
-      },
-      {
-        id: "user-fields",
-        label: "User Fields",
-        icon: List,
-        href: ROUTES.USERS_FIELDS,
-        gate: { kind: "permission", permission: READ_SETTINGS },
-      },
-      {
-        id: "roles",
-        label: "Roles",
-        icon: ShieldAlert,
-        href: ROUTES.SECURITY_ROLES,
-        gate: { kind: "permission", permission: "read-roles" },
-      },
-    ],
-  },
 ];
 
 export interface SettingsNavAccess {
@@ -169,12 +177,30 @@ export function isSettingsNavItemVisible(
   item: SettingsNavItem,
   access: SettingsNavAccess
 ): boolean {
-  if (item.gate.kind === "permission") {
-    return access.hasPermission(item.gate.permission);
+  switch (item.gate.kind) {
+    case "permission":
+      return access.hasPermission(item.gate.permission);
+    case "anyOf":
+      return item.gate.permissions.some(access.hasPermission);
+    case "capability":
+      return item.gate.capability === "apiKeys"
+        ? access.canAccessApiKeys
+        : access.canAccessWebhooks;
   }
-  return item.gate.capability === "apiKeys"
-    ? access.canAccessApiKeys
-    : access.canAccessWebhooks;
+}
+
+/**
+ * Whether a destination is highlighted as the place the reader is.
+ *
+ * By prefix unless the destination asks for an exact match, so the pages
+ * reached from a destination keep it highlighted: an editor under its list,
+ * and the user fields screens under Users, whose trail runs through it.
+ */
+export function isSettingsNavItemActive(
+  item: SettingsNavItem,
+  isActive: (href: string, exact?: boolean) => boolean
+): boolean {
+  return isActive(item.href, item.exact);
 }
 
 /**
@@ -227,7 +253,7 @@ const WEBHOOK_SLUGS = [
  * that bounced. A destination added here now satisfies all three by
  * construction.
  *
- * User Management is excluded deliberately. Those destinations answer to
+ * People is excluded deliberately. Those destinations answer to
  * `canViewUsers` and `canViewRoles`, which the rail consults separately, and
  * folding them in would widen every consumer of the settings capability to
  * anybody who may read users.
@@ -235,18 +261,22 @@ const WEBHOOK_SLUGS = [
 export function settingsPanelSlugs(): string[] {
   const slugs = new Set<string>();
   for (const group of SETTINGS_NAV) {
-    if (group.id === "users") continue;
+    if (group.id === "people") continue;
     for (const item of group.items) {
-      if (item.gate.kind === "permission") {
-        slugs.add(item.gate.permission);
-        continue;
-      }
-      for (const slug of item.gate.capability === "apiKeys"
-        ? API_KEY_SLUGS
-        : WEBHOOK_SLUGS) {
-        slugs.add(slug);
-      }
+      for (const slug of gateSlugs(item.gate)) slugs.add(slug);
     }
   }
   return [...slugs];
+}
+
+/** Every grant that satisfies one gate, any one of them sufficing. */
+function gateSlugs(gate: SettingsNavGate): readonly string[] {
+  switch (gate.kind) {
+    case "permission":
+      return [gate.permission];
+    case "anyOf":
+      return gate.permissions;
+    case "capability":
+      return gate.capability === "apiKeys" ? API_KEY_SLUGS : WEBHOOK_SLUGS;
+  }
 }

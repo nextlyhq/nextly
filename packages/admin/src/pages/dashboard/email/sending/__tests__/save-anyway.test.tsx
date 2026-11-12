@@ -64,7 +64,7 @@ vi.mock("@admin/hooks/useRouter", () => ({
   useRouter: () => ({
     route: { params: { id: PROVIDER_ID } },
     outside: false,
-    pathname: "/admin/email/sending/edit",
+    pathname: "/admin/settings/email/sending/edit",
   }),
 }));
 

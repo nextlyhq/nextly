@@ -4,15 +4,17 @@
 // published into admin's own bundled copy would never reach that Toaster.
 import { PortalProvider, ShortcutProvider, toast } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
+import { ADMIN_ROBOTS } from "nextly/config";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
-import { WidgetPreviewsRegistrar } from "../components/features/widgets/preview/WidgetPreviewsRegistrar";
-import { AdminPending } from "../components/guards/AdminPending";
+import { SessionStallNotice } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
+import { WaitClockContext } from "../components/shared/loading-frame/delayed-reveal";
+import { ScreenOutlineFor } from "../components/shared/loading-frame/screen-outline-for";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { AdminI18nProvider } from "../context/providers/AdminI18nProvider";
@@ -29,6 +31,7 @@ import { RoutedPathnameContext } from "../context/RoutedPathnameContext";
 import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
+import LoginPage from "../pages/(auth)/login";
 
 import "../styles/globals.css";
 import { DashboardLayout } from "./DashboardLayout";
@@ -44,7 +47,7 @@ const RestartOverlay = lazy(() =>
  * Handles theme synchronization via React state instead of manual DOM manipulation.
  */
 function AdminAppContent({ nonce }: RootLayoutProps) {
-  const { route, isHydrated, pathname } = useRouter();
+  const { route, isHydrated, pathname, routedAt } = useRouter();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
@@ -77,9 +80,11 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         suppressHydrationWarning
       >
         <ThemePaintScript nonce={nonce} />
-        {/* Painted with the server's HTML, so the first thing a visitor sees
-            says the admin is loading, while its code downloads. */}
-        <AdminPending />
+        {/* Nothing but the admin's own surface: before its code runs the
+            admin cannot know the screen, nor whether this browser has signed
+            in here, and a spinner that a fast load replaces at once is the
+            flash the frame exists to avoid. The frame or the sign-in form
+            paints as soon as the code runs, before any request answers. */}
       </div>
     );
   }
@@ -99,8 +104,16 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
   const renderComponent = () => {
     // Suspense lets React handle suspended lazy chunks gracefully; fallback
     // is null because we don't render a load indicator during transitions.
+    // A private screen's code arriving shows the screen's outline, which is
+    // also what it shows while its data loads, so the outline stays put.
     const suspended = (
-      <Suspense fallback={null}>
+      <Suspense
+        fallback={
+          routeType === "private" ? (
+            <ScreenOutlineFor pathname={pathname} />
+          ) : null
+        }
+      >
         <Component params={params} searchParams={searchParams} />
       </Suspense>
     );
@@ -126,11 +139,34 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         componentElement
       );
 
+      // One frame for both moments: while the session is checked it draws
+      // the screen's outline and no data, and once the server confirms it,
+      // the screen. The same layout element across both, so the frame is
+      // never redrawn when the answer lands.
       return (
-        <PrivateRoute>
-          <div className="flex-1 min-h-0 h-full overflow-hidden">
-            <DashboardLayout>{content}</DashboardLayout>
-          </div>
+        <PrivateRoute
+          signIn={
+            // In the admin's column, scrolling on its own where the form is
+            // taller than the window.
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <LoginPage />
+            </div>
+          }
+        >
+          {confirmed => (
+            <div className="flex-1 min-h-0 h-full overflow-hidden">
+              <DashboardLayout sessionConfirmed={confirmed}>
+                {confirmed ? (
+                  content
+                ) : (
+                  <>
+                    <ScreenOutlineFor pathname={pathname} />
+                    <SessionStallNotice />
+                  </>
+                )}
+              </DashboardLayout>
+            </div>
+          )}
         </PrivateRoute>
       );
     }
@@ -185,8 +221,6 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
           <AdminI18nProvider signedIn={routeType !== "public"}>
             {/* Keeps the plugin page route registry in sync with admin-meta (D21). */}
             <PluginPageRegistrar />
-            {/* Registers the widget preview page on the server's development answer alone. */}
-            <WidgetPreviewsRegistrar />
             {/* The settings sync applies the admin timezone to date rendering,
               and mounting it starts the ["generalSettings"] query — an
               endpoint gated by settings permissions, so on the signed-out
@@ -205,7 +239,11 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
               {/* The address the router drew this screen for, which a screen
               writing the address compares with the bar's. */}
               <RoutedPathnameContext.Provider value={pathname}>
-                {content}
+                {/* When the browser arrived at this screen: every loading
+                    sign in it is timed from here. */}
+                <WaitClockContext.Provider value={routedAt ?? null}>
+                  {content}
+                </WaitClockContext.Provider>
               </RoutedPathnameContext.Provider>
             </DocumentTitleProvider>
           </AdminI18nProvider>
@@ -213,6 +251,27 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       </PortalProvider>
     </div>
   );
+}
+
+/**
+ * Adds the admin's robots tag to the head in the browser where the page has
+ * none, for an app whose admin layout predates exporting `adminMetadata` as
+ * its metadata. That export puts the tag in the first HTML the server sends;
+ * this cannot, since the admin streams in after the head has gone, but a
+ * crawler that runs the page still reads it. One tag, never a second: a
+ * robots tag already in the head, the layout's or any other, is left as it is.
+ * Only the tag added here is taken away again.
+ */
+function AdminRobotsFallback(): null {
+  useEffect(() => {
+    if (document.head.querySelector('meta[name="robots"]')) return;
+    const tag = document.createElement("meta");
+    tag.name = "robots";
+    tag.content = ADMIN_ROBOTS;
+    document.head.append(tag);
+    return () => tag.remove();
+  }, []);
+  return null;
 }
 
 /** The admin's root layout's settings. */
@@ -227,19 +286,24 @@ export interface RootLayoutProps {
 
 const RootLayout = ({ nonce }: RootLayoutProps = {}): React.ReactElement => {
   return (
-    <ThemeProvider nonce={nonce}>
-      <RestartProvider>
-        {/*
+    <>
+      {/* The admin's robots tag, where the app's layout has not put one in
+          the head (\`AdminRobotsFallback\`). */}
+      <AdminRobotsFallback />
+      <ThemeProvider nonce={nonce}>
+        <RestartProvider>
+          {/*
           The admin's one keydown listener, and the root of the shortcut layer stack. It sits
           above everything so precedence follows the component tree: a dialog or an editor canvas
           registers deeper and therefore outranks the shell without either naming a number the
           other has to stay clear of.
         */}
-        <ShortcutProvider>
-          <AdminAppContent nonce={nonce} />
-        </ShortcutProvider>
-      </RestartProvider>
-    </ThemeProvider>
+          <ShortcutProvider>
+            <AdminAppContent nonce={nonce} />
+          </ShortcutProvider>
+        </RestartProvider>
+      </ThemeProvider>
+    </>
   );
 };
 

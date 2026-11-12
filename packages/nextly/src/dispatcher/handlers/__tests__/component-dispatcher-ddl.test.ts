@@ -17,6 +17,18 @@
  */
 import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getFieldGroupMetadataServiceFromDI: vi.fn(),
@@ -108,6 +120,8 @@ function wireRegistry() {
     // "No such slug" and "no field group owns that table", so a create reaches the DDL path.
     getComponentBySlug: vi.fn().mockResolvedValue(null),
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     isLocked: vi.fn().mockResolvedValue(false),
   };
   vi.mocked(getComponentRegistryFromDI).mockReturnValue(

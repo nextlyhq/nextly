@@ -18,6 +18,7 @@ import {
   emailHubScreen,
   railScreen,
   settingsScreen,
+  settingsSubScreen,
   singleScreen,
   type ScreenName,
 } from "../lib/navigation/screen-names";
@@ -90,6 +91,7 @@ const FieldGroupsPage = lazyRoute(
   () => import("./dashboard/field-group/index")
 );
 const DashboardPage = lazyRoute(() => import("./dashboard/index"));
+const AccountPage = lazyRoute(() => import("./dashboard/account/index"));
 const MediaLibraryPage = lazyRoute(() => import("./dashboard/media/index"));
 const PluginDetailPage = lazyRoute(() => import("./dashboard/plugins/[slug]"));
 const PluginSettingsPage = lazyRoute(
@@ -214,8 +216,9 @@ interface RouteConfigBase {
   requiredPermission?: string | string[];
   /**
    * Route belongs to the schema builder, so it is only reachable where the
-   * builder is enabled (`admin.branding.showBuilder`; off in production by
-   * default). Its links are already hidden there — this covers arriving by URL.
+   * server says the builder is on (never in production; elsewhere unless
+   * `admin.branding.showBuilder` is false). Its links are already hidden
+   * there — this covers arriving by URL.
    */
   requiresBuilder?: boolean;
 }
@@ -300,6 +303,13 @@ const BUILDER_FIELD_GROUPS_NAME = "Field Groups";
  */
 const GENERAL_SETTINGS_NAME = "General Settings";
 
+/**
+ * The user fields screens are reached from the Users page rather than from an
+ * entry of their own in the Settings panel, so they are named as a part of
+ * Users: "Fields · Users", with the Users label read from the panel.
+ */
+const USER_FIELDS_NAME = settingsSubScreen("Fields", ROUTES.USERS);
+
 export const routeConfig: Record<string, RouteConfig> = {
   ...publicRouteConfig,
 
@@ -309,6 +319,15 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: railScreen("dashboard"),
     type: "private",
     section: "dashboard",
+  },
+  // The signed-in person's own account. No permission of its own: it reads
+  // and writes only their own row, through `/me`, which every signed-in
+  // person may. Shown under settings, where "My Account" used to land.
+  [ROUTES.ACCOUNT]: {
+    component: AccountPage,
+    screenName: "My Account",
+    type: "private",
+    section: "settings",
   },
 
   // Users routes
@@ -602,60 +621,61 @@ export const routeConfig: Record<string, RouteConfig> = {
   // grant in `settingsPanelSlugs()` opens one, so the fallthrough to
   // `/admin/settings` is unreachable for anyone this guard admits.
   // ============================================================
-  // The Email hub. Each tab is guarded by the grants that read what it shows,
-  // and each editor by the grant its save needs; the server checks the same
-  // grants again on every request. The landing page admits any hub grant and
-  // moves a reader who may not see Messages on to a tab they may see.
-  // Literal paths are registered before the [id] ones they would match.
+  // The Email hub, a Settings destination. Each tab is guarded by the grants
+  // that read what it shows, and each editor by the grant its save needs; the
+  // server checks the same grants again on every request. The landing page
+  // admits any hub grant and moves a reader who may not see Messages on to a
+  // tab they may see. Literal paths are registered before the [id] ones they
+  // would match.
   // ============================================================
   [ROUTES.EMAIL]: {
     component: EmailMessagesPage,
     screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     requiredPermission: [...EMAIL_HUB_PERMISSIONS],
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.EMAIL_DESIGN]: {
     component: EmailDesignPage,
     screenName: emailHubScreen(ROUTES.EMAIL_DESIGN),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_READ_PERMISSIONS],
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.EMAIL_SENDING]: {
     component: EmailProvidersPage,
     screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.EMAIL_MESSAGES_CREATE]: {
     component: CreateEmailTemplatePage,
     screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_CREATE_PERMISSIONS],
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.EMAIL_MESSAGES_EDIT]: {
     component: EditEmailTemplatePage,
     screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
     requiredPermission: [...EMAIL_TEMPLATE_UPDATE_PERMISSIONS],
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.EMAIL_SENDING_CREATE]: {
     component: CreateEmailProviderPage,
     screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_CREATE_PERMISSIONS],
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.EMAIL_SENDING_EDIT]: {
     component: EditEmailProviderPage,
     screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_UPDATE_PERMISSIONS],
-    section: "email",
+    section: overridableBy("settings"),
   },
 
   [ROUTES.SETTINGS]: {
@@ -665,45 +685,60 @@ export const routeConfig: Record<string, RouteConfig> = {
     requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
   },
-  // Where email lived before the hub. Each redirects to its place there, and
-  // carries no permission of its own: the page it lands on is guarded, and a
-  // refusal here would leave the reader on a URL that no longer means
-  // anything.
+  // Where email lived before it settled under Settings: the hub's own
+  // addresses, and the separate Settings pages before the hub. Each redirects
+  // to its place now, and carries no permission of its own: the page it lands
+  // on is guarded, and a refusal here would leave the reader on a URL that no
+  // longer means anything.
+  [ROUTES.OLD_EMAIL_HUB]: {
+    component: EmailSettingsRedirect,
+    screenName: emailHubScreen(ROUTES.EMAIL),
+    type: "private",
+    section: overridableBy("settings"),
+  },
+  // Every address under the old hub, ids and editors included, maps to the
+  // same path under Settings; the redirect reads the rest of the path itself.
+  [ROUTES.OLD_EMAIL_HUB_PAGE]: {
+    component: EmailSettingsRedirect,
+    screenName: emailHubScreen(ROUTES.EMAIL),
+    type: "private",
+    section: overridableBy("settings"),
+  },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
     component: EmailSettingsRedirect,
     screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE]: {
     component: EmailSettingsRedirect,
     screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT]: {
     component: EmailSettingsRedirect,
     screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES]: {
     component: EmailSettingsRedirect,
     screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE]: {
     component: EmailSettingsRedirect,
     screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
     component: EmailSettingsRedirect,
     screenName: emailHubScreen(ROUTES.EMAIL),
     type: "private",
-    section: "email",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,
@@ -832,14 +867,14 @@ export const routeConfig: Record<string, RouteConfig> = {
 
   [ROUTES.USERS_FIELDS]: {
     component: UserFieldsPage,
-    screenName: settingsScreen(ROUTES.USERS_FIELDS),
+    screenName: USER_FIELDS_NAME,
     type: "private",
     requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
   [ROUTES.USERS_FIELDS_CREATE]: {
     component: CreateUserFieldPage,
-    screenName: settingsScreen(ROUTES.USERS_FIELDS),
+    screenName: USER_FIELDS_NAME,
     type: "private",
     requiredPermission: CREATE_SETTINGS,
     section: overridableBy("settings"),
@@ -848,7 +883,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   // asks `read-settings`; the form is read-only without `update-settings`.
   [ROUTES.USERS_FIELDS_EDIT]: {
     component: EditUserFieldPage,
-    screenName: settingsScreen(ROUTES.USERS_FIELDS),
+    screenName: USER_FIELDS_NAME,
     type: "private",
     requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),

@@ -43,6 +43,7 @@ import { recordRegisteredLocalization } from "./di/registered-localization";
 import { getService, isServicesRegistered } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
+import { recordBuildSchemaVersion } from "./domains/schema/build-schema-version";
 import { NextlyError } from "./errors/nextly-error";
 import { runBootTimeApplyIfDev } from "./init/boot-apply";
 import { awaitBootMigrations } from "./init/boot-migrations-gate";
@@ -52,13 +53,22 @@ import {
 } from "./init/build-service-config";
 import { driftCheckCollections, runDriftCheck } from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
-import { runPostInitTasks } from "./init/post-init-tasks";
+import {
+  provisionUserFieldsAtStart,
+  runPostInitTasks,
+} from "./init/post-init-tasks";
 import { reloadNextlyConfig } from "./init/reload-config";
 import {
   awaitBootSeeding,
   holdBootSeeding,
   seedPermissionsAndRolePresets,
 } from "./init/seed-permissions";
+import {
+  awaitStartInFlight,
+  clearStart,
+  publishStart,
+  startInFlight,
+} from "./init/start-in-flight";
 // HMR listener primitives (F1 PR 2). Lazy WS setup inside getNextly()
 // detects code-first config edits and flips a reload flag; the next
 // getNextly() call drains the flag, calls reloadNextlyConfig, and then
@@ -96,15 +106,18 @@ export type { NextlyServiceConfig } from "./di/register";
  * Instance is created once and reused.
  * Stored on globalThis to survive ESM module duplication in Next.js/Turbopack.
  *
- * __nextly_initPromise deduplicates concurrent getNextly() calls: all callers
- * that arrive while initialization is in progress receive the same Promise,
- * preventing multiple simultaneous database connections (which causes ETIMEDOUT
- * storms against cloud databases such as Neon that auto-suspend).
+ * The start in flight lives in `init/start-in-flight`, which deduplicates
+ * concurrent getNextly() calls: all callers that arrive while initialization
+ * is in progress receive the same Promise, preventing multiple simultaneous
+ * database connections (which causes ETIMEDOUT storms against cloud databases
+ * such as Neon that auto-suspend), and lets the request path and the Direct
+ * API's readers wait for that one start.
  */
 const globalForInit = globalThis as unknown as {
   __nextly_cachedInstance?: Nextly | null;
   __nextly_drizzleVersionChecked?: boolean;
-  __nextly_initPromise?: Promise<Nextly> | null;
+  /** The work the newest start left running after it resolved. */
+  __nextly_postInitTasks?: Promise<void> | null;
   /**
    * The complete options of a start that failed, until a start succeeds, so
    * `getCachedNextly` can start Nextly again with them (the database down,
@@ -129,6 +142,16 @@ const globalForInit = globalThis as unknown as {
    */
   __nextly_stopped?: boolean;
 };
+
+/**
+ * Settles once the work the newest `getNextly()` start left running after it
+ * resolved has finished: the post-initialisation tasks it does not wait for.
+ * Never rejects, since each task catches its own errors. Internal, for tests
+ * that judge everything a start does; not part of the package's exports.
+ */
+export async function startSettled(): Promise<void> {
+  await globalForInit.__nextly_postInitTasks;
+}
 
 // ============================================================
 // Instance Construction
@@ -314,6 +337,15 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
     if (mismatch) consoleLogger.warn(`[nextly] ${mismatch}`);
   }
 
+  // An instance kept from a start whose services were since shut down without
+  // it (`shutdownServices` alone, as a test harness tears down) is not a
+  // started Nextly: dropped, so this call starts again rather than handing out
+  // an instance with nothing registered behind it. A request now begins a
+  // start through this function, so it meets such an instance too.
+  if (globalForInit.__nextly_cachedInstance && !isServicesRegistered()) {
+    globalForInit.__nextly_cachedInstance = null;
+  }
+
   // Fast path: return already-initialised instance immediately.
   if (globalForInit.__nextly_cachedInstance) {
     // F1 PR 2: drain HMR reload flag before returning cached instance.
@@ -350,8 +382,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // for the same Promise instead of starting a second one.  This prevents the
   // concurrent-connection storm that causes ETIMEDOUT against cloud databases
   // (e.g. Neon) that auto-suspend between requests.
-  if (globalForInit.__nextly_initPromise) {
-    return globalForInit.__nextly_initPromise;
+  const inFlight = startInFlight();
+  if (inFlight) {
+    return inFlight;
   }
 
   // Begin first-time initialisation and store the Promise so concurrent calls
@@ -362,7 +395,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
     let releaseSeeding: (() => void) | undefined;
     try {
       // INSIDE the published promise, never before it. An `await` above this
-      // point yields after the `__nextly_initPromise` check but before the
+      // point yields after the `startInFlight()` check but before the
       // promise is stored, so two simultaneous cold calls both pass that check
       // and both call `registerServices()` — restoring the duplicate adapter
       // connections the latch exists to prevent, against databases that
@@ -406,28 +439,33 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         );
         consoleLogger.info(`  - Full-text search: ${capabilities.supportsFts}`);
 
-        // F8 PR 6: drift check. First-run static-table setup already
-        // ran inside registerServices (see first-run.ts). This path
-        // only logs a single warning when config has drifted from
-        // the live schema — it does NOT auto-apply (real apply goes
-        // through HMR or `nextly db:sync` which both have a TTY).
+        // The drift check, in a development start only. First-run
+        // static-table setup already ran inside registerServices (see
+        // first-run.ts). This path only logs a single warning when config
+        // has drifted from the live schema — it does NOT auto-apply (real
+        // apply goes through HMR or `nextly db:sync` which both have a TTY).
+        // A production start compares nothing with the live schema: it reads
+        // every collection's table to do so, and the deploy step that runs
+        // `nextly migrate` is what brings the two together there.
         // The drift check itself is failure-safe; we don't wrap a
         // try/catch around getService("config") so a real DI bug
         // crashes loudly instead of being masked.
-        const config = getService("config");
-        const driftLogger = {
-          debug: (msg: string) => consoleLogger.debug(msg),
-          info: (msg: string) => consoleLogger.info(msg),
-          warn: (msg: string) => consoleLogger.warn(msg),
-          error: (msg: string) => consoleLogger.error(msg),
-        };
-        // Reduced by the drift check's own helper, which carries every
-        // attribute that changes a table (status, declared indexes).
-        await runDriftCheck({
-          adapter,
-          collections: driftCheckCollections(config.collections ?? []),
-          logger: driftLogger,
-        });
+        if (process.env.NODE_ENV === "development") {
+          const config = getService("config");
+          const driftLogger = {
+            debug: (msg: string) => consoleLogger.debug(msg),
+            info: (msg: string) => consoleLogger.info(msg),
+            warn: (msg: string) => consoleLogger.warn(msg),
+            error: (msg: string) => consoleLogger.error(msg),
+          };
+          // Reduced by the drift check's own helper, which carries every
+          // attribute that changes a table (status, declared indexes).
+          await runDriftCheck({
+            adapter,
+            collections: driftCheckCollections(config.collections ?? []),
+            logger: driftLogger,
+          });
+        }
 
         // Boot-time auto-apply for code-first schema changes (dev only).
         // Shared with `route-handler/auth-handler.ts:ensureServicesInitialized`
@@ -456,12 +494,16 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // from instrumentation and scripts.
         await seedPermissionsAndRolePresets();
         releaseSeeding();
+        // The merged user fields too, before getNextly() resolves: a request
+        // served before they load sees the code's user fields alone.
+        await provisionUserFieldsAtStart();
 
         // The remaining post-initialisation tasks (templates, code-field sync,
         // and the like) run in the background so that getNextly() returns as
         // soon as the database is ready. Each is idempotent and catches its own
         // errors.
-        void runPostInitTasks();
+        // Kept, so `startSettled` can tell when this work has finished.
+        globalForInit.__nextly_postInitTasks = runPostInitTasks();
       } else {
         // Registered by the request-path boot, which may still be seeding: wait
         // for it, so this boot does not serve before the roles are written.
@@ -485,14 +527,14 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
       releaseSeeding?.();
       // Always clear the in-flight promise so future calls use the cached
       // instance (or retry on failure).
-      globalForInit.__nextly_initPromise = null;
+      clearStart();
     }
   })();
 
   // Publish the Promise before we await it so any concurrent getNextly()
   // calls that arrive while we are still in registerServices() will join
   // this Promise rather than starting a new one.
-  globalForInit.__nextly_initPromise = initPromise;
+  publishStart(initPromise);
   // A failed start leaves its complete options for `getCachedNextly` to
   // start again with; a start that succeeds clears them. Observed on a branch
   // of its own, so the rejection still reaches every caller awaiting
@@ -508,6 +550,29 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   );
 
   return initPromise;
+}
+
+/**
+ * Wait until Nextly has started, for a reader that needs the services: wait
+ * for a start in flight, then, when it failed and left nothing registered,
+ * start again with the failed start's options. Resolves without starting
+ * anything when nothing was started or the services are registered, so the
+ * reader's own check (`requireNextly()`, say) answers as it always has. A
+ * retry that fails rejects with its own error, which says what is wrong.
+ *
+ * The start-up hook no longer waits for its start, so a failed one leaves no
+ * caller to begin it again: without this, a worker whose readers only wait
+ * would refuse every read until something else started Nextly. Only a failed
+ * start is retried, never the app's registered start, so a reader running
+ * while `next build` prerenders opens no database it did not open before.
+ *
+ * @internal
+ */
+export async function awaitStartOrRetry(): Promise<void> {
+  await awaitStartInFlight();
+  if (isServicesRegistered()) return;
+  const failed = globalForInit.__nextly_failedStartOptions;
+  if (failed !== undefined) await getNextly(failed);
 }
 
 /**
@@ -583,8 +648,9 @@ export async function getCachedNextly(): Promise<Nextly> {
     return globalForInit.__nextly_cachedInstance;
   }
   // Concurrent first-call: another caller is mid-init; share their Promise.
-  if (globalForInit.__nextly_initPromise) {
-    return globalForInit.__nextly_initPromise;
+  const inFlight = startInFlight();
+  if (inFlight) {
+    return inFlight;
   }
 
   // Fallback path: services may have been registered via
@@ -639,9 +705,11 @@ export async function getCachedNextly(): Promise<Nextly> {
  *
  * This is the recommended way to initialize Nextly via Next.js's
  * `instrumentation.ts` hook, which runs **once** in each server worker
- * process before the first request is handled.  Calling `getNextly()`
- * here warms up the database connection and registers storage/plugins so
- * that the first page request never pays the cold-start penalty.
+ * process before the first request is handled. It begins `getNextly()` and
+ * returns without waiting for it, so the server answers requests that need no
+ * database (the admin page, static files) while Nextly starts. A request that
+ * needs the database waits for this same start rather than beginning another,
+ * and a start that fails is logged and begun again by the next such request.
  *
  * @param config - Pre-loaded Nextly configuration from `nextly.config.ts`.
  *                 Pass the default export of your config file so storage
@@ -664,24 +732,64 @@ export async function getCachedNextly(): Promise<Nextly> {
  *               it on, a cached read finding no `"use cache"` read function
  *               registered is said once, naming the file to add. With it off,
  *               or not passed, Nextly warns once at start: it supports only
- *               Cache Components on.
+ *               Cache Components on. `buildSchemaVersion` is the value
+ *               Next.js inlines there for
+ *               `process.env.NEXTLY_BUILD_SCHEMA_VERSION`, which `withNextly`
+ *               sets: the build's newest migration, which a production start
+ *               compares with the database's schema version. Not passed, the
+ *               start reads the variable from its own environment, which only
+ *               `next start` has.
  */
 export function createRegister(
   config: SanitizedNextlyConfig,
-  host: { cacheComponents?: string | boolean } = {}
+  host: RegisterHost = {}
 ): () => Promise<void> {
-  return async function register() {
-    // Kept for the cached reads: under Cache Components they go through the
-    // app's `"use cache"` function, and one that was never registered is said.
-    // Nextly cannot read this itself: Next.js inlines the setting only into
-    // code it bundles, and Nextly is a server-external package.
-    // `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
-    // `cache-components.test.ts` pins it, so a rename fails loudly there.
-    recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
-    // Before Nextly starts, so the line comes first in the server's output.
-    warnIfRegisteredWithCacheComponentsOff(host.cacheComponents);
-    await getNextly({ config });
+  // Not `async`: it awaits nothing, since it begins the start and returns.
+  // Run inside the promise, so a throw from the steps before the start still
+  // reaches Next.js as a rejection, as it did when this waited for the start;
+  // the start is published before the promise Next.js awaits settles.
+  return function register(): Promise<void> {
+    return Promise.resolve().then(() => beginStart(config, host));
   };
+}
+
+/** What the app's `instrumentation.ts` tells `createRegister` about its build. */
+export interface RegisterHost {
+  cacheComponents?: string | boolean;
+  buildSchemaVersion?: string;
+}
+
+/** What `register()` does: record the host's settings, then begin the start. */
+function beginStart(config: SanitizedNextlyConfig, host: RegisterHost): void {
+  // Kept for the cached reads: under Cache Components they go through the
+  // app's `"use cache"` function, and one that was never registered is said.
+  // Nextly cannot read this itself: Next.js inlines the setting only into
+  // code it bundles, and Nextly is a server-external package.
+  // `__NEXT_CACHE_COMPONENTS` is an undocumented Next.js internal;
+  // `cache-components.test.ts` pins it, so a rename fails loudly there.
+  recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
+  // Before Nextly starts, so the line comes first in the server's output.
+  warnIfRegisteredWithCacheComponentsOff(host.cacheComponents);
+  // Kept for the production start's schema version comparison, which reads
+  // it (`buildSchemaVersion`): Next.js inlines the value only into the app's
+  // own bundled code, as it does the Cache Components setting above.
+  recordBuildSchemaVersion(host.buildSchemaVersion);
+  // Begun here and not waited for. Next.js serves nothing until `register()`
+  // returns, so waiting would hold every request, the admin page and static
+  // files among them, for the whole start: over a minute against a database
+  // far from the server. A request that needs the database waits for this
+  // same start instead (`init/start-in-flight`), and one that needs none is
+  // answered at once. `getNextly` publishes the start before its first
+  // `await`, so a request arriving after this returns always finds it.
+  getNextly({ config }).catch((error: unknown) => {
+    // Said here, because nothing else awaits this start: left unhandled, a
+    // failed start would be an unhandled rejection, which ends the process.
+    // The start's own options are kept for a retry (`getCachedNextly`), so
+    // the next read that needs the database starts Nextly again.
+    consoleLogger.error("Nextly failed to start", {
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 /**
@@ -741,6 +849,16 @@ export async function shutdownNextly(): Promise<void> {
   // A shut-down process is not one to start again on its next read. The
   // registered start stays: it says how the app starts, not that it did.
   globalForInit.__nextly_failedStartOptions = undefined;
+  // A start still running when the process is told to stop (the start-up hook
+  // no longer waits for its start) would otherwise finish after this returns,
+  // reopening the database and plugins just shut down. Waited for, then shut
+  // down with the rest.
+  await awaitStartInFlight();
+  // Again after the wait: a start that failed while it was waited for has left
+  // its options for a retry, and a read after this shutdown must not make it.
+  // Stopped either way, so no read runs the app's registered start either.
+  globalForInit.__nextly_failedStartOptions = undefined;
+  globalForInit.__nextly_stopped = true;
   if (globalForInit.__nextly_cachedInstance) {
     await globalForInit.__nextly_cachedInstance.shutdown();
   }

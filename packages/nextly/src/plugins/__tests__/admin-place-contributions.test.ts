@@ -43,6 +43,16 @@ const SECTION = {
   collections: ["tickets"],
 };
 
+/** A tab on a collection entry's edit page. */
+const EDIT_TAB = {
+  id: "acme-support.sla-tab",
+  kind: "tab",
+  place: "collection.edit",
+  label: "SLA",
+  component: "@acme/support/admin#SlaTab",
+  collections: ["tickets"],
+};
+
 const EACH_KIND: unknown[] = [
   {
     id: "acme-support.totals",
@@ -135,6 +145,28 @@ describe("contributedAdminContributions", () => {
     ]);
   });
 
+  it("orders the dashboard's blocks around its header and grid: after the grid unless placed before it", () => {
+    const block = (id: string, over: object = {}) => ({
+      id,
+      kind: "block",
+      place: "dashboard",
+      component: "@acme/support/admin#Totals",
+      ...over,
+    });
+    const { ordered } = contributedAdminContributions([
+      plugin("@acme/support", [
+        block("acme-support.below"),
+        block("acme-support.above", { before: "widgets" }),
+      ]),
+    ]);
+    expect(ordered.get("dashboard")?.get("block")).toEqual([
+      { builtIn: "welcome" },
+      { contribution: "acme-support.above" },
+      { builtIn: "widgets" },
+      { contribution: "acme-support.below" },
+    ]);
+  });
+
   it("skips a disabled plugin's contributions", () => {
     const { contributions } = contributedAdminContributions([
       plugin("@acme/support", EACH_KIND, { enabled: false }),
@@ -151,8 +183,71 @@ describe("contributedAdminContributions", () => {
     ]);
   });
 
+  it("accepts a tab that edits fields of the document, on either edit page", () => {
+    const { contributions } = contributedAdminContributions([
+      plugin("@acme/support", [
+        { ...EDIT_TAB, fields: ["sla", "escalation"] },
+        {
+          id: "acme-support.single-sla",
+          kind: "tab",
+          place: "single.edit",
+          label: "SLA",
+          component: "@acme/support/admin#SlaTab",
+          singles: ["support-settings"],
+          fields: ["sla"],
+        },
+      ]),
+    ]);
+    expect(contributions).toMatchObject([
+      { id: "acme-support.sla-tab", fields: ["sla", "escalation"] },
+      {
+        id: "acme-support.single-sla",
+        singles: ["support-settings"],
+        fields: ["sla"],
+      },
+    ]);
+  });
+
   it.each<[string, unknown]>([
     ["a declaration that is not an object", "acme-support.sla"],
+    ["fields on a kind that is not a tab", { ...SECTION, fields: ["sla"] }],
+    [
+      "fields on a tab of a page with no document",
+      {
+        id: "acme-support.t",
+        kind: "tab",
+        place: "settings",
+        label: "T",
+        component: "x#Y",
+        fields: ["sla"],
+      },
+    ],
+    ["fields that are not a list", { ...EDIT_TAB, fields: "sla" }],
+    ["an empty list of fields", { ...EDIT_TAB, fields: [] }],
+    [
+      "fields naming the title the page draws itself",
+      { ...EDIT_TAB, fields: ["seo", "title"] },
+    ],
+    ["fields naming the slug", { ...EDIT_TAB, fields: ["slug"] }],
+    [
+      "a field that is not a top-level name",
+      { ...EDIT_TAB, fields: ["sla.hours"] },
+    ],
+    [
+      "singles where no Single is shown",
+      { ...EDIT_TAB, singles: ["support-settings"] },
+    ],
+    [
+      "a Single slug no Single can have",
+      {
+        id: "acme-support.t",
+        kind: "tab",
+        place: "single.edit",
+        label: "T",
+        component: "x#Y",
+        singles: ["Support Settings"],
+      },
+    ],
     ["an id that is not a name", { ...SECTION, id: "acme-support.SLA" }],
     ["an unknown kind", { ...SECTION, kind: "panel" }],
     ["a key its kind does not take", { ...SECTION, field: "status" }],
@@ -386,6 +481,85 @@ describe("contributedAdminContributions", () => {
     ).toMatchObject({
       reason: "admin-place-unknown",
       logContext: { place: "collection.view" },
+    });
+  });
+
+  describe("a place of a plugin named in `optionalDependsOn`", () => {
+    /** `@acme/billing`, declaring its invoice place, which takes tabs. */
+    const billing = (over: Partial<PluginDefinition> = {}): PluginDefinition =>
+      plugin("@acme/billing", [], {
+        contributes: {
+          admin: {
+            places: [{ name: "acme-billing.invoice", accepts: ["tab"] }],
+          },
+        },
+        ...over,
+      });
+    const LINES = {
+      id: "acme-support.lines",
+      kind: "tab",
+      place: "acme-billing.invoice",
+      label: "Lines",
+      component: "@acme/support/admin#Lines",
+    };
+    /** `@acme/support`, adding a tab to billing's place and one of its own. */
+    const support = (
+      over: Partial<PluginDefinition> = {
+        optionalDependsOn: { "@acme/billing": "^1" },
+      }
+    ) => plugin("@acme/support", [LINES, EDIT_TAB], over);
+
+    it("places the contribution where the owner is enabled", () => {
+      const { contributions } = contributedAdminContributions([
+        billing(),
+        support(),
+      ]);
+      expect(contributions.map(c => c.id)).toEqual([
+        "acme-support.lines",
+        "acme-support.sla-tab",
+      ]);
+    });
+
+    it.each([
+      ["absent", () => [support()]],
+      ["disabled", () => [billing({ enabled: false }), support()]],
+    ])(
+      "skips the contribution, and starts, where the owner is %s",
+      (_case, plugins) => {
+        const { contributions, ordered } =
+          contributedAdminContributions(plugins());
+        expect(contributions.map(c => c.id)).toEqual(["acme-support.sla-tab"]);
+        expect(ordered.has("acme-billing.invoice")).toBe(false);
+      }
+    );
+
+    it("still refuses a place of an absent plugin the contributor does not name", () => {
+      expect(
+        refusalOf(() =>
+          contributedAdminContributions([support({ optionalDependsOn: {} })])
+        )
+      ).toMatchObject({
+        reason: "admin-place-unknown",
+        logContext: { place: "acme-billing.invoice" },
+      });
+    });
+
+    it("still refuses a place the enabled owner does not declare", () => {
+      expect(
+        refusalOf(() =>
+          contributedAdminContributions([
+            billing(),
+            plugin(
+              "@acme/support",
+              [{ ...LINES, place: "acme-billing.receipt" }],
+              { optionalDependsOn: { "@acme/billing": "^1" } }
+            ),
+          ])
+        )
+      ).toMatchObject({
+        reason: "admin-place-unknown",
+        logContext: { place: "acme-billing.receipt" },
+      });
     });
   });
 
@@ -770,6 +944,21 @@ describe("contributedAdminContributions", () => {
               )
             )
           ),
+        ]),
+    ],
+    [
+      "contribution-replace-not-allowed",
+      () =>
+        contributedAdminContributions([
+          plugin("@acme/support", [
+            {
+              id: "acme-support.grid",
+              kind: "block",
+              place: "dashboard",
+              component: "@acme/support/admin#Grid",
+              replaces: "widgets",
+            },
+          ]),
         ]),
     ],
     [

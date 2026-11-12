@@ -21,6 +21,7 @@ import {
   SettingsSection,
 } from "@admin/components/features/settings";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { PlaceTabs, TargetSlot } from "@admin/components/shared/target-slot";
 import { toast } from "@admin/components/ui";
 import { Form, FormField } from "@admin/components/ui/form";
 import {
@@ -28,6 +29,8 @@ import {
   useUpdateGeneralSettings,
 } from "@admin/hooks/queries/useGeneralSettings";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 import type {
   GeneralSettingsRecord,
@@ -242,6 +245,12 @@ const SettingsGeneralPage: React.FC = () => {
   // refuses their save, so none is offered.
   const { hasPermission } = useCurrentUserPermissions();
   const mayUpdate = settingsChangesAllowed(hasPermission).update;
+  const { user } = useDashboardUser();
+  const t = useT();
+  // What a plugin's block or tab on this page is told: who is looking. Held
+  // while the viewer is not known yet, so no contribution is handed an id
+  // that is not theirs.
+  const placeContext = user ? { userId: user.id } : null;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -273,64 +282,80 @@ const SettingsGeneralPage: React.FC = () => {
   }
 
   return (
-    <PageContainer width="form">
-      <Form {...form}>
-        <form
-          onSubmit={e => {
-            void form.handleSubmit(onSubmit)(e);
+    <PageContainer type="form">
+      {/* The page's own form is the `content` built-in: plugins' blocks
+          draw around it and their tabs beside it, in the order sent. */}
+      <PlaceTabs
+        place="settings"
+        context={placeContext}
+        contentLabel={t("nextly.places.settings.content")}
+      >
+        <TargetSlot
+          place="settings"
+          context={placeContext}
+          builtIns={{
+            content: (
+              <Form {...form}>
+                <form
+                  onSubmit={e => {
+                    void form.handleSubmit(onSubmit)(e);
+                  }}
+                >
+                  <SettingsLayout
+                    title="General Settings"
+                    description="Manage your application and configuration"
+                  >
+                    {isLoading ? (
+                      <GeneralSettingsSkeleton />
+                    ) : (
+                      // ── Section: Locale & Formatting ──
+                      <SettingsSection label="Locale & Formatting">
+                        <SettingSelect
+                          control={form.control}
+                          name="timezone"
+                          label="Timezone"
+                          description="Time zone used across the admin and email notifications."
+                          placeholder="Select a timezone"
+                          options={TIMEZONE_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
+
+                        <SettingSelect
+                          control={form.control}
+                          name="dateFormat"
+                          label="Date Format"
+                          description="How dates appear in lists and detail pages."
+                          placeholder="Select a date format"
+                          options={DATE_FORMAT_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
+
+                        <SettingSelect
+                          control={form.control}
+                          name="timeFormat"
+                          label="Time Format"
+                          description="12-hour vs 24-hour clock."
+                          placeholder="Select a time format"
+                          options={TIME_FORMAT_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
+                      </SettingsSection>
+                    )}
+
+                    <FormActions dirty={form.formState.isDirty}>
+                      {mayUpdate && (
+                        <Button type="submit" disabled={isPending || isLoading}>
+                          {isPending ? "Saving…" : "Save Changes"}
+                        </Button>
+                      )}
+                    </FormActions>
+                  </SettingsLayout>
+                </form>
+              </Form>
+            ),
           }}
-        >
-          <SettingsLayout
-            title="General Settings"
-            description="Manage your application and configuration"
-          >
-            {isLoading ? (
-              <GeneralSettingsSkeleton />
-            ) : (
-              // ── Section: Locale & Formatting ──
-              <SettingsSection label="Locale & Formatting">
-                <SettingSelect
-                  control={form.control}
-                  name="timezone"
-                  label="Timezone"
-                  description="Time zone used across the admin and email notifications."
-                  placeholder="Select a timezone"
-                  options={TIMEZONE_OPTIONS}
-                  disabled={isLoading || !mayUpdate}
-                />
-
-                <SettingSelect
-                  control={form.control}
-                  name="dateFormat"
-                  label="Date Format"
-                  description="How dates appear in lists and detail pages."
-                  placeholder="Select a date format"
-                  options={DATE_FORMAT_OPTIONS}
-                  disabled={isLoading || !mayUpdate}
-                />
-
-                <SettingSelect
-                  control={form.control}
-                  name="timeFormat"
-                  label="Time Format"
-                  description="12-hour vs 24-hour clock."
-                  placeholder="Select a time format"
-                  options={TIME_FORMAT_OPTIONS}
-                  disabled={isLoading || !mayUpdate}
-                />
-              </SettingsSection>
-            )}
-
-            <FormActions dirty={form.formState.isDirty}>
-              {mayUpdate && (
-                <Button type="submit" disabled={isPending || isLoading}>
-                  {isPending ? "Saving…" : "Save Changes"}
-                </Button>
-              )}
-            </FormActions>
-          </SettingsLayout>
-        </form>
-      </Form>
+        />
+      </PlaceTabs>
     </PageContainer>
   );
 };

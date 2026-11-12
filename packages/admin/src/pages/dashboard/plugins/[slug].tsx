@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge } from "@nextlyhq/ui";
+import { Badge, PageHeader } from "@nextlyhq/ui";
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense } from "react";
 
@@ -247,9 +247,10 @@ function PluginIdentityHeader({
   title: string;
 }) {
   return (
-    <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-      <div className="flex items-start gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-primary/5">
+    <PageHeader
+      title={title}
+      media={
+        <div className="flex h-12 w-12 items-center justify-center rounded-md bg-primary/5">
           {/* Package, not Database: this page presents a plugin as the
           package you installed rather than as its collections. */}
           <PluginIcon
@@ -258,39 +259,35 @@ function PluginIdentityHeader({
             className="h-6 w-6 text-primary"
           />
         </div>
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-            {plugin.version && (
-              <span className="inline-flex items-center rounded-sm bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
-                v{plugin.version}
-              </span>
-            )}
-            <PluginStatusPill enabled={plugin.enabled !== false} />
-            {plugin.category && (
-              <Badge
-                variant="default"
-                className="text-xs font-normal text-muted-foreground"
-              >
-                {categoryLabel(plugin.category)}
-              </Badge>
-            )}
-          </div>
-          {plugin.description && (
-            // Muted foreground so this secondary description meets contrast (a faint primary alpha did not).
-            <p className="text-sm font-normal text-muted-foreground">
-              {plugin.description}
-            </p>
+      }
+      meta={
+        <>
+          {plugin.version && (
+            <span className="inline-flex items-center rounded-sm bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
+              v{plugin.version}
+            </span>
           )}
-          {plugin.author && (
-            <p className="text-xs text-muted-foreground">by {plugin.author}</p>
+          <PluginStatusPill enabled={plugin.enabled !== false} />
+          {plugin.category && (
+            <Badge
+              variant="default"
+              className="text-xs font-normal text-muted-foreground"
+            >
+              {categoryLabel(plugin.category)}
+            </Badge>
           )}
-        </div>
-      </div>
-      <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
-        <PluginSettingsLink plugin={plugin} />
-      </div>
-    </div>
+        </>
+      }
+      description={
+        plugin.description || plugin.author ? (
+          <>
+            {plugin.description && <p>{plugin.description}</p>}
+            {plugin.author && <p className="text-xs">by {plugin.author}</p>}
+          </>
+        ) : undefined
+      }
+      actions={<PluginSettingsLink plugin={plugin} />}
+    />
   );
 }
 

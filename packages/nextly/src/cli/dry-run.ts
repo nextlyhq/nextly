@@ -8,7 +8,7 @@
  * nothing), and exits 0. Where the real run would refuse, it says so and
  * still exits 0: the refusal is part of what the real run would do.
  */
-import { relative, sep } from "node:path";
+import * as path from "node:path";
 
 import { Option, type Command } from "commander";
 
@@ -44,26 +44,6 @@ export interface DryRunChange {
   target: string;
 }
 
-/** How a system spells paths: its `relative` and its separator. */
-interface PathSyntax {
-  relative: typeof relative;
-  sep: string;
-}
-
-/**
- * A path as a dry run names it: relative to the project, "/"-separated, as
- * the developer would type it there, so a dry run reads the same on every
- * system. Windows separates with `\`, which would otherwise reach the line.
- * `syntax` is the system's own unless given another.
- */
-export function shownPath(
-  cwd: string,
-  path: string,
-  syntax: PathSyntax = { relative, sep }
-): string {
-  return syntax.relative(cwd, path).split(syntax.sep).join("/");
-}
-
 /** Everything a dry run reports. */
 export interface DryRunPlan {
   /** The changes, in the order the real run would make them. */
@@ -96,4 +76,18 @@ export function reportDryRun(
   plan: DryRunPlan
 ): void {
   for (const line of dryRunLines(plan)) logger.info(line);
+}
+
+/**
+ * A file as a dry run names it: its path from the project folder `cwd`, with
+ * `/` between its parts on every operating system, so the plan reads the same
+ * on Windows as anywhere else. `syntax` is the path module that reads both
+ * paths, the running system's unless a test names one.
+ */
+export function projectPath(
+  cwd: string,
+  file: string,
+  syntax: Pick<typeof path, "relative" | "sep"> = path
+): string {
+  return syntax.relative(cwd, file).split(syntax.sep).join("/");
 }

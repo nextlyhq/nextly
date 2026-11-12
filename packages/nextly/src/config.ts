@@ -254,6 +254,13 @@ export type { PluginRouteMount } from "./plugins/routes/route-types";
 // route the admin cannot call, and nothing fails. A pure string union, so this
 // costs the browser nothing.
 export type { RouteMethod } from "./plugins/routes/route-types";
+// The most rows one request to a declared action's route may name, published
+// so the admin holds a bulk action back on a larger selection instead of
+// sending a request the route refuses. One number, read by both sides: a copy
+// in the admin would stop matching the day the route's limit changes. A plain
+// constant from a module with no runtime imports, so it costs the browser
+// nothing.
+export { MAX_ACTION_ROWS } from "./plugins/routes/route-types";
 
 // And what may travel as one of those routes' bodies. Published here for the
 // same reason: the admin's client serialises with `JSON.stringify`, so a value
@@ -364,7 +371,7 @@ export {
   effectiveWidgetSettings,
   // How many fields a Fields setting may choose: the settings sheet stops at it.
   MAX_CHOSEN_FIELDS,
-  // How many settings a widget may mark quick: the card's quick popover holds that many.
+  // How many settings a widget may mark quick: the card's header draws the first it can.
   MAX_QUICK_SETTINGS,
   naturalGroupBy,
   resolveWidgetSettings,
@@ -376,6 +383,16 @@ export {
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
 // again by the admin before it draws the link, so both read this one rule.
 export { isAdminRelativePath } from "./domains/widgets/admin-path";
+// The admin's robots directives, for its layout's metadata and the admin's own
+// fallback tag.
+export {
+  ADMIN_BRANDING_ELEMENT_ID,
+  ADMIN_ROBOTS,
+  adminBrandingJson,
+  adminMetadata,
+  adminMetadataFor,
+  type AdminPageBranding,
+} from "./domains/admin-metadata";
 // The settings the sheet draws beyond field configs (a collection, and a
 // filter, sort or grouping over it), and the union every rule reads, so the
 // admin's controls and reset are typed by core's vocabulary, not a copy of it.
@@ -459,6 +476,7 @@ export {
   LIST_DENSITIES,
   type ListDensity,
   effectiveWidgetLimit,
+  listEntries,
 } from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this

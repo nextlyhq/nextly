@@ -22,8 +22,11 @@ import {
 } from "../components/layout/ChromeSuppression";
 import { DashboardHeader } from "../components/layout/header";
 import { HeaderTrailProvider } from "../components/layout/header/HeaderTrail";
+import { TopBarPlacesProvider } from "../components/layout/header/TopBarPlaces";
+import { PanelFoldProvider } from "../components/layout/PanelFold";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
+import { DualSidebarOutline } from "../components/layout/sidebar/DualSidebarOutline";
 import {
   SidePanelReservationProvider,
   useReservedInlineEnd,
@@ -32,10 +35,21 @@ import {
   MAIN_CONTENT_ID,
   SkipToContent,
 } from "../components/layout/SkipToContent";
+import {
+  ScreenWaitProvider,
+  ScreenWaitSigns,
+} from "../components/shared/loading-frame/screen-wait";
 import { MediaProvider } from "../context/providers/MediaProvider";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
+  /**
+   * Whether the server has confirmed the session. Until it has, the frame is
+   * drawn with an outline of the sidebar, which reads none of the reader's
+   * data, and `children` is the screen's outline rather than the screen.
+   * Defaults to confirmed, for a caller that mounts the layout only after.
+   */
+  sessionConfirmed?: boolean;
 }
 
 /**
@@ -47,7 +61,8 @@ interface DashboardLayoutProps {
  * ## Responsive Behavior
  *
  * - **Desktop (≥ 1024px)**: Dual sidebar layout
- * - **Mobile (< 768px)**: Mobile header with a Sheet-based drawer
+ * - **Below 1024px**: the rail and its panel open in a drawer, from the menu
+ *   button at the start of the top bar
  */
 /**
  * The provider sits ABOVE the chrome and above `children`, because the surfaces
@@ -56,21 +71,39 @@ interface DashboardLayoutProps {
  */
 export function DashboardLayout({
   children,
+  sessionConfirmed = true,
 }: DashboardLayoutProps): React.JSX.Element {
   return (
     <ChromeSuppressionProvider>
-      <SidePanelReservationProvider>
-        {/* Above the chrome for the same reason: the top bar draws the trail
+      {/* Inside chrome suppression: a page folding its panel asks for the
+          panel to go through it, and the bar reads the fold to draw its
+          toggle. */}
+      <PanelFoldProvider>
+        <SidePanelReservationProvider>
+          {/* Above the chrome for the same reason: the top bar draws the trail
             a page below it registers. */}
-        <HeaderTrailProvider>
-          <DashboardChrome>{children}</DashboardChrome>
-        </HeaderTrailProvider>
-      </SidePanelReservationProvider>
+          <HeaderTrailProvider>
+            {/* And the bar draws what a page puts in its places. */}
+            <TopBarPlacesProvider>
+              {/* Around the chrome and the screen: the screen reports its
+                  wait, and the chrome draws the signs of it. */}
+              <ScreenWaitProvider>
+                <DashboardChrome sessionConfirmed={sessionConfirmed}>
+                  {children}
+                </DashboardChrome>
+              </ScreenWaitProvider>
+            </TopBarPlacesProvider>
+          </HeaderTrailProvider>
+        </SidePanelReservationProvider>
+      </PanelFoldProvider>
     </ChromeSuppressionProvider>
   );
 }
 
-function DashboardChrome({ children }: DashboardLayoutProps) {
+function DashboardChrome({
+  children,
+  sessionConfirmed = true,
+}: DashboardLayoutProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const hidden = useSuppressedChrome();
   /*
@@ -104,38 +137,46 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
           {/* First in the tab order, ahead of the menu, rail and header, on
               every page this layout draws, the editor included. */}
           <SkipToContent />
-          {/* Mobile Header */}
-          <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
-            <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="-ml-2 h-9 w-9 text-foreground"
-                onClick={() => setIsMobileMenuOpen(true)}
-              >
-                <Menu className="h-5 w-5" />
-                <span className="sr-only">Toggle mobile menu</span>
-              </Button>
-              <div className="flex items-center gap-2">
-                <ThemeAwareLogo
-                  alt={branding?.logoText ?? "Logo"}
-                  className="h-5 w-auto object-contain"
-                />
-                {!branding?.logoUrl &&
-                  !branding?.logoUrlLight &&
-                  !branding?.logoUrlDark && (
-                    <span className="text-sm font-semibold tracking-tight text-foreground">
-                      {branding?.logoText ?? "Nextly"}
-                    </span>
-                  )}
+          {/* The phone header: the logo and the menu button, drawn only while
+              a surface has taken the top bar away (a document view such as
+              the builder). Otherwise the menu button is in the top bar, so a
+              phone gets the one bar every other width gets. */}
+          {hidden.has("header") && (
+            <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
+              <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-ml-2 h-9 w-9 text-foreground"
+                  onClick={() => setIsMobileMenuOpen(true)}
+                >
+                  <Menu className="h-5 w-5" />
+                  <span className="sr-only">Open the navigation menu</span>
+                </Button>
+                <div className="flex items-center gap-2">
+                  {/* The one boxed mark the rail and sign-in show, or the
+                      configured logo fitted to the same square. */}
+                  <ThemeAwareLogo
+                    boxed
+                    alt={branding?.logoText ?? "Logo"}
+                    className="size-7 object-contain"
+                  />
+                  {!branding?.logoUrl &&
+                    !branding?.logoUrlLight &&
+                    !branding?.logoUrlDark && (
+                      <span className="text-sm font-semibold tracking-tight text-foreground">
+                        {branding?.logoText ?? "Nextly"}
+                      </span>
+                    )}
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {!hideSidebarColumn && (
               <div className="hidden lg:flex h-full overflow-hidden shrink-0">
-                <DualSidebar />
+                {sessionConfirmed ? <DualSidebar /> : <DualSidebarOutline />}
               </div>
             )}
 
@@ -149,7 +190,11 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
                 <SheetDescription className="sr-only">
                   Primary admin navigation
                 </SheetDescription>
-                <DualSidebar isMobile />
+                {sessionConfirmed ? (
+                  <DualSidebar isMobile />
+                ) : (
+                  <DualSidebarOutline isMobile />
+                )}
               </SheetContent>
             </Sheet>
 
@@ -158,7 +203,13 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
               className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden relative transition-[padding] duration-150"
               style={{ paddingInlineEnd: reservedInlineEnd }}
             >
-              {!hidden.has("header") && <DashboardHeader />}
+              {!hidden.has("header") && (
+                <DashboardHeader onOpenMenu={() => setIsMobileMenuOpen(true)} />
+              )}
+              {/* The line under the bar and the slow-start message, while
+                  the screen waits; laid over the column, so they move
+                  nothing. */}
+              <ScreenWaitSigns />
               {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}
               {/* The skip link's target: an id to name, and tabIndex -1 so

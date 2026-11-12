@@ -2,25 +2,42 @@
  * The Needs your attention card's rows: each item's severity by shape, its
  * label and count, its reason and one Review; a failed item's "Not all
  * checked" with a Retry that asks the card again; no control that dismisses
- * an item; and the fold that grows the card for the items its height does not
- * hold.
+ * an item; and every item drawn, however many there are, with nothing folded
+ * behind "Show N more".
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import {
-  CardFitContext,
-  oneItemBodyPx,
-} from "@admin/components/features/widgets/frame/fit";
-import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
-import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidden-while-empty";
-import { WidgetCard } from "@admin/components/features/widgets/WidgetCard";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
+import type { ReleaseListResponse } from "@admin/services/releaseApi";
+
 import { NeedsAttention } from "./NeedsAttention";
+
+// The releases a release row names, read from the Releases list's own Needs
+// attention tab; answered with none unless a test says otherwise.
+const releaseReads = vi.hoisted(() => ({ fetchReleases: vi.fn() }));
+vi.mock("@admin/services/releaseApi", async () => {
+  const actual = await vi.importActual<
+    typeof import("@admin/services/releaseApi")
+  >("@admin/services/releaseApi");
+  return { ...actual, fetchReleases: releaseReads.fetchReleases };
+});
+
+function releasesAnswer(
+  items: readonly { id: string; title: string; state: string }[]
+): ReleaseListResponse {
+  return {
+    items,
+    meta: { total: items.length, page: 1, limit: 3 },
+  } as unknown as ReleaseListResponse;
+}
+
+beforeEach(() => {
+  releaseReads.fetchReleases.mockReset();
+  releaseReads.fetchReleases.mockResolvedValue(releasesAnswer([]));
+});
 
 const STOPPED = {
   id: "core/stopped-releases",
@@ -84,47 +101,6 @@ function draw(
   );
 }
 
-/**
- * Lays the card out as the frame draws it at `h` grid rows: a body of `cardBodyHeightPx(h)`, rows
- * `rowPx` high from its top (the list's own height unless a case wraps them taller), and the
- * fold's control wherever it is drawn. `drawnBodyPx` draws the body shorter than its rows give
- * it, as a card sized to its content stands while it loads.
- */
-function layOut(
-  h: number,
-  rowPx = LIST_ROW_HEIGHT_PX.default,
-  drawnBodyPx = cardBodyHeightPx(h)
-): void {
-  const rect = (top: number, bottom: number) =>
-    ({
-      top,
-      bottom,
-      left: 0,
-      right: 600,
-      width: 600,
-      height: bottom - top,
-    }) as DOMRect;
-  const row = rowPx;
-  const body = drawnBodyPx;
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: Element) {
-      if (this.getAttribute("data-testid") === "widget-card-body")
-        return rect(0, body);
-      // What the card's body draws: its rows, one under another from the body's top.
-      if (this.getAttribute("data-testid") === "needs-attention")
-        return rect(0, row * this.querySelectorAll("[data-fold-row]").length);
-      if (this.hasAttribute("data-fold-row")) {
-        const index = [
-          ...(this.parentElement?.querySelectorAll("[data-fold-row]") ?? []),
-        ].indexOf(this);
-        return rect(row * index, row * (index + 1));
-      }
-      if (this.hasAttribute("aria-controls")) return rect(body + 12, body + 40);
-      return rect(0, 0);
-    }
-  );
-}
-
 const plugin = (n: number) => ({
   ...SEO,
   id: `seo/item-${n}`,
@@ -134,52 +110,60 @@ const plugin = (n: number) => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-/**
- * What the card drawn four rows high (its stored body holds four default rows) last asked of its
- * cell, with `drawn` rows on show when the case says how many it expects.
- */
-function askedOfCell(items: readonly object[], drawn?: number): unknown {
-  const report = vi.fn();
-  const { unmount } = render(
-    <CardFitContext.Provider value={report}>
-      <CardHeightContext.Provider value={4}>
-        {inFrame(
-          <NeedsAttention
-            widgetId="core/needs-attention"
-            placementId="attention"
-            settings={{}}
-            size={{ w: 8, h: 4, tier: "medium" }}
-            data={{ items }}
-            refreshing={false}
-            retry={() => undefined}
-          />,
-          "Needs your attention"
-        )}
-      </CardHeightContext.Provider>
-    </CardFitContext.Provider>
-  );
-  if (drawn !== undefined) {
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(drawn);
-  }
-  const last = report.mock.calls.at(-1)?.[0];
-  unmount();
-  // Withdrawn as the body leaves, so a card whose state replaces it takes its rows again.
-  expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
-  return last;
-}
+describe("NeedsAttention's release rows", () => {
+  it("names each stopped release under its row, linked to its page, from the stopped part of Needs attention", async () => {
+    releaseReads.fetchReleases.mockImplementation(
+      (params: { reason?: string }) =>
+        Promise.resolve(
+          params.reason === "stopped"
+            ? releasesAnswer([
+                { id: "r-1", title: "Autumn launch", state: "blocked" },
+              ])
+            : releasesAnswer([])
+        )
+    );
+    draw([STOPPED, SEO]);
+    const [stopped] = screen.getAllByTestId("needs-attention-item");
 
-describe("NeedsAttention", () => {
-  it("keeps every row that fits its stored rows while it is drawn at the loading height", () => {
-    // Drawn one row high, as the loading card stood, with two items its four stored rows hold:
-    // judged against its drawn body the second row would fold and the card would ask for its
-    // full rows for a frame, then unfold once drawn there. Judged against its stored rows, both
-    // show and it asks for their height at once. Fails on a fold measured against the drawn body.
-    layOut(4, LIST_ROW_HEIGHT_PX.default, oneItemBodyPx("default"));
-    expect(askedOfCell([STOPPED, OVERDUE], 2)).toBe(
-      LIST_ROW_HEIGHT_PX.default * 2
+    const named = await within(stopped).findByRole("link", {
+      name: "Autumn launch",
+    });
+    expect(named.getAttribute("href")).toMatch(/\/releases\/r-1$/);
+    expect(releaseReads.fetchReleases).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "stopped" })
     );
   });
 
+  it("names each overdue release under its row", async () => {
+    releaseReads.fetchReleases.mockImplementation(
+      (params: { reason?: string }) =>
+        Promise.resolve(
+          params.reason === "overdue"
+            ? releasesAnswer([
+                { id: "r-2", title: "Spring sale", state: "scheduled" },
+                { id: "r-3", title: "Price change", state: "scheduled" },
+              ])
+            : releasesAnswer([])
+        )
+    );
+    draw([OVERDUE]);
+    const [overdue] = screen.getAllByTestId("needs-attention-item");
+
+    expect(
+      await within(overdue).findByRole("link", { name: "Spring sale" })
+    ).toBeInTheDocument();
+    expect(
+      within(overdue).getByRole("link", { name: "Price change" })
+    ).toBeInTheDocument();
+  });
+
+  it("reads no releases for a row that is not about releases", () => {
+    draw([SEO]);
+    expect(releaseReads.fetchReleases).not.toHaveBeenCalled();
+  });
+});
+
+describe("NeedsAttention", () => {
   it("draws each item with its severity, label and count, reason and one Review, in the answer's order", () => {
     draw([OVERDUE, SEO]);
     const [overdue, seo] = screen.getAllByTestId("needs-attention-item");
@@ -199,6 +183,14 @@ describe("NeedsAttention", () => {
     expect(review).toHaveTextContent("Review");
     expect(review.getAttribute("href")).toMatch(
       /\/releases\?tab=attention&reason=overdue$/
+    );
+
+    // Each mark in its status's text colour, never a tinted shade.
+    expect(within(overdue).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-danger-text"
+    );
+    expect(within(seo).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-warning-text"
     );
 
     // A plugin's warning: a triangle rather than a circle, its floor capped at "99+", and no
@@ -278,50 +270,44 @@ describe("NeedsAttention", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it("folds the items its height does not hold behind Show N more, which shows them, moves focus and says so", () => {
-    layOut(3);
-    draw([STOPPED, OVERDUE, plugin(3), plugin(2)]);
-
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
-    const control = screen.getByRole("button", { name: "Show 2 more" });
-    expect(control).toHaveAttribute("aria-expanded", "false");
-
-    fireEvent.click(control);
-    const rows = screen.getAllByTestId("needs-attention-item");
-    expect(rows).toHaveLength(4);
-    expect(rows[2]).toHaveFocus();
-    expect(screen.getByText("2 more items shown")).toBeInTheDocument();
-    expect(control).toHaveAccessibleName("Show less");
-
-    fireEvent.click(control);
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
-    expect(screen.queryByText("2 more items shown")).toBeNull();
-  });
-
-  it("fills its body with whole rows at 3 and 4 rows tall, its control in the footer's room", () => {
-    const items = [STOPPED, OVERDUE, plugin(5), plugin(4), plugin(3)];
-    const fits = (h: number) =>
-      Math.floor(cardBodyHeightPx(h) / LIST_ROW_HEIGHT_PX.default);
-    for (const h of [3, 4]) {
-      layOut(h);
-      const { unmount } = draw(items);
-      expect(
-        screen.getAllByTestId("needs-attention-item"),
-        `h=${h}`
-      ).toHaveLength(fits(h));
-      // In the footer, whose room the frame keeps for every card: none of the body's room goes
-      // to it, so the rows have all of it.
-      const control = screen.getByRole("button", {
-        name: `Show ${items.length - fits(h)} more`,
-      });
-      expect(screen.getByTestId("widget-card-footer")).toContainElement(
-        control
-      );
-      unmount();
-      vi.restoreAllMocks();
-    }
-    // The frame's geometry: 2 rows at 3 tall, 4 at 4.
-    expect([fits(3), fits(4)]).toEqual([2, 4]);
+  it("draws every one of seven items, with no control to show more or fewer", () => {
+    // Laid out as a body two 52 px rows tall, so a card that folded what its body does not hold
+    // would draw fewer than seven and a "Show N more".
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        const height =
+          this.getAttribute("data-testid") === "widget-card-body" ? 104 : 52;
+        return DOMRect.fromRect({ width: 600, height });
+      }
+    );
+    const items = [
+      STOPPED,
+      OVERDUE,
+      plugin(5),
+      plugin(4),
+      plugin(3),
+      plugin(2),
+      plugin(1),
+    ];
+    draw(items);
+    expect(
+      screen
+        .getAllByTestId("needs-attention-item")
+        .map(row => within(row).getByTestId("entity-row-title").textContent)
+    ).toEqual([
+      "Releases that stopped · 1",
+      "Overdue releases · 2",
+      "Item 5 · 5+",
+      "Item 4 · 4+",
+      "Item 3 · 3+",
+      "Item 2 · 2+",
+      "Item 1 · 1+",
+    ]);
+    expect(screen.queryByRole("button", { name: /^Show/ })).toBeNull();
+    expect(screen.queryByText(/more items? shown/)).toBeNull();
+    expect(
+      within(screen.getByTestId("widget-card-footer")).queryByRole("button")
+    ).toBeNull();
   });
 
   it("carries how many items there are beside its title, read with it", () => {
@@ -344,95 +330,53 @@ describe("NeedsAttention", () => {
     expect(screen.queryByText(/need your attention/)).toBeNull();
   });
 
-  it("asks its cell to fit it to its items while they leave a row of its height empty, and not once they fill it", () => {
-    // One item: a height to fit to (jsdom measures it as 0), not "its own rows".
-    expect(askedOfCell([OVERDUE])).toEqual(expect.any(Number));
-    expect(askedOfCell([1, 2, 3].map(plugin))).toEqual(expect.any(Number));
-    // Four fill the body: the card keeps its stored height.
-    expect(askedOfCell([1, 2, 3, 4].map(plugin))).toBeUndefined();
-  });
-
-  it("asks its cell for nothing while it folds rows its count says would fit", () => {
-    // 🔴 Fails where the count alone decides: three items leave a row of four empty, but rows
-    // wrapped to 80 px fold the third, and a card drawn at the two rows' height would be measured
-    // again with all three drawn, grow back, and fold them again.
-    layOut(4, 80);
-    expect(askedOfCell([1, 2, 3].map(plugin), 2)).toBeUndefined();
-    vi.restoreAllMocks();
-    // The must-differ half: rows of their own height all fit, and the card asks for their height.
-    layOut(4);
-    expect(askedOfCell([1, 2, 3].map(plugin), 3)).toEqual(expect.any(Number));
-  });
-
-  it("asks, while loading, for exactly the height its one-item answer then asks for", () => {
-    // 🔴 Fails where the loading card asks for nothing: its cell then stands at its stored
-    // height until the answer arrives and shrinks it, moving every card below.
-    const loadingAsks = (h: number) => {
-      const report = vi.fn();
-      const { unmount } = render(
-        <CardFitContext.Provider value={report}>
-          <WidgetCard
-            title="Needs your attention"
-            widgetId="core/needs-attention"
-            h={h}
-            state={{ kind: "loading" }}
-            skeleton="rows"
-          >
-            {null}
-          </WidgetCard>
-        </CardFitContext.Provider>
-      );
-      const last = report.mock.calls.at(-1)?.[0];
-      unmount();
-      // Withdrawn as the loading state leaves, so the answer's own report is the one that holds.
-      expect(report.mock.calls.at(-1)?.[0]).toBeUndefined();
-      return last;
-    };
-    const loading = loadingAsks(4);
-    expect(loading).toBe(oneItemBodyPx("default"));
-    // The answer with one item, its row laid out at the height it is drawn at.
-    layOut(4);
-    expect(askedOfCell([OVERDUE], 1)).toBe(loading);
-    // Two rows high, one item fills the body, so neither the loading card nor its answer asks.
-    expect(loadingAsks(2)).toBeUndefined();
-  });
-
-  it("keeps its full skeleton where no cell takes its one-item height, as in a preview", () => {
-    // 🔴 Fails where the loading card draws one skeleton row whether or not a cell took the
-    // request: a preview drawn at its stored height with no cell to tell stood tall and mostly
-    // blank under one row until its answer arrived.
-    const skeletonRows = (inCell: boolean) => {
-      const card = (
-        <CardHeightContext.Provider value={4}>
-          <WidgetCard
-            title="Needs your attention"
-            widgetId="core/needs-attention"
-            h={4}
-            state={{ kind: "loading" }}
-            skeleton="rows"
-          >
-            {null}
-          </WidgetCard>
-        </CardHeightContext.Provider>
-      );
-      const { unmount } = render(
-        inCell ? (
-          <CardFitContext.Provider value={vi.fn()}>
-            {card}
-          </CardFitContext.Provider>
-        ) : (
-          card
-        )
-      );
-      // Every child of the skeleton but its "Loading" words is a row.
-      const rows = screen
-        .getByTestId("card-skeleton")
-        .querySelectorAll(":scope > :not(.sr-only)").length;
-      unmount();
-      return rows;
-    };
-    // The must-differ half: in a cell that takes the request, one row.
-    expect(skeletonRows(true)).toBe(1);
-    expect(skeletonRows(false)).toBeGreaterThan(1);
+  it("draws the database's danger and couldn't-check items with How to fix, opening the docs in a new tab", () => {
+    const docs = "https://nextlyhq.com/docs/database/encrypted-connections";
+    draw([
+      {
+        id: "core/system-connection-unencrypted",
+        kind: "system",
+        label: "Database connection is not encrypted",
+        count: 1,
+        single: true,
+        severity: "critical",
+        reason: "Passwords and data cross the network as plain text.",
+        help: docs,
+      },
+      {
+        id: "core/system-connection-unchecked",
+        kind: "system",
+        label: "Couldn't check the database connection's encryption",
+        count: 1,
+        single: true,
+        severity: "warning",
+        reason: "It may cross the network as plain text.",
+        help: docs,
+      },
+    ]);
+    const [danger, unchecked] = screen.getAllByTestId("needs-attention-item");
+    expect(within(danger).getByTestId("needs-attention-critical")).toBeTruthy();
+    expect(danger.textContent).toContain(
+      "Database connection is not encrypted"
+    );
+    expect(danger.textContent).not.toContain("· 1");
+    expect(danger.textContent).toContain(
+      "Passwords and data cross the network as plain text."
+    );
+    expect(
+      within(unchecked).getByTestId("needs-attention-warning")
+    ).toBeTruthy();
+    for (const [row, label] of [
+      [danger, "database connection is not encrypted"],
+      [unchecked, "couldn't check the database connection's encryption"],
+    ] as const) {
+      const fix = within(row).getByRole("link", {
+        name: `How to fix: ${label}`,
+      });
+      expect(fix.textContent).toBe("How to fix");
+      expect(fix.getAttribute("href")).toBe(docs);
+      expect(fix.getAttribute("target")).toBe("_blank");
+      expect(fix.getAttribute("rel")).toContain("noopener");
+    }
   });
 });

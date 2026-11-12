@@ -7,12 +7,15 @@ interface SidebarSearchProps {
   placeholder: string;
   value: string;
   onChange: (value: string) => void;
+  /** Drawn but not usable, as while the panel is drawn from memory. */
+  disabled?: boolean;
 }
 
 export function SidebarSearch({
   placeholder,
   value,
   onChange,
+  disabled,
 }: SidebarSearchProps): JSX.Element {
   return (
     <div className="px-2 pb-2">
@@ -30,6 +33,7 @@ export function SidebarSearch({
           size="sm"
           placeholder={placeholder}
           value={value}
+          disabled={disabled}
           onChange={e => onChange(e.target.value)}
           className="pl-9 bg-background border-input text-xs"
         />

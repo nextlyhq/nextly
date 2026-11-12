@@ -12,12 +12,14 @@
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 
-import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
+import { GreetingActionProvider } from "@admin/components/features/dashboard/GreetingAction";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
 import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ErrorBoundary } from "@admin/components/shared/error-boundary";
+import { TargetSlot } from "@admin/components/shared/target-slot";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 
 /**
  * DashboardErrorFallback Component
@@ -58,21 +60,45 @@ const DashboardErrorFallback = (
   </PageContainer>
 );
 
+/**
+ * The page's own two parts, the dashboard place's built-ins `welcome` and
+ * `widgets`, with plugins' blocks around them in the order the server sent,
+ * each behind its own boundary, after the grid unless placed before it. The
+ * grid itself is passed through as it is, and no plugin may replace it.
+ *
+ * Its own component, inside the page's error boundary, so reading who is
+ * looking can fail into the dashboard's crash screen like the rest.
+ */
+function DashboardPlace(): React.ReactNode {
+  const { user } = useDashboardUser();
+  // What a plugin's block here is told: who is looking. Held while the viewer
+  // is not known yet, so no block is handed an id that is not theirs.
+  const placeContext = user ? { userId: user.id } : null;
+  return (
+    <TargetSlot
+      place="dashboard"
+      context={placeContext}
+      builtIns={{
+        welcome: <WelcomeHeader />,
+        widgets: <WidgetGrid />,
+      }}
+    />
+  );
+}
+
 const DashboardPage: React.FC = () => {
   return (
     <ErrorBoundary fallback={DashboardErrorFallback}>
-      {/* The header and the grid share Customize, the freshness line and the
-          cards the summary links to, through the page. */}
-      <DashboardChromeProvider>
-        <PageContainer>
-          {/* The header's own bottom padding is the space above the cards, as
+      <PageContainer>
+        {/* The greeting row's own bottom margin is the space above the cards, as
             the approved design draws it. No padding of its own above or
-            below: the page container's is every admin page's, so the header
+            below: the page container's is every admin page's, so the greeting
             starts where other pages' headings do. */}
-          <div className="max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-1000">
-            <WelcomeHeader />
-
-            {/* Every card, through ONE grid.
+        {/* No entrance motion: the greeting and the cards replace the
+            dashboard's outline where it stands, and sliding them in would
+            move every part the outline had placed. */}
+        <div className="max-w-[1600px] mx-auto">
+          {/* Every card, through ONE grid.
  
               The seed prompt, the collection counts, the singles and the team
               summary used to be mounted here by name, above a grid that drew
@@ -90,10 +116,13 @@ const DashboardPage: React.FC = () => {
               the resource sections competes with getting an editor to their
               content without answering a question they actually have. The
               component still ships and is cheap to restore, as a widget now. */}
-            <WidgetGrid />
-          </div>
-        </PageContainer>
-      </DashboardChromeProvider>
+          {/* Above both the greeting and the grid: the grid draws its cog
+              into the greeting row's place. */}
+          <GreetingActionProvider>
+            <DashboardPlace />
+          </GreetingActionProvider>
+        </div>
+      </PageContainer>
     </ErrorBoundary>
   );
 };

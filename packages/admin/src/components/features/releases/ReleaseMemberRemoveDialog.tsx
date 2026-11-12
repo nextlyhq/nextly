@@ -24,6 +24,7 @@ import {
 } from "@admin/components/ui";
 import { useRemoveReleaseMember } from "@admin/hooks/queries/useReleases";
 
+import { useReturnFocusOnClose } from "./dialog-opener";
 import { releaseErrorMessage } from "./release-error";
 
 export interface ReleaseMemberRemoveDialogProps {
@@ -54,6 +55,8 @@ export function ReleaseMemberRemoveDialog({
   open,
   onOpenChange,
 }: ReleaseMemberRemoveDialogProps): JSX.Element {
+  // Focus goes back to what opened the dialog when it closes.
+  const returnFocus = useReturnFocusOnClose(open);
   const remove = useRemoveReleaseMember(releaseId);
   return (
     <AlertDialog
@@ -63,7 +66,7 @@ export function ReleaseMemberRemoveDialog({
         onOpenChange(next);
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={returnFocus}>
         <AlertDialogHeader>
           {/* A title that names the document runs to two lines; the theme's
               snug leading keeps them apart where the shared style sets none. */}
@@ -81,7 +84,7 @@ export function ReleaseMemberRemoveDialog({
         {remove.isError ? (
           <p
             role="alert"
-            className="text-sm text-destructive-700 dark:text-destructive"
+            className="text-sm text-danger-text"
           >
             {releaseErrorMessage(
               remove.error,

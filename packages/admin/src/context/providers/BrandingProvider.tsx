@@ -10,7 +10,7 @@ import {
 } from "@nextlyhq/ui/color";
 import { useQuery } from "@tanstack/react-query";
 import type React from "react";
-import { createContext, useContext, useEffect, useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import {
   ADMIN_META_KEY,
@@ -23,10 +23,11 @@ import { useFaviconInjection } from "../../hooks/useFaviconInjection";
 import { enableDevReload } from "../../lib/api/fetcher";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
+import { readConfiguredBranding } from "../../lib/branding/configured-branding";
 import {
-  DEFAULT_MARK_PATHS,
-  DEFAULT_MARK_VIEWBOX,
-} from "../../lib/branding/default-mark";
+  recallBranding,
+  rememberBranding,
+} from "../../lib/device-memory/device-memory";
 import type {
   AdminBranding,
   ResolvedBrandingColors,
@@ -307,23 +308,36 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
   }, [colors]);
 }
 
-/**
- * Default inline SVG favicon (theme-aware via `prefers-color-scheme`).
- * Used when no `branding.favicon` is configured.
- *
- * Note: uses the OS-level color-scheme preference rather than the in-app
- * theme (`useTheme`) — favicons can't reliably react to JS theme toggles
- * across browsers, so the in-app dark-mode switch won't update the favicon.
- */
-const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${DEFAULT_MARK_VIEWBOX}"><style>path{fill:#000}@media (prefers-color-scheme: dark){path{fill:#fff}}</style>${DEFAULT_MARK_PATHS.map(d => `<path d="${d}"/>`).join("")}</svg>`;
-const DEFAULT_FAVICON_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent(DEFAULT_FAVICON_SVG)}`;
-
 // ============================================================================
 // Provider
 // ============================================================================
 
 interface BrandingProviderProps {
   children: React.ReactNode;
+}
+
+/**
+ * Each half carries its own places' contributions: the public half the login
+ * page's, the signed-in half every other place's. Merged place by place, so a
+ * plain merge of the halves does not let signing in take the login page's
+ * away. Nothing when neither half has any.
+ */
+function placesOfBothHalves(
+  publicHalf: AdminBranding | undefined,
+  workspaceHalf: AdminBranding | undefined
+): Pick<AdminBranding, "contributions"> {
+  if (
+    publicHalf?.contributions === undefined &&
+    workspaceHalf?.contributions === undefined
+  ) {
+    return {};
+  }
+  return {
+    contributions: {
+      ...publicHalf?.contributions,
+      ...workspaceHalf?.contributions,
+    },
+  };
 }
 
 export function BrandingProvider({
@@ -387,9 +401,31 @@ export function BrandingProvider({
     enabled: !sessionPending,
   });
 
+  // What `nextly.config` sets, as the page's first HTML carries it: read once,
+  // before any request answers, so a configured logo is drawn from the first
+  // paint, and it wins over branding set in General settings.
+  const [configured] = useState(readConfiguredBranding);
+
+  // The site's public branding as this device last saw it (logo, name,
+  // favicon), drawn until the server's own answer arrives, so the sign-in
+  // screen and the frame look like the site from the first paint. The answer
+  // replaces it whole, a logo since removed in settings included.
+  const [remembered] = useState(recallBranding);
+  const publicBranding: AdminBranding | undefined = brandingData ?? remembered;
+  useEffect(() => {
+    if (brandingData !== undefined) {
+      rememberBranding(brandingData as Record<string, unknown>);
+    }
+  }, [brandingData]);
+
   useColorInjection(brandingData?.colors);
+  // Only a favicon set in General settings is applied here. A configured one
+  // is already linked in the first HTML, and with none set the page keeps its
+  // own icon: either way nothing is swapped after load.
   useFaviconInjection(
-    brandingData?.favicon?.trim() || DEFAULT_FAVICON_DATA_URL
+    configured.favicon === undefined
+      ? publicBranding?.favicon?.trim() || null
+      : null
   );
 
   // The dev-reload subscription is the SERVER's call, not the bundle's. The
@@ -416,9 +452,17 @@ export function BrandingProvider({
   // anonymous caller can be served at all.
   const value = useMemo(() => {
     const merged =
-      brandingData === undefined && workspaceData === undefined
+      brandingData === undefined &&
+      workspaceData === undefined &&
+      Object.keys(configured).length === 0 &&
+      Object.keys(remembered).length === 0
         ? undefined
-        : { ...brandingData, ...workspaceData };
+        : {
+            ...publicBranding,
+            ...workspaceData,
+            ...placesOfBothHalves(brandingData, workspaceData),
+            ...configured,
+          };
     return {
       branding: merged,
       // The WORKSPACE query, matching `isUnavailable`. Both answer one
@@ -443,7 +487,10 @@ export function BrandingProvider({
     };
   }, [
     brandingData,
+    publicBranding,
+    remembered,
     workspaceData,
+    configured,
     sessionPending,
     workspacePending,
     workspaceUnavailable,

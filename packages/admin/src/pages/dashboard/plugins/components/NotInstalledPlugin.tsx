@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import type React from "react";
 import { useState } from "react";
 
@@ -141,29 +141,30 @@ export function NotInstalledPlugin({
 
   return (
     <div className="max-w-3xl">
-      <div className="mb-6 flex items-start gap-4">
-        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40">
-          <PluginIcon
-            plugin={{
-              appearance: {
-                icon: plugin.icon.lucide,
-                iconAsset: plugin.icon.asset,
-              },
-            }}
-            fallback="Package"
-            className="h-6 w-6 text-muted-foreground"
-          />
-        </span>
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-tight">
-            {plugin.name}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+      <PageHeader
+        className="mb-6"
+        title={plugin.name}
+        media={
+          <span className="flex h-12 w-12 items-center justify-center rounded-lg border border-border bg-muted/40">
+            <PluginIcon
+              plugin={{
+                appearance: {
+                  icon: plugin.icon.lucide,
+                  iconAsset: plugin.icon.asset,
+                },
+              }}
+              fallback="Package"
+              className="h-6 w-6 text-muted-foreground"
+            />
+          </span>
+        }
+        description={
+          <>
             {plugin.author}
             {label ? ` · ${label}` : ""}
-          </p>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <p className="mb-8 text-sm leading-relaxed text-muted-foreground">
         {plugin.description}

@@ -15,6 +15,7 @@ import type { Principal } from "../../plugins/principals/types";
 import type { TrustBound } from "../../services/collections/trust-grant";
 
 import type { FormsConfig } from "./forms";
+import type { LanguageOptionsFrom } from "./locales";
 
 // (`{ items, meta }`) so the in-process Direct API speaks the same envelope
 // as the wire API. The legacy `PaginatedResponse` (Payload's `{ docs,
@@ -414,7 +415,9 @@ export interface RunAsPrincipal {
  * });
  * ```
  */
-export interface DirectAPIConfig {
+// The language options (`locale`, `fallbackLocale`) come from `LanguageOptionsFrom`, applied to
+// this site's generated types.
+export interface DirectAPIConfig extends LanguageOptionsFrom<GeneratedTypes> {
   /**
    * Bypass access control checks.
    *
@@ -597,20 +600,6 @@ export interface DirectAPIConfig {
    * @default false
    */
   disableTransaction?: boolean;
-
-  /**
-   * Locale for localized content.
-   *
-   * When set, returns content in the specified locale.
-   */
-  locale?: string;
-
-  /**
-   * Fallback locale when requested locale data is missing.
-   *
-   * Set to `false` to disable fallback behavior.
-   */
-  fallbackLocale?: string | false;
 
   /**
    * Relationship population depth.

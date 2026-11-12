@@ -24,6 +24,7 @@ import { registerClearPlaintextPasswordsCommand } from "./commands/clear-plainte
 import { registerCreateAdminCommand } from "./commands/create-admin.command";
 // What: import the renamed one-shot sync command.
 import { registerDbSyncCommand } from "./commands/db-sync.command";
+import { registerEventsCommand } from "./commands/events.command";
 import { registerGenerateManifestCommand } from "./commands/generate-manifest.command";
 import { registerGenerateTypesCommand } from "./commands/generate-types.command";
 import { registerGenerateWidgetCommand } from "./commands/generate-widget.command";
@@ -50,6 +51,7 @@ import { registerSetupTokenCommand } from "./commands/setup-token.command";
 import { registerTelemetryCommand } from "./commands/telemetry.command";
 import { registerUpgradeCommand } from "./commands/upgrade.command";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command";
+import { registerWorkflowStrandedCommands } from "./commands/workflow-stranded.command";
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
 import { addExitCodesHelp } from "./exit-codes";
@@ -265,6 +267,9 @@ function registerCommands(program: Command): void {
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerRepairColumnsCommand(program, createContext); // report columns whose type or nullability differs from their field
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
+  registerEventsCommand(program); // report and abandon plugins' durable event deliveries
+  // Lists and moves documents in a workflow stage that no longer exists.
+  registerWorkflowStrandedCommands(program);
   registerSetupTokenCommand(program, createContext); // replace or generate the production setup token
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback

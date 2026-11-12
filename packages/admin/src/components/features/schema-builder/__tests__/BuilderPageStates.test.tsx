@@ -86,6 +86,7 @@ describe("the builder's empty editor", () => {
     };
     return render(
       <BuilderPageLayout
+        entitySlug="example"
         config={{
           kind,
           basicsFields: ["singularName", "slug"],
@@ -97,6 +98,7 @@ describe("the builder's empty editor", () => {
         name="Example"
         locked={locked}
         unsavedCount={0}
+        savedFieldIds={new Set<string>()}
         onSave={vi.fn()}
         settings={{ singularName: "Example", slug: "example", icon: "Box" }}
         onSettingsChange={vi.fn()}

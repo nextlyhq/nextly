@@ -43,11 +43,8 @@ import { isNextlyOwnedDocumentColumn } from "../../../../lib/system-columns";
 import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
-import { indexKey, isManagedIndexName, textColumnsOf } from "./index-util";
-import {
-  type ColumnCastContext,
-  normalizeCheckExpression,
-} from "./normalize-check";
+import { isManagedIndexName, keyedIndexes } from "./index-util";
+import { normalizeCheckExpression } from "./normalize-check";
 import { normalizeDefault } from "./normalize-default";
 import type {
   AddColumnOp,
@@ -60,11 +57,11 @@ import type {
   ColumnSpec,
   DropColumnOp,
   DropTableOp,
-  IndexSpec,
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
 } from "./types";
+import { conversionBetweenShapes } from "./types";
 
 /** A table's columns without the ones a step of `nextly migrate` owns. */
 function withoutMigrateStepColumns(columns: ColumnSpec[]): ColumnSpec[] {
@@ -128,13 +125,7 @@ export function diffSnapshots(
       // with IF NOT EXISTS, so it no-ops against the old index still carrying
       // the name, and the drop after it then removes the index outright. The
       // pair routes through one bucket with the drop ahead of its add.
-      const indexOps = diffIndexes(
-        name,
-        prevT.indexes,
-        curT.indexes,
-        textColumnsOf(prevT.columns),
-        textColumnsOf(curT.columns)
-      );
+      const indexOps = diffIndexes(name, prevT, curT);
       const rekeyedNames = new Set(
         indexOps
           .filter(
@@ -191,18 +182,25 @@ export function diffSnapshots(
   // new constraint. Creating the replacement first fails safe: the old index is
   // still there. The two indexes differ in name (idx_ vs uq_), so both can
   // exist for the moment between the statements.
-  const droppedColumnKeys = new Set(
+  const columnsAnIndexBlocks = new Set(
     columnOps
       .filter(op => op.type === "drop_column")
       .map(op => `${op.tableName}\u0000${op.columnName}`)
   );
+  // A column a relation's switch retypes counts too: MySQL refuses to retype an indexed column to
+  // text or JSON, and a generated migration runs its operations in this order. (A live apply's
+  // pre-resolution pass already drops indexes ahead of its conversions.)
+  const retypedForSwitches = retypedForReferenceSwitches(columnOps);
+  for (const op of retypedForSwitches) {
+    columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
+  }
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];
   for (const op of dropIndexOps) {
-    const coversDroppedColumn =
+    const coversBlockedColumn =
       op.type === "drop_index" &&
       op.index.columns.some(column =>
-        droppedColumnKeys.has(`${op.tableName}\u0000${column}`)
+        columnsAnIndexBlocks.has(`${op.tableName}\u0000${column}`)
       );
     // A check or foreign key goes ahead of every column change as well: while
     // it exists it blocks dropping — on MySQL even retyping — a column it
@@ -211,7 +209,7 @@ export function diffSnapshots(
     // drop-then-add and the inverse still re-adds after re-creating columns.
     const isConstraintDrop =
       op.type === "drop_check" || op.type === "drop_foreign_key";
-    if (coversDroppedColumn || isConstraintDrop)
+    if (coversBlockedColumn || isConstraintDrop)
       dropIndexBeforeColumns.push(op);
     else dropIndexAfterAdds.push(op);
   }
@@ -241,14 +239,106 @@ export function diffSnapshots(
     op => op.type === "drop_index"
   );
 
+  // A guard requiring a column empty (`requireEmpty`) leads everything: a migration file runs its
+  // operations in this order, and a guard refusing after any DDL has run would leave a dialect
+  // that commits each statement half-changed.
+  const guards = columnOps.filter(isEmptyColumnGuard);
   return [
-    ...constraintDrops,
+    ...guards,
+    ...keysDroppedBeforeConversions(constraintDrops, columnOps, prevByName),
     ...tableOps,
     ...indexDropsBeforeColumns,
-    ...columnOps,
+    ...columnOps.filter(op => !isEmptyColumnGuard(op)),
     ...addIndexOps,
     ...dropIndexAfterAdds,
   ];
+}
+
+/** Whether `op` is a guard requiring a column empty before a relation's switch (`requireEmpty`). */
+function isEmptyColumnGuard(op: Operation): op is ChangeColumnTypeOp {
+  return op.type === "change_column_type" && op.conversion === "requireEmpty";
+}
+
+/**
+ * The type changes among `columnOps` that a relation's switch makes: one converting the column
+ * between one reference and a list, and the plain retype a guarded switch (`requireEmpty`) needs.
+ * A conversion that keeps the type (SQLite's text) rewrites values only, and blocks on no key or
+ * index.
+ */
+function retypedForReferenceSwitches(
+  columnOps: readonly Operation[]
+): ChangeColumnTypeOp[] {
+  const guarded = new Set(
+    columnOps
+      .filter(isEmptyColumnGuard)
+      .map(op => `${op.tableName}.${op.columnName}`)
+  );
+  return columnOps.filter(
+    (op): op is ChangeColumnTypeOp =>
+      op.type === "change_column_type" &&
+      op.fromType !== op.toType &&
+      (op.conversion !== undefined ||
+        guarded.has(`${op.tableName}.${op.columnName}`))
+  );
+}
+
+/**
+ * `drops` with each foreign key on a column `columnOps` converts between one reference and a list
+ * marked to run ahead of that conversion: the conversion runs before either apply route, and no
+ * database retypes a column a key would then break. A conversion that keeps the column's type
+ * (SQLite's text) rewrites values only, so its key is left to the apply route, which on SQLite
+ * drops one only by rebuilding the table.
+ *
+ * A key over a column becoming a list is dropped even where the desired side tracks no keys, as a
+ * table built from config does: no key to one row can hold a list, so the key cannot survive the
+ * conversion, and left in place it refuses the retype (PostgreSQL) or is put back over the list
+ * (MySQL's lift around a type change). Read from the previous side, which is where it exists.
+ */
+function keysDroppedBeforeConversions(
+  drops: readonly Operation[],
+  columnOps: readonly Operation[],
+  prevByName: ReadonlyMap<string, TableSpec>
+): Operation[] {
+  const retyped = retypedForReferenceSwitches(columnOps);
+  const converted = new Set(
+    retyped.map(op => `${op.tableName}.${op.columnName}`)
+  );
+  const marked = drops.map(op =>
+    op.type === "drop_foreign_key" &&
+    op.foreignKey.columns.some(column =>
+      converted.has(`${op.tableName}.${column}`)
+    )
+      ? { ...op, beforeConversion: true as const }
+      : op
+  );
+  const alreadyDropped = new Set(
+    drops.flatMap(op =>
+      op.type === "drop_foreign_key"
+        ? [`${op.tableName}.${op.foreignKey.name}`]
+        : []
+    )
+  );
+  // Every column a switch retypes into JSON: a list, or references naming their collections.
+  const toList = new Set(
+    retyped
+      .filter(op => op.conversion !== "referenceScalar")
+      .map(op => `${op.tableName}.${op.columnName}`)
+  );
+  const keysOverLists: Operation[] = [...prevByName.values()].flatMap(table =>
+    (table.foreignKeys ?? [])
+      .filter(
+        fk =>
+          !alreadyDropped.has(`${table.name}.${fk.name}`) &&
+          fk.columns.some(column => toList.has(`${table.name}.${column}`))
+      )
+      .map(fk => ({
+        type: "drop_foreign_key" as const,
+        tableName: table.name,
+        foreignKey: fk,
+        beforeConversion: true as const,
+      }))
+  );
+  return [...marked, ...keysOverLists];
 }
 
 /**
@@ -299,17 +389,15 @@ function byForeignKeyDependency(tables: readonly TableSpec[]): TableSpec[] {
  */
 function diffIndexes(
   tableName: string,
-  prev: IndexSpec[] | undefined,
-  cur: IndexSpec[] | undefined,
-  prevColumns: ColumnCastContext,
-  curColumns: ColumnCastContext
+  prevT: TableSpec,
+  curT: TableSpec
 ): Operation[] {
-  if (prev === undefined || cur === undefined) return [];
+  if (prevT.indexes === undefined || curT.indexes === undefined) return [];
   const ops: Operation[] = [];
   // Each side is read against its OWN column types: a column changing from
   // text to integer keeps its authored `::text` on the new side.
-  const prevByKey = new Map(prev.map(i => [indexKey(i, prevColumns), i]));
-  const curByKey = new Map(cur.map(i => [indexKey(i, curColumns), i]));
+  const prevByKey = keyedIndexes(prevT.indexes, prevT.columns);
+  const curByKey = keyedIndexes(curT.indexes, curT.columns);
   for (const [key, idx] of curByKey) {
     if (!prevByKey.has(key)) {
       ops.push({ type: "add_index", tableName, index: idx });
@@ -414,11 +502,92 @@ function diffChecks(
  * attributes travel with the types, and reading that beside the nullability and
  * default comparisons that follow it made one function responsible for both.
  */
-function columnTypeChange(
+function columnTypeChanges(
   tableName: string,
   columnName: string,
   prevC: ColumnSpec,
   curC: ColumnSpec
+): ChangeColumnTypeOp[] {
+  const shapes = shapeChange(prevC, curC);
+  // A switch to or from naming several collections: a guard of its own, which the diff moves ahead
+  // of every other operation, and then whatever retype the column needs, plain.
+  if (shapes === "requireEmpty") {
+    const retype = columnTypeChange(tableName, columnName, prevC, curC, {});
+    return [
+      inPlaceConversion(tableName, columnName, prevC, "requireEmpty"),
+      ...(retype === undefined ? [] : [retype]),
+    ];
+  }
+  const conversion =
+    shapes === undefined
+      ? referenceMarkerConversion(prevC, curC)
+      : { conversion: shapes };
+  const retype = columnTypeChange(
+    tableName,
+    columnName,
+    prevC,
+    curC,
+    conversion
+  );
+  if (retype !== undefined) return [retype];
+  // The type is the same either way (SQLite's text), so only the values change.
+  return shapes === undefined
+    ? []
+    : [inPlaceConversion(tableName, columnName, curC, shapes)];
+}
+
+/** The change between the shapes both sides state (`conversionBetweenShapes`). */
+function shapeChange(
+  prevC: ColumnSpec,
+  curC: ColumnSpec
+): NonNullable<ChangeColumnTypeOp["conversion"]> | undefined {
+  return conversionBetweenShapes(prevC.referenceShape, curC.referenceShape);
+}
+
+/**
+ * The conversion a type change makes when the shapes are not both known, as a snapshot written
+ * before they were recorded, or a live column no road annotated: read from the desired side's
+ * marker. A column becoming a relation's list of references holds a bare id, an array literal or a
+ * JSON list, and a plain cast reads none of them as a list; a previous snapshot can carry the same
+ * flag, and what matters is what the column is becoming.
+ */
+function referenceMarkerConversion(
+  prevC: ColumnSpec,
+  curC: ColumnSpec
+): Pick<ChangeColumnTypeOp, "conversion"> {
+  if (curC.holdsReferenceList === true) return { conversion: "referenceList" };
+  // A relation switched from many related entries to one: the list's one id is kept.
+  if (curC.holdsSingleReference === true && isJsonColumnType(prevC.type)) {
+    return { conversion: "referenceScalar" };
+  }
+  return {};
+}
+
+/** A conversion with the column's type unchanged: the values change, or are required absent. */
+function inPlaceConversion(
+  tableName: string,
+  columnName: string,
+  column: ColumnSpec,
+  conversion: NonNullable<ChangeColumnTypeOp["conversion"]>
+): ChangeColumnTypeOp {
+  return {
+    type: "change_column_type",
+    tableName,
+    columnName,
+    fromType: renderedType(column),
+    toType: renderedType(column),
+    nullable: column.nullable,
+    fromNullable: column.nullable,
+    conversion,
+  };
+}
+
+function columnTypeChange(
+  tableName: string,
+  columnName: string,
+  prevC: ColumnSpec,
+  curC: ColumnSpec,
+  conversion: Pick<ChangeColumnTypeOp, "conversion">
 ): ChangeColumnTypeOp | undefined {
   // Compared as normalised token PLUS declared size — the live side reads PG's
   // `udt_name` (`int4`, `bool`, `varchar` without length) while the desired
@@ -450,13 +619,15 @@ function columnTypeChange(
     ...(prevC.default !== undefined
       ? { fromColumnDefault: prevC.default }
       : {}),
-    // A column becoming a relation's list of references holds a bare id, an array literal or a JSON
-    // list, and a plain cast reads none of them as a list. Read from the DESIRED side alone: a
-    // previous snapshot can carry the same flag, and what matters is what the column is becoming.
-    ...(curC.holdsReferenceList === true
-      ? { conversion: "referenceList" as const }
-      : {}),
+    // How a relation's values cross the change, where they must (`columnTypeChanges`).
+    ...conversion,
   };
+}
+
+/** Whether a column type holds JSON: what a relation's list of references is stored as. */
+function isJsonColumnType(type: string): boolean {
+  const t = type.trim().toLowerCase();
+  return t === "json" || t === "jsonb";
 }
 
 function diffColumns(
@@ -504,8 +675,7 @@ function diffColumns(
     }
     if (prevC && curC) {
       // Column present in both - check for changes.
-      const retyped = columnTypeChange(tableName, name, prevC, curC);
-      if (retyped) typeChanges.push(retyped);
+      typeChanges.push(...columnTypeChanges(tableName, name, prevC, curC));
 
       // A primary key's nullability is not an independent attribute: it
       // follows from being the primary key, and the dialects disagree only on

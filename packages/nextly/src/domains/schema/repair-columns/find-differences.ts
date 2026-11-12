@@ -15,6 +15,7 @@ import { sql } from "drizzle-orm";
 import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import type { ColumnSpec } from "../pipeline/diff/types";
@@ -127,7 +128,8 @@ function columnsNamedBy(
   definition: EntityDefinition,
   dialect: SupportedDialect
 ): NamedColumn[] {
-  const translatable = definition.localized
+  // Kept per language when the entity is translated, or for every entity under the setting.
+  const translatable = storesPerLanguage(definition)
     ? new Set(resolveLocalizedFieldNames([...definition.fields], true))
     : new Set<string>();
   const columns: NamedColumn[] = [];
@@ -429,6 +431,7 @@ async function appliedColumnFindings(
     const conversion = await planDifference(db, dialect, difference, judgement);
     findings.push({
       ...finding,
+      judged: difference,
       judgement,
       conversion,
       rowsRewritten: await rowsRewrittenBy(

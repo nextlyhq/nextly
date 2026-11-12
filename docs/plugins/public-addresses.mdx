@@ -1,0 +1,119 @@
+---
+title: Unique public addresses
+description: How a plugin that keeps a record of page addresses takes part in keeping every public address to one page, through ctx.publicAddresses.
+---
+
+Two pages must never share a public address in the same language. Nextly knows each page's address ([`publicAddressOf`](/docs/configuration/public-addresses)), but keeps no record of which page holds which. Plugins that keep such a record share it through one question that Nextly asks on every save.
+
+This API is experimental.
+
+## How it works
+
+A plugin that keeps a record signs up as a participant. On every save that may change what a published page holds, Nextly:
+
+1. works out every address the saved document holds now, one per language it is published in;
+2. asks every participant, inside the save's transaction, whether another page holds any of them;
+3. refuses the save if one does, with a `DUPLICATE` error naming the address and the language (the page holding it goes to the server log only, since the person saving may not be allowed to read it);
+4. otherwise tells every participant what the document holds now.
+
+A draft holds nothing, and neither does a working draft of a published page until it is published. A site with no participant does no address work at all.
+
+## Taking part
+
+```ts
+import { definePlugin, type PublicAddressParticipant } from "@nextlyhq/plugin-sdk";
+
+const participant: PublicAddressParticipant = {
+  async holderOf(address, asker, batch, { db }) {
+    // Who holds `address` in your record, other than `asker`, as if every
+    // update in `batch` were applied. Return null when nobody does.
+    return null;
+  },
+  async record(batch, { db }) {
+    // Replace what each holder in `batch` holds with its `holds`.
+    // Release before claiming, so two pages can swap addresses.
+  },
+};
+
+export default definePlugin({
+  name: "acme-addresses",
+  version: "1.0.0",
+  nextly: ">=0.0.2",
+  init(ctx) {
+    ctx.publicAddresses.participate(participant);
+  },
+});
+```
+
+Both functions run on the save's own transaction. `db` is your plugin's database bound to it, so what `record` writes commits or rolls back with the save. Keep them short: the saved row stays locked while they run.
+
+- An address is a language and a path: `{ locale: "en", path: "/blog/hello" }`. A `range` address (`range: true`) is the path and everything below it, as a paginated list's later pages are.
+- An exact address is held where it, or a range above it, is held. A range is held where anything at or below it is.
+- Make two saves of one address unable to both commit, for example with a unique key on language and path, and lock rows for each path above an address so a range and an address inside it meet.
+
+`ctx.publicAddresses.withdraw(participant)` stops the asking. A participant is withdrawn with the plugin's other subscriptions when the plugin is torn down.
+
+## Moving addresses yourself
+
+A plugin whose own logic moves addresses, outside an entry's save, asks the same question:
+
+```ts
+const { refused } = await ctx.services.collections.withTransaction(tx =>
+  ctx.publicAddresses.move(
+    [{ holder: { collection: "pages", id: "1" }, holds: [{ locale: "en", path: "/about" }] }],
+    tx
+  )
+);
+```
+
+Every participant is asked about each update with the whole batch in view, and told the ones nobody refused. Refused updates come back with the page holding the address rather than throwing, for you to act on.
+
+## Catching up at start
+
+A participant installed on a site that already has content starts with an empty record, and a deploy can move addresses without any save. Bring the record up to date at start, from work your `init` or `onReady` starts but does not await: `held` and `fingerprint` wait for the boot to finish, and the boot waits for those hooks, so awaiting them there never finishes.
+
+```ts
+import {
+  definePlugin,
+  type PluginContext,
+  type PublicAddressParticipant,
+} from "@nextlyhq/plugin-sdk";
+
+// The participant from "Taking part" above.
+declare const participant: PublicAddressParticipant;
+
+async function catchUp(ctx: PluginContext): Promise<void> {
+  const fingerprint = await ctx.publicAddresses.fingerprint();
+  // Compare `fingerprint` with the one you stored at the last catch-up; when
+  // it differs, walk each type with `held` and record what it returns.
+  const first = await ctx.publicAddresses.held({
+    type: { kind: "collection", slug: "posts" },
+  });
+  for (const item of first.items) {
+    // Record `item.holds` for `item.holder` in your own store.
+  }
+  ctx.logger.info("address catch-up", {
+    fingerprint,
+    documents: first.items.length,
+  });
+}
+
+export const withCatchUp = definePlugin({
+  name: "acme-addresses",
+  version: "1.0.0",
+  nextly: ">=0.0.2",
+  init(ctx) {
+    ctx.publicAddresses.participate(participant);
+    // Started, not awaited: it runs once the boot has finished.
+    void catchUp(ctx).catch(error =>
+      ctx.logger.error("address catch-up failed", { error })
+    );
+  },
+});
+```
+
+- `ctx.publicAddresses.fingerprint()` changes whenever an address template, the language list or the fallback settings do. Store it, and catch up when it differs.
+- `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents in id order, each with every address it holds now and when it was made (`createdAt`), so a caller settling claims oldest first sorts by that. Pass the returned `next` as `after` for the following page.
+- `ctx.publicAddresses.defaultLanguage()` is the language an address is held in where a read names none: the site's default language as it is now, one chosen in Settings included, or `"en"` on a site with no languages. Look up a page read without a language under it, rather than under the `localization` block in code.
+
+Where two documents clash after a deploy, the one already holding the address keeps it.

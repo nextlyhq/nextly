@@ -189,6 +189,14 @@ export type {
   DataFromFieldGroupSlug,
 } from "./direct-api/types";
 
+// The site's languages as generated types know them: what a read's `locale` and
+// `fallbackLocale` take, for a caller annotating its own values with them.
+export type {
+  FallbackLocaleOption,
+  Locale,
+  LocaleOption,
+} from "./direct-api/types/locales";
+
 // Direct API types - the `nextly.fieldGroups.*` namespace. Exported from the
 // root because they are the argument and result types of a public namespace:
 // without them a caller cannot annotate a variable holding what it returns.
@@ -526,7 +534,11 @@ export {
   type InboundWebhookDelivery,
   type InboundWebhookReading,
   type InboundWebhookScheme,
+  type ClaimDeliveryOptions,
+  type DeliveryClaim,
+  type DeliveryClaimResult,
   type PluginReceivedWebhooks,
+  type VerifiedWebhook,
   type VerifyWebhookOptions,
   type WebhookRefusal,
   type WebhookVerification,
@@ -535,6 +547,7 @@ export {
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
@@ -551,6 +564,9 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginDurableEvents,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginContributions,
   type PluginDatabase,
   type PluginRawDatabase,
@@ -569,6 +585,8 @@ export {
   type PluginTransaction,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
+  type PluginCacheApi,
+  pluginCacheTag,
   type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
@@ -613,6 +631,8 @@ export {
   type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
+  type PluginProxyHandler,
+  type ProxyAnswer,
   type NextlyPrincipals,
   type PluginPrincipalsApi,
   type PluginRoutePrincipal,
@@ -662,6 +682,70 @@ export {
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins";
+export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
+
+// "Every content type except these", one answer for each reader of a scope.
+// @experimental
+export {
+  isContentTypeScope,
+  typesReachedBy,
+  type ContentTypeCandidate,
+  type ContentTypeKind,
+  type ContentTypeScope,
+} from "./plugins/content-type-scope";
+
+// The later pages of a paginated list's address (`/news/page/2`): one
+// spelling per page, read the way the content routes read them.
+// @experimental
+export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
+
+// The cache tags a read of a collection, or of one entry in it, carries:
+// what a write to it expires. For code that caches an answer built from
+// those reads, such as a plugin's page metadata.
+// @experimental
+export { nextlyTags } from "./runtime/cache/nextly-tags";
+
+// The paths every robots.txt of a Nextly site keeps crawlers out of, read
+// by `nextlyRobots` and by a plugin that serves the file.
+// @experimental
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "./shared/crawl-exclusions";
+
+// Where an entry is served, as the site declares it: one answer for every
+// reader of a page's public address.
+// @experimental
+export {
+  publicAddressOf,
+  typesWithoutAddress,
+  type PublicAddress,
+  type PublicAddressType,
+} from "./domains/public-addresses/public-address";
+
+// How each language's address is formed, by prefix or by domain, as the site
+// declares it: the address a path kept in one language is opened at.
+// @experimental
+export {
+  addressOfRequest,
+  languageAddressOf,
+  type KeptAddress,
+  type LanguageAddress,
+  type LanguageAddressRule,
+} from "./domains/i18n/language-addresses";
+
+// Keeping every public address to one page: the record a plugin keeps, as
+// core asks it on each save (`ctx.publicAddresses`).
+// @experimental
+export type {
+  AddressHolder,
+  HeldAddress,
+  HeldAddressUpdate,
+} from "./domains/public-addresses/participants";
+export type { HeldDocument } from "./domains/public-addresses/held-listing";
+export type {
+  ParticipantTransaction,
+  PluginPublicAddresses,
+  PublicAddressParticipant,
+  RefusedAddressUpdate,
+} from "./plugins/plugin-public-addresses";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental
@@ -731,6 +815,10 @@ export {
 // reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
 // cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
 export { rowsThatFit } from "./domains/widgets/card-geometry";
+// @experimental The rows a list card loads and shows for its "Number of entries" setting, and the
+// most that setting offers: what a widget's `load` reads its setting by, the rule core's own list
+// cards and the admin read alike. From `query-limits.ts`, which imports nothing.
+export { listEntries, MAX_WIDGET_ROWS } from "./domains/widgets/query-limits";
 // A setting's own editor component's props (experimental).
 export type { SettingEditorProps } from "./domains/widgets/result";
 // @experimental The check a site's generated admin component map applies, and what it reads:
@@ -1129,6 +1217,13 @@ export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from
 // to `ResolvedDraftSplitCollection` however faithfully the record carries them.
 export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
 
+// A plugin's durable events (`ctx.events.emitDurable` / `onDurable`): what a
+// subscriber receives, and the handler that receives it.
+export type {
+  DurableEvent,
+  DurableHandler,
+} from "./domains/plugin-events/subscribers";
+
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
   EventBus,
@@ -1167,6 +1262,7 @@ export {
   type NavFilterContext,
   type ListQueryWhere,
   type ListQueryFilterContext,
+  type PublicAddressTemplateContext,
 } from "./filters";
 
 // ============================================================

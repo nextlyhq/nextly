@@ -27,6 +27,7 @@ import {
 } from "../../domains/email/retention-config";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
+  LanguageAddressRule,
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
@@ -68,6 +69,7 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
 
+import { DEFAULT_MIGRATIONS_DIR } from "./migrations-dir-default";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
 
 // ============================================================
@@ -655,19 +657,14 @@ export interface AdminBrandingConfig {
   colors?: AdminBrandingColors;
 
   /**
-   * Toggle visibility of builder-related navigation (Collections/Singles/Components builders).
+   * Turn the schema builder (Collections, Singles and Field Groups builders) off outside
+   * production with `false`: its navigation is hidden and its schema writes are refused.
    *
-   * This is evaluated at runtime via the `/api/admin-meta` response.
+   * The builder is always off in production, whatever this says: schema reaches production
+   * through migrations, and a production start that finds `true` here logs that it has no
+   * effect. Evaluated at runtime and sent to the admin in the `/api/admin-meta` response.
    *
-   * Default behavior follows `NODE_ENV`:
-   * - `production` => hidden
-   * - `development` / `test` => visible
-   *
-   * Precedence:
-   * 1) `admin.branding.showBuilder` (this field)
-   * 2) `NODE_ENV` default mapping
-   *
-   * @default `process.env.NODE_ENV !== "production"`
+   * @default on outside production
    */
   showBuilder?: boolean;
 }
@@ -693,6 +690,13 @@ export interface PluginOverride {
     | "plugins"
     | "users"
     | "settings";
+  /**
+   * Override where a standalone plugin's rail item goes, written as the
+   * plugin's own `admin.landing` is: one of its pages or one of its
+   * collections. The collection may be named by the slug the plugin declares
+   * or by the one this site renamed it to.
+   */
+  landing?: string;
   /** Override or extend the plugin's sidebar appearance (shallow-merged) */
   appearance?: Partial<PluginAdminAppearance>;
 }
@@ -821,6 +825,28 @@ export interface AuthConfig {
    * in order; the built-in `password` strategy always runs last.
    */
   strategies?: AuthStrategy[];
+
+  /**
+   * @experimental Plugins allowed to finish logins, by name.
+   *
+   * A plugin that declares `capabilities.auth.login` — or contributes a
+   * `determineUser` auth hook, which decides who is signed in — finishes
+   * logins with `ctx.auth.completeLogin`, which signs in whichever account it
+   * names. Declaring it is not enough: the app lists the plugin here too, and
+   * an enabled plugin that declares it without being listed refuses the boot,
+   * naming the line to add.
+   *
+   * Not a sandbox: a plugin is trusted code, and its own code can still reach
+   * core's internals. The listing keeps the grant in the app's code review,
+   * so a plugin update cannot add it quietly.
+   *
+   * @default []
+   * @example
+   * ```ts
+   * auth: { loginPlugins: ["@acme/google-auth"] }
+   * ```
+   */
+  loginPlugins?: readonly string[];
 }
 
 /**
@@ -835,6 +861,12 @@ export interface SanitizedAuthConfig {
   minPasswordLength: number;
   /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
   strategies?: AuthStrategy[];
+  /**
+   * @experimental Plugins allowed to finish logins (`auth.loginPlugins`).
+   * Optional here so a consumer's existing `auth` object stays assignable;
+   * sanitization always fills it, defaulting to `[]`.
+   */
+  loginPlugins?: readonly string[];
 }
 
 /**
@@ -844,6 +876,7 @@ export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
   allowRegistration: false,
   minPasswordLength: 8,
+  loginPlugins: [],
 };
 
 // ============================================================
@@ -942,6 +975,15 @@ export interface NextlyConfig {
    * See docs/superpowers/specs/2026-07-08-multilingual-i18n-design.md.
    */
   localization?: LocalizationConfig;
+
+  /**
+   * How each language's public address is formed: under a prefix
+   * (`/de/about`) or on a domain of its own. Kept apart from `localization`
+   * so a site whose languages are managed in Settings can declare it too.
+   * Omitted, a site with several languages has every language prefixed.
+   * @experimental
+   */
+  languageAddresses?: LanguageAddressRule;
 
   /** Outbound webhook configuration. */
   webhooks?: WebhookConfig;
@@ -1097,6 +1139,9 @@ export interface SanitizedNextlyConfig {
   /** Normalized multilingual content configuration (undefined when i18n is off). */
   localization?: SanitizedLocalizationConfig;
 
+  /** How each language's public address is formed, as declared. */
+  languageAddresses?: LanguageAddressRule;
+
   /**
    * Resolved webhook retention policy, or null when retention is switched off.
    * Always present after sanitization so consumers never re-resolve it.
@@ -1155,7 +1200,8 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   // and undefined is what "public" means here.
   postgres: {},
   schemasDir: "./src/db/schemas/collections",
-  migrationsDir: "./src/db/migrations",
+  // Read from its own module, which `withNextly` reads without this one.
+  migrationsDir: DEFAULT_MIGRATIONS_DIR,
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
   // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
@@ -1440,6 +1486,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       minPasswordLength: authMinPasswordLength(config.auth?.minPasswordLength),
       // Pass opt-in auth strategies through unchanged (D71).
       strategies: config.auth?.strategies,
+      // Copied and frozen like `db.rawSqlPlugins`: the boot and the CLI read
+      // the app's login grants from here, and plugin code that could add a
+      // name to this list would grant itself on the next read.
+      loginPlugins: Object.freeze([...(config.auth?.loginPlugins ?? [])]),
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],
@@ -1458,6 +1508,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     localization: config.localization
       ? normalizeLocalization(config.localization)
       : undefined,
+    languageAddresses: config.languageAddresses,
     // Resolved once at boot so nothing downstream re-derives it. Null means the
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.

@@ -9,11 +9,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Command } from "commander";
+import { Command as CommanderCommand, type Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createContext } from "../../context";
 import { repairColumnsAction } from "../repair-columns";
+import { registerRepairColumnsCommand } from "../repair-columns.command";
 
 /** What the command was given, as Commander would hand it over. */
 const command = (globals: Record<string, unknown>) =>
@@ -112,6 +113,16 @@ describe("repair-columns output and exit code", () => {
     expect(JSON.parse(stdout[0])).toMatchObject({
       schema: "nextly.repair-columns/1",
     });
+  });
+
+  it("declares --apply, off unless given, and says what it does", () => {
+    const program = new CommanderCommand();
+    registerRepairColumnsCommand(program, createContext);
+    const declared = program.commands.find(c => c.name() === "repair-columns");
+    const apply = declared?.options.find(o => o.long === "--apply");
+    expect(apply?.defaultValue).toBe(false);
+    expect(apply?.description).toMatch(/convert/i);
+    expect(declared?.description()).toMatch(/--apply/);
   });
 
   it("without --json, prints the error shape to standard error and nothing to standard output", async () => {

@@ -32,7 +32,6 @@
  * service narrows the findings for each reader ({@link narrowLinkFindings}).
  *
  * @module domains/releases/readiness/unpublished-links
- * @experimental
  */
 import {
   documentRefKey,
@@ -62,8 +61,6 @@ export const UNPUBLISHED_LINKS_SOURCE_KEY = "core.unpublished-links";
 /**
  * What the source reports: a link a reader may be told about, how many a
  * reader may not, and a link in a field the reader may not view.
- *
- * @experimental
  */
 export const UNPUBLISHED_LINK_CODES = [
   "UNPUBLISHED_LINK",
@@ -80,8 +77,6 @@ export type UnpublishedLinkCode = (typeof UNPUBLISHED_LINK_CODES)[number];
  * was read from: two fields with the same path, such as `author` in two kinds
  * of block, have different keys. A reader's access to a field is judged by
  * this key, never by the path, so one field cannot answer for another.
- *
- * @experimental
  */
 export interface DocumentLink {
   field: string;
@@ -94,8 +89,6 @@ export interface DocumentLink {
  * What one document links to, with the document the links were read from.
  * The document is the reads' own, and is handed back as it is to judge what
  * a reader may see of those links, so both come from one reading of it.
- *
- * @experimental
  */
 export interface ScannedLinks {
   links: readonly DocumentLink[];
@@ -106,15 +99,11 @@ export interface ScannedLinks {
  * Why a linked document will not be live at the moment: it is a draft and
  * nothing publishes it by then, a release takes it down by then, or it no
  * longer exists.
- *
- * @experimental
  */
 export type UnpublishedLinkCause = "draft" | "comes-down" | "deleted";
 
 /**
  * What the source asks of the content outside the releases domain.
- *
- * @experimental
  */
 export interface ReleaseLinkReads {
   /**
@@ -355,8 +344,6 @@ async function publishedNow(
  * Every read is batched: links once per scope, and statuses, memberships and
  * authors once per run of targets, so a release of two hundred documents
  * costs a handful of queries, not one per link.
- *
- * @experimental
  */
 export function unpublishedLinksSource(deps: {
   reads: ReleaseLinkReads;
@@ -510,8 +497,6 @@ function byTarget(
 /**
  * The document a link finding names, or `null` for a finding that names none:
  * any other finding, and a link to a deleted document.
- *
- * @experimental
  */
 export function linkTargetOf(
   finding: ReadinessFinding
@@ -535,8 +520,6 @@ function isLinkFinding(finding: ReadinessFinding): boolean {
 
 /**
  * What a reader may be told, as {@link narrowLinkFindings} asks it.
- *
- * @experimental
  */
 export interface LinkReaderVerdicts {
   /** Whether the reader may read the document the link is FROM. */
@@ -573,8 +556,6 @@ function weightOf(finding: ReadinessFinding): number {
  * Counted links are summed in one `UNPUBLISHED_LINKS_HIDDEN` per member, in
  * its links' place. Every other finding passes through untouched, in its
  * order, and no finding leaves with the keys or targets it was judged by.
- *
- * @experimental
  */
 export function narrowLinkFindings(
   findings: readonly ReadinessFinding[],
@@ -619,8 +600,6 @@ export function narrowLinkFindings(
 /**
  * `findings` as a reader who may read everything is shown them: live links
  * dropped, deleted ones per field, and no keys.
- *
- * @experimental
  */
 export function withoutFieldKeys(
   findings: readonly ReadinessFinding[]
@@ -772,8 +751,6 @@ function bare(
 /**
  * One linked document that will not be live when the document it is linked
  * from goes live, as the response to an add names it.
- *
- * @experimental
  */
 export interface UnpublishedLink {
   scopeKind: "collection";
@@ -787,8 +764,6 @@ export interface UnpublishedLink {
 /**
  * The links an added document has that will not be live at its release's
  * moment, as the caller may be told them.
- *
- * @experimental
  */
 export interface UnpublishedLinksReport {
   /** The linked documents the caller may read. */
@@ -804,8 +779,6 @@ export interface UnpublishedLinksReport {
 /**
  * The report for one member, derived from its narrowed findings, so an add
  * answers exactly what the release's readiness would say of the document.
- *
- * @experimental
  */
 export function unpublishedLinksReport(
   findings: readonly ReadinessFinding[]
