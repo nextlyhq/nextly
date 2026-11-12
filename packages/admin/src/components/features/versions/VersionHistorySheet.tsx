@@ -361,6 +361,9 @@ export function VersionHistorySheet({
       canEdit: editor.canEdit,
       ...(editor.translatable ? { translatable: editor.translatable } : {}),
       removed: removedFields,
+      // The version's language, so one that holds none restores only its
+      // shared fields on a translated document.
+      versionLocale: detail.data.locale,
     });
   }, [confirmingRestore, editor, detail.data, viewedWithheld, removedFields]);
 

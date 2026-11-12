@@ -163,6 +163,56 @@ describe("restorePlan", () => {
   });
 });
 
+describe("restorePlan, values a version cleared", () => {
+  it("restores a value the version stored as null as an explicit empty value", () => {
+    const rows = restorePlan(
+      input({ snapshot: { title: "New", views: null, tags: ["a", "b"] } })
+    );
+
+    const views = rows.find(row => row.name === "views");
+    // Present and null, so the save sends the cleared value rather than
+    // dropping an undefined one.
+    expect(views && Object.hasOwn(views, "value")).toBe(true);
+    expect(views?.value).toBeNull();
+  });
+
+  it("restores a value the version stored as an empty string as that string", () => {
+    const rows = restorePlan(
+      input({ snapshot: { title: "", views: 2, tags: ["a", "b"] } })
+    );
+
+    expect(rows.find(row => row.name === "title")?.value).toBe("");
+  });
+});
+
+describe("restorePlan, a version that holds no language on a translated document", () => {
+  it("restores its shared fields only, never its translated ones", () => {
+    const rows = restorePlan(
+      input({ translatable: new Set(["title"]), versionLocale: null })
+    );
+
+    // The translated field is listed, unchosen, and its value never reaches
+    // the editor of whichever language happens to be open.
+    expect(rows.find(row => row.name === "title")).toMatchObject({
+      chosen: false,
+      disabled: "no-language",
+    });
+    expect(rows.find(row => row.name === "title")?.value).toBeUndefined();
+    expect(rows.find(row => row.name === "views")).toMatchObject({
+      chosen: true,
+      value: 1,
+    });
+  });
+
+  it("restores a language's own version in full", () => {
+    const rows = restorePlan(
+      input({ translatable: new Set(["title"]), versionLocale: "en" })
+    );
+
+    expect(rows.every(row => row.chosen)).toBe(true);
+  });
+});
+
 describe("restoresInEditor", () => {
   it("restores a version of the language being edited", () => {
     expect(restoresInEditor("es", "es")).toBe(true);

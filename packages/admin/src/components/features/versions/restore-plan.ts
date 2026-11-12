@@ -23,7 +23,11 @@ import {
 import type { VersionChanges } from "./version-changes";
 
 /** Why a field is listed but cannot be restored. */
-export type RestoreRowDisabled = "hidden" | "read-only" | "removed";
+export type RestoreRowDisabled =
+  | "hidden"
+  | "read-only"
+  | "removed"
+  | "no-language";
 
 /** One field the version holds differently from the editor. */
 export interface RestoreRow {
@@ -59,6 +63,13 @@ export interface RestorePlanInput {
   translatable?: ReadonlySet<string>;
   /** The fields the comparison names as no longer in the content type. */
   removed?: ReadonlySet<string>;
+  /**
+   * The language the version holds: null for one that holds none. On a
+   * translated document such a version's translated values belong to no
+   * language, so only its shared fields are restored, as the server's own
+   * restore of it does.
+   */
+  versionLocale?: string | null;
 }
 
 /** The reasons R-8 gives the person, as they read them. */
@@ -66,6 +77,7 @@ const REASONS: Record<RestoreRowDisabled, string> = {
   hidden: "Hidden: you can't read this field",
   "read-only": "You can't edit this field",
   removed: "No longer in this content type",
+  "no-language": "This version holds no language for this field",
 };
 
 export function restorePlan(input: RestorePlanInput): RestoreRow[] {
@@ -90,8 +102,22 @@ export function restorePlan(input: RestorePlanInput): RestoreRow[] {
     }
     // A field the version does not hold is not the version's to restore.
     if (!Object.hasOwn(input.snapshot, name)) continue;
-    const value = versionValues[name];
+    // A value the version cleared stays cleared: the form reads an empty
+    // stored value as no value, and an undefined one would be dropped by
+    // the save rather than clear the field.
+    const value = Object.hasOwn(versionValues, name)
+      ? versionValues[name]
+      : storedEmpty(input.snapshot[name]);
     if (sameFormValue(value, input.current[name])) continue;
+    // A translated value of a version that holds no language belongs to no
+    // language, so it is never put into the language being edited.
+    if (
+      input.versionLocale === null &&
+      input.translatable?.has(name) === true
+    ) {
+      rows.push({ ...base, ...disabledAs("no-language") });
+      continue;
+    }
     rows.push(
       input.canEdit(name)
         ? { ...base, chosen: true, value }
@@ -114,6 +140,14 @@ export function restorePlan(input: RestorePlanInput): RestoreRow[] {
     });
   }
   return rows;
+}
+
+/** An empty value as the version stored it: its own "" or [], else null. */
+function storedEmpty(stored: unknown): unknown {
+  if (stored === "" || (Array.isArray(stored) && stored.length === 0)) {
+    return stored;
+  }
+  return null;
 }
 
 function disabledAs(disabled: RestoreRowDisabled): {

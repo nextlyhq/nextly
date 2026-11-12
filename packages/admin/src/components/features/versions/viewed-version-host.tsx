@@ -629,6 +629,9 @@ function useFieldRestore(
       canEdit: editor.canEdit,
       ...(editor.translatable ? { translatable: editor.translatable } : {}),
       removed: removedFieldsOf(changes),
+      // As "Restore…" judges it: a version holding no language restores only
+      // its shared fields on a translated document.
+      versionLocale: viewing.locale,
     });
   }, [offered, editor, viewing, changes]);
   return useMemo(() => {
