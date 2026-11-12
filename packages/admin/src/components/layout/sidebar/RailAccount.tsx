@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The foot of the icon rail: the reader's Inbox (notifications, with the
- * unread count) and their account menu.
+ * The foot of the icon rail: plugins' own items placed there, the reader's
+ * Inbox (notifications, with the unread count) and their account menu.
  *
  * They lived at the right end of the top bar on every page. At the rail's
  * foot they stay in one place whatever the page, and the bar is left to the
@@ -24,11 +24,13 @@ import { cn } from "@admin/lib/utils";
 import {
   computeHiddenHeaderButtons,
   headerControlsSettled,
+  pluginUserMenuItems,
   type HeaderAnswersPending,
 } from "../header/header-visibility";
 import { shellAnswersMarker } from "../lib/shell-answers";
 
 import { RailFootGhost } from "./RailColumn";
+import { RailFootPluginPlace } from "./RailFootPluginItems";
 import { useNextDevOverlay } from "./use-next-dev-overlay";
 import { UserProfileDropdown } from "./UserProfileDropdown";
 
@@ -186,6 +188,8 @@ function RailAccountItems({
           until both can be drawn, so the rail never reads as missing them. */}
       {!settled && placement === "rail" ? <RailFootGhost /> : null}
       <div hidden={!settled} className={settled ? flow : undefined}>
+        {/* Plugins' own items at the rail's foot, before the Inbox. */}
+        <RailFootPluginPlace />
         {bellOffered && (
           <NotificationBell
             journalOffered={journalOffered}
@@ -199,6 +203,7 @@ function RailAccountItems({
             void logout();
           }}
           hidden={hidden}
+          pluginItems={pluginUserMenuItems(branding?.plugins)}
           side={side}
           align="end"
         />

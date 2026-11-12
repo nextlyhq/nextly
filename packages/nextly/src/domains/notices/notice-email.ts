@@ -221,8 +221,7 @@ function reportFailure(
     });
     return;
   }
-  throw new NextlyError({
-    code: "EXTERNAL_SERVICE_ERROR",
+  throw NextlyError.externalService({
     publicMessage: `A ${email.name} notice's email was not sent and will be tried again.`,
     logContext: { noticeId, reason: failure.reason },
   });
@@ -266,10 +265,11 @@ export async function sendNoticeEmail(
   if (shown === null) return null;
   const to = await activeAddress(db, shown.notice.userId);
   if (to === null) return null;
-  const message = email.message(
-    shown.notice,
-    await subjectOf(shown.kind, shown.notice.subjectId)
-  );
+  const subject = await subjectOf(shown.kind, shown.notice.subjectId);
+  // A subject gone since it was judged readable can no longer be judged: a kind that judges
+  // readers says nothing of it, as its list then does.
+  if (subject.subjectGone && shown.kind.readable !== undefined) return null;
+  const message = email.message(shown.notice, subject);
   if (message === null) return null;
   return sender.send({
     to,

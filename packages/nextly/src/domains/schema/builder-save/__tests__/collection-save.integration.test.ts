@@ -362,10 +362,18 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it("leaves no file and puts the definition back when the statements fail with nothing applied", async () => {
+      // Declared 255 characters wide, so making `code` unique is the index alone on every dialect
+      // (on MySQL a unique field that states no width is also bounded, a change of its own).
+      const code = (extra: Record<string, unknown> = {}) =>
+        text("code", {
+          options: { variant: "short" },
+          validation: { maxLength: 255 },
+          ...extra,
+        });
       await writeCollectionSave(deps(), {
         slug: "posts",
         previous: null,
-        entity: posts([text("title"), text("code")]),
+        entity: posts([text("title"), code()]),
         change: "create",
       });
       for (const id of ["a", "b"]) {
@@ -381,13 +389,12 @@ describe.each(getConfiguredTestDialects())(
         applied: await appliedRows(),
       };
 
-      // Two rows share a code, so making it unique fails on its first statement; on MySQL an
-      // unbounded text column cannot be keyed at all, so the save is refused before it writes.
+      // Two rows share a code, so making it unique fails on its first statement.
       await expect(
         writeCollectionSave(deps(), {
           slug: "posts",
-          previous: posts([text("title"), text("code")]),
-          entity: posts([text("title"), text("code", { unique: true })]),
+          previous: posts([text("title"), code()]),
+          entity: posts([text("title"), code({ unique: true })]),
           change: "update",
         })
       ).rejects.toBeDefined();
@@ -403,8 +410,8 @@ describe.each(getConfiguredTestDialects())(
       // Nothing of it is left to settle: the next save goes through.
       await writeCollectionSave(deps(), {
         slug: "posts",
-        previous: posts([text("title"), text("code")]),
-        entity: posts([text("title"), text("code"), text("subtitle")]),
+        previous: posts([text("title"), code()]),
+        entity: posts([text("title"), code(), text("subtitle")]),
         change: "update",
       });
       expect(await columns()).toContain("subtitle");

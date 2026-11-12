@@ -297,6 +297,25 @@ export async function readReviewStatesOutside(
 }
 
 /**
+ * The collections and Singles that stored review states name, each once: the entities a
+ * definition sweep may write through, an entity whose workflow was detached among them.
+ */
+export async function readReviewStateScopes(db: {
+  select<T = unknown>(
+    table: string,
+    options?: { columns?: string[]; distinct?: boolean }
+  ): Promise<T[]>;
+}): Promise<{ collections: string[]; singles: string[] }> {
+  const rows = await db.select<{ scopeKind: string; scopeSlug: string }>(
+    REVIEW_STATES_TABLE,
+    { columns: ["scopeKind", "scopeSlug"], distinct: true }
+  );
+  const of = (kind: ReviewScopeKind) =>
+    rows.filter(row => row.scopeKind === kind).map(row => row.scopeSlug);
+  return { collections: of("collection"), singles: of("single") };
+}
+
+/**
  * Points every review state of a collection or Single written under `from` at the definition
  * hash `to`, leaving the rest of each row as it is. Answers how many moved.
  */

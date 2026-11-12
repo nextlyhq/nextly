@@ -6,7 +6,9 @@
  * An import changes the whole site's SEO, so each route is for whoever holds
  * site-wide SEO (`manage-seo`). Pages are read and written as that person
  * too, and a page whose SEO they may not change is left out of the import
- * and said so in the dry run.
+ * and said so in the dry run. The routes only parse the request and hand it
+ * to the import engine (`import/plan`), as the person asking
+ * (`import/actor`), so a command on the server runs the same import.
  *
  * @module import/route
  */
@@ -16,13 +18,13 @@ import {
   respondDoc,
   type PluginRoute,
   type PluginRouteContext,
-  type ServiceOpts,
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
-import { asCaller, defaultLanguageOnly, queryOf } from "../bulk/route";
+import { defaultLanguageOnly, queryOf } from "../bulk/route";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 
+import { callerActor } from "./actor";
 import {
   IMPORT_APPLY_PATH,
   IMPORT_DRY_RUN_PATH,
@@ -37,6 +39,7 @@ import {
   applyImport,
   importGroups,
   planImport,
+  type ImportEngine,
   type ImportSetup,
 } from "./plan";
 import { count } from "./records";
@@ -99,12 +102,16 @@ async function requestOf(
   };
 }
 
-/** The person asking, reading and writing in the import's language. */
-function asIn(
+/** The import engine, run as the person asking. */
+async function engineFor(
   ctx: PluginRouteContext,
-  locale: string | undefined
-): ServiceOpts {
-  return { ...asCaller(ctx), ...(locale === undefined ? {} : { locale }) };
+  setup: ImportSetup
+): Promise<ImportEngine> {
+  return {
+    ctx,
+    actor: await callerActor(ctx, { pagePermissions: setup.pagePermissions }),
+    setup,
+  };
 }
 
 /** The import's routes. */
@@ -118,7 +125,7 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       handler: async (req, ctx) => {
         const locale = await defaultLanguageOnly(ctx, queryOf(req).locale);
         const body: ImportGroupsBody = {
-          groups: await importGroups(ctx, setup, asIn(ctx, locale), locale),
+          groups: await importGroups(await engineFor(ctx, setup), locale),
         };
         return respondDoc(body);
       },
@@ -129,12 +136,7 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
         const request = await requestOf(ctx, await parsedBody(req, REQUEST));
-        const plan = await planImport(
-          ctx,
-          setup,
-          request,
-          asIn(ctx, request.locale)
-        );
+        const plan = await planImport(await engineFor(ctx, setup), request);
         return respondDoc(plan.body);
       },
     },
@@ -145,13 +147,17 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       handler: async (req, ctx) => {
         const body = await parsedBody(req, APPLY);
         const request = await requestOf(ctx, body);
-        const applied = await applyImport(
-          ctx,
-          setup,
-          request,
-          body.plan,
-          asIn(ctx, request.locale)
-        );
+        // Worked out again, and applied only where it is exactly the one the
+        // dry run showed.
+        const plan = await planImport(await engineFor(ctx, setup), request);
+        if (plan.body.plan !== body.plan) {
+          throw NextlyError.conflict({
+            reason: "state",
+            message:
+              "Pages have changed since the dry run, so it no longer shows what would happen. Nothing was imported. Do the dry run again.",
+          });
+        }
+        const applied = await applyImport(plan);
         const redirects =
           applied.redirects > 0
             ? ` and added ${count(applied.redirects, "redirect")}`

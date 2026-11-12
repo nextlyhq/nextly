@@ -82,10 +82,7 @@ export function ReleaseMemberRemoveDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {remove.isError ? (
-          <p
-            role="alert"
-            className="text-sm text-danger-text"
-          >
+          <p role="alert" className="text-sm text-danger-text">
             {releaseErrorMessage(
               remove.error,
               "This document was not removed. It is still in the release."

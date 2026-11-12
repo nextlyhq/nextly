@@ -82,7 +82,7 @@ describe.each(getConfiguredTestDialects())(
       const head = await headOf(t, "about");
 
       expect(head.robots).toMatchObject({ index: false });
-      expect(head.title).toBe("About | Acme");
+      expect(head.title).toEqual({ absolute: "About | Acme" });
     });
 
     it("names the site on the social card and in structured data as the title does", async () => {
@@ -94,7 +94,7 @@ describe.each(getConfiguredTestDialects())(
 
       const head = await headOf(t, "about");
 
-      expect(head.title).toBe("About | Acme");
+      expect(head.title).toEqual({ absolute: "About | Acme" });
       expect(head.openGraph).toMatchObject({ siteName: "Acme" });
       expect(JSON.stringify(head)).not.toContain("Old name");
     });

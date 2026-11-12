@@ -7,6 +7,7 @@ import {
   PageContainer,
   pageRhythm,
 } from "@admin/components/layout/page-container";
+
 import { PluginSlot } from "../plugin-slot";
 
 interface PluginPageHostProps {

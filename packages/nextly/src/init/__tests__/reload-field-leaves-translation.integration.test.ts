@@ -83,16 +83,27 @@ type Body = {
   pairUnique?: true;
   /** `body` declared under this name instead, as a rename in the config. */
   renamedTo?: string;
+  /** The collection is Draft/Published, so each language publishes on its own. */
+  status?: true;
 };
 
 /** A translated collection whose `body` is translated or shared, with its settings. */
 const collectionWith = (
   slug: string,
-  { summary, titleType, indexedUnique, pairUnique, renamedTo, ...body }: Body
+  {
+    summary,
+    titleType,
+    indexedUnique,
+    pairUnique,
+    renamedTo,
+    status,
+    ...body
+  }: Body
 ) =>
   defineCollection({
     slug,
     localized: true,
+    ...(status ? { status: true } : {}),
     ...(indexedUnique ? { indexes: [{ fields: ["body"], unique: true }] } : {}),
     ...(pairUnique
       ? { indexes: [{ fields: ["body", "title"], unique: true }] }
@@ -351,18 +362,51 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toThrow();
     });
 
-    it("refuses a Required field while an entry has no English value, changing nothing", async () => {
-      await seed({ e1: { en: "Hello", es: "Hola" }, e2: { es: "Solo" } });
+    // An entry with a value in another language keeps that one, so only an entry with none in
+    // any language is left without a value.
+    it("refuses a Required field while an entry has no value in any language, changing nothing", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" }, e2: {} });
 
       loaded.config = configWith({ localized: false, required: true });
       await reloadNextlyConfig();
 
       // The refusal of the setting, not the terminal prompt for a required column.
-      expect(told()).toMatch(/no English body/);
+      expect(told()).toMatch(/would have no body once it is shared/);
       expect(told()).toMatch(/remove `required`.*save/s);
       expect(await columnsOf(TABLE)).not.toContain("body");
       expect(await columnsOf(COMPANION)).toContain("body");
       expect(await archived()).toEqual([]);
+    });
+
+    // Each language publishes on its own: an English draft is not what readers saw, so the
+    // published Spanish is the value kept, as the Schema Builder's save keeps it.
+    it("keeps the published Spanish over an English draft of a Draft/Published collection", async () => {
+      loaded.config = configWith(
+        { localized: true },
+        { localized: true, status: true }
+      );
+      await reloadNextlyConfig();
+      const companionOf = `${OTHER_TABLE}_locales`;
+      expect(await columnsOf(companionOf)).toContain("_status");
+      await handle.adapter.executeQuery(
+        `INSERT INTO ${q(OTHER_TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("status")}) VALUES ('d1', 'd1', 'd1', 'published')`
+      );
+      await handle.adapter.executeQuery(
+        `INSERT INTO ${q(companionOf)} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("body")}) VALUES ('d1', 'en', 'draft', 'Draft'), ('d1', 'es', 'published', 'Hola')`
+      );
+
+      loaded.config = configWith(
+        { localized: true },
+        { localized: false, status: true }
+      );
+      await reloadNextlyConfig();
+
+      const [main] = await handle.adapter.executeQuery<{
+        body: string | null;
+      }>(
+        `SELECT ${q("body")} AS body FROM ${q(OTHER_TABLE)} WHERE ${q("id")} = 'd1'`
+      );
+      expect(main?.body).toBe("Hola");
     });
 
     it("makes a Unique field unique once its values are copied", async () => {

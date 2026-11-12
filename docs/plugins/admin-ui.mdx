@@ -271,6 +271,95 @@ contributes: {
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
 
+### Where your own item goes
+
+> **Experimental.** The `place` option may change before it is marked stable.
+
+A plugin may add one item of its own to the admin's frame, under `header`, and choose
+where it goes:
+
+| `place`               | What it takes                        | Mounted                              |
+| --------------------- | ------------------------------------ | ------------------------------------ |
+| `"bar"` (the default) | a component, `slot`                  | for as long as the top bar is        |
+| `"rail-foot"`         | a component, `slot`                  | for as long as the top bar is        |
+| `"menu"`              | a declared `item`, never a component | only while the person's menu is open |
+
+Choose the **bar** or the **rail's foot** for a component that must stay mounted: one
+that draws a button on every page, or one that draws nothing and only registers what a
+page needs. The bar puts it at the top bar's right end; the rail's foot puts it just above
+the Inbox, where it moves into the navigation drawer on a narrow window and into the bar
+while a screen hides the rail, without remounting. Choose the **menu** for a simple link
+or action: it is drawn under "Help and community" in the person's menu, after the
+built-in links.
+
+The bar, as plugins have always declared it (nothing changes for an existing plugin, and
+the deprecated `headerSlot` still means the bar):
+
+```ts
+contributes: {
+  admin: {
+    header: { slot: "@acme/nextly-plugin-reports/admin#PublishBadge" },
+  },
+}
+```
+
+The rail's foot:
+
+```ts
+contributes: {
+  admin: {
+    header: {
+      slot: "@acme/nextly-plugin-reports/admin#ReportsHelper",
+      place: "rail-foot",
+    },
+  },
+}
+```
+
+The person's menu, with a link: an admin path opens in place, and an absolute URL opens
+in a new tab.
+
+```ts
+contributes: {
+  admin: {
+    header: {
+      place: "menu",
+      item: { label: "Reports help", icon: "BookOpen", to: "/admin/plugins/reports" },
+    },
+  },
+}
+```
+
+Or with an action, the same `action` a row action takes: `{ open }` draws your component
+in a dialog, and `{ run }` calls one of your routes with
+`{ action: "<plugin-slug>.user-menu", rows: [] }`. The route is then reachable as that
+item, as a route a row action runs is reachable only as that action (see the
+[API reference](/docs/plugins/api-reference)).
+
+```ts
+contributes: {
+  admin: {
+    header: {
+      place: "menu",
+      item: {
+        label: "Rebuild reports",
+        icon: "RefreshCw",
+        action: { run: { method: "POST", path: "/rebuild" } },
+      },
+    },
+  },
+}
+```
+
+`icon` names a Lucide icon from the admin's icon set. The menu takes no `slot`: the
+compiler refuses one, and an item with neither `to` nor `action`, or both, is refused by
+the compiler too. An `action` is checked as a row action's is: `open` names a component,
+and `run` names one of your own staff routes by method, path and mount. An item that fails
+any of this, as one written in plain JavaScript can, is left out of the menu and reported
+when the app starts in development. `hideDefaults` and `hide` work alongside any place,
+and hide only the built-in buttons. Several plugins in one place are ordered by their
+admin `order`, then, in the menu, by label.
+
 ### Pages that look like core pages
 
 > **Experimental.** `PageFrame` and `PageHeader` may change before they are marked
@@ -912,6 +1001,73 @@ from `nextly` and not from `@nextlyhq/plugin-sdk`. The SDK is the only surface a
 should depend on, so reaching into core for a constant would tie your plugin to core's
 layout for the sake of one string. A host config, which already imports from `nextly`,
 can use the constant, and does so below.
+
+### A standalone plugin's panel
+
+A standalone plugin's panel lists its collections, then its menu items. The plugin can
+group those items under headings, and show a number beside each, all as data: no code
+of yours runs in the browser to draw the panel. This is experimental.
+
+```ts
+contributes: {
+  collections: [patterns],
+  dashboard: { attention: [bindingsToFix] }, // id "acme/bindings-to-fix"
+  admin: {
+    pages: [{ path: "bindings", component: "@acme/plugin/admin#Bindings" }],
+    panel: {
+      groups: [
+        { id: "library", label: "Library" },
+        { id: "checks", label: "Checks" },
+      ],
+    },
+    menu: [
+      {
+        label: "Patterns",
+        to: "/admin/collections/patterns",
+        collection: "patterns",
+        group: "library",
+        count: { collection: "patterns" },
+      },
+      {
+        label: "Bindings to fix",
+        to: "/admin/plugins/acme-plugin/bindings",
+        group: "checks",
+        badge: { attention: "acme/bindings-to-fix" },
+      },
+    ],
+  },
+},
+```
+
+Groups are drawn in the order declared, each under its heading; items naming no group
+come first, under no heading, as every item does today. A heading with no item the
+reader may see is not drawn.
+
+An item takes a `count` or a `badge`, never both. A count is a quiet number, shown at 0
+too: how many there are. A badge is a pill shown only while its number is above 0: how
+many need doing. Either names what it counts in one of two forms:
+
+- `{ collection, where? }` counts one of the plugin's own collections, by its declared
+  slug (a host's rename is followed), narrowed by `where` in the entry list's grammar.
+  The number is the reader's: a collection they may not read shows no number. A
+  collection hidden from the navigation (`admin.hidden`) is counted all the same, so a
+  library the plugin lists only in its own panel can show its size there.
+- `{ attention }` reads one of the plugin's own Needs your attention items, by its id:
+  the count that item's line shows the reader, and 0 when nothing is waiting for them.
+
+The numbers are read while the panel is open, in one request for the whole panel that
+names only the plugin: the server counts what the plugin declared, so nothing the browser
+sends chooses what is counted. They never hold the panel up: the items are drawn first, and a number that cannot be read is left
+out. A link's accessible name includes its number ("Patterns, 12").
+
+A development start reports a `group` the plugin does not declare (the item is listed
+with the ungrouped ones), a count naming a collection the plugin does not contribute or
+an attention item it does not declare (the item is drawn without a number), and a menu
+item linking to one of the plugin's own pages (`/admin/plugins/<slug>/<path>`) that
+`contributes.admin.pages` does not register, which is left out of the admin in every
+environment. It also reports a count or badge reading an attention item gated on
+`collections` that are all hidden from the navigation: Needs your attention leaves hidden
+collections out, so that item is shown to nobody and its number is always 0.
 
 ## Host overrides (D49)
 

@@ -125,6 +125,8 @@ export interface Named {
   name: string;
   /** Its own public address, where it has one. */
   url?: string;
+  /** A person's role, where their entry gives one. */
+  jobTitle?: string;
 }
 
 /** The name an entry or a group is known by. */
@@ -224,9 +226,21 @@ async function namedEntry(
     locale,
     undefined
   );
-  return address === undefined
-    ? { name }
-    : { name, url: new URL(address, `${origin}/`).href };
+  const jobTitle = jobTitleIn(entry);
+  return {
+    name,
+    ...(address === undefined
+      ? {}
+      : { url: new URL(address, `${origin}/`).href }),
+    ...(jobTitle === undefined ? {} : { jobTitle }),
+  };
+}
+
+/** A person's role, as an author's entry may hold it. */
+function jobTitleIn(record: Record<string, unknown>): string | undefined {
+  return (
+    textOf(record.jobTitle) ?? textOf(record.role) ?? textOf(record.position)
+  );
 }
 
 /** A detail's value, the first of a list where the field holds several. */
@@ -259,7 +273,9 @@ export async function namedOf(
       return namedEntry(ctx, target, value, input.locale, origin);
     }
     const name = nameIn(value);
-    return name === undefined ? undefined : { name };
+    if (name === undefined) return undefined;
+    const jobTitle = jobTitleIn(value);
+    return jobTitle === undefined ? { name } : { name, jobTitle };
   }
   const text = textOf(value);
   if (text === undefined) return undefined;
@@ -297,4 +313,111 @@ export async function pictureOf(
   read: DetailRead
 ): Promise<PageMetadataImage | undefined> {
   return imageOf(ctx, read.value);
+}
+
+/** The name one listed item goes by: text, or an entry or group's name. */
+function itemName(item: unknown, relation: Relation | undefined): string[] {
+  if (isRecord(item)) {
+    // A relationship to several collections holds `{ relationTo, value }`.
+    const inner = isRecord(item.value) ? item.value : item;
+    const name = nameIn(inner);
+    return name === undefined ? [] : [name];
+  }
+  // Text in a relationship field is an entry's id, which is not a name.
+  if (relation !== undefined || typeof item !== "string") return [];
+  const text = textOf(item);
+  return text === undefined ? [] : [text];
+}
+
+/**
+ * The names a detail lists, such as a post's tags: text, entries or groups
+ * by their name, each once. A relationship the route read without its
+ * entries names nothing, since an id is not a name.
+ */
+export async function namesOf(
+  ctx: PluginContext,
+  input: PageMetadataInput,
+  read: DetailRead
+): Promise<string[]> {
+  const items = Array.isArray(read.value) ? read.value : [read.value];
+  const relation = items.some(item => typeof item === "string")
+    ? await relationOf(ctx, input, read.field)
+    : undefined;
+  return [...new Set(items.flatMap(item => itemName(item, relation)))];
+}
+
+/** Rich text's kinds of node that run on inside a line rather than start one. */
+const INLINE_NODES = new Set(["link", "autolink", "hashtag", "mark"]);
+
+/** Whether a node runs on inside its line: text, or an inline element. */
+function inline(node: unknown): boolean {
+  return (
+    isRecord(node) &&
+    (typeof node.text === "string" ||
+      (typeof node.type === "string" && INLINE_NODES.has(node.type)))
+  );
+}
+
+/** The text of a node and everything inside it, as it reads. */
+function textIn(node: unknown, depth: number): string {
+  // Rich text nests a few levels deep; a deeper value is not page text.
+  if (depth > 64) return "";
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) {
+    return node.map(each => textIn(each, depth + 1)).join(" ");
+  }
+  if (!isRecord(node)) return "";
+  if (node.type === "linebreak") return " ";
+  if (typeof node.text === "string") return node.text;
+  if (node.root !== undefined) return textIn(node.root, depth + 1);
+  if (!Array.isArray(node.children)) return "";
+  // Text and inline elements join as stored, so a word split by formatting
+  // stays one word; a block, such as a paragraph, starts a new line.
+  return node.children
+    .map(child => {
+      const text = textIn(child, depth + 1);
+      return inline(child) ? text : ` ${text} `;
+    })
+    .join("");
+}
+
+/**
+ * The words of a value as a reader sees them: text as it is, and rich text
+ * (a tree of nodes holding `text`) with its words in order, inline text run
+ * together as stored and blocks apart. Nothing else.
+ */
+export function plainTextOf(value: unknown): string {
+  return textIn(value, 0).replace(/\s+/g, " ").trim();
+}
+
+/** How many words a text has. */
+export function wordCountOf(text: string): number {
+  return text === "" ? 0 : text.split(" ").length;
+}
+
+/** One question a page answers, as its reader sees it. */
+export interface Question {
+  question: string;
+  answer: string;
+}
+
+/**
+ * The questions and answers a field holds: a list of items, each with its
+ * question (`question`, `q`, `name` or `title`) and its answer (`answer`,
+ * `a` or `text`, plain or rich text). An item missing either is left out.
+ */
+export function questionsOf(value: unknown): Question[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    if (!isRecord(item)) return [];
+    const question =
+      textOf(item.question) ??
+      textOf(item.q) ??
+      textOf(item.name) ??
+      textOf(item.title);
+    const answer = plainTextOf(item.answer ?? item.a ?? item.text);
+    return question === undefined || answer === ""
+      ? []
+      : [{ question, answer }];
+  });
 }
