@@ -546,6 +546,11 @@ export function pluginVersionWrites(
             },
           });
         }
+        // A restore's update takes the document's row lock in a transaction
+        // of its own. Inside the plugin's open transaction, which may hold
+        // that lock, it would wait on it until the database gave up, as a
+        // discard would; it is refused at once instead, before any read.
+        assertNoOpenTransaction(getService("adapter"), "versions.restore");
         const writer = await checkedWriter(ref, resolved, "restore", {
           versionNo,
         });
