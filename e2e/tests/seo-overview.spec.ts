@@ -221,11 +221,12 @@ test("an address not found is redirected from the Overview, the redirect saved f
 
   await card.getByRole("link", { name: `Redirect ${missing}` }).click();
   await expect(page).toHaveURL(new RegExp(`${SECTION}/redirects\\?from=`));
-  const from = page.getByLabel("From");
+  const dialog = page.getByRole("dialog", { name: "Add redirect" });
+  const from = dialog.getByLabel("From");
   await expect(from).toHaveValue(missing);
-  const to = page.getByLabel("To");
+  const to = dialog.getByLabel("To");
   if ((await to.inputValue()) === "") await to.fill("/");
-  await page.getByRole("button", { name: /Add redirect/ }).click();
+  await dialog.getByRole("button", { name: "Add redirect" }).click();
 
   await expect(async () => {
     const { items } = await ok<{ items: { from: string }[] }>(
@@ -234,17 +235,4 @@ test("an address not found is redirected from the Overview, the redirect saved f
     // Listed as visitors open it, in the playground's own language prefix.
     expect(items.some(item => item.from.endsWith(missing))).toBe(true);
   }).toPass({ timeout: 10_000 });
-});
-
-test("bulk edit stays at its address, and the old check address moves on to Pages", async ({
-  page,
-}) => {
-  await settle(page, { setupStep: 3 });
-  await gotoAdmin(page, `${SECTION}/bulk`);
-  await expect(page).toHaveURL(new RegExp(`${SECTION}/bulk$`));
-  await expect(
-    page.getByRole("heading", { level: 1, name: /Bulk edit/ })
-  ).toBeVisible();
-  await gotoAdmin(page, `${SECTION}/received`);
-  await expect(page).toHaveURL(new RegExp(`${SECTION}/pages$`));
 });

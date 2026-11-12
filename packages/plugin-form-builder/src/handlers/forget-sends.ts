@@ -177,12 +177,7 @@ async function forgetSubmissionSends(
   if (write.operation !== "delete" || write.id === undefined) return;
   const slug = sendsSlugOf(ctx);
   await inBatches(ctx, write, slug, sends =>
-    forgetBatch(
-      ctx,
-      write,
-      slug,
-      sends
-    )
+    forgetBatch(ctx, write, slug, sends)
   );
   await inBatches(ctx, write, resendsSlugOf(ctx), async requests => {
     for (const row of requests) {

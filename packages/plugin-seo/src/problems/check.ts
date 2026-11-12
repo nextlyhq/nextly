@@ -667,7 +667,8 @@ async function redirectChains(ctx: PluginContext): Promise<RedirectChain[]> {
     const path = pathOf(redirect.target);
     const id = await redirectMeeting(ctx, { locale: redirect.locale, path });
     const next = id === null || id === redirect.id ? undefined : byId.get(id);
-    if (next === undefined) continue;
+    // A redirect to an address that is gone is one hop, then 410: no chain.
+    if (next === undefined || next.gone) continue;
     chains.push({
       source: redirect.source,
       target: redirect.target,

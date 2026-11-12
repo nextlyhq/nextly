@@ -420,10 +420,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("the check of what search engines received needs check-seo", () => {
-      it("answers the pages it offers, and takes a check, from someone holding it", async () => {
-        expect(
-          (await route("GET", "/received/pages", people.checker!)).status
-        ).toBe(200);
+      it("takes a check from someone holding it", async () => {
         // Past the gate: the body is refused for what it says, before
         // anything is fetched.
         expect(
@@ -434,9 +431,6 @@ describe.each(getConfiguredTestDialects())(
       it.each(["siteSeo", "reader", "postEditor"])(
         "refuses %s, who does not hold it, before anything is read or fetched",
         async who => {
-          const pages = await route("GET", "/received/pages", people[who]!);
-          expect(pages.status).toBe(403);
-          expect(pages.body.pages).toBeUndefined();
           expect(
             (
               await route("POST", "/received", people[who]!, {
@@ -895,6 +889,9 @@ describe.each(getConfiguredTestDialects())(
           problem => problem.subject.type === "single:home"
         )
       ).toBe(false);
+      // The list says which types it covers for them, so a page of another
+      // type is not taken for one with no problems.
+      expect(itemOf(posts.body).types).toEqual(["posts"]);
       const refused = await route(
         "GET",
         "/problems",

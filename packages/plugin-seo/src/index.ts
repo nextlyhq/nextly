@@ -7,7 +7,7 @@ export { seoPlugin } from "./plugin";
 export type { SeoPluginOptions } from "./plugin";
 export { defaultSeoFields } from "./fields";
 // Pages with no entry: the one line a page built in code adds so the SEO set
-// for its address on the Pages and addresses screen reaches its head, and
+// for its address on Pages reaches its head, and
 // its structured data from the same answer.
 export { seoMetadata, seoStructuredData } from "./code-pages/metadata";
 export type { RouteMetadata, SeoMetadataOptions } from "./code-pages/metadata";

@@ -3,11 +3,13 @@
  * guard, plain-text copies and the IndexNow key are all answered from it, so
  * a site whose `proxy.ts` is not wired saves redirects that are never served.
  *
- * The Proxy says so itself. Each server notes the time in the address record
- * the first time a request passes through its Proxy, and again at most once
- * an hour, in the background, so a page request never waits on it. The admin
- * and the problem list read the note: a Proxy that has never noted anything
- * is not wired, and one silent for {@link PROXY_QUIET_MS} has stopped running.
+ * The Proxy says so itself. Each server reads the note the first time a
+ * request passes through its Proxy, and again at most once an hour, in the
+ * background, so a page request never waits on it. It writes a new time only
+ * where the stored one is an hour old or more, so a site writes the note at
+ * most once an hour however many servers start. The admin and the problem
+ * list read the note: a Proxy that has never noted anything is not wired, and
+ * one silent for {@link PROXY_QUIET_MS} has stopped running.
  *
  * @module redirects/proxy-seen
  */
@@ -51,7 +53,22 @@ async function seenRow(
   };
 }
 
-/** Record that the Proxy handled a request at `at`. */
+/**
+ * Whether a note stored at `stored` still says the Proxy runs at `at`: made
+ * within the hour, and not after `at`, so a clock set back is noted afresh.
+ */
+function stillCurrent(stored: string | undefined, at: Date): boolean {
+  const time = stored === undefined ? Number.NaN : Date.parse(stored);
+  if (Number.isNaN(time)) return false;
+  const age = at.getTime() - time;
+  return age >= 0 && age < PROXY_NOTE_EVERY_MS;
+}
+
+/**
+ * Record that the Proxy handled a request at `at`, where the stored note is
+ * not already current: a note within the hour says the same, and each write
+ * is a whole entry save.
+ */
 export async function recordProxySeen(
   ctx: PluginContext,
   at: Date = new Date()
@@ -59,6 +76,7 @@ export async function recordProxySeen(
   const slug = recordSlug(ctx);
   const path = at.toISOString();
   const found = await seenRow(ctx);
+  if (stillCurrent(found?.at, at)) return;
   if (found !== undefined) {
     await ctx.services.collections.updateEntry(slug, found.id, {
       path,
@@ -80,19 +98,22 @@ export async function recordProxySeen(
 
 /**
  * A note-taker for one server: `note` records the Proxy as seen the first
- * time and then at most every {@link PROXY_NOTE_EVERY_MS}, without waiting.
- * `now` is the clock, replaced by tests.
+ * time and then at most every {@link PROXY_NOTE_EVERY_MS}. The Proxy does not
+ * wait for it; the promise it answers settles once the note is made or
+ * failed, and never rejects. `now` is the clock, replaced by tests.
  */
 export function proxySeenNotes(now: () => number = Date.now): {
-  note(ctx: PluginContext): void;
+  note(ctx: PluginContext): Promise<void>;
 } {
   let notedAt: number | undefined;
   return {
     note(ctx) {
       const at = now();
-      if (notedAt !== undefined && at - notedAt < PROXY_NOTE_EVERY_MS) return;
+      if (notedAt !== undefined && at - notedAt < PROXY_NOTE_EVERY_MS) {
+        return Promise.resolve();
+      }
       notedAt = at;
-      recordProxySeen(ctx, new Date(at)).catch((error: unknown) => {
+      return recordProxySeen(ctx, new Date(at)).catch((error: unknown) => {
         // Tried again with the next request: a missed note costs nothing.
         notedAt = undefined;
         ctx.logger.warn("The SEO plugin could not note that the Proxy runs", {

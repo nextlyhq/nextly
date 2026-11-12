@@ -45,20 +45,29 @@ export interface ProxyStatus {
   lastSeen: string | null;
 }
 
-/** Whether a redirect is for good or for now. */
-export type RedirectType = "permanent" | "temporary";
+/**
+ * Whether a redirect is for good (301) or for now (302), or the address is
+ * gone for good and answers 410 with no To address.
+ */
+export type RedirectType = "permanent" | "temporary" | "gone";
 
 /** A redirect as the screen shows it, with addresses as visitors open them. */
 export interface RedirectView {
   id: string;
   from: string;
+  /** Where it sends people; empty for an address that is gone. */
   to: string;
   type: RedirectType;
   /** `automatic` for a page's own move, `person` from the screen, `import` from a file. */
   origin: "automatic" | "person" | "import";
   addedBy: string | null;
+  /** Whether the person reading the list added it. */
+  byYou: boolean;
   addedAt: string | null;
-  editedAt: string | null;
+  /** How many requests it has answered, as the site's Proxy counted them. */
+  hits: number;
+  /** When it last answered one, as ISO text; null before the first. */
+  lastHit: string | null;
 }
 
 /** An address not found as the screen shows it. */
@@ -78,6 +87,14 @@ export interface NotFoundView {
   kind: "missing" | "moved";
   /** The closest live page, offered as the To address. */
   suggestion: string | null;
+  /**
+   * Where the last visitor who came from somewhere came from: another
+   * site's host, or a path on this site. Null where every one came
+   * directly, with no page that linked them.
+   */
+  cameFrom: string | null;
+  /** Someone chose to ignore it: listed only when ignored ones are shown. */
+  ignored: boolean;
 }
 
 /** What a row of an imported file would do. */
