@@ -30,6 +30,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
+import { DEFAULT_TITLE_PATTERN } from "../../settings/patterns";
 import { seoPlugin } from "../../plugin";
 import { coverageGroupOf, coverageOf, type SiteAddress } from "../contract";
 import { seoMetadata, seoStructuredData } from "../metadata";
@@ -439,6 +440,46 @@ describe.each(getConfiguredTestDialects())(
           coverage.bothWorkedOut +
           coverage.oneOfEach
       ).toBe(coverage.total);
+    });
+
+    it("lists the description each page is served, and the pattern a title was made from", async () => {
+      const t = await boot();
+      const owner = await personWith(t, "owner", "all");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteName: "Acme",
+          description: "Acme makes things.",
+        },
+      });
+      await t.nextly.create({
+        collection: PAGES,
+        data: {
+          title: "typed",
+          slug: "typed",
+          status: "published",
+          seo: { metaTitle: "Typed", metaDescription: "Typed for it." },
+        },
+      });
+      await seoMetadata("/contact", {
+        metadata: { title: "Contact us", description: "Write to us." },
+      });
+
+      const { items } = await addressesFor(owner);
+      const byPath = Object.fromEntries(
+        (items ?? []).map(item => [item.path, item])
+      );
+      // Typed for the entry: its own description, and no pattern.
+      expect(byPath["/typed"]?.description).toBe("Typed for it.");
+      expect(byPath["/typed"]?.titlePattern).toBeUndefined();
+      // Worked out: the site's description, and the pattern the title came from.
+      expect(byPath["/about"]?.description).toBe("Acme makes things.");
+      expect(byPath["/about"]?.title).toBe("About | Acme");
+      expect(byPath["/about"]?.titlePattern).toBe(DEFAULT_TITLE_PATTERN);
+      // Set in the route's code, for a page built in code.
+      expect(byPath["/contact"]?.description).toBe("Write to us.");
+      expect(byPath["/contact"]?.titlePattern).toBeUndefined();
     });
 
     it("titles a page with nothing set by the site's pattern and the page's name", async () => {

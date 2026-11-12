@@ -322,7 +322,7 @@ export function problemsHref(severity?: ProblemSeverity): string {
  * The id the page's SEO tab is opened by in an editor's address
  * (`?tab=<id>`). An editor without the tab opens its content instead.
  */
-const SEO_TAB_ID = "nextlyhq-plugin-seo.tab";
+export const SEO_TAB_ID = "nextlyhq-plugin-seo.tab";
 
 /** What a problem of the whole site is about. */
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };

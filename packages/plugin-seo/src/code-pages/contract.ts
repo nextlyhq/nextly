@@ -122,6 +122,13 @@ export interface SiteAddress {
   standing: AddressStanding;
   /** The title search engines are given, where there is one. */
   title?: string;
+  /**
+   * The pattern that title was made from, such as `{Title} | {Site name}`,
+   * where the content type's or the site's pattern gave it.
+   */
+  titlePattern?: string;
+  /** The description search engines are given, where there is one. */
+  description?: string;
   /** The page's official address, where it has one. */
   canonical?: string;
   /** Where its served title and description come from. */
