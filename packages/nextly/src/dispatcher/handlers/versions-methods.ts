@@ -687,16 +687,16 @@ export async function setVersionLabelForDocument(
   // redaction the version-detail endpoint applies.
   const { snapshot: _snapshot, ...meta } = row;
 
-  // The same shape a history list returns, author included. Without this the
-  // renamed row comes back carrying only an author id, and an admin that
-  // renders the response directly would show the version losing its author the
-  // moment it is named.
   // It names only the restored fields the caller may read, as a list does.
   const [readable] = await readableFieldSources([meta], {
     ref,
     user: args.user,
     authenticatedScope: readAuthenticatedScope(),
   });
+  // The same shape a history list returns, author included. Without this the
+  // renamed row comes back carrying only an author id, and an admin that
+  // renders the response directly would show the version losing its author the
+  // moment it is named.
   const [withAuthor] = await attachVersionAuthors([readable]);
   return withAuthor as unknown as VersionRow;
 }
