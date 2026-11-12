@@ -818,6 +818,28 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * Rows in groups and rows that open a region below them (@experimental),
+ * taken by `DataTableView` and `ListView` as `grouping` and `rowDetail`.
+ * `DataTableGrouping` places each row in a `DataTableGroup` and draws the
+ * group under a header row with its title, a badge, a count (by default its
+ * rows, in words) and actions; each group is a row group named by its title,
+ * and with `collapsible` its title is the button that folds its rows.
+ * `DataTableRowDetail` gives a row a toggle in its first column, a button with
+ * `aria-expanded` that opens a region below the row, named by the row's
+ * identifying cell. Either state is the list's, or the page's when it passes
+ * the ids. The narrow card view draws the same groups as sections and the
+ * same toggle inside each card.
+ *
+ * Intended to be stable: they are the table's own props, and they graduate
+ * with `ListView` once a first-party plugin's list exercises them.
+ */
+export type {
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
+} from "@nextlyhq/admin";
+
+/**
  * The admin's list surface around that table (@experimental): `ListView`
  * composes `DataTableView` with the one toolbar every admin list draws — the
  * search field, filters in a dropdown or inline, the columns menu and
@@ -920,6 +942,19 @@ export type {
  */
 export { SettingsRowGroup } from "@nextlyhq/admin";
 export type { SettingsRowGroupProps } from "@nextlyhq/admin";
+
+/**
+ * Where a flow of a few steps is (@experimental): a numbered row of steps,
+ * each done, current or to come, the one the email provider setup draws.
+ * `current` is the current step's index from 0; it carries
+ * `aria-current="step"`, and a done step says "(done)" in words as well as
+ * with a tick. A done step with an `href` links back to its page, or with
+ * `onSelect` runs it from a button; a step not yet reached never does.
+ *
+ * Intended to be stable: the admin's own guided setup draws its steps with it.
+ */
+export { Stepper } from "@nextlyhq/admin";
+export type { StepperProps, StepperStep, StepState } from "@nextlyhq/admin";
 
 /**
  * The field-UI kit (@experimental): controlled, form-library-agnostic

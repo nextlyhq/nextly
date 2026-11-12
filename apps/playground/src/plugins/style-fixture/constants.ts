@@ -51,9 +51,10 @@ export const PANEL_PAGE_PATHS = {
 } as const;
 
 /**
- * Plugin pages drawn from the SDK's page building blocks — the list surface,
- * the top-bar trail, the segmented control, the checklist, the settings rows
- * and the status badge — so a real plugin page reaches each through the SDK
+ * Plugin pages drawn from the SDK's page building blocks — the list surface
+ * with its grouped rows and row regions, the top-bar trail, the segmented
+ * control, the checklist, the settings rows, the stepper, the save bar and
+ * the status badge — so a real plugin page reaches each through the SDK
  * and the visual check can capture them. Each page's address under
  * `/admin/plugins/style-fixture/` is its key here.
  */
@@ -61,4 +62,6 @@ export const BLOCK_PAGE_PATHS = {
   "blocks-overview": "playground/style-fixture#BlocksOverviewPage",
   "blocks-list": "playground/style-fixture#BlocksListPage",
   "blocks-settings": "playground/style-fixture#BlocksSettingsPage",
+  "blocks-groups": "playground/style-fixture#BlocksGroupsPage",
+  "blocks-steps": "playground/style-fixture#BlocksStepsPage",
 } as const;

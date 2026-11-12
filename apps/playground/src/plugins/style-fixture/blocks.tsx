@@ -3,7 +3,9 @@
 /**
  * Plugin pages drawn the way a plugin author draws one, from the SDK's page
  * building blocks only: an overview with a checklist, a list page on the
- * admin's list surface, and a settings form in the settings row layout. Each
+ * admin's list surface, a settings form in the settings row layout, a list of
+ * grouped rows that open to list their pages, and a flow of steps above a save
+ * bar saying what changed. Each
  * sets its trail in the top bar with `Breadcrumbs`. The data is fixed, so the
  * visual check captures the same screen every run, and nothing here depends on
  * the admin's stylesheet scanning this file: only kit components and inline
@@ -34,9 +36,11 @@ import {
   SelectTrigger,
   SelectValue,
   SettingsRowGroup,
+  Stepper,
   Textarea,
   useTableColumns,
   type BadgeProps,
+  type DataTableGroup,
   type NextlyColumn,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useMemo, useState } from "react";
@@ -296,8 +300,224 @@ function BlocksSettingsPage() {
   );
 }
 
+interface FixtureProblem {
+  id: string;
+  severity: "Error" | "Warning" | "Notice";
+  title: string;
+  why: string;
+  where: string;
+  action: string;
+  pages: { id: string; name: string; path: string }[];
+}
+
+const PROBLEMS: FixtureProblem[] = [
+  {
+    id: "unserved",
+    severity: "Error",
+    title: "Redirects are saved but not served",
+    why: "21 redirects exist, but the site's proxy does not call the fixture's.",
+    where: "Whole site",
+    action: "Copy a note for a developer",
+    pages: [],
+  },
+  {
+    id: "shared-description",
+    severity: "Warning",
+    title: "Pages share one description",
+    why: "Search shows the same snippet for each, so neither stands out.",
+    where: "Pages",
+    action: "Edit these 2 pages",
+    pages: [
+      { id: "blog", name: "Blog", path: "/blog" },
+      { id: "community", name: "Community", path: "/community" },
+    ],
+  },
+  {
+    id: "svg-image",
+    severity: "Warning",
+    title: "Share image in a format networks don't show",
+    why: "An SVG; social networks need a JPEG or PNG.",
+    where: "Pages",
+    action: "Make a share image",
+    pages: [{ id: "pricing", name: "Pricing", path: "/pricing" }],
+  },
+  {
+    id: "long-title",
+    severity: "Notice",
+    title: "Title longer than search shows",
+    why: "Saved and served as written; search cuts it at about 60 characters.",
+    where: "Pages",
+    action: "Review 4 pages",
+    pages: [
+      { id: "home", name: "Home", path: "/" },
+      { id: "about", name: "About", path: "/about" },
+      { id: "docs", name: "Docs", path: "/docs" },
+      { id: "changelog", name: "Changelog", path: "/changelog" },
+    ],
+  },
+];
+
+const SEVERITY_VARIANT: Record<
+  FixtureProblem["severity"],
+  BadgeProps["variant"]
+> = {
+  Error: "destructive",
+  Warning: "warning",
+  Notice: "info",
+};
+
+/** What to fix first, then what is worth a look: the groups the rows fall in. */
+const PROBLEM_GROUPS: DataTableGroup[] = [
+  {
+    id: "fix-first",
+    title: "Fix first",
+    description: "Search engines or visitors are affected now.",
+    badge: <Badge variant="destructive">Error</Badge>,
+  },
+  {
+    id: "worth-a-look",
+    title: "Worth a look",
+    description: "Served as written, but they could do better.",
+    badge: <Badge variant="warning">Warning</Badge>,
+    actions: (
+      <Button variant="outline" size="sm">
+        Check again
+      </Button>
+    ),
+  },
+];
+
+const PROBLEM_COLUMNS: NextlyColumn<FixtureProblem>[] = [
+  {
+    name: "title",
+    header: "Problem",
+    cell: ({ row }) => (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <strong>{row.title}</strong>
+        <span>{row.why}</span>
+      </div>
+    ),
+  },
+  {
+    name: "severity",
+    header: "Severity",
+    cell: ({ row }) => (
+      <Badge variant={SEVERITY_VARIANT[row.severity]}>{row.severity}</Badge>
+    ),
+  },
+  { name: "where", header: "Where" },
+  {
+    name: "pages",
+    header: "Pages",
+    accessor: row => (row.pages.length > 0 ? row.pages.length : "—"),
+  },
+  {
+    name: "action",
+    header: "",
+    cell: ({ row }) => (
+      <Button variant="link" size="sm">
+        {row.action}
+      </Button>
+    ),
+  },
+];
+
+function BlocksGroupsPage() {
+  return (
+    <PageFrame type="list" data-testid="blocks-groups">
+      <PageHeader
+        title="Problems"
+        description="Rows grouped by what to fix, each opening to list its pages."
+        breadcrumbs={<Trail page="Problems" />}
+      />
+      <ListView<FixtureProblem>
+        columns={PROBLEM_COLUMNS}
+        rows={PROBLEMS}
+        getRowId={problem => problem.id}
+        ariaLabel="Fixture problems"
+        grouping={{
+          groups: PROBLEM_GROUPS,
+          groupOf: problem =>
+            problem.severity === "Error" ? "fix-first" : "worth-a-look",
+          collapsible: true,
+        }}
+        rowDetail={{
+          hasDetail: problem => problem.pages.length > 0,
+          defaultExpandedIds: ["shared-description"],
+          toggleLabel: problem => `Pages with: ${problem.title}`,
+          render: problem => (
+            <ul
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                margin: 0,
+                padding: 0,
+                listStyle: "none",
+              }}
+            >
+              {problem.pages.map(page => (
+                <li key={page.id} style={{ display: "flex", gap: 10 }}>
+                  <span>{page.name}</span>
+                  <code>{page.path}</code>
+                </li>
+              ))}
+            </ul>
+          ),
+        }}
+        empty={{ title: "No problems found" }}
+      />
+    </PageFrame>
+  );
+}
+
+/** The import flow's steps, the first two done and linking back. */
+const IMPORT_STEPS = [
+  {
+    label: "Source: SEO (old) field group",
+    href: "/admin/plugins/style-fixture/blocks-overview",
+  },
+  {
+    label: "Fields matched",
+    href: "/admin/plugins/style-fixture/blocks-settings",
+  },
+  { label: "Check the result" },
+];
+
+function BlocksStepsPage() {
+  const [changed, setChanged] = useState(1);
+  return (
+    <PageFrame type="form" data-testid="blocks-steps">
+      <PageHeader
+        title="Import values"
+        description="A flow of a few steps, and a save bar saying what changed."
+        breadcrumbs={<Trail page="Import" />}
+      />
+      <Stepper aria-label="Import steps" steps={IMPORT_STEPS} current={2} />
+      <Card>
+        <CardContent>
+          <Button variant="outline" onClick={() => setChanged(changed + 1)}>
+            Change another page
+          </Button>
+        </CardContent>
+      </Card>
+      <FormActions
+        dirty={changed > 0}
+        message={changed === 1 ? "1 page changed" : `${changed} pages changed`}
+      >
+        <Button variant="outline" onClick={() => setChanged(0)}>
+          Discard
+        </Button>
+        <Button onClick={() => setChanged(0)}>Save</Button>
+      </FormActions>
+    </PageFrame>
+  );
+}
+
 registerComponents({
   [BLOCK_PAGE_PATHS["blocks-overview"]]: BlocksOverviewPage,
   [BLOCK_PAGE_PATHS["blocks-list"]]: BlocksListPage,
   [BLOCK_PAGE_PATHS["blocks-settings"]]: BlocksSettingsPage,
+  [BLOCK_PAGE_PATHS["blocks-groups"]]: BlocksGroupsPage,
+  [BLOCK_PAGE_PATHS["blocks-steps"]]: BlocksStepsPage,
 });
