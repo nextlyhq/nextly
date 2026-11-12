@@ -11,10 +11,12 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import {
   useSidebarCollectionList,
   useSidebarSingleList,
 } from "@admin/hooks/useSidebarContentLists";
+import { groupCollections } from "@admin/lib/content-groups";
 import {
   deviceMemoryRevision,
   onDeviceMemoryChange,
@@ -30,7 +32,7 @@ import {
   collectionDisplayName,
   singleDisplayName,
 } from "@admin/lib/sidebar-landing";
-import type { PluginMetadata } from "@admin/types/branding";
+import type { AdminBranding, PluginMetadata } from "@admin/types/branding";
 import type { ApiCollection, ApiSingle } from "@admin/types/entities";
 
 import type { MainMenuItem } from "../sidebar-types";
@@ -68,21 +70,33 @@ function railEntriesToKeep(
 function contentItem(
   slug: string,
   label: string,
-  icon: string | undefined
+  icon: string | undefined,
+  group?: RememberedContentItem["group"]
 ): RememberedContentItem[] {
   if (!slug || !label) return [];
-  return [{ slug, label, ...(icon ? { icon } : {}) }];
+  return [
+    { slug, label, ...(icon ? { icon } : {}), ...(group ? { group } : {}) },
+  ];
 }
 
-/** The Content panel's collections, as the device keeps them. */
+/**
+ * The Content panel's collections, as the device keeps them: in the panel's
+ * order, each with the name of the sub-heading it is listed under.
+ */
 function rememberedCollections(
-  collections: readonly ApiCollection[]
+  collections: readonly ApiCollection[],
+  customGroups: AdminBranding["customGroups"]
 ): RememberedContentItem[] {
-  return collections.flatMap(collection =>
-    contentItem(
-      collection.name,
-      collectionDisplayName(collection),
-      collection.admin?.icon
+  return groupCollections(collections, customGroups).flatMap(group =>
+    group.items.flatMap(collection =>
+      contentItem(
+        collection.name,
+        collectionDisplayName(collection),
+        collection.admin?.icon,
+        group.slug === null
+          ? undefined
+          : { slug: group.slug, label: group.name }
+      )
     )
   );
 }
@@ -149,6 +163,7 @@ function useKeepSidebarMenu({
     ? railEntriesToKeep(items, hrefOf, standalonePlugins)
     : null;
   const collectionList = useSidebarCollectionList();
+  const { customGroups } = useBranding();
   const singleList = useSidebarSingleList({ enabled: false });
   // As text, so the effect runs when what would be kept changes, not on every
   // render that builds the same lists anew.
@@ -161,7 +176,7 @@ function useKeepSidebarMenu({
           collections:
             collectionList.data === undefined
               ? undefined
-              : rememberedCollections(collectionList.items),
+              : rememberedCollections(collectionList.items, customGroups),
           singles: singleList.hasArrived
             ? rememberedSingles(singleList.items)
             : undefined,

@@ -312,7 +312,12 @@ export interface CreateTestNextlyOptions {
    * definition file and migrations go: both paths resolve below `basePath`.
    * Absent, the defaults (`./ui-schema.json`, `./migrations`).
    */
-  db?: { migrationsDir: string; uiSchemaFile: string };
+  db?: {
+    migrationsDir: string;
+    uiSchemaFile: string;
+    /** Apply pending migrations at a production start, as `db.runMigrationsOnBoot` does. */
+    runMigrationsOnBoot?: boolean;
+  };
   /**
    * Keep every translatable field per language from the start, as a config's
    * `experimental.perLanguageStorage` does. Off by default.

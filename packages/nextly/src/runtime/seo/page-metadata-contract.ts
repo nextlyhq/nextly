@@ -54,6 +54,14 @@ export interface PageMetadataValues {
   /** The social card's description, where it differs from the page's. */
   socialDescription?: string;
   image?: PageMetadataImage;
+  /**
+   * The route's own metadata hides the page from search (`noindex`). Set
+   * for the route's code level only. A provider may hide a page its route
+   * lists, never list one its route hides: core serves the page hidden
+   * whatever the answer says, so a provider that also reports it hidden
+   * keeps every output built from the answer in step with the page.
+   */
+  hidden?: boolean;
 }
 
 /** @experimental The document a route resolved the page to. */
@@ -73,24 +81,68 @@ export type PageMetadataSource =
       readonly document: Readonly<Record<string, unknown>>;
     };
 
+/** @experimental One entry a page lists, such as a post on a blog's index. */
+export interface PageListItem {
+  /** The entry's name, as the list shows it. */
+  name: string;
+  /** Its own page: absolute, or from the site's root. */
+  url: string;
+}
+
+/** @experimental One question a page answers, with its answer, as shown. */
+export interface PageQuestion {
+  question: string;
+  /** The answer as plain text, as a reader sees it on the page. */
+  answer: string;
+}
+
+/**
+ * @experimental What a route knows about its page that the page's document
+ * does not hold, for its structured data: what kind of page it is, its own
+ * name, the entries it lists and the questions it answers. Every part is
+ * what the page shows; a provider describes nothing a reader cannot see.
+ */
+export interface PageStructuredDataHints {
+  /**
+   * The kind of page, as the provider names its types (for the SEO plugin,
+   * `"aboutPage"`, `"contactPage"`, `"collectionPage"`, ...): used where
+   * neither the page nor its content type chose one. A kind the provider
+   * does not offer is ignored.
+   */
+  type?: string;
+  /** The page's own name, as its heading shows it, without the site's name. */
+  name?: string;
+  /** The entries the page lists, in the order shown. */
+  items?: readonly PageListItem[];
+  /** The questions the page answers, in the order shown. */
+  questions?: readonly PageQuestion[];
+}
+
 /** @experimental What a resolver is asked about one page. */
 export interface PageMetadataInput {
   /**
    * The address the route served this page at, from `/`, as requested. Absent
-   * where the route cannot know it: a Single route is mounted by the app, which
-   * never tells it where.
+   * where the route cannot know it: a Single route is mounted by the app, and
+   * is told where only when the app says so.
    */
   readonly path?: string;
   /** The language the route read the page in, verbatim; absent when unset. */
   readonly locale?: string;
   readonly source: PageMetadataSource;
   /**
-   * What the route's code supplied: a title, a description and social values
-   * only. A route never supplies visibility or the canonical address.
+   * What the route's code supplied: a title, a description, social values,
+   * and whether it hides the page. A route never supplies the canonical
+   * address: core keeps the route's own only where the answer names none.
    */
   readonly code: PageMetadataValues;
   /** What the page's own content offers, such as a Page Builder page's blocks. */
   readonly derived: PageMetadataValues;
+  /**
+   * What the route says about the page for its structured data, where it
+   * says anything. Given only when the page's structured data is asked for,
+   * never with its head, which it cannot change.
+   */
+  readonly structuredDataHints?: PageStructuredDataHints;
 }
 
 /** @experimental The page's answer: the values its head is built from. */

@@ -35,7 +35,11 @@ export { definePlugin } from "nextly";
  * the route, and turn its `PageMetadataAnswer` into the page's head. Its
  * `tags` name what the answer depends on, so a change to them refreshes every
  * page. Boot refuses a second provider, and a provider without the service.
- * Type-only, so importing it pulls no runtime into the plugin.
+ * `PageStructuredDataHints` (with `PageListItem` and `PageQuestion`) is what
+ * a route says about its page for its structured data, handed in as
+ * `input.structuredDataHints`; experimental with the rest of the contract,
+ * and intended to become stable with it. Type-only, so importing it pulls
+ * no runtime into the plugin.
  */
 export type {
   PageMetadataAnswer,
@@ -44,6 +48,9 @@ export type {
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
+  PageListItem,
+  PageQuestion,
+  PageStructuredDataHints,
 } from "nextly/runtime";
 
 /**
@@ -972,6 +979,32 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * @experimental What a standalone plugin declares about its own panel
+ * (`contributes.admin.panel`, and `group`, `count` and `badge` on a menu
+ * item), drawn by the admin with no plugin code running in the browser:
+ *
+ * - `PluginAdminPanel` holds the panel's `groups`, each a `PluginPanelGroup`
+ *   `{ id, label }`, drawn as headings in the order declared. A menu item's
+ *   `group` names one; items naming none are listed first, under no heading.
+ * - A menu item takes a quiet `count` or an attention `badge`, never both,
+ *   each a `PluginItemCount`: `{ collection, where? }` counts one of the
+ *   plugin's own collections for the reader, `{ attention }` reads one of its
+ *   own dashboard attention items' count. A count is drawn at 0 too; a badge
+ *   only above 0.
+ * - `PluginMenuItemFields` is a menu item's fields apart from its number.
+ *
+ * A development start reports a group, count or badge naming nothing the
+ * plugin declares or owns, and a menu item linking to a page of the plugin's
+ * own that it does not register, which is left out.
+ */
+export type {
+  PluginAdminPanel,
+  PluginItemCount,
+  PluginMenuItemFields,
+  PluginPanelGroup,
 } from "nextly";
 
 /**

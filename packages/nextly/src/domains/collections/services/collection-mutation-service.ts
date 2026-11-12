@@ -13313,6 +13313,9 @@ export class CollectionMutationService extends BaseService {
       parts && draftLocale !== SHARED_DRAFT_SLOT
         ? {
             parts,
+            // The language whose draft this save writes beside the shared
+            // one: never the shared slot here, so the store is handed a code.
+            locale: draftLocale,
             touched: new Set([
               ...Object.keys(ctx.updatePayload),
               ...Object.keys(ctx.componentFieldData),
@@ -13350,7 +13353,7 @@ export class CollectionMutationService extends BaseService {
             storeWorkingDraft: async (repo: VersionsRepository) =>
               storePartDrafts(repo, {
                 ref: draftRef,
-                locale: draftLocale,
+                locale: byParts.locale,
                 document: draftDocument,
                 touched: byParts.touched,
                 keys: byParts.keys,

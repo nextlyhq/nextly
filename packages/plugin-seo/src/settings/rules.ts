@@ -301,6 +301,8 @@ export interface StructuredDataSettings {
   /** The production address the language is served from. */
   origin?: string;
   siteName?: string;
+  /** The site's default description, which says what the site is. */
+  description?: string;
   brand: Omit<BrandFacts, "siteKind">;
   /** Per content type: the collection slug, or `single:<slug>` for a Single. */
   types: Readonly<Record<string, StructuredDataTypeRule>>;
@@ -384,8 +386,10 @@ export async function readStructuredDataSettings(
     document,
     mediaImages(ctx)
   );
+  const description = trimmed(document.description);
   return {
     ...(await identityOf(document, locale)),
+    ...(description === undefined ? {} : { description }),
     brand,
     types:
       checked<Record<string, StructuredDataTypeRule>>(

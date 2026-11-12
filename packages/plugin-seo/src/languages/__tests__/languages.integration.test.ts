@@ -240,8 +240,12 @@ describe.each(getConfiguredTestDialects())(
     it("keeps SEO text per language", async () => {
       const t = await boot(dialect);
 
-      expect((await headOf(t, "en", "about")).title).toBe("About Acme");
-      expect((await headOf(t, "de", "ueber")).title).toBe("Über Acme");
+      expect((await headOf(t, "en", "about")).title).toEqual({
+        absolute: "About Acme",
+      });
+      expect((await headOf(t, "de", "ueber")).title).toEqual({
+        absolute: "Über Acme",
+      });
       const [english] = (
         await t.nextly.find({
           collection: "pages",
