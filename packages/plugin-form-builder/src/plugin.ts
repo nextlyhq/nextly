@@ -23,6 +23,7 @@ import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
 
 import { formsCollection } from "./collections/forms";
+import { submissionSendsCollection } from "./collections/sends";
 import { submissionsCollection } from "./collections/submissions";
 import { newSubmissionsWidget } from "./dashboard/widget";
 import {
@@ -41,6 +42,11 @@ import {
   judgeBotCheck,
   warnUncheckedBotChecks,
 } from "./handlers/bot-check";
+import {
+  type RecordedSend,
+  recordSend,
+  registerForgettingSends,
+} from "./handlers/forget-sends";
 import {
   registerFormClosing,
   respondedRefusal,
@@ -244,6 +250,7 @@ export function formBuilder(
 
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
+  const sendsCol = submissionSendsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
   // until `init` reads the slug the site installed it under.
@@ -281,7 +288,7 @@ export function formBuilder(
     // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
-      collections: [formsCol, submissionsCol],
+      collections: [formsCol, submissionsCol, sendsCol],
       // Gives earlier submissions their one-response keys after a form
       // changes how it tells people apart.
       jobs: [
@@ -758,6 +765,13 @@ export function formBuilder(
         submissions: submissionSlug,
       });
 
+      // What each submission sent, forgotten on every path that deletes it,
+      // a form's deletion among them, in the deleting transaction.
+      registerForgettingSends(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
+      });
+
       // Inject a real submissionCount into form reads (spam excluded — the
       // number answers "how many people submitted", not "how many bots").
       nextly.hooks.on("afterRead", formsSlug, (context: unknown) =>
@@ -768,7 +782,7 @@ export function formBuilder(
 
   return {
     plugin,
-    collections: [formsCol, submissionsCol],
+    collections: [formsCol, submissionsCol, sendsCol],
     config: resolvedConfig,
   };
 }
@@ -1747,20 +1761,17 @@ async function handleSubmissionCreated(
   // recorded, for a submission a rollback then removes. The hook context's
   // `afterCommit` holds the send until the outermost transaction commits and
   // drops it on rollback; outside a transaction it sends at once, as before.
+  const submissionId = idText(submission.id);
   const send = () =>
     queueNotificationEmails({
       emails: finalEmails,
       emailService,
       logger: nextly.logger,
       formSlug: form.slug,
-      // A submission's id is a string or a number by dialect.
-      submissionId:
-        typeof submission.id === "number"
-          ? `${submission.id}`
-          : typeof submission.id === "string"
-            ? submission.id
-            : "",
+      submissionId,
       fileAttachments,
+      // Kept so deleting the submission can forget what it sent.
+      record: sent => recordSend(nextly, submissionId, sent),
     });
   const { afterCommit } = context as Pick<HookContext, "afterCommit">;
   await (afterCommit ? afterCommit(send) : send());
@@ -1806,6 +1817,8 @@ export async function queueNotificationEmails(input: {
   /** The submission the notifications are for, which keys each one. */
   submissionId: string;
   fileAttachments: Array<{ mediaId: string; filename?: string }>;
+  /** Records each queued notification for the submission, when given. */
+  record?: (sent: RecordedSend) => Promise<void>;
 }): Promise<void> {
   const { emails, emailService, logger, formSlug, fileAttachments } = input;
   for (const [index, email] of emails.entries()) {
@@ -1814,6 +1827,12 @@ export async function queueNotificationEmails(input: {
       templateSlug: email.templateSlug,
       notificationId: email.notificationId,
     };
+    const sendKey = notificationKey(
+      input.submissionId,
+      index,
+      email.notificationId
+    );
+    let queuedId: string | undefined;
     try {
       const queued = await emailService.queueWithTemplate(
         email.templateSlug,
@@ -1826,13 +1845,10 @@ export async function queueNotificationEmails(input: {
           cc: email.cc,
           bcc: email.bcc,
           attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
-          idempotencyKey: notificationKey(
-            input.submissionId,
-            index,
-            email.notificationId
-          ),
+          idempotencyKey: sendKey,
         }
       );
+      queuedId = queued.id;
       // The first attempt has been made: sent, waiting for a retry, or
       // failed for good (a refusal no retry can change).
       if (queued.state === "failed") {
@@ -1859,6 +1875,40 @@ export async function queueNotificationEmails(input: {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    if (queuedId !== undefined) {
+      await recordQueued(input, identity, { queuedId, sendKey });
+    }
+  }
+}
+
+/** A submission's id as text: a string or a number by dialect. */
+function idText(id: unknown): string {
+  if (typeof id === "number") return `${id}`;
+  return typeof id === "string" ? id : "";
+}
+
+/**
+ * Record a queued notification for its submission. A failure is logged
+ * rather than thrown: the notification is queued either way, and only its
+ * forgetting on deletion would miss it.
+ */
+async function recordQueued(
+  input: {
+    record?: (sent: RecordedSend) => Promise<void>;
+    logger: Pick<NextlyInstance["logger"], "error">;
+  },
+  identity: Record<string, unknown>,
+  sent: RecordedSend
+): Promise<void> {
+  if (!input.record) return;
+  try {
+    await input.record(sent);
+  } catch (err) {
+    input.logger.error?.("Form Builder: notification not recorded", {
+      ...identity,
+      queuedId: sent.queuedId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

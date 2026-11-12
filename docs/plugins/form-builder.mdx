@@ -478,6 +478,12 @@ Each submission tracks its review state:
 
 Admins can also add internal notes to any submission -- these are not visible to the original submitter.
 
+### Deleting submissions
+
+Deleting a submission forgets the notifications it sent, in the same transaction: one not yet sent (waiting, retrying, or failed) is cancelled and its message cleared, so nothing goes out from data that is gone, and the delivery records of one that went out are erased. This holds for deleting one submission, deleting several at once, and deleting a form, which deletes its submissions with it.
+
+The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it.
+
 ### Statistics
 
 ```typescript
