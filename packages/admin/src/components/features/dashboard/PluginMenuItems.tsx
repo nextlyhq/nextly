@@ -29,7 +29,11 @@ import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import { cn } from "@admin/lib/utils";
 import type { PluginMenuItemMeta } from "@admin/types/branding";
 
-import { PluginItemNumber, type ShownItemNumber } from "./PluginItemNumber";
+import {
+  itemNumberName,
+  PluginItemNumber,
+  type ShownItemNumber,
+} from "./PluginItemNumber";
 
 /** Resolve a Lucide icon by name, falling back to the Package icon. */
 function iconFor(name?: string): React.ElementType {
@@ -225,7 +229,7 @@ function PluginMenuLeaf({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
-        <Link href={item.to}>
+        <Link href={item.to} aria-label={itemNumberName(item.label, shown)}>
           <Icon
             className={cn("shrink-0", !active && "text-muted-foreground")}
           />
@@ -271,6 +275,7 @@ function PluginMenuBranch({
             tooltip={item.label}
             isActive={active}
             className="group/trigger"
+            aria-label={itemNumberName(item.label, shown)}
           >
             <Icon
               className={cn("shrink-0", !active && "text-muted-foreground")}
