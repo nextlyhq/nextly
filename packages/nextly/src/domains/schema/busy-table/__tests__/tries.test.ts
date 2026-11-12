@@ -163,6 +163,37 @@ describe("withBusyTableTries", () => {
     expect(stopped.stop).toMatchObject({ tries: 6, endedAtLease: true });
   });
 
+  it("cuts the first try to what is left of the lease", async () => {
+    const bounds: number[] = [];
+    let clock = 0;
+    const run = withBusyTableTries(
+      {
+        bounds: { tryMs: 3_600_000, totalMs: 86_400_000 },
+        change: "0007_add_keys.sql",
+        appliedBefore: [],
+        notify: () => undefined,
+        notice: () => "",
+        assertHeld: () => Promise.resolve(),
+        stopped: stop => new Stopped(stop),
+        leaseDeadline: () => 70_000,
+        now: () => clock,
+        sleep: ms => {
+          clock += ms;
+          return Promise.resolve();
+        },
+      },
+      (_, tryMs) => {
+        bounds.push(tryMs);
+        clock += tryMs;
+        return Promise.resolve(ENDED);
+      }
+    );
+    const stopped = (await run.catch((error: unknown) => error)) as Stopped;
+    // An hour's try would outlive the lease: it waits only what is left of it, then stops there.
+    expect(bounds).toEqual([70_000]);
+    expect(stopped.stop).toMatchObject({ tries: 1, endedAtLease: true });
+  });
+
   it("follows overridden bounds: a try of 1 second and a total of 10", async () => {
     const { run, starts } = harness(() => ENDED, {
       bounds: { tryMs: 1_000, totalMs: 10_000 },

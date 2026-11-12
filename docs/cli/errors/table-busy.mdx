@@ -17,8 +17,6 @@ How the change was left decides what to do:
 
 On SQLite, the tries can end before their bounds: while another connection holds the whole database, the schema lock cannot be renewed, and the Why line says so.
 
-If a signal (Ctrl+C) ended the tries, the first line says interrupted instead of table busy.
-
 ## Fix
 
 - **Nothing changed:** run the command again once the holding session ends, or end that session (on PostgreSQL `pg_terminate_backend`, on MySQL `KILL`, once you are sure it can go), or give the change longer with `--lock-timeout` (one try, in seconds) and `--lock-timeout-total` (every try together), or `NEXTLY_LOCK_TIMEOUT` and `NEXTLY_LOCK_TIMEOUT_TOTAL`.

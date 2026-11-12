@@ -97,7 +97,7 @@ function outcomeOf(
  */
 export async function withBusyTableTries<T>(
   options: BusyTableTriesOptions,
-  attempt: (tryNumber: number) => Promise<TryResult<T>>
+  attempt: (tryNumber: number, tryMs: number) => Promise<TryResult<T>>
 ): Promise<T> {
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? wait;
@@ -106,7 +106,14 @@ export async function withBusyTableTries<T>(
   let committed: readonly number[] = [];
   for (let tryNumber = 1; ; tryNumber++) {
     if (tryNumber > 1) await options.assertHeld();
-    const result = await attempt(tryNumber);
+    // Every try, the first included, ends by the lease where one bounds the tries: a try's own
+    // bound is cut to what is left of it (never below a millisecond, so the try still asks once).
+    const lease = options.leaseDeadline?.();
+    const tryMs =
+      lease === undefined
+        ? options.bounds.tryMs
+        : Math.max(1, Math.min(options.bounds.tryMs, lease - now()));
+    const result = await attempt(tryNumber, tryMs);
     if (result.kind === "done") return result.value;
     // What earlier tries made durable stays durable, and is reported with this try's.
     committed = [...committed, ...result.committed];
@@ -126,8 +133,8 @@ export async function withBusyTableTries<T>(
     if (result.lasting !== undefined) throw stop(false);
     const nextAt = now() + pauseAfterTry(tryNumber - 1);
     if (!mayStartTry(options.bounds, firstStartedAt, nextAt)) throw stop(false);
-    const lease = options.leaseDeadline?.();
-    if (lease !== undefined && nextAt + options.bounds.tryMs > lease) {
+    const nextLease = options.leaseDeadline?.();
+    if (nextLease !== undefined && nextAt + options.bounds.tryMs > nextLease) {
       throw stop(true);
     }
     await sleep(nextAt - now());

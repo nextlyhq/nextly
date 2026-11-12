@@ -88,7 +88,6 @@ export async function runUnitInTries(
     return runMigrationStatements(adapter, statements, unit, after);
   }
   const triggers = await triggerTables(adapter, dialect);
-  const { tryMs } = run.bounds;
   return withBusyTableTries(
     {
       bounds: run.bounds,
@@ -104,7 +103,7 @@ export async function runUnitInTries(
         ? { leaseDeadline: schemaLockConfirmedUntil }
         : {}),
     },
-    async (): Promise<TryResult<number>> => {
+    async (_tryNumber, tryMs): Promise<TryResult<number>> => {
       let session: string | undefined;
       let reached = -1;
       // Made before the unit's transaction opens, so the watch's asks on another connection never
