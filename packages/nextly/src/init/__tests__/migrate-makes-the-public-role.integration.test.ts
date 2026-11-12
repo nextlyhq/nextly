@@ -35,6 +35,8 @@
  * - Migrations at start provision the user fields as `nextly migrate` does: a
  *   newly declared field gets its definition and its `user_ext` column, and
  *   the start serves it.
+ * - Migrations at start make a translated collection's translations table as
+ *   `nextly migrate` does, on a new database, so the start writes its entries.
  */
 
 // Set before anything reads it (env validation reads it once).
@@ -367,6 +369,20 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
+    /** Whether the translations table of the collection `slug` exists. */
+    async function translationsTableExists(slug: string): Promise<boolean> {
+      const adapter = await open();
+      try {
+        const [row] = await adapter.executeQuery<{ table_name: unknown }>(
+          `SELECT ${q}table_name${q} AS table_name FROM ${q}dynamic_collections${q} WHERE ${q}slug${q} = '${slug}'`
+        );
+        if (row === undefined) return false;
+        return await adapter.tableExists(`${String(row.table_name)}_locales`);
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
+    }
+
     /** English, the default, and French, stored in Settings as it writes them. */
     async function storeLanguages(): Promise<void> {
       const adapter = await open();
@@ -653,6 +669,27 @@ describe.each(getConfiguredTestDialects())(
       expect(served).toContain("nickname");
       expect(await definedUserFields()).toContain("nickname");
       expect(await userExtHas("nickname")).toBe(true);
+    }, 240_000);
+
+    it("makes a translated collection's translations table when migrations run at start", async () => {
+      const config = withMigrationsAtStart({
+        collections: [FRENCH],
+        localization: { locales: ["en", "fr"], defaultLocale: "en" },
+      });
+      await migrateCreate("initial", config);
+
+      const written = await atProductionStart(config, nextly =>
+        nextly
+          .create({ collection: "mpr-french", data: { title: "Bonjour" } })
+          .then(
+            () => "written",
+            (error: unknown) =>
+              `refused: ${(error as { code?: string }).code ?? String(error)}`
+          )
+      );
+
+      expect(await translationsTableExists("mpr-french")).toBe(true);
+      expect(written).toBe("written");
     }, 240_000);
 
     it("gives the Public role a plugin's public grant at its install", async () => {
