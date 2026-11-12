@@ -388,9 +388,18 @@ function useSettingsSave(
   const latestRead = useRef(initial);
   latestRead.current = initial;
   const latestStored = useRef(stored);
+  // The version of the last read this screen moved its draft onto.
+  const lastRead = useRef(versionOf(initial));
   latestStored.current = stored;
   useEffect(() => {
-    // Only a new version read is a new baseline.
+    // A read that lands while this screen's own save is on its way waits:
+    // the save sets the baseline it stored, measured against what was
+    // sent, so an edit made meanwhile is never taken for an untouched one.
+    if (saving) return;
+    // Only a version not read before is a new baseline: a read this screen
+    // has seen, older than what its own save stored, changes nothing.
+    if (lastRead.current === initialVersion) return;
+    lastRead.current = initialVersion;
     const was = latestStored.current;
     if (versionOf(was) === initialVersion) return;
     const fresh = latestRead.current;
@@ -398,7 +407,7 @@ function useSettingsSave(
     setDraft(current =>
       rebasedDraft(current, draftOf(was, defaults), draftOf(fresh, defaults))
     );
-  }, [initialVersion, defaults, setDraft]);
+  }, [initialVersion, defaults, setDraft, saving]);
 
   /** Lets go of every unsaved change. */
   const cancel = useCallback(() => {
