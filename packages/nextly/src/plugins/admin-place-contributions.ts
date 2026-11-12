@@ -110,8 +110,12 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-/** What makes an action unusable, or `undefined`. */
-function actionProblem(
+/**
+ * What makes an action unusable, or `undefined`: exactly one of `open` (a
+ * component) or `run` (one of the plugin's own staff routes). The one reading
+ * of an action, for a list's row and bulk actions and a person's-menu item.
+ */
+export function actionProblem(
   action: unknown,
   plugin: PluginDefinition
 ): string | undefined {

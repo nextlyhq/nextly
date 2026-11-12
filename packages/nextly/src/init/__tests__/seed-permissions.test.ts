@@ -7,8 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const seedSystemPermissions = vi.fn();
-const seedAllCollectionPermissions = vi.fn();
-const seedAllSinglePermissions = vi.fn();
+const seedAllEntityPermissions = vi.fn();
 const seedCustomPermissions = vi.fn();
 const markOrphanedPermissions = vi.fn();
 const assignNewPermissionsToSuperAdmin = vi.fn();
@@ -21,8 +20,7 @@ vi.mock("../../di/service-access", () => ({
       ? config
       : {
           seedSystemPermissions,
-          seedAllCollectionPermissions,
-          seedAllSinglePermissions,
+          seedAllEntityPermissions,
           seedCustomPermissions,
           markOrphanedPermissions,
           assignNewPermissionsToSuperAdmin,
@@ -39,8 +37,10 @@ const exportSubmissions = {
 beforeEach(() => {
   vi.clearAllMocks();
   seedSystemPermissions.mockResolvedValue({ newPermissionIds: ["sys-1"] });
-  seedAllCollectionPermissions.mockResolvedValue({ newPermissionIds: [] });
-  seedAllSinglePermissions.mockResolvedValue({ newPermissionIds: [] });
+  seedAllEntityPermissions.mockResolvedValue({
+    collections: { newPermissionIds: [] },
+    singles: { newPermissionIds: [] },
+  });
   seedCustomPermissions.mockResolvedValue({ newPermissionIds: [] });
   config.collections = undefined;
   config.plugins = undefined;

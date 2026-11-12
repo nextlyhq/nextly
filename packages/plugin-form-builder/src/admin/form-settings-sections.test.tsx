@@ -189,6 +189,32 @@ describe("a form's Settings", () => {
     });
   });
 
+  it("saves how long submissions are kept, and Never as no period", async () => {
+    const { user, fetchMock } = view({ settings: { keepDays: 365 } });
+    const keep = screen.getByRole("combobox", {
+      name: "Delete submissions after",
+    });
+    expect(keep).toHaveTextContent("1 year");
+    expect(keep).toHaveAccessibleDescription(/Spam goes after 30 days/);
+    await pick(user, "Delete submissions after", "90 days");
+    await user.click(save());
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({ settings: { keepDays: 90 } });
+
+    await pick(user, "Delete submissions after", "Never");
+    await user.click(save());
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
+    const settings = (saves(fetchMock)[1] as { settings: object }).settings;
+    expect(settings).not.toHaveProperty("keepDays");
+  });
+
+  it("shows a keep period set another way as it is", () => {
+    view({ settings: { keepDays: 45 } });
+    expect(
+      screen.getByRole("combobox", { name: "Delete submissions after" })
+    ).toHaveTextContent("45 days");
+  });
+
   it("saves a web address to go to after submitting", async () => {
     const { user, fetchMock } = view();
     await user.click(

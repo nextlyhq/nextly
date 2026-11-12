@@ -66,7 +66,7 @@ describe("FIELD_TYPE_CATALOG", () => {
 });
 
 describe("FORM_FIELD_TYPE_CATALOG", () => {
-  it("describes the form surface's thirteen types exactly once", () => {
+  it("describes the form surface's fourteen types exactly once", () => {
     const types = FORM_FIELD_TYPE_CATALOG.map(entry => entry.type);
     expect(new Set(types).size).toBe(types.length);
     expect([...types].sort()).toEqual(
@@ -84,6 +84,7 @@ describe("FORM_FIELD_TYPE_CATALOG", () => {
         "time",
         "file",
         "hidden",
+        "consent",
       ].sort()
     );
   });
@@ -109,14 +110,21 @@ describe("FORM_FIELD_TYPE_CATALOG", () => {
 
   it("gives every form-surface type an icon distinct from canonical entries", () => {
     const canonicalIcons = new Set(FIELD_TYPE_CATALOG.map(e => e.icon));
-    for (const surfaceOnly of ["url", "phone", "time", "file", "hidden"]) {
+    for (const surfaceOnly of [
+      "url",
+      "phone",
+      "time",
+      "file",
+      "hidden",
+      "consent",
+    ]) {
       const entry = FORM_FIELD_TYPE_CATALOG.find(e => e.type === surfaceOnly);
       expect(entry && canonicalIcons.has(entry.icon)).toBe(false);
     }
   });
 
   it("keeps the surface-only types out of the canonical catalog", () => {
-    for (const surfaceOnly of ["time", "file", "hidden"]) {
+    for (const surfaceOnly of ["time", "file", "hidden", "consent"]) {
       expect(
         FIELD_TYPE_CATALOG.find(entry => entry.type === surfaceOnly)
       ).toBeUndefined();

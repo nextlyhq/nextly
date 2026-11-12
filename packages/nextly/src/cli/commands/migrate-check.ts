@@ -80,10 +80,7 @@ import {
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import {
-  toMinimalEntities,
-  withBuilderSettingsAll,
-} from "../../domains/schema/migrate-create/config-entities";
+import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -307,8 +304,9 @@ export async function runMigrateCheck(
     appStream,
     dialect,
     declared,
-    // Each entity with its settings, as `migrate:create` records them.
-    entities: withBuilderSettingsAll(merged, manifest),
+    // Each entity with its settings, as `migrate:create` records them; the
+    // merge sets a Builder entity's (`uiToMinimal`).
+    entities: merged,
     logger,
   });
 }

@@ -36,17 +36,16 @@ import {
   PanelRight,
   PanelRightClose,
 } from "@admin/components/icons";
-import { useCanRequest } from "@admin/hooks/useCanRequest";
-import { useLocalization } from "@admin/hooks/useLocalization";
-import { cn } from "@admin/lib/utils";
-import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
-
 import {
   TopBarPlace,
   useInTopBar,
   useTopBarPlaceWidth,
 } from "@admin/components/layout/header/TopBarPlaces";
 import { useCan } from "@admin/hooks/useCan";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
+import { useLocalization } from "@admin/hooks/useLocalization";
+import { cn } from "@admin/lib/utils";
+import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";

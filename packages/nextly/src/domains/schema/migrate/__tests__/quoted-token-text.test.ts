@@ -15,6 +15,7 @@ function quoted(sql: string, dialect: SupportedDialect): QuotedToken[] {
 
 describe("a quoted token names its kind", () => {
   it("reads a string, a quoted name and a dollar body as three kinds", () => {
+    // A quoted name keeps its content as written beside the folded name it is compared by.
     expect(quoted(`SELECT 'a', "b", $$c$$`, "postgresql")).toEqual([
       { kind: "string", name: undefined, text: "a" },
       { kind: "name", name: "B", written: "b" },

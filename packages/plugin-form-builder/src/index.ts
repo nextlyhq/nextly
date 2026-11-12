@@ -98,6 +98,8 @@ export type {
   DateFormField,
   TimeFormField,
   HiddenFormField,
+  ConsentFormField,
+  ConsentAnswer,
 } from "./types";
 export { isKnownFormField, BUILT_IN_FORM_FIELD_TYPES } from "./types";
 
@@ -190,7 +192,7 @@ export { file } from "./config";
 export { date, time } from "./config";
 
 // Special field helpers
-export { hidden } from "./config";
+export { hidden, consent } from "./config";
 
 // ============================================================
 // Conditional Logic Utilities

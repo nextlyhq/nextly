@@ -591,6 +591,7 @@ describe("restoreVersion with field groups placed directly in one another", () =
       collections: [
         defineCollection({
           slug: "rvposts",
+          status: true,
           versions: true,
           fields: [
             text({ name: "title" }),
