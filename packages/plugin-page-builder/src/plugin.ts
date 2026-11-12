@@ -176,7 +176,6 @@ import {
 } from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
-import { seedCompositionGraphLock } from "./composition-graph-lock";
 import { manifestRoute } from "./composition-manifest";
 import { registerCompositionRejudge } from "./composition-rejudge";
 import { COMPOSITION_SERVICE, compositionService } from "./composition-service";
@@ -1893,12 +1892,6 @@ export const pageBuilder = (
     warn: (message: string, meta?: Record<string, unknown>) => void;
   } | null = null;
 
-  /**
-   * Put the composition graph lock's row in place, once the plugin's tables
-   * exist. Published by `init` for the reason `defaultLayoutSetup` is.
-   */
-  let seedGraphLock: (() => Promise<void>) | null = null;
-
   /** The installed spacing-model store, or a refusal naming why it is missing. */
   const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
     if (spacingSetup === null) {
@@ -2944,13 +2937,6 @@ export const pageBuilder = (
         sharedStyleUses: (ids, documents) =>
           storedSharedStyleUses(documents, opts.limits ?? DEFAULT_LIMITS)(ids),
       });
-      seedGraphLock = () =>
-        seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
-          ctx.logger.warn(
-            "[page-builder] the composition graph lock's row could not be put in place; the first write locking it inserts it",
-            { error }
-          )
-        );
 
       usage.reconcile = registerClassUsageMaintenance({
         ctx,
@@ -3588,7 +3574,6 @@ export const pageBuilder = (
           if (addressStartup === startup) addressStartup = null;
         });
       }
-      void seedGraphLock?.();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
       const seeded =
