@@ -358,6 +358,25 @@ function announceMoves(
   }
 }
 
+/**
+ * The event the record announces, once a batch of saves it recorded has
+ * committed, where any redirect's From address was claimed or let go of:
+ * what the Proxy's kept redirect addresses are dropped on. Never for a save
+ * that was undone.
+ */
+export const REDIRECTS_CHANGED: string = `${SEO_ADMIN_SLUG}.redirects-changed`;
+
+/** Announce that redirects changed, once the save commits; never failing it. */
+function announceRedirectsChanged(ctx: PluginContext): void {
+  try {
+    ctx.events.emit(REDIRECTS_CHANGED, {});
+  } catch (error) {
+    ctx.logger.warn("The SEO plugin could not announce changed redirects", {
+      error,
+    });
+  }
+}
+
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
@@ -652,6 +671,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         if (released.length > 0 && !isRedirect(update.holder)) {
           await redirectReleased(transaction, update, released);
         }
+      }
+      if (batch.some(update => isRedirect(update.holder))) {
+        announceRedirectsChanged(ctx);
       }
       announceMoves(
         ctx,

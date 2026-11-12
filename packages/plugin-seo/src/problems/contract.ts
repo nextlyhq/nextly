@@ -27,6 +27,7 @@ export const FULL_CHECK_MAX_AGE_MS: number = 24 * 60 * 60 * 1000;
 /** Every kind of problem the list checks for. */
 export type ProblemKind =
   | "productionAddress"
+  | "proxyNotWired"
   | "connection"
   | "noAddress"
   | "redirectChain"
@@ -55,6 +56,12 @@ export const KIND_TEXT: Readonly<
   productionAddress: {
     title: "Production address missing",
     explain: "Nextly can't tell the real site from a test copy.",
+    siteWide: true,
+  },
+  proxyNotWired: {
+    title: "Redirects saved but not served",
+    explain:
+      "The site's Proxy isn't running, so visitors and search engines asking for an old address get “not found”, and addresses not found aren't logged.",
     siteWide: true,
   },
   connection: {
@@ -155,6 +162,7 @@ export const KIND_TEXT: Readonly<
 export const KIND_ORDER: readonly ProblemKind[] = [
   "productionAddress",
   "noAddress",
+  "proxyNotWired",
   "connection",
   "redirectChain",
   "languageCode",
