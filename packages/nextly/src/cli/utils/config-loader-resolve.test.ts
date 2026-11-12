@@ -77,6 +77,17 @@ describe("orderConfigPlugins (CLI resolution — D5/D6/D7)", () => {
     }
   });
 
+  it("fails fast on a plugin named app, the site's own permission owner", () => {
+    try {
+      orderConfigPlugins([plugin("@t/a"), plugin("app")], NO_PLUGIN_CONSENT);
+      throw new Error("expected orderConfigPlugins to throw");
+    } catch (err) {
+      expect(
+        (err as { logContext?: { reason?: string } }).logContext?.reason
+      ).toBe("plugin-name-reserved");
+    }
+  });
+
   it("returns an empty array unchanged", () => {
     expect(orderConfigPlugins([], NO_PLUGIN_CONSENT).plugins).toEqual([]);
   });

@@ -35,7 +35,10 @@ import {
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
-import { PermissionSeedService } from "../../auth/services/permission-seed-service";
+import {
+  PermissionSeedService,
+  type OrphanPassRow,
+} from "../../auth/services/permission-seed-service";
 import { withPresetGrantsRecorded } from "../../meta/preset-grants-release";
 import {
   buildWorkflowRegistry,
@@ -46,7 +49,7 @@ import { readPluginLifecycle } from "../ownership/plugin-lifecycle-state";
 import { SchemaOwnersRepository } from "../ownership/schema-owners-repository";
 
 /** The logger the services a write goes through are handed. */
-interface ServiceLogger {
+export interface ServiceLogger {
   debug: (message: string) => void;
   info: (message: string) => void;
   warn: (message: string) => void;
@@ -137,7 +140,23 @@ async function pluginsDeclared(
   plugins: readonly PluginDefinition[]
 ): Promise<PluginDefinition[]> {
   if (plugins.length === 0) return [];
-  const notInstalled = await pluginsRecordedNotInstalled(adapter);
+  return pluginsStillDeclaring(
+    plugins,
+    await pluginsRecordedNotInstalled(adapter)
+  );
+}
+
+/**
+ * Of `plugins`, those whose install still declares their permissions: every
+ * one not among `notInstalled`, the plugins recorded as anything but
+ * installed (`pluginsRecordedNotInstalled`). The one reading of it, for
+ * `nextly migrate`'s seeding (`pluginsDeclared`) and for a rollback to the
+ * registry record's point, which leaves such a plugin's permissions live.
+ */
+export function pluginsStillDeclaring<T extends { name: string }>(
+  plugins: readonly T[],
+  notInstalled: ReadonlySet<string>
+): T[] {
   return plugins.filter(plugin => !notInstalled.has(plugin.name));
 }
 
@@ -274,4 +293,24 @@ export async function orphanOwnedPermissionsOnCommandConnection(
       logContext: { reason: "owned-permissions-not-orphaned", owner },
     });
   }
+}
+
+/**
+ * Sets or clears the orphan marks `decide` names, on the command's own
+ * connection (`onCommandConnection`): inside a registry write's transaction,
+ * the one a rollback to the registry record's point writes its bookkeeping
+ * in, so the marks commit or roll back with the rest of it. Through the
+ * service an applied migration and an uninstall mark with
+ * (`PermissionSeedService.rewriteOrphanMarks`), so every grant is kept and
+ * each mark set or cleared is logged, at the operator's level. A mark that
+ * cannot be written throws. Returns how many marks were written.
+ */
+export async function rewriteOrphanMarksOnCommandConnection(
+  pooled: DrizzleAdapter,
+  decide: (rows: readonly OrphanPassRow[]) => ReadonlyMap<string, boolean>,
+  logger: ServiceLogger
+): Promise<number> {
+  return onCommandConnection(pooled, logger, adapter =>
+    new PermissionSeedService(adapter, logger).rewriteOrphanMarks(decide)
+  );
 }
