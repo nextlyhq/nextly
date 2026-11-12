@@ -629,6 +629,47 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("the deploy step, as configurations change", () => {
+      it("leaves review state and pins in place when no configuration file was found", async () => {
+        await boot(dialect);
+        const post = await entry(app(), "posts");
+        const approvedNo = await shownVersion(app(), "posts", post, "en");
+        await seedState(app(), partOf("posts", post, "en"), "approved", {
+          definitionHash: DESK,
+          approval: await approvalOf("posts", post, "en"),
+        });
+        await pin("posts", post, "approved:en", approvedNo);
+
+        // `nextly migrate` with no configuration file: nothing says which workflows there are.
+        await followWorkflowsAfterMigrate(null, null, app().adapter, quiet);
+
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
+          {
+            stage: "approved",
+          }
+        );
+        expect(await pinsOf("posts", post)).toEqual({
+          "approved:en": approvedNo,
+        });
+      });
+
+      it("keeps the review state and pins of a collection removed from code until its teardown", async () => {
+        await boot(dialect);
+        const page = await entry(app(), "pages");
+        const approvedNo = await shownVersion(app(), "pages", page, null);
+        await seedState(app(), partOf("pages", page, null), "approved", {
+          definitionHash: DESK,
+          approval: await approvalOf("pages", page, null),
+        });
+        await pin("pages", page, "approved", approvedNo);
+
+        // Pages is no longer declared at all: removed from code, its registry row and table are
+        // kept until its teardown, and so is what the workflow held on it.
+        const [posts] = collectionsOn({});
+        await deployStep([posts]);
+
+        expect(await pinsOf("pages", page)).toEqual({ approved: approvedNo });
+      });
+
       it("detaches every document when the last workflow is removed", async () => {
         await boot(dialect);
         const post = await entry(app(), "posts");

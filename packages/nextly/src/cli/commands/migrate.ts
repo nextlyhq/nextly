@@ -739,7 +739,9 @@ export async function runMigrate(
           "./follow-workflows"
         );
         await followWorkflowsAfterMigrate(
-          configResult.config,
+          // Null where no configuration file was found, as the user fields beside it: a
+          // default configuration declares no workflow, and following it would detach them all.
+          configResult.configPath ? configResult.config : null,
           configResult.configPath ?? null,
           adapter as unknown as DrizzleAdapter,
           {

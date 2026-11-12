@@ -16,6 +16,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
+import {
+  publishDeclaredEntities,
+  restoreDeclaredEntities,
+} from "../../domains/dynamic-collections/services/removed-from-code-writes";
 import { withdrawApprovalsUnderEarlierDefinitions } from "../../domains/workflows/approval-follows-content";
 import { followWorkflowDefinitions } from "../../domains/workflows/definition-sweep";
 import { buildWorkflowRegistry } from "../../domains/workflows/registry";
@@ -32,9 +36,35 @@ import { installEntityTablesResolver } from "./workflow-stranded";
  * judges them, the configuration's components as written and any other (one made in the admin)
  * from the registry, on the services lent for the command. The tables written through are those
  * of every entity attached, and of every entity stored review state names, a detached one
- * included: registered here, since a command has no boot to have registered them.
+ * included: registered here, since a command has no boot to have registered them. The entities
+ * the configuration declares are published while it runs, as boot publishes them, so an entity
+ * removed from code keeps what it holds until its teardown.
+ *
+ * `config` is null where no configuration file was found: nothing then says which workflows there
+ * are, and an empty set would detach every document, so nothing is done.
  */
 export async function followWorkflowsAfterMigrate(
+  config: SanitizedNextlyConfig | null,
+  configPath: string | null,
+  adapter: DrizzleAdapter,
+  logger: Logger
+): Promise<void> {
+  if (config === null) {
+    logger.warn(
+      "No configuration file was found, so review state was not brought into line with the workflows."
+    );
+    return;
+  }
+  const declared = publishDeclaredEntities(config);
+  try {
+    await followWorkflowsOn(config, configPath, adapter, logger);
+  } finally {
+    restoreDeclaredEntities(declared);
+  }
+}
+
+/** Both passes, for the workflows `config` declares; see {@link followWorkflowsAfterMigrate}. */
+async function followWorkflowsOn(
   config: SanitizedNextlyConfig,
   configPath: string | null,
   adapter: DrizzleAdapter,
