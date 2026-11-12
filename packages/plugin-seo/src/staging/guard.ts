@@ -11,6 +11,10 @@
  * pages when this started stays listable, because dropping a live site out
  * of search is the worse error, and its missing address is a problem to fix.
  *
+ * The guard runs on every request the Proxy matches, so it reads only the
+ * environment for each: the settings and the standing are read once and
+ * kept, as `stagingGuard` says.
+ *
  * @module staging/guard
  */
 import { createHash } from "node:crypto";
@@ -23,6 +27,7 @@ import {
 
 import { recordSlug } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { keptValue } from "../kept-value";
 import type { ReadRules } from "../resolver/provider";
 
 /**
@@ -37,7 +42,10 @@ const STANDING_KEY = createHash("sha256")
   .update("meta:staging-standing", "utf8")
   .digest("hex");
 
-/** How long a read of the addresses and the standing is reused. */
+/**
+ * How old the addresses and the standing read from the database may grow
+ * before they are read again, in the background.
+ */
 const REREAD_MS = 30_000;
 
 /**
@@ -54,20 +62,8 @@ export function keptOutOfSearch(
   return standing === "guarded";
 }
 
-/** The site's production addresses: the environment's, else the settings'. */
-async function productionAddresses(
-  ctx: PluginContext,
-  readRules: ReadRules
-): Promise<string[]> {
-  const fromEnvironment = productionAddressesOf(undefined);
-  if (fromEnvironment.length > 0) return fromEnvironment;
-  return productionAddressesOf(
-    (await readRules(ctx, undefined)).productionAddresses
-  );
-}
-
 /** The site's recorded standing, or nothing before it is decided. */
-async function readStanding(
+export async function readStanding(
   ctx: PluginContext
 ): Promise<StagingStanding | undefined> {
   const { data } = await ctx.services.ownCollections.listEntries(
@@ -128,20 +124,23 @@ export async function decideStanding(
   return standing;
 }
 
+/** What a request is judged by where the environment names no address. */
+interface Judged {
+  addresses: string[];
+  standing: StagingStanding | undefined;
+}
+
 /**
- * What a request is judged by: the production addresses, and the site's
- * standing only where none are known, so that with addresses named the guard
- * never waits on, or fails with, the database.
+ * The settings' production addresses, and the site's standing only where
+ * they name none.
  */
-async function decide(
+async function fromDatabase(
   ctx: PluginContext,
   readRules: ReadRules
-): Promise<{ addresses: string[]; standing: StagingStanding | undefined }> {
-  const fromEnvironment = productionAddressesOf(undefined);
-  if (fromEnvironment.length > 0) {
-    return { addresses: fromEnvironment, standing: undefined };
-  }
-  const addresses = await productionAddresses(ctx, readRules);
+): Promise<Judged> {
+  const addresses = productionAddressesOf(
+    (await readRules(ctx, undefined)).productionAddresses
+  );
   return {
     addresses,
     standing: addresses.length > 0 ? undefined : await readStanding(ctx),
@@ -150,36 +149,40 @@ async function decide(
 
 /**
  * The Proxy handler sending `X-Robots-Tag: noindex` from every host but the
- * site's production addresses. The addresses and the standing are read at
- * most every half minute, so a request does not wait on the database.
+ * site's production addresses.
+ *
+ * With `NEXTLY_PRODUCTION_ADDRESSES` set, a request is judged by the
+ * environment alone and the database is never read. Without it, the
+ * settings' addresses and the standing are read once, by the first request,
+ * and kept: read again in the background every half minute, so no later
+ * request waits on the database.
  */
 export function stagingGuard(readRules: ReadRules): PluginProxyHandler {
-  let read:
-    | {
-        at: number;
-        value: Promise<{
-          addresses: string[];
-          standing: StagingStanding | undefined;
-        }>;
-      }
-    | undefined;
+  let latest: PluginContext | undefined;
+  const judged = keptValue(
+    () =>
+      latest === undefined
+        ? Promise.resolve<Judged>({ addresses: [], standing: undefined })
+        : fromDatabase(latest, readRules),
+    REREAD_MS
+  );
   return {
     name: "staging-guard",
     async handle(request, ctx) {
-      const now = Date.now();
-      if (read === undefined || now - read.at > REREAD_MS) {
-        read = { at: now, value: decide(ctx, readRules) };
-        // A failed read is not kept: the next request reads again.
-        read.value.catch(() => {
-          read = undefined;
-        });
+      const origin = new URL(request.url).origin;
+      const fromEnvironment = productionAddressesOf(undefined);
+      if (fromEnvironment.length > 0) {
+        return keptOutOfSearch(origin, fromEnvironment, undefined)
+          ? { headers: { "X-Robots-Tag": "noindex" } }
+          : undefined;
       }
-      const { addresses, standing } = await read.value;
+      latest = ctx;
+      const { addresses, standing } = await judged.get();
       // Where the answer hangs on a standing the start has not recorded yet,
       // it is not kept: the next request reads again, so a new site is
-      // guarded from the moment its standing is.
-      if (addresses.length === 0 && standing === undefined) read = undefined;
-      const origin = new URL(request.url).origin;
+      // guarded from the moment its standing is. Only until it is decided,
+      // in the first moments after a start.
+      if (addresses.length === 0 && standing === undefined) judged.forget();
       return keptOutOfSearch(origin, addresses, standing)
         ? { headers: { "X-Robots-Tag": "noindex" } }
         : undefined;

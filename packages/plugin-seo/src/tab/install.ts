@@ -29,17 +29,23 @@ export function seoTabParts(setup: {
   readStructuredDataRules: ReadStructuredDataRules;
   /** Where the social card reads its rules from. */
   readSocialCardRules: ReadSocialCardRules;
+  /** Whether a page's SEO has a permission of its own. */
+  pagePermissions: boolean;
 }): Pick<PluginContributions, "admin"> & {
   routes: NonNullable<PluginContributions["routes"]>;
+  /** The collections whose pages the tab edits: none where it edits no group. */
+  tabCollections: string[];
 } {
   const { collections, singles, fields, baseUrl } = setup;
   const names = fields.flatMap(field =>
     typeof field.name === "string" ? [field.name] : []
   );
+  const edits = tabEditsGroup(fields);
   return {
+    tabCollections: edits ? [...collections] : [],
     // A group of fields the tab does not edit stays among the page's own
     // fields instead.
-    ...(tabEditsGroup(fields)
+    ...(edits
       ? {
           admin: {
             contributions: seoTabContributions({ collections, singles }),
@@ -54,6 +60,7 @@ export function seoTabParts(setup: {
         readRules: setup.readRules,
         readStructuredDataRules: setup.readStructuredDataRules,
         readSocialCardRules: setup.readSocialCardRules,
+        pagePermissions: setup.pagePermissions,
         ...(baseUrl === undefined ? {} : { baseUrl }),
       }),
     ],

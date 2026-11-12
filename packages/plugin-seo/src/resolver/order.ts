@@ -4,14 +4,17 @@
  *
  * 1. What a person typed for this page.
  * 2. What the route's code supplies: a title, a description and the social
- *    card's values, never visibility or the canonical.
+ *    card's values, and whether it hides the page; never the canonical.
  * 3. The rule of the Page Builder design drawing the page.
  * 4. The content type's pattern, such as `{Title} | {Site name}`.
  * 5. A value taken from the page's own content.
  * 6. The site's defaults.
  *
  * Visibility has one level above them all: a content type hidden whole keeps
- * every page in it hidden, whatever the page's own setting.
+ * every page in it hidden, whatever the page's own setting. Below a person's
+ * choice, a route's code may hide its page, never show one: core serves the
+ * page hidden whatever the answer says, so the answer says so too, and the
+ * sitemap and the admin agree with the page.
  *
  * A level with nothing for a value, or only blank text, gives way to the next
  * rather than answering it empty. Every value is reported with the level
@@ -75,7 +78,8 @@ export interface Levels {
     canonicalElsewhere?: boolean;
     hidden?: boolean;
   };
-  code: SeoValues;
+  /** What the route's code supplied, and whether it hides the page. */
+  code: SeoValues & { hidden?: boolean };
   template: SeoValues;
   pattern: { title?: FromPattern; description?: FromPattern };
   content: {
@@ -203,9 +207,9 @@ export function resolveOrder(levels: Levels): SeoAnswer {
         },
     { value: picture(levels.site.image), from: "site" },
   ]);
-  // Visibility and the canonical are never code's to decide: a person's
-  // choice, else listed and the page's own declared address. A page with no
-  // declared address has no canonical rather than a guessed one.
+  // The canonical is never code's to decide: a person's choice, else the
+  // page's own declared address. A page with no declared address has no
+  // canonical rather than a guessed one.
   const canonical = first<string>([
     {
       value: typedCanonical(levels.page.canonical, {
@@ -217,13 +221,17 @@ export function resolveOrder(levels: Levels): SeoAnswer {
     { value: text(levels.address), from: "address" },
   ]);
   // A hidden type comes first: its pages stay hidden, whatever each says,
-  // and return to their own setting once the type is shown again.
+  // and return to their own setting once the type is shown again. A person's
+  // choice comes next, then the route's code, which may hide its page and
+  // never list one: a page is listed only where nothing hides it.
   const robots: Sourced<{ index: boolean; follow: boolean }> =
     levels.typeHidden === true
       ? { value: { index: false, follow: true }, from: "type" }
       : levels.page.hidden === true
         ? { value: { index: false, follow: true }, from: "page" }
-        : { value: { index: true, follow: true }, from: "site" };
+        : levels.code.hidden === true
+          ? { value: { index: false, follow: true }, from: "code" }
+          : { value: { index: true, follow: true }, from: "site" };
   return {
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),

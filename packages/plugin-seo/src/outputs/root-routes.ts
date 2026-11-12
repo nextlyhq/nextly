@@ -1,7 +1,7 @@
 /**
- * The routes that serve the site's `/sitemap.xml` and `/robots.txt` at its
- * root. `withNextly` rewrites both to the API handler, and a site that ships
- * its own file keeps serving it.
+ * The routes that serve the site's `/sitemap.xml`, `/robots.txt` and, once
+ * switched on, `/llms.txt` at its root. `withNextly` rewrites each to the API
+ * handler, and a site that ships its own file keeps serving it.
  *
  * @module outputs/root-routes
  */
@@ -11,11 +11,13 @@ import {
   addressRecordReady,
   retryFailedCatchUp,
 } from "../address-record/catch-up";
-import { productionAddressesOf } from "../canonical";
+import type { CodeRoute } from "../code-pages/routes";
 import type { ReadRules } from "../resolver/provider";
 
+import { llmsTxtOf } from "./ai-outputs";
 import { listPages } from "./listing";
 import { robotsTxt, type AiCrawlerChoice } from "./robots";
+import { siteOriginFor } from "./site-origin";
 import { sitemapAnswer, type SitemapLimits } from "./sitemap-files";
 
 /** What the root files are served with. */
@@ -31,14 +33,14 @@ export interface RootFilesConfig {
   sitemap?: { collections?: readonly string[]; limits: SitemapLimits };
   /** Whether robots.txt is served, and what it asks AI crawlers. */
   robots?: { aiCrawlers: AiCrawlerChoice };
+  /** The pages the site's routes render from their own code. */
+  codeRoutes?: () => readonly CodeRoute[];
 }
 
 /**
  * The site's origin for one request, and the headers that follow from it:
- * one of the site's production addresses, as the page's head reads them, the
- * one the request reached where it is among them; else the configured
- * origin; else the request's own, which nothing may cache, since a request's
- * host can be anything its sender says.
+ * {@link siteOriginFor}, else the request's own, which nothing may cache,
+ * since a request's host can be anything its sender says.
  */
 async function originOf(
   req: Request,
@@ -48,19 +50,28 @@ async function originOf(
 ): Promise<{ origin: string; headers: Record<string, string> }> {
   const headers: Record<string, string> = { "content-type": contentType };
   const asked = new URL(req.url).origin;
-  const production = productionAddressesOf(
-    (await config.readRules(ctx, undefined)).productionAddresses
-  );
-  const site =
-    production.find(address => address === asked) ??
-    production[0] ??
-    config.origin;
+  const site = await siteOriginFor(asked, ctx, config);
   if (site !== undefined) return { origin: site, headers };
   headers["cache-control"] = "no-store";
   return { origin: asked, headers };
 }
 
 const notFound = () => new Response("Not found", { status: 404 });
+
+/**
+ * The answer while the address record catches up, or after a catch-up that
+ * failed: a page may not hold its address yet, and a listing read now would
+ * leave it out, so readers are asked to come back, nothing in between keeps
+ * the answer, and a failed catch-up is tried again. Null once it is ready.
+ */
+function catchingUp(what: string): Response | null {
+  if (addressRecordReady()) return null;
+  retryFailedCatchUp();
+  return new Response(`The ${what} is being brought up to date.`, {
+    status: 503,
+    headers: { "cache-control": "no-store", "retry-after": "120" },
+  });
+}
 
 /**
  * The sitemap's answer: one file, or the index of several, and the file a
@@ -80,17 +91,8 @@ export async function sitemapResponse(
   const url = new URL(req.url);
   const asked = url.searchParams.get("page");
   if (asked !== null && !/^[1-9][0-9]{0,8}$/.test(asked)) return notFound();
-  // While the address record catches up, or after a catch-up that failed, a
-  // page may not hold its address yet, and a sitemap read now would leave it
-  // out: crawlers are asked to come back, nothing in between keeps the
-  // answer, and a failed catch-up is tried again.
-  if (!addressRecordReady()) {
-    retryFailedCatchUp();
-    return new Response("The sitemap is being brought up to date.", {
-      status: 503,
-      headers: { "cache-control": "no-store", "retry-after": "120" },
-    });
-  }
+  const waiting = catchingUp("sitemap");
+  if (waiting !== null) return waiting;
   const { origin, headers } = await originOf(
     req,
     ctx,
@@ -100,6 +102,9 @@ export async function sitemapResponse(
   const { pages } = await listPages(ctx, {
     origin,
     readRules: config.readRules,
+    ...(config.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: config.codeRoutes }),
     ...(config.sitemap.collections === undefined
       ? {}
       : { collections: config.sitemap.collections }),
@@ -153,5 +158,40 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       },
     });
   }
+  routes.push({
+    method: "GET",
+    path: "/llms.txt",
+    mount: "root",
+    public: true,
+    // Served only once switched on in the SEO settings, so it is not found
+    // until then; it lists what the sitemap lists, narrowed as it is.
+    handler: async (req, ctx) => {
+      const rules = await config.readRules(ctx, undefined);
+      if (rules.llmsTxt !== true) return notFound();
+      const waiting = catchingUp("list of pages");
+      if (waiting !== null) return waiting;
+      const { origin, headers } = await originOf(
+        req,
+        ctx,
+        config,
+        "text/plain; charset=utf-8"
+      );
+      const body = await llmsTxtOf(
+        ctx,
+        origin,
+        {
+          readRules: config.readRules,
+          ...(config.codeRoutes === undefined
+            ? {}
+            : { codeRoutes: config.codeRoutes }),
+          ...(sitemap?.collections === undefined
+            ? {}
+            : { collections: sitemap.collections }),
+        },
+        rules
+      );
+      return body === null ? notFound() : new Response(body, { headers });
+    },
+  });
   return routes;
 }

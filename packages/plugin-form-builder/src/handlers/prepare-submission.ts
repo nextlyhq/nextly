@@ -25,6 +25,11 @@ import { stripHtmlTags } from "nextly";
 import type { AnyFormField } from "../types";
 import { fieldsHiddenByCondition } from "../utils/condition-visibility";
 import {
+  CONSENT_TEXT_CHANGED,
+  isConsentAnswer,
+  staleConsentNames,
+} from "../utils/consent";
+import {
   generateZodSchema,
   getValidationErrors,
   getValidationIssues,
@@ -129,6 +134,19 @@ export interface SubmissionOriginMarks {
    * to judging its bot check; the seam does not count it again.
    */
   rateCounted?: boolean;
+  /**
+   * The token the visitor's browser sent for one response per browser,
+   * read before the row keeps only the form's fields: the seam makes the
+   * submission's key from it.
+   */
+  browserToken?: string;
+  /**
+   * The one-response key the plugin made for this submission, written by
+   * itself alone (`one-response-rebuild`, and a key handed to the next
+   * submission when its holder leaves). The seam writes this key and nothing
+   * else; the hold checks it was made for the form's current version.
+   */
+  setKey?: string | null;
 }
 
 /** Mark `row` as this plugin's own write, and hand it back. */
@@ -166,6 +184,11 @@ function sameValue(left: unknown, right: unknown): boolean {
       left.length === right.length &&
       left.every((value, index) => sameValue(value, right[index]))
     );
+  }
+  // A consent's answer is an object, made afresh each time a payload is
+  // read: the same choice and text are the same answer.
+  if (isConsentAnswer(left) && isConsentAnswer(right)) {
+    return left.agreed === right.agreed && left.text === right.text;
   }
   return false;
 }
@@ -225,10 +248,17 @@ export function prepareSubmission({
   data,
   fields,
   validate,
+  fresh = true,
 }: {
   data: Record<string, unknown>;
   fields: AnyFormField[];
   validate: boolean;
+  /**
+   * Whether this is a new submission, whose consents are checked against the
+   * text the visitor says they were shown. An update's consents are held to
+   * what is stored instead.
+   */
+  fresh?: boolean;
 }): PreparedSubmission {
   const transformed = transformFormData(data, fields);
   sanitizeSubmissionData(transformed, fields);
@@ -241,21 +271,31 @@ export function prepareSubmission({
   // condition hid could never be answered, and refusing over it would leave
   // the form impossible to send. What is stored is unchanged.
   const hidden = fieldsHiddenByCondition(fields, transformed);
-  const result = generateZodSchema(
-    fields.filter(field => !hidden.has(field.name))
-  ).safeParse(transformed);
-  if (!result.success) {
+  const shown = fields.filter(field => !hidden.has(field.name));
+  const result = generateZodSchema(shown).safeParse(transformed);
+  const stale = fresh ? staleConsentNames(shown, data) : [];
+  if (!result.success || stale.length > 0) {
     // The transformed payload comes back with the errors rather than nothing,
     // so a caller that wants to store it anyway has the same value the valid
     // path would have produced, minus the schema's blessing.
     return {
       data: transformed,
-      validationErrors: getValidationErrors(result),
+      validationErrors: {
+        ...(result.success ? {} : getValidationErrors(result)),
+        ...Object.fromEntries(stale.map(name => [name, CONSENT_TEXT_CHANGED])),
+      },
       // The RAW submission, not the transformed payload. Transformation
       // normalises a value before the schema sees it, so a required
       // multi-select sent a scalar `0` arrives here as `[]` and would read as
       // blank: the visitor answered, and would be told they had not.
-      validationIssues: getValidationIssues(result, data),
+      validationIssues: [
+        ...(result.success ? [] : getValidationIssues(result, data)),
+        ...stale.map(path => ({
+          path,
+          code: "INVALID" as const,
+          message: CONSENT_TEXT_CHANGED,
+        })),
+      ],
     };
   }
 

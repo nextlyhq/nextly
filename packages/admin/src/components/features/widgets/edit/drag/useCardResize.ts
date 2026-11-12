@@ -8,7 +8,9 @@
  * bounds, its bounds' own ends, its default and the width it is drawn at) as the pointer moves,
  * and the grid lays itself out at that width at once, so the other cards move to fit and slide
  * there (`useCardFlip`). Past its widest choice it stays at its widest: the maximum is where it
- * stops. A card with one choice has no edge to drag.
+ * stops. Taken past the grid's right edge, the pointer asks for the widest choice, so a card in
+ * the row's last column, with no room to its right, widens from its edge too (`columnsReached`).
+ * A card with one choice has no edge to drag.
  *
  * The width is staged once, on release, with the dashboard's other unsaved changes, and said
  * then; a cancelled drag (Escape, or the pointer taken away) puts the card back. Below 1,024px

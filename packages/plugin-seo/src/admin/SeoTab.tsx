@@ -19,6 +19,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useFormState, useWatch } from "react-hook-form";
 
+import { receivedHrefFor } from "../received/contract";
 import type { SeoTabContext } from "../tab/contract";
 import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
 import { SEO_GROUP } from "../tab/typed";
@@ -26,7 +27,7 @@ import { SEO_GROUP } from "../tab/typed";
 import { SeoPanel } from "./SeoPanel";
 import { useShareImages } from "./share-images";
 import { publishSeoStatus, statusKeyOf } from "./status";
-import { useTabDocument } from "./tab-document";
+import { useTabDocument, withValueAt } from "./tab-document";
 import { useSeoTabContext } from "./use-seo-tab-context";
 import {
   panelAnswers,
@@ -128,6 +129,22 @@ function useSeoErrors(
   return refused;
 }
 
+/**
+ * Where the page's check of what search engines received is: a saved page
+ * with an address of its own can be checked, at the address its language
+ * serves it at; one being created has nothing served yet.
+ */
+export function receivedHrefOf(
+  id: string | null,
+  levels: SeoTabContext | undefined
+): string | undefined {
+  const served = levels?.served;
+  if (id === null || served === undefined || levels === undefined) {
+    return undefined;
+  }
+  return receivedHrefFor(new URL(served, levels.site.origin).href);
+}
+
 /** The media library, opened to choose the page's share image. */
 function ShareImagePicker({
   open,
@@ -158,16 +175,49 @@ function ShareImagePicker({
   );
 }
 
+/** Where the tab is drawn other than on an edit page, what it is told. */
+export interface SeoTabElsewhere {
+  /**
+   * A value the form does not hold yet, at its form path: a design an
+   * editor keeps until it stores it, which the page's values come from.
+   */
+  unsaved?: { path: string; value: unknown };
+  /** Shows the page's own fields, where a missing one is filled in. */
+  onGoToContent?: () => void;
+}
+
+/** What opens the page's own fields: the edit page's content, by default. */
+function contentOpener(elsewhere: SeoTabElsewhere): () => void {
+  return elsewhere.onGoToContent ?? goToContent;
+}
+
+/**
+ * The whole document as typed: any of its fields can feed an automatic value
+ * (a title, an excerpt, a pattern's field, its address). With a value the
+ * form does not hold yet put at its path.
+ */
+function useTypedDocument(
+  control: DocumentTabProps["control"],
+  unsaved: SeoTabElsewhere["unsaved"]
+): Record<string, unknown> {
+  const typed = useWatch({ control }) as Record<string, unknown>;
+  const path = unsaved?.path;
+  const value = unsaved?.value;
+  return useMemo(
+    () => (path === undefined ? typed : withValueAt(typed, path, value)),
+    [typed, path, value]
+  );
+}
+
 export function SeoTab({
   context,
   control,
   documentLock,
   entry,
   setBadge,
-}: DocumentTabProps): ReactNode {
-  // The whole document as typed: any of its fields can feed an automatic
-  // value (a title, an excerpt, a pattern's field, its address).
-  const document = useWatch({ control }) as Record<string, unknown>;
+  ...elsewhere
+}: DocumentTabProps & SeoTabElsewhere): ReactNode {
+  const document = useTypedDocument(control, elsewhere.unsaved);
   const fields = useSeoFields();
   const errors = useSeoErrors(control);
   const { target, documentKey } = useTabDocument(context, entry);
@@ -194,8 +244,12 @@ export function SeoTab({
   useStatusLine(context, answers, problems.length, levels?.typeLabel);
 
   if (target === null) return null;
+  // Read-only while the document is held, and for someone who may not
+  // change this page's SEO, whose save would keep the stored SEO.
   const writable =
-    !documentLock.readOnly && fields.metaTitle?.writable !== false;
+    !documentLock.readOnly &&
+    fields.metaTitle?.writable !== false &&
+    levels?.mayChange !== false;
   return (
     <>
       <SeoPanel
@@ -214,7 +268,8 @@ export function SeoTab({
         onChooseImage={() => setChoosing(true)}
         shownImageFile={images.contentImage}
         onMakeShareImage={images.make}
-        onGoToField={goToContent}
+        onGoToField={contentOpener(elsewhere)}
+        receivedHref={receivedHrefOf(target.id, levels)}
       />
       <ShareImagePicker
         open={choosing}

@@ -7,12 +7,21 @@ interface SidebarSearchProps {
   placeholder: string;
   value: string;
   onChange: (value: string) => void;
+  /** Drawn but not usable, as while the panel is drawn from memory. */
+  disabled?: boolean;
+  /**
+   * The field's accessible name. A placeholder is no label: it goes as soon
+   * as the reader types, so the field is named by this, else the placeholder.
+   */
+  label?: string;
 }
 
 export function SidebarSearch({
   placeholder,
   value,
   onChange,
+  disabled,
+  label,
 }: SidebarSearchProps): JSX.Element {
   return (
     <div className="px-2 pb-2">
@@ -20,7 +29,10 @@ export function SidebarSearch({
         {/* Centred rather than offset from the top. A fixed `top-2.5` centres a
             16px icon in a 36px control and nowhere else, so it was a second
             copy of the height decision that no longer moves with the token. */}
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Search
+          aria-hidden="true"
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+        />
         <Input
           // The sidebar is a denser surface than a page, so its search takes
           // the small step of the control scale. Named rather than written as
@@ -29,7 +41,9 @@ export function SidebarSearch({
           // while still looking correct.
           size="sm"
           placeholder={placeholder}
+          aria-label={label ?? placeholder}
           value={value}
+          disabled={disabled}
           onChange={e => onChange(e.target.value)}
           className="pl-9 bg-background border-input text-xs"
         />

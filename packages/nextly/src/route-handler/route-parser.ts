@@ -2891,6 +2891,7 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
+    content: { operation: "list", method: "getDashboardContent" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
@@ -2923,6 +2924,7 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
+ *   GET  /api/dashboard/content        → getDashboardContent
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout

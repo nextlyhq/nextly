@@ -27,7 +27,12 @@ import {
 import type React from "react";
 
 import { DEFAULT_FORM_SETTINGS } from "../../../config/defaults";
-import type { FormSettings, OneResponseMode } from "../../../types";
+import type {
+  AnyFormField,
+  FormSettings,
+  OneResponseMode,
+} from "../../../types";
+import { emailFieldsToCompare } from "../../../utils/one-response-field";
 import { parseRedirectReference } from "../../../utils/redirect-reference";
 import { useFormBuilder } from "../../context/FormBuilderContext";
 
@@ -376,45 +381,87 @@ const ONE_RESPONSE_TITLES = {
   ip: "One per network (IP address)",
 } as const satisfies Record<OneResponseMode, string>;
 
-/** The ways offered: the ones the submit handler enforces today. */
-const ONE_RESPONSE_CHOICES: readonly Choice<OneResponseMode>[] = [
-  { value: "off", title: ONE_RESPONSE_TITLES.off },
-  {
-    value: "ip",
-    title: ONE_RESPONSE_TITLES.ip,
-    description:
-      "People in one office or home count as one person, so only one of them can respond.",
-  },
-];
-
-/** Why a stored way that is not offered is shown, and cannot be chosen. */
-const NOT_ENFORCED = "Saved on this form, and not yet applied to submissions.";
+/** How each way is explained, beside its title. */
+const ONE_RESPONSE_DESCRIPTIONS = {
+  email: "Uses one of the form's Email fields. Best for sign-ups.",
+  // Earlier submissions kept no browser token, so they cannot be counted.
+  browser:
+    "Counted from when you choose it. Someone who clears their browser's data, or uses another browser, can respond again.",
+  ip: "People in one office or home count as one person, so only one of them can respond.",
+} as const;
 
 /**
- * The choices for a form, with its stored way added when it is not one of
- * those offered (one written through the API): left out, the list would show
- * nothing chosen while the stored value is saved again on the next save.
+ * One per email address: the Email field it compares, picked among those it
+ * can compare (required, never hidden by a condition). A form with none
+ * cannot take it yet, and the note says what to add.
  */
-function oneResponseChoices(
-  current: OneResponseMode
-): readonly Choice<OneResponseMode>[] {
-  return ONE_RESPONSE_CHOICES.some(choice => choice.value === current)
-    ? ONE_RESPONSE_CHOICES
-    : [
-        ...ONE_RESPONSE_CHOICES,
-        {
-          value: current,
-          title: ONE_RESPONSE_TITLES[current],
-          description: NOT_ENFORCED,
-          disabled: true,
-        },
-      ];
+function emailChoice(
+  fields: readonly AnyFormField[],
+  settings: FormSettings,
+  updateSettings: (patch: Partial<FormSettings>) => void
+): Choice<OneResponseMode> {
+  const candidates = emailFieldsToCompare(fields);
+  const chosen = candidates.find(
+    field => field.name === settings.oneResponseField
+  );
+  return {
+    value: "email",
+    title: ONE_RESPONSE_TITLES.email,
+    description: ONE_RESPONSE_DESCRIPTIONS.email,
+    // Kept choosable while it is what the form has, so it is never shown
+    // chosen and disabled at once; Save then says what to fix.
+    disabled: candidates.length === 0 && settings.oneResponse !== "email",
+    note:
+      candidates.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Add an Email field that is required and not hidden by a condition to
+          use this.
+        </p>
+      ) : undefined,
+    details:
+      candidates.length === 0 ? undefined : (
+        <Select
+          value={chosen?.name ?? ""}
+          onValueChange={oneResponseField =>
+            updateSettings({ oneResponseField })
+          }
+        >
+          <SelectTrigger
+            aria-label="Email field to compare"
+            className="w-full sm:w-72 bg-transparent border-input dark:bg-muted/50"
+          >
+            <SelectValue placeholder="Choose an Email field" />
+          </SelectTrigger>
+          <SelectContent>
+            {candidates.map(field => (
+              <SelectItem key={field.name} value={field.name}>
+                {field.label || field.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ),
+  };
 }
 
 function OneResponseSection(): React.JSX.Element {
-  const { settings, updateSettings } = useFormBuilder();
+  const { fields, settings, updateSettings } = useFormBuilder();
   // Always set once the settings are read; the default covers the type.
   const current = settings.oneResponse ?? DEFAULT_FORM_SETTINGS.oneResponse;
+  const choices: Choice<OneResponseMode>[] = [
+    { value: "off", title: ONE_RESPONSE_TITLES.off },
+    emailChoice(fields, settings, updateSettings),
+    {
+      value: "browser",
+      title: ONE_RESPONSE_TITLES.browser,
+      description: ONE_RESPONSE_DESCRIPTIONS.browser,
+    },
+    {
+      value: "ip",
+      title: ONE_RESPONSE_TITLES.ip,
+      description: ONE_RESPONSE_DESCRIPTIONS.ip,
+    },
+  ];
   return (
     <FormSection label="One response per person">
       <SettingRow label="Who may respond again" stack>
@@ -422,8 +469,22 @@ function OneResponseSection(): React.JSX.Element {
           name="settings-one-response"
           label="One response per person"
           value={current}
-          onChange={oneResponse => updateSettings({ oneResponse })}
-          choices={oneResponseChoices(current)}
+          onChange={oneResponse =>
+            updateSettings({
+              oneResponse,
+              // One per email starts on the first field it can compare, so
+              // the choice is complete when it is made.
+              ...(oneResponse === "email" &&
+              !emailFieldsToCompare(fields).some(
+                field => field.name === settings.oneResponseField
+              )
+                ? {
+                    oneResponseField: emailFieldsToCompare(fields)[0]?.name,
+                  }
+                : {}),
+            })
+          }
+          choices={choices}
         />
       </SettingRow>
     </FormSection>
@@ -455,6 +516,88 @@ function SpamSection({
   );
 }
 
+/**
+ * What a form keeps about who sent a submission. Off, new submissions store
+ * neither their IP address nor their browser; one per network still compares
+ * the address, by the keyed digest made before it is dropped.
+ */
+function PrivacySection(): React.JSX.Element {
+  const { settings, updateSettings } = useFormBuilder();
+  return (
+    <FormSection label="Privacy">
+      <SettingRow
+        label="Store IP address and browser"
+        htmlFor="settings-store-ip"
+        description="Helps spot spam and shows where a response came from. Off, new submissions keep neither; one per network still works, from a scrambled copy."
+      >
+        <Switch
+          id="settings-store-ip"
+          aria-describedby={descriptionIdOf("settings-store-ip")}
+          checked={settings.storeIpAndBrowser !== false}
+          onCheckedChange={storeIpAndBrowser =>
+            updateSettings({ storeIpAndBrowser })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        label="Delete submissions after"
+        htmlFor="settings-keep-days"
+        description="Older submissions and their email records are deleted each night. Spam goes after 30 days either way."
+      >
+        <Select
+          value={keepChoiceOf(settings.keepDays)}
+          onValueChange={choice =>
+            updateSettings({
+              keepDays: choice === "never" ? undefined : Number(choice),
+            })
+          }
+        >
+          <SelectTrigger
+            id="settings-keep-days"
+            aria-describedby={descriptionIdOf("settings-keep-days")}
+            className="w-full sm:w-40 bg-transparent border-input dark:bg-muted/50"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {keepChoicesFor(settings.keepDays).map(choice => (
+              <SelectItem key={choice.value} value={choice.value}>
+                {choice.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
+    </FormSection>
+  );
+}
+
+/** How long a form keeps its submissions: never deleted, or after a while. */
+const KEEP_CHOICES = [
+  { value: "never", label: "Never" },
+  { value: "30", label: "30 days" },
+  { value: "90", label: "90 days" },
+  { value: "365", label: "1 year" },
+] as const;
+
+/** The choice a stored keep period reads as. */
+function keepChoiceOf(keepDays: number | undefined): string {
+  return keepDays === undefined ? "never" : String(keepDays);
+}
+
+/**
+ * The choices offered. A period set some other way (the API, code) is offered
+ * as itself, so opening Settings shows it and never changes it.
+ */
+function keepChoicesFor(
+  keepDays: number | undefined
+): ReadonlyArray<{ value: string; label: string }> {
+  const current = keepChoiceOf(keepDays);
+  return KEEP_CHOICES.some(choice => choice.value === current)
+    ? KEEP_CHOICES
+    : [...KEEP_CHOICES, { value: current, label: `${current} days` }];
+}
+
 export function FormSettingsTab({
   spamDefaults,
   redirectCollections,
@@ -470,6 +613,7 @@ export function FormSettingsTab({
       <AvailabilitySection />
       <OneResponseSection />
       <SpamSection spamDefaults={spamDefaults} />
+      <PrivacySection />
     </>
   );
 }

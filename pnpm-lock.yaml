@@ -1756,6 +1756,9 @@ importers:
 
   packages/plugin-seo:
     dependencies:
+      '@nextlyhq/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -1763,9 +1766,12 @@ importers:
       '@nextlyhq/admin':
         specifier: workspace:*
         version: link:../admin
-      '@nextlyhq/plugin-sdk':
+      '@nextlyhq/blocks-react':
         specifier: workspace:*
-        version: link:../plugin-sdk
+        version: link:../blocks-react
+      '@nextlyhq/plugin-page-builder':
+        specifier: workspace:*
+        version: link:../plugin-page-builder
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig

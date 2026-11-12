@@ -45,6 +45,11 @@ interface PluginDefinition {
 }
 ```
 
+`name` is unique among the app's plugins, and `app` is reserved, in any letter case: the site's
+own permissions are stored under the owner `app` and a plugin's under its name, so startup and
+every CLI command refuse a plugin named `app` (`PLUGIN_RESOLUTION_ERROR`, `logContext.reason`
+`plugin-name-reserved`). Choose another name.
+
 ## `PluginContributions`
 
 ```ts
@@ -896,6 +901,12 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
+A contribution to another plugin's place names that plugin in `dependsOn`, or in
+`optionalDependsOn` where the contributor works without it: while the owner is absent or
+disabled, a contribution to one of its places is left out and the app starts. A place the
+running owner does not declare is still refused (`admin-place-unknown`), as is one of a plugin
+the contributor names in neither.
+
 Every core place draws what is sent to it: settings, a user's detail page, the
 account page, the entry form, the login page, both edit pages, the dashboard
 and the entry list. A plugin draws its own
@@ -1237,6 +1248,13 @@ of the plugin's runs:
 A bulk request is refused whole when any row fails. The rows are read once per
 collection, as the caller. Hiding an action in the admin is not its access
 control; this check is.
+
+A staff route your person's-menu item runs (`header.place: "menu"` with an
+`action.run`) is bound to that item too, under the id
+`<plugin-slug>.user-menu`, and its request names no rows:
+`{ "action": "<plugin-slug>.user-menu", "rows": [] }`. No rows are accepted for
+that id alone, and only on the route the item names; a list action on the same
+route still needs its rows.
 
 Boot fails, naming the plugin and the contribution, on an id outside the
 plugin's slug (`admin-contribution-outside-namespace`), one declared twice

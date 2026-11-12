@@ -21,6 +21,7 @@ import type { SystemColumnEntity } from "../../lib/system-columns";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
 import type { VersionsDbApi } from "./db-api";
+import { sourcesHeld, type FieldSources } from "./restored-from";
 import { documentSystemKeys } from "./snapshot-system-keys";
 import type { VersionCaptureService } from "./version-capture-service";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
@@ -49,11 +50,20 @@ export interface DraftSaveInput {
   createdBy: string | null;
   /** The version this save restored, when it is a restore. */
   sourceVersionNo?: number | null;
+  /** The fields named as restored, and their versions; see `restored-from`. */
+  restoredFrom?: FieldSources;
   /**
    * Durable versions kept for the document, from its versions config; `false`
    * or omitted leaves history unbounded, as for every capture.
    */
   maxPerDoc?: number | false;
+  /**
+   * Stores the working draft in place of the one-row write, on the same
+   * handle: under per-language storage a held save keeps a shared draft and a
+   * language's draft (`part-drafts`) rather than one row of the whole
+   * document. The version below is recorded from `snapshot` either way.
+   */
+  storeWorkingDraft?: (repo: VersionsRepository) => Promise<void>;
 }
 
 /** The version a held save recorded, or null when it changed nothing. */
@@ -80,12 +90,17 @@ export async function storeDraftSave(
   capture: VersionCaptureService,
   input: DraftSaveInput
 ): Promise<DraftSaveResult> {
-  await new VersionsRepository(tx).upsertWorkingDraft({
-    ref: input.ref,
-    locale: input.locale,
-    snapshot: input.snapshot,
-    createdBy: input.createdBy,
-  });
+  const repo = new VersionsRepository(tx);
+  if (input.storeWorkingDraft) {
+    await input.storeWorkingDraft(repo);
+  } else {
+    await repo.upsertWorkingDraft({
+      ref: input.ref,
+      locale: input.locale,
+      snapshot: input.snapshot,
+      createdBy: input.createdBy,
+    });
+  }
   const entity = input.ref.scopeKind === "single" ? "single" : "collection";
   if (sameContent(input.snapshot, input.replaces, entity)) {
     return { versionNo: null };
@@ -109,13 +124,18 @@ export async function storeDraftSave(
     });
   }
 
+  const recorded = withoutStatus(input.snapshot);
+  const fieldSources = input.restoredFrom
+    ? await sourcesHeld(tx, input.ref, input.restoredFrom, recorded)
+    : undefined;
   const { versionNo } = await capture.capture(tx, {
     ref: input.ref,
     status: "draft",
-    snapshot: withoutStatus(input.snapshot),
+    snapshot: recorded,
     createdBy: input.createdBy,
     locale: versionLocaleOf(input),
     sourceVersionNo: input.sourceVersionNo ?? null,
+    fieldSources: fieldSources ?? null,
     maxPerDoc: input.maxPerDoc,
     lifecycle: true,
   });

@@ -1,5 +1,5 @@
 /**
- * The SEO settings screen: rules for the whole site, under four tabs, saved
+ * The SEO settings screen: rules for the whole site, under five tabs, saved
  * together; and, the first time it opens, the three-step setup over it.
  *
  * @module admin/SeoSettingsPage
@@ -13,14 +13,7 @@ import {
   useSingleDocument,
   useUpdateSingleDocument,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-} from "react";
+import { useCallback, useMemo, useRef, useState, type JSX } from "react";
 
 import {
   AI_CRAWLER_CHOICES,
@@ -30,12 +23,19 @@ import {
   SETUP_STEPS,
   type AiCrawlerChoice,
   type SettingsDocumentBody,
+  isSwitchedOff,
+  type ListedContentType,
   type SeoContentType,
+  type SwitchedOffType,
 } from "../settings/contract";
 
+import { ConnectionsTab } from "./connections";
+import { ContentTypesTab } from "./content-types";
+import { useLeaveWarning } from "./leave-warning";
 import {
   changesOf,
   draftOf,
+  structuredDataOf,
   type SettingsDefaults,
   type SettingsDraft,
   type StoredSettings,
@@ -44,7 +44,6 @@ import { SetupDialog } from "./SetupDialog";
 import { ROOT, SeoStyles } from "./styles";
 import {
   BrandTab,
-  ContentTypesTab,
   CrawlersTab,
   draftProblem,
   GeneralTab,
@@ -64,16 +63,23 @@ function tabInAddress(): TabId {
   return isTabId(named) ? named : FIRST_TAB;
 }
 
-/** Keeps the open tab in the address without adding to the history. */
-function showTabInAddress(tab: TabId): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("tab", tab);
-  window.history.replaceState(window.history.state, "", url);
-}
-
 /** The list the content types route answers with. */
 interface ContentTypesBody {
-  items: SeoContentType[];
+  items: ListedContentType[];
+}
+
+/** The types with SEO, which every tab works on, and those without. */
+function splitTypes(items: readonly ListedContentType[] = []): {
+  types: SeoContentType[];
+  switchedOff: SwitchedOffType[];
+} {
+  const types: SeoContentType[] = [];
+  const switchedOff: SwitchedOffType[] = [];
+  for (const item of items) {
+    if (isSwitchedOff(item)) switchedOff.push(item);
+    else types.push(item);
+  }
+  return { types, switchedOff };
 }
 
 /** The SEO settings screen, as the admin mounts it. */
@@ -110,7 +116,7 @@ export function SeoSettingsPage(): JSX.Element {
         <SettingsScreen
           slug={slug}
           stored={settings.data}
-          types={types.data?.items ?? []}
+          {...splitTypes(types.data?.items)}
           typesFailed={types.error !== null}
           reread={async () => {
             // Only a read that succeeded is an answer: a failed one still
@@ -149,12 +155,23 @@ export function SeoSettingsPage(): JSX.Element {
 function useSettingsDefaults(): SettingsDefaults {
   const config = usePluginClientConfig(SEO_PLUGIN_NAME);
   const aiCrawlers = config?.aiCrawlers;
+  const hiddenTypes = config?.hiddenTypes;
+  const structuredData = config?.structuredData;
   return useMemo(
-    () =>
-      (AI_CRAWLER_CHOICES as readonly unknown[]).includes(aiCrawlers)
+    () => ({
+      ...((AI_CRAWLER_CHOICES as readonly unknown[]).includes(aiCrawlers)
         ? { aiCrawlers: aiCrawlers as AiCrawlerChoice }
-        : {},
-    [aiCrawlers]
+        : {}),
+      ...(Array.isArray(hiddenTypes)
+        ? {
+            hiddenTypes: hiddenTypes.filter(
+              (key): key is string => typeof key === "string"
+            ),
+          }
+        : {}),
+      structuredData: structuredDataOf(structuredData),
+    }),
+    [aiCrawlers, hiddenTypes, structuredData]
   );
 }
 
@@ -218,16 +235,6 @@ function useSettingsSave(
   );
 
   return { stored, draft, setDraft, save, saving, failure };
-}
-
-/** Leaving the page with unsaved changes asks first. */
-function useLeaveWarning(unsaved: boolean): void {
-  useEffect(() => {
-    if (!unsaved) return undefined;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [unsaved]);
 }
 
 /** The line that offers setup again until it is finished. */
@@ -307,6 +314,7 @@ function SettingsPanel({
   tab,
   tabProps,
   types,
+  switchedOff,
   typesFailed,
   editing,
   setEditing,
@@ -314,6 +322,7 @@ function SettingsPanel({
   tab: TabId;
   tabProps: TabProps;
   types: readonly SeoContentType[];
+  switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
   editing: string | null;
   setEditing: (key: string | null) => void;
@@ -323,6 +332,7 @@ function SettingsPanel({
   if (tab === "general") content = <GeneralTab {...tabProps} />;
   else if (tab === "brand") content = <BrandTab {...tabProps} />;
   else if (tab === "crawlers") content = <CrawlersTab {...tabProps} />;
+  else if (tab === "connections") content = <ConnectionsTab {...tabProps} />;
   else if (typesFailed) {
     content = (
       <p className="nx-seo-alert" role="alert">
@@ -334,6 +344,7 @@ function SettingsPanel({
       <ContentTypesTab
         {...tabProps}
         types={types}
+        switchedOff={switchedOff}
         editing={editing}
         setEditing={setEditing}
       />
@@ -395,12 +406,14 @@ function SettingsScreen({
   slug,
   stored: initial,
   types,
+  switchedOff,
   typesFailed,
   reread,
 }: {
   slug: string;
   stored: StoredSettings;
   types: readonly SeoContentType[];
+  switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
   reread: () => Promise<StoredSettings | undefined>;
 }): JSX.Element {
@@ -421,10 +434,11 @@ function SettingsScreen({
   const problem = draftProblem(draft, types);
   useLeaveWarning(changes !== null);
 
-  const choose = (next: TabId) => {
-    setTab(next);
-    showTabInAddress(next);
-  };
+  // The open tab is kept here, not written to the address: the admin
+  // answers any change to the address by mounting the page again, which
+  // would drop the edits not yet saved. An address naming a tab still opens
+  // on it.
+  const choose = (next: TabId) => setTab(next);
   const tabProps: TabProps = { draft, change: next => setDraft(next) };
   const saveChanges = () => {
     void save(draft).then(saved => {
@@ -462,6 +476,7 @@ function SettingsScreen({
         tab={tab}
         tabProps={tabProps}
         types={types}
+        switchedOff={switchedOff}
         typesFailed={typesFailed}
         editing={editing}
         setEditing={setEditing}

@@ -153,6 +153,29 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_COMMAND_FROM_OLDER_RELEASE: {
+    cause:
+      "A plugin install or uninstall ran in production from a Nextly release older than the one that set the preset roles' grants, and changed nothing.",
+    from: [
+      {
+        // Refused before anything is written (`refuseFromAnOlderRelease`): an install sets every
+        // preset role's grants, which an older release than the recorded one leaves as they are.
+        code: "CONFLICT",
+        reason: "preset-grants-set-by-a-newer-release",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "An install sets every preset role's grants with the plugin's permissions, and a release older than the one that set them leaves them as they are, so neither command runs from it in production. Nothing was changed.",
+            next: asSentence(
+              rest.join(" ") ||
+                "Run the command from the release that set them, or a newer one."
+            ),
+          };
+        },
+      },
+    ],
+  },
   PLUGIN_HOOK_SERVICES_REGISTERED: {
     cause:
       "A plugin's install or uninstall hook was not run, because the process already had services registered.",

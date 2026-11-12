@@ -10,13 +10,15 @@
  *
  * @module admin/SeoPanel
  */
+import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { Input, Textarea } from "@nextlyhq/ui";
-import { EyeOff } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { EyeOff, Lock } from "lucide-react";
+import { useId, type ReactNode, type Ref } from "react";
 
 import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
 import {
+  characters,
   DESCRIPTION_LIMIT,
   TITLE_LIMIT,
   type SeoProblem,
@@ -73,6 +75,11 @@ export interface SeoPanelProps {
   /** Whether Advanced starts open. Closed on a real page. */
   defaultAdvancedOpen?: boolean;
   /**
+   * Where this page's check of what search engines received is, where it
+   * has an address to check; no link is offered without one.
+   */
+  receivedHref?: string | undefined;
+  /**
    * Which document and language the values are of: another one lets go of
    * what was being typed under Advanced and not stored yet.
    */
@@ -87,10 +94,18 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
   const names: SourceNames = {
     typeLabel: context?.typeLabel ?? "page",
     fieldLabels: context?.fieldLabels ?? {},
+    ...(context?.drawnBy === undefined ? {} : { drawnBy: context.drawnBy }),
   };
   const answer = answers?.answer;
   return (
     <div className="flex flex-col gap-[18px] pt-4 pb-12">
+      {context?.mayChange === false ? (
+        <Note icon={<Lock className="size-4" />}>
+          <b className="font-semibold">You can't change this page's SEO.</b> You
+          can see what search engines and social networks are given. Ask someone
+          who manages the site's SEO to change it.
+        </Note>
+      ) : null}
       {answer?.robots.from === "type" ? (
         <Note icon={<EyeOff className="size-4" />}>
           <b className="font-semibold">
@@ -106,7 +121,7 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         status={props.status}
         sharedTitleTyped={isTyped(values.socialTitle)}
       />
-      <SeoTextField
+      <PageTextField
         label="Title on Google"
         help="The blue link people click in Google's results. Google shows about 60 characters."
         typed={typedText(values.metaTitle)}
@@ -120,7 +135,7 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         writable={writable}
         onChange={next => onSet("metaTitle", next)}
       />
-      <SeoTextField
+      <PageTextField
         multiline
         label="Description on Google"
         help="The grey text under the link. It doesn't change rankings, but it helps people decide to click."
@@ -156,6 +171,35 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         onMakeShareImage={props.onMakeShareImage}
         onGoToField={props.onGoToField}
       />
+      {props.receivedHref === undefined ? null : (
+        <ReceivedLink href={props.receivedHref} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The way to the page's check of what search engines received, opened
+ * within the admin like any of its own links.
+ */
+function ReceivedLink({ href }: { href: string }): ReactNode {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs leading-normal text-muted-foreground">
+      <span>
+        Want to see what Google and LinkedIn actually received for this page?
+      </span>
+      <a
+        href={href}
+        className="text-xs font-semibold text-foreground underline underline-offset-2 hover:decoration-2"
+        onClick={event => {
+          // A new tab or window is the browser's to open.
+          if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+          event.preventDefault();
+          navigateTo(href);
+        }}
+      >
+        Check what search engines received
+      </a>
     </div>
   );
 }
@@ -206,11 +250,34 @@ function FieldSource({
   );
 }
 
-/** What the title's or the description's control is handed. */
-function fieldProps(
+/** What a page's title or description field is handed. */
+export interface SeoTextFieldProps {
+  label: string;
+  help: string;
+  /** What is typed for the page, `""` for nothing. */
+  value: string;
+  /** The placeholder: the value used while nothing is typed. */
+  placeholder: string;
+  /** How long the value used is, in characters. */
+  count: number;
+  limit: number;
+  /** The line under the field saying where the value comes from, by its id. */
+  source: (id: string) => ReactNode;
+  error?: string | undefined;
+  writable: boolean;
+  multiline?: boolean;
+  /** The most characters the field takes, where it takes no more. */
+  maxLength?: number;
+  inputRef?: Ref<HTMLInputElement>;
+  /** Sets the value; `null` returns it to automatic. */
+  onChange: (next: string | null) => void;
+}
+
+/** What a title's or description's control is handed. */
+function controlProps(
   id: string,
-  typed: string,
-  automatic: Sourced<string> | undefined,
+  value: string,
+  placeholder: string,
   writable: boolean,
   error: string | undefined,
   onChange: (next: string | null) => void
@@ -219,8 +286,8 @@ function fieldProps(
   if (error !== undefined) described.push(`${id}-error`);
   return {
     id,
-    value: typed,
-    placeholder: automatic?.value ?? "",
+    value,
+    placeholder,
     disabled: !writable,
     "aria-describedby": described.join(" "),
     "aria-invalid": error !== undefined,
@@ -230,12 +297,83 @@ function fieldProps(
   };
 }
 
+/** Why a field's value was refused at save, where it was. */
+function FieldError({
+  id,
+  error,
+}: {
+  id: string;
+  error: string | undefined;
+}): ReactNode {
+  if (!error) return null;
+  return (
+    <p
+      id={id}
+      role="alert"
+      className="m-0 text-xs font-medium text-danger-text"
+    >
+      {error}
+    </p>
+  );
+}
+
 /**
- * The title or the description: a count of what will be used, one plain
- * sentence, the field with the automatic value as its placeholder, and where
- * the value comes from, with one action back to automatic once typed.
+ * A page's title or description: a count of what will be used, one plain
+ * sentence, the field with the automatic value as its placeholder, and the
+ * line saying where the value comes from. Every surface that edits a page's
+ * SEO draws its title and description with it.
  */
-function SeoTextField({
+export function SeoTextField({
+  label,
+  help,
+  value,
+  placeholder,
+  count,
+  limit,
+  source,
+  error,
+  writable,
+  multiline = false,
+  maxLength,
+  inputRef,
+  onChange,
+}: SeoTextFieldProps): ReactNode {
+  const id = useId();
+  const field = controlProps(id, value, placeholder, writable, error, onChange);
+  const limited = maxLength === undefined ? {} : { maxLength };
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-baseline justify-between gap-2.5">
+        <label
+          htmlFor={id}
+          className="text-[13px] font-semibold text-foreground"
+        >
+          {label}
+        </label>
+        <CharacterCount count={count} limit={limit} />
+      </div>
+      <p
+        id={`${id}-help`}
+        className="m-0 text-[12.5px] leading-[1.45] text-muted-foreground"
+      >
+        {help}
+      </p>
+      {multiline ? (
+        <Textarea {...field} {...limited} rows={3} />
+      ) : (
+        <Input {...field} {...limited} ref={inputRef} />
+      )}
+      {source(`${id}-source`)}
+      <FieldError id={`${id}-error`} error={error} />
+    </div>
+  );
+}
+
+/**
+ * The tab's title or description: the shared field, saying where the value
+ * comes from with one action back to automatic once typed.
+ */
+function PageTextField({
   label,
   help,
   typed,
@@ -264,46 +402,31 @@ function SeoTextField({
   multiline?: boolean;
   onChange: (next: string | null) => void;
 }): ReactNode {
-  const id = useId();
-  const field = fieldProps(id, typed, automatic, writable, error, onChange);
-  const Control = multiline ? Textarea : Input;
   return (
-    <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-2.5">
-        <label
-          htmlFor={id}
-          className="text-[13px] font-semibold text-foreground"
-        >
-          {label}
-        </label>
-        <CharacterCount count={used?.value.length ?? 0} limit={limit} />
-      </div>
-      <p
-        id={`${id}-help`}
-        className="m-0 text-[12.5px] leading-[1.45] text-muted-foreground"
-      >
-        {help}
-      </p>
-      <Control {...field} {...(multiline ? { rows: 3 } : {})} />
-      <FieldSource
-        id={`${id}-source`}
-        typed={typed}
-        automatic={automatic}
-        value={value}
-        names={names}
-        problem={problem}
-        writable={writable}
-        onAutomatic={() => onChange(null)}
-      />
-      {error && (
-        <p
-          id={`${id}-error`}
-          role="alert"
-          className="m-0 text-xs font-medium text-danger-text"
-        >
-          {error}
-        </p>
+    <SeoTextField
+      label={label}
+      help={help}
+      value={typed}
+      placeholder={automatic?.value ?? ""}
+      // Counted as the problems are, so an emoji counts once.
+      count={used === undefined ? 0 : characters(used.value)}
+      limit={limit}
+      error={error}
+      writable={writable}
+      multiline={multiline}
+      onChange={onChange}
+      source={id => (
+        <FieldSource
+          id={id}
+          typed={typed}
+          automatic={automatic}
+          value={value}
+          names={names}
+          problem={problem}
+          writable={writable}
+          onAutomatic={() => onChange(null)}
+        />
       )}
-    </div>
+    />
   );
 }

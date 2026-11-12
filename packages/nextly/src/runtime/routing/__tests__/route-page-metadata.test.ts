@@ -9,17 +9,25 @@
  *   its own visibility never reaches the head;
  * - with no provider, a route serves what it always served, and a route with
  *   no `buildMetadata` reads nothing for its metadata at all;
- * - a Single route, which is never told where the app mounts it, asks without
- *   a path;
+ * - a Single route, which is not told where the app mounts it, asks without
+ *   a path unless the app names one;
+ * - a route that reads its Single itself asks exactly as a Single route does;
+ * - a worker where nothing has started Nextly yet, every read of the page a
+ *   cache hit, starts it and serves the provider's answer, not the route's;
  * - the page's render is handed the structured data of the same answer, as
  *   JSON-LD text that no value can break out of, and nothing without a
- *   provider.
+ *   provider;
+ * - what a route says about its page for its structured data reaches the
+ *   provider with the structured data's ask only, never the head's.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FindArgs } from "../../../direct-api/types/collections";
 import type { ListResult } from "../../../direct-api/types/shared";
-import { recordCapabilityProviders } from "../../../plugins/capabilities";
+import {
+  forgetCapabilityProviders,
+  recordCapabilityProviders,
+} from "../../../plugins/capabilities";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import {
   clearPluginServices,
@@ -29,9 +37,34 @@ import type {
   PageMetadataInput,
   PageMetadataResolver,
 } from "../../seo/page-metadata-contract";
-import { createContentRoute, createPublicContentRoute } from "../content-route";
+import {
+  contentPageMetadata,
+  createContentRoute,
+  createPublicContentRoute,
+} from "../content-route";
 import type { NextlyContentReader } from "../resolve-content";
-import { createSingleRoute, type NextlySingleReader } from "../single-route";
+import {
+  createPublicSingleRoute,
+  createSingleRoute,
+  singlePageMetadata,
+  singlePageStructuredData,
+  type NextlySingleReader,
+} from "../single-route";
+
+// Nextly's start in this process, stood in for: a boot records the
+// providers, as `getCachedNextly` starting Nextly does.
+const start = vi.hoisted(() => ({
+  boot: undefined as (() => void) | undefined,
+  calls: 0,
+}));
+vi.mock("../../../init", () => ({
+  getCachedNextly: async () => {
+    start.calls += 1;
+    start.boot?.();
+    return {};
+  },
+  awaitStartOrRetry: async () => undefined,
+}));
 
 const ABOUT = { id: "a1", slug: "about", title: "About", status: "published" };
 
@@ -90,6 +123,11 @@ function provide(answer: PageMetadataResolver["resolve"]): PageMetadataInput[] {
 
 const params = (slug: string[]) => ({ params: Promise.resolve({ slug }) });
 
+beforeEach(() => {
+  start.boot = undefined;
+  start.calls = 0;
+});
+
 afterEach(() => {
   recordCapabilityProviders([]);
   clearPluginServices();
@@ -109,7 +147,7 @@ describe("a content route with a page-metadata provider", () => {
 
     const metadata = await route.generateMetadata(params(["about"]));
 
-    expect(metadata.title).toBe("About us");
+    expect(metadata.title).toEqual({ absolute: "About us" });
     expect(asked).toHaveLength(1);
     expect(asked[0]).toMatchObject({
       path: "/company/about",
@@ -119,7 +157,7 @@ describe("a content route with a page-metadata provider", () => {
     });
   });
 
-  it("passes the route's own metadata as the code level and keeps its visibility out", async () => {
+  it("passes the route's own metadata as the code level, its hiding included", async () => {
     const asked = provide(() => ({ title: "Answered" }));
     const { reader } = contentReader();
     const route = createPublicContentRoute({
@@ -134,9 +172,10 @@ describe("a content route with a page-metadata provider", () => {
 
     const metadata = await route.generateMetadata(params(["about"]));
 
-    expect(asked[0]?.code).toEqual({ title: "From code" });
-    expect(metadata.title).toBe("Answered");
-    expect(metadata.robots).toBeUndefined();
+    expect(asked[0]?.code).toEqual({ title: "From code", hidden: true });
+    expect(metadata.title).toEqual({ absolute: "Answered" });
+    // The route hid its page and the answer states no visibility: hidden.
+    expect(metadata.robots).toEqual({ index: false, follow: false });
   });
 
   it("hands the provider what the page's content offers", async () => {
@@ -202,7 +241,7 @@ describe("a content route with no page-metadata provider", () => {
 });
 
 describe("a Single route with a page-metadata provider", () => {
-  it("asks without a path, naming the Single and its document", async () => {
+  it("asks without a path where the app names none, naming the Single and its document", async () => {
     const asked = provide(() => ({ title: "Home, answered" }));
     const route = createSingleRoute({
       slug: "homepage",
@@ -213,7 +252,7 @@ describe("a Single route with a page-metadata provider", () => {
 
     const metadata = await route.generateMetadata();
 
-    expect(metadata.title).toBe("Home, answered");
+    expect(metadata.title).toEqual({ absolute: "Home, answered" });
     expect(asked[0]).toEqual({
       locale: "en",
       source: {
@@ -224,6 +263,27 @@ describe("a Single route with a page-metadata provider", () => {
       code: {},
       derived: {},
     });
+  });
+
+  it("asks with the address the app serves the Single at, so a later page of its list is its own page", async () => {
+    const asked = provide(() => ({}));
+    const fixed = createSingleRoute({
+      slug: "blog-page",
+      nextly: singleReader(),
+      path: "/blog",
+      render: () => "blog",
+    });
+    const paged = createPublicSingleRoute({
+      slug: "blog-page",
+      nextly: singleReader(),
+      path: params => `/blog/page/${String(params.page)}`,
+      render: () => "blog",
+    });
+
+    await fixed.generateMetadata();
+    await paged.generateMetadata({ params: Promise.resolve({ page: "2" }) });
+
+    expect(asked.map(input => input.path)).toEqual(["/blog", "/blog/page/2"]);
   });
 
   it("hands the provider what the Single's content offers", async () => {
@@ -334,6 +394,46 @@ describe("structured data handed to a page's render", () => {
     expect(built).toBe(0);
   });
 
+  it("tells the provider what the route says about the page, for its structured data only", async () => {
+    const asked = provide(() => ({ title: "About", structuredData: NODES }));
+    const { reader } = contentReader();
+    let hinted = 0;
+    const route = createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      locale: "en",
+      render: () => "page",
+      structuredDataHints: entry => {
+        hinted += 1;
+        return {
+          type: "aboutPage",
+          name: String(entry.title),
+          items: [{ name: "Team", url: "/about/team" }],
+          questions: [{ question: "Who?", answer: "Us." }],
+        };
+      },
+    });
+
+    await route.generateMetadata(params(["about"]));
+    expect(hinted).toBe(0);
+    await route.ContentPage(params(["about"]));
+
+    expect(hinted).toBe(1);
+    // The head is asked without them; the structured data with them, as
+    // the route gave them, and apart from the head's answer.
+    expect(asked[0]).not.toHaveProperty("structuredDataHints");
+    expect(asked[1]?.structuredDataHints).toEqual({
+      type: "aboutPage",
+      name: "About",
+      items: [{ name: "Team", url: "/about/team" }],
+      questions: [{ question: "Who?", answer: "Us." }],
+    });
+    expect({ ...asked[1], structuredDataHints: undefined }).toEqual({
+      ...asked[0],
+      structuredDataHints: undefined,
+    });
+  });
+
   it("renders the page without structured data when the provider fails", async () => {
     provide(() => {
       throw new Error("settings unreadable");
@@ -348,5 +448,162 @@ describe("structured data handed to a page's render", () => {
     expect(await route.ContentPage(params(["about"]))).toBe(
       "no structured data"
     );
+  });
+});
+
+describe("a route that reads its Single itself", () => {
+  const document = { title: "Blog" };
+
+  it("asks the provider as a Single route does, with the address it served", async () => {
+    const asked = provide(() => ({ title: "Blog | Example" }));
+
+    const metadata = await singlePageMetadata(
+      { buildMetadata: () => ({ title: "From code" }), tags: ["posts"] },
+      document,
+      { slug: "blog-page", locale: "en" },
+      "/blog/page/2"
+    );
+
+    expect(metadata.title).toEqual({ absolute: "Blog | Example" });
+    expect(asked).toEqual([
+      {
+        path: "/blog/page/2",
+        locale: "en",
+        source: { kind: "single", slug: "blog-page", document },
+        code: { title: "From code" },
+        derived: {},
+      },
+    ]);
+  });
+
+  it("asks without a path where it is given none", async () => {
+    const asked = provide(() => ({}));
+    await singlePageMetadata({}, document, { slug: "blog-page" });
+    expect(asked[0]).not.toHaveProperty("path");
+  });
+
+  it("reads the structured data of the same answer as the head", async () => {
+    const asked = provide(() => ({ structuredData: NODES }));
+    const config = { buildMetadata: () => ({ title: "From code" }) };
+    const context = { slug: "blog-page" };
+
+    await singlePageMetadata(config, document, context, "/blog");
+    const text = await singlePageStructuredData(
+      config,
+      document,
+      context,
+      "/blog"
+    );
+
+    expect(graphOf(text)).toEqual(NODES);
+    expect(asked[1]).toEqual(asked[0]);
+  });
+
+  it("tells the provider what the route says about the Single, for its structured data only", async () => {
+    const asked = provide(() => ({ structuredData: NODES }));
+    const config = {
+      structuredDataHints: () => ({
+        type: "collectionPage",
+        items: [{ name: "First post", url: "/blog/first" }],
+      }),
+    };
+    const context = { slug: "blog-page" };
+
+    await singlePageMetadata(config, document, context, "/blog");
+    await singlePageStructuredData(config, document, context, "/blog");
+
+    expect(asked[0]).not.toHaveProperty("structuredDataHints");
+    expect(asked[1]?.structuredDataHints).toEqual({
+      type: "collectionPage",
+      items: [{ name: "First post", url: "/blog/first" }],
+    });
+  });
+
+  it("serves the route's own metadata exactly, and no structured data, with no provider", async () => {
+    recordCapabilityProviders([]);
+    const own = { title: "Own" };
+    expect(
+      await singlePageMetadata({ buildMetadata: () => own }, document, {
+        slug: "blog-page",
+      })
+    ).toBe(own);
+    expect(
+      await singlePageStructuredData({}, document, { slug: "blog-page" })
+    ).toBeUndefined();
+  });
+});
+
+describe("a worker where nothing has started Nextly yet", () => {
+  /** Every read was a cache hit: the reader answers and starts nothing. */
+  function cachedSingle(): NextlySingleReader {
+    return {
+      findSingle: async () => ({ title: "Home" }),
+    } as unknown as NextlySingleReader;
+  }
+
+  /**
+   * Nothing in this worker has recorded its providers yet; starting Nextly
+   * starts the provider.
+   */
+  function coldWorker(): void {
+    forgetCapabilityProviders();
+    start.boot = () => {
+      provide(() => ({ title: "Answered" }));
+    };
+  }
+
+  it("starts Nextly for a Single route's head, rather than serving the route's own", async () => {
+    coldWorker();
+    const route = createPublicSingleRoute({
+      slug: "homepage",
+      nextly: cachedSingle(),
+      render: () => "home",
+      buildMetadata: () => ({ title: "Own" }),
+    });
+
+    const metadata = await route.generateMetadata();
+
+    expect(metadata.title).toEqual({ absolute: "Answered" });
+    expect(start.calls).toBe(1);
+  });
+
+  it("starts Nextly for a page a route reads itself, its entry or its Single", async () => {
+    coldWorker();
+    const entry = await contentPageMetadata(
+      { buildMetadata: () => ({ title: "Own" }) },
+      ABOUT,
+      { collection: "pages", slug: "about" },
+      "/about"
+    );
+    expect(entry.title).toEqual({ absolute: "Answered" });
+
+    coldWorker();
+    const single = await singlePageMetadata(
+      { buildMetadata: () => ({ title: "Own" }) },
+      { title: "Home" },
+      { slug: "homepage" },
+      "/"
+    );
+    expect(single.title).toEqual({ absolute: "Answered" });
+  });
+
+  it("starts Nextly before a Single page's structured data is read", async () => {
+    forgetCapabilityProviders();
+    start.boot = () => {
+      provide(() => ({ structuredData: NODES }));
+    };
+    const rendered: Array<string | undefined> = [];
+    const route = createPublicSingleRoute({
+      slug: "homepage",
+      nextly: cachedSingle(),
+      render: (_, context) => {
+        rendered.push(context.structuredData);
+        return "home";
+      },
+    });
+
+    await route.SinglePage();
+
+    expect(graphOf(rendered[0])).toEqual(NODES);
   });
 });

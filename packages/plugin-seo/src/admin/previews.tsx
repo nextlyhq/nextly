@@ -36,11 +36,20 @@ export function PreviewCard({
   site,
   status,
   sharedTitleTyped,
+  heading,
 }: {
+  /**
+   * What heads the card where a surface says more than that it follows
+   * typing: a template's panel names the page it previews with.
+   */
+  heading?: ReactNode;
   answer: SeoAnswer | undefined;
   site: SeoTabContext["site"] | undefined;
-  /** Whether a different title for sharing is typed for this page. */
-  sharedTitleTyped: boolean;
+  /**
+   * Whether a different title for sharing is typed for this page; absent
+   * where the page has no such title to set.
+   */
+  sharedTitleTyped?: boolean | undefined;
   /** Whether the automatic values are being read, or could not be. */
   status: "ready" | "loading" | "failed";
 }): ReactNode {
@@ -52,9 +61,11 @@ export function PreviewCard({
       className="rounded-lg border border-border bg-card"
     >
       <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-border-subtle py-2 pr-2.5 pl-3.5">
-        <span className="text-xs font-semibold text-muted-foreground">
-          Preview · updates as you type
-        </span>
+        {heading ?? (
+          <span className="text-xs font-semibold text-muted-foreground">
+            Preview · updates as you type
+          </span>
+        )}
         <div
           role="tablist"
           aria-label="Preview"
@@ -189,7 +200,7 @@ function ShareCard({
 }: {
   answer: SeoAnswer;
   site: SeoTabContext["site"];
-  sharedTitleTyped: boolean;
+  sharedTitleTyped: boolean | undefined;
 }): ReactNode {
   const image = answer.image?.value;
   const fit = shareImageFit(image);
@@ -257,11 +268,13 @@ function ShareCard({
             {fit.text}
           </li>
         )}
-        <li>
-          {sharedTitleTyped
-            ? "Using the different title for sharing, set under Advanced."
-            : "The shared title is the Google title. Set a different one under Advanced."}
-        </li>
+        {sharedTitleTyped === undefined ? null : (
+          <li>
+            {sharedTitleTyped
+              ? "Using the different title for sharing, set under Advanced."
+              : "The shared title is the Google title. Set a different one under Advanced."}
+          </li>
+        )}
         {image === undefined ? (
           <li>
             There is no share image yet, so networks show the text alone. Choose

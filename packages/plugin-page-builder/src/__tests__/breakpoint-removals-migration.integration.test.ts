@@ -7,8 +7,10 @@
  *
  * The install is made the way a site at that release made it: a scratch
  * project configured with this plugin as that release shipped it (its first
- * migration modules, without the later tables), migrated with `nextly
- * migrate`. A row is stored in one of its tables. The project is then
+ * migration modules, without the later tables), with the app's migration
+ * from `nextly migrate:create` (it creates the tables of the collections and
+ * Singles the plugin declares, which the plugin's own modules do not),
+ * migrated with `nextly migrate`. A row is stored in one of its tables. The project is then
  * configured with the plugin as it ships now and migrated again. Exactly the
  * modules after it must run: the runs table takes one open run at a time and
  * a run marks the removal it undoes, a run stored before the upgrade undoes
@@ -317,7 +319,15 @@ describe.each(getConfiguredTestDialects())(
         const site = project(database);
         let opened: Awaited<ReturnType<typeof openAdapter>> | undefined;
         try {
-          // The earlier release's install.
+          // The earlier release's install: the app's migration for the
+          // collections and Singles the plugin declares, whose tables the
+          // app's migrations create, then the deploy's migrate.
+          const created = await site.nextly(
+            shipped,
+            "migrate:create",
+            "initial"
+          );
+          expect(created.stdout).toContain("Created migration");
           const first = await site.nextly(shipped, "migrate");
           expect(first.stdout).toContain(
             `Plugin migrations: ${String(shipped)} applied`

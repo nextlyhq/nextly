@@ -158,7 +158,7 @@ export function useDrawnTemplate(
  * collection's template names it as `collection`, an entry's own design
  * (whose `collection` is empty) as `entryCollection`.
  */
-function useTemplateCollection<TFieldValues extends FieldValues>(
+export function useTemplateCollection<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
 ): string | undefined {
   const values: unknown[] = useWatch({
@@ -175,7 +175,7 @@ function useTemplateCollection<TFieldValues extends FieldValues>(
  * The one entry an entry's own design serves, by its stored id, as the form
  * holds it; `undefined` for a collection's template, which names none.
  */
-function useOwnDesignEntry<TFieldValues extends FieldValues>(
+export function useOwnDesignEntry<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>
 ): string | undefined {
   const value: unknown = useWatch({

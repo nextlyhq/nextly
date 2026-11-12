@@ -29,10 +29,11 @@ import {
   type RedirectTargetDocument,
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
+import { pageFromReferer } from "../utils/sent-from";
 
 import { botCheckReady, botTokensOf, judgeBotCheck } from "./bot-check";
 import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
-import { ALREADY_RESPONDED } from "./one-response";
+import { ALREADY_RESPONDED, browserTokenOf } from "./one-response";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
 import { checkSpam, type SpamCheckResult } from "./spam-detection";
 
@@ -56,6 +57,12 @@ export interface SubmitFormOptions {
     ipAddress?: string;
     /** Submitter's user agent string */
     userAgent?: string;
+    /**
+     * The page it was sent from, such as the request's `Referer`. Kept as
+     * its origin and path only, and only when it is a web page
+     * (`pageFromReferer`).
+     */
+    page?: string;
   };
 
   /**
@@ -361,6 +368,22 @@ export interface SubmitFormContext {
 // ============================================================
 
 /**
+ * Whether a failed store was refused because the person has responded
+ * already: the database refused a second one-response key, or the hold found
+ * an earlier submission with the same value (`heldRefusal`).
+ */
+function isRepeatResponse(
+  error: unknown,
+  held: ReturnType<typeof heldRefusal>
+): boolean {
+  return (
+    held === "responded" ||
+    (error instanceof NextlyError &&
+      (error as { code?: unknown }).code === "DUPLICATE")
+  );
+}
+
+/**
  * Process a form submission.
  *
  * This is the main entry point for handling form submissions.
@@ -571,6 +594,7 @@ export async function submitForm(
       spamReason: isContentSpam ? (spamResult.reason ?? null) : null,
       ipAddress: metadata?.ipAddress || null,
       userAgent: metadata?.userAgent || null,
+      page: pageFromReferer(metadata?.page) ?? null,
       submittedAt: new Date(),
     };
 
@@ -581,6 +605,7 @@ export async function submitForm(
     // is evidence this handler chose to keep rather than a caller asking for
     // validation to be skipped. The form goes with it so the seam does not read
     // it a second time.
+    const browserToken = browserTokenOf(data);
     let submission: Awaited<ReturnType<typeof collections.createEntry>>;
     try {
       submission = await collections.createEntry(
@@ -593,6 +618,8 @@ export async function submitForm(
           // The bot-check tokens the visitor's form sent, read before the
           // row keeps only the form's fields: the seam verifies them.
           botTokens: botTokensOf(data),
+          // And the browser's token, for one response per browser.
+          ...(browserToken === undefined ? {} : { browserToken }),
           // Counted already on the way here; the seam does not count it again.
           ...(rateCounted ? { rateCounted } : {}),
         }),
@@ -633,12 +660,9 @@ export async function submitForm(
         return { success: false, outcome: "failed", error: SETTINGS_CHANGED };
       }
       // The database refused a second submission with the same one-response
-      // key: one with the same email or network was stored first, even if
-      // only a moment before.
-      if (
-        error instanceof NextlyError &&
-        (error as { code?: unknown }).code === "DUPLICATE"
-      ) {
+      // key, or the hold found an earlier one with its value: one with the
+      // same email or network was stored first, even if only a moment before.
+      if (isRepeatResponse(error, held)) {
         logger.info?.("Repeat submission rejected (one response per person)", {
           formSlug,
         });

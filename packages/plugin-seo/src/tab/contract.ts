@@ -54,12 +54,30 @@ export interface SeoTabContext {
     /** The origin addresses are shown under, such as `https://acme.com`. */
     origin: string;
   };
+  /**
+   * The page's own address as its language serves it, root-relative or on
+   * the language's own domain: on a site that puts the language in every
+   * address, with it. None where the page has no address of its own.
+   */
+  served?: string;
+  /**
+   * What drew the page where a design gives its template level: the page's
+   * own design (its own blocks), or its collection's template.
+   */
+  drawnBy?: "design" | "template";
   /** The content type's name for one of its pages, such as "Blog post". */
   typeLabel: string;
   /** What each of the document's fields a value came from is called. */
   fieldLabels: Record<string, string>;
   /** The `seo` group's fields, so the tab offers a control for each alone. */
   fields: string[];
+  /**
+   * Whether the person may change this page's SEO, where the site gives it
+   * a permission of its own; true where it does not, since then the page's
+   * own update decides. A save by someone who may not keeps the stored SEO,
+   * so the tab shows it read-only.
+   */
+  mayChange: boolean;
   /** The page's structured data, where the group holds its type. */
   structuredData?: TabStructuredData;
   /** What keeps the page's share image from showing well on a card. */

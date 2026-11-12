@@ -48,6 +48,10 @@ import type { DirectAPIConfig } from "../direct-api/types";
 import type { UserContext } from "../domains/singles/types";
 import { discardWorkingDraft } from "../domains/versions/discard-working-draft";
 import {
+  restoreVersion,
+  type RestoreVersionResult,
+} from "../domains/versions/restore-version";
+import {
   serializeVersionSnapshot,
   type AutosaveWriteResult,
   type VersionRef,
@@ -116,6 +120,25 @@ export interface PluginVersionWrites {
     input: AutosaveInput,
     opts?: ServiceOpts
   ): Promise<AutosaveWriteResult>;
+  /**
+   * @experimental Restore a version into the document's working draft: the
+   * fields `options.fields` names, or every field the version holds, go into
+   * the drafts of the parts the version holds, and nothing published changes.
+   * Refused where the collection or Single keeps no drafts. Made as a person,
+   * the person needs to read and update the document, and a field they may not
+   * read or write is left out and reported in `droppedFields`.
+   * `options.version` is the version the document was read at (`_rev`) and the
+   * overwrite choice (`_overwrite`), judged as a save's are.
+   */
+  restore(
+    ref: VersionRef,
+    versionNo: number,
+    options?: {
+      fields?: readonly string[];
+      version?: Readonly<Record<string, unknown>>;
+    },
+    opts?: ServiceOpts
+  ): Promise<RestoreVersionResult>;
   /**
    * @experimental Version pins on the plugin's own transaction: register a
    * holder, then pin, release and list its slots in `ctx.db.transaction` or
@@ -188,7 +211,7 @@ async function assertHandlerGates(
   ref: VersionRef & { scopeKind: "collection" | "single" },
   user: UserContext,
   resolved: ResolvedOpts,
-  write: "label" | "discard" | "autosave",
+  write: "label" | "discard" | "autosave" | "restore",
   logContext: Record<string, unknown>,
   // The version a label names, whose own language is asked about.
   versionNo?: number
@@ -262,8 +285,8 @@ async function assertHandlerGates(
 async function checkedWriter(
   ref: VersionRef,
   resolved: ResolvedOpts,
-  write: "label" | "discard" | "autosave",
-  // The version a label names, and the language a discard or an autosave
+  write: "label" | "discard" | "autosave" | "restore",
+  // The version a label or a restore names, and the language a discard or an autosave
   // names, as the plugin passes it.
   at: { versionNo?: number; locale?: string | null } = {}
 ): Promise<HistoryWriter | null> {
@@ -295,8 +318,10 @@ async function checkedWriter(
   // label every language. Set here rather than inherited, so a plugin calling
   // from inside an operation in one language is judged as REST judges the
   // route, not in that operation's language.
+  // A restore is judged as REST's restore route judges it: in every language,
+  // as a label is, since the version it names may be any language's.
   await withRuleLanguage(
-    write === "label"
+    write === "label" || write === "restore"
       ? everyLanguage()
       : registeredWriteAsNamedLanguagesFor(at.locale || undefined),
     () =>
@@ -507,6 +532,47 @@ export function pluginVersionWrites(
         // Judged on the version the draft was read at, as a save of it is.
         if (!writer) return discardTrusted(ref, locale, service, version);
         return discardAsWriter(ref, locale, writer, version);
+      });
+    },
+
+    restore(ref, versionNo, options, opts) {
+      return asCalled(opts, async resolved => {
+        if (ref.scopeKind === "page") {
+          throw NextlyError.forbidden({
+            logContext: {
+              reason: "page-history-restore",
+              scopeSlug: ref.scopeSlug,
+              entryId: ref.entryId,
+            },
+          });
+        }
+        // A restore's update takes the document's row lock in a transaction
+        // of its own. Inside the plugin's open transaction, which may hold
+        // that lock, it would wait on it until the database gave up, as a
+        // discard would; it is refused at once instead, before any read.
+        assertNoOpenTransaction(getService("adapter"), "versions.restore");
+        const writer = await checkedWriter(ref, resolved, "restore", {
+          versionNo,
+        });
+        // The same restore REST's route runs once its gates have passed; a
+        // trusted call runs it with no person to judge.
+        return restoreVersion({
+          scopeKind: ref.scopeKind,
+          slug: ref.scopeSlug,
+          entryId: ref.entryId,
+          versionNo,
+          ...(writer
+            ? {
+                user: writer.user,
+                actor: writer.actor,
+                ...(writer.authenticatedScope
+                  ? { authenticatedScope: writer.authenticatedScope }
+                  : {}),
+              }
+            : {}),
+          ...(options?.fields ? { fields: options.fields } : {}),
+          ...(options?.version ? { version: options.version } : {}),
+        });
       });
     },
 

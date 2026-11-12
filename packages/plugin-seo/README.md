@@ -33,15 +33,15 @@ export default defineConfig({
 
 That adds an `seo` field group to each named collection:
 
-| Field             | Type             | Notes                                                  |
-| ----------------- | ---------------- | ------------------------------------------------------ |
-| `metaTitle`       | text             | Truncated by search engines past ~60 chars             |
-| `metaDescription` | textarea         | Truncated past ~160 chars                              |
-| `ogImage`         | upload → `media` | Social share image                                     |
-| `canonical`       | text             | Canonical URL (shipped by default)                     |
-| `noindex`         | checkbox         | Hide the page from search engines (shipped by default) |
+| Field             | Type             | Notes                                                      |
+| ----------------- | ---------------- | ---------------------------------------------------------- |
+| `metaTitle`       | text             | Any length; a warning past ~60 chars, where Google cuts it |
+| `metaDescription` | textarea         | Any length; a warning past ~160 chars                      |
+| `ogImage`         | upload → `media` | Social share image                                         |
+| `canonical`       | text             | Canonical URL (shipped by default)                         |
+| `noindex`         | checkbox         | Hide the page from search engines (shipped by default)     |
 
-Entries expose the data nested under `seo` (e.g. `entry.seo.metaTitle`). Collections you do not name are untouched.
+Entries expose the data nested under `seo` (e.g. `entry.seo.metaTitle`). Collections you do not name are untouched. A long title or description is saved and named as a warning, since search engines cut it to fit rather than refusing it; pass `hardLengthLimits: true` to refuse a save past 60 and 160 characters instead.
 
 ### Custom fields
 
@@ -61,13 +61,29 @@ seoPlugin({
 
 With the plugin installed, content routes and Single routes from `nextly/runtime` get each page's head from the plugin, with no call needed. Each value comes from the first level that has one: what a person typed, then the route's own `buildMetadata` (title, description and social values only), the Page Builder design, the content type's pattern, the page's content, and the site's defaults. The canonical is the page's declared address in its language. See the [SEO plugin guide](https://nextlyhq.com/docs/plugins/seo).
 
-Without a content route, `buildMetadata` from `nextly/runtime` turns the `seo` group into a Next `Metadata` object, so a page's `generateMetadata` is one call instead of a hand-written mapping. It sets the title, description, canonical, OpenGraph, Twitter card, and `robots` (from `noindex`), with per-call fallbacks for blank fields:
+A site that renders its own pages gets the same head, and the same structured data, by asking for it: `contentPageMetadata` and `contentPageStructuredData` for an entry, `singlePageMetadata` and `singlePageStructuredData` for a Single (all from `nextly/runtime`), and `seoMetadata` and `seoStructuredData` from this package for a page built in code. `jsonLdScriptProps` from `nextly/runtime` places the structured data in the page. See [A site that renders its own pages](https://nextlyhq.com/docs/guides/routing-and-seo#a-site-that-renders-its-own-pages).
+
+Without the plugin, `buildMetadata` from `nextly/runtime` turns the `seo` group into a Next `Metadata` object, so a page's `generateMetadata` is one call instead of a hand-written mapping. It sets the title, description, canonical, OpenGraph, Twitter card, and `robots` (from `noindex`), with per-call fallbacks for blank fields:
 
 ```ts
 // app/blog/[slug]/page.tsx
-import { buildMetadata } from "nextly/runtime";
+import { buildMetadata, type MetadataEntry } from "nextly/runtime";
 
-export async function generateMetadata({ params }) {
+// Your own read of one post by its slug, with the fields used below.
+declare function getPostBySlug(slug: string): Promise<
+  | (MetadataEntry & {
+      title: string;
+      excerpt?: string;
+      publishedAt?: string | null;
+    })
+  | null
+>;
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
   const post = await getPostBySlug(slug);
   if (!post) return {};
@@ -94,7 +110,7 @@ Set `metadataBase` once in your root layout so a relative `canonical` resolves t
 The plugin adds an **SEO** item to the admin, whose Settings page holds the rules for the whole
 site: its name and production address, a default description and share image, a title pattern
 per content type (such as `{Title} | {Site name}`, set by clicking the type's variables, with a
-live preview), and one record of brand facts. The first visit asks three short questions before
+preview of the result), and one record of brand facts. The first visit asks three short questions before
 the page opens. Every page's head, the sitemap, robots.txt and the staging guard read these
 settings, with the plugin's options answering what they leave unset, and each save reaches pages
 without a redeploy. Server code reads them with `readSeoRules(ctx)` and `readBrandFacts(ctx)`.

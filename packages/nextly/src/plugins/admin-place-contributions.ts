@@ -19,6 +19,7 @@ import type {
 import { collectionsScopeProblem } from "./admin-filters";
 import {
   ADMIN_CONTRIBUTION_KINDS,
+  adminPlaceNamespaceOf,
   type AdminContributionKind,
   coreAdminPlaceBuiltIns,
   coreAdminPlaceNotReplaceable,
@@ -109,8 +110,12 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-/** What makes an action unusable, or `undefined`. */
-function actionProblem(
+/**
+ * What makes an action unusable, or `undefined`: exactly one of `open` (a
+ * component) or `run` (one of the plugin's own staff routes). The one reading
+ * of an action, for a list's row and bulk actions and a person's-menu item.
+ */
+export function actionProblem(
   action: unknown,
   plugin: PluginDefinition
 ): string | undefined {
@@ -488,6 +493,45 @@ function orderedByPlace(
 }
 
 /**
+ * Whether `declared` adds to a place that belongs to a plugin `plugin` names
+ * in its `optionalDependsOn` and that is not running here: a plugin that
+ * enhances another when present adds nothing to its pages when it is absent
+ * or disabled, rather than stopping the app from starting.
+ *
+ * Only a place no running plugin declares is let go, and only in the
+ * namespace of such an absent plugin: a place a running plugin is missing (a
+ * misspelling), or one of a plugin the contributor does not name, is still
+ * refused by the place check as before.
+ */
+function toAbsentOptionalPlace(
+  plugin: PluginDefinition,
+  declared: unknown,
+  places: ReadonlyMap<string, DeclaredAdminPlace>,
+  running: ReadonlySet<string>
+): boolean {
+  const place = isRecord(declared) ? declared.place : undefined;
+  if (typeof place !== "string" || places.has(place)) return false;
+  const namespace = adminPlaceNamespaceOf(place);
+  return Object.keys(plugin.optionalDependsOn ?? {}).some(
+    owner => !running.has(owner) && pluginAdminSlug(owner) === namespace
+  );
+}
+
+/**
+ * The contributions `plugin` declares, less those to a place of an absent
+ * optional dependency (`toAbsentOptionalPlace`), which are not drawn.
+ */
+function drawnContributions(
+  plugin: PluginDefinition,
+  places: ReadonlyMap<string, DeclaredAdminPlace>,
+  running: ReadonlySet<string>
+): readonly unknown[] {
+  return declaredContributions(plugin).filter(
+    declared => !toAbsentOptionalPlace(plugin, declared, places, running)
+  );
+}
+
+/**
  * @experimental Every enabled plugin's admin contributions, and each place's
  * lists in order, refusing a contribution that is malformed, outside its
  * plugin's namespace, declared twice, at a place that does not exist or does
@@ -504,11 +548,16 @@ export function contributedAdminContributions(
   ordered: OrderedAdminContributions;
 } {
   const places = collectAdminPlaces(plugins);
+  const running = new Set(
+    plugins
+      .filter(plugin => plugin.enabled !== false)
+      .map(plugin => plugin.name)
+  );
   const contributions: ContributedAdminContribution[] = [];
   const owners = new Map<string, string>();
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
-    for (const declared of declaredContributions(plugin)) {
+    for (const declared of drawnContributions(plugin, places, running)) {
       const contribution = {
         ...checkedContribution(plugin, declared, places),
         plugin: plugin.name,

@@ -45,6 +45,8 @@ export const PLUGIN_MEDIA_READS = [
   "isImage",
   "validateImage",
   "getImageDimensions",
+  // Whether anything uses an item, for a plugin freeing its own uploads.
+  "isInUse",
 ] as const satisfies readonly (keyof MediaService)[];
 
 /**

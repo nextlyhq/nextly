@@ -1,7 +1,8 @@
 /**
- * The SEO settings screen's tabs: General, Content types, Brand and
- * Crawlers. Each draws part of one draft and reports changes to it; the page
- * saves them together.
+ * The SEO settings screen's tabs: General, Content types, Brand, Crawlers
+ * and Connections, whose content is its own module (`connections`). Each
+ * draws part of one draft and reports changes to it; the page saves them
+ * together.
  *
  * @module admin/tabs
  */
@@ -266,7 +267,7 @@ function TitleCount({ length }: { length: number }): JSX.Element {
 }
 
 /** The editor of one type's title pattern, under its row. */
-function PatternEditor({
+export function PatternEditor({
   type,
   draft,
   change,
@@ -383,139 +384,6 @@ function PatternEditor({
         </Button>
       </div>
     </div>
-  );
-}
-
-/** Where a type's pages live: their address, or that they have none yet. */
-function TypeAddress({ type }: { type: SeoContentType }): JSX.Element {
-  if (!type.public) {
-    return (
-      <>
-        <span className="nx-seo-notpublic">
-          <Icon name="warn" /> Not public yet
-        </span>
-        <p className="nx-seo-help">A developer sets where these pages live.</p>
-      </>
-    );
-  }
-  return type.example?.address ? (
-    <span className="nx-seo-code">{type.example.address}</span>
-  ) : (
-    <span className="nx-seo-help">Set in code</span>
-  );
-}
-
-/** One content type's row, and its pattern editor under it while open. */
-function TypeRows({
-  type,
-  draft,
-  change,
-  open,
-  setEditing,
-}: TabProps & {
-  type: SeoContentType;
-  open: boolean;
-  setEditing: (key: string | null) => void;
-}): JSX.Element {
-  const { pattern, own } = patternOf(draft, type.key);
-  const problem = open ? null : patternProblem(pattern, type);
-  return (
-    <>
-      <tr>
-        <td className="nx-seo-tname">
-          <b>{type.label}</b>
-          <small>
-            {type.example?.title
-              ? `Newest: ${type.example.title}`
-              : "No pages yet"}
-          </small>
-        </td>
-        <td data-label="Public address">
-          <TypeAddress type={type} />
-        </td>
-        <td data-label="Title pattern">
-          <button
-            type="button"
-            className="nx-seo-pattern"
-            aria-expanded={open}
-            aria-label={`Edit the title pattern for ${type.label}`}
-            onClick={() => setEditing(open ? null : type.key)}
-          >
-            {pattern}
-            {own ? null : <small>default</small>}
-          </button>
-          {problem === null ? null : <p className="nx-seo-error">{problem}</p>}
-        </td>
-      </tr>
-      {open ? (
-        <tr className="nx-seo-editrow">
-          <td colSpan={3}>
-            <PatternEditor
-              type={type}
-              draft={draft}
-              change={change}
-              onDone={() => setEditing(null)}
-            />
-          </td>
-        </tr>
-      ) : null}
-    </>
-  );
-}
-
-/** Where each kind of page lives and how its titles are made. */
-export function ContentTypesTab({
-  draft,
-  change,
-  types,
-  editing,
-  setEditing,
-}: TabProps & {
-  types: readonly SeoContentType[];
-  editing: string | null;
-  setEditing: (key: string | null) => void;
-}): JSX.Element {
-  if (types.length === 0) {
-    return (
-      <p className="nx-seo-help">
-        No content type has SEO yet. A developer chooses which do in the
-        site&apos;s configuration.
-      </p>
-    );
-  }
-  return (
-    <>
-      <div className="nx-seo-tbox">
-        <table className="nx-seo-tbl nx-seo-types">
-          <thead>
-            <tr>
-              <th scope="col">Content type</th>
-              <th scope="col">Public address</th>
-              <th scope="col">Title pattern</th>
-            </tr>
-          </thead>
-          <tbody>
-            {types.map(type => (
-              <TypeRows
-                key={type.key}
-                type={type}
-                draft={draft}
-                change={change}
-                open={editing === type.key}
-                setEditing={setEditing}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="nx-seo-help nx-seo-lock">
-        <Icon name="lock" />
-        <span>
-          Which content types have SEO is set in the site&apos;s configuration
-          by a developer, so the database and the admin always agree.
-        </span>
-      </p>
-    </>
   );
 }
 
@@ -722,6 +590,11 @@ export const TABS = [
     id: "crawlers",
     label: "Crawlers",
     lead: "Which automated readers may use your pages.",
+  },
+  {
+    id: "connections",
+    label: "Connections",
+    lead: "Optional services. If one fails, no page is affected.",
   },
 ] as const;
 
