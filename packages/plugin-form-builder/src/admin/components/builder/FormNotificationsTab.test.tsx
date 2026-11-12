@@ -135,6 +135,31 @@ describe("the notification list", () => {
     expect(patch.name).toBe("Admin notification!");
   });
 
+  it("sends to the edited address alone, not a list saved before", async () => {
+    notifications = [
+      aNotification({
+        to: "a@example.com",
+        recipients: ["a@example.com", "b@example.com"],
+      }),
+    ];
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(
+      screen.getByRole("button", {
+        name: /edit notification admin notification/i,
+      })
+    );
+
+    await user.type(screen.getByDisplayValue("a@example.com"), "u");
+
+    const [, patch] = updateNotification.mock.calls.at(-1) as [
+      string,
+      FormNotification,
+    ];
+    expect(patch.to).toBe("a@example.comu");
+    expect(patch.recipients).toBeUndefined();
+  });
+
   it("offers no save or cancel of its own", async () => {
     notifications = [aNotification()];
     const user = userEvent.setup();

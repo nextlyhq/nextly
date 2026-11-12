@@ -1,5 +1,6 @@
 import type { FormNotification } from "../../../types";
 import { parseFieldRef } from "../../../utils/field-references";
+import { teamAddressesOf } from "../../../utils/notification-model";
 
 /**
  * Deliberately loose email shape check (something@something.tld): the goal is
@@ -56,8 +57,11 @@ export function addressErrorsIn(notification: FormNotification): AddressErrors {
   const sender = addressError("senderEmail", notification.senderEmail);
   if (sender) errors.senderEmail = sender;
 
+  // Every team address, the list or the single one a rule was saved with.
   if (notification.recipientType === "static") {
-    const to = addressError("to", notification.to);
+    const to = teamAddressesOf(notification)
+      .map(address => addressError("to", address))
+      .find(Boolean);
     if (to) errors.to = to;
   }
 

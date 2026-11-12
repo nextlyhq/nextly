@@ -1194,7 +1194,14 @@ function NotificationEditor({
 
   const update = useCallback(
     <K extends keyof FormNotification>(key: K, value: FormNotification[K]) => {
-      onChange({ ...notification, [key]: value });
+      // This editor edits one address. A list saved beside it would outrank
+      // the edit at send time, so an edit of the address drops the list and
+      // the address alone is where the notification goes.
+      onChange(
+        key === "to"
+          ? { ...notification, to: value as string, recipients: undefined }
+          : { ...notification, [key]: value }
+      );
       setAddressErrors(prev =>
         key in prev ? { ...prev, [key]: undefined } : prev
       );
