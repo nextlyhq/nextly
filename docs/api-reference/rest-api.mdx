@@ -331,7 +331,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | Method          | Path                                                   | Description                                                                                                                                                                                          | Auth                                                            |
 | --------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `GET` / `HEAD`  | `/api/health`                                          | Liveness + DB probe.                                                                                                                                                                                 | Public                                                          |
-| `GET`           | `/admin/api/auth/setup-status`                         | Whether the setup wizard has run.                                                                                                                                                                    | Public                                                          |
+| `GET`           | `/admin/api/auth/setup-status`                         | Whether the setup wizard has run, whether it needs a setup token, and whether the app takes sign-ups (`allowRegistration`).                                                                          | Public                                                          |
 | `POST`          | `/admin/api/auth/setup`                                | Run the first-boot setup wizard (creates super admin).                                                                                                                                               | Public, one-shot                                                |
 | `GET`           | `/admin/api/auth/session`                              | Current session info from the cookie.                                                                                                                                                                | Cookie                                                          |
 | `GET`           | `/admin/api/auth/csrf`                                 | CSRF token (when applicable).                                                                                                                                                                        | Public                                                          |
@@ -548,7 +548,7 @@ The setup wizard is a one-shot path that runs only when no super admin exists:
 
 ```bash
 curl http://localhost:3000/admin/api/auth/setup-status
-# {"ok":true,"completed":false}
+# {"isSetup":false,"requiresInitialUser":true,"requiresSetupToken":false,"allowRegistration":false}
 
 curl -X POST http://localhost:3000/admin/api/auth/setup \
   -H "Content-Type: application/json" \
