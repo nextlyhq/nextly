@@ -2,10 +2,11 @@
  * The admin shell at every width, and by keyboard.
  *
  * One page of each kind the admin frames (the dashboard, a collection's list,
- * a list, a form, an entry's editor, a Single's editor and a plugin's
- * workspace) is opened at a phone, a small laptop, a desktop and a large
- * desktop, in light and in dark, and must not scroll sideways: neither the
- * document nor `<main>`, which is the shell's own scroll container.
+ * a list, a form, an entry's editor, a Single's editor, a plugin's workspace
+ * and the Page Builder overview) is opened at a phone, a small laptop, a
+ * desktop and a large desktop, in light and in dark, and must not scroll
+ * sideways: neither the document nor `<main>`, which is the shell's own
+ * scroll container.
  *
  * Then the shell is walked with Tab from the top of the document on a wide
  * window: the skip link first, then the rail top to bottom, then the panel
@@ -115,6 +116,13 @@ const PAGES: readonly ShellPage[] = [
     pageType: "workspace",
     ready: page =>
       page.getByRole("heading", { level: 1, name: "Fixture workspace page" }),
+  },
+  {
+    name: "the Page Builder overview",
+    path: () => "/plugins/nextlyhq-plugin-page-builder/overview",
+    pageType: "list",
+    // A library card, so the overview's own read has answered.
+    ready: page => page.getByTestId("overview-library-patterns"),
   },
 ];
 
