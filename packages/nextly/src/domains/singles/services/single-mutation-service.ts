@@ -214,6 +214,7 @@ import {
   holdsPendingChange,
   partKeysOf,
   SHARED_DRAFT_SLOT,
+  sharedFieldsJudged,
   storePartDrafts,
 } from "../../versions/part-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
@@ -3630,18 +3631,20 @@ export class SingleMutationService extends BaseService {
                   callerData: { ...currentData, ...promotedComponents },
                 }
               );
-              // A language's pending change carries every shared value; one
-              // someone else published since the change began would be put
-              // back by this write, so the publish is refused, naming it.
-              // Kept by part, a language's draft carries no shared value.
-              if (companion && !promoteParts) {
-                const { live, shared, views } = await this.liveSharedDocument(
-                  tx,
-                  singleMeta,
-                  existingDoc.id,
-                  companion,
-                  singleDraftLocale ?? null
-                );
+              // A shared value someone else published since the change began
+              // would be put back by this write, so the publish is refused,
+              // naming it. Judged on the shared fields the change carries
+              // (`sharedFieldsJudged`): every one, or kept by part, the
+              // language's copy of a translated component's shared parts.
+              if (companion) {
+                const { live, shared, views, byHand } =
+                  await this.liveSharedDocument(
+                    tx,
+                    singleMeta,
+                    existingDoc.id,
+                    companion,
+                    singleDraftLocale ?? null
+                  );
                 // Judged as the publish writes it: the stored change with
                 // the request merged over it, as the gate above judges it.
                 // A request that retypes the live value of a field the
@@ -3654,7 +3657,7 @@ export class SingleMutationService extends BaseService {
                     entryId: existingDoc.id,
                   },
                   locale: singleDraftLocale ?? null,
-                  shared,
+                  shared: sharedFieldsJudged(shared, byHand),
                   live,
                   pending: {
                     ...snapshotRecord(pendingDraft.snapshot),
