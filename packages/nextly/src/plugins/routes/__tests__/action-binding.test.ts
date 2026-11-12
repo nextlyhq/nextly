@@ -146,4 +146,32 @@ describe("the person's menu item's action", () => {
     };
     expect(boundActionsOf(off, REBUILD, [off])).toEqual([]);
   });
+
+  it.each([
+    ["null", null],
+    ["an empty object", {}],
+    ["a run that is not a route", { run: "x" }],
+    ["an open that names no component", { open: 5 }],
+  ])(
+    "binds only the list actions, and does not throw, when the item's action is %s",
+    (_case, action) => {
+      // As an untyped config can hand it over.
+      const plugin = {
+        ...SUPPORT,
+        contributes: {
+          ...SUPPORT.contributes,
+          admin: {
+            ...SUPPORT.contributes?.admin,
+            header: {
+              place: "menu",
+              item: { label: "Escalate all", icon: "BookOpen", action },
+            },
+          },
+        },
+      } as unknown as PluginDefinition;
+      expect(boundActionsOf(plugin, ESCALATE, [plugin]).map(a => a.id)).toEqual(
+        ["acme-support.escalate"]
+      );
+    }
+  );
 });

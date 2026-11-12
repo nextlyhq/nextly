@@ -183,7 +183,6 @@ import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
-import { getNextlyLogger } from "../observability/logger";
 import { maskingServiceLogger } from "../observability/mask-emails";
 import {
   forgetCapabilityProviders,
@@ -216,11 +215,11 @@ import type {
   PluginServiceName,
 } from "../plugins/plugin-context";
 import { createPluginContext } from "../plugins/plugin-context";
-import { pluginLandingWarnings } from "../plugins/plugin-landing";
 import {
   clearPluginDependencies,
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
+import { reportPluginLandingWarnings } from "../plugins/plugin-landing";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
 import {
   clearProxyHandlers,
@@ -1677,21 +1676,20 @@ function logRegisteredPlugins(
   // plugin author's and breaks nothing, and an operator cannot fix a
   // third-party package from their own config.
   warnUndescribedPlugins(transformedConfig.plugins, logger);
-  // Beside it for the same reason: a person's-menu item with neither a link
-  // nor an action, or both, is left out of the menu without a word otherwise.
-  reportUserMenuItemProblems(transformedConfig.plugins);
+  // Beside it for the same reason: a malformed person's-menu item is left
+  // out of the menu without a word otherwise.
+  reportUserMenuItemProblems(transformedConfig.plugins, logger);
 
   // Once per start, here rather than in the admin metadata, which is built on
   // every request. Reported in development only and never thrown: the value
   // is already ignored everywhere, and a rail item that opens a menu item
   // still works.
-  for (const warning of pluginLandingWarnings(
+  reportPluginLandingWarnings(
     transformedConfig.plugins,
     transformedConfig.admin?.pluginOverrides,
-    process.env.NODE_ENV
-  )) {
-    getNextlyLogger().warn(warning);
-  }
+    process.env.NODE_ENV,
+    logger
+  );
 }
 
 /**

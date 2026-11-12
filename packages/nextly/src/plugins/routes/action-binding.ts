@@ -54,18 +54,16 @@ function runs(contribution: AdminContribution, route: PluginRoute): boolean {
 
 /**
  * The plugin's person's-menu item, bound to `route` when its action runs it:
- * called on no rows, under the item's id. Only a staff route is bound, as a
- * list action may name only one: a public route or a person's has no staff
- * caller for the check to require, and is left as the plugin declared it.
+ * called on no rows, under the item's id. Read through the one validated
+ * reading of the item, which takes an action only as a list action's is
+ * taken, naming one of the plugin's own staff routes.
  */
 function boundMenuAction(
   plugin: PluginDefinition,
   route: PluginRoute
 ): BoundAction[] {
-  const item = validUserMenuItem(plugin.contributes?.admin);
-  const action = item?.action;
+  const action = validUserMenuItem(plugin)?.action;
   if (action === undefined || !actionRuns(action, route)) return [];
-  if (route.public === true || route.principal !== undefined) return [];
   return [{ id: userMenuItemId(plugin.name), kind: "userMenuItem" }];
 }
 

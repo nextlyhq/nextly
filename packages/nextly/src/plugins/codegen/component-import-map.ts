@@ -38,6 +38,7 @@ import type {
 } from "../admin-contributions";
 import { pluginOwner } from "../dashboard-declarations";
 import { collectDeclarations } from "../declarations";
+import { headerSlotOf, validUserMenuItem } from "../header-item";
 import type { PluginDefinition } from "../plugin-context";
 
 import { isPageBuilderActive, PAGE_BUILDER_PLUGIN } from "./block-manifest";
@@ -103,30 +104,18 @@ const HEADER = [
  * Header, schema-builder and form-toolbar slots, and the component a
  * person's-menu item opens. They render through the same registry from
  * surfaces the plugin does not own, so they need the map's import as much as
- * a page does.
+ * a page does. The header's are read as admin-meta reads them: the slot only
+ * at the bar or the rail's foot, and the menu item's only when it is valid.
  */
-function collectAdminSlotPaths(admin: PluginAdminContributions): string[] {
-  // `header.slot` supersedes the deprecated top-level spelling; both are
-  // read exactly as admin-meta reads them, at the bar or the rail's foot.
-  const headerSlot = admin.header?.slot ?? admin.headerSlot;
+function collectAdminSlotPaths(plugin: PluginDefinition): string[] {
+  const admin = plugin.contributes?.admin;
+  const opened = validUserMenuItem(plugin)?.action;
   return [
-    headerSlot,
-    userMenuOpenedPath(admin.header?.item),
-    admin.schemaBuilderSlot,
-    admin.entryFormToolbarSlot,
+    headerSlotOf(admin),
+    opened && "open" in opened ? opened.open : undefined,
+    admin?.schemaBuilderSlot,
+    admin?.entryFormToolbarSlot,
   ].filter((path): path is ComponentPath => Boolean(path));
-}
-
-/**
- * The component a person's-menu item opens, read as plain JavaScript hands it
- * over: anything else is no path.
- */
-function userMenuOpenedPath(item: unknown): string | undefined {
-  const action = isRecord(item) ? item.action : undefined;
-  const opened = isRecord(action) ? action.open : undefined;
-  return typeof opened === "string" && opened.trim() !== ""
-    ? opened
-    : undefined;
 }
 
 /**
@@ -182,7 +171,7 @@ export function collectAdminComponentEntries(
   return [
     ...fieldTypes,
     ...ownViews,
-    ...collectAdminEntries(plugin.contributes?.admin, owner),
+    ...collectAdminEntries(plugin, owner),
     ...collectDeclaredWidgetEntries(plugin.contributes?.dashboard, owner),
   ];
 }
@@ -204,9 +193,10 @@ const entry = (
 
 /** Every component an enabled plugin's `contributes.admin` names. */
 function collectAdminEntries(
-  admin: PluginAdminContributions | undefined,
+  plugin: PluginDefinition,
   owner: string
 ): ComponentMapEntry[] {
+  const admin = plugin.contributes?.admin;
   if (!admin) return [];
   const tagged = (use: ComponentMapUse) => (path: string) =>
     entry(path, owner, use);
@@ -220,7 +210,7 @@ function collectAdminEntries(
     ...(admin.documentViews ?? []).map(view =>
       entry(view.component, owner, "document view")
     ),
-    ...collectAdminSlotPaths(admin).map(tagged("slot")),
+    ...collectAdminSlotPaths(plugin).map(tagged("slot")),
     ...collectContributionPaths(admin.contributions).map(
       tagged("contribution")
     ),

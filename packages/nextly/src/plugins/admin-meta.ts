@@ -26,6 +26,7 @@ import {
 } from "./document-surfaces";
 import {
   headerItemPlace,
+  headerSlotOf,
   userMenuItemId,
   validUserMenuItem,
 } from "./header-item";
@@ -402,15 +403,17 @@ export function pluginEntitySlugs(plugin: PluginDefinition): PluginEntitySlugs {
 
 /** A plugin's own item, where it chose to put it; nothing for none. */
 function ownItemMeta(
-  admin: PluginAdminContributions,
-  pluginName: string
+  plugin: PluginDefinition
 ): Pick<NonNullable<PluginAdminMeta["header"]>, "slot" | "place" | "item"> {
+  const admin = plugin.contributes?.admin;
   const place = headerItemPlace(admin);
   if (place === "menu") {
-    const item = validUserMenuItem(admin);
-    return item ? { place, item: publishedUserMenuItem(item, pluginName) } : {};
+    const item = validUserMenuItem(plugin);
+    return item
+      ? { place, item: publishedUserMenuItem(item, plugin.name) }
+      : {};
   }
-  const slot = admin.header?.slot ?? admin.headerSlot;
+  const slot = headerSlotOf(admin);
   if (!slot) return {};
   return place === "bar" ? { slot } : { slot, place };
 }
@@ -430,12 +433,12 @@ function publishedUserMenuItem(
 /** The header record a plugin publishes, or nothing when it says nothing. */
 function headerMeta(
   admin: PluginAdminContributions,
-  pluginName: string
+  plugin: PluginDefinition
 ): PluginAdminMeta["header"] {
   const hideDefaults = admin.header?.hideDefaults;
   const hide = admin.header?.hide;
   const header = {
-    ...ownItemMeta(admin, pluginName),
+    ...ownItemMeta(plugin),
     ...(hideDefaults ? { hideDefaults } : {}),
     ...(hide && hide.length > 0 ? { hide } : {}),
   };
@@ -551,7 +554,7 @@ export function buildPluginAdminMeta(
       // Header customization. `header.slot` supersedes the deprecated
       // top-level `headerSlot`, which stays mirrored for a slot at the bar,
       // the one place older admins draw it.
-      const header = headerMeta(admin, plugin.name);
+      const header = headerMeta(admin, plugin);
       if (header) meta.header = header;
       if (header?.slot && header.place === undefined) {
         meta.headerSlot = header.slot;

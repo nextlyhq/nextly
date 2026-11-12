@@ -353,7 +353,9 @@ contributes: {
 
 `icon` names a Lucide icon from the admin's icon set. The menu takes no `slot`: the
 compiler refuses one, and an item with neither `to` nor `action`, or both, is refused by
-the compiler too. One written in plain JavaScript is left out of the menu and reported
+the compiler too. An `action` is checked as a row action's is: `open` names a component,
+and `run` names one of your own staff routes by method, path and mount. An item that fails
+any of this, as one written in plain JavaScript can, is left out of the menu and reported
 when the app starts in development. `hideDefaults` and `hide` work alongside any place,
 and hide only the built-in buttons. Several plugins in one place are ordered by their
 admin `order`, then, in the menu, by label.

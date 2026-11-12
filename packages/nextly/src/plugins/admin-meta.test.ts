@@ -1397,8 +1397,20 @@ describe("buildPluginAdminMeta, a plugin's translations", () => {
 });
 
 describe("a plugin's own item, in the place it chose", () => {
+  /** The plugin's own staff route a menu item's `run` may name. */
+  const SYNC_ROUTE = {
+    method: "POST",
+    path: "/sync",
+    handler: () => new Response(),
+  };
   const withHeader = (header: unknown, rest: object = {}) =>
-    asPlugins([{ ...base, ...rest, contributes: { admin: { header } } }]);
+    asPlugins([
+      {
+        ...base,
+        ...rest,
+        contributes: { routes: [SYNC_ROUTE], admin: { header } },
+      },
+    ]);
   const headerOf = (header: unknown, rest?: object) =>
     buildPluginAdminMeta(withHeader(header, rest), undefined)[0];
 
@@ -1483,6 +1495,36 @@ describe("a plugin's own item, in the place it chose", () => {
     });
   });
 
+  it("publishes a menu action that opens a component", () => {
+    const action = { open: "@acme/p/admin#Report" };
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "Report", icon: "BookOpen", action },
+    });
+    expect(meta.header?.item?.action).toEqual(action);
+  });
+
+  it.each([
+    ["null", null],
+    ["an empty object", {}],
+    ["a run that is not a route", { run: "x" }],
+    ["an open that names no component", { open: 5 }],
+    [
+      "both open and run",
+      { open: "@a#B", run: { method: "POST", path: "/sync" } },
+    ],
+    [
+      "a run naming no route of the plugin's",
+      { run: { method: "POST", path: "/gone" } },
+    ],
+  ])("leaves out a menu item whose action is %s", (_case, action) => {
+    const meta = headerOf({
+      place: "menu",
+      item: { label: "X", icon: "BookOpen", action },
+    });
+    expect(meta.header).toBeUndefined();
+  });
+
   it("never publishes a component for the menu, even a deprecated headerSlot", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
@@ -1530,7 +1572,10 @@ describe("a plugin's own item, in the place it chose", () => {
 
 describe("the start-up report of a menu item left out", () => {
   const warn = vi.fn();
+  /** The host's logger, as start-up resolves it. */
   const logger = { error: vi.fn(), warn, info: vi.fn(), debug: vi.fn() };
+  /** Where a report would land if it went to the global logger instead. */
+  const globalWarn = vi.fn();
   const plugins = asPlugins([
     {
       ...base,
@@ -1558,25 +1603,58 @@ describe("the start-up report of a menu item left out", () => {
     vi.unstubAllEnvs();
     setNextlyLogger(undefined);
     warn.mockReset();
+    globalWarn.mockReset();
   });
 
-  it("names the plugin and why, in development", () => {
+  it("names the plugin and why, in development, to the logger it is handed", () => {
     vi.stubEnv("NODE_ENV", "development");
-    setNextlyLogger(logger);
-    reportUserMenuItemProblems(plugins);
+    setNextlyLogger({ ...logger, warn: globalWarn });
+    reportUserMenuItemProblems(plugins, logger);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toMatchObject({
+    expect(warn.mock.calls[0][0]).toContain(
+      "@acme/p: its item has neither a link nor an action"
+    );
+    expect(warn.mock.calls[0][1]).toEqual({
       kind: "plugin-user-menu-item-left-out",
-      message: expect.stringContaining(
-        "@acme/p: its item has neither a link nor an action"
-      ),
     });
+    expect(globalWarn).not.toHaveBeenCalled();
+  });
+
+  it("reports each malformed action, by what is wrong with it", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const withAction = (name: string, action: unknown) => ({
+      ...base,
+      name,
+      contributes: {
+        admin: {
+          header: { place: "menu", item: { label: "X", icon: "I", action } },
+        },
+      },
+    });
+    reportUserMenuItemProblems(
+      asPlugins([
+        withAction("@acme/null", null),
+        withAction("@acme/empty", {}),
+        withAction("@acme/run", { run: "x" }),
+        withAction("@acme/open", { open: 5 }),
+      ]),
+      logger
+    );
+    expect(warn.mock.calls.map(call => String(call[0]))).toEqual([
+      expect.stringContaining("@acme/null: its `action` is not an action"),
+      expect.stringContaining(
+        "@acme/empty: its `action` must be exactly one of"
+      ),
+      expect.stringContaining("@acme/run: its `action.run` is not a route's"),
+      expect.stringContaining(
+        "@acme/open: its `action.open` names no component"
+      ),
+    ]);
   });
 
   it.each(["production", "test"])("is silent in %s", env => {
     vi.stubEnv("NODE_ENV", env);
-    setNextlyLogger(logger);
-    reportUserMenuItemProblems(plugins);
+    reportUserMenuItemProblems(plugins, logger);
     expect(warn).not.toHaveBeenCalled();
   });
 });

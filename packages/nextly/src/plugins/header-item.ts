@@ -1,17 +1,20 @@
 /**
- * Where a plugin's own header item goes, and whether a person's-menu item is
- * well formed: read by the admin-meta serializer and by the start-up report,
- * so the two cannot disagree about which items are left out.
+ * Where a plugin's own header item goes, which component it mounts, and
+ * whether a person's-menu item is well formed: read by the admin-meta
+ * serializer, the route binding, the component import map and the start-up
+ * report, so none of them can disagree about which items are left out.
  *
  * @module plugins/header-item
  */
-import { getNextlyLogger } from "../observability/logger";
+import type { Logger } from "../shared/types";
 
 import type {
+  ComponentPath,
   PluginAdminContributions,
   PluginItemPlace,
   PluginUserMenuItem,
 } from "./admin-contributions";
+import { actionProblem } from "./admin-place-contributions";
 import type { PluginDefinition } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
 
@@ -22,32 +25,56 @@ export function headerItemPlace(
   return admin?.header?.place ?? "bar";
 }
 
+/**
+ * The component a plugin's own item mounts, at the bar or the rail's foot.
+ * `header.slot` supersedes the deprecated `headerSlot`. None for the menu,
+ * which never mounts one, whatever else the config still carries.
+ */
+export function headerSlotOf(
+  admin: PluginAdminContributions | undefined
+): ComponentPath | undefined {
+  if (headerItemPlace(admin) === "menu") return undefined;
+  return admin?.header?.slot ?? admin?.headerSlot;
+}
+
 const isText = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
 
-/** Why an item's link-or-action cannot be followed, if it cannot. */
-function targetProblem(to: unknown, action: unknown): string | undefined {
+/**
+ * Why an item's link or action cannot be followed, if it cannot. An action is
+ * read as a list action's is, so one naming no component, or no staff route
+ * of the plugin's own, is left out.
+ */
+function targetProblem(
+  item: Record<string, unknown>,
+  plugin: PluginDefinition
+): string | undefined {
+  const { to, action } = item;
   if (to !== undefined && action !== undefined) {
     return "its item has both a link and an action";
   }
   if (to === undefined && action === undefined) {
     return "its item has neither a link nor an action";
   }
-  return to !== undefined && !isText(to)
-    ? "its item's link is empty"
-    : undefined;
+  if (to !== undefined) {
+    return isText(to) ? undefined : "its item's link is empty";
+  }
+  return actionProblem(action, plugin);
 }
 
 /**
  * Why a person's-menu item cannot be drawn, or `undefined` when it can. Read
  * as plain JavaScript hands it over, since a config may not be type-checked.
  */
-function userMenuItemProblem(item: unknown): string | undefined {
+function userMenuItemProblem(
+  item: unknown,
+  plugin: PluginDefinition
+): string | undefined {
   if (typeof item !== "object" || item === null) return "it declares no item";
-  const { label, icon, to, action } = item as Record<string, unknown>;
-  if (!isText(label)) return "its item has no label";
-  if (!isText(icon)) return "its item has no icon";
-  return targetProblem(to, action);
+  const fields = item as Record<string, unknown>;
+  if (!isText(fields.label)) return "its item has no label";
+  if (!isText(fields.icon)) return "its item has no icon";
+  return targetProblem(fields, plugin);
 }
 
 /**
@@ -58,13 +85,17 @@ export function userMenuItemId(pluginName: string): string {
   return `${pluginAdminSlug(pluginName)}.user-menu`;
 }
 
-/** The plugin's person's-menu item, when it chose the menu and it is well formed. */
+/**
+ * The plugin's person's-menu item, when it chose the menu and the item is well
+ * formed: the one validated reading every consumer takes it through.
+ */
 export function validUserMenuItem(
-  admin: PluginAdminContributions | undefined
+  plugin: PluginDefinition
 ): PluginUserMenuItem | undefined {
+  const admin = plugin.contributes?.admin;
   if (headerItemPlace(admin) !== "menu") return undefined;
   const item = admin?.header?.item;
-  return userMenuItemProblem(item) === undefined ? item : undefined;
+  return userMenuItemProblem(item, plugin) === undefined ? item : undefined;
 }
 
 /**
@@ -77,24 +108,26 @@ function userMenuItemProblems(plugins: readonly PluginDefinition[]): string[] {
     if (plugin.enabled === false || headerItemPlace(admin) !== "menu") {
       return [];
     }
-    const problem = userMenuItemProblem(admin?.header?.item);
+    const problem = userMenuItemProblem(admin?.header?.item, plugin);
     return problem === undefined ? [] : [`${plugin.name}: ${problem}`];
   });
 }
 
 /**
- * In development, report each person's-menu item that is left out. Silent
- * elsewhere: the item is simply not drawn, and a production log is no place
- * for a plugin author's mistake an operator cannot fix.
+ * In development, report each person's-menu item that is left out, to the
+ * host's logger. Silent elsewhere: the item is simply not drawn, and a
+ * production log is no place for a plugin author's mistake an operator cannot
+ * fix.
  */
 export function reportUserMenuItemProblems(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  logger: Logger
 ): void {
   if (process.env.NODE_ENV !== "development") return;
   for (const problem of userMenuItemProblems(plugins)) {
-    getNextlyLogger().warn({
-      kind: "plugin-user-menu-item-left-out",
-      message: `Person's-menu item left out, ${problem}. Declare a label, an icon, and either "to" or "action".`,
-    });
+    logger.warn?.(
+      `Person's-menu item left out, ${problem}. Declare a label, an icon, and either "to" or "action".`,
+      { kind: "plugin-user-menu-item-left-out" }
+    );
   }
 }

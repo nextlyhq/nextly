@@ -592,6 +592,42 @@ describe("field-type and slot components", () => {
     expect(collectAdminComponentPaths(p)).toEqual(["@acme/x/admin#LegacySlot"]);
   });
 
+  it("collects the header slot by the place the plugin chose, as admin-meta reads it", () => {
+    const LEGACY = "@acme/x/admin#LegacySlot";
+    const CURRENT = "@acme/x/admin#Slot";
+    const item = { label: "Help", icon: "BookOpen", to: "/x" };
+    // The bar and the rail's foot mount the slot, in either spelling.
+    for (const place of [undefined, "bar", "rail-foot"]) {
+      expect(
+        collectAdminComponentPaths(plugin({ header: { slot: CURRENT, place } }))
+      ).toEqual([CURRENT]);
+      expect(
+        collectAdminComponentPaths(
+          plugin({ headerSlot: LEGACY, header: { place } })
+        )
+      ).toEqual([LEGACY]);
+    }
+    // The menu mounts none, so a deprecated slot it still carries is not
+    // imported: admin-meta never publishes it.
+    const menu = plugin({
+      headerSlot: LEGACY,
+      header: { place: "menu", item },
+    });
+    expect(collectAdminComponentPaths(menu)).toEqual([]);
+    expect(
+      buildPluginAdminMeta([menu], undefined)[0].headerSlot
+    ).toBeUndefined();
+  });
+
+  it("imports nothing for a menu item whose action is malformed", () => {
+    for (const action of [null, {}, { run: "x" }, { open: 5 }]) {
+      const p = plugin({
+        header: { place: "menu", item: { label: "X", icon: "I", action } },
+      });
+      expect(collectAdminComponentPaths(p)).toEqual([]);
+    }
+  });
+
   it("keeps a disabled plugin's field-type editors but drops its slots", () => {
     // admin-meta serializes fieldTypes regardless of enabled state — a
     // disabled plugin keeps its collections and their fields, so their
