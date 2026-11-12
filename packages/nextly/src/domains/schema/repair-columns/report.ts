@@ -210,6 +210,7 @@ type FindingFacts = Omit<
   | "lock"
   | "progress"
   | "failure"
+  | "consent"
 >;
 
 /** The facts no column has until its finding gives them. */
