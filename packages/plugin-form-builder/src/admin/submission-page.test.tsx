@@ -295,11 +295,9 @@ function server(options: ServerOptions) {
     ],
   ];
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    if (init?.method === "PATCH" && options.offline) {
-      throw new TypeError("Failed to fetch");
-    }
     if (init?.method === "PATCH") {
       await options.hold?.();
+      if (options.offline) throw new TypeError("Failed to fetch");
       const sent = JSON.parse(String(init.body)) as {
         status?: string;
         notes?: string;
@@ -885,6 +883,43 @@ describe("a submission's page, writing", () => {
     });
     expect(await within(details).findByText("Priority")).toBeInTheDocument();
     expect(within(details).getByText("high")).toBeInTheDocument();
+  });
+
+  it("retries a note once a run of failed saves is over", async () => {
+    let release = () => undefined as void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      offline: true,
+      hold: () => held,
+    };
+    const fetchMock = server(options);
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    // A's save is on its way when B is left; A then fails, dropping B.
+    await user.type(note, "A");
+    await user.tab();
+    await user.click(note);
+    await user.type(note, "B");
+    await user.tab();
+    release();
+    expect(await screen.findByText(/could not be sent/)).toBeInTheDocument();
+    // Back online: leaving the note sends what it holds, over the note as
+    // stored.
+    options.offline = false;
+    options.hold = undefined;
+    await user.click(note);
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "A", _rev: "rev-7" },
+        { notes: "AB", _rev: "rev-7" },
+      ])
+    );
   });
 
   it("says when a change could not be sent", async () => {

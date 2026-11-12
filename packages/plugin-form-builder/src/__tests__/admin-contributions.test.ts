@@ -95,6 +95,8 @@ describe("the fields a host adds to submissions", () => {
             ],
           }),
           text({ name: "source" }),
+          // Kept out of the admin by the host: not shown.
+          text({ name: "crmId", admin: { hidden: true } }),
         ],
       },
     });

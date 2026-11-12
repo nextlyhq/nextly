@@ -721,6 +721,10 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
   // The stored note once the page's own saves have landed, and how many are on their way.
   const expected = useRef<string>(stored);
   const pending = useRef(0);
+  // The note as stored before the page's current run of note saves: what a
+  // retry replaces if the whole run fails, since a failed save drops the
+  // saves queued behind it.
+  const runBasis = useRef<string>(stored);
   const openedId = useRef(submission.id);
   useEffect(() => {
     // Another submission opened: its note, nothing typed, nothing saved.
@@ -745,15 +749,20 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
     const text = noteNow.current;
     if (text === expected.current) return;
     const basis = expected.current;
+    if (pending.current === 0) runBasis.current = basis;
     expected.current = text;
     pending.current += 1;
     void save({ notes: text }, { notes: basis })
-      .then(() => setSavedText(text))
+      .then(() => {
+        setSavedText(text);
+        runBasis.current = text;
+      })
       .catch(() => {
         // Not stored: once no other note save is on its way, the next one
-        // replaces what this one would have, so leaving the note retries it,
-        // and is refused again if someone else changed the note meanwhile.
-        if (pending.current === 1) expected.current = basis;
+        // replaces the note as stored before this run of saves, so leaving
+        // the note retries it, and is refused again if someone else changed
+        // the note meanwhile.
+        if (pending.current === 1) expected.current = runBasis.current;
       })
       .finally(() => {
         pending.current -= 1;

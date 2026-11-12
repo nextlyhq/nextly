@@ -225,9 +225,9 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
 
 /**
  * The fields a host added to the submissions collection: every named
- * top-level field that is not one of the plugin's own. The submission page
- * shows them, since it replaces the default editor that would have drawn
- * them.
+ * top-level field that is not one of the plugin's own, and not one the host
+ * hid from the admin. The submission page shows them, since it replaces the
+ * default editor that would have drawn them.
  */
 export function submissionExtensionFields(
   pluginConfig: ResolvedFormBuilderConfig
@@ -236,12 +236,18 @@ export function submissionExtensionFields(
     builtInSubmissionFields(pluginConfig.formOverrides.slug).map(fieldName)
   );
   return submissionsCollection(pluginConfig)
-    .fields.map(field => ({
+    .fields.filter(field => !hiddenFromAdmin(field))
+    .map(field => ({
       name: fieldName(field),
       label: fieldLabel(field),
       type: (field as { type: string }).type,
     }))
     .filter(field => field.name !== "" && !builtIn.has(field.name));
+}
+
+/** Whether a field is configured to stay out of the admin. */
+function hiddenFromAdmin(field: FieldConfig): boolean {
+  return (field as { admin?: { hidden?: unknown } }).admin?.hidden === true;
 }
 
 /** A field's name, or "" for a layout field that has none. */
