@@ -21,8 +21,14 @@ const prompts = vi.hoisted(() => ({
   warn: vi.fn(),
   cancel: vi.fn(),
 }));
+// The order the scaffold's steps ran in, so the migration can be shown to
+// come after the install and the `.env` it needs.
+const steps = vi.hoisted((): string[] => []);
 const writeInitialMigration = vi.hoisted(() =>
-  vi.fn(async (): Promise<string | undefined> => undefined)
+  vi.fn(async (): Promise<string | undefined> => {
+    steps.push("migration");
+    return undefined;
+  })
 );
 const copyTemplate = vi.hoisted(() =>
   vi.fn(async (options: { targetDir: string }) => {
@@ -61,7 +67,10 @@ vi.mock("../utils/template", async importOriginal => ({
 }));
 vi.mock("../installers/dependencies", async importOriginal => ({
   ...(await importOriginal<typeof import("../installers/dependencies")>()),
-  installDependencies: vi.fn(async () => []),
+  installDependencies: vi.fn(async () => {
+    steps.push("install");
+    return [];
+  }),
 }));
 vi.mock("../installers/initial-migration", async importOriginal => ({
   ...(await importOriginal<typeof import("../installers/initial-migration")>()),
@@ -79,7 +88,11 @@ vi.mock("../utils/detect", async importOriginal => ({
     appDir: "src/app",
   })),
 }));
-vi.mock("../generators/env", () => ({ generateEnv: vi.fn(async () => {}) }));
+vi.mock("../generators/env", () => ({
+  generateEnv: vi.fn(async () => {
+    steps.push("env");
+  }),
+}));
 
 import { createNextly } from "../create-nextly";
 
@@ -92,6 +105,7 @@ let dir: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  steps.length = 0;
   vi.spyOn(process, "exit").mockImplementation(code => {
     throw new Error(`process.exit(${String(code)})`);
   });
@@ -133,6 +147,12 @@ describe("a code-first blog's first migration", () => {
       path.join(dir, "my-blog"),
       "pnpm"
     );
+    // The installed `nextly` and the `.env` naming the database must both be
+    // in place before the command runs, or it can only fail.
+    expect(steps).toContain("install");
+    expect(steps).toContain("env");
+    expect(steps.indexOf("migration")).toBeGreaterThan(steps.indexOf("install"));
+    expect(steps.indexOf("migration")).toBeGreaterThan(steps.indexOf("env"));
   });
 
   it("is named as the next step when nothing was installed", async () => {
