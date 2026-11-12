@@ -15,7 +15,10 @@
  *
  * @module admin/TemplateSeoPanel
  */
-import { useDocumentLocale } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentLocale,
+  useReportUnsavedWork,
+} from "@nextlyhq/plugin-sdk/admin";
 import { Input, Switch } from "@nextlyhq/ui";
 import { Info } from "lucide-react";
 import {
@@ -52,6 +55,9 @@ export interface DesignSeo {
   image?: { $bind: string; [option: string]: unknown };
 }
 
+/** What the rule still being typed is reported as unsaved work under. */
+const UNSAVED_RULE = "seo-template-rule";
+
 /** The rule as the panel edits it: text with variables. */
 interface RuleDraft {
   title: string;
@@ -74,6 +80,11 @@ export interface TemplateSeoPanelProps {
   design: Readonly<Record<string, unknown>>;
   writable: boolean;
   setBadge: (badge: { count: number; label: string } | null) => void;
+  /**
+   * The editor's hold on an edit not made yet: the rule still being typed is
+   * made before the document is stored.
+   */
+  holdEdit?: (make: () => void) => () => void;
 }
 
 /** The draft a stored rule is edited as. */
@@ -199,7 +210,8 @@ function designWith(
  */
 function useRuleDraft(
   seo: TemplateSeoPanelProps["seo"],
-  fields: readonly PatternField[] | undefined
+  fields: readonly PatternField[] | undefined,
+  holdEdit: TemplateSeoPanelProps["holdEdit"]
 ) {
   const [draft, setDraft] = useState<RuleDraft | undefined>(undefined);
   // What the panel last stored, so a change from outside is told apart from
@@ -219,18 +231,45 @@ function useRuleDraft(
     stored.current = key;
     seo.set(value);
   };
-  // A text still being typed is stored as the panel closes: closing the
-  // Settings dialog takes the field away without its blur.
   const latest = useRef({ draft, commit });
   latest.current = { draft, commit };
-  useEffect(
-    () => () => {
-      const { draft: open, commit: store } = latest.current;
-      if (open !== undefined) store(open);
-    },
-    []
-  );
+  const pending =
+    draft !== undefined &&
+    fields !== undefined &&
+    JSON.stringify(ruleOf(draft, fields, seo.value)) !== valueKey;
+  useHeldDraft(latest, holdEdit, pending);
   return { draft, setDraft, commit };
+}
+
+/**
+ * A rule still being typed, kept from being lost: stored as the panel
+ * closes (closing the Settings dialog takes the field away without its
+ * blur), and before the document is stored, through the editor's hold; and
+ * said to be unsaved work until then, so the save shortcut offers to store
+ * it.
+ */
+function useHeldDraft(
+  latest: {
+    current: {
+      draft: RuleDraft | undefined;
+      commit: (next: RuleDraft) => void;
+    };
+  },
+  holdEdit: TemplateSeoPanelProps["holdEdit"],
+  pending: boolean
+): void {
+  useReportUnsavedWork(UNSAVED_RULE, pending);
+  useEffect(() => {
+    const make = (): void => {
+      const { draft, commit } = latest.current;
+      if (draft !== undefined) commit(draft);
+    };
+    const release = holdEdit?.(make);
+    return () => {
+      release?.();
+      make();
+    };
+  }, [holdEdit, latest]);
 }
 
 /** How many variables the draft names that no field fills, beside the tab's label. */
@@ -263,7 +302,7 @@ export function TemplateSeoPanel(props: TemplateSeoPanelProps): ReactNode {
   const [previewWith, setPreviewWith] = useState<string | null>(draws.entryId);
   // The fields the type offers, once read; the rule is read with them.
   const [fields, setFields] = useState<PatternField[] | undefined>(undefined);
-  const { draft, setDraft, commit } = useRuleDraft(seo, fields);
+  const { draft, setDraft, commit } = useRuleDraft(seo, fields, props.holdEdit);
   const rule =
     draft === undefined || fields === undefined
       ? seo.value

@@ -74,6 +74,7 @@ describe("the SEO tab in the Page Builder's Settings", () => {
 
   it("draws a design's rule for the type it draws, and a word until it draws one", () => {
     const seo = { value: undefined, set: () => {} };
+    const holdEdit = () => () => {};
     const { rerender } = render(
       <PageBuilderSeoTab
         context={{ ...base, document: "template", collection: "templates" }}
@@ -99,9 +100,14 @@ describe("the SEO tab in the Page Builder's Settings", () => {
         seo={seo}
         design={{}}
         writable
+        holdEdit={holdEdit}
       />
     );
     expect(screen.getByText("The rule")).toBeTruthy();
-    expect(handed.rule).toMatchObject({ draws: { collection: "posts" }, seo });
+    expect(handed.rule).toMatchObject({
+      draws: { collection: "posts" },
+      seo,
+      holdEdit,
+    });
   });
 });

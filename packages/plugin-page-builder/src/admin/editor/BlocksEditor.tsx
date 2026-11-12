@@ -1468,6 +1468,13 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     canvasRoot: canvas.canvasElement,
   });
+  // The Settings dialog's place for other plugins' tabs, for a page or a
+  // design: what is being edited, and its own metadata as one undoable edit.
+  const settingsPlace = useSettingsPlace(
+    editor,
+    control,
+    mount.initialDocument.kind
+  );
   const { done, publishOffer, removalHold } = useHostCommit({
     name,
     address: place.address,
@@ -1480,16 +1487,11 @@ function EditorBody<TFieldValues extends FieldValues>({
     // The count the removal dialog says now; the hold keeps it as it stood
     // when each field was removed.
     removalReach: () => mount.componentFacts?.reach,
+    // A tab's text still being typed, made before the document is stored.
+    ...(settingsPlace === null ? {} : { flushHeld: settingsPlace.flushHeld }),
   });
 
   const page = usePageFacts(control);
-  // The Settings dialog's place for other plugins' tabs, for a page or a
-  // design: what is being edited, and its own metadata as one undoable edit.
-  const settingsPlace = useSettingsPlace(
-    editor,
-    control,
-    mount.initialDocument.kind
-  );
   // A component's own view, and the way into one from a placement: its
   // banner, which says how far a change reaches, and "Edit component".
   const componentView = useComponentView({

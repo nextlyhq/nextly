@@ -15,7 +15,7 @@ import {
   useCurrentUserId,
   useDocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type {
@@ -33,6 +33,11 @@ export interface SettingsPlace {
   /** Null while who is looking, or which document, is not known yet. */
   context: PageBuilderSettingsContext | null;
   tabProps: PageBuilderSettingsTabProps;
+  /**
+   * Make the edits tabs hold (`holdEdit`), and answer the document the last
+   * one made; null where none was made.
+   */
+  flushHeld: () => BlockDocument | null;
 }
 
 /** The editor, as far as the place reads and edits it. */
@@ -96,6 +101,7 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
   );
   const { apply } = editor;
   const value = seoOf(editor.document);
+  const held = useHeldEdits();
   const tabProps = useMemo(
     (): PageBuilderSettingsTabProps => ({
       seo: {
@@ -103,15 +109,49 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
         // One edit of the document, so the editor's Undo takes it back and
         // its Save stores it with the rest of the page.
         set: next => {
-          apply({ kind: "seo", seo: next });
+          held.made(apply({ kind: "seo", seo: next }));
         },
       },
       design: editor.document,
       control: control as unknown as Control<FieldValues>,
       writable: true,
+      holdEdit: held.hold,
     }),
-    [value, apply, editor.document, control]
+    [value, apply, editor.document, control, held]
   );
   if (document === null) return null;
-  return { context, tabProps };
+  return { context, tabProps, flushHeld: held.flush };
+}
+
+/**
+ * The edits the place's tabs hold, made on `flush`: the document the last
+ * edit made is kept as it is made, since the editor's own document is the
+ * one from before it until it renders again.
+ */
+function useHeldEdits(): {
+  hold: (make: () => void) => () => void;
+  made: (document: BlockDocument | null) => void;
+  flush: () => BlockDocument | null;
+} {
+  const holding = useRef(new Set<() => void>());
+  const last = useRef<BlockDocument | null>(null);
+  return useMemo(
+    () => ({
+      hold: make => {
+        holding.current.add(make);
+        return () => {
+          holding.current.delete(make);
+        };
+      },
+      made: document => {
+        if (document !== null) last.current = document;
+      },
+      flush: () => {
+        last.current = null;
+        for (const make of [...holding.current]) make();
+        return last.current;
+      },
+    }),
+    []
+  );
 }

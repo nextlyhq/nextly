@@ -197,6 +197,18 @@ export function finishInlineEdit(
 }
 
 /**
+ * The document a store takes: the one the edits Settings tabs hold make
+ * (`flushHeld`), else the one held, with any open passage finished on it.
+ */
+export function documentToStore(
+  inline: { commit: () => InlineEditOutcome },
+  held: BlockDocument,
+  flushHeld: (() => BlockDocument | null) | undefined
+): BlockDocument {
+  return finishInlineEdit(inline, flushHeld?.() ?? held).document;
+}
+
+/**
  * Whether this document holds unsaved work, from EITHER surface that writes it.
  *
  * The status pill otherwise reads the editor's `undoDepth` alone, which is its
@@ -318,6 +330,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onClose,
   savePoint,
   removalReach,
+  flushHeld,
 }: {
   name: Path<TFieldValues>;
   /**
@@ -344,6 +357,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   removalReach?: () =>
     | { readonly count: number; readonly complete: boolean }
     | undefined;
+  /** The edits Settings tabs hold, made before a store (`SettingsPlace`). */
+  flushHeld?: () => BlockDocument | null;
 }): {
   done: () => void;
   /**
@@ -396,7 +411,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   // handler in the same action that asks what is being stored.
   const lastCommitted = useRef<BlockDocument | null>(null);
   useBeforeDocumentAction(() => {
-    const committing = finishInlineEdit(inline, editor.document).document;
+    const committing = documentToStore(inline, editor.document, flushHeld);
     savePoint.committing(committing);
     onCommit(committing);
     lastCommitted.current = committing;

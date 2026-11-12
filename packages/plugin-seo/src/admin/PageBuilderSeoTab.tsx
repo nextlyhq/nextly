@@ -37,6 +37,7 @@ export type PageBuilderSeoTabProps =
     design?: Readonly<Record<string, unknown>>;
     control?: Control<FieldValues>;
     writable?: boolean;
+    holdEdit?: (make: () => void) => () => void;
   };
 
 /** A page's own SEO, as its edit page's tab edits it, where it has the group. */
@@ -108,6 +109,7 @@ export function PageBuilderSeoTab(props: PageBuilderSeoTabProps): ReactNode {
       design={props.design}
       writable={writable}
       setBadge={setBadge}
+      {...(props.holdEdit === undefined ? {} : { holdEdit: props.holdEdit })}
     />
   );
 }

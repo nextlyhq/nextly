@@ -61,6 +61,13 @@ export interface PageBuilderSettingsTabProps {
   control: Control<FieldValues>;
   /** Whether the document takes edits now. */
   writable: boolean;
+  /**
+   * Hold an edit the tab has not made yet, such as text still being typed:
+   * `make` is run before the document is stored (Save, Publish, the save
+   * shortcut), so the store keeps it. Answers the release, called once the
+   * tab has made the edit itself or goes away.
+   */
+  holdEdit: (make: () => void) => () => void;
 }
 
 declare module "@nextlyhq/plugin-sdk" {

@@ -10,6 +10,7 @@
 import "./dom-setup";
 
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -29,6 +30,8 @@ const sent = vi.hoisted(() => [] as Record<string, unknown>[]);
 const editing = vi.hoisted(() => ({
   locale: null as string | null,
   failing: false,
+  /** Each report of unsaved work, by its key. */
+  unsaved: new Map<string, boolean>(),
 }));
 
 /** A rule's text pieces filled as the Page Builder fills them for the post. */
@@ -51,6 +54,9 @@ function filled(segments: unknown): string | undefined {
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentLocale: () =>
     editing.locale === null ? null : { code: editing.locale },
+  useReportUnsavedWork: (key: string, unsaved: boolean) => {
+    editing.unsaved.set(key, unsaved);
+  },
   writePluginRoute: ({ body }: { body: Record<string, unknown> }) => {
     sent.push(body);
     if (editing.failing) return Promise.reject(new Error("offline"));
@@ -112,6 +118,11 @@ const RULE: DesignSeo = {
 let stored: (DesignSeo | null)[] = [];
 /** Set from outside the panel, as the editor's Undo does. */
 let setFromOutside: (value: DesignSeo | undefined) => void = () => {};
+/** The edits the panel holds, made as the editor makes them before a save. */
+const holding = new Set<() => void>();
+const makeHeld = () => {
+  for (const make of [...holding]) make();
+};
 
 function Host({ initial }: { initial: DesignSeo | undefined }): ReactNode {
   const [value, setValue] = useState<DesignSeo | undefined>(initial);
@@ -129,6 +140,12 @@ function Host({ initial }: { initial: DesignSeo | undefined }): ReactNode {
       design={{ formatVersion: 1, kind: "template", nodes: [] }}
       writable
       setBadge={() => {}}
+      holdEdit={make => {
+        holding.add(make);
+        return () => {
+          holding.delete(make);
+        };
+      }}
     />
   );
 }
@@ -138,6 +155,8 @@ beforeEach(() => {
   stored = [];
   editing.locale = null;
   editing.failing = false;
+  editing.unsaved.clear();
+  holding.clear();
 });
 afterEach(cleanup);
 
@@ -280,6 +299,25 @@ describe("a template's SEO panel", () => {
     expect(stored.at(-1)).toMatchObject({
       title: ["New ", { $bind: "title" }],
     });
+  });
+
+  it("has the editor store a rule still being typed when the page is saved, and says it is unsaved until then", async () => {
+    const user = userEvent.setup();
+    const title = await open();
+    const unsaved = () => [...editing.unsaved.values()].some(Boolean);
+    expect(unsaved()).toBe(false);
+
+    await user.clear(title);
+    await user.type(title, "Saved {{Post title}");
+    expect(unsaved()).toBe(true);
+    expect(stored).toEqual([]);
+
+    // The save shortcut, pressed with the field still in focus.
+    act(makeHeld);
+    expect(stored.at(-1)).toMatchObject({
+      title: ["Saved ", { $bind: "title" }],
+    });
+    await waitFor(() => expect(unsaved()).toBe(false));
   });
 
   it("says the preview is the last one read when reading it again fails", async () => {

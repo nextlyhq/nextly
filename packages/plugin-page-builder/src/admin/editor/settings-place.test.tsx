@@ -120,4 +120,27 @@ describe("the Settings place", () => {
       { kind: "seo", seo: null },
     ]);
   });
+
+  it("makes an edit a tab holds before the document is stored, and answers the document it made", () => {
+    const { editor: e, applied } = editor("template");
+    const made = { ...e.document, nodes: [] } as BlockDocument;
+    e.apply = (op: BuilderOp) => {
+      applied.push(op);
+      return made;
+    };
+    const { result } = renderHook(() =>
+      useSettingsPlace(e, {} as never, "template")
+    );
+    expect(result.current?.flushHeld()).toBeNull();
+
+    const release = result.current?.tabProps.holdEdit(() =>
+      result.current?.tabProps.seo.set({ title: ["Held"] })
+    );
+    expect(result.current?.flushHeld()).toBe(made);
+    expect(applied).toEqual([{ kind: "seo", seo: { title: ["Held"] } }]);
+
+    release?.();
+    expect(result.current?.flushHeld()).toBeNull();
+    expect(applied).toHaveLength(1);
+  });
 });
