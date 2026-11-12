@@ -38,36 +38,41 @@ export function useColumnsLeftOut(
   columnSet: string,
   content: unknown
 ): number {
-  const [fit, setFit] = useState({ columnSet, leftOut: 0 });
+  // `width` is the box's, as last observed: a change of it is measured again.
+  const [fit, setFit] = useState({ columnSet, leftOut: 0, width: 0 });
   // A new column set is measured afresh: derived during render rather than in
   // an effect, so the first paint of the new set is not the old one's count.
-  if (fit.columnSet !== columnSet) setFit({ columnSet, leftOut: 0 });
+  if (fit.columnSet !== columnSet) setFit({ ...fit, columnSet, leftOut: 0 });
   const leftOut = fit.columnSet === columnSet ? fit.leftOut : 0;
 
-  // Once the columns or rows change, and again after each column left out:
-  // one more out while the table overflows. Each step renders again before
-  // paint, so the overflowing table never shows. It ends, since `leftOut`
-  // only grows here and stops at `optional`.
+  // Once the columns, the rows or the box's width change, and again after
+  // each column left out: one more out while the table overflows. Each step
+  // renders again before paint, so the overflowing table never shows. It
+  // ends, since `leftOut` only grows here and stops at `optional`.
   useLayoutEffect(() => {
     if (leftOut < optional && overflows(box.current)) {
       setFit(current => ({ ...current, leftOut: current.leftOut + 1 }));
     }
-  }, [box, leftOut, optional, columnSet, content]);
+  }, [box, leftOut, optional, columnSet, content, fit.width]);
 
-  // A wider box may fit what was left out: try every column again, and let
-  // the measurement above leave out what still does not fit.
+  // Any change of the box's width is measured again. A narrower box (the
+  // window narrowed, a side panel opened) may no longer fit what is shown; a
+  // wider one may fit what was left out, so every column is tried again and
+  // the measurement above leaves out what still does not fit.
   useEffect(() => {
     const element = box.current;
     if (!element || typeof ResizeObserver === "undefined") return;
     let width = element.clientWidth;
     const observer = new ResizeObserver(() => {
       const next = element.clientWidth;
-      if (next > width) {
-        setFit(current =>
-          current.leftOut === 0 ? current : { ...current, leftOut: 0 }
-        );
-      }
+      if (next === width) return;
+      const grew = next > width;
       width = next;
+      setFit(current => ({
+        ...current,
+        width: next,
+        leftOut: grew ? 0 : current.leftOut,
+      }));
     });
     observer.observe(element);
     return () => observer.disconnect();

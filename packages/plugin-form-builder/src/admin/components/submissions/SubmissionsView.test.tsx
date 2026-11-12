@@ -17,6 +17,7 @@
  * use for a DOM.
  */
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -670,12 +671,16 @@ describe("a form's tab while its form loads", () => {
   });
 });
 
+/** The box width `layOut` lays the list out in; a test may change it. */
+let laidOut = 0;
+
 /**
  * Lays out every table at `perColumn` pixels a header cell, in a box `box`
  * pixels wide. jsdom lays nothing out, so the scroll box's widths stand in
  * for what a browser would measure: its content is as wide as its columns.
  */
 function layOut(box: number, perColumn = 110): () => void {
+  laidOut = box;
   const proto = HTMLElement.prototype;
   const saved = {
     clientWidth: Object.getOwnPropertyDescriptor(proto, "clientWidth"),
@@ -685,8 +690,9 @@ function layOut(box: number, perColumn = 110): () => void {
     Array.from(element.children).find(child => child.tagName === "TABLE");
   Object.defineProperty(proto, "clientWidth", {
     configurable: true,
-    get(this: HTMLElement) {
-      return table(this) ? box : 0;
+    // Every box is as wide as the list's, so a resize is seen by its box too.
+    get() {
+      return laidOut;
     },
   });
   Object.defineProperty(proto, "scrollWidth", {
@@ -695,7 +701,7 @@ function layOut(box: number, perColumn = 110): () => void {
       const inner = table(this);
       if (!inner) return 0;
       const columns = inner.querySelectorAll("thead th").length;
-      return Math.max(box, columns * perColumn);
+      return Math.max(laidOut, columns * perColumn);
     },
   });
   return () => {
@@ -729,6 +735,43 @@ describe("a list in a narrow box", () => {
       "Status",
       "Submitted",
     ]);
+  });
+
+  it("measures again when its box narrows, as when a side panel opens", async () => {
+    // Loaded wide, every column fits; the box then narrows to 600, and the
+    // browser says so. A list that measured only on growth would keep them.
+    const resized: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(notify: () => void) {
+          resized.push(notify);
+        }
+        observe(): void {}
+        disconnect(): void {}
+      }
+    );
+    restore = layOut(2000);
+    serveJob();
+    renderList();
+    await screen.findAllByText("Hina Rossi");
+    await waitFor(() =>
+      expect(headers()).toEqual([
+        "From",
+        "Form",
+        "Summary",
+        "Status",
+        "Submitted",
+      ])
+    );
+
+    laidOut = 600;
+    act(() => {
+      for (const notify of resized) notify();
+    });
+    await waitFor(() =>
+      expect(headers()).toEqual(["From", "Status", "Submitted"])
+    );
   });
 
   it("gives up the Summary, then the Form column, naming the form under the sender", async () => {
