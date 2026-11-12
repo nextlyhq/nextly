@@ -586,6 +586,7 @@ describe.each(getConfiguredTestDialects())(
 
         await followWorkflowsAfterMigrate(
           defineConfig({
+            localization: { locales: ["en", "es"], defaultLocale: "en" },
             collections: collectionsOn({
               posts: deskRenamed,
               pages: deskRenamed,
