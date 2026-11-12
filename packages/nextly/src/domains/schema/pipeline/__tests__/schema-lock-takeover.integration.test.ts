@@ -20,6 +20,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { getMigrationLockDdl } from "../../../field-groups/migration/session";
 import { withSchemaLock } from "../schema-lock";
 
 import {
@@ -195,6 +196,60 @@ describe.each(SERVERS)(
       expect(await tablesWithPrefix(adapter, PREFIX)).toEqual([BUSY, TAKER]);
       expect(await columnsOf(adapter, dialect, BUSY)).toEqual(["id"]);
       expect(await markedRunning(adapter, dialect)).toBe(0);
+    });
+
+    it("leaves the lock naming the earlier holder when it stops before outlasting its statements", async () => {
+      const killed = await holderWaitingOnTheTable();
+      killed.kill("SIGKILL");
+      await killed.exited;
+      holder = undefined;
+      await sleep(PAST_THE_LEASE_MS);
+      // A field-group lock held by an earlier version: the taking run claims the lapsed row, then
+      // finds this held and stops before it has waited out the killed holder's statement.
+      for (const statement of getMigrationLockDdl(dialect)) {
+        await adapter.executeQuery(statement);
+      }
+      const live =
+        dialect === "mysql"
+          ? sql`DATE_ADD(UTC_TIMESTAMP(), INTERVAL 600 SECOND)`
+          : sql`clock_timestamp() + make_interval(secs => 600)`;
+      // The killed holder's run left its own row there; this one replaces it.
+      await adapter.transaction(async ctx => {
+        await ctx.runStatement(
+          sql`DELETE FROM ${sql.identifier("nextly_field_group_lock")} WHERE id = 1`
+        );
+        await ctx.runStatement(
+          sql`INSERT INTO ${sql.identifier("nextly_field_group_lock")} (id, owner, expires_at)
+            VALUES (1, ${"db:sync#earlier-version"}, ${live})`
+        );
+      });
+
+      const refused = await withSchemaLock(
+        {
+          adapter,
+          command: "nextly migrate",
+          whenHeld: "refuse",
+          leaseSeconds: LEASE_SECONDS,
+          logger: quiet,
+        },
+        async () => {
+          await adapter.executeQuery(`CREATE TABLE ${TAKER} (id integer)`);
+        }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({
+        code: "NEXTLY_MIGRATE_LOCK_BUSY",
+        logContext: { holder: { kind: "earlier-field-group-lock" } },
+      });
+      expect(await tablesWithPrefix(adapter, PREFIX)).toEqual([BUSY]);
+      // Given back to the killed holder's claim, not freed: the next run finds that claim and waits
+      // for its statement, still running, where a freed row would let it start beside it.
+      const rows = await adapter.executeQuery<{ owner: string | null }>(
+        "SELECT owner FROM nextly_schema_lock"
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].owner).toMatch(/^.+:\d+#[0-9a-f-]{36}$/);
+      expect(rows[0].owner).not.toContain(`:${process.pid}#`);
     });
 
     it("lands no statement of a holder paused past its lease after the first change", async () => {

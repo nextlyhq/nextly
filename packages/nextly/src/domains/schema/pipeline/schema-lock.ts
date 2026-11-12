@@ -1032,6 +1032,12 @@ class SchemaLockHold {
   /** The claim of the holder whose lapsed row this run took, whose statements it must outlast. */
   earlierClaim: string | undefined;
   /**
+   * Whether this run has outlasted `earlierClaim`'s statements (`outlastEarlierStatements`).
+   * Until it has, a release gives the row back to that claim rather than freeing it, so the next
+   * run finds the claim and waits for its statements in turn.
+   */
+  earlierOutlasted = false;
+  /**
    * When the lease was last confirmed, by this process's clock, dated from before the attempt
    * that confirmed it: the acquisition, then each renewal that found the lock still this run's.
    * Zero until the lock is taken.
@@ -1090,6 +1096,7 @@ class SchemaLockHold {
       }
       this.rowHeld = true;
       this.earlierClaim = row.earlier;
+      this.earlierOutlasted = false;
     }
     this.confirmedAt = asked;
     // The earlier field-group lock is taken by the session the work runs in; asked first so a
@@ -1313,7 +1320,18 @@ class SchemaLockHold {
     }
     const earlier = this.earlier;
     if (earlier !== undefined) releases.push(() => earlier.release());
-    if (this.rowHeld) releases.push(() => releaseRow(this.adapter, this.claim));
+    const earlierClaim = this.earlierClaim;
+    if (this.rowHeld) {
+      // Every way out before the earlier holder's statements are outlasted (the field-group lock
+      // found held, an interrupt, a listing that fails) leaves the row naming that holder, lapsed,
+      // as a refusal at the wait's deadline does: a freed row would let the next run start beside
+      // a statement of it still running.
+      releases.push(
+        earlierClaim !== undefined && !this.earlierOutlasted
+          ? () => handBackToEarlier(this, earlierClaim)
+          : () => releaseRow(this.adapter, this.claim)
+      );
+    }
     this.fieldGroupClaim = undefined;
     this.earlier = undefined;
     this.rowHeld = false;
@@ -1742,12 +1760,19 @@ async function outlastEarlierStatements(
   const claim = hold.earlierClaim;
   if (claim === undefined) return;
   const listing = earlierStatementsQuery(hold.dialect, claim);
-  if (listing === undefined) return;
+  if (listing === undefined) {
+    // SQLite runs one writer at a time, so none of the earlier holder's statements is running.
+    hold.earlierOutlasted = true;
+    return;
+  }
   const deadline = wait.earlierStatementsDeadline();
   for (;;) {
     const running =
       await hold.adapter.queryStatement<EarlierStatement>(listing);
-    if (running.length === 0) return;
+    if (running.length === 0) {
+      hold.earlierOutlasted = true;
+      return;
+    }
     if (Date.now() >= deadline) {
       // The row goes back to the earlier claim, lapsed, rather than being freed: the next run then
       // finds that claim and waits for its statements in turn, where a freed row would let it
