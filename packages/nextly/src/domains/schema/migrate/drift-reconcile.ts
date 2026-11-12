@@ -60,6 +60,11 @@ export interface ReconcileRepo {
     id: string,
     args: { errorMessage?: string | null; errorJson?: unknown }
   ): Promise<void>;
+  /** End an attempt that left nothing of its file: it resolves itself (`nothing_applied`). */
+  markNothingApplied(
+    id: string,
+    args: { errorMessage?: string | null; errorJson?: unknown }
+  ): Promise<void>;
   /**
    * Delete an attempt still `in_progress`: one whose work was rolled back
    * whole because another run recorded the same file first.
@@ -263,6 +268,16 @@ async function markAppliedOrRefuse(
   });
 }
 
+/** Whether `error` is a busy-table stop that left nothing of its file. */
+function busyTableLeftNothing(error: unknown): boolean {
+  if (!NextlyError.is(error) || error.code !== "NEXTLY_TABLE_BUSY")
+    return false;
+  const stop = (
+    error.logContext as { stop?: { outcome?: { kind?: unknown } } } | undefined
+  )?.stop;
+  return stop?.outcome?.kind === "nothing-changed";
+}
+
 /**
  * Record how an attempt that ran a file's statements ended, once it threw.
  *
@@ -274,13 +289,31 @@ async function markAppliedOrRefuse(
  * (`assertNotPartiallyApplied`) until the operator has looked.
  */
 async function recordAttemptFailed(
-  repo: Pick<ReconcileRepo, "markFailed" | "discardAttempt">,
+  repo: Pick<
+    ReconcileRepo,
+    "markFailed" | "markNothingApplied" | "discardAttempt"
+  >,
   id: string,
   error: unknown,
   partial: boolean
 ): Promise<void> {
   if (isConcurrentRun(error) && !partial) {
     await repo.discardAttempt(id);
+    return;
+  }
+  // A file that stopped waiting for a busy table before anything of it was made durable ends
+  // with nothing applied: resolved, so the next run applies it as usual, where a failed attempt
+  // would be refused on until resolved by hand.
+  if (busyTableLeftNothing(error)) {
+    await repo.markNothingApplied(id, {
+      errorMessage: truncateErrorMessage(
+        describeError(error, { context: false })
+      ),
+      errorJson:
+        error instanceof Error
+          ? { name: error.name, message: error.message }
+          : null,
+    });
     return;
   }
   await repo.markFailed(id, {
