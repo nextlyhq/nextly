@@ -31,6 +31,7 @@ import { createAdapter } from "../../../database/factory";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
+import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
 import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import {
   createTestNextly,
@@ -43,6 +44,7 @@ import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { runMigrateDown } from "../migrate-down";
 
 /** The config the commands load, set by each step before it runs them. */
 const loaded = vi.hoisted(() => ({
@@ -185,6 +187,52 @@ async function migrated(
   expect(code, said.join("\n")).toBeUndefined();
 }
 
+/** `nextly migrate:down --step <step>`, consenting to what it deletes, which must succeed. */
+async function migratedDown(config: unknown, step = 1): Promise<void> {
+  loaded.config = config;
+  tick();
+  const { context, said } = command();
+  setNonInteractive(true);
+  const code = await exiting(() =>
+    runMigrateDown({ cwd: dir, step, acceptDataLoss: true }, context)
+  ).finally(() => setNonInteractive(false));
+  expect(code, said.join("\n")).toBeUndefined();
+}
+
+/** The project's `ui-schema.json`, as the Builder leaves it. */
+async function writeManifest(manifest: unknown): Promise<void> {
+  await writeFile(
+    join(dir, "ui-schema.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`
+  );
+}
+
+/**
+ * Put `statement` into a migration file, as the first statement of its DOWN
+ * or the last of its UP, so a test sees what the database holds at that point
+ * of a run.
+ */
+async function insertStatement(
+  file: string,
+  section: "up-last" | "down-first",
+  statement: string
+): Promise<void> {
+  const path = join(dir, "migrations", file);
+  const sql = await readFile(path, "utf-8");
+  const edited =
+    section === "up-last"
+      ? sql.replace(
+          /(-- DOWN)/,
+          `--> statement-breakpoint\n${statement};\n\n$1`
+        )
+      : sql.replace(
+          /(-- DOWN\s*\n)/,
+          `$1${statement};\n--> statement-breakpoint\n`
+        );
+  expect(edited, `no section to put the statement in ${file}`).not.toBe(sql);
+  await writeFile(path, edited);
+}
+
 /**
  * `fn` as a run under `next dev` sees it: `NODE_ENV=development` and the live
  * sync not turned off, which is how a hand-run `nextly migrate` with no
@@ -303,6 +351,28 @@ function fieldType(row: Row | undefined, name: string): unknown {
     | { name: string; type: string }[]
     | undefined;
   return fields?.find(field => field.name === name)?.type;
+}
+
+/** A field's admin settings, as the row records them. */
+function fieldAdmin(
+  row: Row | undefined,
+  name: string
+): Record<string, unknown> | undefined {
+  const raw = row?.fields;
+  const fields = (typeof raw === "string" ? JSON.parse(raw) : raw) as
+    | { name: string; admin?: Record<string, unknown> }[]
+    | undefined;
+  return fields?.find(field => field.name === name)?.admin;
+}
+
+/** The registry row of `slug` among `kind`'s rows, or undefined. */
+async function rowOf(
+  t: TestNextly,
+  dialect: TestDialect,
+  kind: "collections" | "singles" | "fieldGroups",
+  slug: string
+): Promise<Row | undefined> {
+  return (await registryRows(t, dialect))[kind].find(row => row.slug === slug);
 }
 
 const posts = (description: string, ...extra: ReturnType<typeof text>[]) =>
@@ -466,7 +536,11 @@ describe.each(getConfiguredTestDialects())(
         labels: { singular: "Entry", plural: "Entries" },
         admin: { group: "Content" },
         status: true,
-        fields: [text({ name: "title" }), number({ name: "rank" })],
+        fields: [
+          // A field setting the schema hash omits, which both paths store.
+          text({ name: "title", admin: { description: "The headline" } }),
+          number({ name: "rank" }),
+        ],
       });
       const single = defineSingle({
         slug: "rr_par_site",
@@ -963,6 +1037,575 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await collectionRow(instance!, dialect, "rr_posts"))?.description
       ).toBe("Posts");
+    });
+
+    // A field's help text, placeholder and hidden switch change no column, so
+    // the schema hash leaves them out; the row must still follow them.
+    it("writes the field settings a settings-only migration changes, for each kind", async () => {
+      const declared = (admin: Record<string, unknown>) =>
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_fs_posts",
+              fields: [text({ name: "title", admin })],
+            }),
+          ],
+          singles: [
+            defineSingle({
+              slug: "rr_fs_site",
+              fields: [text({ name: "title", admin })],
+            }),
+          ],
+          fieldGroups: [
+            defineFieldGroup({
+              slug: "rr_fs_hero",
+              fields: [text({ name: "title", admin })],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+      const before = declared({ description: "Old help", placeholder: "Old" });
+      await migrateCreate(before, "create_fs");
+      await migrated(before);
+
+      const after = declared({
+        description: "New help",
+        placeholder: "New",
+        hidden: true,
+      });
+      await migrateCreate(after, "field_settings");
+      await migrated(after);
+      for (const [kind, slug] of [
+        ["collections", "rr_fs_posts"],
+        ["singles", "rr_fs_site"],
+        ["fieldGroups", "rr_fs_hero"],
+      ] as const) {
+        expect(
+          fieldAdmin(await rowOf(instance!, dialect, kind, slug), "title"),
+          `${kind} ${slug}`
+        ).toMatchObject({
+          description: "New help",
+          placeholder: "New",
+          hidden: true,
+        });
+      }
+    });
+
+    it("clears a description a migration cleared, declared in code or in the Builder", async () => {
+      const declared = (description?: string) =>
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_cl_posts",
+              ...(description === undefined ? {} : { description }),
+              fields: [text({ name: "title" })],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+      const created = uiSchemaManifest.parse({
+        collections: [
+          {
+            slug: "rr_cl_events",
+            description: "Things that happen",
+            fields: [{ name: "title", type: "text" }],
+          },
+        ],
+      });
+      await writeManifest(created);
+      await migrateCreate(declared("Posts"), "create_cl");
+      await migrated(declared("Posts"));
+      expect(
+        (await collectionRow(instance!, dialect, "rr_cl_events"))?.description
+      ).toBe("Things that happen");
+
+      // Both descriptions removed: in code, and by the Builder's own upsert of
+      // the entity without one.
+      await writeManifest(
+        mutateManifest(created, {
+          type: "upsert",
+          kind: "collections",
+          entity: {
+            slug: "rr_cl_events",
+            fields: [{ name: "title", type: "text" }],
+          },
+        })
+      );
+      await migrateCreate(declared(), "clear_descriptions");
+      await migrated(declared());
+      for (const slug of ["rr_cl_posts", "rr_cl_events"]) {
+        expect(
+          (await collectionRow(instance!, dialect, slug))?.description ?? null,
+          slug
+        ).toBeNull();
+      }
+    });
+
+    describe("a migration that drops a collection", () => {
+      const both = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "rr_posts",
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: "rr_tags",
+            fields: [text({ name: "label" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      const postsOnly = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "rr_posts",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+
+      it("removes its row once applied with consent, and keeps every other", async () => {
+        await migrateCreate(both, "create_both");
+        await migrated(both);
+        const kept = await collectionRow(instance!, dialect, "rr_posts");
+        expect(
+          await collectionRow(instance!, dialect, "rr_tags")
+        ).toBeDefined();
+
+        await migrateCreate(postsOnly, "drop_tags");
+        await migrated(postsOnly, { acceptDataLoss: true });
+        expect(
+          await collectionRow(instance!, dialect, "rr_tags")
+        ).toBeUndefined();
+        expect(await collectionRow(instance!, dialect, "rr_posts")).toEqual(
+          kept
+        );
+      });
+
+      // A run that applied the drop and stopped before its rows, or an
+      // earlier release that applied it, left the row: the next run removes it.
+      it("removes the row a run that applied the drop left behind", async () => {
+        await migrateCreate(both, "create_both");
+        await migrated(both);
+        const tags = await collectionRow(instance!, dialect, "rr_tags");
+        await migrateCreate(postsOnly, "drop_tags");
+        await migrated(postsOnly, { acceptDataLoss: true });
+
+        const db = (instance!.adapter as unknown as DrizzleAdapter).getDrizzle<{
+          insert: (table: unknown) => {
+            values: (row: Row) => Promise<unknown>;
+          };
+        }>();
+        const { tables } = loadedDialect(dialect);
+        await db.insert(tables.dynamicCollections).values(tags!);
+        expect(
+          await collectionRow(instance!, dialect, "rr_tags")
+        ).toBeDefined();
+
+        await migrated(postsOnly);
+        expect(
+          await collectionRow(instance!, dialect, "rr_tags")
+        ).toBeUndefined();
+      });
+
+      // A registry that cannot be read cannot say whether the row is there:
+      // the run names it as not done rather than reading as complete.
+      it("names the row it could not remove when the registry cannot be read", async () => {
+        await migrateCreate(both, "create_both");
+        await migrated(both);
+        await migrateCreate(postsOnly, "drop_tags");
+        const { CollectionRegistryService } = await import(
+          "../../../domains/collections/services/collection-registry-service"
+        );
+        const read = vi
+          .spyOn(CollectionRegistryService.prototype, "getAllCollections")
+          .mockRejectedValue(new Error("unreadable row"));
+        let said: string[];
+        try {
+          ({ said } = await migrate(postsOnly, { acceptDataLoss: true }));
+        } finally {
+          read.mockRestore();
+        }
+        expect(said.join("\n")).toMatch(
+          /not brought to[^\n]*collection rr_tags/
+        );
+        expect(
+          await collectionRow(instance!, dialect, "rr_tags")
+        ).toBeDefined();
+      });
+    });
+
+    describe("a migration that changes a field's type", () => {
+      const scores = (points: "text" | "number", ...extra: string[]) =>
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_scores",
+              fields: [
+                points === "text"
+                  ? text({ name: "points" })
+                  : number({ name: "points" }),
+                ...extra.map(name => text({ name })),
+              ],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+
+      /** A table the probe statement copies the row's field list into. */
+      async function createProbe(): Promise<void> {
+        await (instance!.adapter as unknown as DrizzleAdapter).executeQuery(
+          `CREATE TABLE ${q}rr_probe${q} (${q}fields${q} TEXT)`
+        );
+      }
+
+      /** The statement copying `rr_scores`'s recorded field list into the probe. */
+      const probe = () =>
+        `INSERT INTO ${q}rr_probe${q} (${q}fields${q}) SELECT CAST(${q}fields${q} AS ${
+          dialect === "mysql" ? "CHAR" : "TEXT"
+        }) FROM ${q}dynamic_collections${q} WHERE ${q}slug${q} = 'rr_scores'`;
+
+      /** The type of `points` in the field list the probe copied. */
+      async function probedType(): Promise<unknown> {
+        const rows = await (
+          instance!.adapter as unknown as DrizzleAdapter
+        ).executeQuery<{ fields: string }>(
+          `SELECT ${q}fields${q} FROM ${q}rr_probe${q}`
+        );
+        expect(rows).toHaveLength(1);
+        return fieldType({ fields: rows[0].fields }, "points");
+      }
+
+      // The probe runs in the file after the type change, in the same run: a
+      // row written only at the run's end still says text there.
+      it("records the entity's row with its file, before the run's next file", async () => {
+        await migrateCreate(scores("text"), "create_scores");
+        await migrated(scores("text"));
+        await createProbe();
+        await migrateCreate(scores("number"), "points_number");
+        const next = await migrateCreate(scores("number", "note"), "add_note");
+        await insertStatement(next, "up-last", probe());
+
+        await migrated(scores("number", "note"), { acceptDataLoss: true });
+        expect(await probedType()).toBe("number");
+      });
+
+      // In a transaction the conversion and its row commit together: a ledger
+      // write that fails after both leaves neither. MySQL commits its DDL as
+      // it runs, so there is no transaction to undo the column with.
+      it.skipIf(dialect === "mysql")(
+        "rolls back the column and its row together when the file cannot be recorded",
+        async () => {
+          await migrateCreate(scores("text"), "create_scores");
+          await migrated(scores("text"));
+          await migrateCreate(scores("number"), "points_number");
+          const { SchemaEventsRepository } = await import(
+            "../../../domains/schema/events/schema-events-repository"
+          );
+          const record = vi
+            .spyOn(SchemaEventsRepository.prototype, "markApplied")
+            .mockRejectedValue(new Error("ledger write refused"));
+          let run: { code: number | undefined; said: string[] };
+          let recorded: number;
+          try {
+            run = await migrate(scores("number"), { acceptDataLoss: true });
+          } finally {
+            recorded = record.mock.calls.length;
+            record.mockRestore();
+          }
+          expect(run.code, run.said.join("\n")).not.toBeUndefined();
+          // Stopped by the refused record, after the conversion and its row.
+          expect(recorded).toBeGreaterThan(0);
+          expect(
+            fieldType(
+              await collectionRow(instance!, dialect, "rr_scores"),
+              "points"
+            )
+          ).toBe("text");
+          const adapter = instance!.adapter as unknown as DrizzleAdapter;
+          const columns =
+            dialect === "sqlite"
+              ? (
+                  await adapter.executeQuery<{ name: string; type: string }>(
+                    `PRAGMA table_info("dc_rr_scores")`
+                  )
+                ).map(c => ({ name: c.name, type: c.type }))
+              : (
+                  await adapter.executeQuery<{
+                    column_name: string;
+                    data_type: string;
+                  }>(
+                    `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'dc_rr_scores'`
+                  )
+                ).map(c => ({ name: c.column_name, type: c.data_type }));
+          expect(
+            columns.find(c => c.name === "points")?.type.toLowerCase()
+          ).toMatch(/text|char/);
+        }
+      );
+
+      it("records it with its DOWN when migrate:down rolls it back, before the next DOWN", async () => {
+        await migrateCreate(scores("text"), "create_scores");
+        await migrated(scores("text"));
+        const note = await migrateCreate(scores("text", "note"), "add_note");
+        await insertStatement(note, "down-first", probe());
+        await migrateCreate(scores("number", "note"), "points_number");
+        await migrated(scores("number", "note"), { acceptDataLoss: true });
+        await createProbe();
+
+        await migratedDown(scores("number", "note"), 2);
+        expect(await probedType()).toBe("text");
+        expect(
+          fieldType(
+            await collectionRow(instance!, dialect, "rr_scores"),
+            "points"
+          )
+        ).toBe("text");
+      });
+    });
+
+    describe("migrate:down undoes the rolled-back migrations' own registry changes", () => {
+      it("puts back a description a settings-only migration changed", async () => {
+        await migrateCreate(posts("Posts"), "create_posts");
+        await migrated(posts("Posts"));
+        await migrateCreate(posts("All posts"), "describe_posts");
+        await migrated(posts("All posts"));
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("All posts");
+
+        await migratedDown(posts("All posts"));
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("Posts");
+      });
+
+      it("removes the row of a collection a rolled-back migration added, and nothing else", async () => {
+        const withTags = defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_posts",
+              description: "Posts",
+              fields: [text({ name: "title" })],
+            }),
+            defineCollection({
+              slug: "rr_tags",
+              fields: [text({ name: "label" })],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+        await migrateCreate(posts("Posts"), "create_posts");
+        await migrated(posts("Posts"));
+        await migrateCreate(withTags, "create_tags");
+        await migrated(withTags);
+        // A row no snapshot records, which no rollback may touch.
+        const tags = await collectionRow(instance!, dialect, "rr_tags");
+        const db = (instance!.adapter as unknown as DrizzleAdapter).getDrizzle<{
+          insert: (table: unknown) => {
+            values: (row: Row) => Promise<unknown>;
+          };
+        }>();
+        const { tables } = loadedDialect(dialect);
+        await db.insert(tables.dynamicCollections).values({
+          ...tags!,
+          id: `${String(tags!.id)}-own`,
+          slug: "rr_own",
+          tableName: "dc_rr_own",
+        });
+        const own = await collectionRow(instance!, dialect, "rr_own");
+        const posted = await collectionRow(instance!, dialect, "rr_posts");
+
+        await migratedDown(withTags);
+        expect(
+          await collectionRow(instance!, dialect, "rr_tags")
+        ).toBeUndefined();
+        expect(await collectionRow(instance!, dialect, "rr_posts")).toEqual(
+          posted
+        );
+        expect(await collectionRow(instance!, dialect, "rr_own")).toEqual(own);
+      });
+
+      // A recorded row the rolled-back migration never touched keeps what it
+      // holds, even where it differs from the snapshot the rollback reaches.
+      it("leaves a recorded row the rolled-back migration did not change", async () => {
+        const both = (posts: string) =>
+          defineConfig({
+            collections: [
+              defineCollection({
+                slug: "rr_posts",
+                description: posts,
+                fields: [text({ name: "title" })],
+              }),
+              defineCollection({
+                slug: "rr_tags",
+                description: "Tags",
+                fields: [text({ name: "label" })],
+              }),
+            ],
+            db: { migrationsDir: "./migrations" },
+          });
+        await migrateCreate(both("Posts"), "create_both");
+        await migrated(both("Posts"));
+        await migrateCreate(both("All posts"), "describe_posts");
+        await migrated(both("All posts"));
+        const db = (
+          instance!.adapter as unknown as DrizzleAdapter
+        ).getDrizzle<Selecting>();
+        const { tables } = loadedDialect(dialect);
+        const { eq } = await import("drizzle-orm");
+        await db
+          .update(tables.dynamicCollections)
+          .set({ description: "kept by another writer" })
+          .where(eq(tables.dynamicCollections.slug, "rr_tags"));
+
+        await migratedDown(both("All posts"));
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("Posts");
+        expect(
+          (await collectionRow(instance!, dialect, "rr_tags"))?.description
+        ).toBe("kept by another writer");
+      });
+
+      // The rows go back with the last DOWN, in its transaction: a row that
+      // cannot be written leaves the migration applied and its row as it was.
+      it("rolls nothing back when a row cannot be written back", async () => {
+        await migrateCreate(posts("Posts"), "create_posts");
+        await migrated(posts("Posts"));
+        const describe = await migrateCreate(posts("All posts"), "describe");
+        await migrated(posts("All posts"));
+        const { CollectionRegistryService } = await import(
+          "../../../domains/collections/services/collection-registry-service"
+        );
+        const write = vi
+          .spyOn(CollectionRegistryService.prototype, "writeRecordedCollection")
+          .mockRejectedValue(new Error("registry row refused"));
+        try {
+          loaded.config = posts("All posts");
+          tick();
+          const { context } = command();
+          setNonInteractive(true);
+          // The command itself throws; its action turns that into an exit.
+          await expect(
+            runMigrateDown({ cwd: dir, acceptDataLoss: true }, context).finally(
+              () => setNonInteractive(false)
+            )
+          ).rejects.toThrow(/registry row refused/);
+        } finally {
+          write.mockRestore();
+        }
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("All posts");
+        const { SchemaEventsRepository } = await import(
+          "../../../domains/schema/events/schema-events-repository"
+        );
+        expect(
+          await new SchemaEventsRepository(
+            (instance!.adapter as unknown as DrizzleAdapter).getDrizzle(),
+            dialect
+          ).isFileApplied(describe)
+        ).toBe(true);
+      });
+    });
+
+    // One point, two paths to it: `nextly migrate` stopping there, and
+    // `migrate:down` coming back to it from a later migration.
+    it("migrate:down to a point leaves the rows nextly migrate leaves there", async () => {
+      const first = posts("Posts");
+      await migrateCreate(first, "create_posts");
+      await migrated(first);
+      const atPoint = await registryRows(instance!, dialect);
+
+      const later = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "rr_posts",
+            description: "All posts",
+            fields: [
+              text({ name: "title", admin: { placeholder: "Title" } }),
+              text({ name: "body" }),
+            ],
+          }),
+          defineCollection({
+            slug: "rr_tags",
+            fields: [text({ name: "label" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      await migrateCreate(later, "later");
+      await migrated(later);
+      await migratedDown(later);
+
+      const back = await registryRows(instance!, dialect);
+      expect(declaredColumns(back.collections, "rr_posts")).toEqual(
+        declaredColumns(atPoint.collections, "rr_posts")
+      );
+      expect(declaredColumns(back.collections, "rr_tags")).toBeUndefined();
+    });
+
+    describe("an earlier release's snapshots, which record no settings", () => {
+      /** Make `file`'s snapshot one an earlier release wrote: no registry metadata, no permissions. */
+      async function asEarlierRelease(file: string): Promise<void> {
+        const path = join(
+          dir,
+          "migrations",
+          "meta",
+          file.replace(/\.sql$/, ".snapshot.json")
+        );
+        const snapshot = JSON.parse(await readFile(path, "utf-8"));
+        delete snapshot.entities;
+        delete snapshot.permissions;
+        await writeFile(path, JSON.stringify(snapshot, null, 2));
+      }
+
+      const undescribed = (...extra: ReturnType<typeof text>[]) =>
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_posts",
+              fields: [text({ name: "title" }), ...extra],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+
+      it("nextly migrate clears no setting because of what they lack", async () => {
+        await asEarlierRelease(await migrateCreate(posts("Posts"), "create"));
+        const withBody = posts("Posts", text({ name: "body" }));
+        await asEarlierRelease(await migrateCreate(withBody, "add_body"));
+        // The first run on this release writes the rows from the configuration
+        // and takes the registry record.
+        await migrated(withBody);
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("Posts");
+
+        // A configuration without the description: nothing of it is read here,
+        // and the newest applied snapshot says nothing of the description.
+        await migrated(undescribed(text({ name: "body" })));
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("Posts");
+      });
+
+      it("migrate:down between two of them, before the registry record exists, leaves the rows as they are", async () => {
+        await asEarlierRelease(await migrateCreate(posts("Posts"), "create"));
+        const withBody = posts("Posts", text({ name: "body" }));
+        await asEarlierRelease(await migrateCreate(withBody, "add_body"));
+        await migrated(withBody);
+        // As an earlier release left the database: no record.
+        await (instance!.adapter as unknown as DrizzleAdapter).executeQuery(
+          `DELETE FROM ${q}nextly_meta${q} WHERE ${q}key${q} = 'registry_record'`
+        );
+        const before = await registryRows(instance!, dialect);
+
+        await migratedDown(withBody);
+        expect(await registryRows(instance!, dialect)).toEqual(before);
+      });
     });
   }
 );
