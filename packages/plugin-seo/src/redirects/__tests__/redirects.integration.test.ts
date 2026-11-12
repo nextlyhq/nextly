@@ -20,12 +20,19 @@ import { defineCollection, text } from "nextly";
 import { createNextlyProxy } from "nextly/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { statementsOf, writesAmong } from "../../__tests__/count-statements";
+import { lastCatchUp } from "../../address-record/catch-up";
 import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
 import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
 import { redirectsProxyHandler } from "../proxy-handler";
-import { PROXY_QUIET_MS, readProxyStatus } from "../proxy-seen";
+import {
+  PROXY_QUIET_MS,
+  proxySeenNotes,
+  readProxyStatus,
+  recordProxySeen,
+} from "../proxy-seen";
 import { putRedirect, removeRedirect, type RedirectInput } from "../store";
 
 let current: TestNextly | undefined;
@@ -524,5 +531,35 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
         )
       ).state
     ).toBe("quiet");
+  });
+
+  it("a new server's first request writes nothing where the Proxy was noted within the hour", async () => {
+    const { seo } = await boot(dialect);
+    // The start's own catch-up writes its notes first, outside the count.
+    await lastCatchUp();
+    const noted = new Date(Date.now() - 10 * 60 * 1000);
+    await recordProxySeen(seo, noted);
+
+    // A new process: its own note-taker has noted nothing yet, and the note
+    // it would make is read against the one stored.
+    const statements = await statementsOf(dialect, async () => {
+      await proxySeenNotes().note(seo);
+      await recordProxySeen(seo);
+    });
+
+    expect(writesAmong(statements)).toEqual([]);
+    expect((await readProxyStatus(seo)).lastSeen).toBe(noted.toISOString());
+  });
+
+  it("notes the Proxy again where its last note is over an hour old", async () => {
+    const { seo } = await boot(dialect);
+    await recordProxySeen(seo, new Date(Date.now() - 2 * 60 * 60 * 1000));
+    const at = Date.now();
+
+    await proxySeenNotes(() => at).note(seo);
+
+    expect((await readProxyStatus(seo)).lastSeen).toBe(
+      new Date(at).toISOString()
+    );
   });
 });
