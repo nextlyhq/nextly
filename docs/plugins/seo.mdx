@@ -35,6 +35,12 @@ The plugin also declares a compatibility range for the runtime check: `>=` its o
 version, so a core older than the plugin is refused at boot. Install the two at the same
 version.
 
+The plugin keeps records of its own (redirects, the record of each page's address, the problem
+list, the SEO of pages built in code, and what each page's route sets in code) in collections it
+adds, each with a table. A site that applies its schema with migrations creates those tables
+as it creates its own: `nextly migrate:create`, then `nextly migrate`, after installing the
+plugin and after upgrading to a release that adds one. The release notes say when one does.
+
 ## Basic setup
 
 ```ts
@@ -193,9 +199,14 @@ always agree; a page hidden from search has no title or description problem in e
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
 anyone who may read that collection or Single, a reader shown the page read-only too.
-What a page's route sets in its own code is not known to the admin, so the tab does not
-show it. What a [Page Builder design](#in-the-page-builder) sets is, where the Page Builder is
-installed, and the tab says so: "from this page's template".
+What a page's route sets in its own code (the title, description and social values its
+`buildMetadata` returns, and whether it hides the page) is recorded each time the page's head
+is worked out, and the tab shows it marked **Set in code**, "by this page's route"; a page its
+route hides says **Hidden from search by the page's code**. Until the route has answered once
+after it changed, for example before the first visit to a page after a deploy, the tab shows
+what it last recorded. A later page of a list (`/blog/page/2`) is that page's own, and is
+not recorded as the list's. What a [Page Builder design](#in-the-page-builder) sets is
+shown too, where the Page Builder is installed: "from this page's template".
 
 The tab's component is `@nextlyhq/plugin-seo/admin#SeoTab`. `nextly generate:types`
 adds it to your app's generated component map, as it does every component a plugin
@@ -1148,7 +1159,8 @@ it is published in and at its address there, as its head would be served, for:
 - structured data missing a detail its type needs;
 - a language the site's language links leave out, because search engines don't accept its code.
 
-A page hidden from search on purpose is checked only for broken links and alt text. The site as a
+A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
+checked only for broken links and alt text. The site as a
 whole is checked for a missing production address, a collection with no public address, a
 redirect whose To address redirects again, and a page left out of the sitemap because another page
 holds its address.
@@ -1183,11 +1195,13 @@ readers. It is served at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems`, and a full check at
 `/admin/api/plugins/@nextlyhq/plugin-seo/problems/check` (`POST`), for a signed-in person.
 
-The check reads the values the plugin keeps: the page's own, its content type's pattern, its
-content and the site's defaults, and, where the Page Builder is installed, what the design drawing
-the page sets, worked out as the page's route works it out. A title, description or share image
-that only the route's code sets is not seen, so such a page is listed as missing it; typing the
-value on the page's SEO tab settles it either way.
+The check reads the values the plugin keeps: the page's own, what its route last set in code
+(see [The SEO tab](#the-seo-tab)), its content type's pattern, its content and the site's
+defaults, and, where the Page Builder is installed, what the design drawing the page sets, worked
+out as the page's route works it out. A title, description or share image that only the route's
+code sets is seen once the page's head has been worked out since that code was deployed; a page
+listed as missing one before then is settled by the next check after a visit, or by typing the
+value on the page's SEO tab.
 
 Not checked yet: whether a response is small enough for every value to fall within its first
 2 MB, and whether a page built in code calls the plugin's metadata function. Both need the page
@@ -1241,8 +1255,10 @@ With no production address set, the screen asks for one and checks nothing.
 ## Bulk edit and import
 
 The **Bulk edit** screen, under SEO in the admin, shows the title and description of every page
-of one content type in one table. A cell left empty shows, in grey, what the page uses
-automatically, from the type's title pattern or its own content; typing in it sets the page's own.
+of one content type in one table. Each Single SEO is added to is a type of its own, with its one
+page. A cell left empty shows, in grey, what the page uses automatically: what its route last set
+in code, else the type's title pattern or its own content; typing in it sets the page's own. A
+page whose route hides it from search says so under its name.
 **Show** narrows the table to the pages with something typed, or to those wholly automatic. Each
 cell counts its characters against what Google shows: about 60 for a title, 160 for a description.
 
@@ -1250,14 +1266,17 @@ cell counts its characters against what Google shows: about 60 for a title, 160 
 nothing is saved, and the screen names the page. A page whose SEO you may not change is shown
 read-only (see [Who may change SEO](#who-may-change-seo)). The table and the import work in the
 site's default language; a type that keeps working drafts is shown read-only, and its pages' SEO is
-changed in each page's editor, where its draft is.
+changed in each page's editor, where its draft is. A Single's page is saved on its own, at the
+version the table read. A Single made in the Schema Builder rather than declared in code is shown
+read-only, since whether it keeps working drafts can't be read from the plugin; change its SEO in
+its own editor.
 
 ### Importing SEO values
 
 The panel beside the table brings existing SEO values across. It reads:
 
-- **An existing field group** on your content types, such as a `group` or a component holding a
-  title and a description. Each field that holds values is matched to where it goes, from its name,
+- **An existing field group** on your content types, Singles included, such as a `group` or a
+  component holding a title and a description. Each field that holds values is matched to where it goes, from its name,
   for you to check. The plugin's own group, as an earlier version of the plugin kept it, is offered
   too: its titles and descriptions typed the same as the automatic ones become automatic again, so a
   later change to a pattern reaches them, and every other value stays.
@@ -1271,12 +1290,20 @@ The panel beside the table brings existing SEO values across. It reads:
 Pages in a file are matched by their address, or by their slug where the file names no address. A
 share image is matched to the media library by its file name.
 
+The import is one engine, whichever way it is started: it reads each page as the person
+importing and reports, for every page and every record it passes over, what it would set, what
+is already the same as the page's automatic value, what a person already typed (which it keeps),
+and why it skips one. Run again after an import, it sets nothing, since every place it filled is
+filled.
+
 **Do a dry run** shows what would change and changes nothing: how many pages each value would
 reach, the values left automatic because they are the same as what the page uses already, the
 values a person already typed here, which are kept, the fields left out, and anything to check,
 such as pages in the file that are not on this site. **Import** then applies exactly what the dry
-run showed, in one step: every page and redirect, or, if anything fails part-way, nothing. Where a
-page changed after the dry run, the import is refused and asks for another dry run. Importing needs
+run showed, in one step: every page and redirect, or, if anything fails part-way, nothing. A
+Single's page cannot be part of that one step, so it is written first and put back as it was
+when anything after it fails. Where a page changed after the dry run, the import is refused and
+asks for another dry run. Importing needs
 `manage-seo`, and a page whose SEO you may not change is left out and named.
 
 ## Who may change SEO

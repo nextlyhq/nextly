@@ -20,11 +20,8 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  SubmissionsView,
-  submissionPatch,
-  type SubmissionRow,
-} from "./SubmissionsView";
+import type { SubmissionRow } from "./submission-row";
+import { SubmissionsView, submissionPatch } from "./SubmissionsView";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
