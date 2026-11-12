@@ -32,6 +32,10 @@ import {
   type Holder,
   type LockWorld,
 } from "./helpers/schema-lock-world";
+import {
+  HOLDER_LITERAL,
+  HOLDER_UNIT,
+} from "./helpers/schema-lock-statement-holder-names";
 
 const PREFIX = `slt_${randomBytes(4).toString("hex")}`;
 /** A role that may see every session's statement but stop none of a superuser's. */
@@ -321,11 +325,22 @@ describe.each(SERVERS)(
 
           expect(refused).toMatchObject({
             code: "NEXTLY_MIGRATE_LOCK_BUSY",
-            logContext: { holder: { kind: "earlier-statement" } },
+            logContext: {
+              holder: { kind: "earlier-statement", unit: HOLDER_UNIT },
+            },
           });
-          expect(String((refused as Error).message)).toContain(
-            `ALTER TABLE ${BUSY} ADD COLUMN late integer`
+          // The file and the session are named; the statement, which holds a literal value, is
+          // in neither the message nor the log context.
+          const message = String((refused as Error).message);
+          expect(message).toContain(`a statement of \`${HOLDER_UNIT}\``);
+          expect(message).toMatch(/running in database session \d+ /);
+          const logged = JSON.stringify(
+            (refused as { logContext?: unknown }).logContext
           );
+          for (const text of [message, logged]) {
+            expect(text).not.toContain(HOLDER_LITERAL);
+            expect(text).not.toContain("ALTER TABLE");
+          }
           expect(await tablesWithPrefix(adapter, PREFIX)).toEqual([BUSY]);
           // Refused with the lock handed back to the earlier holder's claim, not freed and not kept:
           // the next run finds that claim and waits for its statement in turn, where a freed row
