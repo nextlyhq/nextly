@@ -585,8 +585,6 @@ interface Tally {
   elsewhere: number;
   /** Canonicals that are no address a page could name. */
   unusableCanonicals: number;
-  /** Values never served, left out. */
-  neverServed: number;
 }
 
 /**
@@ -687,7 +685,7 @@ function neverServed(
 
 /**
  * Notes the title or description the source holds for the report, and
- * whether `value` is left out as never served, counted as such.
+ * whether `value` is left out as never served, recorded on the page.
  */
 function leftAsNeverServed(
   at: Deciding,
@@ -698,7 +696,6 @@ function leftAsNeverServed(
     at.decision.values[place] = value;
   }
   if (!neverServed(at, place, value)) return false;
-  at.tally.neverServed++;
   at.decision.neverServed.push(place);
   return true;
 }
@@ -1356,7 +1353,6 @@ export async function planImport(
     missingImages: 0,
     elsewhere: 0,
     unusableCanonicals: 0,
-    neverServed: 0,
   };
   const matched = matchRecords(
     parsed.records,
@@ -1430,7 +1426,11 @@ export async function planImport(
       pages: changing.length,
       same: tally.same,
       kept: tally.kept,
-      neverServed: tally.neverServed,
+      // Counted from the pages' own decisions, the list the report shows.
+      neverServed: matched.planned.reduce(
+        (sum, page) => sum + page.neverServed.length,
+        0
+      ),
       redirects: kept.length,
       left: parsed.left,
       warnings,
