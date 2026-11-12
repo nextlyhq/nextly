@@ -34,7 +34,14 @@ function brandOf(
     brand.profiles.length > 0
       ? brand.profiles.map(profile => ({ url: profile.url }))
       : base.profiles;
+  // The brand's own description where the options give one, else the site's
+  // default description, which says what the site is.
+  const description = base.description ?? settings.description;
   return {
+    // The facts the settings do not hold, such as contact points, are the
+    // options' alone.
+    ...base,
+    ...(description === undefined ? {} : { description }),
     ...(name === undefined ? {} : { name }),
     ...(otherNames === undefined ? {} : { otherNames }),
     ...(logo === undefined ? {} : { logo }),
@@ -49,6 +56,7 @@ export function structuredDataRulesOf(
 ): StructuredDataRules {
   const origin = settings.origin ?? base.origin;
   return {
+    ...base,
     ...(origin === undefined ? {} : { origin }),
     brand: brandOf(base.brand, settings),
     types: { ...base.types, ...settings.types },

@@ -148,14 +148,6 @@ export type PluginHeaderContributions =
   | PluginHeaderUserMenuContributions;
 
 /**
- * @public A sidebar navigation entry contributed by a plugin.
- *
- * Declarative and introspectable — delivered to the client via `/api/admin-meta`.
- * Exactly **one** level of `children` is supported. Visibility is controlled by
- * `requiredPermission` (client-gated via `useCan`); a `visible(ctx)` callback is
- * intentionally NOT supported because menus are serialized to the client.
- */
-/**
  * @experimental Where a plugin's admin surfaces appear in the sidebar.
  *
  * A closed vocabulary rather than a free string, so a typo is a compile error
@@ -176,7 +168,100 @@ export type PluginNavSection =
   | "settings"
   | "standalone";
 
-export interface PluginMenuItem {
+/**
+ * @experimental A heading in a standalone plugin's own panel, which the items
+ * naming it as their `group` are listed under: see
+ * `PluginAdminContributions.panel`.
+ */
+export interface PluginPanelGroup {
+  /** What an item's `group` names it by; unique within the plugin. */
+  id: string;
+  /** The heading drawn above the group's items. */
+  label: string;
+}
+
+/**
+ * @experimental How a standalone plugin's own panel lists its menu items.
+ */
+export interface PluginAdminPanel {
+  /**
+   * The panel's headings, drawn in this order, each above the items naming it
+   * as their `group`. Items naming no group are listed first, under no
+   * heading, and a heading with no item the reader may see is not drawn.
+   */
+  groups: ReadonlyArray<PluginPanelGroup>;
+}
+
+/**
+ * @experimental The number a panel item shows beside its label, read for the
+ * person looking at the panel, in one of two forms:
+ *
+ * - `{ collection, where? }`: how many entries of one of this plugin's own
+ *   collections, named by its declared slug (a host's rename is followed),
+ *   the reader may read, narrowed by `where` when given.
+ * - `{ attention }`: the count of one of this plugin's own dashboard
+ *   attention items (`contributes.dashboard.attention`), by its id, as the
+ *   reader's Needs your attention card counts it. An item with nothing
+ *   waiting for the reader counts 0.
+ *
+ * A count naming a collection the plugin does not contribute, or an attention
+ * item it does not declare, is left out, and a development start says so. A
+ * count that cannot be read draws no number.
+ */
+export type PluginItemCount =
+  | {
+      /** The declared slug of one of this plugin's own collections. */
+      collection: string;
+      /** Narrows the entries counted, in the entry list's `where` grammar. */
+      where?: WhereFilter;
+      attention?: never;
+    }
+  | {
+      /** The id of one of this plugin's own dashboard attention items. */
+      attention: string;
+      collection?: never;
+      where?: never;
+    };
+
+/**
+ * A menu item takes a quiet count or an attention badge, never both: one
+ * number beside one label.
+ */
+type PluginMenuItemNumber =
+  | {
+      /**
+       * @experimental A quiet number beside the item's label, shown at 0 too:
+       * how many there are. Drawn in the plugin's own standalone panel, on a
+       * top-level item.
+       */
+      count?: PluginItemCount;
+      badge?: never;
+    }
+  | {
+      /**
+       * @experimental A pill beside the item's label, shown only while its
+       * number is above 0: how many need doing. Drawn in the plugin's own
+       * standalone panel, on a top-level item.
+       */
+      badge?: PluginItemCount;
+      count?: never;
+    };
+
+/**
+ * @public A sidebar navigation entry contributed by a plugin.
+ *
+ * Declarative and introspectable — delivered to the client via `/api/admin-meta`.
+ * Exactly **one** level of `children` is supported. Visibility is controlled by
+ * `requiredPermission` (client-gated via `useCan`); a `visible(ctx)` callback is
+ * intentionally NOT supported because menus are serialized to the client.
+ *
+ * Its fields are `PluginMenuItemFields`, and it takes one `count` or one
+ * `badge`, never both.
+ */
+export type PluginMenuItem = PluginMenuItemFields & PluginMenuItemNumber;
+
+/** The fields of a `PluginMenuItem`, apart from its number. */
+export interface PluginMenuItemFields {
   /** Display label. */
   label: string;
   /** Admin path to navigate to, e.g. `"/admin/collections/forms"`. */
@@ -219,6 +304,13 @@ export interface PluginMenuItem {
    * plugin's own `placement` when omitted.
    */
   section?: PluginNavSection;
+  /**
+   * @experimental The id of one of `panel.groups`, the heading the item is
+   * listed under in the plugin's own standalone panel. An item naming none is
+   * listed first, under no heading; one naming a group the plugin does not
+   * declare is listed with those, and a development start says so.
+   */
+  group?: string;
   /** One nested level of sub-items. */
   children?: PluginMenuItem[];
 }
@@ -591,6 +683,12 @@ export type AdminContribution =
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
   menu?: PluginMenuItem[];
+  /**
+   * @experimental How a standalone plugin's own panel lists its menu items:
+   * the headings they are grouped under. Without it the panel lists them as
+   * it always has.
+   */
+  panel?: PluginAdminPanel;
   /**
    * @experimental Places of this plugin's own, on its pages, that plugins may
    * add to. Each name starts with this plugin's slug and a dot,

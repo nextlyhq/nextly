@@ -172,7 +172,77 @@ describe("getSidebarCollectionsForLanding", () => {
   });
 });
 
+describe("getSidebarCollectionsForLanding with sidebar groups", () => {
+  const deps = (pinned: string[] = []) => ({
+    branding: noBranding,
+    capabilities: superAdmin,
+    pinnedCollections: new Set(pinned),
+  });
+
+  it("lists a collection naming a group of its own, before the ungrouped ones", () => {
+    const items = [
+      makeCollection("posts", { order: 1 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 50 }),
+    ];
+    expect(
+      getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
+    ).toEqual(["products", "posts"]);
+  });
+
+  it("puts each group where its first collection appears, its collections together", () => {
+    const items = [
+      makeCollection("newsletters", { sidebarGroup: "marketing", order: 30 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 20 }),
+      makeCollection("case-studies", { sidebarGroup: "marketing", order: 10 }),
+      makeCollection("orders", { sidebarGroup: "shop", order: 40 }),
+    ];
+    expect(
+      getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
+    ).toEqual(["case-studies", "newsletters", "products", "orders"]);
+  });
+
+  it("moves a pinned collection up its own group, not its group past others", () => {
+    const items = [
+      makeCollection("case-studies", { sidebarGroup: "marketing", order: 10 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 20 }),
+      makeCollection("orders", { sidebarGroup: "shop", order: 40 }),
+    ];
+    expect(
+      getSidebarCollectionsForLanding(items, deps(["orders"])).map(c => c.name)
+    ).toEqual(["case-studies", "orders", "products"]);
+  });
+
+  it("reads the built-in section's name as no group", () => {
+    const items = [
+      makeCollection("pages", { sidebarGroup: "collections", order: 1 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 50 }),
+    ];
+    expect(
+      getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
+    ).toEqual(["products", "pages"]);
+  });
+});
+
 describe("pickCollectionsLandingTarget", () => {
+  it("lands on the first named group's first collection when groups exist", () => {
+    const target = pickCollectionsLandingTarget(
+      [
+        makeCollection("posts", { order: 1 }),
+        makeCollection("newsletters", { sidebarGroup: "marketing", order: 30 }),
+        makeCollection("case-studies", {
+          sidebarGroup: "marketing",
+          order: 10,
+        }),
+      ],
+      {
+        branding: noBranding,
+        capabilities: superAdmin,
+        pinnedCollections: new Set(),
+      }
+    );
+    expect(target?.name).toBe("case-studies");
+  });
+
   it("returns null when no collections are visible", () => {
     expect(
       pickCollectionsLandingTarget([], {
@@ -214,6 +284,18 @@ describe("getSidebarSinglesForLanding + pickSinglesLandingTarget", () => {
       "zebras", // order=1 next
       "alligators", // order=5 first alphabetically
     ]);
+  });
+
+  it("lists a Single that names a sidebar group, where it would otherwise be listed nowhere", () => {
+    const items = [
+      makeSingle("banner", { sidebarGroup: "marketing", order: 1 }),
+      makeSingle("footer", { order: 5 }),
+    ];
+    const result = getSidebarSinglesForLanding(items, {
+      capabilities: superAdmin,
+      pinnedSingles: new Set(),
+    });
+    expect(result.map(s => s.slug)).toEqual(["banner", "footer"]);
   });
 
   it("excludes hidden singles", () => {

@@ -8,6 +8,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AdminBranding } from "@admin/types/branding";
+import type { ApiCollection } from "@admin/types/entities";
 
 const branding: AdminBranding = {
   plugins: [
@@ -102,5 +103,49 @@ describe("the desktop Plugins panel", () => {
     // label alone and hide the result.
     renderPlugins("week");
     expect(screen.getByRole("link", { name: "Weekly" })).toBeDefined();
+  });
+});
+
+describe("a plugin's own panel", () => {
+  it("draws its collections with the icon every panel draws for a collection", () => {
+    render(
+      <SidebarProvider defaultOpen>
+        <SubSidebarContent
+          selectedMain="standalone-forms"
+          standaloneLabel="Forms"
+          contentSearch=""
+          onContentSearchChange={() => undefined}
+          hasCollectionsSection
+          hasSinglesSection
+          pluginSearch=""
+          onPluginSearchChange={() => undefined}
+          isActive={() => false}
+          hasPermission={() => true}
+          canAccessApiKeys
+          canAccessWebhooks
+          pluginCollectionsForSection={
+            [
+              { id: "c1", name: "forms", labels: { plural: "Forms" } },
+              {
+                id: "c2",
+                name: "submissions",
+                labels: { plural: "Submissions" },
+                admin: { icon: "Archive" },
+              },
+            ] as unknown as ApiCollection[]
+          }
+          showBuilder
+          hasPanel={() => true}
+        />
+      </SidebarProvider>
+    );
+
+    const iconOf = (name: string) =>
+      screen.getByRole("link", { name }).querySelector("svg");
+    // No icon set: the list, muted, as the Content panel draws one.
+    expect(iconOf("Forms")).toHaveClass("lucide-list", "text-muted-foreground");
+    expect(iconOf("Forms")).not.toHaveClass("lucide-database");
+    // A set icon is kept.
+    expect(iconOf("Submissions")).toHaveClass("lucide-archive");
   });
 });
