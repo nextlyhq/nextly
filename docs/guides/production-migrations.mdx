@@ -38,14 +38,13 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 - `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files with the SQL each would run, in run order and within `--step`, with anything a run would refuse; the rows in the way of a column made required are counted only for the first migration a run applies, and a later one says they are counted when the run reaches it, since the migrations before it may fill them), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files; a step never ends inside the files that move a field between translated and shared, and the run says when it goes on through them), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`, `--dry-run` (name the migration and snapshot it would write, whether it would create the ledger table, and the ledger row it would record, without writing any of them or taking the migrate lock; where a run would refuse, it says why and still exits 0).
-- `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive` (a global option every command accepts), `--accept-renames`, `--accept-data-loss[=targets]` (write a migration that [deletes data](#a-migration-that-deletes-data) without being asked), `--record-snapshot` (a migration that changes nothing, whose snapshot records which fields are translated as the database holds them, for a project whose snapshots [predate that record](/docs/localization#when-your-migrations-predate-the-record-of-translated-fields); it reads the database, so run it against one that has applied every migration), `--dry-run` (print the migration it would write and name it and its snapshot, or with `--plugin` the module and its barrel, without writing any of them; it still asks about possible renames, whose answers shape the migration, and where a run would refuse, it says why and still exits 0).
+- `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive` (a global option every command accepts), `--accept-renames` (with no terminal, accept every possible [rename](#renaming-a-field), a field group's included, instead of declining them), `--accept-data-loss[=targets]` (write a migration that [deletes data](#a-migration-that-deletes-data) without being asked), `--record-snapshot` (a migration that changes nothing, whose snapshot records which fields are translated as the database holds them, for a project whose snapshots [predate that record](/docs/localization#when-your-migrations-predate-the-record-of-translated-fields); it reads the database, so run it against one that has applied every migration), `--dry-run` (print the migration it would write and name it and its snapshot, or with `--plugin` the module and its barrel, without writing any of them; it still asks about possible renames, whose answers shape the migration, and where a run would refuse, it says why and still exits 0).
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting), `--plugin <name>` (list that plugin's migration modules instead of the app's files).
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`, `--removed <file>` (record an applied migration's file removed on purpose; it stays applied); `--file-missing` (with `--rolled-back`, say the file is gone from the folder, so it is not read); `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished); `--dry-run` (run the same checks and name the ledger rows it would record, recording none).
 - `nextly migrate:fresh` -- `--accept-data-loss` (skip confirmation; `-f, --force` still works for one release, with a notice, and `--yes` is refused), `--seed` (run seeders after migrations), `--dry-run` (name every table it would drop and each migration it would run again, needing no consent and dropping nothing).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations, going on through the files that move a field between translated and shared when the step would end inside them), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
 - `nextly upgrade` -- `--confirm-backed-up` (required outside a terminal, when a step has work: your statement that the database is backed up), `-f, --force` (skip the backup prompt), `--target-table-name <name>` (use another name for the events table when one of that name already exists), `--reconcile-core` (see [Core schema drift after `nextly upgrade`](#core-schema-drift-after-nextly-upgrade)), `--force-unlock`, `--dry-run` (count each step's pending work, all taken before any step runs, and name what a run would refuse, with no backup question and no lock; with `--reconcile-core`, name each statement the reconcile would run and each drop it would leave in place).
 - `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued being refused within about ten seconds; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
-
 
 ### A migration that deletes data
 
@@ -71,6 +70,44 @@ The file it writes is marked in its header, so the deletion is visible in review
 ```
 
 It names what `nextly migrate` will ask consent for, judged the same way, and `nextly migrate` asks again on each database it runs on. A change that turns translation on or off, or moves a field in or out of translation, drops a column or table after its values move, so it is listed and asked about too.
+
+### Renaming a field
+
+A migration compares your config with the last snapshot, so a renamed field first looks like one
+field removed and another added. `nextly migrate:create` asks about each such pair: answer yes and
+the migration keeps the data under the new name; answer no and the old field's data is not carried
+over.
+
+- A field stored in a column (text, number, a relationship, a repeater...) is renamed with
+  `RENAME COLUMN`.
+- A field group, including a repeatable one and a list of several groups, has no column: its
+  values are rows in the group's table (`comp_<slug>`), keyed by the field's name. Accepting the
+  rename writes an `UPDATE` that moves those rows to the new name, for that collection, Single or
+  field group only, and its reverse in the `DOWN`. Both run in the migration's transaction. A
+  removed and an added field group are asked about only when they hold the same groups (in any
+  order) and are both repeatable or both not.
+
+```sql
+-- UP
+UPDATE "comp_seo"
+SET "_parent_field" = 'legacySeo'
+WHERE "_parent_field" = 'seo'
+  AND "_parent_table" = 'dc_posts';
+
+-- DOWN
+UPDATE "comp_seo"
+SET "_parent_field" = 'seo'
+WHERE "_parent_field" = 'legacySeo'
+  AND "_parent_table" = 'dc_posts';
+```
+
+With no terminal (CI, `--non-interactive`), every rename is declined unless you pass
+`--accept-renames`, which accepts them all. A declined field-group rename deletes nothing, so no
+consent is asked for it, but its rows stay under the old name, where nothing reads them, and the
+new field starts empty; `migrate:create` warns when it declines one. Check the pairs first with
+`nextly migrate:create --dry-run` at a terminal. If one field group could be renamed to more than
+one new field and `--accept-renames` accepts them all, `migrate:create` refuses and writes
+nothing: answer each pair at a terminal, or rename one field group per migration.
 
 ---
 
