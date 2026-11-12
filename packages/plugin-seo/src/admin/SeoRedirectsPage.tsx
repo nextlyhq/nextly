@@ -214,7 +214,11 @@ const REDIRECT_COLUMNS: NextlyColumn<RedirectView>[] = [
   {
     name: "from",
     header: "From",
-    cell: ({ row }) => <span className="font-mono">{row.from}</span>,
+    // The table is as wide as its cells' text, so a long address wraps
+    // within a measure rather than pushing the other columns off.
+    cell: ({ row }) => (
+      <span className="block max-w-xs break-all font-mono">{row.from}</span>
+    ),
   },
   {
     name: "to",
@@ -223,7 +227,9 @@ const REDIRECT_COLUMNS: NextlyColumn<RedirectView>[] = [
       row.type === "gone" ? (
         <span className="text-muted-foreground">—</span>
       ) : (
-        <span className="font-mono text-muted-foreground">{row.to}</span>
+        <span className="block max-w-xs break-all font-mono text-muted-foreground">
+          {row.to}
+        </span>
       ),
   },
   {
@@ -336,7 +342,7 @@ function notFoundColumns(actions: {
       header: "Address asked for",
       cell: ({ row }) => (
         <div className="flex flex-col gap-0.5">
-          <span className="font-mono">{row.path}</span>
+          <span className="block max-w-sm break-all font-mono">{row.path}</span>
           {row.kind === "moved" ? (
             <span className="text-xs text-muted-foreground">
               Moved by a deploy, with no redirect
