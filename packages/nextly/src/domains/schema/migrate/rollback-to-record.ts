@@ -51,6 +51,7 @@ import { canonicalJson } from "../../../shared/lib/canonical-json";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { OrphanPassRow } from "../../auth/services/permission-seed-service";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import {
   mediaUsageTablePresent,
@@ -309,6 +310,9 @@ async function writeBaselineRows(
       await view.insert(rows.table, { slug, ...storedColumns(row, undefined) });
     } else {
       await view.update(rows.table, storedColumns(row, now), bySlug(slug));
+      // Cleared as the row is written back, so a read later in the
+      // transaction finds the baseline, not the row it read before.
+      clearRegistryRowCache();
     }
     written.push(`${rows.kind} ${slug}`);
   }
