@@ -54,6 +54,7 @@ import {
 import { entryDesignReads } from "./address-claims/design-reads";
 import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
+  collectionClaimInputs,
   registerEntryAddressClaims,
   releaseUndeclared,
   settleEntryClaimsAtStart,
@@ -64,6 +65,13 @@ import {
   describeFor,
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
+import {
+  runAddressStartup,
+  sortedPairs,
+  startMarkStore,
+  type AddressedCollection,
+  type RowsState,
+} from "./address-claims/start-pass";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import { bindingFieldsRoute } from "./binding-fields-route";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
@@ -1398,6 +1406,43 @@ function installHoldsFor(
   });
 }
 
+/**
+ * One start's work on the address store: the check the boot waits for, and
+ * the passes it leaves running.
+ */
+interface AddressStart {
+  readonly check: () => Promise<void>;
+  readonly passes: () => Promise<void>;
+}
+
+/** The newest-first read of one row, for a collection's {@link RowsState}. */
+const NEWEST_ROW = {
+  sort: { field: "updatedAt", direction: "desc" as const },
+  pagination: { limit: 1 },
+  select: { id: true, updatedAt: true },
+  depth: 0 as const,
+};
+
+/** A collection's rows from a {@link NEWEST_ROW} read of it. */
+function rowsStateOf(found: {
+  readonly data: readonly unknown[];
+  readonly pagination: { readonly total: number };
+}): RowsState {
+  const newest = (found.data[0] as { updatedAt?: unknown } | undefined)
+    ?.updatedAt;
+  return {
+    total: found.pagination.total,
+    // A driver answers a timestamp as a Date, or as text or a number where
+    // the column keeps it so.
+    newest:
+      newest instanceof Date
+        ? newest.toISOString()
+        : typeof newest === "string" || typeof newest === "number"
+          ? String(newest)
+          : null,
+  };
+}
+
 /** The context the plugin's `init` is handed. */
 type InitContext = Parameters<
   NonNullable<Parameters<typeof definePlugin>[0]["init"]>
@@ -1779,10 +1824,6 @@ export const pageBuilder = (
    * handled long after it.
    */
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
-  // The claiming of existing pages' addresses, set by `init` and run once the
-  // boot has finished.
-  // It answers whether every page was settled.
-  let pageClaimsBackfill: (() => Promise<boolean>) | null = null;
   // Set once that pass has finished, after which a page save need not claim
   // the existing pages its list's later pages would fall on.
   let pageClaimsBackfilled = false;
@@ -1818,13 +1859,11 @@ export const pageBuilder = (
     }
     return contentAddresses;
   };
-  // Refuses to start when a collection given a template address cannot have
-  // a template: run once every plugin's collections are registered.
-  let checkTemplateAddresses: (() => Promise<void>) | null = null;
-  // Brings the entries' claims to the declared addresses, after the pages'.
-  let entryClaimsPass: (() => Promise<void>) | null = null;
-  // Releases the claims of collections no longer given an address.
-  let undeclaredSweep: (() => Promise<void>) | null = null;
+  // One start's work on the address store, set by `init`: the check that
+  // refuses a collection given a template address that cannot have a
+  // template (run once every plugin's collections are registered), and the
+  // start-up passes, both over one read of the stored template addresses.
+  let beginAddressStart: (() => AddressStart) | null = null;
   // The start-up passes over the address store while they run: pages, the
   // sweep, then entries. The addresses listed for pre-rendering wait for it,
   // so a build never lists a store the passes are still filling or moving.
@@ -3027,7 +3066,16 @@ export const pageBuilder = (
         // last connection never waits for a second one.
         publishedPages: tx => publishedPagesInTransaction(readPagesOn, tx),
       });
-      pageClaimsBackfill = async () => {
+      // The pages `ids` as stored, each matched by its id exactly (a database
+      // may compare loosely): their own columns, no relationship expanded,
+      // past every read hook, as the pages' pass judges their claims.
+      const pagesWithIds = (rows: readonly unknown[], ids: readonly string[]) =>
+        (rows as Readonly<Record<string, unknown>>[]).filter(
+          row =>
+            (typeof row.id === "string" || typeof row.id === "number") &&
+            ids.includes(String(row.id))
+        );
+      const pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
         const complete = await backfillPageClaims({
           pages: pagesSlug,
@@ -3040,19 +3088,33 @@ export const pageBuilder = (
           // With no row lock: the pass holds the page's claims lock, which a
           // save of the page takes before it commits, while a share lock
           // here would wait for a save holding the row that is itself
-          // waiting for that claims lock.
+          // waiting for that claims lock. At depth 0: a page's claims follow
+          // from its own columns, and expanding its relationships costs a
+          // read per related document.
           readPage: async (tx, id) => {
-            try {
-              return await ctx.services.ownCollections.findEntryByIdInTransaction(
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
                 tx,
                 pagesSlug,
-                id,
+                {
+                  where: { id: { equals: id } },
+                  pagination: { limit: 1 },
+                  depth: 0,
+                },
                 { lock: "none" }
               );
-            } catch (error) {
-              if (NextlyError.isNotFound(error)) return null;
-              throw error;
-            }
+            return pagesWithIds(found.data, [id])[0] ?? null;
+          },
+          readPages: async ids => {
+            const found = await ctx.services.ownCollections.listEntries(
+              pagesSlug,
+              {
+                where: { id: { in: [...ids] } },
+                pagination: { limit: ids.length },
+                depth: 0,
+              }
+            );
+            return pagesWithIds(found.data, ids);
           },
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),
@@ -3301,16 +3363,35 @@ export const pageBuilder = (
         warn: (message: string, meta: Record<string, unknown>) =>
           ctx.logger.warn(message, meta),
       };
-      entryClaimsPass = () => settleEntryClaimsAtStart(passDeps);
-      undeclaredSweep = () => releaseUndeclared(passDeps);
-      checkTemplateAddresses = async () => {
+      // Why a collection given an address in code cannot be served there, or
+      // null when it can.
+      const declaredAddressProblem = async (
+        collection: string,
+        own: ReadonlySet<string>
+      ): Promise<string | null> => {
+        const problem = await templateCollectionProblem(
+          collection,
+          collectionRecord,
+          own
+        );
+        if (problem !== null) return problem;
+        // One slug serves an entry in every language, as a page's does: a
+        // localized collection's entries have a slug and a state in each,
+        // which an address per language would have to follow.
+        return (await collectionRecord(collection))?.localized === true
+          ? `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
+          : null;
+      };
+      const checkTemplateAddresses = async (
+        storedAtStart: () => Promise<ReadonlyMap<string, string>>
+      ) => {
         const own = new Set(Object.values(ctx.self.collections));
         const problems: string[] = [];
         // An address declared in code is compared with every other
         // collection's stored one: two collections may not share one. A
         // collection promoted into code taking over its own stored address
         // is no clash.
-        const stored = await readStoredAddresses();
+        const stored = await storedAtStart();
         for (const [collection, address] of declaredPaths) {
           for (const [other, held] of stored) {
             if (held === address && other !== collection) {
@@ -3321,29 +3402,116 @@ export const pageBuilder = (
           }
         }
         for (const collection of templateAddresses.keys()) {
-          const problem = await templateCollectionProblem(
-            collection,
-            collectionRecord,
-            own
-          );
-          if (problem !== null) {
-            problems.push(problem);
-            continue;
-          }
-          // One slug serves an entry in every language, as a page's does: a
-          // localized collection's entries have a slug and a state in each,
-          // which an address per language would have to follow.
-          if ((await collectionRecord(collection))?.localized === true) {
-            problems.push(
-              `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
-            );
-          }
+          const problem = await declaredAddressProblem(collection, own);
+          if (problem !== null) problems.push(problem);
         }
         if (problems.length > 0) {
           throw new Error(
             `[page-builder] templates.addresses cannot be used: ${problems.join(" ")}`
           );
         }
+      };
+      // Where the start-up passes record that the store is settled.
+      const startMarks = startMarkStore(ctx.db, ctx.dialect);
+      // Each collection given a template address, as the start's mark reads
+      // it: read through the pool, before any pass's transaction opens. Its
+      // entries' count and newest save are read here, the rest as the pass
+      // reads it (`collectionClaimInputs`).
+      const addressedCollection = async (
+        collection: string
+      ): Promise<AddressedCollection> => {
+        const record = await collectionRecord(collection);
+        let rows: RowsState | null = null;
+        if (record !== null) {
+          // Newest save where its entries keep one; how many, either way.
+          const found = await ctx.services.collections.listEntries(
+            collection,
+            record.timestamps === false
+              ? { pagination: { limit: 1 }, select: { id: true }, depth: 0 }
+              : NEWEST_ROW,
+            { as: "system" }
+          );
+          rows =
+            record.timestamps === false
+              ? { total: found.pagination.total, newest: null }
+              : rowsStateOf(found);
+        }
+        return {
+          slug: collection,
+          // Asked of the claims' own deps, as the start-up pass asks them,
+          // so whatever decides what its entries hold moves the mark.
+          claims: await collectionClaimInputs(claimsDeps, collection),
+          rows,
+        };
+      };
+      beginAddressStart = () => {
+        // The template addresses set in the admin, read once for the whole
+        // start: by the check the boot waits for, and by every pass after it.
+        // A template saved meanwhile settles its entries' claims in its own
+        // transaction.
+        let storedRead: Promise<ReadonlyMap<string, string>> | undefined;
+        const storedAtStart = () => (storedRead ??= readStoredAddresses());
+        const startDeps = {
+          ...passDeps,
+          storedAddresses: async () =>
+            new Map(
+              [...(await storedAtStart()).entries()].map(
+                ([collection, address]) => [
+                  collection,
+                  addressSegments(address),
+                ]
+              )
+            ),
+        };
+        return {
+          check: () => checkTemplateAddresses(storedAtStart),
+          passes: () =>
+            runAddressStartup({
+              inputs: async () => {
+                const stored = await storedAtStart();
+                const addressed = [
+                  ...new Set([...declaredPaths.keys(), ...stored.keys()]),
+                ].sort();
+                const collections: AddressedCollection[] = [];
+                for (const collection of addressed) {
+                  collections.push(await addressedCollection(collection));
+                }
+                return {
+                  plugin: PLUGIN_VERSION,
+                  slugs: [pagesSlug, templatesSlug, claimsStore.slug],
+                  locales: [...siteLocales()],
+                  pagePath: opts.pagePreviewPath ?? null,
+                  declared: sortedPairs(declaredPaths),
+                  stored: sortedPairs(stored),
+                  collections,
+                  pages: rowsStateOf(
+                    await ctx.services.ownCollections.listEntries(pagesSlug, {
+                      ...NEWEST_ROW,
+                      where: { status: { equals: "published" } },
+                    })
+                  ),
+                  templates: rowsStateOf(
+                    await ctx.services.ownCollections.listEntries(
+                      templatesSlug,
+                      NEWEST_ROW
+                    )
+                  ),
+                  claims: await ctx.services.ownCollections.count(
+                    claimsStore.slug
+                  ),
+                };
+              },
+              mark: startMarks,
+              pages: pageClaimsBackfill,
+              sweep: () => releaseUndeclared(startDeps),
+              entries: () => settleEntryClaimsAtStart(startDeps),
+              skipped: () => {
+                if (claimsInit === pageClaimsInit) pageClaimsBackfilled = true;
+              },
+              current: () => claimsInit === pageClaimsInit,
+              warn: (message, meta) => ctx.logger.warn(message, meta),
+            }),
+        };
       };
       contentAddresses = contentAddressService({
         claims: claimsStore,
@@ -3549,26 +3717,18 @@ export const pageBuilder = (
       // A collection given a template address that cannot have a template
       // refuses to start, naming it: checked once every plugin's
       // collections are registered.
-      await checkTemplateAddresses?.();
+      const addressStart = beginAddressStart?.() ?? null;
+      await addressStart?.check();
       // Existing pages' addresses, claimed in the background, then the
-      // entries' under their collections' addresses, pages first: the
-      // passes never throw, and a boot is not held for them.
-      const backfill = pageClaimsBackfill;
-      const entryPass = entryClaimsPass;
-      const sweep = undeclaredSweep;
-      if (backfill !== null) {
-        // The entries' pass only after every page holds its address: until
-        // then an entry could take a path a page is still owed. Releasing a
-        // removed collection's claims takes nothing a page is owed, so it
-        // runs whether or not the pages' pass completed.
+      // entries' under their collections' addresses, pages first, unless
+      // nothing they follow from changed since the last start that settled
+      // them (see `runAddressStartup`): the passes never throw, and a boot
+      // is not held for them.
+      if (addressStart !== null) {
         // Not awaited, so the boot is not held; the address listing joins it
-        // instead (see the content address service).
-        const startup = backfill()
-          .then(async complete => {
-            await sweep?.();
-            if (complete) await entryPass?.();
-          })
-          .catch(() => undefined);
+        // instead (see the content address service), which is also how a
+        // test waits for it.
+        const startup = addressStart.passes().catch(() => undefined);
         addressStartup = startup;
         void startup.finally(() => {
           if (addressStartup === startup) addressStartup = null;
