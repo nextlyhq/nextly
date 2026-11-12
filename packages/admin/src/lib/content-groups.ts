@@ -2,8 +2,8 @@
  * The groups a collection is listed under: its own `admin.sidebarGroup`,
  * shown as a sub-heading inside Collections.
  *
- * Collections that name no group come first, then each group in the order its
- * first collection appears. The list handed in is already in the sidebar's
+ * Each group comes first, in the order its first collection appears, then
+ * the collections that name no group. The list handed in is already in the sidebar's
  * order (`getSidebarCollectionsForLanding`), so this only partitions it, and
  * a group's place follows from that order rather than from a second sort.
  *
@@ -52,7 +52,7 @@ interface CollectionGroup {
 
 /**
  * The collections in the groups they are listed under, in the order given:
- * the ungrouped run first, then each group as its first collection appears.
+ * each group as its first collection appears, then the ungrouped run.
  * A run with no collections is left out.
  */
 export function groupCollections(
@@ -74,5 +74,5 @@ export function groupCollections(
     }
     group.items.push(collection);
   }
-  return [ungrouped, ...groups.values()].filter(g => g.items.length > 0);
+  return [...groups.values(), ungrouped].filter(g => g.items.length > 0);
 }

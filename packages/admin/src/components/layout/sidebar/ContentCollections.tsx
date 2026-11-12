@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * What the Content panel lists under Collections: the collections that name
- * no group, with the plugin menu items placed in Collections, then each
- * `admin.sidebarGroup` under a sub-heading of its own, in the order its first
- * collection appears.
+ * What the Content panel lists under Collections: each `admin.sidebarGroup`
+ * under a sub-heading of its own, its collections indented under it, in the
+ * order its first collection appears; then the collections that name no
+ * group, with the plugin menu items placed in Collections.
  *
  * @module components/layout/sidebar/ContentCollections
  */
@@ -41,22 +41,9 @@ export function ContentCollections({
 }): JSX.Element {
   const branding = useBranding();
   const groups = groupCollections(matched, branding.customGroups);
-  const hasUngrouped = groups[0]?.slug === null;
+  const hasUngrouped = groups.at(-1)?.slug === null;
   return (
     <>
-      {/* The list draws its loading rows itself, so it shows while loading
-          too; otherwise only when it has something, as an empty list is
-          still announced as one. */}
-      {loading || hasUngrouped || pluginMatches > 0 ? (
-        <SidebarMenu>
-          <DynamicCollectionNav isActive={isActive} search={search} />
-          <PluginMenuItems
-            isActive={isActive}
-            section="collections"
-            search={search}
-          />
-        </SidebarMenu>
-      ) : null}
       {groups.flatMap(group =>
         group.slug === null
           ? []
@@ -78,6 +65,19 @@ export function ContentCollections({
               </ContentFold>,
             ]
       )}
+      {/* The list draws its loading rows itself, so it shows while loading
+          too; otherwise only when it has something, as an empty list is
+          still announced as one. */}
+      {loading || hasUngrouped || pluginMatches > 0 ? (
+        <SidebarMenu>
+          <DynamicCollectionNav isActive={isActive} search={search} />
+          <PluginMenuItems
+            isActive={isActive}
+            section="collections"
+            search={search}
+          />
+        </SidebarMenu>
+      ) : null}
     </>
   );
 }

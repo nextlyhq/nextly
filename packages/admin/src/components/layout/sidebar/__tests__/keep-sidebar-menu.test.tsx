@@ -94,13 +94,14 @@ describe("the kept Content panel", () => {
     lists.collections = [POSTS, PRODUCTS];
     render(keep(true));
 
+    // In the panel's order: the groups first, then the ungrouped.
     expect(recallMenu()?.collections).toEqual([
-      { slug: "posts", label: "Posts" },
       {
         slug: "products",
         label: "Products",
         group: { slug: "shop", label: "Online shop" },
       },
+      { slug: "posts", label: "Posts" },
     ]);
   });
 });

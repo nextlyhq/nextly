@@ -32,14 +32,15 @@ import { RememberedContentBody } from "../RememberedMenu";
 const MENU: RememberedMenu = {
   rail: [],
   parts: { collections: true, singles: true },
+  // Kept in the panel's order: the groups first, then the ungrouped.
   collections: [
-    { slug: "posts", label: "Posts" },
     {
       slug: "products",
       label: "Products",
       icon: "Archive",
       group: { slug: "shop", label: "Online shop" },
     },
+    { slug: "posts", label: "Posts" },
   ],
   singles: [{ slug: "homepage", label: "Homepage" }],
 };
@@ -67,9 +68,9 @@ describe("RememberedContentBody", () => {
 
     expect(outline()).toEqual([
       "Collections2",
-      "Posts",
       "Online shop",
       "Products",
+      "Posts",
       "Singles1",
       "Homepage",
     ]);
@@ -102,8 +103,8 @@ describe("RememberedContentBody", () => {
     );
     expect(outline()).toEqual([
       "Collections2",
-      "Posts",
       "Online shop",
+      "Posts",
       "Singles1",
       "Homepage",
     ]);

@@ -179,14 +179,14 @@ describe("getSidebarCollectionsForLanding with sidebar groups", () => {
     pinnedCollections: new Set(pinned),
   });
 
-  it("lists a collection naming a group of its own, after the ungrouped ones", () => {
+  it("lists a collection naming a group of its own, before the ungrouped ones", () => {
     const items = [
-      makeCollection("products", { sidebarGroup: "shop", order: 1 }),
-      makeCollection("posts", { order: 50 }),
+      makeCollection("posts", { order: 1 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 50 }),
     ];
     expect(
       getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
-    ).toEqual(["posts", "products"]);
+    ).toEqual(["products", "posts"]);
   });
 
   it("puts each group where its first collection appears, its collections together", () => {
@@ -214,16 +214,35 @@ describe("getSidebarCollectionsForLanding with sidebar groups", () => {
 
   it("reads the built-in section's name as no group", () => {
     const items = [
-      makeCollection("pages", { sidebarGroup: "collections", order: 50 }),
-      makeCollection("products", { sidebarGroup: "shop", order: 1 }),
+      makeCollection("pages", { sidebarGroup: "collections", order: 1 }),
+      makeCollection("products", { sidebarGroup: "shop", order: 50 }),
     ];
     expect(
       getSidebarCollectionsForLanding(items, deps()).map(c => c.name)
-    ).toEqual(["pages", "products"]);
+    ).toEqual(["products", "pages"]);
   });
 });
 
 describe("pickCollectionsLandingTarget", () => {
+  it("lands on the first named group's first collection when groups exist", () => {
+    const target = pickCollectionsLandingTarget(
+      [
+        makeCollection("posts", { order: 1 }),
+        makeCollection("newsletters", { sidebarGroup: "marketing", order: 30 }),
+        makeCollection("case-studies", {
+          sidebarGroup: "marketing",
+          order: 10,
+        }),
+      ],
+      {
+        branding: noBranding,
+        capabilities: superAdmin,
+        pinnedCollections: new Set(),
+      }
+    );
+    expect(target?.name).toBe("case-studies");
+  });
+
   it("returns null when no collections are visible", () => {
     expect(
       pickCollectionsLandingTarget([], {

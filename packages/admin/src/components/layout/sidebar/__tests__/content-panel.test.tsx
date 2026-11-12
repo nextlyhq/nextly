@@ -214,7 +214,7 @@ describe("ContentPanel", () => {
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
-  it("lists each sidebarGroup under its own sub-heading, ungrouped first, groups as they first appear", () => {
+  it("lists each sidebarGroup under its own sub-heading, groups as they first appear, then the ungrouped", () => {
     lists.collections = [
       // Out of order on purpose: the panel's order comes from admin.order,
       // then the name, not from the order the server sent.
@@ -251,9 +251,6 @@ describe("ContentPanel", () => {
 
     expect(outline()).toEqual([
       "Collections5",
-      // Ungrouped first; naming the built-in section is naming no group.
-      "Posts",
-      "Pages",
       // Marketing's first collection (order 10) comes before Shop's (20).
       "Marketing",
       "Case Studies",
@@ -261,13 +258,28 @@ describe("ContentPanel", () => {
       // A group named in the site's custom groups shows that name.
       "Online shop",
       "Products",
+      // The ungrouped last; naming the built-in section is naming no group.
+      "Posts",
+      "Pages",
       "Singles2",
       "Footer",
       "Homepage",
     ]);
-    expect(
-      within(contentNav()).getByRole("button", { name: "Marketing" })
-    ).toHaveAttribute("aria-expanded", "true");
+    const marketing = within(contentNav()).getByRole("button", {
+      name: "Marketing",
+    });
+    expect(marketing).toHaveAttribute("aria-expanded", "true");
+    // A group's collections sit in its own region, under its sub-heading;
+    // the ungrouped ones do not.
+    const region = document.getElementById(
+      marketing.getAttribute("aria-controls") ?? ""
+    );
+    expect(region).toContainElement(
+      screen.getByRole("link", { name: "Case Studies" })
+    );
+    expect(region).not.toContainElement(
+      screen.getByRole("link", { name: "Posts" })
+    );
   });
 
   it("filters both headings with the one search, and counts what each lists", async () => {
@@ -369,9 +381,9 @@ describe("ContentPanel", () => {
     expect(heading("Collections")).toHaveAttribute("aria-expanded", "true");
     expect(outline()).toEqual([
       "Collections3",
+      "Shop",
       "Authors",
       "Posts",
-      "Shop",
       "Singles2",
     ]);
     second.unmount();

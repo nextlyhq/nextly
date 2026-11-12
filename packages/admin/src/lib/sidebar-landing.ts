@@ -148,9 +148,9 @@ export function searchSidebarSingles(
 /**
  * Apply the sidebar's "Collections" section filter + permission filter
  * + pinned/order/name sort to the supplied list. Returns the items in
- * the EXACT order the sidebar would render them: the collections naming no
- * group first, then each `sidebarGroup` in the order its first collection
- * appears, each run sorted pinned/order/name.
+ * the EXACT order the sidebar would render them: each `sidebarGroup` in
+ * the order its first collection appears, then the collections naming no
+ * group, each run sorted pinned/order/name.
  *
  * A group's place is read from the order and name alone, not the pins, so
  * pinning a collection moves it to the top of its own run without moving
@@ -171,17 +171,19 @@ export function getSidebarCollectionsForLanding(
       getDisplayName: collectionDisplayName,
       pinned,
     });
-  // Each group's place: 0 for no group, then 1, 2, ... as groups first
-  // appear in the unpinned order.
+  // Each group's place: 0, 1, 2, ... as groups first appear in the unpinned
+  // order, and after every group for the collections naming none.
   const groupPlace = new Map<string, number>();
   for (const collection of [...permitted].sort(comparatorWith(new Set()))) {
     const group = collectionSidebarGroup(collection);
     if (group !== null && !groupPlace.has(group)) {
-      groupPlace.set(group, groupPlace.size + 1);
+      groupPlace.set(group, groupPlace.size);
     }
   }
-  const placeOf = (c: ApiCollection) =>
-    groupPlace.get(collectionSidebarGroup(c) ?? "") ?? 0;
+  const placeOf = (c: ApiCollection) => {
+    const group = collectionSidebarGroup(c);
+    return group === null ? groupPlace.size : (groupPlace.get(group) ?? 0);
+  };
   const comparator = comparatorWith(deps.pinnedCollections);
   return [...permitted].sort(
     (a, b) => placeOf(a) - placeOf(b) || comparator(a, b)

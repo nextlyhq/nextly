@@ -97,7 +97,7 @@ interface RememberedRun {
 
 /**
  * The remembered items in runs under one sub-heading each, in their order:
- * the panel kept them ungrouped first, then each group together.
+ * the panel kept each group together, then the ungrouped ones.
  */
 function runsOf(items: readonly RememberedContentItem[]): RememberedRun[] {
   const runs: RememberedRun[] = [];
