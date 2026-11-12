@@ -2,6 +2,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 
+import {
+  recallPreference,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
+
 const STORAGE_KEY = "nextly:admin:entry-rail-collapsed";
 
 /**
@@ -19,31 +24,22 @@ export function useRailCollapsed(): {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored === "1") setCollapsedState(true);
-    } catch {
-      // localStorage may throw under privacy modes / quota; default to expanded.
-    }
+    // Read through the device memory, which guards storage that throws
+    // (privacy modes, quota): nothing read means expanded.
+    if (recallPreference(STORAGE_KEY) === "1") setCollapsedState(true);
   }, []);
 
   const setCollapsed = useCallback((next: boolean) => {
     setCollapsedState(next);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
-    } catch {
-      // ignore — UI still updates in-memory.
-    }
+    // Kept through the device memory, which keeps nothing where the site
+    // turned remembering off; the UI still updates in memory.
+    rememberPreference(STORAGE_KEY, next ? "1" : "0");
   }, []);
 
   const toggle = useCallback(() => {
     setCollapsedState(prev => {
       const next = !prev;
-      try {
-        window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
-      } catch {
-        // ignore
-      }
+      rememberPreference(STORAGE_KEY, next ? "1" : "0");
       return next;
     });
   }, []);

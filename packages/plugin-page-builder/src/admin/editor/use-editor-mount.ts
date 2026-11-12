@@ -31,7 +31,6 @@ import {
   useInlineEditing,
   type OpenPassages,
   useNoticeQueue,
-  userPreferenceStore,
   type BuilderShellProps,
   type ComponentVerbsHost,
   type TurnIntoChoice,
@@ -65,6 +64,7 @@ import {
 } from "../pattern-capability-client";
 import { useEditedComponentVariants } from "../variant-use-client";
 
+import { shellPreferenceStore } from "./editor-preference-stores";
 import { useRestorableEditorState } from "./restore-as-edit";
 import { useConnectStyleHistory } from "./site-style-history";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
@@ -532,7 +532,7 @@ export function useEditorMount(
    * id arrives.
    */
   const userId = useCurrentUserId();
-  const preferenceStore = useMemo(() => userPreferenceStore(userId), [userId]);
+  const preferenceStore = useMemo(() => shellPreferenceStore(userId), [userId]);
 
   return {
     initialDocument,

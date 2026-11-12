@@ -119,6 +119,7 @@ describe("a form's Settings", () => {
       "Availability",
       "One response per person",
       "Spam protection",
+      "Privacy",
     ];
     expect(sections).toHaveLength(names.length);
     sections.forEach((section, index) =>
@@ -170,6 +171,48 @@ describe("a form's Settings", () => {
         internalNote: "Lahore meetup.",
       },
     });
+  });
+
+  it("saves a form that keeps no IP address or browser", async () => {
+    const { user, fetchMock } = view({ status: "published" });
+    const keep = screen.getByRole("switch", {
+      name: "Store IP address and browser",
+    });
+    expect(keep).toBeChecked();
+    expect(keep).toHaveAccessibleDescription(/one per network still works/);
+    await user.click(keep);
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({
+      settings: { storeIpAndBrowser: false },
+    });
+  });
+
+  it("saves how long submissions are kept, and Never as no period", async () => {
+    const { user, fetchMock } = view({ settings: { keepDays: 365 } });
+    const keep = screen.getByRole("combobox", {
+      name: "Delete submissions after",
+    });
+    expect(keep).toHaveTextContent("1 year");
+    expect(keep).toHaveAccessibleDescription(/Spam goes after 30 days/);
+    await pick(user, "Delete submissions after", "90 days");
+    await user.click(save());
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({ settings: { keepDays: 90 } });
+
+    await pick(user, "Delete submissions after", "Never");
+    await user.click(save());
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
+    const settings = (saves(fetchMock)[1] as { settings: object }).settings;
+    expect(settings).not.toHaveProperty("keepDays");
+  });
+
+  it("shows a keep period set another way as it is", () => {
+    view({ settings: { keepDays: 45 } });
+    expect(
+      screen.getByRole("combobox", { name: "Delete submissions after" })
+    ).toHaveTextContent("45 days");
   });
 
   it("saves a web address to go to after submitting", async () => {
@@ -234,12 +277,62 @@ describe("a form's Settings", () => {
     });
   });
 
-  it("shows a stored way to limit responses that is not offered yet", () => {
-    // Written through the API: shown chosen, and not choosable here.
-    view({ settings: { oneResponse: "email" } });
-    const stored = screen.getByRole("radio", { name: "One per email address" });
-    expect(stored).toBeChecked();
-    expect(stored).toBeDisabled();
+  it("offers one per email, comparing only an Email field it can", async () => {
+    const { user, fetchMock } = view({
+      fields: [
+        {
+          id: "f1",
+          name: "email",
+          label: "Email",
+          type: "email",
+          required: true,
+        },
+        {
+          id: "f2",
+          name: "work",
+          label: "Work email",
+          type: "email",
+          required: true,
+          conditionalLogic: {
+            enabled: true,
+            action: "show",
+            operator: "AND",
+            conditions: [{ field: "email", comparison: "is_not_empty" }],
+          },
+        },
+        { id: "f3", name: "other", label: "Other email", type: "email" },
+      ],
+    });
+    await user.click(
+      screen.getByRole("radio", { name: "One per email address" })
+    );
+    // Started on the one field it can compare, and offering no other.
+    const fieldPicker = screen.getByRole("combobox", {
+      name: "Email field to compare",
+    });
+    expect(fieldPicker).toHaveTextContent("Email");
+    await user.click(fieldPicker);
+    expect(
+      (await screen.findAllByRole("option")).map(option => option.textContent)
+    ).toEqual(["Email"]);
+    await user.keyboard("{Escape}");
+    await user.click(save());
+
+    await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
+    expect(saves(fetchMock)[0]).toMatchObject({
+      settings: { oneResponse: "email", oneResponseField: "email" },
+    });
+  });
+
+  it("cannot take one per email without an Email field it can compare", () => {
+    // The form's only Email field is optional.
+    view();
+    expect(
+      screen.getByRole("radio", { name: "One per email address" })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/Add an Email field that is required/)
+    ).toBeInTheDocument();
   });
 });
 

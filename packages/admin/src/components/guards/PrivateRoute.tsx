@@ -10,12 +10,22 @@ import {
   restartSessionCheck,
   useAuthSession,
 } from "@admin/hooks/queries/useAuthSession";
-import { holdLoginRedirect } from "@admin/lib/api/refreshInterceptor";
 import {
-  forgetSignedInHere,
+  holdLoginRedirect,
+  redirectToLogin,
+} from "@admin/lib/api/refreshInterceptor";
+import {
+  getCurrentUserId,
+  invalidateSessionCache,
+} from "@admin/lib/auth/session";
+import {
+  announceSignedOut,
+  forgetPerson,
   hasSignedInHere,
+  onSignedOutElsewhere,
   rememberSignedInHere,
-} from "@admin/lib/auth/signed-in-here";
+} from "@admin/lib/device-memory/device-memory";
+import { confirmDeviceMemory } from "@admin/lib/device-memory/server-answer";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface PrivateRouteProps {
@@ -125,13 +135,34 @@ export function PrivateRoute({
   const signInInPlace =
     !signedInHere && redirect !== null && redirect.path === ROUTES.LOGIN;
 
-  // The record follows the server's answer: kept on a confirmed session,
-  // dropped when the server says there is none.
+  // The device memory follows the server's answer: on a confirmed session the
+  // record is kept and what was remembered is checked against the versions
+  // the server serves; when the server says there is none, the session ended,
+  // and everything remembered about the person goes, in every open tab.
   const isAuthenticated = settled ? data.isAuthenticated : null;
   useEffect(() => {
-    if (isAuthenticated === true) rememberSignedInHere();
-    if (isAuthenticated === false) forgetSignedInHere();
+    if (isAuthenticated === true) {
+      rememberSignedInHere();
+      // Handed the lookup rather than its result, so the answer is tied to
+      // the session this page is in now: a sign-out before the id arrives
+      // leaves it unapplied.
+      void confirmDeviceMemory(getCurrentUserId()).catch(() => {
+        // No user id after all: nothing is labelled, so nothing is written.
+      });
+    }
+    if (isAuthenticated === false && forgetPerson()) announceSignedOut();
   }, [isAuthenticated]);
+
+  // Signed out in another tab: the session this tab holds is gone with it, so
+  // it goes to the sign-in page too rather than drawing a person who left.
+  useEffect(
+    () =>
+      onSignedOutElsewhere(() => {
+        invalidateSessionCache();
+        redirectToLogin();
+      }),
+    []
+  );
 
   useEffect(() => {
     if (redirect && !signInInPlace) navigateTo(redirect.path);

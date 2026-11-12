@@ -6,7 +6,7 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
-import { designLevelOf } from "../design-level";
+import { designLevelOf, designOf } from "../design-level";
 
 /** A context whose installed plugins offer `plugins`. */
 function contextWith(plugins: Record<string, Record<string, unknown>>) {
@@ -66,5 +66,47 @@ describe("the design level of a page", () => {
       designLevelOf(ctx, { kind: "single", slug: "home", document: {} })
     ).resolves.toEqual({});
     expect(valuesFor).not.toHaveBeenCalled();
+  });
+
+  it("says what drew the page, where the Page Builder tells it", async () => {
+    const designFor = vi.fn(async () => ({
+      values: { title: "About" },
+      drawnBy: "design",
+    }));
+    const ctx = contextWith({
+      "@nextlyhq/plugin-page-builder": {
+        designSeo: { designFor, valuesFor: async () => ({ title: "x" }) },
+      },
+    });
+    const source = {
+      kind: "entry",
+      collection: "pages",
+      entry: ENTRY,
+    } as const;
+
+    await expect(designOf(ctx, source, "de", { blocks: [] })).resolves.toEqual({
+      values: { title: "About" },
+      drawnBy: "design",
+    });
+    expect(designFor).toHaveBeenCalledWith({
+      collection: "pages",
+      entry: ENTRY,
+      locale: "de",
+      document: { blocks: [] },
+    });
+    await expect(designLevelOf(ctx, source)).resolves.toEqual({
+      title: "About",
+    });
+  });
+
+  it("leaves what drew the page unsaid where the Page Builder answers values alone", async () => {
+    const ctx = contextWith({
+      "@nextlyhq/plugin-page-builder": {
+        designSeo: { valuesFor: async () => ({ title: "Hello" }) },
+      },
+    });
+    await expect(
+      designOf(ctx, { kind: "entry", collection: "posts", entry: ENTRY })
+    ).resolves.toEqual({ values: { title: "Hello" } });
   });
 });

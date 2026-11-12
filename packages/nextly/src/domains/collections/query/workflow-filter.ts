@@ -1,9 +1,11 @@
 /**
- * The two reserved filter keys that keep entries by where they stand in
+ * The reserved filter keys that keep entries by where they stand in
  * publishing, rather than by a value they hold.
  *
  * - `_pendingChange: true` keeps entries whose draft holds changes not yet
  *   published.
+ * - `_strandedStage: true` keeps entries with a part in a stage their workflow
+ *   no longer has, which Needs attention lists.
  * - `_inRelease: { scheduledBefore }` keeps entries a scheduled release will
  *   publish after now and no later than `scheduledBefore`; `_inRelease: true`
  *   drops the upper bound.
@@ -23,10 +25,14 @@
  */
 
 import type { FilterProblem } from "./filter-shape";
-import { IN_RELEASE_KEY, PENDING_CHANGE_KEY } from "./reserved-filter-keys";
+import {
+  IN_RELEASE_KEY,
+  PENDING_CHANGE_KEY,
+  STRANDED_STAGE_KEY,
+} from "./reserved-filter-keys";
 
 // Declared with the other reserved keys, so the admin reads the same names.
-export { IN_RELEASE_KEY, PENDING_CHANGE_KEY };
+export { IN_RELEASE_KEY, PENDING_CHANGE_KEY, STRANDED_STAGE_KEY };
 
 /**
  * Which scheduled releases an entry must be in to be kept.
@@ -51,6 +57,12 @@ export interface WorkflowFilter {
   pendingChange: boolean;
   /** Keep only entries a scheduled release will publish, or `null` for no such condition. */
   inRelease: InReleaseFilter | null;
+  /**
+   * Keep only entries with a part in a stage their workflow no longer has.
+   * Absent reads as false, so a filter built before the key existed keeps
+   * meaning what it meant.
+   */
+  strandedStage?: boolean;
 }
 
 /**
@@ -120,6 +132,14 @@ function readPendingChange(value: unknown): true | undefined {
 }
 
 /**
+ * `_strandedStage`'s value, read: `true` is its only form, for the reason
+ * `_pendingChange` takes no `false`.
+ */
+function readStrandedStage(value: unknown): true | undefined {
+  return value === true ? true : undefined;
+}
+
+/**
  * `_inRelease`'s value, read: `true`, or an object holding exactly one
  * `scheduledBefore` instant.
  *
@@ -155,6 +175,10 @@ const WORKFLOW_KEYS = {
     read: readInRelease,
     form: `true, or { "scheduledBefore": "<date and time with a zone, such as 2026-10-28T09:00:00Z>" }`,
   },
+  [STRANDED_STAGE_KEY]: {
+    read: readStrandedStage,
+    form: `true`,
+  },
 } as const;
 
 type WorkflowKey = keyof typeof WORKFLOW_KEYS;
@@ -184,11 +208,34 @@ export function workflowKeyProblem(
 export const WORKFLOW_KEY_PURPOSE: Readonly<Record<WorkflowKey, string>> = {
   [PENDING_CHANGE_KEY]: "keeps entries with unpublished changes",
   [IN_RELEASE_KEY]: "keeps entries a scheduled release will publish",
+  [STRANDED_STAGE_KEY]:
+    "keeps entries with a part in a stage their workflow no longer has",
 };
 
 /** How a workflow key is written, for the refusal of one given below the top level. */
 export function workflowKeyForm(key: WorkflowKey): string {
   return `{ "${key}": ${WORKFLOW_KEYS[key].form} }`;
+}
+
+/** Whether `where` is a filter object with a workflow key at its top level. */
+function carriesWorkflowKey(where: unknown): where is object {
+  return (
+    typeof where === "object" &&
+    where !== null &&
+    !Array.isArray(where) &&
+    Object.keys(where).some(isWorkflowKey)
+  );
+}
+
+/** Sets the condition one readable workflow key carries on `filter`. */
+function applyWorkflowKey(
+  filter: WorkflowFilter,
+  key: WorkflowKey,
+  value: unknown
+): void {
+  if (key === PENDING_CHANGE_KEY) filter.pendingChange = true;
+  else if (key === STRANDED_STAGE_KEY) filter.strandedStage = true;
+  else filter.inRelease = readInRelease(value) ?? null;
 }
 
 /**
@@ -204,12 +251,7 @@ export function extractWorkflowFilter(where: unknown): {
   cleanedWhere: unknown;
   problems: FilterProblem[];
 } {
-  if (
-    typeof where !== "object" ||
-    where === null ||
-    Array.isArray(where) ||
-    !Object.keys(where).some(isWorkflowKey)
-  ) {
+  if (!carriesWorkflowKey(where)) {
     return { filter: null, cleanedWhere: where, problems: [] };
   }
   const rest: Record<string, unknown> = {};
@@ -221,8 +263,7 @@ export function extractWorkflowFilter(where: unknown): {
       if (problem !== undefined) problems.push(problem);
       // Read by the same reader the problem was judged with, so a value is
       // never both accepted there and dropped here.
-      else if (key === PENDING_CHANGE_KEY) filter.pendingChange = true;
-      else filter.inRelease = readInRelease(value) ?? null;
+      else applyWorkflowKey(filter, key, value);
     } else {
       // Defined, not assigned, so a `__proto__` key stays a key for the
       // condition builder to refuse.

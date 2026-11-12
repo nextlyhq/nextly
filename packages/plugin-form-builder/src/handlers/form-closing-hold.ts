@@ -46,6 +46,7 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { closedMessageOf, pastClosingTime } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
+import { deletingForm } from "./forget-sends";
 import {
   ALREADY_RESPONDED,
   holdsKeyFor,
@@ -167,10 +168,29 @@ async function holdFormClosing(
   if (pastClosingTime(locked.settings, new Date())) {
     throw closedRefusal(locked.form, { formId, closedBy: "date" });
   }
+  refuseKeptAddress(write, formId, locked.settings);
   if (submission.takesAPlace) {
     await holdLimit(deps.own, write, slugs, formId, locked);
   }
   await holdResponseKey(deps, write, slugs, formId, locked.settings);
+}
+
+/**
+ * Refuse a new submission that carries an IP address or browser to a form
+ * that, as committed, keeps neither: the write seam read the setting before
+ * it changed. The visitor sends it again, and it is stored without them.
+ */
+function refuseKeptAddress(
+  write: InTransactionContext,
+  formId: string,
+  settings: { storeIpAndBrowser?: boolean }
+): void {
+  if (settings.storeIpAndBrowser !== false) return;
+  const row = write.data as { ipAddress?: unknown; userAgent?: unknown };
+  const kept = (value: unknown) => typeof value === "string" && value !== "";
+  if (kept(row?.ipAddress) || kept(row?.userAgent)) {
+    throw changedRefusal(formId);
+  }
 }
 
 /** Refuse a submission that takes the form past its limit, under the lock. */
@@ -297,7 +317,7 @@ async function refuseEarlierEmail(
 }
 
 /** The refusal for a person who has responded to the form already. */
-function respondedRefusal(formId: string) {
+export function respondedRefusal(formId: string): NextlyError {
   return NextlyError.conflict({
     reason: "state",
     message: ALREADY_RESPONDED,
@@ -390,6 +410,8 @@ async function handOffKey(
   const released = releasedKeyOf(write);
   if (released === undefined) return;
   const { key, formId, ipAddress } = released;
+  // Deleted with its form: the next holder is about to go as well.
+  if (deletingForm(write, formId)) return;
   const { settings } = await formOf(deps.own, write, slugs, formId, "update");
   if (keyVersionOf(key) !== (settings.oneResponseVersion ?? 0)) return;
   const next = await nextHolderOf(deps, write, slugs, {

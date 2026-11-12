@@ -93,6 +93,12 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     content: { isLoading: answers.contentLoading },
   }),
 }));
+// The Content panel's lists, which the rail reads only to keep the menu on
+// the device: nothing in these tests asks for them.
+vi.mock("@admin/hooks/useSidebarContentLists", () => ({
+  useSidebarCollectionList: () => ({ items: [], data: undefined }),
+  useSidebarSingleList: () => ({ items: [], hasArrived: false }),
+}));
 vi.mock("@admin/hooks/queries", () => ({
   NAV_COLLECTIONS_PARAMS: {},
   NAV_SINGLES_PARAMS: {},

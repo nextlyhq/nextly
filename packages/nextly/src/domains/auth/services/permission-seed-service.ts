@@ -56,6 +56,70 @@ export interface SeedResult {
 export interface OrphanMarkScope {
   owners: ReadonlySet<string>;
   heldSlugs?: ReadonlySet<string>;
+  /**
+   * Permissions another owner declares, whose rows the pass leaves as they are,
+   * neither marked nor cleared, whatever owner key they are stored under. The
+   * app's own are stored under `app`, which a plugin may also be named, so an
+   * owner key alone cannot tell the plugin's rows from the app's.
+   */
+  kept?: readonly { action: string; resource: string }[];
+}
+
+/** A permission row as the orphan pass reads it, and as a rollback's undo of its marks is judged. */
+export interface OrphanPassRow {
+  id: string;
+  slug: string;
+  action: string;
+  resource: string;
+  owner: string | null;
+  orphanedAt: Date | null;
+}
+
+/** A permission's identity as the orphan pass compares it: action and resource, in any case. */
+function orphanPassKey(p: { action: string; resource: string }): string {
+  return `${String(p.action).toLowerCase()}|${String(p.resource).toLowerCase()}`;
+}
+
+/**
+ * The owners a pass speaks for: those `scope` names, and each owner of a
+ * permission the point before held, read from the same rows the pass walks.
+ */
+function ownersSpokenFor(
+  rows: readonly OrphanPassRow[],
+  scope: OrphanMarkScope
+): Set<string> {
+  const spokenFor = new Set(scope.owners);
+  for (const row of rows) {
+    if (row.owner && scope.heldSlugs?.has(String(row.slug))) {
+      spokenFor.add(row.owner);
+    }
+  }
+  return spokenFor;
+}
+
+/**
+ * The orphan mark the pass gives `row`: true to mark it, false to clear it, or
+ * undefined to leave it as it is. A row with no owner is core's or an
+ * entity's, and one another owner declares (`kept`) is not the pass's. A mark
+ * is set only for an owner the declaration speaks for; one it does not speak
+ * for may have added the permission outside it. A permission it declares is
+ * live whoever is recorded as its owner, so its mark is cleared.
+ */
+function orphanMarkFor(
+  row: OrphanPassRow,
+  judged: {
+    declared: ReadonlySet<string>;
+    kept: ReadonlySet<string>;
+    spokenFor: ReadonlySet<string>;
+  }
+): boolean | undefined {
+  if (!row.owner) return undefined;
+  const key = orphanPassKey(row);
+  if (judged.kept.has(key)) return undefined;
+  const isDeclared = judged.declared.has(key);
+  if (isDeclared === (row.orphanedAt === null)) return undefined;
+  if (!isDeclared && !judged.spokenFor.has(row.owner)) return undefined;
+  return !isDeclared;
 }
 
 /**
@@ -1111,73 +1175,26 @@ export class PermissionSeedService extends BaseService {
     scope: OrphanMarkScope
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const { permissions } = this.tables;
 
-    const declaredKeys = new Set(
-      declared.map(p => `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`)
-    );
+    const declaredKeys = new Set(declared.map(orphanPassKey));
+    // Another owner's declarations: their rows are not this pass's to change.
+    const keptKeys = new Set((scope.kept ?? []).map(orphanPassKey));
 
     try {
-      const rows = (await this.db
-        .select({
-          id: permissions.id,
-          slug: permissions.slug,
-          action: permissions.action,
-          resource: permissions.resource,
-          owner: permissions.owner,
-          orphanedAt: permissions.orphanedAt,
-        })
-        .from(permissions)) as Array<{
-        id: string;
-        slug: string;
-        action: string;
-        resource: string;
-        owner: string | null;
-        orphanedAt: Date | null;
-      }>;
+      const rows = await this.orphanPassRows();
 
-      // The owners spoken for: those named, and each owner of a permission
-      // the point before held, read from the same rows the pass walks.
-      const spokenFor = new Set(scope.owners);
+      const judged = {
+        declared: declaredKeys,
+        kept: keptKeys,
+        spokenFor: ownersSpokenFor(rows, scope),
+      };
       for (const row of rows) {
-        if (row.owner && scope.heldSlugs?.has(String(row.slug))) {
-          spokenFor.add(row.owner);
-        }
-      }
-
-      for (const row of rows) {
-        if (!row.owner) continue;
-
-        const key = `${String(row.action).toLowerCase()}|${String(
-          row.resource
-        ).toLowerCase()}`;
-        const isDeclared = declaredKeys.has(key);
-        const isMarked = row.orphanedAt !== null;
-
-        if (isDeclared === !isMarked) continue;
-        // A mark is set only for an owner the declaration speaks for; one it
-        // does not speak for may have added the permission outside it. A
-        // permission it declares is live whoever is recorded as its owner.
-        if (!isDeclared && !spokenFor.has(row.owner)) continue;
+        const orphaned = orphanMarkFor(row, judged);
+        if (orphaned === undefined || row.owner === null) continue;
 
         result.total++;
-        await writingPermissions(permissions, table =>
-          this.db
-            .update(table)
-            .set({ orphanedAt: isDeclared ? null : new Date() })
-            .where(eq(table.id, String(row.id)))
-        );
+        await this.writeOrphanMark(row, orphaned);
         result.created++;
-
-        // Said with the grants the permission has once the mark is written,
-        // which a mark leaves as they were.
-        await this.permissionService.logOrphanMarkChange({
-          id: String(row.id),
-          action: row.action,
-          resource: row.resource,
-          owner: row.owner,
-          orphaned: !isDeclared,
-        });
       }
     } catch (error) {
       this.logger.warn(
@@ -1189,6 +1206,81 @@ export class PermissionSeedService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * Set or clear the orphan marks `decide` names, by permission id, and leave
+   * every other permission as it is: what a rollback to the registry record's
+   * point does with the marks the rolled-back migrations set or made needed.
+   * `decide` is handed every permission as the orphan pass reads it, so the
+   * judgement is made on the rows the writes then change. A mark already as
+   * decided is not written again.
+   *
+   * Unlike the orphan pass, a permission with no owner (an entity's built-in
+   * one) can be marked here: the rollback that removes an entity's registry
+   * row orphans its permissions with it. Every grant is kept, and each mark
+   * set or cleared is logged with the grants the permission keeps
+   * (`logOrphanMarkChange`). A write that fails throws, so the caller's
+   * transaction does not commit with some marks written and others not.
+   *
+   * @returns How many marks were set or cleared.
+   */
+  async rewriteOrphanMarks(
+    decide: (rows: readonly OrphanPassRow[]) => ReadonlyMap<string, boolean>
+  ): Promise<number> {
+    return inPermissionSweep(async () => {
+      const rows = await this.orphanPassRows();
+      const marks = decide(rows);
+      let written = 0;
+      for (const row of rows) {
+        const orphaned = marks.get(String(row.id));
+        if (orphaned === undefined || orphaned === (row.orphanedAt !== null)) {
+          continue;
+        }
+        await this.writeOrphanMark(row, orphaned);
+        written += 1;
+      }
+      return written;
+    });
+  }
+
+  /** Every permission, as the orphan pass and a rollback's undo of its marks read it. */
+  private async orphanPassRows(): Promise<OrphanPassRow[]> {
+    const { permissions } = this.tables;
+    return (await this.db
+      .select({
+        id: permissions.id,
+        slug: permissions.slug,
+        action: permissions.action,
+        resource: permissions.resource,
+        owner: permissions.owner,
+        orphanedAt: permissions.orphanedAt,
+      })
+      .from(permissions)) as OrphanPassRow[];
+  }
+
+  /**
+   * Write one permission's orphan mark, set or cleared, and log it with the
+   * grants the permission has once the mark is written, which a mark leaves
+   * as they were.
+   */
+  private async writeOrphanMark(
+    row: OrphanPassRow,
+    orphaned: boolean
+  ): Promise<void> {
+    await writingPermissions(this.tables.permissions, table =>
+      this.db
+        .update(table)
+        .set({ orphanedAt: orphaned ? new Date() : null })
+        .where(eq(table.id, String(row.id)))
+    );
+    await this.permissionService.logOrphanMarkChange({
+      id: String(row.id),
+      action: row.action,
+      resource: row.resource,
+      owner: row.owner,
+      orphaned,
+    });
   }
 
   /**

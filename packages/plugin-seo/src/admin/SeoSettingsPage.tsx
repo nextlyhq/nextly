@@ -13,14 +13,7 @@ import {
   useSingleDocument,
   useUpdateSingleDocument,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type JSX,
-} from "react";
+import { useCallback, useMemo, useRef, useState, type JSX } from "react";
 
 import {
   AI_CRAWLER_CHOICES,
@@ -38,6 +31,7 @@ import {
 
 import { ConnectionsTab } from "./connections";
 import { ContentTypesTab } from "./content-types";
+import { useLeaveWarning } from "./leave-warning";
 import {
   changesOf,
   draftOf,
@@ -241,16 +235,6 @@ function useSettingsSave(
   );
 
   return { stored, draft, setDraft, save, saving, failure };
-}
-
-/** Leaving the page with unsaved changes asks first. */
-function useLeaveWarning(unsaved: boolean): void {
-  useEffect(() => {
-    if (!unsaved) return undefined;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [unsaved]);
 }
 
 /** The line that offers setup again until it is finished. */

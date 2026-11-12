@@ -55,6 +55,24 @@ vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
   writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
 }));
 
+// No release has recorded the preset roles' grants on this double's database, so neither
+// command is refused for the release it runs from; the refusal and the permissions, roles and
+// grants a recorded state brings are the integration suite's subject
+// (`plugin-lifecycle-writes-its-access.integration.test.ts`), so here they write nothing.
+vi.mock(
+  "../../../domains/meta/preset-grants-release",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/meta/preset-grants-release")
+    >()),
+    readPresetGrantsRelease: async () => undefined,
+  })
+);
+vi.mock("../../../domains/schema/migrate/command-access", () => ({
+  seedAccessOnCommandConnection: async () => {},
+  orphanOwnedPermissionsOnCommandConnection: async () => {},
+}));
+
 // The schema lock is exercised against real databases in its own suites. These drive the lifecycle hook's boot
 // through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
 vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({
