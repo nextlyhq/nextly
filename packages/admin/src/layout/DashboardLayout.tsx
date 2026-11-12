@@ -27,7 +27,10 @@ import { PanelFoldProvider } from "../components/layout/PanelFold";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
 import { DualSidebarOutline } from "../components/layout/sidebar/DualSidebarOutline";
-import { RailFootPluginItemsProvider } from "../components/layout/sidebar/RailFootPluginItems";
+import {
+  RailFootPluginItemsProvider,
+  useIsInRailFootHost,
+} from "../components/layout/sidebar/RailFootPluginItems";
 import {
   SidePanelReservationProvider,
   useReservedInlineEnd,
@@ -185,23 +188,16 @@ function DashboardChrome({
                 </div>
               )}
 
-              <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
-                <SheetContent
-                  side="left"
-                  className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
-                >
-                  {/* Screen-reader label for the drawer dialog. */}
-                  <SheetTitle className="sr-only">Navigation menu</SheetTitle>
-                  <SheetDescription className="sr-only">
-                    Primary admin navigation
-                  </SheetDescription>
-                  {sessionConfirmed ? (
-                    <DualSidebar isMobile />
-                  ) : (
-                    <DualSidebarOutline isMobile />
-                  )}
-                </SheetContent>
-              </Sheet>
+              <NavigationDrawer
+                open={isMobileMenuOpen}
+                onOpenChange={setIsMobileMenuOpen}
+              >
+                {sessionConfirmed ? (
+                  <DualSidebar isMobile />
+                ) : (
+                  <DualSidebarOutline isMobile />
+                )}
+              </NavigationDrawer>
 
               {/* Main Content */}
               <div
@@ -250,5 +246,43 @@ function DashboardChrome({
         </RailFootPluginItemsProvider>
       </SidebarProvider>
     </MediaProvider>
+  );
+}
+
+/**
+ * The navigation drawer, below the width where the rail shows.
+ *
+ * The plugins' rail-foot items are moved into its foot while it is open, but
+ * drawn from outside it in the React tree, so a press or focus on one would
+ * read as outside the drawer and close it, losing the click. Those count as
+ * inside.
+ */
+function NavigationDrawer({
+  open,
+  onOpenChange,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const inRailFoot = useIsInRailFootHost();
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="left"
+        className="p-0 border-none w-auto max-w-[calc(100vw-2rem)] flex bg-transparent"
+        onInteractOutside={event => {
+          if (inRailFoot(event.target)) event.preventDefault();
+        }}
+      >
+        {/* Screen-reader label for the drawer dialog. */}
+        <SheetTitle className="sr-only">Navigation menu</SheetTitle>
+        <SheetDescription className="sr-only">
+          Primary admin navigation
+        </SheetDescription>
+        {children}
+      </SheetContent>
+    </Sheet>
   );
 }
