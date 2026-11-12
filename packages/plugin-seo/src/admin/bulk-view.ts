@@ -70,17 +70,40 @@ export function changesOf(
   return changes;
 }
 
-/** How many cells differ from what their pages hold. */
-export function changeCount(
+/** How many cells a save of `changes` sends. */
+export function changeCount(changes: readonly BulkChange[]): number {
+  return changes.reduce(
+    (count, change) =>
+      count +
+      (change.title === undefined ? 0 : 1) +
+      (change.description === undefined ? 0 : 1),
+    0
+  );
+}
+
+/**
+ * The rows as a save of `changes` left them: each saved value in place, and
+ * each saved page at the version the save gave it.
+ */
+export function savedRows(
   rows: readonly BulkRow[],
-  edits: BulkEdits
-): number {
-  let count = 0;
-  for (const row of rows) {
-    if (changed(row, "title", edits)) count++;
-    if (changed(row, "description", edits)) count++;
-  }
-  return count;
+  changes: readonly BulkChange[],
+  revs: Readonly<Record<string, string>>
+): BulkRow[] {
+  const byId = new Map(changes.map(change => [change.id, change]));
+  return rows.map(row => {
+    const change = byId.get(row.id);
+    if (change === undefined) return row;
+    const rev = revs[row.id];
+    return {
+      ...row,
+      ...(change.title === undefined ? {} : { title: change.title }),
+      ...(change.description === undefined
+        ? {}
+        : { description: change.description }),
+      ...(rev === undefined ? {} : { rev }),
+    };
+  });
 }
 
 /**

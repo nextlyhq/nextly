@@ -34,6 +34,7 @@ import {
   BULK_SAVE_LIMIT,
   BULK_SAVE_PATH,
   BULK_TYPES_PATH,
+  type BulkChange,
   type BulkRow,
   type BulkRowsBody,
   type BulkSaveBody,
@@ -49,6 +50,7 @@ import {
   cellMeta,
   cellValue,
   changeCount,
+  savedRows,
   changed,
   changesOf,
   editKey,
@@ -149,6 +151,24 @@ function useRows(type: string | undefined) {
     // Every page read so far, read again from the first.
     again: (slug: string | undefined = type) => {
       if (slug !== undefined) void read(slug, loaded[slug]?.pages ?? 1, []);
+    },
+    // A save's values and new versions put into its rows at once, then the
+    // type read again: no row shows what the save replaced meanwhile, and an
+    // edit made meanwhile starts from the version the save gave its page.
+    saved: (
+      slug: string,
+      changes: readonly BulkChange[],
+      revs: Readonly<Record<string, string>>
+    ) => {
+      setLoaded(current => {
+        const known = current[slug];
+        if (known === undefined) return current;
+        return {
+          ...current,
+          [slug]: { ...known, rows: savedRows(known.rows, changes, revs) },
+        };
+      });
+      void read(slug, loaded[slug]?.pages ?? 1, []);
     },
     // An import may change pages of any type: the type shown is read again,
     // and every other one is put away, with any read of it on its way, to be
@@ -401,7 +421,14 @@ function ChangesBar({
 function useBulkEdits(
   type: string | undefined,
   rows: readonly BulkRow[],
-  onSaved: (type: string) => void
+  reads: {
+    saved: (
+      type: string,
+      changes: readonly BulkChange[],
+      revs: Readonly<Record<string, string>>
+    ) => void;
+    again: (type: string) => void;
+  }
 ) {
   const [edits, setEdits] = useState<Record<string, BulkEdits>>({});
   const [revs, setRevs] = useState<Record<string, Record<string, string>>>({});
@@ -472,7 +499,7 @@ function useBulkEdits(
       if (answer === undefined) return;
       toastMutationResult(answer.message, []);
       forget(type, new Set(changes.map(change => change.id)));
-      onSaved(type);
+      reads.saved(type, changes, answer.revs);
     } catch (error) {
       setRefused({ type, message: apiErrorMessage(error) });
     } finally {
@@ -497,7 +524,7 @@ function useBulkEdits(
       if (refused === null) return;
       forget(refused.type);
       setRefused(null);
-      onSaved(refused.type);
+      reads.again(refused.type);
     },
   };
 }
@@ -692,7 +719,7 @@ export function SeoBulkPage(): JSX.Element {
   const rows = useRows(type?.slug);
   const [filter, setFilter] = useState<BulkFilter>("all");
   const loaded = rows.loaded?.rows ?? [];
-  const editing = useBulkEdits(type?.slug, loaded, rows.again);
+  const editing = useBulkEdits(type?.slug, loaded, rows);
   const shown = useMemo(() => shownRows(loaded, filter), [loaded, filter]);
   const failure = failureOf(editing.failed, rows.error, read.error);
   useLeaveWarning(editing.unsaved);
@@ -727,7 +754,7 @@ export function SeoBulkPage(): JSX.Element {
             {...noticeAction(editing, rows)}
           />
           <ChangesBar
-            count={changeCount(loaded, editing.edits)}
+            count={changeCount(editing.changes)}
             pages={editing.changes.length}
             busy={editing.busy}
             onDiscard={editing.clear}

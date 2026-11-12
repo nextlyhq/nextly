@@ -707,3 +707,38 @@ describe("the bulk edit screen, Codex round 2", () => {
     ).toBeTruthy();
   });
 });
+
+describe("the bulk edit screen, Codex round 3", () => {
+  it("edits a saved row from its new version while the table is read again", async () => {
+    let reads = 0;
+    vi.mocked(readPluginRoute).mockImplementation((async () => {
+      reads++;
+      if (reads > 1) return new Promise(() => undefined);
+      return { type: "posts", rows: ROWS, total: 4, more: false };
+    }) as unknown as typeof readPluginRoute);
+    vi.mocked(writePluginRoute).mockImplementation((async (request: {
+      path: string;
+      body?: unknown;
+    }) => {
+      writes.push({ path: request.path, body: request.body });
+      return { message: "Saved 1 page.", saved: 1, revs: { p1: "4" } };
+    }) as unknown as typeof writePluginRoute);
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await waitFor(() => expect(reads).toBe(2));
+    await waitFor(() => expect(titleOf("Surfer vs Rext").readOnly).toBe(false));
+    expect(titleOf("Surfer vs Rext").value).toBe("New");
+    fireEvent.change(
+      screen.getByLabelText("Description on Google for Surfer vs Rext"),
+      { target: { value: "Saved after" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(writes[1]?.body).toEqual({
+      type: "posts",
+      changes: [{ id: "p1", rev: "4", description: "Saved after" }],
+    });
+  });
+});
