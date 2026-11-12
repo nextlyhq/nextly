@@ -664,6 +664,10 @@ export async function runMigrateCreate(
       migrationsDir,
       appStream,
       defaultLocale: configResult.config.localization?.defaultLocale,
+      // The configuration's order, which decides a field leaving translation's shared value.
+      languageOrder: configResult.config.localization?.locales.map(
+        locale => locale.code
+      ),
       onWarning: message => logger.warn(message),
       collections,
       singles,

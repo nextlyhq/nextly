@@ -4,8 +4,10 @@
  * set for that address, through the same order of who wins as every page;
  * the Pages and addresses list names every public address the site knows
  * of, from its entries, its static routes and the addresses a dynamic route
- * declared, marking a route that does not call the function; and the
- * sitemap lists a connected page that search engines may index.
+ * declared, marking a route that does not call the function; the sitemap
+ * lists a connected page that search engines may index, and none its route
+ * hides; and `seoStructuredData` reads the page's structured data from the
+ * same answer as its head.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -30,7 +32,7 @@ import { lastCatchUp } from "../../address-record/catch-up";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { seoPlugin } from "../../plugin";
 import type { SiteAddress } from "../contract";
-import { seoMetadata } from "../metadata";
+import { seoMetadata, seoStructuredData } from "../metadata";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const PAGES = "seocp_pages";
@@ -237,27 +239,71 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(200);
       const after = await seoMetadata("/pricing", code);
 
-      expect(after.title).toBe("Plans and prices");
+      // A title set for the page is its whole title, past a layout template.
+      expect(after.title).toEqual({ absolute: "Plans and prices" });
       expect(after.description).toBe("Plans, described in code.");
       expect(after.alternates?.canonical).toBe("/pricing");
       // What the answer does not speak to stays as the route set it.
       expect(after.keywords).toEqual(["plans"]);
     });
 
-    it("hides a page from search only as the screen says, whatever its code says", async () => {
+    it("hides a page its route's code hides, and lists none the screen hides, whatever the code says", async () => {
       const t = await boot();
       const owner = await personWith(t, "owner", "all");
-      const code = { metadata: { robots: { index: false, follow: false } } };
+      const hiding = {
+        metadata: {
+          robots: { index: false, follow: true, "max-snippet": -1 },
+        },
+      };
+      const listing = { metadata: { robots: { index: true, follow: true } } };
 
-      expect((await seoMetadata("/contact", code)).robots).toMatchObject({
+      // The route hides its page: served hidden, its other directives kept.
+      expect((await seoMetadata("/contact", hiding)).robots).toEqual({
+        index: false,
+        follow: true,
+        "max-snippet": -1,
+      });
+      expect((await seoMetadata("/thank-you", listing)).robots).toMatchObject({
         index: true,
       });
 
-      await save(owner, typed("/contact", { hidden: true }));
-
-      expect((await seoMetadata("/contact", code)).robots).toMatchObject({
+      // The screen hides a page its route lists: the code cannot list it.
+      await save(owner, typed("/thank-you", { hidden: true }));
+      expect((await seoMetadata("/thank-you", listing)).robots).toMatchObject({
         index: false,
       });
+
+      // And the page its route hides is left out of the sitemap, as the
+      // screen says it is hidden.
+      const locs = await listed();
+      expect(locs).not.toContain(`${SITE}/contact`);
+      const { items } = await addressesFor(owner);
+      expect(items?.find(item => item.path === "/contact")?.standing).toBe(
+        "hidden"
+      );
+    });
+
+    it("reads a page's structured data from the same answer as its head", async () => {
+      const t = await boot();
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, siteName: "Acme" },
+      });
+      const options = { metadata: { title: "Plans and prices" } };
+
+      const head = await seoMetadata("/pricing", options);
+      const text = await seoStructuredData("/pricing", options);
+
+      // The page described is the one the head names, at its own address.
+      expect(head.title).toBe("Plans and prices");
+      expect(JSON.parse(text ?? "{}")).toMatchObject({
+        "@context": "https://schema.org",
+      });
+      expect(text).toContain(`"${SITE}/pricing`);
+      expect(text).toContain("Plans and prices");
+      await expect(seoStructuredData("pricing")).rejects.toThrow(
+        /not an address from the site's root/
+      );
     });
 
     it("titles a page with nothing set by the site's pattern and the page's name", async () => {
@@ -267,10 +313,12 @@ describe.each(getConfiguredTestDialects())(
         data: { _overwrite: true, siteName: "Acme" },
       });
 
-      expect((await seoMetadata("/thank-you")).title).toBe("Thank you | Acme");
-      expect((await seoMetadata("/thank-you", { name: "Thanks" })).title).toBe(
-        "Thanks | Acme"
-      );
+      expect((await seoMetadata("/thank-you")).title).toEqual({
+        absolute: "Thank you | Acme",
+      });
+      expect(
+        (await seoMetadata("/thank-you", { name: "Thanks" })).title
+      ).toEqual({ absolute: "Thanks | Acme" });
     });
 
     it("lists every public address, marking the routes that do not call the function", async () => {

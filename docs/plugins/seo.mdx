@@ -263,8 +263,10 @@ never disagree. A page is listed when all of these hold:
   page that held it keeps it, and the other is left out until it is given another.
 
 A [page built in code](#pages-built-in-code) is listed too, once its route calls
-`seoMetadata` and unless it is hidden from search: its head and its sitemap entry are then
-built from the same answer.
+`seoMetadata` and unless it is hidden from search, on the Pages and addresses screen or by its
+route's own `noindex`: its head and its sitemap entry are then built from the same answer. A
+`noindex` an entry's route sets in code hides that page's head, but the sitemap lists entries
+from what is stored for them, so hide such an entry in its SEO tab too.
 
 A content type that declares no public address has no page in the sitemap, and nothing is
 guessed for it. Declare one with `publicAddress` on the collection or Single:
@@ -658,13 +660,16 @@ should carry `seoSettingsCacheTags()`, which every save expires.
 ## Turning the fields into tags
 
 With the plugin installed, every page served by a content route or a Single route gets its head
-from the plugin: nothing to call in `generateMetadata`. Each value is worked out on its own, from
-the first of these that has one:
+from the plugin: nothing to call in `generateMetadata`. A site that renders its own pages calls
+`contentPageMetadata` for an entry, `singlePageMetadata` for a Single, or
+[`seoMetadata`](#pages-built-in-code) for a page built in code, and gets the same head: see
+[A site that renders its own pages](/docs/guides/routing-and-seo#a-site-that-renders-its-own-pages).
+Each value is worked out on its own, from the first of these that has one:
 
 | Order | Where the value comes from                                                     | For                                         |
 | ----- | ------------------------------------------------------------------------------ | ------------------------------------------- |
 | 1     | What a person typed in the page's `seo` group                                  | every value                                 |
-| 2     | What the route's own `buildMetadata` returns                                   | title, description and the social card only |
+| 2     | What the route's own `buildMetadata` returns                                   | title, description and the social card      |
 | 3     | The Page Builder design drawing the page                                       | title, description, the social card         |
 | 4     | The content type's pattern, such as `{Title} \| {Site name}`                   | title, description                          |
 | 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image             |
@@ -679,7 +684,16 @@ A level with nothing for a value, or only blank text, gives way to the next, so 
 served an empty title. A pattern whose tokens have no value gives way too, rather than leaving a
 gap. What a person typed always wins, so a route's code fills only what nobody typed.
 
-- **Visibility** is never code's to decide: a page is listed unless `noindex` is set on it.
+- **Visibility**: a page is listed unless `noindex` is set on it, its type is hidden, or the
+  route's own metadata hides it. A route may hide its page, never list one the plugin hides:
+  its `noindex` and `nofollow` are kept whatever the answer says, and the other directives it
+  sets, such as Google's `max-image-preview`, `max-snippet` and `max-video-preview` limits, are
+  served beside the answer's (see
+  [robots meta tags](https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag)).
+- **The title** is the page's whole title, its site name included where a pattern adds it, so
+  it is served as `title: { absolute }` and a root layout's `title.template` cannot add the
+  name again. The route's own title, where it is the one served, keeps the form the route gave
+  it. The social card's titles follow the same rule.
 - **The canonical** is the page's own declared address, in the language it was read in, formed by
   the site's [language rule](/docs/localization#each-languages-address). A page whose type
   declares no address gets no canonical rather than a guessed one, and so does a page whose
@@ -687,6 +701,8 @@ gap. What a person typed always wins, so a route's code fills only what nobody t
   new address. A canonical typed in the `seo` group overrides it only where search engines can
   follow it (a path from the site's root, or an `http(s)` address) and only on the site's own
   production addresses, unless `canonicalElsewhere` says the page first appeared on another site.
+  Where the plugin gives a page no canonical, the canonical and `og:url` the route set are kept,
+  so a page whose type declares no address is never served without the one it had.
 - **The share image** may be stored as a media id: the plugin looks it up, so a page read at
   `depth: 0` keeps its image.
 
@@ -848,19 +864,22 @@ empty, no field holds it yet, or the route read its relationship without the ent
 site is described.
 
 The route helpers hand the page's render the structured data as `context.structuredData`, text
-written so that no value can end its script element. Place it in the page, so it is in the HTML a
-crawler receives:
+written so that no value can end its script element. Place it in the page with
+`jsonLdScriptProps` from `nextly/runtime`, so it is in the HTML a crawler receives:
 
 ```tsx
 {
   context.structuredData && (
-    <script
-      type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: context.structuredData }}
-    />
+    <script {...jsonLdScriptProps(context.structuredData)} />
   );
 }
 ```
+
+`jsonLdScriptProps` also takes nodes a site builds itself, and escapes them the same way, so no
+page writes that escaping by hand. A site that renders its own pages asks for the structured
+data beside the head: `contentPageStructuredData` for an entry, `singlePageStructuredData` for a
+Single, and [`seoStructuredData`](#pages-built-in-code) for a page built in code. See
+[A site that renders its own pages](/docs/guides/routing-and-seo#a-site-that-renders-its-own-pages).
 
 Page Builder routes (`createBlocksPage`, `createSinglePage`, `createContentPage` and their public
 forms) place it themselves, before the page's blocks, so a page built in the Page Builder needs
@@ -1210,9 +1229,35 @@ The page is answered by the same order of who wins as every page with an entry:
 - then the site's [title pattern](#title-patterns) with the page's name, taken from its
   address (`/thank-you` is "Thank you") or given as `name`, and the site's defaults.
 
-Visibility and the canonical come only from the answer, never from the route: the canonical
-is the page's own address, and a page is hidden only from the screen. A save on the screen
-reaches the page from its next visit, a page built ahead of time included.
+The canonical is the page's own address, never the route's. A page is hidden where the screen
+hides it or where the route's own metadata sets `noindex`; a route cannot list a page the screen
+hides. A save on the screen reaches the page from its next visit, a page built ahead of time
+included.
+
+Its structured data comes from the same answer. Call `seoStructuredData` with the same address
+and options, and place the text with `jsonLdScriptProps`:
+
+```tsx
+// src/app/pricing/page.tsx
+import { seoMetadata, seoStructuredData } from "@nextlyhq/plugin-seo";
+import { jsonLdScriptProps } from "nextly/runtime";
+
+const options = {
+  metadata: { title: "Pricing", description: "Plans for every team." },
+};
+
+export const generateMetadata = () => seoMetadata("/pricing", options);
+
+export default async function PricingPage() {
+  const structuredData = await seoStructuredData("/pricing", options);
+  return (
+    <main>
+      {structuredData && <script {...jsonLdScriptProps(structuredData)} />}
+      <h1>Pricing</h1>
+    </main>
+  );
+}
+```
 
 The screen marks **Not connected** each route that has not called `seoMetadata`. What is set
 for its address is kept, and reaches the page once the line is in. A route records that it is

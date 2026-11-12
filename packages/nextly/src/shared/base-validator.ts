@@ -23,6 +23,7 @@
 import type { FieldAccess } from "../collections/fields/types/base";
 import { isIconIdShape } from "../collections/fields/types/icon";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
+import { neverTranslatable } from "../domains/i18n/classify-fields";
 import {
   configuredSiblingClashes,
   siblingClashMessage,
@@ -750,6 +751,19 @@ export function validateFieldBasicsShared(
   sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
 ): void {
   validateFieldNameShared(field.name, path, errors, sqlKeywordsSet);
+  // Refused rather than quietly stored as shared: a field the author marked translatable that
+  // can never be would otherwise read as translated in the configuration and be shared in fact.
+  if (
+    field.localized === true &&
+    typeof field.type === "string" &&
+    neverTranslatable(field as { type: string })
+  ) {
+    errors.push({
+      path: `${path}.localized`,
+      message: `Field "${String(field.name)}" cannot be translatable: a password or a virtual field is the same in every language. Remove \`localized: true\`.`,
+      code: "FIELD_NEVER_TRANSLATABLE",
+    });
+  }
   validateAccessShared(
     field.access,
     FIELD_ACCESS_KEYS,

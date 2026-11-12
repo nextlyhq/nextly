@@ -54,6 +54,14 @@ export interface PageMetadataValues {
   /** The social card's description, where it differs from the page's. */
   socialDescription?: string;
   image?: PageMetadataImage;
+  /**
+   * The route's own metadata hides the page from search (`noindex`). Set
+   * for the route's code level only. A provider may hide a page its route
+   * lists, never list one its route hides: core serves the page hidden
+   * whatever the answer says, so a provider that also reports it hidden
+   * keeps every output built from the answer in step with the page.
+   */
+  hidden?: boolean;
 }
 
 /** @experimental The document a route resolved the page to. */
@@ -77,16 +85,17 @@ export type PageMetadataSource =
 export interface PageMetadataInput {
   /**
    * The address the route served this page at, from `/`, as requested. Absent
-   * where the route cannot know it: a Single route is mounted by the app, which
-   * never tells it where.
+   * where the route cannot know it: a Single route is mounted by the app, and
+   * is told where only when the app says so.
    */
   readonly path?: string;
   /** The language the route read the page in, verbatim; absent when unset. */
   readonly locale?: string;
   readonly source: PageMetadataSource;
   /**
-   * What the route's code supplied: a title, a description and social values
-   * only. A route never supplies visibility or the canonical address.
+   * What the route's code supplied: a title, a description, social values,
+   * and whether it hides the page. A route never supplies the canonical
+   * address: core keeps the route's own only where the answer names none.
    */
   readonly code: PageMetadataValues;
   /** What the page's own content offers, such as a Page Builder page's blocks. */

@@ -53,6 +53,7 @@ import {
   type TranslationSurface,
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
+import { copyLiveness } from "../../i18n/migration/generate-down";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
@@ -275,6 +276,12 @@ export interface GenerateArgs {
    * an enable transition. Defaults to `"en"` when omitted.
    */
   defaultLocale?: string;
+  /**
+   * The site's languages in the configuration's order. With each language's own publish state, it
+   * decides the language a field leaving translation takes its shared value from (`copyLiveness`);
+   * omitted, the default language's, else the first by code.
+   */
+  languageOrder?: readonly string[];
   /**
    * Where to say what this run could not check, for the operator to act on. A warning never stops
    * the run; a refusal throws.
@@ -839,7 +846,8 @@ export async function generateMigration(
     args.dialect,
     args.defaultLocale ?? "en",
     companionHistory,
-    companionRenames
+    companionRenames,
+    args.languageOrder
   );
 
   // 3. Diff.
@@ -859,7 +867,8 @@ export async function generateMigration(
     args.defaultLocale ?? "en",
     companionHistory,
     args.onWarning ?? (() => {}),
-    desiredSnapshot
+    desiredSnapshot,
+    args.languageOrder
   );
 
   // 3c. Shared fields that become translated while their entity stays translated. The diff above
@@ -1699,6 +1708,26 @@ function tablesOfSettingsChanges(
  * column that has nowhere to land.
  */
 /**
+ * Whether an entity's translations table held each language's own `_status` in `previous`. The
+ * snapshot records no translations table, so this is read from what it keeps and from whether the
+ * entity is `translated`: its translations table has `_status` exactly when it publishes each
+ * language on its own (`publishesPerLanguage`), translated and Draft/Published, the latter recorded
+ * by its main table's `status` column. The snapshot's `localized` marker says only that the table
+ * exists: under per-language storage an untranslated entity keeps one with no `_status`.
+ */
+function companionHadStatus(
+  previous: NextlySchemaSnapshot,
+  mainTable: string,
+  translated: boolean
+): boolean {
+  const main = previous.tables.find(t => t.name === mainTable);
+  return publishesPerLanguage({
+    localized: translated && main?.localized === true,
+    status: main?.columns.some(col => col.name === "status") === true,
+  });
+}
+
+/**
  * The fields a disable brings home and the companion columns they come from: each field whose
  * column the previous snapshot records in the companion. The snapshot, not the config, says what
  * the companion holds, so a field added in the disabling edit is not among them.
@@ -1871,7 +1900,9 @@ function planCompanionMigrations(
   dialect: SupportedDialect,
   defaultLocale: string,
   history: TranslationRecords,
-  renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map()
+  renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map(),
+  /** The site's languages in order, which decides the value a disable keeps (`copyLiveness`). */
+  languageOrder?: readonly string[]
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const { entity: c, kind: entityKind } of entities) {
@@ -1900,7 +1931,8 @@ function planCompanionMigrations(
         spec?.mainTable ?? c.tableName,
         previousSnapshot,
         dialect,
-        defaultLocale
+        defaultLocale,
+        languageOrder
       );
       if (disable) entries.push(disable);
       continue;
@@ -1984,7 +2016,8 @@ function disableEntryFor(
   mainTable: string,
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
-  defaultLocale: string
+  defaultLocale: string,
+  languageOrder?: readonly string[]
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
@@ -2024,6 +2057,12 @@ function disableEntryFor(
     defaultLocale
   );
   if (!disableSpec) return undefined;
+  // Each entry keeps the value its readers saw, as the runtime disable keeps it.
+  disableSpec.liveness = copyLiveness(
+    languageOrder,
+    // A disable turns off translation for an entity that was translated.
+    companionHadStatus(previousSnapshot, mainTable, true)
+  );
   const plan = planCompanionMigration({
     spec: disableSpec,
     prevMainColumnNames: [],
@@ -2268,7 +2307,8 @@ function planFieldsLeavingTranslation(
   defaultLocale: string,
   history: TranslationRecords,
   warn: (message: string) => void,
-  desiredSnapshot: NextlySchemaSnapshot
+  desiredSnapshot: NextlySchemaSnapshot,
+  languageOrder?: readonly string[]
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
   for (const entry of entities) {
@@ -2310,6 +2350,16 @@ function planFieldsLeavingTranslation(
           mainTable: c.tableName,
           companionTable: `${c.tableName}_locales`,
           defaultLocale,
+          // Each language's own publish state is read where the translations table the snapshot
+          // records has one; otherwise every language of an entry is ranked as live.
+          liveness: copyLiveness(
+            languageOrder,
+            companionHadStatus(
+              previousSnapshot,
+              c.tableName,
+              c.localized === true
+            )
+          ),
           parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
           columns: leaving.map(l => l.column),
           // A rollback recreates default-language rows with the main row's publishing state, when
