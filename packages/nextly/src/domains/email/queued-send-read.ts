@@ -172,7 +172,7 @@ export async function readQueuedEmails(
     });
   }
   if (parsed.data.length === 0) return [];
-  const dialect = adapter.getCapabilities().dialect as QueueDialect;
+  const dialect: QueueDialect = adapter.getCapabilities().dialect;
   const queue = loadedDialect(dialect).tables.emailQueue;
   const db = adapter.getDrizzle<ReadDb>();
   const rows = (await db

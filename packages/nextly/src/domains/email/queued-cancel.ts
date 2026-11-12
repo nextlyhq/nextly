@@ -35,13 +35,13 @@ import {
   type QueuedErasureDb,
   type ReachedQueuedEmail,
 } from "./queued-erasure";
-import { attemptsOn, type QueueDialect } from "./queued-send-read";
 import {
   changesObserved,
   notifyQueuedEmailChange,
   type QueuedEmailCancelCause,
   type QueuedEmailChange,
 } from "./queued-send-changes";
+import { attemptsOn, type QueueDialect } from "./queued-send-read";
 
 /** What the plugin that queued `email` is told of a cancel reaching it. */
 function changeFor(
@@ -103,9 +103,12 @@ export async function cancelQueuedEmailAsPerson(
   id: string,
   userId: string | null
 ): Promise<{ id: string; state: string }> {
-  const dialect = adapter.getCapabilities().dialect as QueueDialect;
+  const dialect: QueueDialect = adapter.getCapabilities().dialect;
   const tables = loadedDialect(dialect).tables;
-  return runAdapterTransaction<{ id: string; state: string }, TransactionContext>(
+  return runAdapterTransaction<
+    { id: string; state: string },
+    TransactionContext
+  >(
     run => adapter.transaction(ctx => run(ctx)),
     async tx => {
       const [email] = await cancelQueuedEmailsAmong(

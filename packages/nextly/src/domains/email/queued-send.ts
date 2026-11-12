@@ -63,6 +63,12 @@ import { recipientDigest, storableError } from "./delivery-record";
 import { type EmailFailure, httpFailure } from "./failure";
 import { pruneQueuedEmails } from "./prune";
 import {
+  QUEUED_EMAIL_JOB,
+  QUEUED_EMAIL_MAX_ATTEMPTS,
+  QUEUED_EMAIL_PRUNE_JOB,
+} from "./queued-email-job";
+import type { QueuedErasureDb } from "./queued-erasure";
+import {
   changeRecipients,
   changesObserved,
   type FinalRecipient,
@@ -70,12 +76,6 @@ import {
   type QueuedEmailChange,
   type QueuedEmailRecipient,
 } from "./queued-send-changes";
-import {
-  QUEUED_EMAIL_JOB,
-  QUEUED_EMAIL_MAX_ATTEMPTS,
-  QUEUED_EMAIL_PRUNE_JOB,
-} from "./queued-email-job";
-import type { QueuedErasureDb } from "./queued-erasure";
 import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
 import { toAddressList } from "./services/recipients";

@@ -62,14 +62,8 @@ import {
   withEmailFailure,
 } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
-import { warnAboutLateQueuedEmail } from "../queued-email-warning";
 import { cancelQueuedEmailAsPerson } from "../queued-cancel";
-import {
-  comparableMailbox,
-  type FinalRecipient,
-  recipientDigesterOf,
-} from "../queued-send-changes";
-import { type QueuedEmailStatus, readQueuedEmails } from "../queued-send-read";
+import { warnAboutLateQueuedEmail } from "../queued-email-warning";
 import {
   type QueuedEmail,
   type QueuedEmailState,
@@ -78,6 +72,12 @@ import {
   type StoredQueuedEmail,
   storeQueuedEmail,
 } from "../queued-send";
+import {
+  comparableMailbox,
+  type FinalRecipient,
+  recipientDigesterOf,
+} from "../queued-send-changes";
+import { type QueuedEmailStatus, readQueuedEmails } from "../queued-send-read";
 import {
   assertIdempotencyKey,
   CORE_KEY_SCOPE,
@@ -133,13 +133,6 @@ import {
 } from "./recipients";
 import { DEFAULT_APP_NAME } from "./render-template";
 import {
-  checkedExclusions,
-  finalRecipients,
-  leaveOutExcluded,
-  repeatedOutcomes,
-  unknownOutcomes,
-} from "./send-recipient-report";
-import {
   answeredFailure,
   type EmailSendOutcome,
   inProgressFailure,
@@ -150,6 +143,13 @@ import {
   type RefusedRecipient,
   thrownFailure,
 } from "./send-failures";
+import {
+  checkedExclusions,
+  finalRecipients,
+  leaveOutExcluded,
+  repeatedOutcomes,
+  unknownOutcomes,
+} from "./send-recipient-report";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
 import { htmlToText, validateTemplateVariables } from "./template-engine";
 
