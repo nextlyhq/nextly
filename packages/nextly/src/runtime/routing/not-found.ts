@@ -13,37 +13,96 @@
  * @module runtime/routing/not-found
  */
 import { NextlyError } from "../../errors/nextly-error";
-import { loadNextModule, requireNextApi } from "../next-api";
+import {
+  isMissingFromChain,
+  loadNextModule,
+  reportMissingFromChain,
+  requireNextApi,
+} from "../next-api";
+import { notFoundError, permanentRedirectError } from "../next-control-flow";
 
-let cachedNotFound: (() => never) | null | undefined;
+/** Loads a module by specifier, as `require` does; replaced in tests. */
+type Load = (specifier: string) => unknown;
 
-function loadNotFound(): () => never {
-  if (cachedNotFound === undefined) {
-    const mod = loadNextModule("next/navigation");
-    cachedNotFound = mod
-      ? requireNextApi<() => never>(mod, "next/navigation", "notFound")
-      : null;
-  }
-  if (!cachedNotFound) {
-    // Where Next.js is not installed there is no not-found boundary to trigger, so
-    // there is nothing to degrade to: returning would hand the caller a page
-    // it believes is a 404.
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          "a Nextly route helper requires next/navigation (use it inside a Next.js app)",
-      },
-    });
-  }
-  return cachedNotFound;
+/**
+ * Where Next.js is not installed there is no not-found boundary to trigger and
+ * no response to redirect, so there is nothing to degrade to: returning would
+ * hand the caller a page it believes was answered.
+ */
+function outsideNextApp(): NextlyError {
+  return NextlyError.internal({
+    logContext: {
+      reason:
+        "a Nextly route helper requires next/navigation (use it inside a Next.js app)",
+    },
+  });
 }
+
+/**
+ * `name` from `next/navigation`, else `fallback` when `next/navigation` was
+ * found but a module it requires was not. A host that deploys each function
+ * with only its traced files (Vercel) can ship that bundle: Nextly's require
+ * of `next/navigation` is opaque to the trace, and Next's require hook sends
+ * it on to files no trace names. The fallback throws the same error, by
+ * digest, as Next's own helper, so the visitor gets the 404 or the redirect
+ * rather than a 500. Not installed at all: {@link outsideNextApp}.
+ */
+function navigationApi<A extends unknown[]>(
+  name: string,
+  fallback: (...args: A) => never,
+  load: Load | undefined
+): (...args: A) => never {
+  let mod: Record<string, unknown> | null;
+  try {
+    mod = loadNextModule("next/navigation", load);
+  } catch (error) {
+    if (!isMissingFromChain(error, "next/navigation")) throw error;
+    reportMissingFromChain(
+      "next/navigation",
+      error,
+      "answers its not-found pages and redirects with Next.js's errors built by digest"
+    );
+    return fallback;
+  }
+  if (!mod) {
+    return () => {
+      throw outsideNextApp();
+    };
+  }
+  return requireNextApi<(...args: A) => never>(mod, "next/navigation", name);
+}
+
+/** Next's `notFound`, or its error by digest when `next/navigation` is incomplete. */
+export function notFoundFrom(load?: Load): () => never {
+  return navigationApi(
+    "notFound",
+    () => {
+      throw notFoundError();
+    },
+    load
+  );
+}
+
+/** Next's `permanentRedirect`, or its error by digest when `next/navigation` is incomplete. */
+export function permanentRedirectFrom(load?: Load): (path: string) => never {
+  return navigationApi(
+    "permanentRedirect",
+    (path: string) => {
+      throw permanentRedirectError(path);
+    },
+    load
+  );
+}
+
+let cachedNotFound: (() => never) | undefined;
 
 /** Trigger the App Router's not-found boundary; never returns (narrows callers). */
 export function triggerNotFound(): never {
-  return loadNotFound()();
+  cachedNotFound ??= notFoundFrom();
+  return cachedNotFound();
 }
 
-let cachedPermanentRedirect: ((path: string) => never) | null | undefined;
+let cachedPermanentRedirect: ((path: string) => never) | undefined;
 
 /**
  * Answer with a permanent redirect to `path`; never returns.
@@ -54,25 +113,6 @@ let cachedPermanentRedirect: ((path: string) => never) | null | undefined;
  * of its address (a list's `/page/1`) should be indexed under its first.
  */
 export function triggerPermanentRedirect(path: string): never {
-  if (cachedPermanentRedirect === undefined) {
-    const mod = loadNextModule("next/navigation");
-    cachedPermanentRedirect = mod
-      ? requireNextApi<(path: string) => never>(
-          mod,
-          "next/navigation",
-          "permanentRedirect"
-        )
-      : null;
-  }
-  if (!cachedPermanentRedirect) {
-    // Without Next.js there is no response to redirect, and returning would
-    // hand the caller a page it believes was answered.
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          "a Nextly route helper requires next/navigation (use it inside a Next.js app)",
-      },
-    });
-  }
+  cachedPermanentRedirect ??= permanentRedirectFrom();
   return cachedPermanentRedirect(path);
 }

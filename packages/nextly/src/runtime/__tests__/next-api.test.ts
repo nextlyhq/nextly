@@ -6,7 +6,11 @@
 import { describe, expect, it } from "vitest";
 
 import { supportedFrameworkRanges } from "../framework-versions";
-import { loadNextModule, requireNextApi } from "../next-api";
+import {
+  isMissingFromChain,
+  loadNextModule,
+  requireNextApi,
+} from "../next-api";
 
 /** Node's error for `specifier` not being installed, as `require` throws it. */
 function notInstalled(specifier: string): Error {
@@ -70,5 +74,30 @@ describe("loadNextModule", () => {
         throw broken;
       })
     ).toThrow(broken);
+  });
+});
+
+describe("isMissingFromChain", () => {
+  it("is a module the entry requires being missing, the entry itself found", () => {
+    expect(
+      isMissingFromChain(
+        notInstalled(
+          "next/dist/server/route-modules/pages/vendored/contexts/app-router-context"
+        ),
+        "next/navigation"
+      )
+    ).toBe(true);
+  });
+
+  it("is not the entry itself being missing", () => {
+    expect(
+      isMissingFromChain(notInstalled("next/navigation"), "next/navigation")
+    ).toBe(false);
+  });
+
+  it("is not any other failure", () => {
+    expect(
+      isMissingFromChain(new SyntaxError("Unexpected token"), "next/navigation")
+    ).toBe(false);
   });
 });

@@ -21,6 +21,7 @@
 import { createRequire } from "node:module";
 
 import { NextlyError } from "../errors/nextly-error";
+import { getNextlyLogger } from "../observability/logger";
 
 import { supportedFrameworkRanges } from "./framework-versions";
 
@@ -43,6 +44,44 @@ function isNotInstalled(error: unknown, specifier: string): boolean {
     (error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND" &&
     error.message.includes(`'${specifier}'`)
   );
+}
+
+/**
+ * True for Node's error for a module `specifier` requires being missing while
+ * `specifier` itself was found: a deployment whose trace left part of Next.js
+ * out. Not a Next.js version, and not running outside a Next.js app.
+ */
+export function isMissingFromChain(error: unknown, specifier: string): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === "MODULE_NOT_FOUND" &&
+    !isNotInstalled(error, specifier)
+  );
+}
+
+// The entries an incomplete deployment was named for already: once each is
+// enough, and every request after it would repeat the same line.
+const reportedIncomplete = new Set<NextModule>();
+
+/**
+ * Name, once per entry, a deployment missing a file `specifier` requires, and
+ * what Nextly does without it (`instead`). Through nextly's logger, which an
+ * app may have replaced.
+ */
+export function reportMissingFromChain(
+  specifier: NextModule,
+  error: unknown,
+  instead: string
+): void {
+  if (reportedIncomplete.has(specifier)) return;
+  reportedIncomplete.add(specifier);
+  const missing =
+    error instanceof Error ? (error.message.split("\n")[0] ?? "") : "";
+  getNextlyLogger().warn({
+    kind: "next-module-incomplete",
+    message: `${specifier} could not be loaded: the deployment is missing a file it requires (${missing}). Nextly ${instead}. Wrap next.config in withNextly() from nextly/next, or add nextlyTracingIncludes() to outputFileTracingIncludes.`,
+    specifier,
+  });
 }
 
 /**
