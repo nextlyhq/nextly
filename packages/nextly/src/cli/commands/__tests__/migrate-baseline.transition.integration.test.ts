@@ -812,6 +812,58 @@ function runSuite(dialect: SupportedDialect): void {
     ]);
   });
 
+  it("refuses an extra withdrawn index sharing an owner's index shape", async () => {
+    // A second live index sharing columns and uniqueness with an owner's
+    // declared index under another name is not accounted for by that single
+    // declaration, and must still be refused on adoption.
+    const indexedPlugin = definePlugin({
+      name: "fx",
+      version: "0.0.0",
+      nextly: "*",
+      contributes: {
+        schema: {
+          prefix: "fx",
+          tables: [
+            defineTable(
+              "notes",
+              { id: col.id(), title: col.shortText() },
+              { indexes: [{ columns: ["title"], unique: true }] }
+            ),
+          ],
+        },
+      },
+    });
+    await runDbSync(
+      h,
+      defineConfig({
+        plugins: [indexedPlugin],
+        collections: [],
+      })
+    );
+    await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+      `CREATE UNIQUE INDEX ${id(h, "uq_fx_notes_title_app")} ON ${id(h, "fx__notes")} (${id(h, "title")})`
+    );
+
+    const refused = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: defineConfig({ plugins: [indexedPlugin], collections: [] }),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(refused.kind).toBe("contribution-mismatch");
+    if (refused.kind !== "contribution-mismatch")
+      throw new Error("expected a refusal");
+    expect(refused.mismatches).toEqual([
+      { table: "fx__notes", elements: ["uq_fx_notes_title_app"] },
+    ]);
+  });
+
   it("refuses a withdrawn index-only contribution on a core table", async () => {
     // An app index added to an existing core column carries no contributed
     // column beside it; withdrawing it must still be caught rather than skipped
