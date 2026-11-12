@@ -75,6 +75,12 @@ import {
   type SubmissionOriginMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
+import {
+  RETENTION_SCHEDULE,
+  type RetentionDeps,
+  retentionJob,
+  runRetention,
+} from "./handlers/retention";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
 import { publicFormRoutes } from "./routes/public-forms";
 import type {
@@ -271,6 +277,8 @@ export function formBuilder(
   // What the one-response sweep reads and writes with, once `init` has the
   // live context; until then a pass defers its work to the next.
   let rebuildDeps: RebuildDeps | undefined;
+  // What the nightly retention pass deletes with, set the same way.
+  let retentionDeps: RetentionDeps | undefined;
 
   const plugin = definePlugin({
     name: "@nextlyhq/plugin-form-builder",
@@ -295,7 +303,15 @@ export function formBuilder(
         rebuildKeysJob(async deadline => {
           if (rebuildDeps) await rebuildResponseKeys(rebuildDeps, deadline);
         }),
+        // Deletes submissions past their form's keeping, and old spam.
+        retentionJob(async (deadline, cursor) => {
+          if (retentionDeps) {
+            await runRetention(retentionDeps, deadline, cursor);
+          }
+        }),
       ],
+      // Runs the retention pass each night.
+      schedules: [RETENTION_SCHEDULE],
       // New form submissions, the one plugin widget core's default dashboard
       // names. Contributed, never suggested: where it goes is core's default's
       // to say, and a site's own default may leave it out.
@@ -720,6 +736,12 @@ export function formBuilder(
       rebuildDeps = {
         collections: nextly.services.collections,
         digests: () => nextly.security.digests,
+        formsSlug,
+        submissionsSlug: submissionSlug,
+      };
+      retentionDeps = {
+        collections: nextly.services.collections,
+        jobs: nextly.services.jobs,
         formsSlug,
         submissionsSlug: submissionSlug,
       };
