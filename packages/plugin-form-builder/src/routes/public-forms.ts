@@ -48,6 +48,17 @@ import { formAvailabilityNow } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
 /**
+ * The refusal for a form that is absent, not published, or not open: one
+ * message whatever the reason, so the answer does not say which forms exist.
+ */
+export function noSuchForm(slug: string): NextlyError {
+  return NextlyError.notFound({
+    message: NO_SUCH_FORM,
+    logContext: { entity: "form", slug },
+  });
+}
+
+/**
  * These routes read and write as the anonymous visitor on the other end.
  *
  * `public: true` waives the ROUTE's authentication and says nothing about the

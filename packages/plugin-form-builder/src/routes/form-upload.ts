@@ -30,17 +30,15 @@
  */
 import {
   NextlyError,
-  NO_SUCH_FORM,
-  RateLimiter,
-  resolveRateLimitStore,
   respondAction,
   trustedClientIp,
   type PluginRoute,
   type PluginRouteContext,
-} from "nextly";
+} from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
 import { FORM_UPLOADS_SLUG } from "../collections/uploads";
+import { countAgainstLimit } from "../handlers/spam-detection";
 import type { ResolvedFormBuilderConfig } from "../types";
 import {
   acceptPatternsOf,
@@ -50,7 +48,7 @@ import {
   uploadLimitOf,
 } from "../utils/upload-rules";
 
-import { formAt, type PublicForm } from "./public-forms";
+import { formAt, noSuchForm, type PublicForm } from "./public-forms";
 
 /** How many uploads a visitor may make per submission the limit allows. */
 const UPLOADS_PER_SUBMISSION = 5;
@@ -103,10 +101,7 @@ async function openFormAt(
     });
   }
   if (availability.kind !== "open" || typeof doc?.id !== "string") {
-    throw NextlyError.notFound({
-      message: NO_SUCH_FORM,
-      logContext: { entity: "form", slug },
-    });
+    throw noSuchForm(slug);
   }
   return doc as PublicForm & { id: string };
 }
@@ -125,7 +120,7 @@ async function holdUploadRate(
   const limit = config.spamProtection.rateLimit;
   const ip = trustedClientIp(req);
   if (!limit || !ip) return;
-  const result = await new RateLimiter(resolveRateLimitStore()).check(
+  const result = await countAgainstLimit(
     `form-upload:${formId}:${ip}`,
     limit.maxSubmissions * UPLOADS_PER_SUBMISSION,
     limit.windowMs
