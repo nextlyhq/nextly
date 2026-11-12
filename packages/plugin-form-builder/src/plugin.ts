@@ -1900,22 +1900,9 @@ async function queueSubmissionNotifications(
   nextly: NextlyInstance,
   formsSlug: string
 ): Promise<void> {
-  if (write.operation !== "create") return;
-  // The plugin-level kill switch: `notifications.enabled: false` turns off
-  // all form emails regardless of per-rule state.
-  if (!config.notifications.enabled) return;
-
-  // The submission as the write leaves it, in the shape a read returns.
-  const submission = write.data as Record<string, unknown> | undefined;
-  if (!submission) return;
-
-  // Spam is stored for review, but nobody gets emailed about it — otherwise
-  // every bot hit would trigger the form's notification rules. Marking it
-  // Not spam later queues nothing either.
-  if (submission.status === "spam") return;
-
-  const formId = parentFormId(submission);
-  if (!formId) return;
+  const target = submissionToNotify(write, config);
+  if (!target) return;
+  const { submission, formId } = target;
 
   const form = await formInTransaction(nextly, write, formsSlug, formId);
   if (!form) return;
@@ -1923,22 +1910,17 @@ async function queueSubmissionNotifications(
   const notifications = Array.isArray(form.notifications)
     ? (form.notifications as FormNotification[])
     : [];
-  if (notifications.length === 0) return;
-
   const emailService = nextly.services.email;
-  if (!emailService) return;
+  if (notifications.length === 0 || !emailService) return;
 
   // Read either way: as an object, or serialized as a dialect that stores
   // JSON columns as text keeps it. Without parsing a serialized one,
   // {{field}} recipients, reply-to references, and send conditions all
   // silently see an empty submission.
   const submittedData = parseJsonColumn(submission.data);
-
-  // Collect mediaIds from file fields marked for email attachment
-  const formFields = Array.isArray(form.fields)
-    ? (form.fields as Array<Record<string, unknown>>)
+  const fields = Array.isArray(form.fields)
+    ? (form.fields as AnyFormField[])
     : [];
-  const fileAttachments = collectAttachmentInputs(formFields, submittedData);
 
   // -- Build phase: resolve each enabled notification into an outgoing
   // descriptor (the value the D63 seam transforms).
@@ -1948,26 +1930,9 @@ async function queueSubmissionNotifications(
     formName: form.name,
     submissionId: write.id,
     defaultFrom: config.notifications.defaultFrom,
-    fields: Array.isArray(form.fields) ? (form.fields as AnyFormField[]) : [],
+    fields,
   });
-
-  for (const skip of skipped) {
-    if (skip.reason === "empty-recipient") {
-      nextly.logger.warn?.(
-        "Form Builder: empty recipient, skipping notification",
-        { notificationId: skip.notificationId, formSlug: form.slug }
-      );
-    } else {
-      // Unmet conditions and missing templates are expected states, not
-      // faults — surface them only at debug level.
-      nextly.logger.debug?.("Form Builder: notification skipped", {
-        notificationId: skip.notificationId,
-        formSlug: form.slug,
-        reason: skip.reason,
-      });
-    }
-  }
-
+  logSkippedNotifications(skipped, form.slug, nextly.logger);
   if (emails.length === 0) return;
 
   // -- Seam: thread the outgoing notifications through the D63 filter so user
@@ -1989,12 +1954,67 @@ async function queueSubmissionNotifications(
     logger: nextly.logger,
     formSlug: form.slug,
     submissionId,
-    fileAttachments,
+    // The mediaIds of file fields marked for email attachment, for an email
+    // a filter added that names no files of its own.
+    fileAttachments: attachmentsFrom(
+      fieldsMarkedToAttach(fields),
+      submittedData
+    ),
     tx: write.db,
     // Kept so marking the submission Spam, or deleting it, can call off or
     // forget what it sent.
     record: sent => recordSend(nextly, write.transaction, submissionId, sent),
   });
+}
+
+/**
+ * The new submission a write asks notifications for, and its form's id, or
+ * undefined when it asks for none: not a create, notifications switched off
+ * for the whole plugin, spam, or a row naming no form.
+ */
+function submissionToNotify(
+  write: SubmissionWrite,
+  config: ResolvedFormBuilderConfig
+): { submission: Record<string, unknown>; formId: string } | undefined {
+  // The plugin-level kill switch: `notifications.enabled: false` turns off
+  // all form emails regardless of per-rule state.
+  if (write.operation !== "create" || !config.notifications.enabled) {
+    return undefined;
+  }
+  // The submission as the write leaves it, in the shape a read returns.
+  const submission = write.data as Record<string, unknown> | undefined;
+  // Spam is stored for review, but nobody gets emailed about it — otherwise
+  // every bot hit would trigger the form's notification rules. Marking it
+  // Not spam later queues nothing either.
+  if (!submission || submission.status === "spam") return undefined;
+  const formId = parentFormId(submission);
+  return formId ? { submission, formId } : undefined;
+}
+
+/**
+ * Log why each skipped notification was not queued: an empty recipient as a
+ * warning, and unmet conditions or a missing template, which are expected
+ * states rather than faults, at debug level only.
+ */
+function logSkippedNotifications(
+  skipped: readonly SkippedNotification[],
+  formSlug: unknown,
+  logger: Pick<NextlyInstance["logger"], "warn" | "debug">
+): void {
+  for (const skip of skipped) {
+    if (skip.reason === "empty-recipient") {
+      logger.warn?.("Form Builder: empty recipient, skipping notification", {
+        notificationId: skip.notificationId,
+        formSlug,
+      });
+    } else {
+      logger.debug?.("Form Builder: notification skipped", {
+        notificationId: skip.notificationId,
+        formSlug,
+        reason: skip.reason,
+      });
+    }
+  }
 }
 
 /**
