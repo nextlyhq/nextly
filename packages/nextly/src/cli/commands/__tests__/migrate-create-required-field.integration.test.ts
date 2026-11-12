@@ -334,8 +334,10 @@ describe.each(getConfiguredTestDialects())(
       const refused = await migrate(config, `${TABLE}.subtitle`);
       expect(refused.refused, refused.said).toBe(true);
       expect(refused.said).toContain("(REQUIRED_COLUMN_HAS_NULLS)");
+      // Named as the collection's field: the first `nextly migrate` wrote the
+      // collection's registry row, which maps the table to its entity.
       expect(refused.said).toContain(
-        `Table '${TABLE}': column 'subtitle' cannot become required while 1 row holds no value in it`
+        `Collection '${SLUG}': field 'subtitle' cannot become required while 1 row holds no value in it`
       );
       // Refused before it ran, not failed part-way: no attempt is recorded,
       // where a server refusing the ALTER mid-file would leave a failed one.
