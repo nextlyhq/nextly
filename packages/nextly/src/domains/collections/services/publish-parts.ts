@@ -4,26 +4,32 @@
  * or applied, and everything chosen moves or nothing does.
  *
  * What it decides, before anything is written:
- * - every refusal, collected rather than the first: each language's own publish rule and
- *   validation, the shared part's rule (asked as every language, since every language shows it),
- *   whatever governs publishing beyond access (`publishGate`), a unique translated field with no
- *   value of its own in a language going live, and, where the collection requires it, a required
- *   translated field with no value of its own;
+ * - every refusal, collected rather than the first: each language's own publish rule, the shared
+ *   part's rule (asked in every language, since every language shows it), whatever governs
+ *   publishing beyond access (`publishGate`), a unique translated field with no value of its own
+ *   in a language going live, and, where the collection requires it, a required translated field
+ *   with no value of its own;
  * - the shared part goes live with an entry's first language, chosen or not, and cannot be taken
  *   down while a language the request does not name stays live.
  *
- * The writes themselves are each language's own publish, run together in one transaction: a dry
- * run of them, rolled back, finds their refusals, and the same writes, committed, apply the
- * request. So what a request says it would do and what it does come from one implementation.
+ * The move itself is the transition of every language, told which parts it moves: one
+ * transaction under the entry's row lock, which judges each language going live (every one at
+ * fault reported) and writes the chosen parts' statuses together. What a request says it would do
+ * is that transition's own preview, so the two come from one implementation.
  *
  * @experimental The request and its answer may change until publishing per language is complete.
  *
  * @module domains/collections/services/publish-parts
  */
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
-import type { LanguageOutcome } from "../../versions/publish-all-plan";
+import type {
+  LanguageOutcome,
+  PublishAllBlocker,
+} from "../../versions/publish-all-plan";
 
+import type { LifecycleParts } from "./all-locales-lifecycle";
 import type { CollectionServiceResult } from "./collection-types";
 import type { PublishGate, PublishPart } from "./publish-gate";
 
@@ -89,45 +95,38 @@ export interface PartsState {
   requireEveryLanguage: boolean;
 }
 
-/** The writes a request is carried out with, inside one transaction. */
-export interface PartWrites {
-  /** One language's own publish or unpublish, as an update in that language makes it. */
-  language(
-    direction: PublishDirection,
-    locale: string
-  ): Promise<CollectionServiceResult>;
-  /** The shared part's publishing state: the entry's own. */
-  shared(direction: PublishDirection): Promise<void>;
+/** What a request reads before it decides anything. */
+export interface PartsReads {
+  state: PartsState;
+  /** Why the caller may not move each language it asked about, by language. */
+  languageRefusals: ReadonlyMap<string, string>;
+  /** Why the caller may not move the shared part, when asked about it, or null. */
+  sharedRefusal: string | null;
 }
 
 /** What a request is carried out with, bound to the entry and the caller. */
 export interface PublishPartsEngines {
-  /** Every language at once, or what doing so would do. */
-  everyLanguage(
-    direction: PublishDirection,
-    describe: boolean
-  ): Promise<CollectionServiceResult>;
-  /** The entry before the request, or why it cannot be read. */
-  state(): Promise<PartsState | CollectionServiceResult>;
-  /** Why the caller may not move this language, or null. */
-  languageRefusal(
-    direction: PublishDirection,
-    locale: string
-  ): Promise<string | null>;
-  /** Why the caller may not move the shared part, or null. */
-  sharedRefusal(direction: PublishDirection): Promise<string | null>;
+  /**
+   * The entry as stored and the caller's refusals for `locales` and, where `shared`, the shared
+   * part; or the answer that ends the request, when the entry cannot be read.
+   */
+  reads(ask: {
+    locales: readonly string[];
+    shared: boolean;
+  }): Promise<PartsReads | CollectionServiceResult>;
   gate: PublishGate;
   /** The entry's collection and the caller, for the gate. */
   collection: string;
   userId?: string;
   /**
-   * `work` in one transaction: committed when `commit` is true and `work` refuses nothing (an
-   * empty list), rolled back otherwise. A dry run runs no hooks and leaves nothing behind.
+   * The transition of `parts` (every part, where absent) in `direction`, in one transaction; or,
+   * where `describe`, what a publish of them would do, changing nothing.
    */
-  transaction(
-    commit: boolean,
-    work: (writes: PartWrites) => Promise<Issue[]>
-  ): Promise<Issue[]>;
+  move(
+    direction: PublishDirection,
+    parts: LifecycleParts | undefined,
+    describe: boolean
+  ): Promise<CollectionServiceResult>;
 }
 
 /** One refused part, as a validation error carries it. */
@@ -177,36 +176,31 @@ function ownValueIssues(state: PartsState, locale: string): Issue[] {
   return issues;
 }
 
-/** The outcome a publish or unpublish has on one language, from the state before it. */
-function outcomeOf(
-  state: PartsState,
-  direction: PublishDirection,
-  locale: string
-): PartOutcome {
-  const stored = state.languages.get(locale);
-  if (direction === "unpublish") {
-    return {
-      locale,
-      outcome: stored?.live ? "taken-down" : "stays-unpublished",
-    };
-  }
-  if (stored?.live) return { locale, outcome: "stays-published" };
-  if (stored === undefined && locale !== state.defaultLocale) {
-    return { locale, outcome: "shows-fallback", fallback: state.defaultLocale };
-  }
-  return { locale, outcome: "goes-live" };
+/** The outcome an unpublish has on one language, from the state before it. */
+function unpublishOutcome(state: PartsState, locale: string): PartOutcome {
+  return {
+    locale,
+    outcome: state.languages.get(locale)?.live
+      ? "taken-down"
+      : "stays-unpublished",
+  };
 }
 
-/** Every refusal of the request, before anything is written. */
+/**
+ * Every refusal the request meets before anything is written. `everyLanguage` requests leave
+ * access to the transition, which judges it as publishing every language always has.
+ */
 async function refusalsOf(
   id: string,
   request: PublishPartsRequest,
   chosen: readonly string[],
   sharedPart: boolean,
-  state: PartsState,
-  engines: PublishPartsEngines
+  reads: PartsReads,
+  engines: PublishPartsEngines,
+  everyLanguage: boolean
 ): Promise<Issue[]> {
   const { direction } = request;
+  const { state } = reads;
   const issues: Issue[] = [];
   for (const locale of chosen) {
     if (!state.configured.includes(locale)) {
@@ -218,25 +212,22 @@ async function refusalsOf(
       });
       continue;
     }
-    const refused = await engines.languageRefusal(direction, locale);
-    if (refused !== null) {
+    const refused = reads.languageRefusals.get(locale);
+    if (refused !== undefined) {
       issues.push({
         path: locale,
         code: "FORBIDDEN",
         locale,
-        message: refused,
+        message: `${languageName(locale)} (${locale}): ${refused}`,
       });
     }
   }
-  if (sharedPart) {
-    const refused = await engines.sharedRefusal(direction);
-    if (refused !== null) {
-      issues.push({
-        path: SHARED_PATH,
-        code: "FORBIDDEN",
-        message: `The shared part: ${refused}`,
-      });
-    }
+  if (sharedPart && reads.sharedRefusal !== null) {
+    issues.push({
+      path: SHARED_PATH,
+      code: "FORBIDDEN",
+      message: `The shared part: ${reads.sharedRefusal}`,
+    });
   }
   const parts: PublishPart[] = [
     ...chosen.map(locale => ({ kind: "language" as const, locale })),
@@ -256,7 +247,7 @@ async function refusalsOf(
       message: held.message,
     });
   }
-  if (direction === "unpublish" && sharedPart) {
+  if (direction === "unpublish" && sharedPart && !everyLanguage) {
     const stillLive = state.configured.filter(
       locale => !chosen.includes(locale) && state.languages.get(locale)?.live
     );
@@ -269,48 +260,55 @@ async function refusalsOf(
     }
   }
   if (direction === "publish") {
-    for (const locale of chosen) issues.push(...ownValueIssues(state, locale));
-  }
-  return issues;
-}
-
-/** Each language's write, the shared part's after them; each refusal collected, none thrown. */
-async function writeAll(
-  writes: PartWrites,
-  direction: PublishDirection,
-  chosen: readonly string[],
-  sharedPart: boolean
-): Promise<Issue[]> {
-  const issues: Issue[] = [];
-  for (const locale of chosen) {
-    const result = await writes.language(direction, locale);
-    if (!result.success) {
-      issues.push({
-        path: locale,
-        code: "REFUSED",
-        locale,
-        message: `${languageName(locale)} (${locale}): ${result.message ?? "refused."}`,
-      });
+    // Each language going live: a chosen one, or, for every language, each stored one. A language
+    // already live does not go live again.
+    for (const locale of chosen) {
+      const stored = state.languages.get(locale);
+      if (stored?.live) continue;
+      if (everyLanguage && stored === undefined) continue;
+      issues.push(...ownValueIssues(state, locale));
     }
   }
-  if (sharedPart && issues.length === 0) await writes.shared(direction);
   return issues;
 }
 
+/** The request refused whole, every issue in the validation error's public data. */
 function refused(issues: Issue[]): CollectionServiceResult {
   const error = NextlyError.validation({ errors: issues });
   return {
+    ...errorEnvelopeFields(error),
     success: false,
-    statusCode: 400,
+    statusCode: error.statusCode,
+    // Every part's reason in the message too, for a caller that reads only that.
     message: issues.map(issue => issue.message).join(" "),
     data: null,
-    error,
-  } as CollectionServiceResult;
+  };
+}
+
+/** The issues a preview's blockers stand for: what the publish it previews would refuse. */
+function blockerIssues(blockers: readonly PublishAllBlocker[]): Issue[] {
+  return blockers.map(blocker => ({
+    path: blocker.fields.join(", ") || SHARED_PATH,
+    code: blocker.reason,
+    message: `Publishing would be refused (${blocker.reason})${blocker.fields.length > 0 ? `: ${blocker.fields.join(", ")}` : ""}.`,
+  }));
+}
+
+/** Each chosen language's outcome, as the transition reports it, in the order they were chosen. */
+function chosenOutcomes(
+  reported: readonly LanguageOutcome[],
+  chosen: readonly string[]
+): PartOutcome[] {
+  const byLocale = new Map(reported.map(outcome => [outcome.locale, outcome]));
+  return chosen.flatMap(locale => {
+    const outcome = byLocale.get(locale);
+    return outcome === undefined ? [] : [outcome];
+  });
 }
 
 /**
- * Carry out `request` on entry `id`: every language through the every-language engine, a list of
- * languages as one transaction of their own publishes, everything refused before anything moves.
+ * Carry out `request` on entry `id`: every refusal collected before anything moves, then the
+ * chosen parts moved together, or described.
  */
 export async function publishParts(
   id: string,
@@ -320,78 +318,82 @@ export async function publishParts(
   CollectionServiceResult<PublishPartsAnswer> | CollectionServiceResult
 > {
   const describe = request.describe === true;
-  if (request.locales === "all") {
-    const result = await engines.everyLanguage(request.direction, describe);
-    if (!result.success) return result;
-    const data = result.data as { languages?: LanguageOutcome[] } | null;
-    return {
-      ...result,
-      data: {
-        id,
-        languages: data?.languages ?? [],
-        shared: { changes: true, added: false },
-      },
-    };
-  }
-  const read = await engines.state();
+  const everyLanguage = request.locales === "all";
+  const asked = everyLanguage ? [] : [...new Set(request.locales)];
+  // The shared part's rule is asked whether or not the request ends up moving it: whether a first
+  // publish adds it is known only once the entry is read.
+  const read = await engines.reads({
+    locales: asked,
+    shared: !everyLanguage,
+  });
   if ("success" in read) return read;
-  const state = read;
-  const chosen = [...new Set(request.locales)];
+  const { state } = read;
+  const chosen = everyLanguage ? [...state.configured] : asked;
   // An entry's first publish takes the shared part with it, chosen or not: no language is live
   // while its shared part is not.
   const added =
+    !everyLanguage &&
     request.direction === "publish" &&
     !state.sharedLive &&
     request.shared !== true;
-  const sharedPart = request.shared === true || added;
+  const sharedPart = everyLanguage || request.shared === true || added;
 
   const issues = await refusalsOf(
     id,
     request,
     chosen,
     sharedPart,
-    state,
-    engines
-  );
-  // The writes' own refusals, found by running them and rolling back, so every language's is
-  // known before any language moves.
-  issues.push(
-    ...(await engines.transaction(false, writes =>
-      writeAll(writes, request.direction, chosen, sharedPart)
-    ))
+    read,
+    engines,
+    everyLanguage
   );
   if (issues.length > 0) return refused(issues);
 
-  const answer: PublishPartsAnswer = {
-    id,
-    languages: chosen.map(locale =>
-      outcomeOf(state, request.direction, locale)
-    ),
-    shared: {
-      changes:
-        sharedPart &&
-        (request.direction === "publish"
-          ? !state.sharedLive
-          : state.sharedLive),
-      added,
-    },
+  const parts: LifecycleParts | undefined = everyLanguage
+    ? undefined
+    : { locales: new Set(chosen), shared: sharedPart };
+  const shared = {
+    changes:
+      sharedPart &&
+      (request.direction === "publish" ? !state.sharedLive : state.sharedLive),
+    added,
   };
-  if (describe) {
-    return {
-      success: true,
-      statusCode: 200,
-      message: "What the change does.",
-      data: answer,
+
+  if (request.direction === "unpublish") {
+    const answer: PublishPartsAnswer = {
+      id,
+      languages: chosen.map(locale => unpublishOutcome(state, locale)),
+      shared,
     };
+    if (describe) {
+      return {
+        success: true,
+        statusCode: 200,
+        message: "What the change does.",
+        data: answer,
+      };
+    }
+    const moved = await engines.move("unpublish", parts, false);
+    if (!moved.success) return moved;
+    return { ...moved, message: "Unpublished.", data: answer };
   }
-  const late = await engines.transaction(true, writes =>
-    writeAll(writes, request.direction, chosen, sharedPart)
-  );
-  if (late.length > 0) return refused(late);
+
+  const moved = await engines.move("publish", parts, describe);
+  if (!moved.success) return moved;
+  const data = moved.data as {
+    languages?: LanguageOutcome[];
+    blockers?: PublishAllBlocker[];
+  } | null;
+  if (describe && (data?.blockers?.length ?? 0) > 0) {
+    return refused(blockerIssues(data?.blockers ?? []));
+  }
   return {
-    success: true,
-    statusCode: 200,
-    message: request.direction === "publish" ? "Published." : "Unpublished.",
-    data: answer,
+    ...moved,
+    message: describe ? "What the change does." : "Published.",
+    data: {
+      id,
+      languages: chosenOutcomes(data?.languages ?? [], chosen),
+      shared,
+    },
   };
 }

@@ -34,6 +34,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { assertWellFormedFilter } from "../../domains/collections/query/filter-shape";
+import type { LifecycleParts } from "../../domains/collections/services/all-locales-lifecycle";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
@@ -47,6 +48,7 @@ import type {
   BulkOperationOptions,
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
+import { publishGate } from "../../domains/collections/services/publish-gate";
 import {
   publishParts,
   type PublishPartsRequest,
@@ -159,6 +161,8 @@ type EveryLanguageLifecycleParams = {
   request?: Request;
   /** Seeds the context every hook of this transition shares. */
   context?: Record<string, unknown>;
+  /** The parts the transition moves, where fewer than all; see `LifecycleParts`. */
+  parts?: LifecycleParts;
 };
 
 /**
@@ -960,30 +964,25 @@ export class CollectionEntryService extends BaseService {
     request: PublishPartsRequest
   ) {
     return publishParts(params.entryId, request, {
-      everyLanguage: (direction, describe) =>
-        describe
-          ? this.previewPublishAllLocales(params)
-          : direction === "publish"
-            ? this.publishAllLocales(params)
-            : this.unpublishAllLocales(params),
-      oneLanguage: (direction, locale) =>
-        this.updateEntry(
-          {
-            collectionName: params.collectionName,
-            entryId: params.entryId,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            authenticatedScope: params.authenticatedScope,
-            disableRevalidate: params.disableRevalidate,
-            request: params.request,
-            context: params.context,
-            locale,
-          },
-          {
-            ...params.data,
-            status: direction === "publish" ? "published" : "draft",
-          }
-        ),
+      reads: ask =>
+        withRuleLanguage(everyLanguageOf(this.localization), async () => {
+          const read = await this.mutationService.publishPartsReads(params, {
+            action: request.direction,
+            ...ask,
+          });
+          return "answer" in read ? read.answer : read;
+        }),
+      gate: publishGate(),
+      collection: params.collectionName,
+      userId: params.user?.id,
+      // The transition of every language, told which parts it moves.
+      move: (direction, parts, describe) => {
+        const scoped = parts === undefined ? params : { ...params, parts };
+        if (describe) return this.previewPublishAllLocales(scoped);
+        return direction === "publish"
+          ? this.publishAllLocales(scoped)
+          : this.unpublishAllLocales(scoped);
+      },
     });
   }
 

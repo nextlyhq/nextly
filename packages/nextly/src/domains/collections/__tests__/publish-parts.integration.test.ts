@@ -411,7 +411,7 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
   });
 
   it("refuses a language whose required translated field holds only a fallback, when every language must hold its own", async () => {
-    await boot(posts({ requireEveryLanguage: true } as never));
+    await boot(posts({ requireEveryLanguage: true }));
     // Spanish has a row, and its title falls back to English.
     const id = await entry({ es: { tagline: "Shared" } });
     const before = await states(id);

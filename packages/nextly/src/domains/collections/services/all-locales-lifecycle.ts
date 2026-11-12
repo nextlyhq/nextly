@@ -124,4 +124,31 @@ export interface AllLocalesLifecycleParams {
    * `context` does.
    */
   context?: Record<string, unknown>;
+  /**
+   * The parts the transition moves, where it moves fewer than all of them: the chosen languages
+   * and whether the shared part moves too. Absent, every language and the shared part move.
+   */
+  parts?: LifecycleParts;
+}
+
+/**
+ * Some of a document's parts: chosen languages, and whether its shared part moves with them.
+ * The shared part is the document's own status, which every language shows.
+ */
+export interface LifecycleParts {
+  locales: ReadonlySet<string>;
+  shared: boolean;
+}
+
+/** Whether a transition over `parts` moves `locale`: every language when none are chosen. */
+export function movesLanguage(
+  parts: LifecycleParts | undefined,
+  locale: string
+): boolean {
+  return parts === undefined || parts.locales.has(locale);
+}
+
+/** Whether a transition over `parts` moves the shared part: always when none are chosen. */
+export function movesShared(parts: LifecycleParts | undefined): boolean {
+  return parts === undefined || parts.shared;
 }
