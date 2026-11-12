@@ -307,7 +307,7 @@ function declaredAttentionIds(plugin: PluginDefinition): string[] {
 }
 
 /** One line of the start-up report about plugins' panels. */
-export interface PluginPanelWarning {
+interface PluginPanelWarning {
   readonly kind: PluginPanelProblem["kind"];
   readonly plugin: string;
   readonly message: string;
