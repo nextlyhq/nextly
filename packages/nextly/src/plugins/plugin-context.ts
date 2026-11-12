@@ -1268,6 +1268,37 @@ export interface PluginAdminConfig {
     | "users"
     | "settings";
 
+  /**
+   * Where the plugin's own rail item goes when it is opened, for a plugin
+   * placed `AdminPlacement.STANDALONE`. Written the way a menu item's `to` is:
+   *
+   * - one of the plugin's own pages, as `/admin/plugins/<slug>/<path>`, where
+   *   `<path>` is a `contributes.admin.pages` entry's `path`;
+   * - one of the plugin's own collections, as `/admin/collections/<slug>`,
+   *   with the slug the plugin declares. A host's `rename` is applied, as it
+   *   is to a menu item naming the collection, so the link follows the slug
+   *   the host registered. A sub-path, a query or a hash after either is kept.
+   *
+   * A reader who may not open it (a collection they cannot read, a page whose
+   * `requiredPermission` they lack) is sent where it would go without one.
+   * Without it, the rail item opens the first of the plugin's collections the
+   * reader can see, in the order its panel lists them, and with none, the
+   * first menu item its panel lists. A value naming anything else is ignored,
+   * as if unset, and reported at start-up in development.
+   *
+   * A site can override it per plugin in `admin.pluginOverrides`, as it can
+   * `placement` and `order`.
+   *
+   * @example
+   * ```ts
+   * admin: {
+   *   placement: AdminPlacement.STANDALONE,
+   *   landing: "/admin/plugins/analytics/overview",
+   * }
+   * ```
+   */
+  landing?: string;
+
   /** Plugin description shown on the plugin settings page */
   description?: string;
 
