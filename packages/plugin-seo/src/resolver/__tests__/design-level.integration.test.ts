@@ -62,9 +62,12 @@ const pageBuilder: PluginDefinition = {
       ],
     },
     services: {
+      // The post's own design draws it, as a page's own blocks do.
       designSeo: () => ({
-        valuesFor: async ({ entry }: { entry: Record<string, unknown> }) =>
-          entry.slug === "designed" ? DESIGNED : undefined,
+        designFor: async ({ entry }: { entry: Record<string, unknown> }) =>
+          entry.slug === "designed"
+            ? { values: DESIGNED, drawnBy: "design" }
+            : undefined,
       }),
     },
   },
@@ -196,7 +199,7 @@ async function checked(t: TestNextly, ids: string[]): Promise<void> {
 describe.each(getConfiguredTestDialects())(
   "a page's design level, asked outside a request (%s)",
   dialect => {
-    it("is the template level the SEO tab's route answers", async () => {
+    it("is the template level the SEO tab's route answers, with what drew it", async () => {
       const { t } = await boot(dialect);
       const id = await publish(t, "designed");
       const segments = ["plugins", "@nextlyhq", "plugin-seo", "resolve"];
@@ -220,6 +223,7 @@ describe.each(getConfiguredTestDialects())(
       expect(response.status, await response.clone().text()).toBe(200);
       const context = (await response.json()) as SeoTabContext;
       expect(context.levels.template).toEqual(DESIGNED);
+      expect(context.drawnBy).toBe("design");
     });
 
     it("judges a page with what its design sets, and one no design draws as before", async () => {

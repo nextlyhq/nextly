@@ -12,7 +12,7 @@
  * What a route's code supplies cannot be known here: the admin does not run
  * the page's route. That level is left empty until the address record keeps
  * what each route supplies. The design drawing the page is asked of the Page
- * Builder where it is installed (`designLevelOf`).
+ * Builder where it is installed (`designOf`).
  *
  * Answered to anyone who may read the collection or the Single, an editor or
  * a reader shown the page read-only, with whether they may change its SEO. The page's images are looked up only for
@@ -32,7 +32,7 @@ import { z } from "nextly/zod";
 import { productionAddressesOf } from "../canonical";
 import { servedAt } from "../languages/versions";
 import { mayChangePageSeo } from "../permissions";
-import { designLevelOf } from "../resolver/design-level";
+import { designOf } from "../resolver/design-level";
 import type { Levels } from "../resolver/order";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
@@ -305,13 +305,14 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         ctx,
         (await ctx.caller?.can("read", "media")) === true
       );
+      const design = await designOf(reading, source, locale);
       const input: PageMetadataInput = {
         ...(locale === undefined ? {} : { locale }),
         source,
         code: {},
         // The design drawing the page, as its route would hand it: the
         // template level the tab shows a value coming from.
-        derived: await designLevelOf(reading, source, locale),
+        derived: design.values,
       };
       const rules = await readRules(ctx, locale);
       const levels = await levelsOf(reading, input, rules);
@@ -321,6 +322,7 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
         levels,
         site: siteOf(rules, setup.baseUrl, req),
         ...(served === undefined ? {} : { served }),
+        ...(design.drawnBy === undefined ? {} : { drawnBy: design.drawnBy }),
         typeLabel: typeLabelOf(declaration, body.slug),
         fieldLabels: fieldLabelsOf(declaration, levels),
         fields: [...setup.fields],

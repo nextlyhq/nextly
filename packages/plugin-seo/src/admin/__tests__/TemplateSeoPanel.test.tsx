@@ -148,6 +148,9 @@ describe("a template's SEO panel", () => {
       screen.getByText(/every blog post that uses this template/)
     ).toBeTruthy();
     expect(screen.getByText(/19 pages/)).toBeTruthy();
+    expect(
+      screen.getByText(/Each blog post's own text in its SEO tab still wins\./)
+    ).toBeTruthy();
   });
 
   it("previews the rule as the route fills it, not the post's own text", async () => {
@@ -231,5 +234,16 @@ describe("a template's SEO panel", () => {
       expect(sent.some(body => body.entryId === "p2")).toBe(true)
     );
     expect(within(heading).getAllByRole("option")).toHaveLength(2);
+  });
+
+  it("draws its choices in the SEO screens' select styling", async () => {
+    const user = userEvent.setup();
+    await open();
+    await user.click(screen.getByRole("button", { name: "Change" }));
+    for (const label of ["Preview with", "Take the share image from"]) {
+      const select = await screen.findByLabelText(label);
+      expect(select.className).toContain("nx-seo-select");
+      expect(select.closest(".nx-seo")).not.toBeNull();
+    }
   });
 });

@@ -43,12 +43,26 @@ export interface DesignSeoRequest {
 }
 
 /**
+ * What drew a page: its own design (a page's blocks, an entry's own
+ * design), or its collection's template.
+ */
+export type DesignDrawnBy = "design" | "template";
+
+/** A page's design level and what drew it. */
+export interface DesignSeoAnswer {
+  readonly values: PageMetadataValues;
+  readonly drawnBy: DesignDrawnBy;
+}
+
+/**
  * The design level of a page, or undefined where no design draws it.
  *
  * @experimental Settles with the page-metadata contract.
  */
 export interface DesignSeoService {
   valuesFor(request: DesignSeoRequest): Promise<PageMetadataValues | undefined>;
+  /** The design level with what drew it, or undefined as `valuesFor`. */
+  designFor(request: DesignSeoRequest): Promise<DesignSeoAnswer | undefined>;
 }
 
 /** How the service derives a design's values: the route's derivation. */
@@ -81,34 +95,54 @@ function idOf(entry: Readonly<Record<string, unknown>>): string | undefined {
 }
 
 export function designSeoService(deps: DesignSeoDeps): DesignSeoService {
-  return {
-    valuesFor: async ({ collection, entry, locale, document }) => {
-      const nextly = await deps.nextly();
-      const base = {
-        config: { nextly },
-        collection,
-        entry: { ...entry },
-        ...(locale === undefined ? {} : { locale }),
+  const designFor = async ({
+    collection,
+    entry,
+    locale,
+    document,
+  }: DesignSeoRequest): Promise<DesignSeoAnswer | undefined> => {
+    const nextly = await deps.nextly();
+    const base = {
+      config: { nextly },
+      collection,
+      entry: { ...entry },
+      ...(locale === undefined ? {} : { locale }),
+    };
+    const isPage = collection === deps.pages.collection;
+    // A design handed in draws the page as it is, unsaved: a page's blocks
+    // in the pages collection, a template anywhere else.
+    if (document !== undefined) {
+      return {
+        values: await deps.derive({ ...base, document }),
+        drawnBy: isPage ? "design" : "template",
       };
-      // A design handed in draws the page as it is, unsaved.
-      if (document !== undefined) return deps.derive({ ...base, document });
-      // A page draws its own blocks, as the pages route draws them.
-      if (collection === deps.pages.collection) {
-        return deps.derive({ ...base, field: deps.pages.field });
-      }
-      const content = pageBuilderContent({
-        nextly,
-        templatesCollection: deps.templatesCollection,
-      });
-      const id = idOf(entry);
-      // An entry never saved has no own design yet: its collection's
-      // template is the one that will draw it.
-      const design =
-        id === undefined
-          ? await content.templates.read(collection, locale)
-          : await content.templates.readFor(collection, id, locale);
-      if (design === null) return undefined;
-      return deps.derive({ ...base, document: design.document });
-    },
+    }
+    // A page draws its own blocks, as the pages route draws them.
+    if (isPage) {
+      return {
+        values: await deps.derive({ ...base, field: deps.pages.field }),
+        drawnBy: "design",
+      };
+    }
+    const content = pageBuilderContent({
+      nextly,
+      templatesCollection: deps.templatesCollection,
+    });
+    const id = idOf(entry);
+    // An entry never saved has no own design yet: its collection's
+    // template is the one that will draw it.
+    const design =
+      id === undefined
+        ? await content.templates.read(collection, locale)
+        : await content.templates.readFor(collection, id, locale);
+    if (design === null) return undefined;
+    return {
+      values: await deps.derive({ ...base, document: design.document }),
+      drawnBy: design.own ? "design" : "template",
+    };
+  };
+  return {
+    designFor,
+    valuesFor: async request => (await designFor(request))?.values,
   };
 }

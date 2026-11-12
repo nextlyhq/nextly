@@ -102,6 +102,28 @@ describe("the design level of a page", () => {
     expect(api.find).not.toHaveBeenCalled();
   });
 
+  it("says what drew the page: a page's own blocks and an entry's own design are its design, a collection's template its template", async () => {
+    const derive = vi.fn<DeriveDesignValues>(async () => ({ title: "x" }));
+    const { service: s } = service(derive);
+
+    const page = await s.designFor({ collection: "pages", entry: { id: "a" } });
+    const own = await s.designFor({ collection: "posts", entry: { id: "p2" } });
+    const shared = await s.designFor({
+      collection: "posts",
+      entry: { id: "p1" },
+    });
+
+    expect([page?.drawnBy, own?.drawnBy, shared?.drawnBy]).toEqual([
+      "design",
+      "design",
+      "template",
+    ]);
+    expect(shared?.values).toEqual({ title: "x" });
+    await expect(
+      s.designFor({ collection: "news", entry: { id: "n1" } })
+    ).resolves.toBeUndefined();
+  });
+
   it("is nothing where no design draws the entry", async () => {
     const derive = vi.fn<DeriveDesignValues>(async () => ({ title: "x" }));
     const { service: s } = service(derive);

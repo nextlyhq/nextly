@@ -94,6 +94,7 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
   const names: SourceNames = {
     typeLabel: context?.typeLabel ?? "page",
     fieldLabels: context?.fieldLabels ?? {},
+    ...(context?.drawnBy === undefined ? {} : { drawnBy: context.drawnBy }),
   };
   const answer = answers?.answer;
   return (

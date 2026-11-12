@@ -26,6 +26,7 @@ import { defineCollection, text } from "nextly";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { PRODUCTION_ADDRESSES_ENV } from "../../canonical";
 import { seoPlugin } from "../../plugin";
 import { resolveOrder } from "../../resolver/order";
 import type { TemplateContext } from "../contract";
@@ -129,12 +130,12 @@ async function readerKey(t: TestNextly): Promise<string> {
   ).key;
 }
 
-/** The template panel's preview of `document` with the post `id`. */
-async function previewed(
+/** What the template route answers the panel for `document` with `id`. */
+async function panelContext(
   key: string,
   id: string,
   document: unknown
-): Promise<{ title?: string; description?: string }> {
+): Promise<TemplateContext> {
   const segments = ["plugins", "@nextlyhq", "plugin-seo", "template"];
   const response = await createDynamicHandlers().POST(
     new Request(`https://admin.example/api/${segments.join("/")}`, {
@@ -148,7 +149,16 @@ async function previewed(
     { params: Promise.resolve({ params: segments }) }
   );
   expect(response.status, await response.clone().text()).toBe(200);
-  const context = (await response.json()) as TemplateContext;
+  return (await response.json()) as TemplateContext;
+}
+
+/** The template panel's preview of `document` with the post `id`. */
+async function previewed(
+  key: string,
+  id: string,
+  document: unknown
+): Promise<{ title?: string; description?: string }> {
+  const context = await panelContext(key, id, document);
   const levels = context.previewed?.levels;
   if (levels === undefined) throw new Error("no page was previewed");
   // As the panel shows it: the rule's answer, before the page's own text.
@@ -257,6 +267,32 @@ describe.each(getConfiguredTestDialects())(
         description: "A post called Second post.",
       });
       expect(before).toEqual({ hello, second });
+    });
+
+    it("previews on the site's production address, the environment's winning, else on the admin's own", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: "posts",
+        data: { title: "Hello world", slug: "hello", status: "published" },
+      });
+      const id = String((created as { item: { id: unknown } }).item.id);
+      const key = await readerKey(t);
+      const was = process.env[PRODUCTION_ADDRESSES_ENV];
+      try {
+        delete process.env[PRODUCTION_ADDRESSES_ENV];
+        expect(
+          (await panelContext(key, id, design(FIRST_RULE))).site.origin
+        ).toBe("https://admin.example");
+
+        process.env[PRODUCTION_ADDRESSES_ENV] =
+          "https://fieldnotes.example, https://www.fieldnotes.example";
+        expect(
+          (await panelContext(key, id, design(FIRST_RULE))).site.origin
+        ).toBe("https://fieldnotes.example");
+      } finally {
+        if (was === undefined) delete process.env[PRODUCTION_ADDRESSES_ENV];
+        else process.env[PRODUCTION_ADDRESSES_ENV] = was;
+      }
     });
   }
 );

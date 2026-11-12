@@ -40,6 +40,7 @@ import {
 import { CharacterCount, inSentence, Note } from "./parts";
 import { PreviewCard } from "./previews";
 import { Row, RowButton } from "./rows";
+import { ROOT, SeoStyles } from "./styles";
 import { useTemplateContext } from "./use-template-context";
 
 /** A design's own metadata, as the Page Builder stores it. */
@@ -314,6 +315,7 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
   });
   return (
     <div className="flex flex-col gap-[18px] pt-4 pb-12">
+      <SeoStyles />
       <Note icon={<Info className="size-4" />}>
         {props.ownDesign ? (
           <>
@@ -324,8 +326,8 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
           <>
             These are rules for{" "}
             <b className="font-semibold">every {one} that uses this template</b>
-            , {context.count} {context.count === 1 ? "page" : "pages"}. A {one}
-            &apos;s own text in its SEO tab still wins.
+            , {context.count} {context.count === 1 ? "page" : "pages"}. Each{" "}
+            {one}&apos;s own text in its SEO tab still wins.
           </>
         )}
       </Note>
@@ -439,7 +441,7 @@ function PreviewWith({
   onChange: (id: string) => void;
 }): ReactNode {
   return (
-    <span className="flex min-w-0 items-center gap-2">
+    <span className={`${ROOT} flex min-w-0 items-center gap-2`}>
       <label
         htmlFor={id}
         className="text-xs font-semibold whitespace-nowrap text-muted-foreground"
@@ -448,7 +450,7 @@ function PreviewWith({
       </label>
       <select
         id={id}
-        className="h-7 max-w-[230px] min-w-0 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+        className="nx-seo-select min-w-0"
         value={value ?? ""}
         disabled={context.entries.length === 0}
         onChange={event => onChange(event.target.value)}
@@ -634,11 +636,13 @@ function ShareImageRule({
       }
     >
       {changing ? (
-        <label className="grid gap-1 text-[12.5px] text-muted-foreground">
+        <label
+          className={`${ROOT} grid gap-1 text-[12.5px] text-muted-foreground`}
+        >
           <span>Take the share image from</span>
           <select
             id={`${id}-field`}
-            className="h-8 max-w-[260px] rounded-md border border-input bg-background px-2 text-[13px] text-foreground"
+            className="nx-seo-select"
             value={draft.image ?? ""}
             disabled={!writable}
             onChange={event => {
