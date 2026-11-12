@@ -338,6 +338,18 @@ export function lostLockError(
   });
 }
 
+/**
+ * Whether `error` is the refusal of a run that lost the schema lock (`lostLockError`), the one
+ * error a caller that otherwise carries on past a failure must let through: the run may change
+ * nothing further.
+ */
+export function isSchemaLockLost(error: unknown): error is NextlyError {
+  return (
+    NextlyError.is(error) &&
+    error.logContext?.reason === SCHEMA_LOCK_LOST_REASON
+  );
+}
+
 /** The claim this process would write: who it is, unique per acquisition. */
 function newClaim(): string {
   return `${hostname()}:${process.pid}#${randomUUID()}`;

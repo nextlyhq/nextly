@@ -57,13 +57,6 @@ export interface RegistryWriteDeps {
   adapter: DrizzleAdapter;
   logger: Logger;
   /**
-   * Asked before each row is written, and throws once this run can no longer
-   * show it holds the schema lock: a run that lost the lock writes nothing
-   * further. Asked besides the schema lock's own check (`assertSchemaLockHeld`),
-   * which every write asks first.
-   */
-  assertLockHeld?: () => Promise<void> | void;
-  /**
    * The origin of each collection a plugin contributes, `plugin:<name>` by
    * slug, as the start gives it: a row the writer creates for one of them
    * is that plugin's, not the app's.
@@ -99,7 +92,6 @@ export async function writeRegistryFromSource(
       // Outside the per-row guard below: a lost lock stops the pass, it is
       // never one row's failure to report and go on from.
       await assertSchemaLockHeld();
-      await deps.assertLockHeld?.();
       try {
         // Its own step of the registry write the caller opened, so a row that
         // fails is rolled back alone and the rest still land (`inRegistryStep`).

@@ -209,8 +209,9 @@ import {
 } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
 import {
+  assertSchemaLockHeld,
+  isSchemaLockLost,
   lostLockError,
-  SCHEMA_LOCK_LOST_REASON,
 } from "../../domains/schema/pipeline/schema-lock";
 import {
   newestAppliedAppMigration,
@@ -986,12 +987,6 @@ export interface MigrateCoreDeps {
    * the rows in step with the code as it is edited.
    */
   registryRows?: "write" | "insert-missing";
-  /**
-   * Asked before each registry row is written; throws once the run can no
-   * longer show it holds the schema lock, so a run that lost it writes no
-   * further row. Absent, every write goes ahead.
-   */
-  assertLockHeld?: () => Promise<void> | void;
   /**
    * Each plugin-contributed collection's origin, `plugin:<name>`, for a
    * registry row the run creates (`pluginMigrationArgs`).
@@ -2209,9 +2204,6 @@ export async function migrateCore(
     ...(deps.registryRows === undefined
       ? {}
       : { registryRows: deps.registryRows }),
-    ...(deps.assertLockHeld === undefined
-      ? {}
-      : { assertLockHeld: deps.assertLockHeld }),
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
@@ -2226,6 +2218,9 @@ export async function migrateCore(
     try {
       metadata = await reconcileMetadata(metadataArgs());
     } catch (error) {
+      // A run that lost the schema lock stops here: it is not a bookkeeping
+      // failure to warn about and carry on from into Phase 4's writes.
+      if (isSchemaLockLost(error)) throw error;
       // The whole pass failed, so nothing was read: say so in the result
       // rather than returning zeroes that read like "nothing needed doing".
       metadata = {
@@ -2243,7 +2238,7 @@ export async function migrateCore(
   const seedAccess = async (): Promise<void> => {
     if (deps.seedPermissions === undefined) return;
     deps.logger.info("Phase 4: adding permissions, roles and preset grants...");
-    await deps.assertLockHeld?.();
+    await assertSchemaLockHeld();
     await deps.seedPermissions();
   };
   /**
@@ -2263,7 +2258,7 @@ export async function migrateCore(
             record: await storedRegistryRecord(deps),
           });
           if (scope === undefined) return;
-          await deps.assertLockHeld?.();
+          await assertSchemaLockHeld();
           await deps.markOrphanedPermissions?.(scope, applied.name);
         };
   const dz = deps.adapter as unknown as DrizzleAdapter;
@@ -2373,7 +2368,7 @@ export async function migrateCore(
     standings: readonly AppMigrationStanding[],
     migration: string
   ): Promise<void> => {
-    await deps.assertLockHeld?.();
+    await assertSchemaLockHeld();
     const point = await writeRegistryRows(
       dz,
       tx => recordAtPoint(tx, standings),
@@ -3988,7 +3983,13 @@ export async function runFileMigrations(args: {
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
-      if (m.transaction === false || dialect === "mysql") running = filename;
+      // The statements of this file, sent through `executeSql`. Once the first is sent, a file
+      // whose statements commit one by one (one outside a transaction, or any file on MySQL) may
+      // stand part-way, so a lost lock names it; a refusal before then left it untouched.
+      const executeFileSql: typeof executeSql = (...statement) => {
+        if (m.transaction === false || dialect === "mysql") running = filename;
+        return executeSql(...statement);
+      };
       if (!target) {
         // No paired snapshot (hand-written migration): run verbatim + record.
         logger.warn(
@@ -4022,7 +4023,7 @@ export async function runFileMigrations(args: {
             },
             dialect,
             repo,
-            executeSql,
+            executeSql: executeFileSql,
           });
         } catch (err) {
           throw NextlyError.is(err) ? err : applyFailedError(filename, err);
@@ -4083,7 +4084,7 @@ export async function runFileMigrations(args: {
         live: sides.live,
         dialect,
         repo,
-        executeSql,
+        executeSql: executeFileSql,
       });
       applied++;
       lastApplied = filename;
@@ -4121,13 +4122,8 @@ function withLastApplied(
   lastApplied: string | null,
   running: string | undefined
 ): unknown {
-  if (
-    !NextlyError.is(error) ||
-    error.logContext?.reason !== SCHEMA_LOCK_LOST_REASON
-  ) {
-    return error;
-  }
-  const command = error.logContext.command;
+  if (!isSchemaLockLost(error)) return error;
+  const command = error.logContext?.command;
   return lostLockError(
     typeof command === "string" ? command : "nextly migrate",
     lastApplied,
