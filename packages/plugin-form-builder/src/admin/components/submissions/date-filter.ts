@@ -50,8 +50,12 @@ function midnight(day: Date, days = 0): Date {
 function dayStart(day: string | undefined): Date | undefined {
   const match = day ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(day) : null;
   if (!match) return undefined;
-  const [, year, month, date] = match.map(Number);
-  const start = new Date(year!, month! - 1, date);
+  const [year, month, date] = match.slice(1).map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const start = new Date(year, month - 1, date);
   return Number.isNaN(start.getTime()) ? undefined : start;
 }
 

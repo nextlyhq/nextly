@@ -207,7 +207,8 @@ test("reviews spam in its tab and recovers it", async ({ page }) => {
   ).toBeVisible({ timeout: 15_000 });
   await page.goBack();
 
-  await page.getByRole("tab", { name: "New", exact: true }).click();
+  // A tab's name carries its count once read ("New 3").
+  await page.getByRole("tab", { name: /^New\b/ }).click();
   await expect(
     page.getByText(bot).filter({ visible: true }).first()
   ).toBeVisible({

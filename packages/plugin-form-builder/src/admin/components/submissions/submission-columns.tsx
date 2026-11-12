@@ -224,7 +224,7 @@ export function allFormsColumns(
       accessor: row => summaryOf(row, formOf(row)),
       cell: ({ value }) => (
         <span className="block max-w-sm truncate text-muted-foreground">
-          {String(value ?? "")}
+          {typeof value === "string" ? value : ""}
         </span>
       ),
     },

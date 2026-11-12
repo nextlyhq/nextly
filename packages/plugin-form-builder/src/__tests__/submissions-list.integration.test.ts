@@ -82,11 +82,22 @@ const NOVEMBER_1_TO_5 = {
 };
 
 async function boot(dialect: TestDialect) {
-  current = await createTestNextly({
-    dialect,
-    plugins: [formBuilder().plugin],
-  });
+  const { plugin } = formBuilder();
+  current = await createTestNextly({ dialect, plugins: [plugin] });
   const t = current;
+  // The harness runs none of boot's seeding, so the plugin's own permissions
+  // (export) are written here from its declaration, under the slug the seeder
+  // composes, `<action>-<resource>`.
+  for (const declared of plugin.contributes?.permissions ?? []) {
+    await t.nextly.permissions.create({
+      data: {
+        name: declared.label ?? `${declared.action} ${declared.resource}`,
+        slug: `${declared.action}-${declared.resource}`,
+        action: declared.action,
+        resource: declared.resource,
+      },
+    });
+  }
   // The instance's first user is its super admin.
   const owner = await person(t, "owner");
   const form = async (slug: string, fields: Record<string, unknown>[]) =>
