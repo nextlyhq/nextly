@@ -10,6 +10,12 @@
 export type FieldWidth = "half" | "full" | "fill";
 
 /**
+ * Where a field's label and help stand relative to its control.
+ * @experimental
+ */
+export type FieldLayout = "stacked" | "row";
+
+/**
  * The wiring `FieldShell` computes for its control: the id to attach, the
  * composed `aria-describedby` (`undefined` when nothing is rendered to point
  * at), and whether a rendered `error` forces the control invalid (`undefined`
@@ -35,8 +41,19 @@ export interface FieldShellProps {
   description?: React.ReactNode;
   /** Validation message under the control. Rendered only when present. */
   error?: React.ReactNode;
-  /** Defaults to "half": most admin inputs are short values. */
+  /**
+   * Defaults to "half" in the stacked layout, where most admin inputs are
+   * short values, and to "fill" in the row layout, whose right column is
+   * already the control's measure.
+   */
   width?: FieldWidth;
+  /**
+   * `stacked` (the default): the label above the control, the help under it.
+   * `row`: the settings row, with the label and its help in a left column and
+   * the control in a right one, stacking on a narrow screen. Both lay out the
+   * same wiring; only where each part stands differs.
+   */
+  layout?: FieldLayout;
   htmlFor?: string;
   className?: string;
   /**
