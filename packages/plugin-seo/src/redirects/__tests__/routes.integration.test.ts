@@ -200,7 +200,13 @@ describe.each(getConfiguredTestDialects())(
 
       const listed = items((await call(seo, "GET", "/redirects")).body);
       expect(
-        listed.map(item => [item.from, item.to, item.type, item.hits, item.lastHit])
+        listed.map(item => [
+          item.from,
+          item.to,
+          item.type,
+          item.hits,
+          item.lastHit,
+        ])
       ).toEqual(
         expect.arrayContaining([
           ["/retired", "", "gone", 0, null],
@@ -226,9 +232,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       const listed = items((await call(seo, "GET", "/not-found")).body);
-      expect(listed.map(item => [item.path, item.ignored, item.cameFrom])).toEqual([
-        ["/old-pricing", false, null],
-      ]);
+      expect(
+        listed.map(item => [item.path, item.ignored, item.cameFrom])
+      ).toEqual([["/old-pricing", false, null]]);
 
       const id = String(listed[0]?.id);
       const ignored = await call(seo, "PATCH", `/not-found/${id}`, {

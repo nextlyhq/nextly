@@ -479,9 +479,7 @@ export async function putRedirect(
       );
       const next = id === null ? undefined : await read.byId(id);
       // A gone address ends the chain: a visitor sent there is answered 410.
-      return next === undefined || next.gone
-        ? null
-        : destinationOf(next, path);
+      return next === undefined || next.gone ? null : destinationOf(next, path);
     }
   );
   if ("error" in end) return { refused: end.error, reason: "loop" };
@@ -559,7 +557,12 @@ async function putGone(
   if ("refused" in saved) return saved;
   // The address answers now, so it leaves the not-found log.
   if (from.address.range) {
-    await forgetNotFoundUnder(ctx, transaction, input.locale, from.address.path);
+    await forgetNotFoundUnder(
+      ctx,
+      transaction,
+      input.locale,
+      from.address.path
+    );
   } else {
     await forgetNotFound(ctx, transaction, {
       locale: input.locale,

@@ -93,9 +93,12 @@ export function redirectHits(write: HitWriter = writeHits): RedirectHits {
             await write(ctx, id, noted);
           } catch (error) {
             // A count is worth less than the next request: it is let go.
-            ctx.logger.warn("The SEO plugin could not count a redirect's hits", {
-              error,
-            });
+            ctx.logger.warn(
+              "The SEO plugin could not count a redirect's hits",
+              {
+                error,
+              }
+            );
           }
         }
       }

@@ -162,12 +162,15 @@ async function savedRow(
   const { locale } = outcome.saved;
   if (replaced !== undefined) {
     if (replaced.gone) {
-      return { ...view, kind: "replaced", says: `Replaces ${view.from}, gone.` };
+      return {
+        ...view,
+        kind: "replaced",
+        says: `Replaces ${view.from}, gone.`,
+      };
     }
     // The old type is named where only the type changes, so the row says why.
     const type =
-      replaced.permanent === outcome.saved.permanent &&
-      !outcome.saved.gone
+      replaced.permanent === outcome.saved.permanent && !outcome.saved.gone
         ? ""
         : `, ${replaced.permanent ? "permanent" : "temporary"}`;
     return {

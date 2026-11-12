@@ -563,7 +563,9 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     );
     const lastHit = counted?.lastHit;
     expect(
-      Date.parse(lastHit instanceof Date ? lastHit.toISOString() : String(lastHit))
+      Date.parse(
+        lastHit instanceof Date ? lastHit.toISOString() : String(lastHit)
+      )
     ).toBeGreaterThanOrEqual(before - 1000);
   });
 
