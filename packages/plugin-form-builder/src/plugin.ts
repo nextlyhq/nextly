@@ -53,8 +53,6 @@ import {
   recordSend,
   registerForgettingSends,
 } from "./handlers/forget-sends";
-import { registerSendHistory } from "./handlers/send-history";
-import { notificationSendDetails } from "./handlers/send-record";
 import {
   registerFormClosing,
   respondedRefusal,
@@ -90,6 +88,8 @@ import {
   retentionJob,
   runRetention,
 } from "./handlers/retention";
+import { registerSendHistory } from "./handlers/send-history";
+import { notificationSendDetails } from "./handlers/send-record";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
 import {
   markUploadClaims,
