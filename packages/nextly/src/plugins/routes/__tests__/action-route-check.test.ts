@@ -241,3 +241,49 @@ describe("actionRouteRefusal", () => {
     expect(readRows).toHaveBeenCalledWith("posts", ["p1"]);
   });
 });
+
+describe("a route the person's menu item also runs", () => {
+  /** Bound to the list's actions and to the plugin's menu item, as boot binds it. */
+  const MENU: BoundAction = {
+    id: "acme-support.user-menu",
+    kind: "userMenuItem",
+  };
+  const shared = [ESCALATE, ASSIGN, MENU];
+
+  it("lets the menu item through with no rows, reading none", async () => {
+    const { d, readRows, refusalFor } = deps([]);
+    expect(
+      await actionRouteRefusal({ action: MENU.id, rows: [] }, shared, d)
+    ).toBeUndefined();
+    expect(readRows).not.toHaveBeenCalled();
+    expect(refusalFor).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a list action with no rows", { action: ESCALATE.id, rows: [] }],
+    ["a bulk action with no rows", { action: ASSIGN.id, rows: [] }],
+    ["an unknown id with no rows", { action: "acme-support.other", rows: [] }],
+    [
+      "the menu item naming rows",
+      { action: MENU.id, rows: [row("helpdesk-tickets", "t1")] },
+    ],
+    ["the menu item with no rows key", { action: MENU.id }],
+  ])("still answers 400 to %s, reading no row", async (_case, body) => {
+    const { d, readRows } = deps();
+    const refused = await actionRouteRefusal(body, shared, d);
+    expect(refused?.statusCode).toBe(400);
+    expect(refused?.code).toBe("INVALID_INPUT");
+    expect(readRows).not.toHaveBeenCalled();
+  });
+
+  it("refuses the menu item's id on a route the menu item does not run", async () => {
+    const { d } = deps();
+    const refused = await actionRouteRefusal(
+      { action: MENU.id, rows: [] },
+      [ESCALATE, ASSIGN],
+      d
+    );
+    expect(refused?.statusCode).toBe(400);
+    expect(refused?.code).toBe("INVALID_INPUT");
+  });
+});

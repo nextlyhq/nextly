@@ -31,6 +31,14 @@ import { useInterfaceLanguages, useT } from "@admin/lib/i18n/I18nProvider";
 import { languageName } from "@admin/lib/i18n/language-name";
 import { navigateTo } from "@admin/lib/navigation";
 
+import type { PluginUserMenuEntry } from "../header/header-visibility";
+
+import {
+  PluginMenuActionDialog,
+  PluginUserMenuItems,
+  usePluginMenuAction,
+} from "./plugin-user-menu";
+
 interface UserProfileDropdownProps {
   user: {
     id?: string;
@@ -45,6 +53,11 @@ interface UserProfileDropdownProps {
    * by the same rule that hid them from the top bar.
    */
   hidden?: ReadonlySet<"github" | "discord" | "docs" | "notifications">;
+  /**
+   * The items plugins put in this menu (`header.place: "menu"`), in order,
+   * drawn after the help links.
+   */
+  pluginItems?: readonly PluginUserMenuEntry[];
   /** Where the menu opens from its trigger: to the right of the rail. */
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
@@ -73,17 +86,23 @@ const HELP_LINKS = [
 ] as const;
 
 /**
- * Documentation, GitHub and Discord, as one group.
+ * Documentation, GitHub and Discord, as one group, and the items plugins put
+ * there after them.
  * They lived as icons across the top bar on every page; here they are a click
  * away without taking the bar's width from the page.
  */
 function HelpAndCommunity({
   hidden,
+  pluginItems,
+  onPluginAction,
 }: {
   hidden: ReadonlySet<string>;
+  pluginItems: readonly PluginUserMenuEntry[];
+  onPluginAction: (item: PluginUserMenuEntry) => void;
 }): JSX.Element | null {
   const links = HELP_LINKS.filter(link => !hidden.has(link.id));
-  if (links.length === 0) return null;
+  // Drawn while it has something to show: a help link left, or a plugin's item.
+  if (links.length === 0 && pluginItems.length === 0) return null;
   return (
     <>
       <DropdownMenuLabel className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
@@ -101,6 +120,7 @@ function HelpAndCommunity({
           </a>
         </DropdownMenuItem>
       ))}
+      <PluginUserMenuItems items={pluginItems} onAction={onPluginAction} />
       <DropdownMenuSeparator className="my-1" />
     </>
   );
@@ -173,9 +193,13 @@ export function UserProfileDropdown({
   onLogout,
   className,
   hidden = new Set(),
+  pluginItems = [],
   side = "bottom",
   align = "end",
 }: UserProfileDropdownProps): JSX.Element {
+  // Held here, outside the menu, so what an item opened outlives the menu
+  // closing on the choice.
+  const pluginAction = usePluginMenuAction();
   return (
     <div className={className}>
       <DropdownMenu>
@@ -215,7 +239,13 @@ export function UserProfileDropdown({
           <InterfaceLanguageChoice />
           <ThemeChoice />
           <DropdownMenuSeparator className="my-1" />
-          <HelpAndCommunity hidden={hidden} />
+          <HelpAndCommunity
+            hidden={hidden}
+            pluginItems={pluginItems}
+            onPluginAction={item => {
+              void pluginAction.run(item);
+            }}
+          />
           {/* Muted foreground so this menu label meets contrast; a faint primary alpha did not. */}
           <DropdownMenuItem
             // The signed-in person's own page, which every one of them may
@@ -237,6 +267,10 @@ export function UserProfileDropdown({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <PluginMenuActionDialog
+        opened={pluginAction.opened}
+        close={pluginAction.close}
+      />
     </div>
   );
 }

@@ -66,6 +66,8 @@ export const ENFORCED_VALIDATION_RULES: Record<
   date: ["message"],
   time: ["message"],
   hidden: ["message"],
+  // A consent is always required; only the refusal's wording is the author's.
+  consent: ["message"],
 };
 
 /**

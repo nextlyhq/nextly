@@ -39,6 +39,7 @@ import {
   Input,
   Label,
   Switch,
+  Textarea,
 } from "@nextlyhq/ui";
 import { type JSX, type ReactNode, useCallback, useState } from "react";
 
@@ -385,6 +386,33 @@ function HiddenValue(props: FieldSettingsSurfaceControlProps): JSX.Element {
   );
 }
 
+/**
+ * What a consent's visitor agrees to. Each answer keeps the text it was given
+ * under, so changing it here changes what later visitors agree to and leaves
+ * earlier answers as they were.
+ */
+function ConsentText(props: FieldSettingsControlProps): JSX.Element {
+  const { form, update } = useFormField(props);
+  const text = (form as Extract<AnyFormField, { type: "consent" }>)
+    .agreementText;
+  const id = `${props.field.id}-agreement-text`;
+  return (
+    <Setting
+      id={id}
+      label="Agreement text"
+      help="Shown beside the box. Each submission keeps the text it agreed to, so a change applies to later visitors only."
+    >
+      <Textarea
+        id={id}
+        rows={3}
+        disabled={props.readOnly}
+        value={text ?? ""}
+        onChange={e => update({ agreementText: e.target.value })}
+      />
+    </Setting>
+  );
+}
+
 /** A file's accepted types, several files, and attaching it to emails. */
 function FileSettings(props: FieldSettingsSurfaceControlProps): JSX.Element {
   const { form, update } = useFormField(props);
@@ -512,6 +540,8 @@ export const FORMS_FIELD_SURFACE: FieldSettingsSurface = {
   typeSettings: {
     // One yes or no (a consent box, say), never a list of choices.
     checkbox: {},
+    // What the visitor agrees to is what makes a consent, so it comes first.
+    consent: { defining: ConsentText },
     select: { defining: FormChoices },
     radio: { defining: FormChoices },
   },

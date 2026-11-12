@@ -32,6 +32,7 @@ import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 import { validateUUID } from "@admin/lib/validation";
+
 import { UserFieldsGuard } from "../user-fields-guard";
 
 function EditUserFieldPageContent(): JSX.Element {
