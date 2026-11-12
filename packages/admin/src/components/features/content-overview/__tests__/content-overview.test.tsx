@@ -453,7 +453,9 @@ describe("a reader with no content to open", () => {
     expect(replaceTo).not.toHaveBeenCalled();
     pending.unmount();
 
-    // A failed answer is said as a failure, not as an empty install.
+    // A failed answer is said as a failure, not as an empty install, and
+    // sends nowhere, even where a list left over from before holds a Single.
+    state.caps = { homepage: { canRead: true } };
     state.content = {
       isLoading: false,
       hasAnswer: false,
