@@ -47,8 +47,16 @@ export function consentAnswerOf(
 
 function sameConsent(before: unknown, after: unknown): boolean {
   if (before === undefined) return after === undefined;
-  if (!isConsentAnswer(before) || !isConsentAnswer(after)) return false;
-  return before.agreed === after.agreed && before.text === after.text;
+  if (isConsentAnswer(before)) {
+    return (
+      isConsentAnswer(after) &&
+      before.agreed === after.agreed &&
+      before.text === after.text
+    );
+  }
+  // An answer stored before its field became a consent (a checkbox's yes or
+  // no, say): kept as it was, and compared as stored.
+  return JSON.stringify(before) === JSON.stringify(after);
 }
 
 /**

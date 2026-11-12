@@ -82,6 +82,7 @@ import type {
 import {
   CONSENT_EDIT_REFUSED,
   editedConsents,
+  isConsentAnswer,
   storedConsentNames,
 } from "./utils/consent";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
@@ -1380,8 +1381,9 @@ export async function prepareSubmissionForWrite(
  * would change a consent. A consent keeps what the visitor agreed to and the
  * text they were shown, so no edit, by staff or through the API, may change
  * it. Refused rather than quietly kept, so the editor learns their change did
- * not happen. A consent with no stored answer (the field was added after this
- * submission) is left out: nobody but the visitor can give one.
+ * not happen. A consent with no stored consent (the field was added after this
+ * submission, or was another kind of field when it was made) is left out of
+ * the checks: nobody but the visitor can give one, and they were not asked.
  */
 function consentsKept(
   fields: AnyFormField[],
@@ -1400,7 +1402,7 @@ function consentsKept(
     });
   }
   return fields.filter(
-    field => field.type !== "consent" || stored[field.name] !== undefined
+    field => field.type !== "consent" || isConsentAnswer(stored[field.name])
   );
 }
 

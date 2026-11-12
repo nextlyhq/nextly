@@ -380,6 +380,58 @@ describe.each(getConfiguredTestDialects())("a consent field (%s)", dialect => {
     expect(row.data.privacy).toEqual({ agreed: true, text: AGREEMENT });
   });
 
+  it("lets earlier answers be edited once a checkbox of theirs becomes a consent", async () => {
+    const { t, formId, answers } = await boot(dialect);
+    // A form whose box was a plain checkbox when this was submitted.
+    await t.nextly.update({
+      collection: "forms",
+      id: formId,
+      data: {
+        fields: FIELDS.map(field =>
+          field.type === "consent"
+            ? { type: "checkbox", name: "privacy", label: "Privacy" }
+            : field
+        ),
+        _overwrite: true,
+      },
+    });
+    const created = await t.nextly.create({
+      collection: "form-submissions",
+      data: {
+        form: formId,
+        data: { name: "Ada", privacy: true },
+        submittedAt: new Date().toISOString(),
+      },
+    });
+    const id = String(created.item.id);
+    await t.nextly.update({
+      collection: "forms",
+      id: formId,
+      data: { fields: FIELDS, _overwrite: true },
+    });
+    const edit = (data: Record<string, unknown>) =>
+      t.nextly.update({
+        collection: "form-submissions",
+        id,
+        data: { data, _overwrite: true },
+      });
+
+    // Another answer edits, the old yes kept as it was.
+    await edit({ name: "Ada Lovelace", privacy: true });
+    expect(await answers(id)).toEqual({ name: "Ada Lovelace", privacy: true });
+    // The old answer cannot be turned into a consent the visitor never gave.
+    await expect(
+      edit({
+        name: "Ada Lovelace",
+        privacy: { agreed: true, text: AGREEMENT },
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [{ path: "privacy", message: CONSENT_EDIT_REFUSED }],
+      },
+    });
+  });
+
   it("refuses a form saved with a consent that has no text", async () => {
     const { t, formId } = await boot(dialect);
     const blank = FIELDS.map(field =>
