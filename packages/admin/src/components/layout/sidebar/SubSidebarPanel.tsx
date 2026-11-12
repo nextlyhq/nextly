@@ -22,11 +22,12 @@
 import type { JSX, ReactNode } from "react";
 
 import { Link } from "@admin/components/ui/link";
+import { ROUTES } from "@admin/constants/routes";
 import { cn } from "@admin/lib/utils";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
-import { CONTENT_OVERVIEW_HREF, isContentSection } from "./lib/content-rail";
+import { isContentSection } from "./lib/content-rail";
 import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import {
   subSidebarBorderClass,
@@ -65,7 +66,7 @@ function PanelTitle({
   }
   return (
     <Link
-      href={CONTENT_OVERVIEW_HREF}
+      href={ROUTES.CONTENT}
       className={cn(
         TITLE_CLASS,
         "rounded-sm outline-none hover:underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring"
