@@ -477,6 +477,105 @@ function answersChanged(
 /** The key this page reports its unsaved answers under. */
 const UNSAVED_ANSWERS_KEY = "forms.submission-answers";
 
+/**
+ * Editing a submission's answers: the draft, the answers it is made from, and
+ * saving it. An answer changed and not yet saved is reported to the admin's
+ * leave guard, until it is saved or the person cancels, or the submission is
+ * deleted and the page is leaving. Edits made while a save is on its way stay
+ * open, now made from the answers just saved.
+ */
+function useAnswerDraft(
+  submission: SubmissionDocument,
+  fields: readonly FormField[],
+  save: Save,
+  leaving: boolean
+) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const draftNow = useRef(draft);
+  draftNow.current = draft;
+  // The answers as they were when editing began, which the draft is made from.
+  const [basis, setBasis] = useState<Record<string, unknown> | null>(null);
+  const changed = editing && answersChanged(fields, basis ?? undefined, draft);
+  useReportUnsavedWork(UNSAVED_ANSWERS_KEY, !leaving && changed);
+  // Another submission opened: not editing it.
+  useEffect(() => setEditing(false), [submission.id]);
+  const begin = () => {
+    setDraft(submission.data ?? {});
+    setBasis(submission.data ?? null);
+    setEditing(true);
+  };
+  const change = (name: string, value: unknown) =>
+    setDraft(current => ({ ...current, [name]: value }));
+  const afterSave = (sent: Record<string, unknown>) => {
+    if (JSON.stringify(draftNow.current) === JSON.stringify(sent)) {
+      setEditing(false);
+    } else {
+      setBasis(sent);
+    }
+  };
+  const saveDraft = () => {
+    // Saving untouched answers writes nothing: a `data` write stamps the
+    // submission as edited in the admin.
+    if (!answersChanged(fields, submission.data, draft)) {
+      setEditing(false);
+      return;
+    }
+    const sent = draft;
+    void save({ data: sent }, { data: basis })
+      .then(() => afterSave(sent))
+      .catch(() => undefined);
+  };
+  return {
+    editing,
+    draft,
+    begin,
+    change,
+    saveDraft,
+    cancel: () => setEditing(false),
+  };
+}
+
+/** The answers as inputs, and saving or leaving them. */
+function AnswerEditor({
+  fields,
+  asked,
+  draft,
+}: {
+  fields: readonly FormField[];
+  asked: AskedSnapshot;
+  draft: ReturnType<typeof useAnswerDraft>;
+}): JSX.Element {
+  return (
+    <div className="space-y-4 px-4 py-4 sm:px-5">
+      {fields.map(field => (
+        <div key={field.name} className="space-y-1.5">
+          <label
+            htmlFor={`submission-field-${field.name}`}
+            className="text-sm font-medium text-foreground"
+          >
+            {field.label || field.name}
+          </label>
+          <EditableAnswer
+            field={field}
+            asked={asked}
+            value={draft.draft[field.name]}
+            onChange={value => draft.change(field.name, value)}
+          />
+        </div>
+      ))}
+      <div className="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="outline" onClick={draft.cancel}>
+          Cancel
+        </Button>
+        <Button type="button" onClick={draft.saveDraft}>
+          Save answers
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** The answers, as asked, and editing them for a person who may. */
 function AnswersBox({
   submission,
@@ -484,96 +583,32 @@ function AnswersBox({
   asked,
   canUpdate,
   save,
+  leaving,
 }: {
   submission: SubmissionDocument;
   form: FormDocument | null | undefined;
   asked: AskedSnapshot;
   canUpdate: boolean;
   save: Save;
+  /** The submission is deleted and the page is moving on: nothing is left to save. */
+  leaving: boolean;
 }): JSX.Element {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Record<string, unknown>>({});
-  // The answers as they were when editing began, which the draft is made from.
-  const [draftBasis, setDraftBasis] = useState<Record<string, unknown> | null>(
-    null
-  );
-  // An answer changed and not yet saved holds the page: leaving it asks first.
-  useReportUnsavedWork(
-    UNSAVED_ANSWERS_KEY,
-    editing &&
-      answersChanged(form?.fields ?? [], draftBasis ?? undefined, draft)
-  );
-  // Another submission opened: not editing it.
-  useEffect(() => setEditing(false), [submission.id]);
+  const fields = form?.fields ?? [];
+  const draft = useAnswerDraft(submission, fields, save, leaving);
   return (
     <Box
       title="Answers"
       action={
-        canUpdate && !editing ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setDraft(submission.data ?? {});
-              setDraftBasis(submission.data ?? null);
-              setEditing(true);
-            }}
-          >
+        canUpdate && !draft.editing ? (
+          <Button type="button" variant="ghost" size="sm" onClick={draft.begin}>
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
             Edit answers
           </Button>
         ) : null
       }
     >
-      {editing ? (
-        <div className="space-y-4 px-4 py-4 sm:px-5">
-          {(form?.fields ?? []).map(field => (
-            <div key={field.name} className="space-y-1.5">
-              <label
-                htmlFor={`submission-field-${field.name}`}
-                className="text-sm font-medium text-foreground"
-              >
-                {field.label || field.name}
-              </label>
-              <EditableAnswer
-                field={field}
-                asked={asked}
-                value={draft[field.name]}
-                onChange={value =>
-                  setDraft(current => ({ ...current, [field.name]: value }))
-                }
-              />
-            </div>
-          ))}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setEditing(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                // Saving untouched answers writes nothing: a `data` write
-                // stamps the submission as edited in the admin.
-                if (
-                  !answersChanged(form?.fields ?? [], submission.data, draft)
-                ) {
-                  setEditing(false);
-                  return;
-                }
-                void save({ data: draft }, { data: draftBasis })
-                  .then(() => setEditing(false))
-                  .catch(() => undefined);
-              }}
-            >
-              Save answers
-            </Button>
-          </div>
-        </div>
+      {draft.editing ? (
+        <AnswerEditor fields={fields} asked={asked} draft={draft} />
       ) : (
         <SubmissionAnswers asked={asked} data={submission.data ?? {}} />
       )}
@@ -907,6 +942,14 @@ function usePageMoves(
   remove: () => Promise<boolean>
 ) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Where the page goes once its submission is deleted. Moved to on the next
+  // render, after the answers have stopped reporting unsaved work: a move made
+  // in the same breath as the delete would be asked about by the leave guard,
+  // for a submission that no longer exists.
+  const [leavingTo, setLeavingTo] = useState<string | null>(null);
+  useEffect(() => {
+    if (leavingTo !== null) navigateTo(leavingTo);
+  }, [leavingTo]);
   const go = (target: string | undefined) => {
     if (target) navigateTo(submissionPageAddress(slug, target, scope));
   };
@@ -914,13 +957,19 @@ function usePageMoves(
     setConfirmDelete(false);
     if (!(await remove())) return;
     const next = place?.older ?? place?.newer;
-    navigateTo(
+    setLeavingTo(
       next
         ? submissionPageAddress(slug, next, scope)
         : `/admin/collections/${encodeURIComponent(slug)}`
     );
   };
-  return { go, confirmDelete, setConfirmDelete, deleteSubmission };
+  return {
+    go,
+    confirmDelete,
+    setConfirmDelete,
+    deleteSubmission,
+    leaving: leavingTo !== null,
+  };
 }
 
 /**
@@ -1161,7 +1210,7 @@ export function SubmissionPage({
   const { data: place } = useListPlace(slug, submission, scope);
   const { save, remove, error } = useSubmissionWrites(slug, id, held);
   useReadOnOpen(submission, known, canUpdate, save);
-  const { go, confirmDelete, setConfirmDelete, deleteSubmission } =
+  const { go, confirmDelete, setConfirmDelete, deleteSubmission, leaving } =
     usePageMoves(slug, scope, place, remove);
 
   if (readError || !submission) return <PageMessage error={readError} />;
@@ -1199,6 +1248,7 @@ export function SubmissionPage({
               asked={asked}
               canUpdate={canUpdate}
               save={save}
+              leaving={leaving}
             />
 
             <ActivityBox submission={submission} status={status} />

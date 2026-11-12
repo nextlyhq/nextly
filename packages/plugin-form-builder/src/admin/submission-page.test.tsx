@@ -28,9 +28,16 @@ import { SubmissionPage } from "./SubmissionPage";
 const navigateTo = vi.fn();
 // What the page last told the admin's leave guard, by key.
 const unsavedWork = new Map<string, boolean>();
+// Whether the answers still held the page at each move.
+const movedWhileUnsaved: boolean[] = [];
 vi.mock("@nextlyhq/plugin-sdk/admin", async original => ({
   ...(await original<object>()),
-  navigateTo: (href: string) => navigateTo(href),
+  navigateTo: (href: string) => {
+    movedWhileUnsaved.push(
+      unsavedWork.get("forms.submission-answers") ?? false
+    );
+    navigateTo(href);
+  },
   useReportUnsavedWork: (key: string, dirty: boolean) => {
     unsavedWork.set(key, dirty);
   },
@@ -48,6 +55,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   navigateTo.mockReset();
   unsavedWork.clear();
+  movedWhileUnsaved.length = 0;
   window.history.replaceState(null, "", "/");
 });
 
@@ -636,6 +644,73 @@ describe("a submission's page, writing", () => {
     expect(unsavedWork.get("forms.submission-answers")).toBe(true);
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(unsavedWork.get("forms.submission-answers")).toBe(false);
+  });
+
+  it("keeps answers changed while the last answers were being saved", async () => {
+    let release = () => undefined as void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const store = { data: { ...DATA } as Record<string, unknown> };
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+      store,
+      hold: () => held,
+    });
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    const name = screen.getByRole("textbox", { name: "Full name" });
+    await user.clear(name);
+    await user.type(name, "Hina R.");
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    // Still typing while that save is on its way.
+    await user.type(name, "x");
+    release();
+    await waitFor(() => expect(patches(fetchMock)).toHaveLength(1));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.getByRole("textbox", { name: "Full name" })).toHaveValue(
+      "Hina R.x"
+    );
+    expect(unsavedWork.get("forms.submission-answers")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    await waitFor(() =>
+      expect(patches(fetchMock)[1]).toEqual({
+        data: { ...DATA, name: "Hina R.x" },
+        _rev: "rev-8",
+      })
+    );
+  });
+
+  it("leaves a deleted submission without asking about its answers", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+      older: "sub-3",
+    });
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    await user.type(screen.getByRole("textbox", { name: "Full name" }), "!");
+    expect(unsavedWork.get("forms.submission-answers")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Delete submission" })
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Delete submission" })
+    );
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/admin/collections/form-submissions/sub-3?status=all"
+      )
+    );
+    expect(movedWhileUnsaved).toEqual([false]);
   });
 
   it("saves a note after one was cleared", async () => {
