@@ -2,7 +2,9 @@
  * The App Router's not-found boundary, reached without importing `next` at load.
  *
  * `next/navigation` is loaded through {@link loadNextModule}, so a module that
- * only MIGHT trigger a 404 does not drag Next into a non-Next consumer.
+ * only MIGHT trigger a 404 does not drag Next into a non-Next consumer. That
+ * loads Next's server build of it, which reaches none of the client contexts
+ * a deployment that ships only traced files can lack.
  *
  * Shared by every route helper rather than copied into each. Two helpers that
  * each decide how to reach `notFound()` agree on the day they are written and
@@ -41,9 +43,8 @@ function outsideNextApp(): NextlyError {
 /**
  * `name` from `next/navigation`, else `fallback` when `next/navigation` was
  * found but a module it requires was not. A host that deploys each function
- * with only its traced files (Vercel) can ship that bundle: Nextly's require
- * of `next/navigation` is opaque to the trace, and Next's require hook sends
- * it on to files no trace names. The fallback throws the same error, by
+ * with only its traced files (Vercel) can ship that bundle where its trace
+ * did not follow Nextly's require. The fallback throws the same error, by
  * digest, as Next's own helper, so the visitor gets the 404 or the redirect
  * rather than a 500. Not installed at all: {@link outsideNextApp}.
  */

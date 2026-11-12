@@ -34,7 +34,7 @@
  */
 import { createRequire } from "node:module";
 
-import { requireNextApi } from "../runtime/next-api";
+import { requireNextApi, requireNextNavigation } from "../runtime/next-api";
 import {
   NEXT_HTTP_ERROR_FALLBACK_CODE,
   NEXT_REDIRECT_CODE,
@@ -62,9 +62,9 @@ export function getHeaders(): HeadersFn {
  */
 export function getUnstableRethrow(): UnstableRethrow {
   if (cachedUnstableRethrow) return cachedUnstableRethrow;
-  cachedUnstableRethrow = unstableRethrowFrom(() =>
-    createRequire(import.meta.url)("next/navigation")
-  );
+  // Next's server build of next/navigation, which reaches none of the client
+  // contexts a deployment can lack (`requireNextNavigation`).
+  cachedUnstableRethrow = unstableRethrowFrom(requireNextNavigation);
   return cachedUnstableRethrow;
 }
 

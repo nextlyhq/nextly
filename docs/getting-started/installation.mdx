@@ -293,7 +293,7 @@ Drop adapters and drivers your project doesn't actually use. A project made with
 
 #### Deploying with traced functions
 
-A host that deploys each route with only the files the build traced, such as Vercel, needs the files Nextly loads at request time. Nextly reaches Next.js's `next/navigation`, `next/cache`, `next/headers` and `next/server` through a require the build's trace does not follow, so without them the first request that needs one fails with `Cannot find module`: an unknown address, for one, answers 500 instead of 404. `nextlyTracingIncludes()` lists those files, with the database drivers and adapters, as globs relative to the project, and the `outputFileTracingIncludes` line above adds them to every route. A config wrapped in `withNextly()` from `nextly/next` gets them without the line. `next start` on a server with the whole `node_modules` needs neither.
+A host that deploys each route with only the files the build traced, such as Vercel, needs the files Nextly loads at request time. Nextly reaches Next.js's `next/navigation`, `next/cache`, `next/headers` and `next/server` at request time, through a require the build's trace may not follow, so without them the first request that needs one can fail with `Cannot find module`. `nextlyTracingIncludes()` lists those files, with the database drivers and adapters, as globs relative to the project, and the `outputFileTracingIncludes` line above adds them to every route. A config wrapped in `withNextly()` from `nextly/next` gets them without the line. `next start` on a server with the whole `node_modules` needs neither.
 
 ### 4. Set Up Admin Routes
 

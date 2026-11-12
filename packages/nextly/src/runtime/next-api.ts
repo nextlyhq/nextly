@@ -35,6 +35,56 @@ export type NextModule =
 const nodeRequire = createRequire(import.meta.url);
 
 /**
+ * Next's server build of `next/navigation`: what a Server Component's
+ * `next/navigation` resolves to under the `react-server` condition. It holds
+ * every navigation API nextly calls (`notFound`, `permanentRedirect`,
+ * `unstable_rethrow`) and requires only the files that throw and recognise
+ * them. `next/navigation` itself is the client entry: on the server it reaches
+ * the App Router's React contexts, which Next's require hook sends on to the
+ * pages router's compiled runtime, `react-dom`, `styled-jsx` and
+ * `client-only`, files a deployment that ships only traced files can lack.
+ */
+export const NEXT_NAVIGATION_SERVER_ENTRY =
+  "next/dist/client/components/navigation.react-server.js";
+
+/**
+ * `next/navigation` as nextly loads it on the server: the server build, else
+ * the public entry where a Next.js release lays its files out differently.
+ * Throws as `require` does, so a caller tells "not installed" (the error
+ * names `next/navigation`) from a deployment missing a file further in.
+ */
+export function requireNextNavigation(): unknown {
+  try {
+    return nodeRequire(
+      "next/dist/client/components/navigation.react-server.js"
+    );
+  } catch (error) {
+    if (!isNotInstalled(error, NEXT_NAVIGATION_SERVER_ENTRY)) throw error;
+    return nodeRequire("next/navigation");
+  }
+}
+
+/**
+ * Each entry loaded by its own literal specifier, so a tracer that follows a
+ * `createRequire` call with a string can name its files; the variable
+ * specifier an earlier loader passed is one no tracer follows.
+ */
+function requireNextModule(specifier: string): unknown {
+  switch (specifier) {
+    case "next/navigation":
+      return requireNextNavigation();
+    case "next/cache":
+      return nodeRequire("next/cache");
+    case "next/headers":
+      return nodeRequire("next/headers");
+    case "next/server":
+      return nodeRequire("next/server");
+    default:
+      return nodeRequire(specifier);
+  }
+}
+
+/**
  * True for Node's error for `specifier` itself not being installed. A missing
  * module deeper inside it names that other module and is not this case.
  */
@@ -90,7 +140,7 @@ export function reportMissingFromChain(
  */
 export function loadNextModule(
   specifier: NextModule,
-  load: (specifier: string) => unknown = nodeRequire
+  load: (specifier: string) => unknown = requireNextModule
 ): Record<string, unknown> | null {
   try {
     return load(specifier) as Record<string, unknown>;

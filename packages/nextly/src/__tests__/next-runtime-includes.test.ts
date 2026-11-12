@@ -1,20 +1,24 @@
 /**
  * The Next.js files every route ships for Nextly's runtime requires.
  *
- * Nextly loads `next/navigation`, `next/cache`, `next/headers` and
- * `next/server` through a require no build trace follows, and Next's require
- * hook sends `next/navigation` on to the pages router's vendored contexts. A
- * host that deploys each function with only its traced files (Vercel) then
- * failed the first request that needed one: every unknown address answered
- * 500, because `notFound()` could not load
- * `next/dist/server/route-modules/pages/vendored/contexts/app-router-context`.
+ * Nextly loads Next's server build of `next/navigation`, `next/cache`,
+ * `next/headers` and `next/server` through `createRequire`, which a build
+ * trace may not follow. A host that deploys each function with only its
+ * traced files (Vercel) then failed the first request that needed one of
+ * their files: every unknown address answered 500. The client
+ * `next/navigation` nextly loaded before made it worse: on the server, Next's
+ * require hook sends it on to the pages router's runtime, `react-dom`,
+ * `styled-jsx` and `client-only`, reached through pnpm's links, which no
+ * list of files recreates.
  *
- * Judged against the installed Next.js: each pattern matches a file, so a
- * release that renames one fails here; each glob matches a file through the
- * glob Next.js itself runs, from the project directory; and every file the
- * production require graph was seen to load that its traces left out is
- * covered.
+ * Judged against the installed Next.js: the four entries, loaded as a
+ * production server loads them (Next's require hook installed), reach no
+ * file outside `next` but `react`, so the `next` package's own files are
+ * enough; each pattern matches a file, through the glob Next.js itself runs,
+ * so a release that renames one fails here; and every file the production
+ * require graph was seen to load that its traces left out is covered.
  */
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { join, matchesGlob, relative, sep } from "node:path";
 
@@ -23,105 +27,91 @@ import { afterEach, describe, expect, it } from "vitest";
 import { nextlyTracingIncludes as exported, withNextly } from "../next";
 import {
   NEXT_RUNTIME_PATTERNS,
+  nextPackageDirs,
   nextRuntimeIncludes,
   nextlyTracingIncludes,
-  runtimePackageDirs,
-  type RuntimePackage,
 } from "../next-runtime-includes";
+import { NEXT_NAVIGATION_SERVER_ENTRY } from "../runtime/next-api";
 
 /**
- * The files `next/navigation` and `next/cache` loaded at request time on a
+ * The files of `next` that Nextly's four entries loaded at request time on a
  * Next.js 16.4 production server that the route's own build trace did not
- * hold, taken from its require graph; then what `next/headers` and
- * `next/server` load beyond those. Each is named by its package.
+ * hold, taken from its require graph, with what `next/headers` and
+ * `next/server` load beyond the others. Each is named from the package's
+ * directory.
  */
 const UNTRACED_CLOSURE = [
-  "client-only/index.js",
-  "next/cache.js",
-  "next/dist/build/output/log.js",
-  "next/dist/client/components/app-router-headers.js",
-  "next/dist/compiled/next-server/pages-turbo.runtime.prod.js",
-  "next/dist/lib/batcher.js",
-  "next/dist/server/base-http/helpers.js",
-  "next/dist/server/lib/clone-response.js",
-  "next/dist/server/lib/dedupe-fetch.js",
-  "next/dist/server/lib/encode-header-safe.js",
-  "next/dist/server/lib/patch-fetch-symbol.js",
-  "next/dist/server/lib/patch-fetch.js",
-  "next/dist/server/lib/trace/request-insights-identity.js",
-  "next/dist/server/lib/trace/request-insights.js",
-  "next/dist/server/lib/trace/span-store.js",
-  "next/dist/server/pipe-readable.js",
-  "next/dist/server/render-result.js",
-  "next/dist/server/request-meta.js",
-  "next/dist/server/request/cache-stages.js",
-  "next/dist/server/request/io.js",
-  "next/dist/server/response-cache/index.js",
-  "next/dist/server/response-cache/utils.js",
-  "next/dist/server/route-modules/pages/module.compiled.js",
-  "next/dist/server/route-modules/pages/vendored/contexts/app-router-context.js",
-  "next/dist/server/route-modules/pages/vendored/contexts/hooks-client-context.js",
-  "next/dist/server/route-modules/pages/vendored/contexts/server-inserted-html.js",
-  "next/dist/server/stream-utils/encoded-tags.js",
-  "next/dist/server/stream-utils/node-web-streams-helper.js",
-  "next/dist/server/stream-utils/uint8array-helpers.js",
-  "next/dist/server/use-cache/cache-life-profile.js",
-  "next/dist/server/use-cache/cache-life.js",
-  "next/dist/server/use-cache/cache-tag.js",
-  "next/dist/server/web/error.js",
-  "next/dist/server/web/next-url.js",
-  "next/dist/server/web/spec-extension/adapters/next-request.js",
-  "next/dist/server/web/spec-extension/request.js",
-  "next/dist/server/web/spec-extension/revalidate.js",
-  "next/dist/server/web/spec-extension/unstable-cache.js",
-  "next/dist/server/web/spec-extension/unstable-no-store.js",
-  "next/dist/server/web/utils.js",
-  "next/dist/shared/lib/errors/constants.js",
-  "next/dist/shared/lib/get-hostname.js",
-  "next/dist/shared/lib/hash.js",
-  "next/dist/shared/lib/i18n/detect-domain-locale.js",
-  "next/dist/shared/lib/request-insights.js",
-  "next/dist/shared/lib/router/utils/add-locale.js",
-  "next/dist/shared/lib/router/utils/add-path-prefix.js",
-  "next/dist/shared/lib/router/utils/add-path-suffix.js",
-  "next/dist/shared/lib/router/utils/cache-busting-search-param.js",
-  "next/dist/shared/lib/router/utils/format-next-pathname-info.js",
-  "next/dist/shared/lib/router/utils/get-next-pathname-info.js",
-  "next/dist/shared/lib/router/utils/parse-path.js",
-  "next/dist/shared/lib/router/utils/path-has-prefix.js",
-  "next/dist/shared/lib/router/utils/remove-path-prefix.js",
-  "next/dist/shared/lib/router/utils/remove-trailing-slash.js",
-  "react-dom/cjs/react-dom-server-legacy.browser.production.js",
-  "react-dom/cjs/react-dom-server.edge.production.js",
-  "react-dom/server.edge.js",
-  "react/cjs/react-jsx-runtime.production.js",
-  "react/jsx-runtime.js",
-  "styled-jsx/dist/index/index.js",
-  "styled-jsx/index.js",
-  // next/headers and next/server, beyond the files above.
-  "next/dist/compiled/ua-parser-js/ua-parser.js",
-  "next/dist/server/after/after.js",
-  "next/dist/server/after/index.js",
-  "next/dist/server/create-deduped-by-callsite-server-error-logger.js",
-  "next/dist/server/request/connection.js",
-  "next/dist/server/request/cookies.js",
-  "next/dist/server/request/draft-mode.js",
-  "next/dist/server/request/headers.js",
-  "next/dist/server/web/spec-extension/adapters/headers.js",
-  "next/dist/server/web/spec-extension/adapters/reflect.js",
-  "next/dist/server/web/spec-extension/adapters/request-cookies.js",
-  "next/dist/server/web/spec-extension/image-response.js",
-  "next/dist/server/web/spec-extension/response.js",
-  "next/dist/server/web/spec-extension/url-pattern.js",
-  "next/dist/server/web/spec-extension/user-agent.js",
-  "next/headers.js",
-  "next/server.js",
+  "cache.js",
+  "dist/build/output/log.js",
+  "dist/client/components/app-router-headers.js",
+  "dist/compiled/ua-parser-js/ua-parser.js",
+  "dist/lib/batcher.js",
+  "dist/server/after/after.js",
+  "dist/server/after/index.js",
+  "dist/server/base-http/helpers.js",
+  "dist/server/create-deduped-by-callsite-server-error-logger.js",
+  "dist/server/lib/clone-response.js",
+  "dist/server/lib/dedupe-fetch.js",
+  "dist/server/lib/encode-header-safe.js",
+  "dist/server/lib/patch-fetch-symbol.js",
+  "dist/server/lib/patch-fetch.js",
+  "dist/server/lib/trace/request-insights-identity.js",
+  "dist/server/lib/trace/request-insights.js",
+  "dist/server/lib/trace/span-store.js",
+  "dist/server/pipe-readable.js",
+  "dist/server/render-result.js",
+  "dist/server/request-meta.js",
+  "dist/server/request/cache-stages.js",
+  "dist/server/request/connection.js",
+  "dist/server/request/cookies.js",
+  "dist/server/request/draft-mode.js",
+  "dist/server/request/headers.js",
+  "dist/server/request/io.js",
+  "dist/server/response-cache/index.js",
+  "dist/server/response-cache/utils.js",
+  "dist/server/stream-utils/encoded-tags.js",
+  "dist/server/stream-utils/node-web-streams-helper.js",
+  "dist/server/stream-utils/uint8array-helpers.js",
+  "dist/server/use-cache/cache-life-profile.js",
+  "dist/server/use-cache/cache-life.js",
+  "dist/server/use-cache/cache-tag.js",
+  "dist/server/web/error.js",
+  "dist/server/web/next-url.js",
+  "dist/server/web/spec-extension/adapters/headers.js",
+  "dist/server/web/spec-extension/adapters/next-request.js",
+  "dist/server/web/spec-extension/adapters/reflect.js",
+  "dist/server/web/spec-extension/adapters/request-cookies.js",
+  "dist/server/web/spec-extension/image-response.js",
+  "dist/server/web/spec-extension/request.js",
+  "dist/server/web/spec-extension/response.js",
+  "dist/server/web/spec-extension/revalidate.js",
+  "dist/server/web/spec-extension/unstable-cache.js",
+  "dist/server/web/spec-extension/unstable-no-store.js",
+  "dist/server/web/spec-extension/url-pattern.js",
+  "dist/server/web/spec-extension/user-agent.js",
+  "dist/server/web/utils.js",
+  "dist/shared/lib/errors/constants.js",
+  "dist/shared/lib/get-hostname.js",
+  "dist/shared/lib/hash.js",
+  "dist/shared/lib/i18n/detect-domain-locale.js",
+  "dist/shared/lib/request-insights.js",
+  "dist/shared/lib/router/utils/add-locale.js",
+  "dist/shared/lib/router/utils/add-path-prefix.js",
+  "dist/shared/lib/router/utils/add-path-suffix.js",
+  "dist/shared/lib/router/utils/cache-busting-search-param.js",
+  "dist/shared/lib/router/utils/format-next-pathname-info.js",
+  "dist/shared/lib/router/utils/get-next-pathname-info.js",
+  "dist/shared/lib/router/utils/parse-path.js",
+  "dist/shared/lib/router/utils/path-has-prefix.js",
+  "dist/shared/lib/router/utils/remove-path-prefix.js",
+  "dist/shared/lib/router/utils/remove-trailing-slash.js",
+  "headers.js",
+  "server.js",
 ];
 
 /** This package's directory: its `node_modules` links Next.js as an app's does. */
 const ROOT = process.cwd();
-const dirs = runtimePackageDirs(ROOT);
-const PACKAGES = Object.keys(NEXT_RUNTIME_PATTERNS) as RuntimePackage[];
+const dirs = nextPackageDirs(ROOT);
 const posix = (path: string) => path.split(sep).join("/");
 
 type GlobFn = (
@@ -141,6 +131,43 @@ function nextGlob(pattern: string): Promise<string[]> {
   });
 }
 
+/**
+ * Every file the four entries load, in a process of its own with Next's
+ * require hook installed and a production Turbopack server's environment,
+ * as each package directory's path to the file (`next/dist/...`).
+ */
+function loadedByEntries(): string[] {
+  const script = `
+    const { createRequire } = require("node:module");
+    const req = createRequire(process.cwd() + "/package.json");
+    req("next/dist/server/require-hook");
+    const before = new Set(Object.keys(require.cache));
+    for (const entry of process.argv.slice(1)) req(entry);
+    const files = Object.keys(require.cache).filter(file => !before.has(file));
+    process.stdout.write(JSON.stringify(files));
+  `;
+  const run = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      script,
+      NEXT_NAVIGATION_SERVER_ENTRY,
+      "next/cache",
+      "next/headers",
+      "next/server",
+    ],
+    {
+      cwd: ROOT,
+      env: { ...process.env, NODE_ENV: "production", TURBOPACK: "1" },
+      encoding: "utf8",
+    }
+  );
+  if (run.status !== 0) throw new Error(run.stderr);
+  return (JSON.parse(run.stdout) as string[]).map(file =>
+    posix(file).replace(/^.*\/node_modules\//, "")
+  );
+}
+
 afterEach(() => {
   // `withNextly()` queues a Cache Components warning for configs that leave
   // the options off; cleared so it reaches no other file's logger.
@@ -158,52 +185,56 @@ afterEach(() => {
 });
 
 describe("the Next.js runtime files Nextly's requires load", () => {
-  it("finds every package where Next's own requires would", () => {
-    expect(Object.keys(dirs).sort()).toEqual([...PACKAGES].sort());
+  it("reach no package but next and react, and none of the pages router's runtime", () => {
+    const loaded = loadedByEntries();
+    // The control: the entries were loaded at all.
+    expect(loaded).toContain("next/cache.js");
+    expect(loaded).toContain(
+      "next/dist/client/components/navigation.react-server.js"
+    );
+    expect(
+      loaded.filter(
+        file => !file.startsWith("next/") && !file.startsWith("react/")
+      )
+    ).toEqual([]);
+    expect(
+      loaded.filter(file =>
+        /route-modules\/pages|next-server\/pages|shared-runtime|navigation\.js$/.test(
+          file
+        )
+      )
+    ).toEqual([]);
   });
 
   it("names only patterns that match a file, so a renamed one fails here", async () => {
+    expect(dirs).not.toBeNull();
     const empty: string[] = [];
-    for (const name of PACKAGES) {
-      const real = dirs[name]?.real ?? "";
-      for (const pattern of NEXT_RUNTIME_PATTERNS[name]) {
-        const glob = posix(relative(ROOT, join(real, pattern)));
-        if ((await nextGlob(glob)).length === 0)
-          empty.push(`${name}/${pattern}`);
-      }
+    for (const pattern of NEXT_RUNTIME_PATTERNS) {
+      const glob = posix(relative(ROOT, join(dirs?.real ?? "", pattern)));
+      if ((await nextGlob(glob)).length === 0) empty.push(pattern);
     }
     expect(empty).toEqual([]);
   });
 
   it("covers every file the production require graph loaded untraced", () => {
-    const uncovered = UNTRACED_CLOSURE.filter(file => {
-      const name = PACKAGES.find(pkg => file.startsWith(`${pkg}/`));
-      if (name === undefined) return true;
-      const inside = file.slice(name.length + 1);
-      return !NEXT_RUNTIME_PATTERNS[name].some(pattern =>
-        matchesGlob(inside, pattern)
-      );
-    });
-    expect(uncovered).toEqual([]);
-    expect(UNTRACED_CLOSURE).toContain(
-      "next/dist/server/route-modules/pages/vendored/contexts/app-router-context.js"
+    const uncovered = UNTRACED_CLOSURE.filter(
+      file => !NEXT_RUNTIME_PATTERNS.some(pattern => matchesGlob(file, pattern))
     );
+    expect(uncovered).toEqual([]);
   });
 
   it("gives each pattern under the project's link and under the real directory, each matching through Next's glob", async () => {
     const globs = nextRuntimeIncludes(ROOT);
-    for (const name of PACKAGES) {
-      const found = dirs[name];
-      if (!found) continue;
-      const pattern = NEXT_RUNTIME_PATTERNS[name][0] ?? "";
+    const linked = posix(relative(ROOT, dirs?.linked ?? ""));
+    const real = posix(relative(ROOT, dirs?.real ?? ""));
+    for (const pattern of NEXT_RUNTIME_PATTERNS) {
+      expect(globs).toContain(`./${linked}/${pattern}`);
       expect(globs).toContain(
-        `./${posix(relative(ROOT, join(found.linked, pattern)))}`
+        real.startsWith("../") ? `${real}/${pattern}` : `./${real}/${pattern}`
       );
-      const real = posix(relative(ROOT, join(found.real, pattern)));
-      expect(globs).toContain(real.startsWith("../") ? real : `./${real}`);
     }
-    // The real directories, which are what a require from Nextly resolves to,
-    // match from the project directory, where Next.js runs the globs.
+    // The real directory, which is what a require from Nextly resolves to,
+    // matches from the project directory, where Next.js runs the globs.
     const failing: string[] = [];
     for (const glob of globs.filter(g => g.includes("/.pnpm/"))) {
       if ((await nextGlob(glob)).length === 0) failing.push(glob);
@@ -226,9 +257,7 @@ describe("withNextly's includes", () => {
     const all = includes["/**"] ?? [];
     expect(all[0]).toBe("./content/**/*");
     expect(all).toEqual(expect.arrayContaining(nextRuntimeIncludes(ROOT)));
-    expect(all).toContain(
-      "./node_modules/next/dist/server/route-modules/pages/**/*.js"
-    );
+    expect(all).toContain("./node_modules/next/cache.js");
     expect(includes["/api/report"]).toEqual(["./templates/report.hbs"]);
   });
 
