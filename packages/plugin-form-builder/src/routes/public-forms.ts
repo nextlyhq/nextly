@@ -389,6 +389,7 @@ async function acceptSubmission(
       metadata: {
         ipAddress: trustedClientIp(req) ?? undefined,
         userAgent: req.headers.get("user-agent") ?? undefined,
+        page: req.headers.get("referer") ?? undefined,
       },
       access: PUBLIC,
     },

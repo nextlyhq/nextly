@@ -33,12 +33,14 @@ import type {
   BaseListOptions,
   BaseListResult,
 } from "../../../shared/base-registry-service";
+import { canonicalJson } from "../../../shared/lib/canonical-json";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import { settingsOf } from "../../schema/migrate-create/entity-settings";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 import {
   calculateSchemaHash,
@@ -252,31 +254,119 @@ export interface RecordedWriteOptions<TRecord> {
    * does, rather than clearing it.
    */
   leavesUnsaid?: boolean;
+  /**
+   * Of the settings a Builder record leaves unsaid, those an applied
+   * migration cleared: its record no longer says one an earlier record of
+   * the entity said. These are cleared rather than kept, so a clearing made
+   * in the Builder travels like any other settings change.
+   */
+  cleared?: ReadonlySet<UnsaidSetting>;
 }
+
+/** A setting a Builder record may leave unsaid (`RecordedWriteOptions.leavesUnsaid`). */
+export type UnsaidSetting = "description" | "admin";
 
 /**
  * `config` with the description and admin block it does not say taken from
- * `existing`, so they are neither compared nor written (`leavesUnsaid`). One
- * rule for every kind's recorded writer.
+ * `existing`, so they are neither compared nor written (`leavesUnsaid`),
+ * unless a migration cleared them (`cleared`). One rule for every kind's
+ * recorded writer.
  */
 export function withUnsaidKept<
   TConfig extends { description?: string; admin?: unknown },
 >(
   config: TConfig,
-  existing: { description?: string | null; admin?: unknown } | null
+  existing: { description?: string | null; admin?: unknown } | null,
+  cleared: ReadonlySet<UnsaidSetting> = new Set()
 ): TConfig {
   if (existing === null) return config;
   return {
     ...config,
     ...(config.description === undefined &&
+    !cleared.has("description") &&
     existing.description !== null &&
     existing.description !== undefined
       ? { description: existing.description }
       : {}),
-    ...(config.admin === undefined && existing.admin
+    ...(config.admin === undefined && !cleared.has("admin") && existing.admin
       ? { admin: existing.admin }
       : {}),
   };
+}
+
+/**
+ * Whether the settings of a declared field list differ from a stored one's
+ * where the schema hash cannot see them: each field's admin options (help
+ * text, placeholder, hidden and the rest), custom data, allowed components,
+ * filter options and declared defaults, at any depth.
+ * They change no column, so the hash leaves them out, yet the row carries
+ * them and the admin reads them from it.
+ *
+ * Each side is read as a snapshot records it (`settingsOf`): functions and
+ * what held only functions or nothing are left out, and an empty object is
+ * no setting. A declaration, the row a start stored from it and the row
+ * `nextly migrate` wrote from its snapshot then compare equal, so no writer
+ * undoes another's row. One answer for every kind's code-first decision.
+ */
+export function fieldSettingsChanged(
+  declared: unknown,
+  stored: unknown
+): boolean {
+  return (
+    canonicalJson(fieldSettingsOf(declared)) !==
+    canonicalJson(fieldSettingsOf(stored))
+  );
+}
+
+/** The settings `fieldSettingsChanged` compares, field by field, in order. */
+function fieldSettingsOf(fields: unknown): unknown[] {
+  if (!Array.isArray(fields)) return [];
+  return fields.map((field: unknown) => {
+    if (field === null || typeof field !== "object") return null;
+    const {
+      name,
+      admin,
+      custom,
+      components,
+      filterOptions,
+      defaultValue,
+      fields: nested,
+      blocks,
+    } = field as Record<string, unknown>;
+    return {
+      name: name ?? null,
+      admin: recordedSetting(admin),
+      custom: recordedSetting(custom),
+      // Hash-excluded too, and stored with the field where they are data: a
+      // component field's allowed components, a relationship's filter.
+      components: recordedSetting(components),
+      filterOptions: recordedSetting(filterOptions),
+      // A declared default (a computed one is a function, left out): Singles
+      // and field groups have no other comparison of it.
+      defaultValue: recordedSetting(defaultValue),
+      fields: fieldSettingsOf(nested),
+      blocks: Array.isArray(blocks)
+        ? blocks.map((block: unknown) => {
+            const { slug, fields: inBlock } =
+              block !== null && typeof block === "object"
+                ? (block as Record<string, unknown>)
+                : {};
+            return { slug: slug ?? null, fields: fieldSettingsOf(inBlock) };
+          })
+        : [],
+    };
+  });
+}
+
+/** A setting as a snapshot records it, or null where it records none. */
+function recordedSetting(value: unknown): unknown {
+  const recorded = settingsOf({ value }, "code").value;
+  if (recorded === undefined || recorded === null) return null;
+  return typeof recorded === "object" &&
+    !Array.isArray(recorded) &&
+    Object.keys(recorded).length === 0
+    ? null
+    : recorded;
 }
 
 /** Result of syncing code-first collections. */
@@ -1003,6 +1093,9 @@ export class CollectionRegistryService extends BaseRegistryService<
       // their own comparison or a changed default never reaches the write.
       fieldDefaultsSignature(config.fields) !==
         fieldDefaultsSignature(existing.fields) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
       // A collection's physical table: a changed `dbName` moves it.
       desiredTableName !== existing.tableName ||
       // The timestamp columns, which the schema hash omits: turning them on
@@ -1074,7 +1167,7 @@ export class CollectionRegistryService extends BaseRegistryService<
         : options.existing;
     const config =
       options.leavesUnsaid === true
-        ? withUnsaidKept(recorded, existing)
+        ? withUnsaidKept(recorded, existing, options.cleared)
         : recorded;
     const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash, desiredTableName } = decision;

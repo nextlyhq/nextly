@@ -113,14 +113,13 @@ export interface NoticeEmail {
  * notice's own transaction, so the job exists only if the notice does.
  */
 export async function enqueueNoticeEmail(
-  tx: Pick<TransactionContext, "getDrizzle">,
-  dialect: string,
+  tx: Pick<TransactionContext, "insert">,
   slug: string,
   noticeId: string,
   now: Date
 ): Promise<void> {
   const input: NoticeEmailJobInput = { noticeId };
-  await enqueueInTransaction(tx, dialect, {
+  await enqueueInTransaction(tx, {
     slug,
     input,
     runAt: null,

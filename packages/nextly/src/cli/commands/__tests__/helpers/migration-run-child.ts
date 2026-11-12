@@ -31,6 +31,7 @@ import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 
+import { asWritten } from "../../../../__tests__/helpers/statement-as-written";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { ensureSchemaEventsTable } from "../../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../../domains/schema/events/schema-events-repository";
@@ -85,15 +86,6 @@ async function pause(): Promise<void> {
     }
     if (line === "continue") return;
   }
-}
-
-/**
- * The statement as its file wrote it. A run holding the schema lock sends each statement behind
- * comments of its own (the lock's claim, and what the statement was sent for), which are not part
- * of the text a suite watches for.
- */
-function asWritten(statement: string): string {
-  return statement.replace(/^\s*(?:\/\*[\s\S]*?\*\/\s*)*/, "");
 }
 
 /** Runs `statement` through `run`, stopping before or after it when it is the watched one. */

@@ -77,6 +77,10 @@ import { createRequire } from "node:module";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../di/container";
+import {
+  isMissingFromChain,
+  reportMissingFromChain,
+} from "../runtime/next-api";
 import { ServiceContainer } from "../services";
 import { resolveClaimedMimeType } from "../services/upload-validation/mime";
 import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
@@ -92,10 +96,31 @@ type RevalidatePath = (path: string) => void;
 let cachedRevalidatePath: RevalidatePath | null = null;
 function getRevalidatePath(): RevalidatePath {
   if (cachedRevalidatePath) return cachedRevalidatePath;
-  const require = createRequire(import.meta.url);
-  const mod = require("next/cache") as { revalidatePath: RevalidatePath };
-  cachedRevalidatePath = mod.revalidatePath;
+  cachedRevalidatePath = revalidatePathFrom(createRequire(import.meta.url));
   return cachedRevalidatePath;
+}
+
+/**
+ * `revalidatePath` from `next/cache`, loaded through `load`. It runs after
+ * the upload is stored, so a deployment whose trace left out a module
+ * `next/cache` requires gets a revalidation skipped and named, not a failed
+ * response for a file that was saved. Any other failure is rethrown.
+ */
+export function revalidatePathFrom(
+  load: (specifier: string) => unknown
+): RevalidatePath {
+  try {
+    const mod = load("next/cache") as { revalidatePath: RevalidatePath };
+    return mod.revalidatePath;
+  } catch (error) {
+    if (!isMissingFromChain(error, "next/cache")) throw error;
+    reportMissingFromChain(
+      "next/cache",
+      error,
+      "skips revalidating the media page after an upload"
+    );
+    return () => undefined;
+  }
 }
 
 /**
