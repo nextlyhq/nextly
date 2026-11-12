@@ -5,7 +5,7 @@
  *
  * @module admin/share-image-row
  */
-import { Button } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/plugin-sdk/admin";
 import { Check } from "lucide-react";
 import { useState, type ReactNode } from "react";
 

@@ -5,6 +5,7 @@
  *
  * @module admin/parts
  */
+import { Alert, AlertDescription } from "@nextlyhq/plugin-sdk/admin";
 import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -179,20 +180,58 @@ function sourceWords(
   return SITE_DEFAULT[value];
 }
 
-/** A note's frame and icon colour for each tone. */
-const NOTE_TONES = {
-  plain: { box: "border-border bg-muted", icon: "text-muted-foreground" },
-  warning: {
-    box: "border-warning-border bg-warning-surface",
-    icon: "text-warning-text",
-  },
-  success: {
-    box: "border-success-border bg-success-surface",
-    icon: "text-success-text",
-  },
+/**
+ * What an empty field falls back to, as one sentence: "Empty uses the Posts
+ * pattern: {Title} | {Site name}", "Empty uses the post's summary".
+ */
+export function EmptyUses({
+  sourced,
+  value,
+  names,
+}: {
+  sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">;
+  value: SourcedValue;
+  names: SourceNames;
+}): ReactNode {
+  const level: SeoLevel = sourced.from;
+  if (level === "pattern" && sourced.pattern !== undefined) {
+    return (
+      <>
+        Empty uses the {names.typeLabel} pattern: <Code>{sourced.pattern}</Code>
+      </>
+    );
+  }
+  if (level === "content" && sourced.field !== undefined) {
+    const field = names.fieldLabels[sourced.field] ?? sourced.field;
+    return (
+      <>
+        Empty uses the {inSentence(names.typeLabel)}&apos;s {inSentence(field)}
+      </>
+    );
+  }
+  if (level === "template") {
+    return names.drawnBy === "design"
+      ? "Empty uses this page's design"
+      : "Empty uses this page's template";
+  }
+  if (level === "code") {
+    return "Empty uses what this page's route sets. Anything you type here wins over it.";
+  }
+  return `Empty uses ${SITE_DEFAULT[value]}`;
+}
+
+/** The admin's notice each tone is drawn as. */
+const NOTE_VARIANTS = {
+  plain: "info",
+  warning: "warning",
+  success: "success",
 } as const;
 
-/** A boxed note: a plain one, a warning, or the word that something worked. */
+/**
+ * A note: the admin's own notice, plain, a warning, or the word that
+ * something worked. A note says how things stand rather than interrupting,
+ * so it is announced as a note, not as an alert.
+ */
 export function Note({
   tone = "plain",
   icon,
@@ -203,20 +242,17 @@ export function Note({
   children: ReactNode;
 }): ReactNode {
   return (
-    <div
-      className={cx(
-        "flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[13px] leading-[1.45] text-foreground",
-        NOTE_TONES[tone].box
-      )}
+    <Alert
+      variant={NOTE_VARIANTS[tone]}
+      role="note"
+      // The icon sits straight inside, where the notice colours it by tone.
+      className="px-3 py-2.5 text-[13px] leading-[1.45] [&>svg]:mt-px [&>svg]:size-4 [&>svg]:flex-none"
     >
-      <span
-        aria-hidden="true"
-        className={cx("mt-px flex-none", NOTE_TONES[tone].icon)}
-      >
-        {icon ?? <TriangleAlert className="size-4" />}
-      </span>
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
+      {icon ?? <TriangleAlert aria-hidden="true" />}
+      <AlertDescription className="min-w-0 flex-1 text-[13px] leading-[1.45]">
+        {children}
+      </AlertDescription>
+    </Alert>
   );
 }
 
