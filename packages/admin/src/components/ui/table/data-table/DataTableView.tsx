@@ -242,7 +242,10 @@ function RowEntry({
           navigateTo(href);
         }}
         className={cn(
-          "inline-block text-foreground font-medium hover:underline",
+          // A block as wide as its text, not an inline-block: an inline-block
+          // in a table cell sits on the cell's line by its own baseline and
+          // drew the title above the row's other cells.
+          "block w-fit max-w-full text-foreground font-medium hover:underline",
           ROW_ENTRY_HIT_AREA,
           ROW_ENTRY_FOCUS
         )}

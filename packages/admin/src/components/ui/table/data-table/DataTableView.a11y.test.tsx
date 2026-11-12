@@ -226,7 +226,8 @@ describe("DataTableView target size", () => {
     // A block box, so the padding counts toward its height: 2px above and
     // below 20px text make 24px, and the matching negative margin keeps the
     // line, and so the row, at the text's height.
-    expect(tokens).toContain("inline-block");
+    expect(tokens).toContain("block");
+    expect(tokens).toContain("w-fit");
     expect(tokens).toContain("py-0.5");
     expect(tokens).toContain("-my-0.5");
   });
