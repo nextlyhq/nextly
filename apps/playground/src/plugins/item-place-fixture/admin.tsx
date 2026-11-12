@@ -51,7 +51,7 @@ function NewspaperIcon(): JSX.Element {
  * it opens, with the rail's tooltip. Its own tooltip provider, so it needs
  * nothing from the page around it.
  */
-export function ReleaseNotesButton(): JSX.Element {
+function ReleaseNotesButton(): JSX.Element {
   return (
     <TooltipProvider>
       <Tooltip delayDuration={0}>
@@ -78,7 +78,7 @@ export function ReleaseNotesButton(): JSX.Element {
 }
 
 /** What the What's new item opens: a few lines, and a way out. */
-export function WhatsNewDialogBody({
+function WhatsNewDialogBody({
   onClose,
 }: {
   onClose?: () => void;
