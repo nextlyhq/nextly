@@ -235,6 +235,7 @@ function storedHeadOf(answer: PageMetadataAnswer, origin: string): StoredHead {
       ? {}
       : { canonical: at(answer.canonical) }),
     listed: answer.robots?.index !== false,
+    followed: answer.robots?.follow !== false,
     ...(answer.social?.locale === undefined
       ? {}
       : { locale: answer.social.locale }),
@@ -289,7 +290,6 @@ function valueOriginOf(
 /** What a page's head holds, as the screen shows it. */
 function storedValuesOf(
   head: StoredHead,
-  answer: PageMetadataAnswer,
   from: Partial<Record<RowKey, ValueOrigin | undefined>>
 ): StoredValues {
   return {
@@ -300,7 +300,7 @@ function storedValuesOf(
     ...(head.image === undefined ? {} : { image: head.image }),
     ...(head.canonical === undefined ? {} : { canonical: head.canonical }),
     listed: head.listed,
-    followed: answer.robots?.follow !== false,
+    followed: head.followed !== false,
     ...(head.locale === undefined ? {} : { locale: head.locale }),
     ...(head.siteName === undefined ? {} : { siteName: head.siteName }),
     from: Object.fromEntries(
@@ -425,7 +425,7 @@ async function heldAt(
           kept.locale,
           await ctx.publicAddresses.defaultLanguage()
         ),
-        stored: storedValuesOf(head, answer, {
+        stored: storedValuesOf(head, {
           title: valueOriginOf(sourced.title),
           description: valueOriginOf(sourced.description),
           image: valueOriginOf(sourced.image),

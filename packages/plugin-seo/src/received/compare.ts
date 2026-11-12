@@ -41,6 +41,8 @@ export interface StoredHead {
   image?: { url: string; width?: number; height?: number };
   canonical?: string;
   listed: boolean;
+  /** Whether search engines are told to follow the page's links; yes where unsaid. */
+  followed?: boolean;
   /** The language the card states, such as `en_US`. */
   locale?: string;
   /** The site's name, as the card states it. */
@@ -80,6 +82,8 @@ interface Seen {
   siteName?: string;
   /** Where Googlebot was told not to list it, or false where it was not. */
   noindex: NoindexFrom | false;
+  /** Whether Googlebot was told not to follow its links. */
+  nofollow: boolean;
 }
 
 /** Whether `key` reads the page's own title and description, not the card's. */
@@ -114,13 +118,25 @@ function absolute(
  * another crawler (`bingbot: noindex`) does not.
  */
 function headerNoindex(header: string | undefined): boolean {
-  if (header === undefined) return false;
-  // Each header, a line of its own, starts out naming no crawler.
-  return header.split("\n").some(oneHeaderNoindex);
+  return headerSays(header, NOINDEX);
 }
 
-/** Whether one robots header tells Googlebot not to index the page. */
-function oneHeaderNoindex(header: string): boolean {
+/** The rules that keep a page out of search, and that stop its links being followed. */
+const NOINDEX: readonly string[] = ["noindex", "none"];
+const NOFOLLOW: readonly string[] = ["nofollow", "none"];
+
+/** Whether the `X-Robots-Tag` header gives Googlebot one of `rules`. */
+function headerSays(
+  header: string | undefined,
+  rules: readonly string[]
+): boolean {
+  if (header === undefined) return false;
+  // Each header, a line of its own, starts out naming no crawler.
+  return header.split("\n").some(line => oneHeaderSays(line, rules));
+}
+
+/** Whether one robots header gives Googlebot one of `rules`. */
+function oneHeaderSays(header: string, rules: readonly string[]): boolean {
   let crawler: string | undefined;
   for (const part of header.toLowerCase().split(",")) {
     const named = /^\s*([a-z0-9_-]+)\s*:\s*(.*)$/.exec(part);
@@ -132,7 +148,7 @@ function oneHeaderNoindex(header: string): boolean {
     if (isCrawler) crawler = known;
     const rule = (isCrawler ? named[2] : part)?.trim() ?? "";
     const forGoogle = crawler === undefined || crawler === "googlebot";
-    if (forGoogle && (rule === "noindex" || rule === "none")) return true;
+    if (forGoogle && rules.includes(rule)) return true;
   }
   return false;
 }
@@ -147,6 +163,9 @@ function seenBy(
   const tagNoindex = head.robots.some(
     rule => rule === "noindex" || rule === "none"
   );
+  const nofollow =
+    headerSays(headers["x-robots-tag"], NOFOLLOW) ||
+    head.robots.some(rule => NOFOLLOW.includes(rule));
   const noindex: Seen["noindex"] = headerNoindex(headers["x-robots-tag"])
     ? "header"
     : tagNoindex
@@ -160,6 +179,7 @@ function seenBy(
       ...defined("image", absolute(head.og.image, url)),
       ...defined("canonical", canonical),
       noindex,
+      nofollow,
     };
   }
   const x = key === "x";
@@ -182,6 +202,7 @@ function seenBy(
     ...defined("locale", head.og.locale),
     ...defined("siteName", head.og.siteName),
     noindex,
+    nofollow,
   };
 }
 
@@ -243,6 +264,8 @@ interface Group {
   status?: number;
   failure?: string;
   noindex?: NoindexFrom;
+  /** For links told differently alone: whether Googlebot was told not to follow them. */
+  nofollow?: boolean;
 }
 
 const NAME = CRAWLER_NAMES;
@@ -419,6 +442,17 @@ function canonicalSaid(
 
 /** The words of a search listing Googlebot was told differently. */
 function robotsSaid(group: Group): Said {
+  if (group.nofollow !== undefined) {
+    return group.nofollow
+      ? {
+          title: "Googlebot was told not to follow this page's links.",
+          text: "Nextly lets its links be followed, but the page said nofollow. The page's route, the site's layout or the X-Robots-Tag header sets it.",
+        }
+      : {
+          title: "Googlebot wasn't told to leave this page's links unfollowed.",
+          text: "Nextly says nofollow, but the page's head doesn't. The page's route may not build its head from Nextly.",
+        };
+  }
   if (group.noindex === undefined) {
     return {
       title: "Googlebot wasn't told to keep this page out of search.",
@@ -624,9 +658,9 @@ function fetchGroups(
   }
 }
 
-/** How a search listing is said. */
-function listedText(noindex: Seen["noindex"]): string {
-  return noindex === false ? "Listed in search" : "Hidden from search";
+/** The robots rules a crawler was given, as the Head table writes them. */
+function robotsText(seen: Pick<Seen, "noindex" | "nofollow">): string {
+  return `${seen.noindex === false ? "index" : "noindex"}, ${seen.nofollow ? "nofollow" : "follow"}`;
 }
 
 /** A cell that differs, numbered by the group it falls in. */
@@ -643,9 +677,16 @@ function robotsCell(
   reading: Reading,
   groups: Map<string, Group>
 ): ReceivedCell {
-  if ((seen.noindex === false) === stored.listed) return { kind: "same" };
-  const received = listedText(seen.noindex);
-  const extra = seen.noindex === false ? {} : { noindex: seen.noindex };
+  const listedSame = (seen.noindex === false) === stored.listed;
+  const followSame = !seen.nofollow === (stored.followed !== false);
+  if (listedSame && followSame) return { kind: "same" };
+  const received = robotsText(seen);
+  // A listing told differently is said first; links alone after it.
+  const extra = !listedSame
+    ? seen.noindex === false
+      ? {}
+      : { noindex: seen.noindex }
+    : { nofollow: seen.nofollow };
   return different(
     groupFor(groups, "robots", received, reading, extra),
     received
@@ -663,8 +704,10 @@ function valueCell(
   const expected = expectedOf(row, reading.key, stored);
   const got =
     row === "image" || row === "canonical" ? seen[row] : tidy(seen[row]);
+  // A picture a network doesn't display shows on no card, whether it is the
+  // one Nextly holds or one the route served instead.
   const format =
-    row === "image" && got !== undefined && got === expected
+    row === "image" && got !== undefined
       ? notDisplayed(got, reading.key)
       : undefined;
   if (format !== undefined) {
@@ -697,8 +740,7 @@ function cellFor(
   }
   if (seen === undefined) return { kind: "none" };
   if (stored === undefined) {
-    const value =
-      row === "robots" ? listedText(seen.noindex) : shown(row, seen[row]);
+    const value = row === "robots" ? robotsText(seen) : shown(row, seen[row]);
     return value === undefined
       ? { kind: "received" }
       : { kind: "received", received: value };
@@ -714,7 +756,7 @@ function groupFor(
   row: Group["row"],
   received: string | undefined,
   reading: Reading,
-  extra: Pick<Group, "noindex">
+  extra: Pick<Group, "noindex" | "nofollow">
 ): Group {
   const id = `${row}|${received ?? ""}|${received === undefined ? "none" : "some"}`;
   const group = groups.get(id) ?? {

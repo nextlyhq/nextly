@@ -150,9 +150,11 @@ function usePages(filter: PagesFilter) {
 /** The header's actions: Import, in View mode, and the mode. */
 function ModeActions({
   mode,
+  saving,
   onMode,
 }: {
   mode: Mode;
+  saving: boolean;
   onMode: (mode: Mode) => void;
 }): JSX.Element {
   return (
@@ -168,6 +170,8 @@ function ModeActions({
         size="bordered"
         options={MODES}
         value={mode}
+        disabled={saving}
+        title={saving ? "Saving…" : undefined}
         onSelect={next => onMode(next === "edit" ? "edit" : "view")}
       />
     </div>
@@ -184,6 +188,8 @@ export function SeoPagesPage(): JSX.Element {
   });
   // Kept here, not in Edit mode, so a look at View mode and back keeps them.
   const [edits, setEdits] = useState<PageEdits>({});
+  // A save on its way holds the mode, so its boxes stay locked until it ends.
+  const [saving, setSaving] = useState(false);
   useLeaveWarning(Object.keys(edits).length > 0);
   const pages = usePages(filter);
   const filters = (
@@ -194,7 +200,7 @@ export function SeoPagesPage(): JSX.Element {
       <PageHeader
         title="Pages"
         description={DESCRIPTION[mode]}
-        actions={<ModeActions mode={mode} onMode={setMode} />}
+        actions={<ModeActions mode={mode} saving={saving} onMode={setMode} />}
       />
       {pages.problemsFailed === null ? null : (
         <Alert variant="warning" className="mb-4">
@@ -228,6 +234,8 @@ export function SeoPagesPage(): JSX.Element {
           byPage={pages.byPage}
           edits={edits}
           onEdits={setEdits}
+          saving={saving}
+          onSaving={setSaving}
           onSaved={pages.reread}
         />
       )}

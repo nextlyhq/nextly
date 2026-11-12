@@ -282,7 +282,7 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     expect(compared.rows.robots.googlebot).toEqual({
       kind: "different",
       difference: 1,
-      received: "Hidden from search",
+      received: "noindex, follow",
     });
     expect(compared.differences[0]).toMatchObject({
       title: "Googlebot was told not to list this page.",
@@ -302,7 +302,7 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     });
     expect(compared.rows.robots.googlebot).toMatchObject({
       kind: "different",
-      received: "Hidden from search",
+      received: "noindex, follow",
     });
   });
 
@@ -393,7 +393,7 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     });
     expect(compared.rows.robots.googlebot).toEqual({
       kind: "received",
-      received: "Listed in search",
+      received: "index, follow",
     });
     expect(compared.rows.robots.facebook).toEqual({ kind: "not-used" });
   });
@@ -461,5 +461,45 @@ describe("comparing what crawlers received with what Nextly holds", () => {
       title: "X received a different title.",
     });
     expect(compared.differences[0]?.expected).toBeUndefined();
+  });
+
+  it("says the networks show no picture for a share image the route swapped for one they don't display", () => {
+    const svg = "https://rext.ai/opengraph-image.svg";
+    const compared = compareReceived({
+      address: ADDRESS,
+      // Nextly's PNG is automatic; the route serves an SVG instead.
+      stored: { ...STORED, automatic: { image: true } },
+      fetched: everyone(
+        page(head => {
+          head["og:image"] = svg;
+          head["twitter:image"] = svg;
+        })
+      ),
+    });
+    expect(compared.rows.image.facebook).toEqual({
+      kind: "different",
+      difference: expect.any(Number),
+      received: "No picture shown: Facebook doesn't display SVG",
+    });
+    const missing = compared.differences.find(difference =>
+      difference.title.includes("show no picture")
+    );
+    expect(missing?.expected).toBeUndefined();
+  });
+
+  it("finds links Google was told not to follow, though the page is listed", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: STORED,
+      fetched: everyone(page(head => (head.robots = "index, nofollow"))),
+    });
+    expect(compared.rows.robots.googlebot).toEqual({
+      kind: "different",
+      difference: 1,
+      received: "index, nofollow",
+    });
+    expect(compared.differences[0]).toMatchObject({
+      title: "Googlebot was told not to follow this page's links.",
+    });
   });
 });

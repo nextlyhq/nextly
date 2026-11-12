@@ -228,7 +228,7 @@ describe("a save", () => {
       saved: ["/blog/one"],
       failed: [{ names: ["Pricing"], message: "The database didn't answer." }],
     });
-    expect(editsAfter(edits, outcome.saved)).toEqual({
+    expect(editsAfter(edits, outcome.saved, edits)).toEqual({
       "/pricing": { title: "Plans and prices" },
     });
   });
@@ -249,5 +249,18 @@ describe("a save", () => {
     });
     // A box typed back to what the page holds lets go of the version too.
     expect(withEdit(edits, one, "title", "")).toEqual({});
+  });
+
+  it("keeps an edit typed after a save began, letting go only of what the save sent", () => {
+    const sent: PageEdits = { "/blog/one": { title: "One" } };
+    const now: PageEdits = {
+      "/blog/one": { title: "One, typed on" },
+      "/pricing": { title: "Plans" },
+    };
+    expect(editsAfter(now, ["/blog/one", "/pricing"], sent)).toEqual({
+      "/blog/one": { title: "One, typed on" },
+      "/pricing": { title: "Plans" },
+    });
+    expect(editsAfter(sent, ["/blog/one"], sent)).toEqual({});
   });
 });

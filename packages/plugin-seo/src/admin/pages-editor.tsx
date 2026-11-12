@@ -361,6 +361,8 @@ export function PagesEditor({
   byPage,
   edits,
   onEdits,
+  saving,
+  onSaving,
   onSaved,
 }: {
   shown: readonly SiteAddress[];
@@ -370,13 +372,18 @@ export function PagesEditor({
   byPage: ProblemsByPage | undefined;
   edits: PageEdits;
   onEdits: Dispatch<SetStateAction<PageEdits>>;
+  /**
+   * Whether a save is on its way: kept by the screen, so leaving Edit mode
+   * and coming back while it runs still holds the boxes.
+   */
+  saving: boolean;
+  onSaving: (saving: boolean) => void;
   /** Called once a save has run, so the list and the problems are read again. */
   onSaved: () => void;
 }): JSX.Element {
   const types = useMemo(() => typesToRead(shown), [shown]);
   const { rows: typeRows, again } = useTypeRows(types);
   const rows = useMemo(() => editRowsOf(shown, typeRows), [shown, typeRows]);
-  const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
   const changedPages = rows.filter(row => rowChanged(row, edits)).length;
   const byPath = useMemo(
@@ -391,7 +398,9 @@ export function PagesEditor({
   const save = async () => {
     const steps = saveSteps(rows, edits);
     if (steps.length === 0) return;
-    setSaving(true);
+    // The edits as the save takes them, so one typed since is kept.
+    const sent = edits;
+    onSaving(true);
     setOutcome(null);
     const result = saveOutcome(await runSteps(steps), rows);
     // Each type a step saved is read again, for the values and versions the
@@ -404,9 +413,9 @@ export function PagesEditor({
           : []
       )
     );
-    onEdits(current => editsAfter(current, result.saved));
+    onEdits(current => editsAfter(current, result.saved, sent));
     onSaved();
-    setSaving(false);
+    onSaving(false);
     if (result.failed.length === 0) {
       toastMutationResult(`Saved ${pagesText(result.saved.length)}.`, []);
     } else {

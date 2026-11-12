@@ -384,16 +384,24 @@ export function pagesText(count: number): string {
 }
 
 /**
- * The edits left once `saved` were saved: every other page's, so what was
- * not saved stays to be saved again.
+ * The edits left once `saved` were saved from `sent`, the edits as the save
+ * took them: every other page's, so what was not saved stays to be saved
+ * again, and a saved page's where it was typed on after the save began.
  */
 export function editsAfter(
   edits: PageEdits,
-  saved: readonly string[]
+  saved: readonly string[],
+  sent: PageEdits
 ): PageEdits {
   const done = new Set(saved);
+  // A page typed on while its save ran keeps what was typed since.
   return Object.fromEntries(
-    Object.entries(edits).filter(([path]) => !done.has(path))
+    Object.entries(edits).filter(
+      ([path, now]) =>
+        !done.has(path) ||
+        now.title !== sent[path]?.title ||
+        now.description !== sent[path]?.description
+    )
   );
 }
 
