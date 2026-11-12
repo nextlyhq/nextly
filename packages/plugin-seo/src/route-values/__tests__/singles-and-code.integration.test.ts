@@ -119,7 +119,7 @@ async function ok<T>(response: Promise<Response>): Promise<T> {
  */
 async function boot(dialect: TestDialect, options: { drafts?: boolean } = {}) {
   const seen: { ctx?: PluginContext } = {};
-  const drafted = options.drafts === true ? ["about", "promo"] : [];
+  const drafted = options.drafts === true ? ["about", "promo", "guarded"] : [];
   const plugin = seoPlugin({
     collections: ["posts", "notes"],
     singles: ["home", ...drafted],
@@ -186,6 +186,14 @@ async function boot(dialect: TestDialect, options: { drafts?: boolean } = {}) {
       }),
       ...(options.drafts === true
         ? [
+            // Kept per language, and read in any language but German.
+            defineSingle({
+              slug: "guarded",
+              label: { singular: "Guarded" },
+              localized: true,
+              access: { read: ({ locale }) => locale !== "de" },
+              fields: [text({ name: "title" })],
+            }),
             defineSingle({
               slug: "about",
               label: { singular: "About" },
@@ -414,6 +422,34 @@ describe.each(getConfiguredTestDialects())(
         ).levels.code;
       expect(await codeIn("en")).toEqual({ title: "From code (en)" });
       expect(await codeIn("de")).toEqual({});
+
+      // So is a Single's: read as its reader in the language asked, which
+      // its own rule refuses in German.
+      await t.nextly.updateSingle({
+        slug: "guarded",
+        data: { _overwrite: true, title: "Guarded" },
+      });
+      for (const locale of ["en", "de"]) {
+        await answer({
+          locale,
+          source: { kind: "single", slug: "guarded", document: { id: "g" } },
+          code: { title: `Guarded (${locale})` },
+          derived: {},
+        });
+      }
+      const guardedIn = async (locale: string) =>
+        (
+          await ok<SeoTabContext>(
+            call(editor, "POST", "/resolve", {
+              kind: "single",
+              slug: "guarded",
+              locale,
+              document: { title: "Guarded" },
+            })
+          )
+        ).levels.code;
+      expect(await guardedIn("en")).toEqual({ title: "Guarded (en)" });
+      expect(await guardedIn("de")).toEqual({});
     });
 
     it("keeps a Single read-only only where it keeps working drafts, as its own write decides", async () => {
