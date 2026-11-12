@@ -1789,6 +1789,18 @@ function cancelStatement(
 }
 
 /**
+ * The statement a refusal names: one that names what it was sent for, where any does, over one
+ * that names nothing. `running` is never empty here.
+ */
+function namedStatement(
+  running: readonly EarlierStatement[]
+): EarlierStatement {
+  return (
+    running.find(statement => unitOf(statement.unit) !== null) ?? running[0]
+  );
+}
+
+/**
  * A run that took over a lapsed lock outlasts the earlier holder's statements before its first
  * change: it asks the database to stop each one still running, and waits until none is, so no
  * change of the earlier holder lands after one of this run's. A statement that outlives the wait
@@ -1828,10 +1840,7 @@ async function outlastEarlierStatements(
       // finds that claim and waits for its statements in turn, where a freed row would let it
       // start beside one still running.
       await handBackToEarlier(hold, claim);
-      // A statement that names what it was sent for, where any does, over one that names nothing.
-      const named =
-        running.find(statement => unitOf(statement.unit) !== null) ??
-        running[0];
+      const named = namedStatement(running);
       throw wait.refusal({
         kind: "earlier-statement",
         owner: claim,
