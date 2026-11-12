@@ -1077,19 +1077,6 @@ export async function migrateDownCore(
         rolledBack.push(p.filename);
         deps.logger.success(`Rolled back ${p.filename}`);
       }
-      // The rolled-back migrations' own registry changes, undone once the
-      // last DOWN has run, under the same lock. Every DOWN has committed by
-      // now, so a failure here is said beside the rollback rather than
-      // reported as one: a rollback re-run on that report would roll back
-      // the migration before as well.
-      try {
-        await bookkeeping?.afterAll?.();
-      } catch (error) {
-        deps.logger.warn(
-          `The rollback is done, but the registry rows were not brought back to the point it reached: ${describeError(error, { context: false })}. ` +
-            "Run `nextly migrate`, which writes the rows the newest applied snapshot records."
-        );
-      }
     },
     lockOptions
   );

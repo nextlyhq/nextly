@@ -81,7 +81,11 @@ import {
 } from "./first-run";
 import { permissionsDeclaredBy } from "./permission-orphans";
 import { pluginCollectionSources } from "./plugin/plugin-collection-sources";
-import { addedEntities, clearedSettings } from "./registry-history";
+import {
+  addedEntities,
+  clearedSettings,
+  touchedEntities,
+} from "./registry-history";
 import {
   readRegistryRecord,
   takeRegistryBaseline,
@@ -416,9 +420,14 @@ export interface RollbackBookkeeping {
   /** Where the point it leaves has no registry source: thrown before anything changes. */
   refusal?: NextlyError;
   /**
-   * Where the point is the record's and the record keeps a baseline: the
-   * bookkeeping undone, run in the transaction of the last migration rolled
-   * back, after its statements and before its rollback is recorded.
+   * The rolled-back migrations' own registry changes undone, run in the
+   * transaction of the last migration rolled back, after its statements and
+   * before its rollback is recorded, so the two commit together or neither
+   * does. Where the point is the record's and the record keeps a baseline,
+   * the bookkeeping that baseline keeps; where the point has a snapshot of
+   * its own recording the registry, each row a rolled-back migration
+   * changed goes back to it, and the row of an entity one of them added,
+   * which it does not record, is removed (`undoToOwnSource`).
    */
   restore?: () => Promise<void>;
   /**
@@ -427,14 +436,6 @@ export interface RollbackBookkeeping {
    * where it runs in one (`typeChangedRowsWriter`).
    */
   perFile?: ReadonlyMap<string, () => Promise<void>>;
-  /**
-   * Where the point it leaves has a snapshot of its own recording the
-   * registry: the rolled-back migrations' own registry changes undone, once
-   * the last DOWN has run, under the same lock. Every row that snapshot
-   * records goes back to it, and the row of an entity a rolled-back
-   * migration added, which it does not record, is removed.
-   */
-  afterAll?: () => Promise<void>;
   /** What a dry run says of it. */
   summary?: string;
 }
@@ -610,7 +611,7 @@ async function typeChangedRowsPerDown(args: {
 
 /**
  * What a rollback to `point`, whose own snapshot records the registry, does
- * with the rows once its last DOWN has run (`RollbackBookkeeping.afterAll`):
+ * with the rows with its last DOWN (`RollbackBookkeeping.restore`):
  * nothing where the point's snapshot records nothing (an earlier release's,
  * or none), so such a point's rows stay as they are.
  */
@@ -620,7 +621,7 @@ async function undoToOwnSource(args: {
   remaining: readonly string[];
   targets: ReadonlySet<string>;
   deps: RegistryWriteDeps;
-}): Promise<Pick<RollbackBookkeeping, "afterAll" | "summary">> {
+}): Promise<Pick<RollbackBookkeeping, "restore" | "summary">> {
   if (args.point === null) return {};
   const at = await readMigrationSnapshot(args.metaDir, args.point);
   if (at === null || !carriesRegistryMetadata(at)) return {};
@@ -647,13 +648,18 @@ async function undoToOwnSource(args: {
     entities: at.entities,
   };
   const plan = {
+    // The rows the rolled-back migrations changed, and no other (D26).
+    only: touchedEntities(undone, at.entities),
     remove: addedEntities(undone, at.entities),
     cleared: clearedSettings(at.entities, [...earlier, ...undone]),
+    // Inside the last DOWN's transaction: a row that cannot be written
+    // fails the DOWN, rather than committing it with the registry behind.
+    strict: true,
   };
   const named = pointNamed(args.point);
   return {
     summary: `The registry rows would go back to what ${named} records.`,
-    afterAll: async () => {
+    restore: async () => {
       const outcome = await writeRegistryRows(
         args.deps.adapter,
         () => writeRegistryFromSource(source, args.deps, plan),
@@ -667,16 +673,20 @@ async function undoToOwnSource(args: {
         (sum, count) => sum + count,
         0
       );
+      // Strict, so nothing was left unwritten; a registry that could not be
+      // read for a removal is the one way a row stays, and it fails too.
+      if (outcome.failed.length > 0) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "rollback registry rows not undone",
+            rows: outcome.failed,
+          },
+        });
+      }
       args.deps.logger.info(
         `The registry rows are back to what ${named} records: ` +
           `${rewritten} row(s) written back, ${outcome.removed.length} removed.`
       );
-      if (outcome.failed.length > 0) {
-        args.deps.logger.warn(
-          `${outcome.failed.length} registry row(s) not brought back to ${named}: ${outcome.failed.join(", ")}. ` +
-            "Run `nextly migrate`, which writes the rows the newest applied snapshot records."
-        );
-      }
     },
   };
 }

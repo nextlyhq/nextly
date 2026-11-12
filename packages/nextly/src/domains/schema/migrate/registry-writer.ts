@@ -89,7 +89,7 @@ export interface RegistryWriteResult {
   written: Record<SettingsEntityKind, number>;
   /** Rows removed, as `<kind> <slug>`. */
   removed: string[];
-  /** Entities whose row could not be written, as `<kind> <slug>`. */
+  /** Entities whose row could not be written or removed, as `<kind> <slug>`. */
   failed: string[];
 }
 
@@ -99,7 +99,10 @@ export interface RegistryWriteResult {
  * (`RegistrySource.chain`), as `nextly migrate` judges it.
  */
 export interface RegistryWritePlan {
-  /** Write only these entities' rows, and remove none: one file's type change. */
+  /**
+   * Write only these entities' rows: one file's type change, or what a
+   * rollback undoes. Nothing is removed unless `remove` names it.
+   */
   only?: SlugsByKind;
   /** The rows to remove; by default the entities an applied migration dropped. */
   remove?: SlugsByKind;
@@ -166,7 +169,7 @@ export async function writeRegistryFromSource(
         );
       }
     }
-    if (plan.only === undefined) {
+    if (plan.only === undefined || plan.remove !== undefined) {
       await removeRows(
         plan.remove ?? droppedEntities(chain),
         stored,
@@ -200,11 +203,23 @@ async function removeRows(
   result: RegistryWriteResult,
   keepWhereTableStands: boolean
 ): Promise<void> {
-  const doomed = RECORDED_KINDS.flatMap(([kind]) =>
+  const candidates = RECORDED_KINDS.flatMap(([kind]) =>
     [...remove[kind]]
       .filter(slug => !isReservedResourceSlug(slug))
-      .filter(slug => stored[kind]?.has(slug) === true)
       .map(slug => ({ kind, slug }))
+  );
+  // A registry that could not be read cannot say whether a row is there to
+  // remove: each candidate is reported not done, so the run never reads as
+  // complete while a row it should remove may stay.
+  for (const { kind, slug } of candidates) {
+    if (stored[kind] !== undefined) continue;
+    result.failed.push(`${kind} ${slug}`);
+    deps.logger.warn(
+      `Could not remove the registry row of ${kind} "${slug}": the ${kind} registry could not be read.`
+    );
+  }
+  const doomed = candidates.filter(
+    ({ kind, slug }) => stored[kind]?.has(slug) === true
   );
   if (doomed.length === 0) return;
   await writeRegistryRows(

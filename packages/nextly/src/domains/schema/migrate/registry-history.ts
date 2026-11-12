@@ -14,6 +14,7 @@
  *
  * @module domains/schema/migrate/registry-history
  */
+import { canonicalJson } from "../../../shared/lib/canonical-json";
 import type { UnsaidSetting } from "../../collections/services/collection-registry-service";
 import {
   settingsChangesFor,
@@ -84,6 +85,35 @@ export function addedEntities(
     }
   }
   return slugs;
+}
+
+/**
+ * The entities `undone` (the records of the migrations a rollback undoes)
+ * changed from `point` (the record it returns to): one whose record in any
+ * of them differs from the point's, or that one of them holds and the point
+ * does not, or the other way round. A rollback writes these rows and no
+ * other, so a row nothing it undoes touched keeps what it holds.
+ */
+export function touchedEntities(
+  undone: readonly EntitySettingsRecord[],
+  point: EntitySettingsRecord
+): SlugsByKind {
+  const touched = noSlugs();
+  for (const record of undone) {
+    for (const [kind, key] of RECORDED_KINDS) {
+      const slugs = new Set([
+        ...Object.keys(record[key]),
+        ...Object.keys(point[key]),
+      ]);
+      for (const slug of slugs) {
+        const [was, now] = [point[key][slug], record[key][slug]];
+        if (canonicalJson(was ?? null) !== canonicalJson(now ?? null)) {
+          touched[kind].add(slug);
+        }
+      }
+    }
+  }
+  return touched;
 }
 
 /** The settings a Builder record may leave unsaid, as its declaration keys them. */

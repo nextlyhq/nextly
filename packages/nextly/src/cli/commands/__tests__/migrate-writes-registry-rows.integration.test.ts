@@ -983,6 +983,32 @@ describe.each(getConfiguredTestDialects())(
           await collectionRow(instance!, dialect, "rr_tags")
         ).toBeUndefined();
       });
+
+      // A registry that cannot be read cannot say whether the row is there:
+      // the run names it as not done rather than reading as complete.
+      it("names the row it could not remove when the registry cannot be read", async () => {
+        await migrateCreate(both, "create_both");
+        await migrated(both);
+        await migrateCreate(postsOnly, "drop_tags");
+        const { CollectionRegistryService } = await import(
+          "../../../domains/collections/services/collection-registry-service"
+        );
+        const read = vi
+          .spyOn(CollectionRegistryService.prototype, "getAllCollections")
+          .mockRejectedValue(new Error("unreadable row"));
+        let said: string[];
+        try {
+          ({ said } = await migrate(postsOnly, { acceptDataLoss: true }));
+        } finally {
+          read.mockRestore();
+        }
+        expect(said.join("\n")).toMatch(
+          /not brought to[^\n]*collection rr_tags/
+        );
+        expect(
+          await collectionRow(instance!, dialect, "rr_tags")
+        ).toBeDefined();
+      });
     });
 
     describe("a migration that changes a field's type", () => {
@@ -1120,6 +1146,87 @@ describe.each(getConfiguredTestDialects())(
           posted
         );
         expect(await collectionRow(instance!, dialect, "rr_own")).toEqual(own);
+      });
+
+      // A recorded row the rolled-back migration never touched keeps what it
+      // holds, even where it differs from the snapshot the rollback reaches.
+      it("leaves a recorded row the rolled-back migration did not change", async () => {
+        const both = (posts: string) =>
+          defineConfig({
+            collections: [
+              defineCollection({
+                slug: "rr_posts",
+                description: posts,
+                fields: [text({ name: "title" })],
+              }),
+              defineCollection({
+                slug: "rr_tags",
+                description: "Tags",
+                fields: [text({ name: "label" })],
+              }),
+            ],
+            db: { migrationsDir: "./migrations" },
+          });
+        await migrateCreate(both("Posts"), "create_both");
+        await migrated(both("Posts"));
+        await migrateCreate(both("All posts"), "describe_posts");
+        await migrated(both("All posts"));
+        const db = (
+          instance!.adapter as unknown as DrizzleAdapter
+        ).getDrizzle<Selecting>();
+        const { tables } = loadedDialect(dialect);
+        const { eq } = await import("drizzle-orm");
+        await db
+          .update(tables.dynamicCollections)
+          .set({ description: "kept by another writer" })
+          .where(eq(tables.dynamicCollections.slug, "rr_tags"));
+
+        await migratedDown(both("All posts"));
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("Posts");
+        expect(
+          (await collectionRow(instance!, dialect, "rr_tags"))?.description
+        ).toBe("kept by another writer");
+      });
+
+      // The rows go back with the last DOWN, in its transaction: a row that
+      // cannot be written leaves the migration applied and its row as it was.
+      it("rolls nothing back when a row cannot be written back", async () => {
+        await migrateCreate(posts("Posts"), "create_posts");
+        await migrated(posts("Posts"));
+        const describe = await migrateCreate(posts("All posts"), "describe");
+        await migrated(posts("All posts"));
+        const { CollectionRegistryService } = await import(
+          "../../../domains/collections/services/collection-registry-service"
+        );
+        const write = vi
+          .spyOn(CollectionRegistryService.prototype, "writeRecordedCollection")
+          .mockRejectedValue(new Error("registry row refused"));
+        try {
+          loaded.config = posts("All posts");
+          tick();
+          const { context } = command();
+          setNonInteractive(true);
+          const code = await exiting(() =>
+            runMigrateDown({ cwd: dir, acceptDataLoss: true }, context)
+          ).finally(() => setNonInteractive(false));
+          expect(code).not.toBeUndefined();
+        } finally {
+          write.mockRestore();
+        }
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("All posts");
+        const { SchemaEventsRepository } = await import(
+          "../../../domains/schema/events/schema-events-repository"
+        );
+        expect(
+          await new SchemaEventsRepository(
+            (instance!.adapter as unknown as DrizzleAdapter).getDrizzle(),
+            dialect
+          ).isFileApplied(describe)
+        ).toBe(true);
       });
     });
 
