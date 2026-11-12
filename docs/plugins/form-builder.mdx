@@ -158,7 +158,7 @@ formSubmissionOverrides: {
 
 ## Field Types
 
-All 13 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
+All 14 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
 
 | Type       | Description                          | Key Options                         |
 | ---------- | ------------------------------------ | ----------------------------------- |
@@ -175,6 +175,7 @@ All 13 field types are enabled by default. Set any to `false` in the `fields` op
 | `date`     | Date picker                          | `min`, `max`                        |
 | `time`     | Time picker                          | `defaultValue` (HH:mm format)       |
 | `hidden`   | Hidden value (not shown to users)    | `defaultValue`                      |
+| `consent`  | Required box agreeing to a text      | `agreementText`                     |
 
 Every field supports these common properties: `name`, `label`, `placeholder`, `helpText`, `defaultValue`, `required`, `validation`, `conditionalLogic`, and `admin.width` (25% to 100%).
 
@@ -238,7 +239,24 @@ const contactFields = [
 
 The `option()` helper converts labels to slug values automatically (`'General Inquiry'` becomes `'general_inquiry'`). Pass a second argument for an explicit value: `option('United States', 'us')`.
 
-Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `date()`, `time()`, `hidden()`.
+Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `date()`, `time()`, `hidden()`, `consent()`.
+
+### Consent fields
+
+A consent field is a box the visitor ticks to agree to a text, such as your privacy policy. It is always required. The answer stores the choice with the text the form showed, so changing the text later leaves what earlier visitors agreed to as it was:
+
+```typescript
+import { consent } from "@nextlyhq/plugin-form-builder";
+
+consent({
+  name: "privacy",
+  label: "Privacy",
+  agreementText: "I agree to the privacy policy",
+});
+// A submission stores: { privacy: { agreed: true, text: "I agree to the privacy policy" } }
+```
+
+The text comes from the form, never from what the visitor sends. A submitted consent cannot be edited: an update that would change or drop it, from the admin or the API, is refused with a validation error, and an edit of other answers keeps it as it was.
 
 ### Utility Functions
 

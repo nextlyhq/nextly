@@ -12,8 +12,10 @@
  * @module admin/components/builder/FieldInspector
  */
 import { FieldSettingsPanel } from "@nextlyhq/plugin-sdk/admin";
+import { toast } from "@nextlyhq/ui";
 import { type JSX, type ReactNode, useMemo, useSyncExternalStore } from "react";
 
+import { consentFieldEdit } from "../../../utils/consent";
 import {
   useFieldBookkeeping,
   useFormBuilder,
@@ -85,7 +87,15 @@ export function useFieldPanel(closable: boolean): ReactNode {
       siblings={panelFields}
       saved={savedFieldNames.has(selected.name)}
       readOnly={readOnly}
-      onChange={next => editField(selected, fromPanelField(next), fields)}
+      onChange={next => {
+        // A consent stays required: turning it off is refused, and why said.
+        const kept = consentFieldEdit(selected, fromPanelField(next));
+        if ("refused" in kept) {
+          toast.error(kept.refused);
+          return;
+        }
+        editField(selected, kept.field, fields);
+      }}
       onClose={closable ? () => selectField(null) : undefined}
     />
   );

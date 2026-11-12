@@ -211,8 +211,12 @@ export function ConditionalLogicEditor({
     [field.conditionalLogic]
   );
 
-  // Get other fields that can be referenced (exclude current field)
-  const availableFields = allFields.filter(f => f.name !== field.name);
+  // Get other fields that can be referenced (exclude current field). A
+  // consent is left out too: every sent form has it agreed, so a condition on
+  // it could only ever answer one way.
+  const availableFields = allFields.filter(
+    f => f.name !== field.name && f.type !== "consent"
+  );
 
   // Update the entire conditional logic object
   const updateLogic = useCallback(

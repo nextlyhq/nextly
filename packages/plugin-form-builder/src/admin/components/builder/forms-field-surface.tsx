@@ -33,7 +33,7 @@ import {
   type FieldSettingsSurface,
   type FieldSettingsSurfaceControlProps,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Checkbox, FormLabelWithTooltip, Input } from "@nextlyhq/ui";
+import { Checkbox, FormLabelWithTooltip, Input, Textarea } from "@nextlyhq/ui";
 import { type JSX, type ReactNode, useCallback, useState } from "react";
 
 import type { AnyFieldValidation, AnyFormField } from "../../../types";
@@ -195,7 +195,7 @@ function numberOrUndefined(text: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-/** What a text area, a file, a date, a number and a hidden field add. */
+/** What a text area, a file, a date, a number, a hidden field and a consent add. */
 function FormTypeSettings(
   props: FieldSettingsSurfaceControlProps
 ): JSX.Element | null {
@@ -210,6 +210,8 @@ function FormTypeSettings(
       return <NumberStep {...props} />;
     case "hidden":
       return <HiddenValue {...props} />;
+    case "consent":
+      return <ConsentText {...props} />;
     default:
       return null;
   }
@@ -324,6 +326,33 @@ function HiddenValue(props: FieldSettingsSurfaceControlProps): JSX.Element {
         disabled={props.readOnly}
         value={typeof form.defaultValue === "string" ? form.defaultValue : ""}
         onChange={e => update({ defaultValue: e.target.value || undefined })}
+      />
+    </Setting>
+  );
+}
+
+/**
+ * What a consent's visitor agrees to. Each answer keeps the text it was given
+ * under, so changing it here changes what later visitors agree to and leaves
+ * earlier answers as they were.
+ */
+function ConsentText(props: FieldSettingsSurfaceControlProps): JSX.Element {
+  const { form, update } = useFormField(props);
+  const text = (form as Extract<AnyFormField, { type: "consent" }>)
+    .agreementText;
+  const id = `${props.field.id}-agreement-text`;
+  return (
+    <Setting
+      id={id}
+      label="Agreement text"
+      help="Shown beside the box. Each submission keeps the text it agreed to, so a change applies to later visitors only."
+    >
+      <Textarea
+        id={id}
+        rows={3}
+        disabled={props.readOnly}
+        value={text ?? ""}
+        onChange={e => update({ agreementText: e.target.value })}
       />
     </Setting>
   );

@@ -68,6 +68,7 @@ function PreviewFieldInput({
         />
       );
     case "checkbox":
+    case "consent":
       // A real checkbox, not a toggle switch — the preview should look like
       // what a frontend form renders for this type.
       return (
@@ -338,7 +339,29 @@ function PreviewFieldRow({
     <div
       className={`space-y-1.5 ${hidden === undefined ? "" : "rounded-md border border-dashed border-border p-3 opacity-70"}`}
     >
-      {field.type === "checkbox" ? (
+      {field.type === "consent" ? (
+        // The box is labelled by what the visitor agrees to, as a site shows
+        // it; the field's own label names the question above it.
+        <>
+          <p className="text-sm font-medium text-foreground">
+            {field.label || field.name}
+          </p>
+          <div className="flex items-start gap-2">
+            <PreviewFieldInput
+              field={field}
+              value={value}
+              onChange={onChange}
+            />
+            <Label
+              htmlFor={`preview-${field.name}`}
+              className="font-normal leading-snug"
+            >
+              {field.agreementText}
+              <span className="ml-1 text-destructive">*</span>
+            </Label>
+          </div>
+        </>
+      ) : field.type === "checkbox" ? (
         <div className="flex items-center gap-2">
           <PreviewFieldInput field={field} value={value} onChange={onChange} />
           {label}
