@@ -70,6 +70,8 @@ export interface SeoRules {
    * are, once the settings name any.
    */
   hiddenTypes?: string[];
+  /** Whether IndexNow is told of changed pages: only once switched on. */
+  indexNow?: boolean;
   /** Whether `/llms.txt` is served: only once switched on. */
   llmsTxt?: boolean;
   /** Whether each listed page has a plain-text copy: only once switched on. */
@@ -189,6 +191,7 @@ async function rulesOf(
     ...withDefined("aiCrawlers", aiCrawlersOf(document)),
     ...withDefined("hiddenTypes", hiddenTypesOf(document)),
     // Off unless stored as switched on: a value that is not `true` is off.
+    ...withDefined("indexNow", document.indexNow === true ? true : undefined),
     ...withDefined("llmsTxt", document.llmsTxt === true ? true : undefined),
     ...withDefined(
       "plainTextCopies",

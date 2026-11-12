@@ -13,7 +13,7 @@ import { forgetDeleted, recheckSaved, type ProblemChecks } from "./check";
 import { singleKey } from "./page-types";
 
 /** The id of the document a hook was handed, as text. */
-function idOf(context: { data?: unknown }): string | undefined {
+export function idOf(context: { data?: unknown }): string | undefined {
   const id = isRecord(context.data) ? context.data.id : undefined;
   return typeof id === "string" || typeof id === "number"
     ? String(id)
