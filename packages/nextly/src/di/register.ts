@@ -1012,15 +1012,7 @@ async function registerServicesOnce(
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
 
-  // `next build` sets up nothing: a database with no Nextly tables is one the
-  // deploy has not migrated, and the build refuses, naming the command, rather
-  // than creating the schema in a database other deployments may share.
-  if (isNextBuildPhase()) {
-    const { refuseUnmigratedDatabaseInBuild } = await import(
-      "../init/first-run"
-    );
-    await refuseUnmigratedDatabaseInBuild(adapter);
-  }
+  await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
@@ -1304,27 +1296,8 @@ async function registerServicesOnce(
 
   assertBootRelationsResolve(schemaRegistry, resolvedLogger);
 
-  // Before any plugin starts, as stored plugin secrets are: the key naming
-  // deleted plugin-defined people, sealed under a secret since rotated, is
-  // sealed again under the current one, so the retired secret can go once
-  // the app has started with both. Not in `next build`: no plugin needs these
-  // to start, the first start after the build still has the retired secret to
-  // open them, and the build writes nothing but a plugin's own settings seal.
-  if (!isNextBuildPhase()) {
-    await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
-    // Held queued messages too, for the same reason: one sealed under a
-    // secret since rotated is sealed again under the current one while the
-    // previous can still open it, so a message outlives any number of
-    // rotations.
-    await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
-    // And every plugin digest key stored, a removed plugin's included, for
-    // the same reason: a digest stored beside a plugin's records must match
-    // for as long as they are kept.
-    await resealPluginDigestKeys(
-      getService("metaService"),
-      pluginSettingsSecrets(env)
-    );
-  }
+  // Before any plugin starts, as stored plugin secrets are.
+  await resealKeysUnderCurrentSecret(adapter, pluginSettingsSecrets(env));
 
   // In production, until the install has an administrator, setup needs a
   // token: an install with none gets one here, printed once to this output.
@@ -2657,6 +2630,64 @@ async function syncCodeFirstEntities(
 }
 
 /**
+ * In `next build`, refuse a database with no Nextly tables.
+ *
+ * The build sets up nothing: a database with no Nextly tables is one the
+ * deploy has not migrated, and the build refuses, naming the command, rather
+ * than creating the schema in a database other deployments may share. Before
+ * any schema work, so nothing reads or writes first.
+ */
+async function refuseUnmigratedDatabaseInBuildPhase(
+  adapter: DrizzleAdapter
+): Promise<void> {
+  if (!isNextBuildPhase()) return;
+  const { refuseUnmigratedDatabaseInBuild } = await import("../init/first-run");
+  await refuseUnmigratedDatabaseInBuild(adapter);
+}
+
+/**
+ * Seal again, under the current secret, the keys sealed under one since
+ * rotated: the key naming deleted plugin-defined people, held queued messages
+ * and every plugin digest key stored, a removed plugin's included. The retired
+ * secret can then go once the app has started with both, a message outlives
+ * any number of rotations, and a digest stored beside a plugin's records
+ * matches for as long as they are kept.
+ *
+ * Not in `next build`: no plugin needs these to start, the first start after
+ * the build still has the retired secret to open them, and the build writes
+ * nothing but a plugin's own settings seal.
+ */
+async function resealKeysUnderCurrentSecret(
+  adapter: DrizzleAdapter,
+  secrets: string[]
+): Promise<void> {
+  if (isNextBuildPhase()) return;
+  await resealPrincipalDigestKeyAtBoot(adapter, secrets);
+  await resealQueuedMessagesAtBoot(adapter, secrets);
+  await resealPluginDigestKeys(getService("metaService"), secrets);
+}
+
+/**
+ * The code-first collections as every sync route stores and publishes them,
+ * each tagged by who contributed it (D14): `plugin:<name>` for a slug a
+ * resolved plugin declares in `contributes.collections`, `code` otherwise.
+ * Drives locking + `nextly prune`, and is the rule `nextly migrate`'s registry
+ * writer gives a row it creates, too.
+ */
+function codeFirstCollectionConfigs(
+  transformedConfig: NextlyServiceConfig
+): CodeFirstCollectionConfig[] {
+  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
+    pluginCollectionSources(transformedConfig.plugins ?? []);
+  return (transformedConfig.collections ?? []).map(collection =>
+    toCodeFirstCollectionConfig(
+      collection,
+      sourceBySlug.get(collection.slug) ?? "code"
+    )
+  );
+}
+
+/**
  * Layer 6.5: Pending migrations, BEFORE any plugin initialises.
  *
  * Pending migrations apply before `initializePlugins`, so a plugin's `init`
@@ -3883,22 +3914,9 @@ async function syncCodeFirstCollections(
     }
   }
 
-  // Provenance (D14): tag each collection by who contributed it. A slug that a
-  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
-  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
-  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
-  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
-    pluginCollectionSources(transformedConfig.plugins ?? []);
-
   // The projection every sync route shares, so what boot stores and publishes
   // for a collection is what reload and `db:sync` store and publish for it.
-  const codeFirstConfigs: CodeFirstCollectionConfig[] =
-    transformedConfig.collections.map(collection =>
-      toCodeFirstCollectionConfig(
-        collection,
-        sourceBySlug.get(collection.slug) ?? "code"
-      )
-    );
+  const codeFirstConfigs = codeFirstCollectionConfigs(transformedConfig);
 
   // Boot's one publish of the collection db options, from the same projection
   // the sync stores, and before it: they are the config's, not the

@@ -1935,7 +1935,26 @@ async function buildSeedingCreateStatements(
   );
 }
 
-export async function ensureCompanionTable(
+/**
+ * Create a translated entity's translation table where it is missing, or
+ * finish what an existing one still owes (`createOrCompleteCompanionTable`).
+ *
+ * Not in `next build`, which creates no table: a translated entity whose
+ * translation table is missing is one the deploy has not migrated, and
+ * `nextly migrate` makes it. Nothing was created, which is what the answer
+ * says.
+ */
+export function ensureCompanionTable(
+  ...args: Parameters<typeof createOrCompleteCompanionTable>
+): Promise<boolean> {
+  if (isNextBuildPhase()) return Promise.resolve(false);
+  return createOrCompleteCompanionTable(...args);
+}
+
+// The body `ensureCompanionTable` had before the build gate moved in front of
+// it, unchanged; its size is that function's, not new branching.
+// fallow-ignore-next-line complexity
+async function createOrCompleteCompanionTable(
   adapter: CompanionIntrospectAdapter,
   args: {
     /**
@@ -2004,10 +2023,6 @@ export async function ensureCompanionTable(
    */
   onError?: (error: unknown) => void
 ): Promise<boolean> {
-  // `next build` creates no table: a translated entity whose translation table
-  // is missing is one the deploy has not migrated, and `nextly migrate` makes
-  // it. Nothing was created, which is what the answer says.
-  if (isNextBuildPhase()) return false;
   const companionTableName = `${args.tableName}_locales`;
   // Tracked because only a failure of the CREATE itself can be explained away by a concurrent
   // winner. The plan may also carry a seed, and a seed that fails leaves a table this call made —
