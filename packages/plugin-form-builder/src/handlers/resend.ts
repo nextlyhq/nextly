@@ -41,7 +41,13 @@ import {
 import { type RecordedSend, recordSend } from "./forget-sends";
 import { formIdOf } from "./form-closing-hold";
 import { configuredRecipients, notificationSendDetails } from "./send-record";
-import { type SendRow, sendRowOf, sendRows, upToDate } from "./send-views";
+import {
+  orderedSends,
+  type SendRow,
+  sendRowOf,
+  sendRows,
+  upToDate,
+} from "./send-views";
 
 type InTransactionHandler = Parameters<
   PluginContext["hooks"]["onInTransaction"]
@@ -305,7 +311,12 @@ async function lockedSends(
     },
     { lock: "update" }
   );
-  return data.map(entry => sendRowOf(entry));
+  // Oldest first, as every reading of the history takes them: the latest
+  // result per recipient is the last one met.
+  return orderedSends(
+    data.map(entry => sendRowOf(entry)),
+    {}
+  );
 }
 
 /**

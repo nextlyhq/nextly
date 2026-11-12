@@ -148,7 +148,7 @@ export async function upToDate(
  * alike by their time on some dialects, so an original comes before a send
  * Resend made, which always follows it.
  */
-function orderedSends(
+export function orderedSends(
   rows: SendRow[],
   options: { newestFirst?: boolean }
 ): SendRow[] {
