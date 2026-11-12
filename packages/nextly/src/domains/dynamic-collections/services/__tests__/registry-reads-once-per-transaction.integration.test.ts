@@ -181,24 +181,29 @@ describeEachDialect("registry rows read inside a transaction", dialect => {
     });
   });
 
-  it("forgets what a part rolled back to its savepoint read", async () => {
-    await current.adapter.transaction(async (tx: TransactionContext) => {
-      const executor = tx.getDrizzle();
-      expect(await descriptionOn(executor)).toBeNull();
+  // MySQL joins a part flat, with no savepoint: a part that fails fails the
+  // whole transaction, and nothing it wrote is undone while it runs on.
+  it.skipIf(dialect === "mysql")(
+    "forgets what a part rolled back to its savepoint read",
+    async () => {
+      await current.adapter.transaction(async (tx: TransactionContext) => {
+        const executor = tx.getDrizzle();
+        expect(await descriptionOn(executor)).toBeNull();
 
-      await expect(
-        current.adapter.transaction(async (part: TransactionContext) => {
-          await describePosts("undone with the savepoint");
-          expect(await descriptionOn(part.getDrizzle())).toBe(
-            "undone with the savepoint"
-          );
-          throw new Error("roll this part back");
-        })
-      ).rejects.toThrow();
+        await expect(
+          current.adapter.transaction(async (part: TransactionContext) => {
+            await describePosts("undone with the savepoint");
+            expect(await descriptionOn(part.getDrizzle())).toBe(
+              "undone with the savepoint"
+            );
+            throw new Error("roll this part back");
+          })
+        ).rejects.toThrow();
 
-      expect(await descriptionOn(executor)).toBeNull();
-    });
-  });
+        expect(await descriptionOn(executor)).toBeNull();
+      });
+    }
+  );
 
   // SQLite has one connection, and a second transaction waits for the first
   // to end, so there is no other transaction to read while this one is open.
