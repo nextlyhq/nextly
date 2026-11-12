@@ -195,7 +195,7 @@ function numberOrUndefined(text: string): number | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-/** What a text area, a file, a date, a number, a hidden field and a consent add. */
+/** What a text area, a file, a date, a number and a hidden field add. */
 function FormTypeSettings(
   props: FieldSettingsSurfaceControlProps
 ): JSX.Element | null {
@@ -210,8 +210,6 @@ function FormTypeSettings(
       return <NumberStep {...props} />;
     case "hidden":
       return <HiddenValue {...props} />;
-    case "consent":
-      return <ConsentText {...props} />;
     default:
       return null;
   }
@@ -336,7 +334,7 @@ function HiddenValue(props: FieldSettingsSurfaceControlProps): JSX.Element {
  * under, so changing it here changes what later visitors agree to and leaves
  * earlier answers as they were.
  */
-function ConsentText(props: FieldSettingsSurfaceControlProps): JSX.Element {
+function ConsentText(props: FieldSettingsControlProps): JSX.Element {
   const { form, update } = useFormField(props);
   const text = (form as Extract<AnyFormField, { type: "consent" }>)
     .agreementText;
@@ -478,6 +476,8 @@ export const FORMS_FIELD_SURFACE: FieldSettingsSurface = {
   typeSettings: {
     // One yes or no (a consent box, say), never a list of choices.
     checkbox: {},
+    // What the visitor agrees to is what makes a consent, so it comes first.
+    consent: { defining: ConsentText },
     select: { defining: FormChoices },
     radio: { defining: FormChoices },
   },

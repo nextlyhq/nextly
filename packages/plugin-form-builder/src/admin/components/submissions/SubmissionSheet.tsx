@@ -296,9 +296,10 @@ export function SubmissionSheet({
         if (!open) onClose();
       }}
     >
+      {/* The whole width on a phone, where 560px would run off the screen. */}
       <SheetContent
         side="right"
-        className="w-[560px] sm:max-w-[560px] p-0 flex flex-col"
+        className="w-full sm:w-[560px] sm:max-w-[560px] p-0 flex flex-col"
       >
         <SheetHeader className="p-4 border-b border-border">
           <div className="flex items-center justify-between gap-2">

@@ -354,7 +354,7 @@ function PreviewFieldRow({
             />
             <Label
               htmlFor={`preview-${field.name}`}
-              className="font-normal leading-snug"
+              className="block font-normal leading-snug"
             >
               {field.agreementText}
               <span className="ml-1 text-destructive">*</span>

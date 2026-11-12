@@ -383,7 +383,7 @@ const CONSENT_SURFACE_ENTRY = {
   label: "Consent",
   category: "Advanced",
   hint: "Agree to a text; stores the text shown",
-  icon: "CircleCheck",
+  icon: "CheckCircle2",
 } as const satisfies FieldTypeCatalogEntry<"consent">;
 
 /** The user-profile surface's field types: flat scalars plus url/phone. */
