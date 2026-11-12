@@ -90,6 +90,10 @@ import {
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
 import { NextlyError } from "../../errors/index";
+import {
+  RETIRED_ACCESS_RULES_COLUMN,
+  RETIRED_ACCESS_RULES_TABLES,
+} from "../../init/retired-access-rules";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import {
   projectPath,
@@ -613,6 +617,17 @@ function withAppStreamTables(
     const liveTable = live.get(name);
     if (liveTable === undefined) continue;
     const held = standingContribution({ ...entry, live: liveTable });
+    const hasStanding =
+      held.elements.columns.length > 0 ||
+      held.elements.indexes.length > 0 ||
+      held.elements.foreignKeys.length > 0 ||
+      held.elements.checks.length > 0;
+    // Nothing stood in the database yet: keep the foreign table out of both
+    // the snapshot and the contribution record. Recording the table without
+    // crediting any contribution to it would leave `appStreamSnapshots` with no
+    // reason to carry it on the desired side if the pending hook is later
+    // removed, which would plan `DROP TABLE` for the owner's table.
+    if (!hasStanding) continue;
     // Core tables are already adopted whole by the managed-prefix filter; a
     // plugin's table is not, and enters here for the first time. Either way
     // the copy that stands in the snapshot is one the reader can trust.
@@ -621,17 +636,7 @@ function withAppStreamTables(
       present.add(name);
     }
     recordedSpecs.set(name, held.spec);
-    // Recorded only where something stands: an empty record would name a
-    // table with nothing credited to it, which the next diff reads as
-    // "contributed once, since withdrawn" rather than "never arrived".
-    if (
-      held.elements.columns.length > 0 ||
-      held.elements.indexes.length > 0 ||
-      held.elements.foreignKeys.length > 0 ||
-      held.elements.checks.length > 0
-    ) {
-      contributions[name] = held.elements;
-    }
+    contributions[name] = held.elements;
   }
   return { snapshot: { ...snapshot, tables }, contributions, recordedSpecs };
 }
@@ -765,6 +770,17 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   // mismatch: dropping content-bearing columns is the operator's decision.
   // Judged before the empty-database answer, because a config that withdrew
   // its every contribution is exactly one with nothing currently standing.
+  // Columns the core reconcile itself keeps on an existing database, scoped
+  // by table so a withdrawn contribution sharing a name on another table is
+  // still refused.
+  const retainedCoreColumns: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+    [
+      ["media", new Set([RETAINED_SIZES_COLUMN.name])],
+      ...RETIRED_ACCESS_RULES_TABLES.map(
+        table => [table, new Set([RETIRED_ACCESS_RULES_COLUMN])] as const
+      ),
+    ]
+  );
   const orphans = deps.appStream
     ? [...ownerLive.entries()].flatMap(([name, table]) => {
         const bare = deps.appStream?.baselines.get(name);
@@ -775,10 +791,7 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
             deps.appStream?.contributed.get(name)?.elements ?? NO_ELEMENTS,
           live: table,
           core: coreTableNames(dialect),
-          // The column the core reconcile itself keeps on an existing
-          // database: the one thing standing there that no declaration
-          // names and no withdrawal explains, on purpose.
-          retained: new Set([RETAINED_SIZES_COLUMN.name]),
+          retained: retainedCoreColumns,
         });
         return unexplained.length === 0
           ? []

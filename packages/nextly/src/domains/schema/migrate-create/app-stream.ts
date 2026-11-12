@@ -41,6 +41,11 @@ import {
   onlyElements,
   withEntityContributions,
 } from "../extension/entity-contributions";
+import {
+  indexKey,
+  isManagedIndexName,
+  textColumnsOf,
+} from "../pipeline/diff/index-util";
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
@@ -774,51 +779,90 @@ export function unexplainedElements(input: {
   /** The core tables' names: a bare declaration the dialect bundle wrote. */
   core: ReadonlySet<string>;
   /**
-   * Column names the database keeps though nothing declares them — the
-   * retired `media.sizes`, which the core reconcile retains until an
-   * operator removes it. Never an orphan, whatever table they stand on.
+   * Per-table column names the database keeps though nothing declares them —
+   * `media.sizes` and the retired `access_rules` columns, which the core
+   * reconcile retains until an operator removes them. Scoped by table name so
+   * a withdrawn contribution sharing one of those names on another table is
+   * still flagged.
    */
-  retained: ReadonlySet<string>;
+  retained: ReadonlyMap<string, ReadonlySet<string>>;
 }): string[] {
-  const unexplained: string[] = [];
-  // Columns are always declared, and their names are stable across dialects:
-  // judged by name.
-  const columnNames = new Set(
-    [
-      ...input.bare.columns.map(column => column.name),
-      ...input.elements.columns,
-    ].values()
+  return [
+    ...new Set([
+      ...unexplainedColumns(input),
+      ...unexplainedIndexes(input),
+      ...unexplainedChecks(input),
+    ]),
+  ].sort();
+}
+
+/** Live columns on an owner's table that neither declaration nor retention explains. */
+function unexplainedColumns(input: {
+  bare: TableSpec;
+  elements: ContributedElements;
+  live: TableSpec;
+  retained: ReadonlyMap<string, ReadonlySet<string>>;
+}): string[] {
+  const explained = new Set([
+    ...input.bare.columns.map(column => column.name),
+    ...input.elements.columns,
+    ...(input.retained.get(input.bare.name) ?? []),
+  ]);
+  return input.live.columns
+    .filter(column => !explained.has(column.name))
+    .map(column => column.name);
+}
+
+/**
+ * Live indexes on an owner's table that neither declaration nor contribution explains.
+ *
+ * Judged by `indexKey` (ordered columns, uniqueness, predicate and expression),
+ * not by name. On core tables, dialect bundles declare column uniques and
+ * partial indexes outside `bare.indexes` under non-managed names (`*_key`,
+ * `*_unique`, etc.), whereas every contributed index passes `resolveIndexName`
+ * (`isManagedIndexName`: `idx_`/`uq_`), so unmanaged core indexes are skipped
+ * while withdrawn index-only contributions are caught.
+ */
+function unexplainedIndexes(input: {
+  bare: TableSpec;
+  elements: ContributedElements;
+  live: TableSpec;
+  core: ReadonlySet<string>;
+}): string[] {
+  if (input.bare.indexes === undefined || input.live.indexes === undefined) {
+    return [];
+  }
+  const isCore = input.core.has(input.bare.name);
+  const contributed = new Set(input.elements.indexes);
+  const bareText = textColumnsOf(input.bare.columns);
+  const liveText = textColumnsOf(input.live.columns);
+  const declaredKeys = new Set(
+    input.bare.indexes.map(index => indexKey(index, bareText))
   );
-  for (const name of input.retained) columnNames.add(name);
-  for (const column of input.live.columns) {
-    if (!columnNames.has(column.name)) unexplained.push(column.name);
-  }
-  // Indexes are judged by the COLUMNS they cover, not by name, and only on a
-  // table whose bare side the extension compile wrote — a plugin's. The core
-  // tables' dialect bundles declare uniques as column attributes, which
-  // introspection renders back as differently named `*_key` indexes, so no
-  // name or shape comparison agrees on a database that is perfectly in
-  // sync; a stranded index on a core table rides the column it was
-  // withdrawn with. Foreign keys and checks are not judged at all, for the
-  // same reason on every table.
-  if (
-    !input.core.has(input.bare.name) &&
-    input.bare.indexes !== undefined &&
-    input.live.indexes !== undefined
-  ) {
-    const contributed = new Set(input.elements.indexes);
-    const declaredShapes = new Set(
-      input.bare.indexes.map(index => [...index.columns].sort().join("\u0000"))
-    );
-    for (const index of input.live.indexes) {
-      if (contributed.has(index.name)) continue;
-      if (declaredShapes.has([...index.columns].sort().join("\u0000"))) {
-        continue;
-      }
-      unexplained.push(index.name);
-    }
-  }
-  return [...new Set(unexplained)].sort();
+  return input.live.indexes
+    .filter(
+      index =>
+        !contributed.has(index.name) &&
+        (!isCore || isManagedIndexName(index.name)) &&
+        !declaredKeys.has(indexKey(index, liveText))
+    )
+    .map(index => index.name);
+}
+
+/** Live checks on an owner's table that neither declaration nor contribution explains. */
+function unexplainedChecks(input: {
+  bare: TableSpec;
+  elements: ContributedElements;
+  live: TableSpec;
+}): string[] {
+  if (input.live.checks === undefined) return [];
+  const explained = new Set([
+    ...(input.bare.checks ?? []).map(check => check.name),
+    ...input.elements.checks,
+  ]);
+  return input.live.checks
+    .filter(check => !explained.has(check.name))
+    .map(check => check.name);
 }
 
 /** The core tables' names, as the dialect's own declaration writes them. */

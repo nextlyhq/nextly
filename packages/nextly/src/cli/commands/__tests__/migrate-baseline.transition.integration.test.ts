@@ -673,10 +673,13 @@ function runSuite(dialect: SupportedDialect): void {
       snapshot: { tables: { name: string; columns?: { name: string }[] }[] };
       contributions?: Record<string, unknown>;
     };
-    // The plugin's table is copied as the database holds it — bare of the
-    // contribution — and nothing is credited to the app on it.
-    const fx = recorded.snapshot.tables.find(t => t.name === "fx__notes");
-    expect(fx?.columns?.map(c => c.name)).not.toContain("app_ref");
+    // With no element standing in the database, the foreign table is omitted
+    // from both the snapshot and the contribution record — otherwise dropping
+    // the pending contribution afterwards would leave the snapshot holding a
+    // table the desired side no longer visits, planning a DROP TABLE on it.
+    expect(
+      recorded.snapshot.tables.find(t => t.name === "fx__notes")
+    ).toBeUndefined();
     expect(recorded.contributions?.fx__notes).toBeUndefined();
 
     // Nor does the body build what the adopting database never received.
@@ -684,6 +687,24 @@ function runSuite(dialect: SupportedDialect): void {
       parseSqlSections(await readFile(adopted.sqlPath, "utf-8")).upSql
     );
     expect(up.filter(s => s.includes("app_ref"))).toEqual([]);
+
+    // Removing the pending contribution before the next generation produces no
+    // migration and never tries to drop the plugin's own table.
+    const withdrawn = await generateMigration({
+      name: "drop_pending",
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      collections: [],
+      singles: [],
+      components: [],
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+      nonInteractive: true,
+    });
+    expect(withdrawn).toBeNull();
 
     // The change is still owed, and it is the app's migration that brings
     // it — the whole point of leaving it unrecorded.
@@ -732,6 +753,147 @@ function runSuite(dialect: SupportedDialect): void {
       throw new Error("expected a refusal");
     expect(adopted.mismatches).toEqual([
       { table: "fx__notes", elements: ["app_ref", "idx_fx_notes_app_ref"] },
+    ]);
+  });
+
+  it("refuses a withdrawn unique index sharing columns with a plugin index", async () => {
+    // Uniqueness is part of an index's identity: a plugin's non-unique index
+    // on `title` must not mask a withdrawn app unique index on `title`.
+    const indexedPlugin = definePlugin({
+      name: "fx",
+      version: "0.0.0",
+      nextly: "*",
+      contributes: {
+        schema: {
+          prefix: "fx",
+          tables: [
+            defineTable(
+              "notes",
+              { id: col.id(), title: col.shortText() },
+              { indexes: [{ columns: ["title"] }] }
+            ),
+          ],
+        },
+      },
+    });
+    const withUnique: SchemaHook = ({ schema }) => {
+      schema.extendTable("fx__notes", {
+        indexes: [
+          { columns: ["title"], unique: true, name: "uq_fx_notes_title" },
+        ],
+      });
+    };
+    await runDbSync(
+      h,
+      defineConfig({
+        plugins: [indexedPlugin],
+        collections: [],
+        db: { schema: { extend: [withUnique] } },
+      })
+    );
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: defineConfig({ plugins: [indexedPlugin], collections: [] }),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(adopted.kind).toBe("contribution-mismatch");
+    if (adopted.kind !== "contribution-mismatch")
+      throw new Error("expected a refusal");
+    expect(adopted.mismatches).toEqual([
+      { table: "fx__notes", elements: ["uq_fx_notes_title"] },
+    ]);
+  });
+
+  it("refuses a withdrawn index-only contribution on a core table", async () => {
+    // An app index added to an existing core column carries no contributed
+    // column beside it; withdrawing it must still be caught rather than skipped
+    // because the table is a core table.
+    const indexOnUsers: SchemaHook = ({ schema }) => {
+      schema.extendTable("users", {
+        indexes: [{ columns: ["name"], name: "idx_users_name_app" }],
+      });
+    };
+    await runDbSync(h, configV1);
+    await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+      `CREATE INDEX ${id(h, "idx_users_name_app")} ON ${id(h, "users")} (${id(h, "name")})`
+    );
+
+    const refused = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: defineConfig({ collections: [] }),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(refused.kind).toBe("contribution-mismatch");
+    if (refused.kind !== "contribution-mismatch")
+      throw new Error("expected a refusal");
+    expect(refused.mismatches).toEqual([
+      { table: "users", elements: ["idx_users_name_app"] },
+    ]);
+
+    // And when the hook IS present in config, the same live index is
+    // explained and recorded rather than refused.
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: defineConfig({
+          collections: [],
+          db: { schema: { extend: [indexOnUsers] } },
+        }),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(adopted.kind).toBe("baselined");
+  });
+
+  it("refuses a withdrawn enum CHECK when the contributed column remains", async () => {
+    // Changing a contributed `col.enum()` to `col.shortText()` leaves the
+    // column name explained while withdrawing its CHECK constraint; dialects
+    // whose push and introspection carry the CHECK must refuse rather than
+    // silently leaving the live constraint behind.
+    const asText: SchemaHook = ({ schema }) => {
+      schema.extendTable("fx__notes", {
+        columns: { reviewState: col.shortText({ nullable: true }) },
+      });
+    };
+    await runDbSync(h, pendingConfig([contributesEnum]));
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([asText]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(adopted.kind).toBe("contribution-mismatch");
+    if (adopted.kind !== "contribution-mismatch")
+      throw new Error("expected a refusal");
+    expect(adopted.mismatches).toEqual([
+      { table: "fx__notes", elements: ["ck_fx__notes_review_state_enum"] },
     ]);
   });
 
@@ -804,18 +966,24 @@ function runSuite(dialect: SupportedDialect): void {
     expect(adopted.kind).toBe("empty-database");
   });
 
-  it("keeps the retired media sizes column out of the orphan refusal", async () => {
-    // The core reconcile deliberately retains `media.sizes` until an
-    // operator removes it, so it stands there explained by nothing — and a
-    // refusal over it would block every existing installation from
-    // graduating. It is named as retained, never an orphan, and never
+  it("keeps the retired media sizes and access_rules columns out of the orphan refusal", async () => {
+    // The core reconcile deliberately retains `media.sizes` and the retired
+    // `access_rules` columns on `dynamic_collections` and `dynamic_singles`
+    // until an operator removes them, so they stand there explained by nothing —
+    // and a refusal over them would block existing installations from
+    // graduating. They are retained per table, never an orphan, and never
     // recorded either.
     await runDbSync(h, configV1);
-    await (h.adapter as unknown as DrizzleAdapter).executeQuery(
-      `ALTER TABLE ${id(h, "media")} ADD COLUMN ${id(h, "sizes")} ${
-        h.dialect === "mysql" ? "JSON" : "text"
-      }`
-    );
+    const colType = h.dialect === "mysql" ? "JSON" : "text";
+    for (const [table, column] of [
+      ["media", "sizes"],
+      ["dynamic_collections", "access_rules"],
+      ["dynamic_singles", "access_rules"],
+    ] as const) {
+      await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+        `ALTER TABLE ${id(h, table)} ADD COLUMN ${id(h, column)} ${colType}`
+      );
+    }
 
     const adopted = await baselineCore({
       adapter: h.adapter,
@@ -831,13 +999,47 @@ function runSuite(dialect: SupportedDialect): void {
     });
     if (adopted.kind !== "baselined")
       throw new Error(`expected a baseline, got ${adopted.kind}`);
-    // A core table is never adopted whole, so the retained column reaches
-    // no snapshot: what this asserts is that the adoption happened at all
-    // rather than refusing over the column.
+    // Core tables are never adopted whole, so retained columns reach no
+    // snapshot: what this asserts is that adoption succeeded rather than
+    // refusing over any of the three retained columns.
     const recorded = JSON.parse(
       await readFile(adopted.snapshotPath, "utf-8")
     ) as { snapshot: { tables: { name: string }[] } };
     expect(recorded.snapshot.tables.some(t => t.name === "media")).toBe(false);
+    expect(
+      recorded.snapshot.tables.some(t => t.name === "dynamic_collections")
+    ).toBe(false);
+    expect(
+      recorded.snapshot.tables.some(t => t.name === "dynamic_singles")
+    ).toBe(false);
+  });
+
+  it("still refuses a withdrawn sizes column on a plugin table", async () => {
+    // The retained `sizes` exemption is scoped to `media`: a leftover `sizes`
+    // column on any other table is still a withdrawn contribution.
+    await runDbSync(h, pendingConfig([]));
+    await (h.adapter as unknown as DrizzleAdapter).executeQuery(
+      `ALTER TABLE ${id(h, "fx__notes")} ADD COLUMN ${id(h, "sizes")} text`
+    );
+
+    const adopted = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(adopted.kind).toBe("contribution-mismatch");
+    if (adopted.kind !== "contribution-mismatch")
+      throw new Error("expected a refusal");
+    expect(adopted.mismatches).toEqual([
+      { table: "fx__notes", elements: ["sizes"] },
+    ]);
   });
 
   it("carries a localized companion into the baseline SQL, but not the snapshot", async () => {
