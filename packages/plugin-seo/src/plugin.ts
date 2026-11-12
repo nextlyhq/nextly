@@ -309,7 +309,7 @@ export interface SeoPluginOptions {
    * @experimental Where `next build` writes, relative to the app's
    * directory: `.next` unless the app's `next.config` sets `distDir`. The
    * pages the site's routes render from their own code are read from it,
-   * for the Pages and addresses screen and the sitemap.
+   * for Pages and the sitemap.
    */
   nextBuildDir?: string;
   /**
@@ -841,19 +841,21 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),
-    // What the "What search engines received" screen reads and checks.
+    // What Inspect checks.
     ...receivedRoutes({
       collections: targets,
       singles: singleTargets,
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
       readRules,
       pageMetadata,
+      structuredDataReaders: problemChecks.readers,
+      aiCrawlers: options.aiCrawlers,
     }),
     ...tab.routes,
     // What a Page Builder template's SEO panel reads.
     seoTemplateRoute({ readRules, baseUrl: options.baseUrl }),
     ...problemRoutes(problemChecks),
-    // The Pages and addresses screen's list, and its save of a page with no
+    // Pages' list, and its save of a page with no
     // entry's SEO.
     ...codePageRoutes({
       readRules,
