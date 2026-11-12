@@ -67,10 +67,10 @@ The file it writes is marked in its header, so the deletion is visible in review
 ```sql
 -- Migration: remove_posts
 -- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_posts (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts)
--- Deletes: table dc_posts: no longer in the config
+-- Deletes: table dc_posts: collection posts is no longer in the config
 ```
 
-The mark is for people. `nextly migrate` asks for the consent again on each database it runs on.
+It names what `nextly migrate` will ask consent for, judged the same way, and `nextly migrate` asks again on each database it runs on. A change that turns translation on or off, or moves a field in or out of translation, drops a column or table after its values move, so it is listed and asked about too.
 
 ---
 
