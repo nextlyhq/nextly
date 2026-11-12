@@ -127,8 +127,9 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       .click();
     await sent;
     await readAfterPublish;
+    // The entry's status chip sits in the page's bar, beside the breadcrumb.
     await expect(
-      page.locator("main").getByText("Published", { exact: true }).first()
+      page.getByRole("banner").getByText("Published", { exact: true }).first()
     ).toBeVisible({ timeout: 30_000 });
 
     // A held working-draft save, of the published entry.
