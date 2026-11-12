@@ -63,6 +63,10 @@ import {
 import { describeProviderFailure } from "../provider-definition";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
 import {
+  type FinalRecipient,
+  recipientDigesterOf,
+} from "../queued-send-changes";
+import {
   type QueuedEmail,
   type QueuedEmailState,
   type QueuedMessage,
@@ -124,6 +128,13 @@ import {
   type SendMessage,
 } from "./recipients";
 import { DEFAULT_APP_NAME } from "./render-template";
+import {
+  checkedExclusions,
+  finalRecipients,
+  leaveOutExcluded,
+  repeatedOutcomes,
+  unknownOutcomes,
+} from "./send-recipient-report";
 import {
   answeredFailure,
   type EmailSendOutcome,
@@ -217,6 +228,8 @@ interface TemplateSendOptions {
   person?: PrincipalRef;
   /** @experimental Send this message once for the key (see `send`). */
   idempotencyKey?: string;
+  /** @experimental Leave these recipients out (see `send`). */
+  excludeRecipients?: readonly string[];
 }
 
 /** What one message's dispatch needs beyond the message itself. */
@@ -433,6 +446,8 @@ export class EmailService extends BaseService {
    * set (`withTemplateCopies`).
    */
   private frozenCopies?: { cc: string[]; bcc: string[] };
+  /** Set on a view made by `withRecipientReport`. */
+  private recipientReport?: (recipients: FinalRecipient[]) => void;
 
   constructor(
     adapter: DrizzleAdapter,
@@ -503,6 +518,28 @@ export class EmailService extends BaseService {
     const view = Object.create(this) as EmailService;
     view.keyScope = scope;
     return view;
+  }
+
+  /**
+   * @internal This service, handing `report` every final recipient of each
+   * send it makes, with what became of it: what a queued email's attempt
+   * tells the plugin that queued it (`queued-send-changes`).
+   */
+  withRecipientReport(
+    report: (recipients: FinalRecipient[]) => void
+  ): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.recipientReport = report;
+    return view;
+  }
+
+  /** Hand the final recipients to the view's report, when it has one. */
+  private reportRecipients(
+    envelope: SendEnvelope,
+    outcomes: Parameters<typeof finalRecipients>[1],
+    excluded: Parameters<typeof finalRecipients>[2]
+  ): void {
+    this.recipientReport?.(finalRecipients(envelope, outcomes, excluded));
   }
 
   /**
@@ -657,6 +694,7 @@ export class EmailService extends BaseService {
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
         idempotencyKey: options?.idempotencyKey,
+        excludeRecipients: options?.excludeRecipients,
       });
     }
 
@@ -711,6 +749,7 @@ export class EmailService extends BaseService {
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
         idempotencyKey: options?.idempotencyKey,
+        excludeRecipients: options?.excludeRecipients,
       });
     }
 
@@ -780,6 +819,16 @@ export class EmailService extends BaseService {
      * Keys are scoped to their caller, so two plugins never share one.
      */
     idempotencyKey?: string;
+    /**
+     * @experimental Leave out the recipients these digests name: the
+     * caller's own keyed digests of their mailboxes (`recipientDigest`),
+     * compared with the recipients `email.beforeSend` filters returned, so
+     * one a filter adds is left out too. When no `to` is left, each copy
+     * that is gets a message of its own, addressed to it alone; when no
+     * recipient is left, nothing is sent. Offered to plugins, and refused
+     * with `person`.
+     */
+    excludeRecipients?: readonly string[];
   }): Promise<EmailSendOutcome> {
     if (options.idempotencyKey !== undefined) {
       assertIdempotencyKey(options.idempotencyKey);
@@ -787,6 +836,11 @@ export class EmailService extends BaseService {
     // A precondition, before anything is resolved or sent: a person that
     // cannot be read would leave the record unable to be erased with them.
     const person = await this.personToRecord(options.person);
+    const digester = recipientDigesterOf(this.keyScope);
+    const exclusions = checkedExclusions(options.excludeRecipients, {
+      namesPerson: person !== null,
+      digester,
+    });
 
     // The caller's recipients are a precondition too. They are checked again
     // once filters have run, against the envelope that is actually sent.
@@ -886,7 +940,7 @@ export class EmailService extends BaseService {
       personAddress: person !== null ? requestedTo[0] : undefined,
     });
 
-    const envelope: SendEnvelope = {
+    const filteredEnvelope: SendEnvelope = {
       to,
       from: filtered.from,
       // A handler written before `replyTo` was in the payload may build a new
@@ -901,7 +955,19 @@ export class EmailService extends BaseService {
 
     // The Reply-To that goes out, whoever set it, is a header like the
     // recipients, and is held to the same rule before any provider is called.
-    assertSendableReplyTo(envelope.replyTo);
+    assertSendableReplyTo(filteredEnvelope.replyTo);
+
+    // The recipients the caller excluded, left out of what the filters
+    // returned (`send-recipient-report`). Nobody left: nothing is sent.
+    const excluded =
+      exclusions && digester
+        ? await leaveOutExcluded(filteredEnvelope, exclusions, digester)
+        : undefined;
+    const envelope = excluded?.envelope ?? filteredEnvelope;
+    if (envelope.to.length === 0) {
+      this.reportRecipients(envelope, [], excluded);
+      return { success: true };
+    }
 
     // Claimed on the envelope that goes out, so a filter's change is part of
     // the message the key names. A repeat is answered here, sending nothing.
@@ -910,7 +976,16 @@ export class EmailService extends BaseService {
       attachments: resolvedAttachments,
       person,
     });
-    if (claimed && "answer" in claimed) return claimed.answer;
+    if (claimed && "answer" in claimed) {
+      this.reportRecipients(
+        envelope,
+        claimed.answer.repeat
+          ? repeatedOutcomes(envelope, claimed.answer)
+          : unknownOutcomes(envelope),
+        excluded
+      );
+      return claimed.answer;
+    }
 
     // A keyed retry sends only to the recipients an earlier attempt with the
     // key had not reached. With none, this is the envelope itself.
@@ -918,9 +993,10 @@ export class EmailService extends BaseService {
       claimed?.keyed.claim,
       envelope
     );
+    // Copies sent alone go one message each, whatever the provider takes.
     const messages = messagesFor(
       pendingEnvelope(envelope, previouslyAccepted),
-      maxToPerMessage
+      excluded?.alone ? 1 : maxToPerMessage
     );
 
     const runAfterSend = (value: EmailAfterSendValue) =>
@@ -963,11 +1039,13 @@ export class EmailService extends BaseService {
     });
     // One message is today's send, and its result is returned as it is; a
     // split send's messages are combined into one result.
-    const { outcome, accepted } = sendResultOf(
+    const { outcome, accepted, recipients } = sendResultOf(
       envelope,
       previouslyAccepted,
       calls
     );
+    // As this attempt left them: a call still unsettled reads unknown.
+    this.reportRecipients(envelope, recipients, excluded);
     const late = calls.some(call => call.late);
     let committed = true;
     if (late) {

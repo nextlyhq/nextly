@@ -26,6 +26,7 @@
  * @module domains/email/plugin-send-forgetting
  */
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
 import { getDialectTables } from "../../database/index";
@@ -48,6 +49,7 @@ import {
   eraseKeyedDeliveries,
   type RecipientErasureCapableDb,
 } from "./erase-recipient";
+import { tellCancelReached } from "./queued-cancel";
 import {
   cancelQueuedEmailsAmong,
   type EmailQueueTables,
@@ -57,10 +59,11 @@ import { assertIdempotencyKey, idempotencyKeyDigest } from "./send-claims";
 
 const OPERATION = "ctx.services.email.forgetSends";
 
-/** A transaction as forgetting uses it: its Drizzle handle. */
-interface ForgettingTransaction {
-  getDrizzle<D = unknown>(): D;
-}
+/**
+ * A transaction as forgetting uses it: the adapter's, so the plugin that
+ * queued the emails is told in it (`tellCancelReached`).
+ */
+type ForgettingTransaction = TransactionContext;
 
 /**
  * What forgetting needs of an adapter: a transaction of its own, and whether
@@ -169,7 +172,7 @@ export async function forgetPluginSends(
         )
       );
     }
-    await cancelQueuedEmailsAmong(
+    const reached = await cancelQueuedEmailsAmong(
       db,
       {
         dialect,
@@ -179,6 +182,8 @@ export async function forgetPluginSends(
       scope,
       queuedIds
     );
+    // The plugin is told in the same transaction, as every cancel tells it.
+    await tellCancelReached(tx, dialect, reached, { by: "sender" });
   };
 
   if (options.tx !== undefined) {

@@ -39,6 +39,7 @@ export interface EmailQueueTables {
     id: Column;
     scope: Column;
     state: Column;
+    jobId: Column;
     message: Column;
     principalKind: Column;
     principalId: Column;
@@ -190,28 +191,51 @@ function ownedBy(
 }
 
 /**
+ * A queued email a cancel reached, as it stood just before: which caller
+ * queued it, its state, and the job that makes its attempts.
+ */
+export interface ReachedQueuedEmail {
+  id: string;
+  scope: string;
+  state: string;
+  jobId: string | null;
+}
+
+/**
  * Cancel and clear the queued emails among `ids` that `scope` queued (a
- * plugin's own, `plugin:<name>`): an id another caller queued, or none at
- * all, is passed over. Read under the lock a deletion takes, so one being
- * claimed for an attempt is read as it stands.
+ * plugin's own, `plugin:<name>`), or that anyone did when `scope` is
+ * undefined: an id another caller queued, or none at all, is passed over.
+ * Read under the lock a deletion takes, so one being claimed for an attempt
+ * is read as it stands. Answers each email reached, as it stood before.
  */
 export async function cancelQueuedEmailsAmong(
   db: QueuedErasureDb,
   tables: EmailQueueTables,
-  scope: string,
+  scope: string | undefined,
   ids: readonly string[]
-): Promise<void> {
+): Promise<ReachedQueuedEmail[]> {
   const { queue } = tables;
+  const reached: ReachedQueuedEmail[] = [];
   for (let start = 0; start < ids.length; start += BATCH) {
     const batch = ids.slice(start, start + BATCH);
     const rows = (await locked(
       tables,
       db
-        .select({ id: queue.id })
+        .select({
+          id: queue.id,
+          scope: queue.scope,
+          state: queue.state,
+          jobId: queue.jobId,
+        })
         .from(queue)
-        .where(and(inArray(queue.id, batch), ownedBy(queue, tables, scope)))
+        .where(
+          and(
+            inArray(queue.id, batch),
+            scope === undefined ? undefined : ownedBy(queue, tables, scope)
+          )
+        )
         .limit(BATCH)
-    )) as Array<{ id: string }>;
+    )) as ReachedQueuedEmail[];
     if (rows.length > 0) {
       await cancelAndClear(
         db,
@@ -219,8 +243,10 @@ export async function cancelQueuedEmailsAmong(
         rows.map(row => row.id),
         {}
       );
+      reached.push(...rows);
     }
   }
+  return reached;
 }
 
 /**
