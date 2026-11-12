@@ -49,6 +49,18 @@ type ForgettingContext = Pick<PluginContext, "hooks" | "services" | "self">;
 export const DELETE_PAGE = 200;
 
 /**
+ * How a submission's sends and requests are read: with no row lock. The
+ * write deleting the submission or marking it Spam holds the submission's
+ * row, and core changes or cancels each queued email under that email's own
+ * row lock before telling the plugin, so nothing else changes them
+ * meanwhile, and each is then written by its id. A locking read would take
+ * MySQL's next-key locks on the `submission` index, which deadlock when
+ * several submissions are deleted or marked Spam at once, each in its own
+ * transaction.
+ */
+const UNLOCKED = { lock: "none" } as const;
+
+/**
  * The forms each transaction is deleting, by the transaction's key. A
  * submission deleted with its form need not hand its one-response key to
  * the next submission, which is about to go too.
@@ -131,7 +143,8 @@ async function queuedIdsOf(
         where: { submission: { equals: String(write.id) } },
         pagination: { limit: DELETE_PAGE, page },
         depth: 0,
-      }
+      },
+      UNLOCKED
     );
     const sends = data as Array<Partial<RecordedSend>>;
     for (const send of sends) if (send.queuedId) ids.push(send.queuedId);
@@ -173,7 +186,8 @@ async function forgetSubmissionSends(
         where: { submission: { equals: String(write.id) } },
         pagination: { limit: DELETE_PAGE },
         depth: 0,
-      }
+      },
+      UNLOCKED
     );
     const sends = data as Array<{ id: unknown } & Partial<RecordedSend>>;
     if (sends.length > 0) await forgetBatch(ctx, write, slug, sends);
@@ -196,7 +210,8 @@ async function deleteResends(
         where: { submission: { equals: String(write.id) } },
         pagination: { limit: DELETE_PAGE },
         depth: 0,
-      }
+      },
+      UNLOCKED
     );
     for (const row of data as Array<{ id: unknown }>) {
       await ctx.services.collections.deleteEntryInTransaction(
