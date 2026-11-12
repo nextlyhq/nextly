@@ -486,6 +486,17 @@ export const PLUGIN_CASES = {
         "Another migration is holding the migrate lock, so @acme/seo was not installed. Nothing was changed — re-run once it finishes.",
       logContext: { reason: "plugin-lifecycle-lock-busy", outcome: "settled" },
     }),
+  PLUGIN_COMMAND_FROM_OLDER_RELEASE: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        "The preset roles' grants were set by Nextly 0.10.0, newer than this release (0.9.0). Run this command from Nextly 0.10.0 or newer.",
+      logContext: {
+        reason: "preset-grants-set-by-a-newer-release",
+        recorded: "0.10.0",
+        running: "0.9.0",
+      },
+    }),
   PLUGIN_HOOK_SERVICES_REGISTERED: () =>
     new NextlyError({
       code: "CONFLICT",

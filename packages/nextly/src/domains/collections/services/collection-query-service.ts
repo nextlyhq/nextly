@@ -212,6 +212,13 @@ import {
   resolveDraftOverlay,
   type DraftDocumentConfig,
 } from "../../versions/draft-overlay";
+import {
+  combinedDraft,
+  draftsKeptByPart,
+  findPartDrafts,
+  holdsPendingChange,
+  SHARED_DRAFT_SLOT,
+} from "../../versions/part-drafts";
 import { pendingChangeCondition } from "../../versions/pending-change-condition";
 import {
   buildRestorePayload,
@@ -221,6 +228,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { strandedStageCondition } from "../../workflows/stranded-stage-condition";
 import {
   componentTableNamesFor,
   localizedFilterContext,
@@ -257,6 +265,7 @@ import {
   extractWorkflowFilter,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
+  STRANDED_STAGE_KEY,
   type WorkflowFilter,
 } from "../query/workflow-filter";
 
@@ -2510,6 +2519,16 @@ export class CollectionQueryService extends BaseService {
         })
       );
     }
+    if (filter.strandedStage === true) {
+      conditions.push(
+        strandedStageCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          locales,
+        })
+      );
+    }
     if (filter.inRelease !== null) {
       conditions.push(
         inReleaseCondition({
@@ -2577,8 +2596,8 @@ export class CollectionQueryService extends BaseService {
   }): Promise<void> {
     if (!isPlainObject(params.where)) return;
     const where = params.where;
-    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY].find(key =>
-      Object.prototype.hasOwnProperty.call(where, key)
+    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY, STRANDED_STAGE_KEY].find(
+      key => Object.prototype.hasOwnProperty.call(where, key)
     );
     if (used === undefined) return;
     const denied = await this.denyCollectionRead({
@@ -5474,6 +5493,9 @@ export class CollectionQueryService extends BaseService {
       // was suppressed but nothing is overlaid, the loaded row is the published
       // one, which an explicit draft filter must not return (see the 404 below).
       let draftOverlaid = false;
+      // Under per-language storage: whether the shared part holds a pending
+      // change, told on every language's editor read. Undefined elsewhere.
+      let sharedChangesPending: boolean | undefined;
       if (draftEligible) {
         if (params.overrideAccess === true) {
           draftView = true;
@@ -5527,16 +5549,25 @@ export class CollectionQueryService extends BaseService {
           requestLocale: params.locale ?? null,
           defaultLocale: this.localization?.defaultLocale ?? null,
         });
-        const workingDraft = await new VersionsRepository(
-          this.adapter
-        ).findWorkingDraft(
-          {
-            scopeKind: "collection",
-            scopeSlug: params.collectionName,
-            entryId,
-          },
-          draftLocale
-        );
+        const draftRef = {
+          scopeKind: "collection" as const,
+          scopeSlug: params.collectionName,
+          entryId,
+        };
+        const draftRepo = new VersionsRepository(this.adapter);
+        // Kept by part, the pending change is the shared draft and this
+        // language's, read as the one change they make together: only the
+        // keys they hold, laid over the live entry below.
+        const parts =
+          draftsKeptByPart() && draftLocale !== SHARED_DRAFT_SLOT
+            ? await findPartDrafts(draftRepo, draftRef, draftLocale)
+            : undefined;
+        if (parts) sharedChangesPending = parts.shared !== undefined;
+        const workingDraft = parts
+          ? holdsPendingChange(parts)
+            ? { snapshot: combinedDraft({}, parts) }
+            : undefined
+          : await draftRepo.findWorkingDraft(draftRef, draftLocale);
         // Mirror the write gate's eligibility check before overlaying: a
         // component that turned localized or unresolvable after this draft was
         // written — or a password field that appeared on the collection or a
@@ -5694,7 +5725,18 @@ export class CollectionQueryService extends BaseService {
             draftEntry[TRANSLATION_OVERVIEW_KEY] =
               expandedEntry[TRANSLATION_OVERVIEW_KEY];
           }
-          expandedEntry = draftEntry;
+          // A draft kept by part holds only what it changes, so its values
+          // are laid over the live entry rather than replacing it.
+          expandedEntry = parts
+            ? {
+                ...expandedEntry,
+                ...Object.fromEntries(
+                  Object.entries(draftEntry).filter(
+                    ([key]) => key in rawSnapshot
+                  )
+                ),
+              }
+            : draftEntry;
           draftOverlaid = true;
         }
       }
@@ -5758,6 +5800,11 @@ export class CollectionQueryService extends BaseService {
       // surfaced; mirrors the synthetic `_translations` read-response convention.
       if (draftOverlaid) {
         finalData._isWorkingDraft = true;
+      }
+      // The shared part's pending change concerns every language, so each
+      // language's editor read says whether there is one.
+      if (sharedChangesPending !== undefined) {
+        finalData._sharedChangesPending = sharedChangesPending;
       }
 
       return {

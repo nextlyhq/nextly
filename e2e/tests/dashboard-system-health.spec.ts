@@ -159,3 +159,38 @@ test("a refused copy opens Details with the report selected", async ({
   expect(selected).toBe(await report.textContent());
   expect(selected).toMatch(/^Nextly diagnostics, /);
 });
+
+test("copying from Details says so above the drawer's footer, clear of its Copy diagnostics button", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await gotoAdmin(page, "/");
+  await placeSystemHealth(page);
+  await gotoAdmin(page, "/");
+
+  const card = page.getByTestId(`widget-cell-${CARD}`);
+  await card.getByRole("button", { name: "Details" }).click();
+  await expect(page.getByTestId("system-health-report")).toBeVisible();
+  const copy = page.getByTestId("system-health-details-copy");
+  await copy.click();
+  const said = page
+    .locator("[data-sonner-toast]")
+    .filter({ hasText: "Diagnostics copied." });
+  await expect(said).toBeVisible();
+  // Read once it has finished sliding in.
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        animation =>
+          animation.playState !== "running" ||
+          animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY
+      )
+  );
+  const toast = await said.boundingBox();
+  const button = await copy.boundingBox();
+  if (toast === null || button === null) throw new Error("not drawn");
+  // The toast ends above the footer's button: it covers none of it.
+  expect(toast.y + toast.height).toBeLessThanOrEqual(button.y);
+});

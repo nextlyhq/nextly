@@ -12,15 +12,9 @@ import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
-import {
-  browserStore,
-  type LeftPanel,
-  type PreferenceStore,
-  type SavedPattern,
-} from "@nextlyhq/builder";
+import type { LeftPanel, SavedPattern } from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
-  CHECKLIST_STORAGE_KEY,
   ComponentsPanel,
   InsertPanel,
   LayersPanel,
@@ -50,6 +44,7 @@ import {
   type CanvasPreviewMode,
 } from "./canvas-preview-mode";
 import { DesignPanel } from "./design-panel";
+import { checklistStoreFor } from "./editor-preference-stores";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
@@ -78,17 +73,6 @@ function identityKey(
   return identity.kind === "collection"
     ? `collection:${identity.slug}:${identity.documentId ?? "new"}`
     : `${identity.kind}:${identity.slug}`;
-}
-
-/**
- * Where the getting-started card's dismissal is kept: under the author's own
- * key, so dismissing it is one author's choice in a browser two people share.
- * With no author known, the card's own browser-wide default.
- */
-function checklistStoreFor(userId: string | null): PreferenceStore | undefined {
-  return userId === null
-    ? undefined
-    : browserStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
 }
 
 /**

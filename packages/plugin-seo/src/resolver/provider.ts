@@ -76,6 +76,28 @@ export function answerOf(
   };
 }
 
+/**
+ * `resolver` with `add` worked out over each page's answer, for a part of the
+ * head derived from it, such as its language links or structured data. The
+ * answer's own cache tags are kept: what is added reads nothing they miss.
+ */
+export function overAnswer(
+  resolver: PageMetadataResolver,
+  add: (
+    answer: PageMetadataAnswer,
+    input: PageMetadataInput
+  ) => Promise<PageMetadataAnswer>
+): PageMetadataResolver {
+  return {
+    ...(resolver.tags === undefined
+      ? {}
+      : { tags: input => resolver.tags?.(input) ?? [] }),
+    async resolve(input) {
+      return add(await resolver.resolve(input), input);
+    },
+  };
+}
+
 /** The page-metadata provider the SEO plugin contributes. */
 export function seoPageMetadata(
   ctx: PluginContext,

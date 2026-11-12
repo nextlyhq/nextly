@@ -20,16 +20,19 @@ export default defineConfig({
       "**/dist/**",
       "src/**/*.integration.test.ts",
     ],
-    // The settings screen's suites render React under jsdom, which each such
-    // file asks for itself (`@vitest-environment jsdom`), so the node suites
-    // stay in node. Rendering through the admin's components is heavier than
-    // the 5s default is sized for on a loaded runner.
+    // The admin suites (the settings screen, the SEO tab) render React under
+    // jsdom, which each such file asks for itself (`@vitest-environment
+    // jsdom`), so the node suites stay in node. Rendering through the admin's
+    // components is heavier than the 5s default is sized for on a loaded
+    // runner.
     testTimeout: 10_000,
     // The shared DOM setup tears renders down between cases; the second gives
-    // jsdom the globals the admin bundle needs at import time.
+    // jsdom the globals the admin bundle needs at import time; the third adds
+    // the DOM matchers.
     setupFiles: [
       "../../scripts/vitest-dom-setup.ts",
       "./src/admin/__tests__/dom-setup.ts",
+      "./src/__tests__/setup.ts",
     ],
   },
 });

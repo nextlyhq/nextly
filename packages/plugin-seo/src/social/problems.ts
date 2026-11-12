@@ -13,22 +13,27 @@ import type { PageMetadataInput, PluginContext } from "@nextlyhq/plugin-sdk";
 import type { SeoLevel } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { readSeoRules } from "../settings/rules";
+import { socialCardFromSettings } from "../settings/social-card-rules";
 
 import {
   cardOrigin,
   isAbsolute,
-  noSocialCardRules,
+  socialCardRulesFromOptions,
   type ReadSocialCardRules,
 } from "./card";
-import { shareImageSizeProblem } from "./contract";
+import { shareImageFormatProblem, shareImageSizeProblem } from "./contract";
+
+/** The card's rules with no plugin options: the site's environment alone. */
+const fromEnvironment = socialCardRulesFromOptions(undefined, undefined);
 
 /** Something about a page's share image that keeps its card from showing well. */
 export interface ShareImageProblem {
   /**
-   * What it is about: the picture's size or shape (`size`), or the site's
-   * address the picture's own address is stated on (`siteAddress`).
+   * What it is about: the picture's size or shape (`size`), its file type
+   * where some networks don't show it (`format`), or the site's address the
+   * picture's own address is stated on (`siteAddress`).
    */
-  detail: "size" | "siteAddress";
+  detail: "size" | "format" | "siteAddress";
   /** What the problem list shows, such as `800 × 600, LinkedIn will crop it`. */
   message: string;
   /**
@@ -89,7 +94,20 @@ export async function shareImageProblems(
       ...where,
     });
   }
-  const readCard = readers.readSocialCardRules ?? noSocialCardRules;
+  // A making of a share image writes a JPEG, which every network shows.
+  const format = shareImageFormatProblem(image.value.url);
+  if (format !== undefined) {
+    problems.push({
+      detail: "format",
+      message: format,
+      fix: fixFor(image.from),
+      ...where,
+    });
+  }
+  // The card's rules as the head reads them: the SEO settings, then the
+  // site's environment, when the caller gives none.
+  const readCard =
+    readers.readSocialCardRules ?? socialCardFromSettings(fromEnvironment);
   const rules = await readCard(ctx, input.locale);
   if (
     !isAbsolute(image.value.url) &&

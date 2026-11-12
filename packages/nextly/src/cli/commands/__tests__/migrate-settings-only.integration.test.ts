@@ -35,6 +35,7 @@ import { SchemaEventsRepository } from "../../../domains/schema/events/schema-ev
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
 import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
+import { schemaVersionStoreSql } from "../../../domains/schema/schema-version";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import {
@@ -308,13 +309,20 @@ describe.each(getConfiguredTestDialects())(
 
       const { file, sql } = await migrationNamed("describe_events");
       expect(sql).toContain("-- Settings: so_events: description");
-      // No table statement: the only statement is the Builder entity's
-      // registry row, which is how its settings reach a deployed database.
+      // No table statement: the statements are the Builder entity's registry
+      // row, which is how its settings reach a deployed database, and the
+      // stored schema version moved after it.
       const statements = upStatements(sql, dialect);
       expect(
         statements.filter(s => /^\s*(CREATE|ALTER|DROP)\b/i.test(s))
       ).toEqual([]);
-      expect(statements).toHaveLength(1);
+      expect(statements).toHaveLength(2);
+      expect(statements[0]).toMatch(
+        /^\s*INSERT INTO ["`]dynamic_collections["`]/
+      );
+      expect(statements.slice(1)).toEqual(
+        splitSqlStatements(schemaVersionStoreSql(dialect), dialect)
+      );
 
       await migrate(builderOnly);
       expect(await applied(instance!, dialect, file)).toBe(true);

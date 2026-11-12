@@ -43,6 +43,8 @@ import type {
   RecordedEntitySettings,
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
+import { inRegistryStep } from "../schema-version";
 import {
   collectionRowValues,
   componentRowValues,
@@ -54,12 +56,6 @@ import type { RegistrySource } from "./registry-source";
 export interface RegistryWriteDeps {
   adapter: DrizzleAdapter;
   logger: Logger;
-  /**
-   * Asked before each row is written, and throws once this run can no longer
-   * show it holds the schema lock: a run that lost the lock writes nothing
-   * further. Absent, every write goes ahead.
-   */
-  assertLockHeld?: () => Promise<void> | void;
   /**
    * The origin of each collection a plugin contributes, `plugin:<name>` by
    * slug, as the start gives it: a row the writer creates for one of them
@@ -95,9 +91,13 @@ export async function writeRegistryFromSource(
     for (const row of await recordedRows(source, deps)) {
       // Outside the per-row guard below: a lost lock stops the pass, it is
       // never one row's failure to report and go on from.
-      await deps.assertLockHeld?.();
+      await assertSchemaLockHeld();
       try {
-        if ((await row.write()) !== "unchanged") result.written[row.kind] += 1;
+        // Its own step of the registry write the caller opened, so a row that
+        // fails is rolled back alone and the rest still land (`inRegistryStep`).
+        if ((await inRegistryStep(deps.adapter, row.write)) !== "unchanged") {
+          result.written[row.kind] += 1;
+        }
       } catch (error) {
         // One row that cannot be written costs only that row; the rest are
         // still brought to the source, and the run says which one failed.
@@ -133,11 +133,14 @@ async function recordedRows(
     !isReservedResourceSlug(slug);
   const { entities } = source;
   const [storedCollections, storedSingles, storedFieldGroups] =
-    await Promise.all([
-      storedBySlug(() => collections.getAllCollections()),
-      storedBySlug(() => singles.getAllSingles()),
-      storedBySlug(() => fieldGroups.getAllComponents()),
-    ]);
+    // One after another, each its own step: a registry that cannot be read
+    // must not abort the transaction the rows are written in, and steps on
+    // one transaction run in turn.
+    [
+      await storedBySlug(deps.adapter, () => collections.getAllCollections()),
+      await storedBySlug(deps.adapter, () => singles.getAllSingles()),
+      await storedBySlug(deps.adapter, () => fieldGroups.getAllComponents()),
+    ];
   return [
     ...Object.entries(entities.collections)
       .filter(kept)
@@ -185,10 +188,13 @@ async function recordedRows(
  * read, so each row is read on its own and one that fails costs only itself.
  */
 async function storedBySlug<TRecord extends { slug: string }>(
+  adapter: DrizzleAdapter,
   read: () => Promise<TRecord[]>
 ): Promise<ReadonlyMap<string, TRecord> | undefined> {
   try {
-    return new Map((await read()).map(row => [row.slug, row]));
+    return new Map(
+      (await inRegistryStep(adapter, read)).map(row => [row.slug, row])
+    );
   } catch {
     return undefined;
   }

@@ -19,6 +19,8 @@ import { getEmailProviderRegistry } from "../domains/email/services/email-provid
 import { ownershipFromConfig } from "../domains/email/template-ownership";
 import { provisionUserFieldStorage } from "../domains/users/services/provision-user-field-storage";
 
+import { isProductionStart } from "./production-start";
+
 /**
  * Sync the code-defined user fields, merge them with the admin's, and make sure
  * user_ext has a column for each.
@@ -28,11 +30,16 @@ import { provisionUserFieldStorage } from "../domains/users/services/provision-u
  * request served before then reads a person without the admin's fields and an
  * update to one is dropped while reporting success. `nextly migrate` runs the
  * same step (`provisionUserFieldStorage`); here it also keeps a development
- * database current as fields change. Never throws: nothing here may stop the
- * app starting.
+ * database current as fields change. A production start only loads the merged
+ * fields: the definitions and their columns are `nextly migrate`'s to write,
+ * so it writes neither. Never throws: nothing here may stop the app starting.
  */
 export async function provisionUserFieldsAtStart(): Promise<void> {
   try {
+    if (isProductionStart()) {
+      await getService("userExtSchemaService").loadMergedFields();
+      return;
+    }
     await provisionUserFieldStorage({
       codeFields: getService("config").users?.fields ?? [],
       fieldDefService: getService("userFieldDefinitionService"),

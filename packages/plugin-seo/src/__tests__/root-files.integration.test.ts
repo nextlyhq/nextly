@@ -314,15 +314,19 @@ describe.each(getConfiguredTestDialects())(
       expect(type).toBe("application/xml; charset=utf-8");
     });
 
-    it("lists a page at the address its language is served at", async () => {
-      // Several languages and no rule declared: every language under its code.
+    it("lists a page at the address each of its languages is served at", async () => {
+      // Several languages and no rule declared: every language under its
+      // code. A type that is not translated is published in every language.
       const { t } = await boot(dialect, {}, ["en", "fr"]);
       await create(t, "posts", {
         title: "Hello",
         slug: "hello",
         status: "published",
       });
-      expect(await listed()).toEqual([`${SITE}/en/blog/hello`]);
+      expect(await listed()).toEqual([
+        `${SITE}/en/blog/hello`,
+        `${SITE}/fr/blog/hello`,
+      ]);
     });
 
     it("leaves out a Single never published, and does not count it as a problem", async () => {
@@ -431,6 +435,7 @@ describe.each(getConfiguredTestDialects())(
         {
           kind: "held-by-another",
           path: "/blog",
+          language: "en",
           holder: { collection: "pages", id: page },
           heldBy: expect.objectContaining({ collection: "tags", id: tag }),
         },
@@ -466,6 +471,46 @@ describe.each(getConfiguredTestDialects())(
           _overwrite: true,
         },
       });
+      const published = await entryOf(`${SITE}/about`);
+      expect(published).toMatch(/<lastmod>[^<]+<\/lastmod>/);
+      expect(published).not.toBe(first);
+    });
+
+    it("holds an SEO change as a draft, in the page's head and its lastmod, until the page is published", async () => {
+      const { t } = await boot(dialect);
+      const id = await create(t, "pages", {
+        title: "About",
+        slug: "about",
+        status: "published",
+        seo: { metaTitle: "About Acme" },
+      });
+      const titleOf = async () =>
+        JSON.stringify((await headOf(t, "pages", "about")).title);
+      expect(await titleOf()).toContain("About Acme");
+      const first = await entryOf(`${SITE}/about`);
+      expect(first).toMatch(/<lastmod>[^<]+<\/lastmod>/);
+
+      // Timestamps may be kept to the second: a later save is a later second.
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      // An SEO change alone, saved with no status: held as the working draft.
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { seo: { metaTitle: "About Acme, rewritten" }, _overwrite: true },
+      });
+      expect(await titleOf()).not.toContain("rewritten");
+      expect(await entryOf(`${SITE}/about`)).toBe(first);
+
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: {
+          seo: { metaTitle: "About Acme, rewritten" },
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      expect(await titleOf()).toContain("About Acme, rewritten");
       const published = await entryOf(`${SITE}/about`);
       expect(published).toMatch(/<lastmod>[^<]+<\/lastmod>/);
       expect(published).not.toBe(first);

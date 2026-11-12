@@ -41,8 +41,8 @@ pnpm create nextly-app@alpha my-blog --template blog --approach visual
 
 The Blog template supports two approaches:
 
-- **`code-first`** (default) -- Collections and singles are defined in TypeScript files under `src/collections/` and `src/singles/`. The CLI copies `configs/codefirst.config.ts` to the project root as `nextly.config.ts`. Best for version control and type safety.
-- **`visual`** -- Collections and singles are created via the Visual Schema Builder in the admin. The CLI copies `configs/visual.config.ts` (an empty config) to the project root as `nextly.config.ts`. After scaffolding, define your schemas through the admin UI, or seed the demo schemas and content from the **Start with sample content** step of the **Set up your project** card on the admin dashboard.
+- **`code-first`** (default) -- Collections and singles are defined in TypeScript files under `src/collections/` and `src/singles/`. The CLI copies `configs/codefirst.config.ts` to the project root as `nextly.config.ts`, and once the dependencies are installed it runs `nextly migrate:create initial` to write the first migration from that config, for the database you chose, into `src/db/migrations/`. The build's `nextly migrate` applies it, the form-builder plugin's collections included. With `--skip-install`, run that command yourself after installing, before the first build. Best for version control and type safety.
+- **`visual`** -- Collections and singles are created via the Visual Schema Builder in the admin. The CLI copies `configs/visual.config.ts` (an empty config) to the project root as `nextly.config.ts`, and the template's prebuilt migration to `migrations/`, the folder that config names. After scaffolding, define your schemas through the admin UI, or seed the demo schemas and content from the **Start with sample content** step of the **Set up your project** card on the admin dashboard.
 
 ## What it ships
 
@@ -97,8 +97,8 @@ None checks a role's name, so a role you create and an API key are judged by the
 permissions they hold. Publishing a post needs `publish-posts`. Only a caller holding it
 sets or changes a post's `author`; a new post with no author becomes its creator's.
 Media has no rule of its own: a visitor reads it through the built-in Public role's
-`read-media`, granted once at the first start, and taking it away on the Roles screen
-keeps it away.
+`read-media`, granted once by the first `nextly migrate`, and taking it away on the Roles
+screen keeps it away.
 
 The demo-content seed creates three roles (`admin`, `editor`, `author`). An author may
 draft posts and edit and delete their own, but holds no `publish-posts`; an editor
@@ -118,7 +118,7 @@ The homepage and footer newsletter forms submit through the form-builder plugin.
 
 ```
 my-blog/
-├── migrations/                    # The blog schema, prebuilt for each dialect
+├── migrations/                    # Visual: the blog schema, prebuilt for each dialect
 ├── scripts/
 │   └── build-search-index.mjs     # Pagefind index builder
 ├── src/

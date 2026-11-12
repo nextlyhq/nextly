@@ -66,7 +66,6 @@ import {
 } from "./address-claims/page-claims-hook";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import { bindingFieldsRoute } from "./binding-fields-route";
-import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
 import { layoutRegionsOf } from "./bindings-report/layout-regions";
@@ -85,7 +84,6 @@ import { bindingReportStore } from "./bindings-report/store";
 import {
   bindingsToFixAttention,
   bindingsToFixWidget,
-  EDIT_PAGES_PERMISSION,
 } from "./bindings-report/widget";
 import {
   BLOCK_SERVICE,
@@ -108,7 +106,6 @@ import {
   nameDocumentsOnSite,
 } from "./breakpoint-removal/site-counter";
 import {
-  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
@@ -145,7 +142,11 @@ import {
 } from "./collections/components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
-import { PAGES_SLUG, pagesCollection } from "./collections/pages";
+import {
+  PAGES_CONTENT_FIELD,
+  PAGES_SLUG,
+  pagesCollection,
+} from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
@@ -193,6 +194,7 @@ import {
 } from "./default-layout/settings-single";
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
+import { DESIGN_SEO_SERVICE, designSeoService } from "./design-seo";
 import { entriesRoute, titleFieldIn } from "./entries-route";
 import type { BindingJudging } from "./fields/binding-judgement";
 import type {
@@ -242,7 +244,15 @@ import { loopCollectionsRoute } from "./loop-collections-route";
 import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
+import {
+  PAGE_BUILDER_MENU,
+  PAGE_BUILDER_PAGES,
+  PAGE_BUILDER_PANEL,
+  PAGE_BUILDER_PLACEMENT,
+} from "./overview/admin-panel";
+import { overviewRoute } from "./overview/route";
 import { pageActionsRoute } from "./page-actions-route";
+import type { PageBuilderContentDirectApi } from "./page-content";
 import { pageAddressRoute, pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -279,6 +289,7 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import { PAGE_BUILDER_SETTINGS_PLACE } from "./settings-place-contract";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
   firstReadableTitle,
@@ -2430,6 +2441,9 @@ export const pageBuilder = (
       appearance: { icon: "Layout", label: "Page Builder" },
       description:
         "Build pages visually from blocks with drag-and-drop editing",
+      // Its own rail item after Forms, opening the overview: see
+      // `overview/admin-panel.ts`.
+      ...PAGE_BUILDER_PLACEMENT,
     },
     // Registers what other plugins DECLARED, and resolves the registry service
     // on the way, which is what empties it for the boot. The service is lazy:
@@ -3639,6 +3653,41 @@ export const pageBuilder = (
         // collection's entry under its template address. Read as committed,
         // through the store every save's collision check writes.
         [CONTENT_ADDRESS_SERVICE]: () => requireContentAddresses(),
+        // What the design drawing a page says about it (its title,
+        // description and share image), for a plugin that asks about a page
+        // outside a request: worked out by the route's own derivation, over
+        // the design the route would draw, so it answers what the published
+        // page is answered with.
+        [DESIGN_SEO_SERVICE]: ctx =>
+          designSeoService({
+            nextly: async () => {
+              const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+              return (await getCachedNextly()) as unknown as PageBuilderContentDirectApi;
+            },
+            pages: {
+              collection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+              field: PAGES_CONTENT_FIELD,
+            },
+            templatesCollection:
+              ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
+            // Loaded when first asked: the renderer's Next-coupled entry is
+            // needed only once a page is asked about.
+            derive: async args => {
+              const { designMetadataFor } = await import(
+                "@nextlyhq/blocks-react/next"
+              );
+              return designMetadataFor({
+                ...args,
+                config: {
+                  // The booted Direct API the provider read through, which
+                  // the route's reads take as their reader.
+                  nextly: args.config.nextly as NonNullable<
+                    Parameters<typeof designMetadataFor>[0]["config"]["nextly"]
+                  >,
+                },
+              });
+            },
+          }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(
@@ -3985,6 +4034,9 @@ export const pageBuilder = (
         // An unbind's plan for the inspector, against the document it holds:
         // the same decision as the page actions API's, applied by the editor.
         unbindPlanRoute({ limits: () => opts.limits ?? DEFAULT_LIMITS }),
+        // The overview's libraries and where the builder is used, as the
+        // caller may see them.
+        overviewRoute(componentStoreOf(opts)),
         // The documents whose bindings no longer fit, for those who edit
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({
@@ -4204,17 +4256,12 @@ export const pageBuilder = (
           canvasPath,
           fontsOff: fonts.off,
         }),
-        // The "Bindings to fix" page, at
-        // `/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`,
-        // reached from its dashboard card and the editor's notice.
-        pages: [
-          {
-            path: "/bindings-to-fix",
-            component: BINDINGS_TO_FIX_PAGE_COMPONENT,
-            requiredPermission: EDIT_PAGES_PERMISSION,
-          },
-        ],
-        // The three LIBRARIES, and no link to Pages.
+        // The overview the rail item opens, and the "Bindings to fix" page,
+        // reached from the panel, its dashboard card and the editor's notice.
+        pages: PAGE_BUILDER_PAGES,
+        // The panel's headings: the libraries, then the checks.
+        panel: PAGE_BUILDER_PANEL,
+        // The LIBRARIES and the bindings report, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
         // field — a title, a slug and the document — and the Collections
@@ -4242,11 +4289,11 @@ export const pageBuilder = (
         // would strand the link and hide the item from the readers who can
         // open the list.
         //
-        // They sit under this plugin's own heading rather than a section of
-        // their own: the sidebar's section vocabulary is a closed list in core
-        // with no design entry, so grouping them elsewhere would mean widening
-        // that list — a change to the admin's navigation model, and a larger
-        // question than where three links go.
+        // They are listed in the plugin's own panel, beside its rail item,
+        // since the plugin is placed standalone; where the overview lists the
+        // collections and Singles that use the field, which is the answer to
+        // "where are the pages" that stays true as more of them declare it.
+        //
         // The editor is a full-screen view of the document, offered wherever a
         // blocks field is used — including collections the Schema Builder adds
         // later — and opened by the field's card at that address.
@@ -4263,6 +4310,16 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // The editor's Settings dialog, where other plugins may add a tab
+        // beside the page's or the design's own settings.
+        places: [
+          {
+            name: PAGE_BUILDER_SETTINGS_PLACE,
+            description:
+              "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings.",
+            accepts: ["tab"],
+          },
+        ],
         // An entry's own design, where an author meets it.
         //
         // The Design section of an entry's side panel, first, before Status:
@@ -4324,45 +4381,10 @@ export const pageBuilder = (
         ...(hostStoreOf(componentStoreOf(opts)) === undefined
           ? {}
           : { header: { slot: COMPONENT_STORE_DELETE_HOST_COMPONENT } }),
-        menu: [
-          {
-            label: "Patterns",
-            collection: PATTERNS_SLUG,
-            to: `/admin/collections/${PATTERNS_SLUG}`,
-            icon: "LayoutTemplate",
-          },
-          {
-            label: "Components",
-            collection: COMPONENTS_SLUG,
-            to: `/admin/collections/${COMPONENTS_SLUG}`,
-            icon: "Component",
-          },
-          {
-            label: "Layouts",
-            collection: LAYOUTS_SLUG,
-            to: `/admin/collections/${LAYOUTS_SLUG}`,
-            icon: "PanelsTopLeft",
-          },
-          // The designs collections' entries are drawn with, and where each
-          // collection's entries are served.
-          {
-            label: "Templates",
-            collection: TEMPLATES_SLUG,
-            to: `/admin/collections/${TEMPLATES_SLUG}`,
-            icon: "LayoutDashboard",
-          },
-          // The site-wide report of bindings that no longer fit, for those
-          // who edit pages, as its page asks.
-          {
-            label: "Bindings to fix",
-            to: BINDINGS_TO_FIX_PAGE_HREF,
-            // Neutral: the entry is there whether or not anything needs
-            // fixing; the warning sign is for the dashboard line and the
-            // editor's chip, which show only when something does.
-            icon: "Unlink",
-            requiredPermission: EDIT_PAGES_PERMISSION,
-          },
-        ],
+        // Each library's item with a quiet count of its collection, and
+        // "Bindings to fix" with its attention badge: see
+        // `overview/admin-panel.ts`.
+        menu: PAGE_BUILDER_MENU,
         // No `schemaBuilderSlot`. It named a component this package no longer
         // ships: a schema-builder toggle for turning a collection into a
         // page-builder one, from an editor that stored its own document

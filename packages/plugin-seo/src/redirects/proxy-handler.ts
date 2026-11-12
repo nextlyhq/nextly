@@ -1,29 +1,34 @@
 /**
  * Redirects at request time: the site's Proxy asks this handler about every
  * page request, and it answers with the redirect that holds the address, if
- * any, before the page is served. A saved redirect is read from the database
- * on the next request, so it applies at once, on every instance.
+ * any, before the page is served.
  *
- * Which redirect answers is read from the address record, by the claim keys
- * of the address itself and of every range above it: one indexed read. An
- * address a page holds, exactly or in one of its ranges, is served, whatever
- * pattern covers it.
+ * A request no redirect is for, nearly every one, is passed without reading
+ * the database: the addresses redirects hold are kept in this process
+ * (`held-keys`). Only an address one of them matches is read, from the
+ * address record by the claim keys of the address itself and of every range
+ * above it, which decides the redirect: an address a page holds, exactly or
+ * in one of its ranges, is served, whatever pattern covers it. A saved
+ * redirect applies at once on the server that saved it, and within
+ * `REDIRECT_KEYS_REFRESH_MS` on every other.
  *
  * @module redirects/proxy-handler
  */
 import {
-  addressOfRequest,
   languageAddressOf,
   type KeptAddress,
   type PluginContext,
   type PluginProxyHandler,
 } from "@nextlyhq/plugin-sdk";
 
-import { notAPageAddress } from "../not-found/log";
+import { notAPageAddress } from "../not-found/page-address";
 
 import { destinationOf, withQuery } from "./addresses";
 import { redirectsSlug } from "./collection";
+import { heldRedirectKeys, type HeldRedirectKeys } from "./held-keys";
 import { redirectMeeting } from "./meeting";
+import { proxySeenNotes } from "./proxy-seen";
+import { askedAddress } from "./served";
 import { redirectOf, type StoredRedirect } from "./store";
 
 /**
@@ -31,6 +36,12 @@ import { redirectOf, type StoredRedirect } from "./store";
  * for, so the site's not-found page can log it (`logNotFound`).
  */
 export const ASKED_FOR_HEADER = "x-nextly-seo-asked-for";
+
+/**
+ * The request header naming one request the Proxy let through, so a
+ * not-found page Next.js renders more than once for it is counted once.
+ */
+export const REQUEST_HEADER = "x-nextly-seo-request";
 
 /** The redirect that answers `address`, if any. */
 async function redirectFor(
@@ -80,39 +91,46 @@ async function locationOf(
  * one for the admin, the API or an asset.
  */
 async function pageAddressOf(
+  ctx: PluginContext,
   request: Request,
   url: URL
-): Promise<KeptAddress | undefined | "not-a-page"> {
-  if (request.method !== "GET" && request.method !== "HEAD")
+): Promise<KeptAddress | "not-a-page"> {
+  if (request.method !== "GET" && request.method !== "HEAD") {
     return "not-a-page";
-  if (notAPageAddress(url.pathname)) return "not-a-page";
-  const asked = await addressOfRequest(url);
-  if (
-    asked === undefined ||
-    asked.path.length <= 1 ||
-    !asked.path.endsWith("/")
-  ) {
-    return asked;
   }
+  if (notAPageAddress(url.pathname)) return "not-a-page";
+  const asked = await askedAddress(ctx, url);
+  if (asked.path.length <= 1 || !asked.path.endsWith("/")) return asked;
   return { ...asked, path: asked.path.slice(0, -1) };
 }
 
-/** The handler the plugin contributes to the site's Proxy. */
-export function redirectsProxyHandler(): PluginProxyHandler {
+/**
+ * The handler the plugin contributes to the site's Proxy, answering from
+ * `keys`: the plugin forgets them when a redirect saved here commits.
+ */
+export function redirectsProxyHandler(
+  keys: HeldRedirectKeys = heldRedirectKeys()
+): PluginProxyHandler {
+  const seen = proxySeenNotes();
   return {
     name: "redirects",
     async handle(request, ctx) {
+      // Noted in the background, so the admin can tell the Proxy runs.
+      seen.note(ctx);
       const url = new URL(request.url);
-      const address = await pageAddressOf(request, url);
+      const address = await pageAddressOf(ctx, request, url);
       if (address === "not-a-page") {
         // Emptied rather than left alone: a value a visitor sent in this
         // header themselves must never be logged as an address asked for.
-        return { requestHeaders: { [ASKED_FOR_HEADER]: "" } };
+        return {
+          requestHeaders: { [ASKED_FOR_HEADER]: "", [REQUEST_HEADER]: "" },
+        };
       }
-      const redirect =
-        address === undefined ? undefined : await redirectFor(ctx, address);
+      const redirect = (await keys.mayMeet(ctx, address))
+        ? await redirectFor(ctx, address)
+        : undefined;
       const location =
-        redirect !== undefined && address !== undefined
+        redirect !== undefined
           ? await locationOf(redirect, address, url)
           : undefined;
       // A redirect to the very address asked for would answer it again and
@@ -132,7 +150,10 @@ export function redirectsProxyHandler(): PluginProxyHandler {
       // The page is served; should it be found missing, its not-found page
       // reads which address was asked for from this.
       return {
-        requestHeaders: { [ASKED_FOR_HEADER]: `${url.origin}${url.pathname}` },
+        requestHeaders: {
+          [ASKED_FOR_HEADER]: `${url.origin}${url.pathname}`,
+          [REQUEST_HEADER]: crypto.randomUUID(),
+        },
       };
     },
   };

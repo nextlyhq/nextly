@@ -232,7 +232,7 @@ describe("adding a provider", () => {
       },
       expect.anything()
     );
-    expect(navigateTo).toHaveBeenCalledWith("/admin/email/sending");
+    expect(navigateTo).toHaveBeenCalledWith("/admin/settings/email/sending");
   });
 
   it("explains a refused test and lets the person send again in place", async () => {
@@ -327,7 +327,7 @@ describe("adding a provider", () => {
 
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(update).not.toHaveBeenCalled();
-    expect(navigateTo).toHaveBeenCalledWith("/admin/email/sending");
+    expect(navigateTo).toHaveBeenCalledWith("/admin/settings/email/sending");
   });
 
   it("asks for a new choice when a refresh takes the chosen type away", async () => {
