@@ -221,6 +221,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { strandedStageCondition } from "../../workflows/stranded-stage-condition";
 import {
   componentTableNamesFor,
   localizedFilterContext,
@@ -257,6 +258,7 @@ import {
   extractWorkflowFilter,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
+  STRANDED_STAGE_KEY,
   type WorkflowFilter,
 } from "../query/workflow-filter";
 
@@ -2510,6 +2512,16 @@ export class CollectionQueryService extends BaseService {
         })
       );
     }
+    if (filter.strandedStage === true) {
+      conditions.push(
+        strandedStageCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          locales,
+        })
+      );
+    }
     if (filter.inRelease !== null) {
       conditions.push(
         inReleaseCondition({
@@ -2577,8 +2589,8 @@ export class CollectionQueryService extends BaseService {
   }): Promise<void> {
     if (!isPlainObject(params.where)) return;
     const where = params.where;
-    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY].find(key =>
-      Object.prototype.hasOwnProperty.call(where, key)
+    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY, STRANDED_STAGE_KEY].find(
+      key => Object.prototype.hasOwnProperty.call(where, key)
     );
     if (used === undefined) return;
     const denied = await this.denyCollectionRead({

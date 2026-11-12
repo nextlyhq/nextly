@@ -23,6 +23,12 @@
  *
  * @module domains/schema/migrate/permission-orphans
  */
+import {
+  APP_OWNER,
+  collectCustomPermissions,
+  type PermissionConfigSource,
+} from "../../../plugins/permissions/collect-permissions";
+import type { PluginDefinition } from "../../../plugins/plugin-context";
 import type { OrphanMarkScope } from "../../auth/services/permission-seed-service";
 import type { PermissionRecord } from "../migrate-create/declared-permissions";
 import {
@@ -32,13 +38,14 @@ import {
 
 import type { RegistryRecord } from "./registry-record";
 
-/** The owner key the app's own permissions are stored under. */
-const APP_OWNER = "app";
-
 /** What one applied migration orphans and clears, for `markOrphanedPermissions`. */
 export interface MigrationOrphanScope extends OrphanMarkScope {
   /** Every permission the migration's snapshot declares, whoever owns it. */
   declared: { action: string; resource: string }[];
+  /** The plugins the snapshot, or the one before it, records. */
+  plugins: ReadonlySet<string>;
+  /** What the snapshot declares for each plugin it records, by plugin name. */
+  declaredByPlugin: ReadonlyMap<string, { action: string; resource: string }[]>;
 }
 
 /** A snapshot as this module reads it. */
@@ -68,6 +75,33 @@ function everyPermission(
 }
 
 /**
+ * Every permission `snapshot` declares, by action and resource, or undefined
+ * where it says nothing about permissions: what a migration made live as it
+ * applied, which a rollback to the registry record's point withdraws.
+ */
+export function permissionsDeclaredBy(
+  snapshot: SnapshotPart | null
+): { action: string; resource: string }[] | undefined {
+  const record = declaredBy(snapshot);
+  return record === undefined ? undefined : everyPermission(record);
+}
+
+/** What a record declares for each plugin it records. */
+function eachPluginsPermissions(
+  record: PermissionRecord
+): Map<string, { action: string; resource: string }[]> {
+  return new Map(
+    Object.entries(record.plugins).map(([plugin, owned]) => [
+      plugin,
+      Object.values(owned).map(({ action, resource }) => ({
+        action,
+        resource,
+      })),
+    ])
+  );
+}
+
+/**
  * The scope of `migration`, just applied, or undefined where its snapshot
  * declares no permissions.
  *
@@ -88,11 +122,17 @@ export function orphanScopeOf(args: {
 }): MigrationOrphanScope | undefined {
   const now = declaredBy(args.snapshot);
   if (now === undefined) return undefined;
-  const owners = new Set([APP_OWNER, ...Object.keys(now.plugins)]);
+  const plugins = new Set(Object.keys(now.plugins));
   const then = declaredBy(args.before);
+  for (const plugin of Object.keys(then?.plugins ?? {})) plugins.add(plugin);
+  const owners = new Set([APP_OWNER, ...plugins]);
   if (then !== undefined) {
-    for (const plugin of Object.keys(then.plugins)) owners.add(plugin);
-    return { declared: everyPermission(now), owners };
+    return {
+      declared: everyPermission(now),
+      declaredByPlugin: eachPluginsPermissions(now),
+      owners,
+      plugins,
+    };
   }
   const baseline =
     args.record !== undefined && args.record.point === args.previous
@@ -100,9 +140,59 @@ export function orphanScopeOf(args: {
       : undefined;
   return {
     declared: everyPermission(now),
+    declaredByPlugin: eachPluginsPermissions(now),
     owners,
+    plugins,
     ...(baseline === undefined
       ? {}
       : { heldSlugs: new Set(baseline.permissions) }),
+  };
+}
+
+/**
+ * `scope` with the permissions of each configured plugin it does not record
+ * kept as they are (`OrphanMarkScope.kept`). Such a plugin joined after the
+ * migration was written, so the migration does not speak for it and its
+ * permissions stay. Its owner key alone cannot always say so: the app's own
+ * permissions are stored under `app`, which the migration always speaks for,
+ * and a plugin may be named `app` too. Who declares what is read from the
+ * configuration's one collection of declarations (`collectCustomPermissions`),
+ * which keeps the app's apart by their source. Only keeps: it marks nothing,
+ * and a plugin the migration records is judged by its snapshot alone.
+ */
+export function keepingUnrecordedPlugins(
+  scope: MigrationOrphanScope,
+  config: PermissionConfigSource & { plugins?: PluginDefinition[] }
+): MigrationOrphanScope {
+  const kept = collectCustomPermissions(config, config.plugins ?? []).filter(
+    p => p.source === "plugin" && !scope.plugins.has(p.owner)
+  );
+  return { ...scope, kept };
+}
+
+/**
+ * `scope` without what its snapshot declares for each plugin in
+ * `notInstalled`, the plugins recorded as anything but installed
+ * (`pluginsRecordedNotInstalled`). A migration written before such a plugin's
+ * uninstall still declares its permissions, and a declared permission has its
+ * mark cleared, which would undo the uninstall without a reinstall. Left out,
+ * a permission the uninstall marked stays marked, and one not yet marked is
+ * marked where the migration speaks for the plugin, as its uninstall marks it.
+ */
+export function leavingPluginsNotInstalled(
+  scope: MigrationOrphanScope,
+  notInstalled: ReadonlySet<string>
+): MigrationOrphanScope {
+  const keyOf = (p: { action: string; resource: string }) =>
+    `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`;
+  const left = new Set(
+    [...scope.declaredByPlugin]
+      .filter(([plugin]) => notInstalled.has(plugin))
+      .flatMap(([, owned]) => owned.map(keyOf))
+  );
+  if (left.size === 0) return scope;
+  return {
+    ...scope,
+    declared: scope.declared.filter(p => !left.has(keyOf(p))),
   };
 }

@@ -10,14 +10,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  forgetSignedInHere,
+  forgetPerson,
   hasSignedInHere,
   rememberSignedInHere,
+  resetDeviceMemoryForTests,
   SIGNED_IN_HERE_KEY,
-} from "../signed-in-here";
+} from "../device-memory";
 
 beforeEach(() => {
   window.localStorage.clear();
+  resetDeviceMemoryForTests();
 });
 
 afterEach(() => {
@@ -38,7 +40,7 @@ describe("the signed-in-here record", () => {
     expect(window.localStorage.getItem(SIGNED_IN_HERE_KEY)).toBe("1");
     expect(hasSignedInHere()).toBe(true);
 
-    forgetSignedInHere();
+    forgetPerson();
     expect(window.localStorage.getItem(SIGNED_IN_HERE_KEY)).toBeNull();
     expect(hasSignedInHere()).toBe(false);
   });
@@ -61,6 +63,6 @@ describe("the signed-in-here record", () => {
 
     expect(() => rememberSignedInHere()).not.toThrow();
     expect(hasSignedInHere()).toBe(false);
-    expect(() => forgetSignedInHere()).not.toThrow();
+    expect(() => forgetPerson()).not.toThrow();
   });
 });

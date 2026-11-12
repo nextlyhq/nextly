@@ -27,7 +27,7 @@ import { SEO_GROUP } from "../tab/typed";
 import { SeoPanel } from "./SeoPanel";
 import { useShareImages } from "./share-images";
 import { publishSeoStatus, statusKeyOf } from "./status";
-import { useTabDocument } from "./tab-document";
+import { useTabDocument, withValueAt } from "./tab-document";
 import { useSeoTabContext } from "./use-seo-tab-context";
 import {
   panelAnswers,
@@ -175,16 +175,49 @@ function ShareImagePicker({
   );
 }
 
+/** Where the tab is drawn other than on an edit page, what it is told. */
+export interface SeoTabElsewhere {
+  /**
+   * A value the form does not hold yet, at its form path: a design an
+   * editor keeps until it stores it, which the page's values come from.
+   */
+  unsaved?: { path: string; value: unknown };
+  /** Shows the page's own fields, where a missing one is filled in. */
+  onGoToContent?: () => void;
+}
+
+/** What opens the page's own fields: the edit page's content, by default. */
+function contentOpener(elsewhere: SeoTabElsewhere): () => void {
+  return elsewhere.onGoToContent ?? goToContent;
+}
+
+/**
+ * The whole document as typed: any of its fields can feed an automatic value
+ * (a title, an excerpt, a pattern's field, its address). With a value the
+ * form does not hold yet put at its path.
+ */
+function useTypedDocument(
+  control: DocumentTabProps["control"],
+  unsaved: SeoTabElsewhere["unsaved"]
+): Record<string, unknown> {
+  const typed = useWatch({ control }) as Record<string, unknown>;
+  const path = unsaved?.path;
+  const value = unsaved?.value;
+  return useMemo(
+    () => (path === undefined ? typed : withValueAt(typed, path, value)),
+    [typed, path, value]
+  );
+}
+
 export function SeoTab({
   context,
   control,
   documentLock,
   entry,
   setBadge,
-}: DocumentTabProps): ReactNode {
-  // The whole document as typed: any of its fields can feed an automatic
-  // value (a title, an excerpt, a pattern's field, its address).
-  const document = useWatch({ control }) as Record<string, unknown>;
+  ...elsewhere
+}: DocumentTabProps & SeoTabElsewhere): ReactNode {
+  const document = useTypedDocument(control, elsewhere.unsaved);
   const fields = useSeoFields();
   const errors = useSeoErrors(control);
   const { target, documentKey } = useTabDocument(context, entry);
@@ -235,7 +268,7 @@ export function SeoTab({
         onChooseImage={() => setChoosing(true)}
         shownImageFile={images.contentImage}
         onMakeShareImage={images.make}
-        onGoToField={goToContent}
+        onGoToField={contentOpener(elsewhere)}
         receivedHref={receivedHrefOf(target.id, levels)}
       />
       <ShareImagePicker

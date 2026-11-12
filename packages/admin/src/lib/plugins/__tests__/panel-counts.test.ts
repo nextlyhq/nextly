@@ -11,7 +11,9 @@ import {
   declaresNumbers,
   itemNumberSpoken,
   itemNumberText,
-  panelNumbersByAddress,
+  panelNumbersByPlace,
+  panelPlaceOf,
+  withPanelPlaces,
 } from "../panel-counts";
 import { panelItemsByGroup } from "../panel-groups";
 
@@ -33,28 +35,35 @@ describe("declaresNumbers", () => {
   });
 });
 
-describe("panelNumbersByAddress", () => {
+describe("panelNumbersByPlace", () => {
   const menu = [
     item("Plain"),
     item("Patterns", { count: { collection: "patterns" } }),
     item("Fix", { badge: { attention: "acme/fix" } }),
   ];
 
-  it("files each number under the address of the item at its place", () => {
-    const numbers = panelNumbersByAddress(menu, {
+  it("files each number under its item's place", () => {
+    const numbers = panelNumbersByPlace(menu, {
       numbers: [
         { index: 1, value: 0, atLeast: false },
         { index: 2, value: 99, atLeast: true },
       ],
     });
     expect([...numbers]).toEqual([
-      ["/admin/x/Patterns", { value: 0, atLeast: false }],
-      ["/admin/x/Fix", { value: 99, atLeast: true }],
+      [1, { value: 0, atLeast: false }],
+      [2, { value: 99, atLeast: true }],
     ]);
   });
 
+  it("marks each item with its place, and the mark survives a copy", () => {
+    const marked = withPanelPlaces(menu);
+    expect(marked.map(panelPlaceOf)).toEqual([0, 1, 2]);
+    expect(panelPlaceOf({ ...marked[2], children: [] })).toBe(2);
+    expect(panelPlaceOf(menu[0])).toBeUndefined();
+  });
+
   it("drops an entry that is not a number, or whose item declares none", () => {
-    const numbers = panelNumbersByAddress(menu, {
+    const numbers = panelNumbersByPlace(menu, {
       numbers: [
         { index: 0, value: 4, atLeast: false },
         { index: 9, value: 4, atLeast: false },
@@ -64,8 +73,8 @@ describe("panelNumbersByAddress", () => {
       ],
     });
     expect(numbers.size).toBe(0);
-    expect(panelNumbersByAddress(menu, null).size).toBe(0);
-    expect(panelNumbersByAddress(menu, { numbers: "x" }).size).toBe(0);
+    expect(panelNumbersByPlace(menu, null).size).toBe(0);
+    expect(panelNumbersByPlace(menu, { numbers: "x" }).size).toBe(0);
   });
 
   it("draws and speaks a floor as one", () => {

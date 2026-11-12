@@ -27,7 +27,9 @@ import type { BuilderField } from "../../types";
 import { FormPreview } from "../FormPreview";
 import { Outline, type OutlineCallbacks } from "../Outline";
 
-const FOLD_KEY = "test:outline:fixture";
+// Under the admin's own storage prefix, as the builder's fold keys are: the
+// device memory keeps interface preferences only under the admin's keys.
+const FOLD_KEY = "nextly:admin:builder-fold:test:outline-fixture";
 
 function callbacks(): OutlineCallbacks &
   Record<string, ReturnType<typeof vi.fn>> {

@@ -274,6 +274,19 @@ describe("a sweep over a form's earlier submissions", () => {
     expect(updateEntry.mock.calls[0]?.[0]).toBe("forms");
   });
 
+  it("keeps the current key of a row that kept no address", async () => {
+    // Stored under a form that keeps no addresses: its key cannot be made
+    // again from the row, and is the current version's.
+    const rows = [{ ...row(1), ipAddress: null, responseKey: "v2:ip-gone" }];
+    const { deps, updateEntry } = fakeDeps(rows, behind);
+
+    await rebuildResponseKeys(deps, later());
+
+    expect(
+      updateEntry.mock.calls.filter(([slug]) => slug === "form-submissions")
+    ).toEqual([]);
+  });
+
   it("keys every row although others are deleted and restored while it reads", async () => {
     // Two pages of keyless rows. After the first page is read, a row on it
     // is deleted and a spam row restored: a page by position would skip one.

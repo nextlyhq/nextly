@@ -13,7 +13,11 @@
 import { NAV_COLLECTIONS_PARAMS } from "@admin/hooks/queries/useCollections";
 import { NAV_SINGLES_PARAMS } from "@admin/hooks/queries/useSingles";
 import { BASE_URL } from "@admin/lib/api/fetcher";
-import { beginStartupRequest } from "@admin/lib/api/startup-request";
+import {
+  beginStartupRequest,
+  startupResponseHeaders,
+} from "@admin/lib/api/startup-request";
+import { applyServerSwitch } from "@admin/lib/device-memory/server-answer";
 import { collectionsListPath } from "@admin/services/collectionApi";
 import { singlesListPath } from "@admin/services/singleApi";
 
@@ -36,4 +40,9 @@ function adminStartupPaths(): string[] {
 /** Send the admin's startup request, once per page, in the browser. */
 export function beginAdminStartup(): void {
   beginStartupRequest(BASE_URL, adminStartupPaths());
+  // Its answer says whether the site lets the admin remember anything on this
+  // device; off removes what was kept, on the sign-in page as on any other.
+  void startupResponseHeaders().then(headers => {
+    if (headers !== null) applyServerSwitch(headers);
+  });
 }

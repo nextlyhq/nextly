@@ -11,6 +11,34 @@ import { useMemo } from "react";
 
 import type { SeoTabDocument } from "./use-seo-tab-context";
 
+/**
+ * `document` with `value` at the form path `path` (`content`,
+ * `layout.hero`, `rows.1.blocks`), copied along the way so the form's own
+ * values are left as they are: the document as typed, with a value an
+ * editor holds outside the form until it stores it.
+ */
+export function withValueAt(
+  document: Readonly<Record<string, unknown>>,
+  path: string,
+  value: unknown
+): Record<string, unknown> {
+  const [head = "", ...rest] = path.split(".");
+  const inner = (at: unknown): unknown => {
+    if (rest.length === 0) return value;
+    const held =
+      typeof at === "object" && at !== null
+        ? (at as Record<string, unknown>)
+        : {};
+    return withValueAt(held, rest.join("."), value);
+  };
+  if (Array.isArray(document)) {
+    const copy: unknown[] = [...document];
+    copy[Number(head)] = inner(copy[Number(head)]);
+    return copy as unknown as Record<string, unknown>;
+  }
+  return { ...document, [head]: inner(document[head]) };
+}
+
 /** The id of the document the page read, where it read one. */
 function readId(entry: Readonly<Record<string, unknown>> | undefined) {
   const id = entry?.id;

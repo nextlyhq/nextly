@@ -7,6 +7,20 @@
  *
  * @module bulk/contract
  */
+import { SEO_ADMIN_SLUG } from "../settings/contract";
+
+/** The bulk edit screen: its path under the plugin, and its component. */
+export const BULK_PAGE: {
+  readonly path: "bulk";
+  readonly component: "@nextlyhq/plugin-seo/admin#SeoBulkPage";
+} = {
+  path: "bulk",
+  component: "@nextlyhq/plugin-seo/admin#SeoBulkPage",
+};
+
+/** Where the bulk edit screen is, for a link. */
+export const BULK_PAGE_HREF: string = `/admin/plugins/${SEO_ADMIN_SLUG}/${BULK_PAGE.path}`;
+
 /** Where the screen reads the content types it can edit. */
 export const BULK_TYPES_PATH = "/bulk/types";
 
@@ -71,6 +85,22 @@ export interface BulkRowsBody {
   total: number;
   /** Whether there are more pages after these. */
   more: boolean;
+}
+
+/** One page's changed title or description, or both. */
+export interface BulkChange {
+  id: string;
+  /** The version the page was read at. */
+  rev?: string;
+  title?: string;
+  description?: string;
+}
+
+/** What the save route is sent. */
+export interface BulkSaveRequest {
+  type: string;
+  locale?: string;
+  changes: BulkChange[];
 }
 
 /** What the save route answers, beside its message. */

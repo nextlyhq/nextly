@@ -19,7 +19,7 @@
  * reader moves between the dashboard and a collection.
  */
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
@@ -51,6 +51,7 @@ export function SubSidebarPanel({
   isFolderTreeVisible,
   standaloneLabel,
   content,
+  outlineBody,
 }: {
   isMobile: boolean;
   selectedMain: string;
@@ -64,6 +65,11 @@ export function SubSidebarPanel({
    * links will be.
    */
   content?: React.ComponentProps<typeof SubSidebarContent>;
+  /**
+   * What the panel's outline holds in place of its neutral rows: the panel
+   * drawn from what this device remembered, where it remembered one.
+   */
+  outlineBody?: ReactNode;
 }): JSX.Element {
   const suppressed = useSuppressedChrome();
   const hasSubSidebar = isSubSidebarOpen(
@@ -130,7 +136,7 @@ export function SubSidebarPanel({
       {hasSubSidebar ? (
         <div className="flex-1 overflow-y-auto motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
           {content === undefined ? (
-            <PanelGhostBody />
+            (outlineBody ?? <PanelGhostBody />)
           ) : (
             <SubSidebarContent {...content} />
           )}

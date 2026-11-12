@@ -19,7 +19,7 @@ import { useMemo } from "react";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
   declaresNumbers,
-  panelNumbersByAddress,
+  panelNumbersByPlace,
   type PanelItemNumber,
 } from "@admin/lib/plugins/panel-counts";
 import type { PluginMetadata } from "@admin/types/branding";
@@ -28,15 +28,16 @@ import type { PluginMetadata } from "@admin/types/branding";
 const PANEL_COUNTS_STALE_MS = 30_000;
 
 /** No numbers: before the answer, after a failure, or with none declared. */
-const NONE: ReadonlyMap<string, PanelItemNumber> = new Map();
+const NONE: ReadonlyMap<number, PanelItemNumber> = new Map();
 
 /**
- * Each item's number, by its address, for `plugin`'s panel. Empty until the
- * server answers, and for good when it fails.
+ * Each item's number, by its place among `plugin`'s published menu
+ * (`panelPlaceOf`), for its panel. Empty until the server answers, and for
+ * good when it fails.
  */
 export function usePluginPanelCounts(
   plugin: PluginMetadata
-): ReadonlyMap<string, PanelItemNumber> {
+): ReadonlyMap<number, PanelItemNumber> {
   const { data } = useQuery({
     queryKey: ["plugin-panel-numbers", plugin.name],
     queryFn: ({ signal }) =>
@@ -49,13 +50,17 @@ export function usePluginPanelCounts(
     // A number is a convenience: one that fails is left out rather than asked
     // for again and again while the panel is open.
     retry: false,
+    // The admin turns focus refetching off by default; a panel left open
+    // asks again when the reader comes back, once its answer is stale, so a
+    // number they have since dealt with does not linger.
+    refetchOnWindowFocus: true,
   });
   const menu = plugin.menu;
   return useMemo(
     () =>
       data === undefined || menu === undefined
         ? NONE
-        : panelNumbersByAddress(menu, data),
+        : panelNumbersByPlace(menu, data),
     [data, menu]
   );
 }

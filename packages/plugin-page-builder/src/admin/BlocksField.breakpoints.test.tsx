@@ -252,6 +252,9 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Settings' place for other plugins' tabs, with none added: the page's own
+  // settings alone, as the admin draws them with no tab.
+  PlaceTabs: ({ children }: { children: unknown }) => children,
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (

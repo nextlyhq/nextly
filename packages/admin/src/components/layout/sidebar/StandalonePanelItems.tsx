@@ -26,6 +26,8 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
 import {
   declaresNumbers,
+  panelPlaceOf,
+  withPanelPlaces,
   type PanelItemNumber,
 } from "@admin/lib/plugins/panel-counts";
 import { panelItemsByGroup } from "@admin/lib/plugins/panel-groups";
@@ -75,11 +77,14 @@ function declaresPanel(plugin: PluginMetadata): boolean {
 /** What an item shows: its declared kind, and its number once read. */
 function shownNumber(
   item: PluginMenuItemMeta,
-  numbers: ReadonlyMap<string, PanelItemNumber>
+  numbers: ReadonlyMap<number, PanelItemNumber>
 ): ShownItemNumber | undefined {
   const kind = item.badge !== undefined ? "badge" : "count";
   if (item[kind] === undefined) return undefined;
-  const number = numbers.get(item.to);
+  // By the item's own place, never its address: two items may link to one
+  // page and show different numbers.
+  const place = panelPlaceOf(item);
+  const number = place === undefined ? undefined : numbers.get(place);
   return number === undefined ? { kind } : { kind, number };
 }
 
@@ -94,8 +99,13 @@ function DeclaredPanelItems({
 }): JSX.Element | null {
   const { hasPermission } = useCurrentUserPermissions();
   // The items the panel lists for the reader, by the same filter and order
-  // every panel lists plugin items with.
-  const items = resolveVisibleMenuItems([plugin], hasPermission, section);
+  // every panel lists plugin items with, each marked with its place among the
+  // published menu first, which its number is keyed by.
+  const items = resolveVisibleMenuItems(
+    [{ ...plugin, menu: withPanelPlaces(plugin.menu ?? []) }],
+    hasPermission,
+    section
+  );
   const numbers = usePluginPanelCounts(plugin);
   const { ungrouped, groups } = panelItemsByGroup(
     items,

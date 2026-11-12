@@ -289,6 +289,7 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import { PAGE_BUILDER_SETTINGS_PLACE } from "./settings-place-contract";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
   firstReadableTitle,
@@ -4309,6 +4310,16 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // The editor's Settings dialog, where other plugins may add a tab
+        // beside the page's or the design's own settings.
+        places: [
+          {
+            name: PAGE_BUILDER_SETTINGS_PLACE,
+            description:
+              "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings.",
+            accepts: ["tab"],
+          },
+        ],
         // An entry's own design, where an author meets it.
         //
         // The Design section of an entry's side panel, first, before Status:

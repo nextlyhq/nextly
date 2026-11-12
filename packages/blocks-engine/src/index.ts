@@ -35,6 +35,7 @@ export {
   DOCUMENT_KINDS,
   MAX_SEO_SEGMENTS,
   MAX_SEO_TEXT_LENGTH,
+  SEO_TEXT_FIELDS,
   BINDING_SOURCES,
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
@@ -103,6 +104,7 @@ export type {
   DocumentSettings,
   SeoBinding,
   SeoTextSegment,
+  SeoTextField,
   LocaleOverlay,
   LocaleOverlayValue,
   NodeStyles,
@@ -1159,6 +1161,7 @@ export {
 // a script or an agent has the same right to it, and each would otherwise grow
 // its own vocabulary that agrees with this one only until one of them changed.
 export {
+  addressesNoNode,
   applyOp,
   applyOps,
   // Published for the planners: an insert whose subtree arrives locked is

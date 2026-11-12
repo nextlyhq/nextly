@@ -102,11 +102,36 @@ function panelBatches(page: Page): Request[] {
   return sent;
 }
 
+/**
+ * Holds the panel's numbers request until `release`, so the panel can be
+ * measured before any number is drawn, then lets it through to the server.
+ */
+async function holdPanelNumbers(page: Page): Promise<{ release: () => void }> {
+  let release = () => {};
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  // Registered before the page asks, so the first request is the one held.
+  await page.route(
+    "**/admin/api/admin-meta/plugin-panel-numbers*",
+    async route => {
+      try {
+        await released;
+        await route.continue();
+      } catch {
+        // The page closed while the request was held: nothing waits for it.
+      }
+    }
+  );
+  return { release };
+}
+
 test("draws the fixture's groups, counts and badges in its own panel", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const batches = panelBatches(page);
+  const numbers = await holdPanelNumbers(page);
   await gotoAdmin(page, "/plugins/style-fixture/panel-overview");
   const panel = page.getByTestId("sub-sidebar");
 
@@ -123,9 +148,18 @@ test("draws the fixture's groups, counts and badges in its own panel", async ({
   );
   expect(order).toEqual([...order].sort((a, b) => a - b));
 
-  // Where the counted item sat before its number arrived.
+  // Where the counted item sits while its number is held back: drawn with
+  // no number yet, so its name is its label alone.
+  await expect(
+    library.getByRole("link", { name: "Swatches to fix", exact: true })
+  ).toBeVisible();
   const counted = library.getByRole("link", { name: /^Swatches to fix/ });
-  const before = await counted.boundingBox();
+  const label = counted.getByText("Swatches to fix", { exact: true });
+  const before = {
+    row: await counted.boundingBox(),
+    label: await label.boundingBox(),
+  };
+  numbers.release();
 
   // The quiet count of the fixture's own collection, narrowed by its where,
   // named with its number: a collection hidden from the navigation is
@@ -152,8 +186,11 @@ test("draws the fixture's groups, counts and badges in its own panel", async ({
     checks.getByRole("link", { name: "Quiet checks", exact: true })
   ).toBeVisible();
 
-  // The number arriving moved nothing.
-  expect(await counted.boundingBox()).toEqual(before);
+  // The number arriving moved nothing: neither the row nor its label.
+  expect({
+    row: await counted.boundingBox(),
+    label: await label.boundingBox(),
+  }).toEqual(before);
 
   // Every number came from one request, which names only the plugin.
   expect(batches).toHaveLength(1);

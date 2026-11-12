@@ -12,6 +12,8 @@
  * @module database/seeders/role-presets
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
@@ -123,6 +125,24 @@ export async function seedRolePresets(
       );
     }
   }
+}
+
+/**
+ * The flows whose recorded preset seeding must set every preset role's grants
+ * or fail ({@link withPresetGrantsRequired}).
+ */
+const presetGrantsRequired = new AsyncLocalStorage<true>();
+
+/**
+ * Runs `run` with a recorded preset seeding inside it ({@link
+ * setPresetGrantsRecorded}) throwing when it could not set the grants, rather
+ * than warning and going on: for a write whose own record must not commit
+ * without them, as a plugin's install records the plugin installed, which is
+ * what lets a production start serve it. The grants' transaction has rolled
+ * back by then, so the caller's rolls back too and nothing is recorded.
+ */
+export function withPresetGrantsRequired<T>(run: () => Promise<T>): Promise<T> {
+  return presetGrantsRequired.run(true, run);
 }
 
 /** A preset, and the ids of the stored permissions it resolves to. */
@@ -283,6 +303,8 @@ async function setPresetGrantsRecorded(
         }
       });
     } catch (error) {
+      // Where the caller's own record needs the grants, it fails with them.
+      if (presetGrantsRequired.getStore() === true) throw error;
       // As the unrecorded seeding treats a preset it cannot set, the run goes
       // on, said; set together, none of the preset roles' grants changed, and
       // the next run sets them all again.

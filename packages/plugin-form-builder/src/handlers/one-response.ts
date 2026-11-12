@@ -216,7 +216,8 @@ export async function responseKeyOf(
  * An address's key is made again from the row and compared. A browser's
  * cannot be, since its token is not stored: under one per browser a browser
  * key, or none (a submission sent without a token), is the right one, and a
- * key made for another mode is not.
+ * key made for another mode is not. Nor can a network's on a form that keeps
+ * no addresses, where a key for the current version is the right one.
  */
 export async function holdsKeyFor(
   digests: () => Digests,
@@ -226,6 +227,21 @@ export async function holdsKeyFor(
   const key = row.responseKey ?? null;
   if (settings.oneResponse === "browser" && row.status !== "spam") {
     return key === null || isBrowserKey(key, settings.oneResponseVersion);
+  }
+  // A form that keeps no addresses (Privacy) stores the network's key and
+  // not the address it was made from, so it cannot be made again here. A key
+  // made for the form's current version is the right one: the version moves
+  // on whenever what the form compares changes.
+  if (
+    settings.oneResponse === "ip" &&
+    textOf(row.ipAddress) === undefined &&
+    typeof key === "string" &&
+    row.status !== "spam"
+  ) {
+    return (
+      keyVersionOf(key) === (settings.oneResponseVersion ?? 0) &&
+      !key.includes(BROWSER_KEY_PREFIX)
+    );
   }
   return key === (await responseKeyOf(digests, settings, row));
 }
@@ -261,6 +277,21 @@ export async function responseKeyAfterUpdate(input: {
   const { patch, stored } = input;
   if (input.settings.oneResponse === "browser") {
     return browserKeyAfterUpdate(
+      patch,
+      stored,
+      input.settings.oneResponseVersion,
+      input.moved
+    );
+  }
+  // A network's key on a submission that never stored its address (a form
+  // that keeps none): it cannot be made again, so it is kept, as a
+  // browser's is. An update that sets or clears the address is judged below.
+  if (
+    input.settings.oneResponse === "ip" &&
+    textOf(stored?.ipAddress) === undefined &&
+    patch.ipAddress === undefined
+  ) {
+    return keptKeyAfterUpdate(
       patch,
       stored,
       input.settings.oneResponseVersion,
@@ -330,4 +361,55 @@ function browserKeyFor(
   return match
     ? `${keyPrefixOf(version)}${BROWSER_KEY_PREFIX}${match[1]}`
     : null;
+}
+
+/**
+ * A key the row holds but cannot be made again from it (a network's on a
+ * form that keeps no addresses), after an update: none once the submission
+ * is spam; spelled for the destination's version when it moves to another
+ * form; else the key it holds, while that is for the form's current version.
+ */
+function keptKeyAfterUpdate(
+  patch: KeyedSubmission,
+  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined,
+  version: number | undefined,
+  moved: boolean
+): string | null {
+  const key = networkKeyHeld(patch, stored);
+  if (key === null) return null;
+  if (moved) return `${keyPrefixOf(version)}${key.replace(/^v\d+:/, "")}`;
+  return keyVersionOf(key) === (version ?? 0) ? key : null;
+}
+
+/**
+ * The key a stored submission should hold under `settings`: its value's,
+ * made again from the row; or, for a network's on a row that kept no
+ * address (a form that keeps none), the key it holds while that is for the
+ * current version, since it cannot be made again. The rebuild asks this, so
+ * a submission stored under a form that keeps no addresses keeps its key.
+ */
+export async function storedRowKeyOf(
+  digests: () => Digests,
+  settings: KeySettings,
+  row: KeyedSubmission & { responseKey?: unknown }
+): Promise<string | null> {
+  if (settings.oneResponse !== "ip" || textOf(row.ipAddress) !== undefined) {
+    return responseKeyOf(digests, settings, row);
+  }
+  const key = networkKeyHeld({}, row);
+  return key !== null &&
+    keyVersionOf(key) === (settings.oneResponseVersion ?? 0)
+    ? key
+    : null;
+}
+
+/** The network key a submission holds, unless the update makes it spam. */
+function networkKeyHeld(
+  patch: KeyedSubmission,
+  stored: (KeyedSubmission & { responseKey?: unknown }) | undefined
+): string | null {
+  const status = patch.status === undefined ? stored?.status : patch.status;
+  const key = stored?.responseKey;
+  if (status === "spam" || typeof key !== "string") return null;
+  return key.includes(BROWSER_KEY_PREFIX) ? null : key;
 }

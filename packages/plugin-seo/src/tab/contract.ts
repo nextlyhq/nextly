@@ -60,6 +60,11 @@ export interface SeoTabContext {
    * address, with it. None where the page has no address of its own.
    */
   served?: string;
+  /**
+   * What drew the page where a design gives its template level: the page's
+   * own design (its own blocks), or its collection's template.
+   */
+  drawnBy?: "design" | "template";
   /** The content type's name for one of its pages, such as "Blog post". */
   typeLabel: string;
   /** What each of the document's fields a value came from is called. */

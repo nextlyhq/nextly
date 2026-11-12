@@ -445,6 +445,16 @@ export function createFieldFromType(
     case "hidden":
       return { ...baseField, type: "hidden" };
 
+    case "consent":
+      // Always required, and seeded with a text to agree to, since a consent
+      // with none could not be saved.
+      return {
+        ...baseField,
+        type: "consent",
+        required: true,
+        agreementText: "I agree to the privacy policy",
+      };
+
     default:
       // A plugin-contributed type keeps its own id; the plugin owns the editor
       // component and value semantics, so no built-in defaults are seeded.
@@ -604,6 +614,12 @@ export function FormBuilderProvider({
       if (moves) {
         setNotifications(prev =>
           renameInNotifications(prev, referencesFrom, next.name)
+        );
+        // The Email field one response per person compares, by name.
+        setSettings(prev =>
+          prev.oneResponseField === referencesFrom
+            ? { ...prev, oneResponseField: next.name }
+            : prev
         );
       }
       record(fieldChangeKey(currentDocument().fields, fieldName));

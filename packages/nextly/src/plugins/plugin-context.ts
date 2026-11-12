@@ -30,6 +30,10 @@ import type { CollectionRegistryService } from "../domains/collections/services/
 import { collectionFields } from "../domains/collections/services/collection-utils";
 import type { StoredReads } from "../domains/collections/services/stored-field-read";
 import type { ContentEventSubject } from "../domains/content-events/record";
+import {
+  type ForgetSendsInput,
+  forgetPluginSends,
+} from "../domains/email/plugin-send-forgetting";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { JobRegistry } from "../domains/jobs/job-registry";
@@ -45,6 +49,7 @@ import {
   getDurableSubscribers,
   type DurableHandler,
 } from "../domains/plugin-events/subscribers";
+import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -663,7 +668,23 @@ export type { PluginMediaService } from "./plugin-media";
 export type PluginEmailService = Pick<
   EmailService,
   (typeof PLUGIN_EMAIL_METHODS)[number]
->;
+> & {
+  /**
+   * @experimental Forget email this plugin sent about something it has
+   * deleted: cancel the queued emails among `queuedIds` that are still
+   * waiting or could be retried, clear the message and recipients of every
+   * one of them, and erase the delivery records of the sends that carried
+   * `idempotencyKeys`. Only this plugin's own: another caller's ids and keys
+   * name nothing. Pass `tx`, the handle a `ctx.db.transaction` callback or an
+   * in-transaction handler received, to commit with your own deletion;
+   * without one it runs in a transaction of its own, and is refused inside
+   * an open one.
+   */
+  forgetSends(
+    input: ForgetSendsInput,
+    options?: { tx?: PluginTransaction }
+  ): Promise<void>;
+};
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
@@ -1351,7 +1372,9 @@ export interface PluginAdminConfig {
 export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   /**
    * Unique plugin name.
-   * Used for identification and error messages.
+   * Used for identification and error messages. `app`, in any letter case, is
+   * reserved: the site's own permissions are stored under that owner, and a
+   * plugin's under its name, so a plugin named `app` is refused at startup.
    */
   name: string;
 
@@ -2997,10 +3020,23 @@ export function createPluginContext(
       media: mediaForPlugin(mediaService),
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
-      email: methodFacade(
-        scopedSender(emailService, pluginKeyScope(pluginName)),
-        PLUGIN_EMAIL_METHODS
-      ),
+      email: Object.freeze({
+        ...methodFacade(
+          scopedSender(emailService, pluginKeyScope(pluginName)),
+          PLUGIN_EMAIL_METHODS
+        ),
+        // Its own sends only, by the same scope its keys are claimed in.
+        forgetSends: (
+          input: ForgetSendsInput,
+          options?: { tx?: PluginTransaction }
+        ) =>
+          forgetPluginSends(pluginKeyScope(pluginName), input, {
+            tx: options?.tx,
+            // The context's own adapter, as its other services use.
+            adapter: getServiceFn("adapter"),
+            secrets: pluginSettingsSecrets(env),
+          }),
+      }),
       // Resolved on access, not at construction: `createPluginContext` is
       // exported, and a resolver written before this service existed would
       // otherwise throw while building the context for callers that never
