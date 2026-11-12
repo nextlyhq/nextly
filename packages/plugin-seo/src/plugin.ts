@@ -155,6 +155,15 @@ export interface SeoPluginOptions {
    */
   fields?: FieldConfig[];
   /**
+   * Refuse a save of a title longer than 60 characters or a description
+   * longer than 160, the lengths Google shows about as much of. Off by
+   * default: search engines cut a longer one to fit rather than refusing it,
+   * so a long value is saved and named as a warning in the SEO tab and the
+   * problem list. Applies to the default fields; a site passing its own
+   * `fields` sets `maxLength` on them itself.
+   */
+  hardLengthLimits?: boolean;
+  /**
    * The site's production origin (e.g. "https://example.com", no trailing
    * slash): every address the sitemap lists, and the sitemap's address in
    * robots.txt, are made absolute against it. When omitted, each request's own
@@ -304,13 +313,27 @@ export interface SeoPluginOptions {
   searchConsole?: { clientId: string; clientSecret: string | Secret<string> };
 }
 
+/**
+ * The value a client secret holds: wrapped in `secret()`, or as typed. A
+ * wrapper made by another copy of the SDK than the plugin's, which a site
+ * installing its own may load, is not an instance of the plugin's class, so
+ * it is read by its `reveal()` too.
+ */
+function revealed(value: string | Secret<string>): unknown {
+  if (isSecret(value)) return value.reveal();
+  if (typeof value === "object" && value !== null) {
+    const reveal: unknown = Reflect.get(value, "reveal");
+    if (typeof reveal === "function") return Reflect.apply(reveal, value, []);
+  }
+  return value;
+}
+
 /** The Google sign-in `options` name, or none; a blank one is refused at boot. */
 function googleClientOf(options: SeoPluginOptions): GoogleClient | undefined {
   const named = options.searchConsole;
   if (named === undefined) return undefined;
-  const clientSecret = isSecret(named.clientSecret)
-    ? named.clientSecret.reveal()
-    : named.clientSecret;
+  const secretValue = revealed(named.clientSecret);
+  const clientSecret = typeof secretValue === "string" ? secretValue : "";
   if (named.clientId.trim() === "" || clientSecret.trim() === "") {
     throw new Error(
       "seoPlugin: searchConsole needs both a clientId and a clientSecret"
@@ -492,7 +515,9 @@ function siteFileRoutes(
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
-  const seoFields = options.fields ?? defaultSeoFields();
+  const seoFields =
+    options.fields ??
+    defaultSeoFields({ hardLengthLimits: options.hardLengthLimits === true });
   const pagePermissions = options.pagePermissions === true;
   const seoGroup = group({
     name: "seo",
