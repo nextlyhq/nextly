@@ -16,6 +16,13 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 
+import {
+  DEFAULT_TOTAL_SECONDS,
+  DEFAULT_TRY_SECONDS,
+  MAX_TOTAL_SECONDS,
+  MAX_TRY_SECONDS,
+} from "./bounds-values";
+
 /** One try's bound and the total, in milliseconds. */
 export interface BusyTableBounds {
   readonly tryMs: number;
@@ -24,15 +31,9 @@ export interface BusyTableBounds {
 
 /** About 5 seconds a try, about 90 in all: seven tries with the pauses between them. */
 export const DEFAULT_BUSY_TABLE_BOUNDS: BusyTableBounds = {
-  tryMs: 5_000,
-  totalMs: 90_000,
+  tryMs: DEFAULT_TRY_SECONDS * 1000,
+  totalMs: DEFAULT_TOTAL_SECONDS * 1000,
 };
-
-/** The longest one try may be set to, in seconds. */
-const MAX_TRY_SECONDS = 3_600;
-
-/** The longest the total may be set to, in seconds: a day. */
-const MAX_TOTAL_SECONDS = 86_400;
 
 /** A whole number of seconds as an operator types it: digits only, no sign, point or exponent. */
 const WHOLE_SECONDS = /^[0-9]+$/;
@@ -98,7 +99,7 @@ export function busyTableBounds(input: {
   );
   const trySeconds =
     trySource === undefined
-      ? DEFAULT_BUSY_TABLE_BOUNDS.tryMs / 1000
+      ? DEFAULT_TRY_SECONDS
       : seconds(
           trySource,
           1,
@@ -114,7 +115,9 @@ export function busyTableBounds(input: {
   const totalRange = `${String(trySeconds)} (one try) to ${String(MAX_TOTAL_SECONDS)}`;
   const totalSeconds =
     totalSource === undefined
-      ? Math.max(DEFAULT_BUSY_TABLE_BOUNDS.totalMs / 1000, trySeconds)
+      ? // A one try set past the default total, with no total given, raises the total to match:
+        // one long try runs. A total given below the one try is still refused.
+        Math.max(DEFAULT_TOTAL_SECONDS, trySeconds)
       : seconds(totalSource, trySeconds, MAX_TOTAL_SECONDS, totalRange);
   return { tryMs: trySeconds * 1000, totalMs: totalSeconds * 1000 };
 }
