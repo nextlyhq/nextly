@@ -58,7 +58,6 @@ import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
 import type { QueuedEmailChange } from "../queued-send-changes";
 import { defineEmailProvider } from "../provider-definition";
-import type { EmailDeliveryService } from "../services/email-delivery-service";
 import type { EmailProviderAdapter } from "../types";
 
 type SentOptions = Parameters<EmailProviderAdapter["send"]>[0];
@@ -449,9 +448,7 @@ describe.each(getConfiguredTestDialects())(
       });
       const told = changesOf(id).length;
 
-      await t
-        .getService<EmailDeliveryService>("emailDeliveryService")
-        .eraseRecipient(ADA);
+      await t.getService("emailDeliveryService").eraseRecipient(ADA);
 
       expect(changesOf(id)).toHaveLength(told);
       expect(await plugin().services.email.readQueued([id])).toEqual([
