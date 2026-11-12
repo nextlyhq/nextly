@@ -207,7 +207,7 @@ describeEachDialect("the value an entry keeps, case by case", dialect => {
   });
 
   it.each(CASES)("$name", async ({ rows, keeps }) => {
-    // A create answers `{ message, item }`; the item's id is an unknown value.
+    // A mutation answers `{ message, item }`, the item being the row it wrote.
     const created = await current.nextly.create({
       collection: "rcposts",
       locale: "en",

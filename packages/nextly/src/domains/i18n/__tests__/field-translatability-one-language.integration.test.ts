@@ -74,7 +74,7 @@ describeEachDialect(
 
     /** Every entry's heading, read through the Direct API, by id. */
     async function headings(): Promise<Record<string, unknown>> {
-      // Read as the Direct API types it: rows of unknown values, keyed by id.
+      // A list answers `{ items }`, each item a row of the collection's fields.
       const { items } = await current.nextly.find({
         collection: "onelangposts",
         limit: 10,

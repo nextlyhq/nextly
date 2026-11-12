@@ -123,7 +123,7 @@ describeEachDialect("the site's languages in Settings", dialect => {
     });
     const registry = current.getService("languageRegistry") as LanguageRegistry;
     const settings = new LanguageSettingsService(current.adapter, registry);
-    // A create answers `{ message, item }`; the item's id is an unknown value.
+    // A mutation answers `{ message, item }`, the item being the row it wrote.
     const created = await current.nextly.create({
       collection: "lsarticles",
       data: { headline: "Hello", views: 3 },
