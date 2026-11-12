@@ -75,7 +75,11 @@ export interface TemplateSeoPanelProps {
   /** The collection the design draws, and the one entry an own design draws. */
   draws: { collection: string; entryId: string | null };
   /** The design's own metadata, and the edit that changes it. */
-  seo: { value: DesignSeo | undefined; set: (next: DesignSeo | null) => void };
+  seo: {
+    value: DesignSeo | undefined;
+    /** Answers false where the editor refused the edit. */
+    set: (next: DesignSeo | null) => boolean | void;
+  };
   /** The design as it is being edited. */
   design: Readonly<Record<string, unknown>>;
   writable: boolean;
@@ -214,10 +218,12 @@ function useRuleDraft(
   holdEdit: TemplateSeoPanelProps["holdEdit"]
 ) {
   const [draft, setDraft] = useState<RuleDraft | undefined>(undefined);
+  // Whether the editor refused the last rule stored, which stays the draft.
+  const [refused, setRefused] = useState(false);
   // What the panel last stored, so a change from outside is told apart from
   // the panel's own.
   const stored = useRef<string | undefined>(undefined);
-  const valueKey = JSON.stringify(seo.value ?? null);
+  const valueKey = keyOf(seo.value ?? null);
   useEffect(() => {
     if (fields === undefined || stored.current === valueKey) return;
     stored.current = valueKey;
@@ -226,19 +232,35 @@ function useRuleDraft(
   const commit = (next: RuleDraft): void => {
     if (fields === undefined) return;
     const value = ruleOf(next, fields, seo.value);
-    const key = JSON.stringify(value);
+    const key = keyOf(value);
     if (key === stored.current) return;
-    stored.current = key;
-    seo.set(value);
+    // Marked stored only once the editor made the edit: a refused rule is
+    // stored again on the next try, the save's included.
+    const made = seo.set(value) !== false;
+    setRefused(!made);
+    if (made) stored.current = key;
   };
   const latest = useRef({ draft, commit });
   latest.current = { draft, commit };
   const pending =
     draft !== undefined &&
     fields !== undefined &&
-    JSON.stringify(ruleOf(draft, fields, seo.value)) !== valueKey;
+    keyOf(ruleOf(draft, fields, seo.value)) !== valueKey;
   useHeldDraft(latest, holdEdit, pending);
-  return { draft, setDraft, commit };
+  return { draft, setDraft, commit, refused };
+}
+
+/** A rule as one key, its parts in one order however they were stored. */
+function keyOf(value: unknown): string {
+  return JSON.stringify(value, (_key, part: unknown) =>
+    typeof part === "object" && part !== null && !Array.isArray(part)
+      ? Object.fromEntries(
+          Object.entries(part as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
+        )
+      : part
+  );
 }
 
 /**
@@ -302,7 +324,11 @@ export function TemplateSeoPanel(props: TemplateSeoPanelProps): ReactNode {
   const [previewWith, setPreviewWith] = useState<string | null>(draws.entryId);
   // The fields the type offers, once read; the rule is read with them.
   const [fields, setFields] = useState<PatternField[] | undefined>(undefined);
-  const { draft, setDraft, commit } = useRuleDraft(seo, fields, props.holdEdit);
+  const { draft, setDraft, commit, refused } = useRuleDraft(
+    seo,
+    fields,
+    props.holdEdit
+  );
   const rule =
     draft === undefined || fields === undefined
       ? seo.value
@@ -344,12 +370,15 @@ export function TemplateSeoPanel(props: TemplateSeoPanelProps): ReactNode {
       onPreviewWith={setPreviewWith}
       onChange={setDraft}
       onCommit={commit}
+      refused={refused}
     />
   );
 }
 
 /** What the rule editor is handed. */
 interface RuleEditorProps {
+  /** Whether the editor refused the rule last stored. */
+  refused: boolean;
   context: TemplateContext;
   status: "ready" | "loading" | "failed";
   draft: RuleDraft;
@@ -424,6 +453,13 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
           </>
         )}
       </Note>
+      {props.refused ? (
+        <p role="alert" className="m-0 text-xs font-medium text-warning-text">
+          This rule couldn&apos;t be stored: it holds more text or more
+          variables than a rule can. Shorten it, and it is stored when you leave
+          the field.
+        </p>
+      ) : null}
       <PreviewCard
         answer={answer}
         site={context.site}

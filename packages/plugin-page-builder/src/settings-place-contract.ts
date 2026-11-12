@@ -53,7 +53,11 @@ export interface PageBuilderSettingsTabProps {
    */
   seo: {
     value: DocumentSeo | undefined;
-    set: (next: DocumentSeo | null) => void;
+    /**
+     * Answers whether the edit was made: false where the editor refused it,
+     * as it refuses metadata past the document's limits.
+     */
+    set: (next: DocumentSeo | null) => boolean;
   };
   /** The document as it is being edited. */
   design: BlockDocument;
@@ -68,6 +72,13 @@ export interface PageBuilderSettingsTabProps {
    * tab has made the edit itself or goes away.
    */
   holdEdit: (make: () => void) => () => void;
+  /**
+   * The form path of the field the design is edited in, whose value is the
+   * design as saved until the editor stores it.
+   */
+  designField?: string;
+  /** Show the dialog's General tab, where the page's own fields are. */
+  openGeneral?: () => void;
 }
 
 declare module "@nextlyhq/plugin-sdk" {

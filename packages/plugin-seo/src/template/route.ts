@@ -30,6 +30,7 @@ import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import type { PatternField } from "../settings/contract";
 import { tokenOf } from "../settings/pattern-fields";
+import { SITE_NAME_TOKEN, tokenKey } from "../settings/patterns";
 import { publishedWhere } from "../sitemap";
 import { mediaReadFor, siteOf } from "../tab/route";
 
@@ -99,6 +100,12 @@ function namesOf(
   return { one, many: textOf(labels.plural) ?? one };
 }
 
+/** Whether a field's name or variable is the site's name variable's. */
+function namesSiteName(name: string, token: string): boolean {
+  const site = tokenKey(SITE_NAME_TOKEN);
+  return tokenKey(name) === site || tokenKey(token) === site;
+}
+
 /** The type's fields a rule may name, and those a share image may come from. */
 function fieldsOf(meta: Record<string, unknown>): {
   fields: PatternField[];
@@ -113,7 +120,10 @@ function fieldsOf(meta: Record<string, unknown>): {
     if (name === undefined || field.hasMany === true) continue;
     const type = String(field.type);
     if (TEXT_TYPES.has(type)) {
-      fields.push({ name, token: tokenOf({ name, label: field.label }) });
+      const token = tokenOf({ name, label: field.label });
+      // A field written as the site's name variable would be read as it.
+      if (namesSiteName(name, token)) continue;
+      fields.push({ name, token });
     } else if (type === "upload") {
       imageFields.push({ name, label: labelOfField(field, name) });
     }

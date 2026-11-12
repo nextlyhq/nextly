@@ -24,7 +24,7 @@ import type { Control, FieldValues } from "react-hook-form";
 
 import { SEO_PLUGIN_NAME } from "../tab/contract";
 
-import { SeoTab } from "./SeoTab";
+import { SeoTab, type SeoTabElsewhere } from "./SeoTab";
 import { TemplateSeoPanel, type DesignSeo } from "./TemplateSeoPanel";
 
 /** What the Page Builder hands every tab at its Settings place. */
@@ -32,12 +32,14 @@ export type PageBuilderSeoTabProps =
   PlaceTabProps<"nextlyhq-plugin-page-builder.settings"> & {
     seo?: {
       value: DesignSeo | undefined;
-      set: (next: DesignSeo | null) => void;
+      set: (next: DesignSeo | null) => boolean | void;
     };
     design?: Readonly<Record<string, unknown>>;
     control?: Control<FieldValues>;
     writable?: boolean;
     holdEdit?: (make: () => void) => () => void;
+    designField?: string;
+    openGeneral?: () => void;
   };
 
 /** A page's own SEO, as its edit page's tab edits it, where it has the group. */
@@ -48,6 +50,7 @@ function PageSeo({
   control,
   writable,
   setBadge,
+  elsewhere,
 }: {
   userId: string;
   collection: string;
@@ -55,6 +58,7 @@ function PageSeo({
   control: Control<FieldValues>;
   writable: boolean;
   setBadge: PageBuilderSeoTabProps["setBadge"];
+  elsewhere: SeoTabElsewhere;
 }): ReactNode {
   // A page whose type has no SEO tab has no group the panel edits: the group,
   // where it has one, stays among the page's own fields.
@@ -75,7 +79,22 @@ function PageSeo({
     ...(entryId === null ? {} : { entry: { id: entryId } }),
     setBadge,
   };
-  return <SeoTab {...props} />;
+  return <SeoTab {...props} {...elsewhere} />;
+}
+
+/**
+ * What a page's SEO tab is told in the builder: the design being edited,
+ * which the form holds only once the editor stores it, so the preview reads
+ * the blocks on screen; and General, where the page's own fields are.
+ */
+function elsewhereOf(props: PageBuilderSeoTabProps): SeoTabElsewhere {
+  const { design, designField, openGeneral } = props;
+  return {
+    ...(design === undefined || designField === undefined
+      ? {}
+      : { unsaved: { path: designField, value: design } }),
+    ...(openGeneral === undefined ? {} : { onGoToContent: openGeneral }),
+  };
 }
 
 export function PageBuilderSeoTab(props: PageBuilderSeoTabProps): ReactNode {
@@ -90,6 +109,7 @@ export function PageBuilderSeoTab(props: PageBuilderSeoTabProps): ReactNode {
         control={props.control}
         writable={writable}
         setBadge={setBadge}
+        elsewhere={elsewhereOf(props)}
       />
     );
   }

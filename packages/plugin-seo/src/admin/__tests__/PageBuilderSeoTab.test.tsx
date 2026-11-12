@@ -57,6 +57,26 @@ describe("the SEO tab in the Page Builder's Settings", () => {
     });
   });
 
+  it("hands a page's tab the design being edited, and shows General for a field the page lacks", () => {
+    const design = { formatVersion: 1, kind: "page", nodes: [] };
+    const openGeneral = () => {};
+    render(
+      <PageBuilderSeoTab
+        context={{ ...base, document: "page", collection: "posts" }}
+        setBadge={() => {}}
+        control={control}
+        writable
+        design={design}
+        designField="content"
+        openGeneral={openGeneral}
+      />
+    );
+    expect(handed.tab).toMatchObject({
+      unsaved: { path: "content", value: design },
+      onGoToContent: openGeneral,
+    });
+  });
+
   it("says so for a page whose type has no SEO tab", () => {
     render(
       <PageBuilderSeoTab

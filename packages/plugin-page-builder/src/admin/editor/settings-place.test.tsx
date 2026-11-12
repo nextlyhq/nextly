@@ -108,6 +108,21 @@ describe("the Settings place", () => {
     expect(result.current?.context).toBeNull();
   });
 
+  it("says whether the editor made a tab's change, and names the field the design is edited in", () => {
+    const { editor: e } = editor("template");
+    let refuse = false;
+    e.apply = () => (refuse ? null : e.document);
+    const { result } = renderHook(() =>
+      useSettingsPlace(e, {} as never, "template", "content")
+    );
+    expect(result.current?.tabProps.seo.set({ title: ["New"] })).toBe(true);
+    refuse = true;
+    expect(
+      result.current?.tabProps.seo.set({ title: ["x".repeat(2000)] })
+    ).toBe(false);
+    expect(result.current?.tabProps.designField).toBe("content");
+  });
+
   it("applies a tab's change of the metadata as one seo edit", () => {
     const { editor: e, applied } = editor("template");
     const { result } = renderHook(() =>

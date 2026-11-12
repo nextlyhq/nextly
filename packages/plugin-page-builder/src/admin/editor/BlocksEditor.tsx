@@ -1473,7 +1473,8 @@ function EditorBody<TFieldValues extends FieldValues>({
   const settingsPlace = useSettingsPlace(
     editor,
     control,
-    mount.initialDocument.kind
+    mount.initialDocument.kind,
+    name
   );
   const { done, publishOffer, removalHold } = useHostCommit({
     name,

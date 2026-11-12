@@ -119,6 +119,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title" }),
           text({ name: "slug", unique: true }),
           number({ name: "readingMinutes" }),
+          text({ name: "siteName" }),
           upload({ name: "cover", relationTo: "media" }),
         ],
       }),
@@ -322,7 +323,7 @@ describe.each(getConfiguredTestDialects())(
       expect(before).toEqual({ hello, second });
     });
 
-    it("offers only fields a variable fills as text, and previews the page's content image under its own", async () => {
+    it("offers only fields a variable fills as text and reads as their own, and previews the page's content image under its own", async () => {
       const t = await boot(dialect);
       const cover = await picture(t, "cover.png");
       const own = await picture(t, "own.png");
@@ -344,9 +345,10 @@ describe.each(getConfiguredTestDialects())(
         design(FIRST_RULE)
       );
 
-      expect(context.fields.map(field => field.name)).not.toContain(
-        "readingMinutes"
-      );
+      const offered = context.fields.map(field => field.name);
+      expect(offered).not.toContain("readingMinutes");
+      // A field named as the site's name variable would read as the site's.
+      expect(offered).not.toContain("siteName");
       // The rule's preview leaves the page's own image out, so the image the
       // page's content offers is the one shown.
       expect(context.previewed?.levels.content.image?.value.url).toMatch(

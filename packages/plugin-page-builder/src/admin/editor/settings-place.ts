@@ -87,7 +87,8 @@ function drawsOf(
 export function useSettingsPlace<TFieldValues extends FieldValues>(
   editor: PlaceEditor,
   control: Control<TFieldValues>,
-  kind: DocumentKind
+  kind: DocumentKind,
+  field?: string
 ): SettingsPlace | null {
   const identity = useDocumentIdentity();
   const userId = useCurrentUserId();
@@ -109,15 +110,18 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
         // One edit of the document, so the editor's Undo takes it back and
         // its Save stores it with the rest of the page.
         set: next => {
-          held.made(apply({ kind: "seo", seo: next }));
+          const made = apply({ kind: "seo", seo: next });
+          held.made(made);
+          return made !== null;
         },
       },
       design: editor.document,
       control: control as unknown as Control<FieldValues>,
       writable: true,
       holdEdit: held.hold,
+      ...(field === undefined ? {} : { designField: field }),
     }),
-    [value, apply, editor.document, control, held]
+    [value, apply, editor.document, control, held, field]
   );
   if (document === null) return null;
   return { context, tabProps, flushHeld: held.flush };

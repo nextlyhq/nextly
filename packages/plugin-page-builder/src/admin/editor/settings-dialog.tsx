@@ -311,12 +311,16 @@ function PlaceTabsOf({
   place: SettingsPlace | null;
   children: ReactNode;
 }): JSX.Element {
+  // The tab shown, held here so a tab can show General (`openGeneral`).
+  const [open, setOpen] = useState<string | null>(null);
   if (place === null) return <>{children}</>;
   return (
     <PlaceTabs
       place={PAGE_BUILDER_SETTINGS_PLACE}
       context={place.context}
-      tabProps={{ ...place.tabProps }}
+      tabProps={{ ...place.tabProps, openGeneral: () => setOpen(null) }}
+      openTab={open}
+      onOpenTabChange={setOpen}
       contentLabel="General"
       className="pt-4"
     >

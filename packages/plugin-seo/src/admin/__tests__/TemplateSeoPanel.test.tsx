@@ -32,6 +32,8 @@ const editing = vi.hoisted(() => ({
   failing: false,
   /** Each report of unsaved work, by its key. */
   unsaved: new Map<string, boolean>(),
+  /** Whether the editor refuses the panel's edits. */
+  refusing: false,
 }));
 
 /** A rule's text pieces filled as the Page Builder fills them for the post. */
@@ -133,8 +135,10 @@ function Host({ initial }: { initial: DesignSeo | undefined }): ReactNode {
       seo={{
         value,
         set: next => {
+          if (editing.refusing) return false;
           stored.push(next);
           setValue(next ?? undefined);
+          return true;
         },
       }}
       design={{ formatVersion: 1, kind: "template", nodes: [] }}
@@ -156,6 +160,7 @@ beforeEach(() => {
   editing.locale = null;
   editing.failing = false;
   editing.unsaved.clear();
+  editing.refusing = false;
   holding.clear();
 });
 afterEach(cleanup);
@@ -318,6 +323,27 @@ describe("a template's SEO panel", () => {
       title: ["Saved ", { $bind: "title" }],
     });
     await waitFor(() => expect(unsaved()).toBe(false));
+  });
+
+  it("says a rule the editor refuses was not stored, and keeps it to store again", async () => {
+    const user = userEvent.setup();
+    const title = await open();
+    editing.refusing = true;
+    await user.clear(title);
+    await user.type(title, "Too long");
+    await user.tab();
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /couldn.t be stored/
+    );
+    expect(title).toHaveProperty("value", "Too long");
+    expect([...editing.unsaved.values()].some(Boolean)).toBe(true);
+
+    editing.refusing = false;
+    act(makeHeld);
+    expect(stored.at(-1)).toMatchObject({ title: ["Too long"] });
+    await waitFor(() =>
+      expect(screen.queryByText(/couldn.t be stored/)).toBeNull()
+    );
   });
 
   it("says the preview is the last one read when reading it again fails", async () => {

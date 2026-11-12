@@ -6,6 +6,7 @@
  * went.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -259,6 +260,36 @@ describe("the Settings dialog", () => {
       context: shownPlace.context,
       tabProps: { seo: { set }, writable: true },
     });
+  });
+
+  it("lets a tab added to the place show General, where the page's own fields are", () => {
+    shownPlace = {
+      context: {
+        userId: "u1",
+        document: "page",
+        collection: "pages",
+        entryId: "p1",
+        draws: null,
+      },
+      tabProps: {
+        seo: { value: undefined, set: vi.fn() },
+        design: { formatVersion: 1, kind: "page", nodes: [] },
+        control: {} as never,
+        writable: true,
+      },
+    };
+    show();
+    const handed = () =>
+      placeTabs.at(-1) as {
+        openTab: string | null;
+        onOpenTabChange: (tab: string | null) => void;
+        tabProps: { openGeneral: () => void };
+      };
+    expect(handed().openTab).toBeNull();
+    act(() => handed().onOpenTabChange("seo"));
+    expect(handed().openTab).toBe("seo");
+    act(() => handed().tabProps.openGeneral());
+    expect(handed().openTab).toBeNull();
   });
 
   it("draws no place for a document that offers none", () => {
