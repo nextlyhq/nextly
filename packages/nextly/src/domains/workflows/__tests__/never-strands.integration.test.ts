@@ -665,23 +665,17 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
-      it("judges an attachment whose field group was made in the admin", async () => {
+      it("judges an attachment whose field group was made in the admin, as boot judges it", async () => {
         await boot(dialect);
-        // A field group the configuration does not define: only the registry holds it.
+        // A field group the configuration does not define: only the registry holds it, and its
+        // password field means a collection using it cannot keep a draft, so boot refuses it.
         await seedBuilderComponent(app().adapter, {
           slug: "aside",
-          fields: [{ name: "note", type: "text" }],
-        });
-        const parked = await entry(app(), "posts");
-        await seedState(app(), partOf("posts", parked, "en"), "hold", {
-          definitionHash: DESK,
+          fields: [{ name: "secret", type: "password" }],
         });
 
-        const [posts, pages] = collectionsOn({
-          posts: deskRenamed,
-          pages: deskRenamed,
-        });
-        await deployStep([
+        const [posts, pages] = collectionsOn({});
+        const refused = await deployStep([
           {
             ...posts,
             fields: [
@@ -690,11 +684,21 @@ describe.each(getConfiguredTestDialects())(
             ],
           },
           pages,
-        ]);
+        ]).then(
+          () => undefined,
+          (error: unknown) => error
+        );
 
-        expect(
-          await stateOf(app(), partOf("posts", parked, "en"))
-        ).toMatchObject({ stage: "paused" });
+        expect(refused).toMatchObject({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "collections.posts.workflow",
+                message: expect.stringContaining("password field"),
+              }),
+            ],
+          },
+        });
       });
 
       // SQLite only, as every redeploy here: the harness releases a server-backed database when
