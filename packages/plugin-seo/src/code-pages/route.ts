@@ -18,8 +18,7 @@ import { z } from "zod";
 import { readSingle, singleAccessOf } from "../bulk/singles";
 import type { Candidate } from "../outputs/listing";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
-import { pageRefKey, type PageRef } from "../problems/check";
-import { callerReads, readerAs } from "../problems/reader";
+import { callerReads, type ReadsAs } from "../problems/reader";
 import type { ReadRules } from "../resolver/provider";
 
 import { siteAddresses, type ReadableEntries } from "./addresses";
@@ -56,35 +55,52 @@ function originFor(req: Request, config: CodePageRoutesConfig): string {
 }
 
 /**
- * The entries the route's caller may read in each language, asked as them,
- * as the collection's own list or the Single's own read asks: none of a type
- * they may not read, and of a collection whose rule admits only some
- * entries, those it admits in that language.
+ * Which of `ids`, entries of the collection `slug`, `reads` admits: none
+ * where the collection refuses the read outright.
+ */
+async function admitted(
+  reads: ReadsAs,
+  slug: string,
+  ids: readonly string[]
+): Promise<string[]> {
+  try {
+    return await reads.readable(slug, ids);
+  } catch (error) {
+    if (NextlyError.isCode(error, "FORBIDDEN")) return [];
+    throw error;
+  }
+}
+
+/**
+ * The entries the route's caller may read in each language, asked only of
+ * the reads themselves, made as them in that language, as the collection's
+ * own list or the Single's own read answers them: a rule that admits only
+ * some entries, or only some languages, decides as it does there.
  */
 async function readableBy(ctx: PluginRouteContext): Promise<ReadableEntries> {
-  const caller = ctx.caller;
-  if (caller === null) throw NextlyError.authRequired();
-  const types = new Set<string>();
-  for (const type of await ctx.publicAddresses.types()) {
-    if (await caller.can("read", type.slug)) types.add(type.slug);
-  }
+  if (ctx.caller === null) throw NextlyError.authRequired();
   const single = await singleAccessOf(ctx);
   return async (batch, language) => {
-    const collections = batch.filter(({ type }) => type.kind === "collection");
-    // Redirects are never named here, so whether they may see them is moot.
-    const allowed = await readerAs(
-      callerReads(ctx, language),
-      types,
-      false
-    ).pages(collections.map(refOf));
+    const reads = callerReads(ctx, language);
+    const ids = new Map<string, string[]>();
+    for (const { type, holder } of batch) {
+      if (type.kind === "collection") {
+        ids.set(type.slug, [...(ids.get(type.slug) ?? []), holder.id]);
+      }
+    }
+    const allowed = new Set<string>();
+    for (const [slug, asked] of ids) {
+      for (const id of await admitted(reads, slug, asked)) {
+        allowed.add(`${slug}\u0000${id}`);
+      }
+    }
     const kept: Candidate[] = [];
     for (const candidate of batch) {
-      const { type } = candidate;
+      const { type, holder } = candidate;
       if (
         type.kind === "collection"
-          ? allowed.has(pageRefKey(refOf(candidate)))
-          : types.has(type.slug) &&
-            (await readSingle(type.slug, single, language)) !== undefined
+          ? allowed.has(`${type.slug}\u0000${holder.id}`)
+          : (await readSingle(type.slug, single, language)) !== undefined
       ) {
         kept.push(candidate);
       }
@@ -92,12 +108,6 @@ async function readableBy(ctx: PluginRouteContext): Promise<ReadableEntries> {
     return kept;
   };
 }
-
-/** A collection's entry, as the problem list keys its page. */
-const refOf = ({ holder }: Candidate): PageRef => ({
-  type: holder.collection,
-  id: holder.id,
-});
 
 /** The route that lists every public address the site knows of. */
 function addressesRoute(config: CodePageRoutesConfig): PluginRoute {

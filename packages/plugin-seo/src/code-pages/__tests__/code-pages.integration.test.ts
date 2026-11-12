@@ -42,6 +42,7 @@ const TEAM = "seocp_team";
 const PRIVATE = "seocp_private";
 const HOME = "seocp_home";
 const TEAM_LOCALIZED = "seocp_team_localized";
+const GERMAN_ONLY = "seocp_german_only";
 const SITE = "https://acme.example";
 const PLUGIN = "@nextlyhq/plugin-seo";
 const CSRF = "c".repeat(64);
@@ -843,7 +844,7 @@ describe.each(getConfiguredTestDialects())(
         languageAddresses: { by: "prefix" },
         plugins: [
           seoPlugin({
-            collections: [TEAM_LOCALIZED],
+            collections: [TEAM_LOCALIZED, GERMAN_ONLY],
             baseUrl: SITE,
             nextBuildDir: LANGUAGE_BUILD,
           }),
@@ -863,6 +864,18 @@ describe.each(getConfiguredTestDialects())(
             ],
             publicAddress: "/{slug}",
           }),
+          defineCollection({
+            slug: GERMAN_ONLY,
+            localized: true,
+            status: true,
+            // Read in German alone, whoever asks.
+            access: { read: ({ locale }) => locale === "de" },
+            fields: [
+              text({ name: "slug", localized: true }),
+              text({ name: "title", localized: true }),
+            ],
+            publicAddress: "/notes/{slug}",
+          }),
         ],
         seedPublic: true,
       });
@@ -871,16 +884,17 @@ describe.each(getConfiguredTestDialects())(
       // Each page open in one language and closed in the other.
       const page = async (
         en: Record<string, unknown>,
-        de: Record<string, unknown>
+        de: Record<string, unknown>,
+        collection = TEAM_LOCALIZED
       ) => {
         const made = await t.nextly.create({
-          collection: TEAM_LOCALIZED,
+          collection,
           locale: "en",
           data: { ...en, status: "published" },
           overrideAccess: true,
         });
         await t.nextly.update({
-          collection: TEAM_LOCALIZED,
+          collection,
           id: String(made.item.id),
           locale: "de",
           data: { ...de, status: "published", _overwrite: true },
@@ -900,11 +914,17 @@ describe.each(getConfiguredTestDialects())(
         { slug: "both-en", title: "Open twice", team: "open" },
         { slug: "both-de", title: "Zweimal offen", team: "open" }
       );
+      await page(
+        { slug: "note-en", title: "A note" },
+        { slug: "note-de", title: "Eine Notiz" },
+        GERMAN_ONLY
+      );
       await lastCatchUp();
       const owner = await personWith(t, "owner", "all");
       const manager = await personWith(t, "manager", [
         "manage-seo",
         `read-${TEAM_LOCALIZED}`,
+        `read-${GERMAN_ONLY}`,
       ]);
 
       const all = (await addressesFor(owner)).items?.map(item => item.path);
@@ -917,11 +937,20 @@ describe.each(getConfiguredTestDialects())(
           "/de/closed-de",
           "/en/closed-en",
           "/de/open-de",
+          "/en/notes/note-en",
+          "/de/notes/note-de",
         ])
       );
       expect(paths).toEqual(
-        expect.arrayContaining(["/en/open-en", "/en/both-en", "/de/both-de"])
+        expect.arrayContaining([
+          "/en/open-en",
+          "/en/both-en",
+          "/de/both-de",
+          // A rule that reads the language admits the German version.
+          "/de/notes/note-de",
+        ])
       );
+      expect(paths).not.toContain("/en/notes/note-en");
       expect(paths).not.toContain("/de/closed-de");
       expect(paths).not.toContain("/en/closed-en");
       // Whether /de/open-de is listed is the collection's own German read's
