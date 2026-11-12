@@ -185,6 +185,21 @@ async function migrated(
   expect(code, said.join("\n")).toBeUndefined();
 }
 
+/**
+ * `fn` as a run under `next dev` sees it: `NODE_ENV=development` and the live
+ * sync not turned off, which is how a hand-run `nextly migrate` with no
+ * `NODE_ENV` reads too, since the command sets development itself.
+ */
+async function inDevelopment<T>(fn: () => Promise<T>): Promise<T> {
+  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("NEXTLY_DISABLE_HMR", undefined);
+  try {
+    return await fn();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}
+
 type Row = Record<string, unknown>;
 interface Selecting {
   select: () => { from: (table: unknown) => Promise<Row[]> };
@@ -503,6 +518,143 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await collectionRow(instance!, dialect, "rr_posts"))?.description
       ).toBe("synced from the code");
+    });
+
+    // A run in development adds the rows a fresh database lacks, from the
+    // migrations it applies: nothing else writes them on a site whose start
+    // syncs no rows.
+    it("writes every row on a fresh database in development", async () => {
+      const declared = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "rr_posts",
+            description: "Posts",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "rr_site",
+            fields: [text({ name: "tagline" })],
+          }),
+        ],
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "rr_hero",
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      await migrateCreate(declared, "create_all");
+      await inDevelopment(() => migrated(declared));
+
+      const rows = await registryRows(instance!, dialect);
+      expect(rows.collections.map(row => row.slug)).toContain("rr_posts");
+      expect(rows.singles.map(row => row.slug)).toContain("rr_site");
+      expect(rows.fieldGroups.map(row => row.slug)).toContain("rr_hero");
+      expect(
+        fieldNames(rows.collections.find(row => row.slug === "rr_posts"))
+      ).toContain("title");
+    });
+
+    // The migration a development run applies changed the entity's table, so
+    // its row is brought to the migration's record, field and all.
+    it("writes the row of an entity a migration applied in development changes", async () => {
+      await migrateCreate(posts("Posts"), "create_posts");
+      await migrated(posts("Posts"));
+      const withBody = posts("Posts", text({ name: "body" }));
+      await migrateCreate(withBody, "add_body");
+      await inDevelopment(() => migrated(withBody));
+
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).toEqual(expect.arrayContaining(["title", "body"]));
+    });
+
+    // Only the entities the applied migration changes: another entity's row,
+    // edited by a live sync with no migration for the edit, is left as it is.
+    it("leaves a synced row in development while a migration for another entity applies", async () => {
+      const declared = (...extra: ReturnType<typeof text>[]) =>
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_posts",
+              description: "Posts",
+              fields: [text({ name: "title" }), ...extra],
+            }),
+            defineCollection({
+              slug: "rr_tags",
+              description: "Tags",
+              fields: [text({ name: "label" })],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+      await migrateCreate(declared(), "create_both");
+      await migrated(declared());
+      const db = (
+        instance!.adapter as unknown as DrizzleAdapter
+      ).getDrizzle<Selecting>();
+      const { tables } = loadedDialect(dialect);
+      const { eq } = await import("drizzle-orm");
+      await db
+        .update(tables.dynamicCollections)
+        .set({ description: "synced from the code" })
+        .where(eq(tables.dynamicCollections.slug, "rr_tags"));
+
+      const withBody = declared(text({ name: "body" }));
+      await migrateCreate(withBody, "add_body");
+      await inDevelopment(() => migrated(withBody));
+
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).toEqual(expect.arrayContaining(["title", "body"]));
+      expect(
+        (await collectionRow(instance!, dialect, "rr_tags"))?.description
+      ).toBe("synced from the code");
+    });
+
+    // A template's hand-written migration, whose snapshot lists its entities
+    // in the older shape, still has the rows it lists added in development.
+    it("adds the rows an older-format snapshot lists in development", async () => {
+      const none = defineConfig({
+        collections: [],
+        db: { migrationsDir: "./migrations" },
+      });
+      // MySQL keys no TEXT column without a length.
+      const id = dialect === "mysql" ? "varchar(36)" : "text";
+      await writeFile(
+        join(dir, "migrations", "0001_000000_legacy.sql"),
+        [
+          "-- UP",
+          `CREATE TABLE ${q}dc_rr_legacy${q} (${q}id${q} ${id} PRIMARY KEY, ${q}title${q} text);`,
+          "",
+          "-- DOWN",
+          `DROP TABLE ${q}dc_rr_legacy${q};`,
+          "",
+        ].join("\n")
+      );
+      mkdirSync(join(dir, "migrations", "meta"), { recursive: true });
+      await writeFile(
+        join(dir, "migrations", "meta", "0001_000000_legacy.snapshot.json"),
+        JSON.stringify({
+          version: 1,
+          collections: [
+            {
+              slug: "rr_legacy",
+              tableName: "dc_rr_legacy",
+              fields: [{ name: "title", type: "text" }],
+            },
+          ],
+        })
+      );
+      await inDevelopment(() => migrated(none));
+      await inDevelopment(() => migrated(none));
+
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_legacy"))
+      ).toContain("title");
     });
 
     // The Builder's own registry upsert leaves a description or admin block
