@@ -366,8 +366,16 @@ function announceMoves(
  */
 export const REDIRECTS_CHANGED: string = `${SEO_ADMIN_SLUG}.redirects-changed`;
 
-/** Announce that redirects changed, once the save commits; never failing it. */
-function announceRedirectsChanged(ctx: PluginContext): void {
+/**
+ * Announce that redirects changed, where any of `holders` is a redirect, once
+ * the save commits; never failing it.
+ */
+function announceRedirectsChanged(
+  ctx: PluginContext,
+  holders: readonly AddressHolder[],
+  isRedirect: (holder: AddressHolder) => boolean
+): void {
+  if (!holders.some(isRedirect)) return;
   try {
     ctx.events.emit(REDIRECTS_CHANGED, {});
   } catch (error) {
@@ -672,9 +680,11 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
           await redirectReleased(transaction, update, released);
         }
       }
-      if (batch.some(update => isRedirect(update.holder))) {
-        announceRedirectsChanged(ctx);
-      }
+      announceRedirectsChanged(
+        ctx,
+        batch.map(update => update.holder),
+        isRedirect
+      );
       announceMoves(
         ctx,
         batch
