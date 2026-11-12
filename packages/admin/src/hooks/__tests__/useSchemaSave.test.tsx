@@ -244,6 +244,36 @@ describe("a refusal's reasons", () => {
 });
 
 describe("confirmApply", () => {
+  // What the dialog showed is what is applied: fields changed after the
+  // preview, by an edit or an undo while it was on its way, are not applied
+  // unseen. The person saves again and reviews them.
+  it("applies nothing when the fields changed after the preview", async () => {
+    const pending = preview();
+    const confirmation = confirmationStub(pending);
+    let fields = FIELDS;
+    const { result, applyFn } = setup({
+      confirmation,
+      getValidatedFields: () => fields,
+      previewFn: vi.fn(() => Promise.resolve(pending)),
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(pending)
+    );
+
+    fields = [...FIELDS, { ...FIELDS[0]!, name: "added_later" }];
+    await act(async () => result.current.confirmApply({}, []));
+
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith(
+      "The fields changed after the preview. Save again to review what changes."
+    );
+    expect(confirmation.settle).toHaveBeenCalledTimes(1);
+  });
+
   it("applies the confirmed change and reports it once", async () => {
     const pending = preview();
     const confirmation = confirmationStub(pending);

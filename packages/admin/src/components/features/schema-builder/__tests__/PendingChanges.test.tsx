@@ -76,6 +76,8 @@ const settingsOf = (loaded: Entity): BuilderSettingsValues => ({
 
 /** What a test reaches into: the builder the controls are driven through. */
 let builder: ReturnType<typeof useFieldBuilder>;
+/** The overlays the layout asked for, in order: the picker among them. */
+let activeChanges: unknown[] = [];
 let setSettings: (next: BuilderSettingsValues) => void;
 
 function Harness({ locked = false }: { locked?: boolean }) {
@@ -302,6 +304,42 @@ describe("pending changes controls", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
+  it("says each undo even when it reads as the one before", async () => {
+    const user = setup();
+    act(() => builder.handleFieldAdd("text"));
+    act(() => builder.handleFieldAdd("text"));
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    const first = announced();
+    expect(first?.trim()).toBe("Undid: added a new field");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    // The same words, but a change to the live region, so it is read again.
+    expect(announced()).not.toBe(first);
+    expect(announced()?.trim()).toBe("Undid: added a new field");
+  });
+
+  it("the keys do nothing while a dialog is open over the builder", async () => {
+    const user = setup();
+    act(() =>
+      builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
+    );
+    // A confirmation waiting on the person, as a schema change's preview is.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    const confirm = document.createElement("button");
+    dialog.append(confirm);
+    document.body.append(dialog);
+    try {
+      confirm.focus();
+      await user.keyboard("{Control>}z{/Control}");
+      expect(field("summary").label).toBe("Excerpt");
+    } finally {
+      dialog.remove();
+    }
+    await user.keyboard("{Control>}z{/Control}");
+    expect(field("summary").label).toBe("Summary");
+  });
+
   it("a read-only entity offers none of them", () => {
     setup(true);
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
@@ -350,7 +388,9 @@ function LayoutHarness() {
       settings={state.settings}
       onSettingsChange={state.setSettings}
       active={{ kind: "none" }}
-      onActiveChange={() => {}}
+      onActiveChange={next => {
+        activeChanges.push(next);
+      }}
       onDuplicateField={() => {}}
       onRowDragEnd={() => {}}
       isSaving={false}
@@ -415,5 +455,46 @@ describe("pending changes in the outline", () => {
     await user.click(screen.getByRole("button", { name: "Undo" }));
     expect(countText()).toBe("No unsaved changes");
     expect(within(row("address")).queryByText(/Deleted/)).toBeNull();
+  });
+
+  it("nothing moves into or out of a deleted row's place", async () => {
+    const user = userEvent.setup();
+    render(<LayoutHarness />, { wrapper: Providers });
+    act(() => builder.handleFieldDelete(field("summary").id));
+    // Headline sits just above the deleted Summary.
+    row("headline").focus();
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    expect(names()).toEqual(["headline", "address"]);
+    row("summary").focus();
+    await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+    expect(names()).toEqual(["headline", "address"]);
+  });
+
+  it("a deleted row adds nothing by key", async () => {
+    const user = userEvent.setup();
+    activeChanges = [];
+    render(<LayoutHarness />, { wrapper: Providers });
+    // On a live row, "/" opens the picker to add after it.
+    row("headline").focus();
+    await user.keyboard("/");
+    expect(activeChanges).toHaveLength(1);
+    act(() => builder.handleFieldDelete(field("summary").id));
+    activeChanges = [];
+    row("summary").focus();
+    await user.keyboard("/");
+    expect(activeChanges).toEqual([]);
+  });
+
+  it("a deleted row offers no place to add, inside it or before it", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    // By the id each place carries: "add-inside-<label>", "add-before-<label>".
+    const place = (id: string) => screen.queryByTestId(id);
+    // Offered while the group is there.
+    expect(place("add-inside-Address")).not.toBeNull();
+    expect(place("add-before-City")).not.toBeNull();
+    act(() => builder.handleFieldDelete(field("address").id));
+    expect(place("add-inside-Address")).toBeNull();
+    expect(place("add-before-Address")).toBeNull();
+    expect(place("add-before-City")).toBeNull();
   });
 });

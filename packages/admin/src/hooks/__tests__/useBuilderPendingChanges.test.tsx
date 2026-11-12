@@ -199,6 +199,100 @@ describe("builder pending changes", () => {
     expect(field("headline").label).toBe("X");
   });
 
+  it("an edit made while a save is in flight stays pending and undoable once it lands", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    // The save is sent with the fields as they are now…
+    const pinWhenSaved = result.current.state.pinFields;
+    // …and another edit is made before it lands.
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        label: "B",
+      })
+    );
+    act(() => pinWhenSaved());
+    expect(result.current.state.pending.changes).toMatchObject([
+      { kind: "settings", name: "summary" },
+    ]);
+    expect(result.current.state.pending.canUndo).toBe(true);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("summary").label).toBe("Summary");
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("an edit of the same field made while a save is in flight undoes back to what was saved", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    const pinWhenSaved = result.current.state.pinFields;
+    // The same field again: one step with the edit the save sent, as typing is.
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "AB",
+      })
+    );
+    act(() => pinWhenSaved());
+    expect(result.current.state.unsavedCount).toBe(1);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    // Back to the saved value, not past it.
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("edits made after a same-field edit during a save stay steps of their own", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    const pinWhenSaved = result.current.state.pinFields;
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "AB",
+      })
+    );
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        label: "S",
+      })
+    );
+    act(() => pinWhenSaved());
+    // One undo takes back the last edit only.
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("summary").label).toBe("Summary");
+    expect(field("headline").label).toBe("AB");
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
   it("the count is the changes plus one for the settings", () => {
     const { result, field } = setup();
     act(() =>

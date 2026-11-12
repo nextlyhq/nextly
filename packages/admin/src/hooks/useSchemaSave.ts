@@ -17,7 +17,7 @@
  * `endApply` leaves the page permanently "applying", and a `stopRestart` missed
  * on one branch leaves the overlay up over a page that has finished.
  */
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
@@ -143,6 +143,11 @@ export function useSchemaSave({
   onApplied,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
   const { startRestart, stopRestart } = useRestart();
+  // The fields each preview was made from. The dialog shows that preview, so
+  // those are the fields a confirmation agrees to: an edit or an undo made
+  // while the preview was on its way, or while it was shown, is not applied
+  // unseen.
+  const previewedFields = useRef(new WeakMap<object, string>());
 
   const handleSave = useCallback(() => {
     void (async () => {
@@ -160,6 +165,7 @@ export function useSchemaSave({
           onNoChanges(fields);
           return;
         }
+        previewedFields.current.set(previewed, JSON.stringify(fields));
         confirmation.request(previewed);
       } catch (err) {
         toast.error(apiErrorMessage(err, "Failed to preview schema changes"));
@@ -182,6 +188,14 @@ export function useSchemaSave({
       const fields = getValidatedFields();
       const previewed = confirmation.preview;
       if (!slug || !fields || !previewed) return;
+      const shown = previewedFields.current.get(previewed);
+      if (shown !== undefined && shown !== JSON.stringify(fields)) {
+        confirmation.settle();
+        toast.error(
+          "The fields changed after the preview. Save again to review what changes."
+        );
+        return;
+      }
 
       void (async () => {
         confirmation.beginApply();

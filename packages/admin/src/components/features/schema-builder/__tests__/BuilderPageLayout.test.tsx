@@ -90,6 +90,7 @@ function makeBuilder(): BuilderFieldsApi {
     validateFields: vi.fn(() => ({ valid: true })),
     resetFields: vi.fn(),
     clearHistory: vi.fn(),
+    historyStep: 0,
     canUndo: false,
     canRedo: false,
     undo: vi.fn(() => null),
@@ -329,6 +330,19 @@ describe("BuilderPageLayout", () => {
 
     beforeEach(() => navigateTo.mockClear());
     afterEach(() => vi.restoreAllMocks());
+
+    // The reference goes; the field group's own fields, shown beneath it,
+    // stay where they are defined.
+    it("deleting it says the field goes, not the field group's own fields", async () => {
+      withSeo(0);
+      const user = userEvent.setup();
+      screen.getByTestId("field-row-seo").focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      expect(
+        screen.getByText("Deleted SEO. Undo brings it back.")
+      ).toBeInTheDocument();
+    });
 
     // The page's guard asks before any navigation while changes are pending
     // (see "leaving with pending changes" below), so opening a field group

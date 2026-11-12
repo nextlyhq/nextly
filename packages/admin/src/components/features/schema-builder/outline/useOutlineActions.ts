@@ -77,11 +77,20 @@ export function useOutlineActions(
 
     const canMove = (id: string, delta: -1 | 1): boolean => {
       const node = nodeOf(id);
-      if (!node || !node.own || node.readOnly) return false;
+      // A deleted row neither moves nor is moved past: the builder no
+      // longer holds it, so a move beside it would land elsewhere.
+      if (!node || !node.own || node.readOnly || isPendingDelete(node)) {
+        return false;
+      }
       const siblings = siblingsOf(node);
       const target = siblings[siblings.indexOf(node) + delta];
       // Nor past a read-only sibling: that would move it too.
-      return target !== undefined && target.own && target.readOnly === null;
+      return (
+        target !== undefined &&
+        target.own &&
+        target.readOnly === null &&
+        !isPendingDelete(target)
+      );
     };
 
     /** Right after a field, in its own container. */
@@ -104,11 +113,16 @@ export function useOutlineActions(
         if (!node?.meta && !(node && isPendingDelete(node))) call().select(id);
         focusRow(id);
       },
-      addInside: id => call().addAt({ parentFieldId: id }),
+      addInside: id => {
+        const node = nodeOf(id);
+        // The builder no longer holds a deleted container to add into.
+        if (!node || !isPendingDelete(node))
+          call().addAt({ parentFieldId: id });
+      },
       addAfter: id => {
         const node = nodeOf(id);
         // A read-only row, or one in a read-only container, offers no place.
-        if (node?.own && node.readOnly === null) {
+        if (node?.own && node.readOnly === null && !isPendingDelete(node)) {
           call().addAt(positionAfter(node));
         }
       },
@@ -131,8 +145,10 @@ export function useOutlineActions(
         call().remove(id);
         // Pending until the save, and said so, with what goes with it.
         if (node) {
+          // Only the fields that go with it: a field group's own fields, shown
+          // beneath a field that uses it, stay where they are defined.
           const inside = flattenOutline(node.children).filter(
-            row => !row.meta
+            row => row.own && !row.meta
           ).length;
           setAnnouncement(
             `Deleted ${spokenName(node)}${
