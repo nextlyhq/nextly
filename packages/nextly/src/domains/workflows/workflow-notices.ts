@@ -250,6 +250,9 @@ async function rowsAsRead(
       locale
     );
   }
+  // The Singles read path makes a Single that has no row, so a Single deleted since is read as
+  // gone, never asked of a path that would make it again.
+  if ((await liveSingleId(slug)) === null) return new Map();
   const row = await readableSingleColumns(slug, caller, fields, locale);
   const id = row?.id;
   return typeof id === "string" && row !== null

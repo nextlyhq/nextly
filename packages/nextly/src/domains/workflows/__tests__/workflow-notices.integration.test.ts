@@ -850,6 +850,47 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(sent[0])).not.toContain("Robert Brown");
     });
 
+    it("never makes again a Single deleted since its notice was written", async () => {
+      await boot(dialect);
+      await person(app(), "alice", [["read", "banner"]]);
+      const singles = app().getService(
+        "singleEntryService"
+      ) as SingleEntryService;
+      await singles.update(
+        "banner",
+        { title: "Banner", _overwrite: true },
+        { overrideAccess: true }
+      );
+      const banner = await resolveSingleDocumentId("banner");
+      if (banner === null) throw new Error("no banner");
+      const service = container.get<NoticesService>("noticesService");
+      await service.record({
+        kind: WORKFLOW_CHANGES_REQUESTED_NOTICE,
+        userId: "alice",
+        subjectId: `single:banner:${banner}`,
+        occurrence: "deleted-single",
+        data: {
+          collection: "Banner",
+          title: "Banner",
+          titleField: "title",
+          part: null,
+          localized: false,
+          step: "Bounce",
+          actor: null,
+          comment: "Rework it",
+        },
+      });
+      // The Single's row deleted, as a teardown or a reset leaves it.
+      await app().adapter.delete("single_wn_banner", {
+        and: [{ column: "id", op: "=", value: banner }],
+      });
+
+      const [shown] = (await service.find({ userId: "alice" })).rows;
+
+      expect(shown?.subject).toMatchObject({ link: null, gone: true });
+      expect(await resolveSingleDocumentId("banner")).toBeNull();
+    });
+
     it("judges each notice in its own part's language, and a Single as a Single", async () => {
       await boot(dialect);
       // Letters may be read in every language but Spanish; Carol may read neither entity.
