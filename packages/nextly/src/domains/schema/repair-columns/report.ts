@@ -563,7 +563,33 @@ function describeRun(record: RepairRecord): string {
       ` Owned by plugin "${record.plugin}"; reported, never changed here.`
     );
   }
+  if (record.consent !== null) parts.push(describeConsent(record));
   return parts.join("");
+}
+
+/**
+ * What a lossy column's record says of its consent: the values this run cleared and how it was
+ * consented to, or, where nothing covered it, why a consent given did not and the one that would.
+ * A blocked column says nothing of it, as no consent converts it.
+ */
+function describeConsent(record: RepairRecord): string {
+  const consent = record.consent;
+  if (consent === null) return "";
+  if (consent.given !== null) {
+    if (consent.valuesCleared === 0) return "";
+    const values =
+      consent.valuesCleared === 1
+        ? "1 value"
+        : `${consent.valuesCleared} values`;
+    const how =
+      consent.given === "flag"
+        ? "under the consent naming the column"
+        : "as confirmed at the terminal";
+    return ` Cleared ${values}, ${how}.`;
+  }
+  if (record.outcome === "blocked") return "";
+  const notice = consent.notice === null ? "" : ` ${consent.notice}.`;
+  return `${notice} To convert it, clearing the named values, give ${consent.flag}.`;
 }
 
 /** One record as the text report prints it: one line, then the statements, indented. */
