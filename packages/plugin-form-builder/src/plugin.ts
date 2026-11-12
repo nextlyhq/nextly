@@ -24,7 +24,10 @@ import type { CollectionConfig } from "nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionSendsCollection } from "./collections/sends";
-import { submissionsCollection } from "./collections/submissions";
+import {
+  submissionExtensionFields,
+  submissionsCollection,
+} from "./collections/submissions";
 import { newSubmissionsWidget } from "./dashboard/widget";
 import {
   asFormDocument,
@@ -277,6 +280,7 @@ export function formBuilder(
 
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
+  const submissionFields = submissionExtensionFields(resolvedConfig);
   const sendsCol = submissionSendsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
@@ -545,6 +549,20 @@ export function formBuilder(
                 },
               })
             ),
+        },
+        {
+          // The fields a host added to submissions, which a submission's
+          // page shows in its details. Gated on reading submissions rather
+          // than forms: a person who may read submissions sees their values
+          // in the submission itself, and may lack any right to forms. Asked
+          // of the collection as installed, so a renamed one gates on its
+          // own read permission.
+          method: "GET",
+          path: "/submission-fields",
+          requiredPermission: ({ collection }) =>
+            collection(resolvedConfig.formSubmissionOverrides.slug, "read"),
+          handler: () =>
+            Promise.resolve(Response.json({ fields: submissionFields })),
         },
       ],
     },

@@ -33,13 +33,8 @@ import type {
   UpdateOptions,
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
-import { getColumns } from "drizzle-orm";
 
-import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
-import type { nextlyJobsMysql } from "../../schemas/jobs/mysql";
-import type { nextlyJobsPg } from "../../schemas/jobs/postgres";
-import type { nextlyJobsSqlite } from "../../schemas/jobs/sqlite";
 import type { JobState } from "../../schemas/jobs/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
@@ -218,37 +213,11 @@ function newJobRow(id: string, input: NewJob): Record<string, unknown> {
   };
 }
 
-/** The jobs table's Drizzle model for a dialect. */
-function jobsTableFor(
-  dialect: string
-): typeof nextlyJobsPg | typeof nextlyJobsMysql | typeof nextlyJobsSqlite {
-  switch (dialect) {
-    case "postgresql":
-    case "mysql":
-    case "sqlite":
-      // The loaded dialect's own table, so only that dialect's file is
-      // imported; `createAdapter` loads it.
-      return loadedDialect(dialect).tables.nextlyJobs;
-    default:
-      throw NextlyError.internal({
-        logContext: { reason: "unsupported dialect for jobs", dialect },
-      });
-  }
-}
-
-/** The Drizzle insert a transaction's handle offers. */
-interface JobInsertDb {
-  insert(table: unknown): { values(row: unknown): PromiseLike<unknown> };
-}
-
 /**
  * Add a job inside a transaction the caller holds, so it exists only if that
- * transaction commits.
- *
- * Written through the table's Drizzle model, which stores `input` as JSON on
- * every dialect: a transaction's own `insert` hands a structured value to the
- * driver as it is, and mysql2 writes an object as `[object Object]`. The row
- * is `newJobRow`'s, read by each column's SQL name.
+ * transaction commits. The row is `newJobRow`'s, as `enqueue` writes it, and
+ * the transaction's `insert` stores its `input` as JSON on every dialect, as
+ * the pooled one does.
  *
  * Without a dedupe key: a duplicate-key refusal cannot be recovered from
  * inside the caller's transaction, since on PostgreSQL the failed insert
@@ -256,8 +225,7 @@ interface JobInsertDb {
  * `enqueue` checks it.
  */
 export async function enqueueInTransaction(
-  tx: Pick<TransactionContext, "getDrizzle">,
-  dialect: string,
+  tx: Pick<TransactionContext, "insert">,
   input: Omit<NewJob, "dedupeKey">
 ): Promise<{ id: string }> {
   const id = crypto.randomUUID();
@@ -266,14 +234,7 @@ export async function enqueueInTransaction(
     slug: normalizeJobSlug(input.slug),
     dedupeKey: null,
   });
-  const table = jobsTableFor(dialect);
-  const values = Object.fromEntries(
-    Object.entries(getColumns(table)).map(([property, column]) => [
-      property,
-      row[column.name],
-    ])
-  );
-  await tx.getDrizzle<JobInsertDb>().insert(table).values(values);
+  await tx.insert(JOBS, row, { returning: [] });
   return { id };
 }
 
