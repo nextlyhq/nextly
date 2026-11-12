@@ -1337,11 +1337,16 @@ async function storedOrNone(
  * first time. A pass over entries that already hold what they should writes
  * nothing. Never throws: a collection it cannot settle is warned about and
  * left for the next start.
+ *
+ * @returns Whether every collection was settled, the stored addresses read
+ *   included.
  */
 export async function settleEntryClaimsAtStart(
   deps: EntryClaimsPassDeps
-): Promise<void> {
-  const stored = (await storedOrNone(deps)) ?? new Map();
+): Promise<boolean> {
+  const read = await storedOrNone(deps);
+  const stored = read ?? new Map();
+  let settled = read !== null;
   const collections = new Set([...deps.addresses.keys(), ...stored.keys()]);
   for (const collection of collections) {
     try {
@@ -1352,12 +1357,14 @@ export async function settleEntryClaimsAtStart(
         settleAtStart(deps, tx, collection, eligible)
       );
     } catch (error) {
+      settled = false;
       deps.warn("Could not settle the addresses of a collection's entries.", {
         collection,
         error: String(error),
       });
     }
   }
+  return settled;
 }
 
 /**
@@ -1396,12 +1403,14 @@ async function settleAtStart(
  * release is warned about and left for the next start, as is everything when
  * the stored addresses cannot be read, since a collection served at one would
  * otherwise lose its entries' claims.
+ *
+ * @returns Whether every undeclared collection was released.
  */
 export async function releaseUndeclared(
   deps: EntryClaimsPassDeps
-): Promise<void> {
+): Promise<boolean> {
   const stored = await storedOrNone(deps);
-  if (stored === null) return;
+  if (stored === null) return false;
   const known = new Set([
     deps.pages,
     ...deps.addresses.keys(),
@@ -1418,20 +1427,23 @@ export async function releaseUndeclared(
     deps.warn("Could not read the address claims to sweep.", {
       error: String(error),
     });
-    return;
+    return false;
   }
+  let released = true;
   for (const collection of new Set(stale.map(holder => holder.collection))) {
     try {
       await deps.withTransaction(tx =>
         releaseUnaddressed(deps, tx, collection)
       );
     } catch (error) {
+      released = false;
       deps.warn("Could not release an undeclared collection's addresses.", {
         collection,
         error: String(error),
       });
     }
   }
+  return released;
 }
 
 /**
