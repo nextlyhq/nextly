@@ -112,6 +112,15 @@ describe("each page's status", () => {
     expect(statusOf(ITEMS[0] as SiteAddress, undefined)).toBe("unknown");
   });
 
+  it("is unknown for a page of a type the problem list doesn't cover for the reader", () => {
+    const byPage = problemsByPage([], ["single:home"]);
+    expect(statusOf(ITEMS[0] as SiteAddress, byPage)).toBe("good");
+    // Posts aren't readable to them: their problems were never in the list.
+    expect(statusOf(ITEMS[1] as SiteAddress, byPage)).toBe("unknown");
+    // A page built in code isn't checked per page either way.
+    expect(statusOf(ITEMS[3] as SiteAddress, byPage)).toBe("not-connected");
+  });
+
   it("names a Single by its type key", () => {
     const single = problemsByPage([problem("canonical", "single:home", "1")]);
     expect(statusOf(ITEMS[0] as SiteAddress, single)).toBe("error");

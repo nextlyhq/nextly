@@ -66,22 +66,32 @@ export function entryTypeKey(entry: NonNullable<SiteAddress["entry"]>): string {
   return entry.kind === "single" ? `single:${entry.slug}` : entry.slug;
 }
 
-/** The problem list's problems about each page, by the page's key. */
-export type ProblemsByPage = ReadonlyMap<string, readonly Problem[]>;
+/**
+ * The problem list as Pages reads it: its problems about each page, by the
+ * page's key, and the page types it covers for the reader, where it says.
+ */
+export interface ProblemsByPage {
+  pages: ReadonlyMap<string, readonly Problem[]>;
+  /** The types whose pages the list checked for this reader. */
+  types?: ReadonlySet<string>;
+}
 
 /**
  * The problem list's problems grouped by the page each is about: read once
  * for the whole list. A problem about the whole site names no page.
  */
-export function problemsByPage(problems: readonly Problem[]): ProblemsByPage {
-  const byPage = new Map<string, Problem[]>();
+export function problemsByPage(
+  problems: readonly Problem[],
+  types?: readonly string[]
+): ProblemsByPage {
+  const pages = new Map<string, Problem[]>();
   for (const problem of problems) {
     const { type, id, locale } = problem.subject;
     if (type === undefined || id === undefined) continue;
     const key = pageKey(type, id, locale);
-    byPage.set(key, [...(byPage.get(key) ?? []), problem]);
+    pages.set(key, [...(pages.get(key) ?? []), problem]);
   }
-  return byPage;
+  return types === undefined ? { pages } : { pages, types: new Set(types) };
 }
 
 /** The problems the list holds about `item`; none for a page built in code. */
@@ -91,7 +101,9 @@ export function problemsOf(
 ): readonly Problem[] {
   const { entry } = item;
   if (entry === undefined) return [];
-  return byPage.get(pageKey(entryTypeKey(entry), entry.id, entry.locale)) ?? [];
+  return (
+    byPage.pages.get(pageKey(entryTypeKey(entry), entry.id, entry.locale)) ?? []
+  );
 }
 
 /**
@@ -104,6 +116,16 @@ export function statusOf(
   byPage: ProblemsByPage | undefined
 ): PageStatus {
   if (byPage === undefined) return "unknown";
+  // A page of a type the list doesn't cover for this reader was never
+  // checked for them: no problem listed is no evidence of none.
+  const { entry } = item;
+  if (
+    entry !== undefined &&
+    byPage.types !== undefined &&
+    !byPage.types.has(entryTypeKey(entry))
+  ) {
+    return "unknown";
+  }
   const severities = new Set(
     problemsOf(item, byPage).map(problem => KIND_SEVERITY[problem.kind])
   );

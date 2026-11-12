@@ -157,9 +157,12 @@ let sent: unknown[];
 let writes: { path: string; body?: unknown }[];
 /** The list the addresses route answers: replaced to model a read after a save. */
 let listed: SiteAddress[];
+/** Whether the addresses route is being read: true while a read runs. */
+let fetching: boolean;
 
 beforeEach(() => {
   listed = ITEMS;
+  fetching = false;
   sent = [];
   writes = [];
   vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
@@ -167,7 +170,7 @@ beforeEach(() => {
     pending: false,
     error: null,
     refetch: () => {},
-    fetching: false,
+    fetching: args.path === "/problems" ? false : fetching,
   })) as unknown as typeof usePluginRoute);
   vi.mocked(usePluginRouteMutation).mockImplementation(((args: {
     path: string;
@@ -384,6 +387,26 @@ describe("Edit mode", () => {
     });
   });
 
+  it("lets a saved page built in code go once the list has been read again, though nothing in it changed", async () => {
+    const { rerender } = render(<SeoPagesPage />);
+    editMode();
+    const pricing = (await screen.findByLabelText(
+      "Title for Pricing"
+    )) as HTMLInputElement;
+    fireEvent.change(pricing, { target: { value: " " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() =>
+      expect(toastMutationResult).toHaveBeenCalledWith("Saved 1 page.", [])
+    );
+    expect(pricing.readOnly).toBe(true);
+    // The read after the save runs, and answers the list as it was.
+    fetching = true;
+    rerender(<SeoPagesPage />);
+    fetching = false;
+    rerender(<SeoPagesPage />);
+    await vi.waitFor(() => expect(pricing.readOnly).toBe(false));
+  });
+
   it("holds a saved page built in code until the list is read again with what it saved", async () => {
     const { rerender } = render(<SeoPagesPage />);
     editMode();
@@ -408,6 +431,9 @@ describe("Edit mode", () => {
           }
         : item
     );
+    fetching = true;
+    rerender(<SeoPagesPage />);
+    fetching = false;
     rerender(<SeoPagesPage />);
     await vi.waitFor(() => expect(pricing.readOnly).toBe(false));
     expect(pricing.value).toBe("Plans");

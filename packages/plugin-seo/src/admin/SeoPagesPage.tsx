@@ -38,7 +38,14 @@ import {
   type NextlyColumn,
   type RowAction,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+} from "react";
 
 import { ADDRESSES_ROUTE_PATH, type SiteAddress } from "../code-pages/contract";
 import { IMPORT_PAGE_HREF } from "../overview/contract";
@@ -114,12 +121,17 @@ function usePages(filter: PagesFilter) {
   });
   const problems = useCheckedProblemList();
   const items = addresses.data?.items;
+  // Each read of the list that ends, whether or not its answer changed.
+  const [reads, setReads] = useState(0);
+  useEffect(() => {
+    if (!addresses.fetching) setReads(count => count + 1);
+  }, [addresses.fetching]);
   // No list yet, or one that couldn't be read: every status is unknown.
   const byPage = useMemo(
     () =>
       problems.list === undefined
         ? undefined
-        : problemsByPage(problems.list.problems),
+        : problemsByPage(problems.list.problems, problems.list.types),
     [problems.list]
   );
   const shown = useMemo(
@@ -130,8 +142,8 @@ function usePages(filter: PagesFilter) {
     ? `The site's pages could not be read. ${apiErrorMessage(addresses.error)}`
     : null;
   return {
-    // The answer as read, which a later read replaces.
-    list: items,
+    // How many reads of the list have ended, which a later read moves on.
+    list: reads,
     items: items ?? [],
     byPage,
     shown,

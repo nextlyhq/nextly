@@ -889,6 +889,9 @@ describe.each(getConfiguredTestDialects())(
           problem => problem.subject.type === "single:home"
         )
       ).toBe(false);
+      // The list says which types it covers for them, so a page of another
+      // type is not taken for one with no problems.
+      expect(itemOf(posts.body).types).toEqual(["posts"]);
       const refused = await route(
         "GET",
         "/problems",
