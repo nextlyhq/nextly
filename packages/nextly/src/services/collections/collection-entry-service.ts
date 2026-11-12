@@ -47,6 +47,10 @@ import type {
   BulkOperationOptions,
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
+import {
+  publishParts,
+  type PublishPartsRequest,
+} from "../../domains/collections/services/publish-parts";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 import {
@@ -943,6 +947,44 @@ export class CollectionEntryService extends BaseService {
     return withRuleLanguage(everyLanguageOf(this.localization), () =>
       this.mutationService.previewPublishAllLocales(params)
     );
+  }
+
+  /**
+   * Publish or unpublish the parts of an entry the request chooses: some of its languages, or
+   * every one, and its shared part, or say what doing so would do.
+   *
+   * @experimental
+   */
+  publishParts(
+    params: EveryLanguageLifecycleParams,
+    request: PublishPartsRequest
+  ) {
+    return publishParts(params.entryId, request, {
+      everyLanguage: (direction, describe) =>
+        describe
+          ? this.previewPublishAllLocales(params)
+          : direction === "publish"
+            ? this.publishAllLocales(params)
+            : this.unpublishAllLocales(params),
+      oneLanguage: (direction, locale) =>
+        this.updateEntry(
+          {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            user: params.user,
+            overrideAccess: params.overrideAccess,
+            authenticatedScope: params.authenticatedScope,
+            disableRevalidate: params.disableRevalidate,
+            request: params.request,
+            context: params.context,
+            locale,
+          },
+          {
+            ...params.data,
+            status: direction === "publish" ? "published" : "draft",
+          }
+        ),
+    });
   }
 
   /**

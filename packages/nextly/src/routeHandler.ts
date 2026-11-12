@@ -721,6 +721,8 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "duplicateEntry",
   "publishAllLocales",
   "unpublishAllLocales",
+  "publishParts",
+  "unpublishParts",
   // What publishing every language would do. A read, but admitted on the
   // publish grant as the publish is (LIFECYCLE_ROUTE_ACTIONS).
   "previewPublishAllLocales",
@@ -971,6 +973,8 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
 > = {
   publishAllLocales: "publish",
   unpublishAllLocales: "unpublish",
+  publishParts: "publish",
+  unpublishParts: "unpublish",
   publishAllSingleLocales: "publish",
   previewPublishAllSingleLocales: "publish",
   previewPublishAllLocales: "publish",

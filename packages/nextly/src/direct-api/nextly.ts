@@ -167,6 +167,8 @@ import type {
   SingleListResult,
   SingleSlug,
   UpdateArgs,
+  PublishArgs,
+  PublishResult,
   UpdateSingleArgs,
   UserContext,
   VerifyEmailArgs,
@@ -583,6 +585,29 @@ export class Nextly implements NextlyContext {
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.update(this, callArgs)
+    );
+  }
+
+  /**
+   * Publish the parts of one entry `args` chooses: some of its languages, or every one, and its
+   * shared part. With `describe`, say what publishing them would do, and change nothing.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  publish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.publish(this, callArgs)
+    );
+  }
+
+  /**
+   * Unpublish the parts of one entry `args` chooses, or say what doing so would do.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  unpublish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.unpublish(this, callArgs)
     );
   }
 
