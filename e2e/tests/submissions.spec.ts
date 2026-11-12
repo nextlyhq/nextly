@@ -141,25 +141,43 @@ test("shows per-field columns, edits in the drawer, and stamps the edit", async 
   // The spam row stays out of the default view.
   await expect(includingHidden(page).getByText(bot)).toHaveCount(0);
 
-  // Drawer: values, edit, save — the server stamps the edit.
+  // A row opens the submission's own page, at its own address, carrying the
+  // list's filter.
   await page.getByText(ada).filter({ visible: true }).first().click();
-  const sheet = page.getByRole("dialog");
-  await expect(sheet.getByText(greeting)).toBeVisible();
-  await sheet.getByRole("button", { name: "Edit" }).click();
-  await sheet
+  await expect(page).toHaveURL(
+    /\/admin\/collections\/form-submissions\/[^/?]+\?status=all&form=/
+  );
+  const answers = page.getByRole("region", { name: "Answers" });
+  await expect(answers.getByText(greeting)).toBeVisible();
+  // Opening a New one marks it Read, for a person who may update it.
+  await expect(
+    page
+      .getByRole("complementary", { name: "Submission details" })
+      .getByRole("button", { name: "Read", pressed: true })
+  ).toBeVisible({ timeout: 15_000 });
+
+  // Edit, save: the server stamps the edit, and Activity says so.
+  await answers.getByRole("button", { name: "Edit answers" }).click();
+  await answers
     .getByRole("textbox", { name: "Text" })
     .fill(`${greeting} (corrected)`);
-  await sheet.getByRole("button", { name: "Save", exact: true }).click();
-
-  // The sheet stays open after saving (prev/next continuity); the refetched
-  // record flows back in with the server-side edit stamp.
-  await expect(sheet.getByText(/Edited .* — the values above/)).toBeVisible({
+  await answers.getByRole("button", { name: "Save answers" }).click();
+  await expect(answers.getByText(`${greeting} (corrected)`)).toBeVisible({
     timeout: 15_000,
   });
-  await page.keyboard.press("Escape");
   await expect(
-    page.getByText(`${greeting} (corrected)`).filter({ visible: true }).first()
+    page.getByRole("region", { name: "Activity" }).getByText(
+      "Answers edited in the admin"
+    )
   ).toBeVisible();
+
+  // Opened directly, by its address alone, it reads the same.
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Answers" }).getByText(
+      `${greeting} (corrected)`
+    )
+  ).toBeVisible({ timeout: 30_000 });
 });
 
 test("reviews spam in its tab and recovers it", async ({ page }) => {
@@ -172,14 +190,18 @@ test("reviews spam in its tab and recovers it", async ({ page }) => {
     page.getByText(bot).filter({ visible: true }).first()
   ).toBeVisible();
 
-  // Recover: the drawer's spam banner explains, status New brings it back.
+  // Recover from its page: Not spam brings it back as New.
   await page.getByText(bot).filter({ visible: true }).first().click();
-  const sheet = page.getByRole("dialog");
-  await expect(sheet.getByText(/Flagged as spam/)).toBeVisible();
-  await sheet.getByLabel("Status").click();
-  await page.getByRole("option", { name: "New", exact: true }).click();
-  await sheet.getByRole("button", { name: "Save", exact: true }).click();
-  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("region", { name: "Activity" }).getByText(/Flagged as spam/)
+  ).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Not spam" }).click();
+  await expect(
+    page
+      .getByRole("complementary", { name: "Submission details" })
+      .getByRole("button", { name: "New", pressed: true })
+  ).toBeVisible({ timeout: 15_000 });
+  await page.goBack();
 
   await page.getByRole("tab", { name: "New", exact: true }).click();
   await expect(

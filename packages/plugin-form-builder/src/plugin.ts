@@ -97,6 +97,7 @@ import {
   askedSnapshotOf,
   readAskedSnapshot,
 } from "./utils/asked-fields";
+import {
   CONSENT_EDIT_REFUSED,
   editedConsents,
   isConsentAnswer,
@@ -1455,6 +1456,9 @@ function recordAsked(
     data
   );
   if (after !== undefined) row.asked = after;
+}
+
+/**
  * The fields an update of a submission is checked against, refusing one that
  * would change a consent. A consent keeps what the visitor agreed to and the
  * text they were shown, so no edit, by staff or through the API, may change

@@ -15,6 +15,7 @@
 
 import {
   DataTableView,
+  navigateTo,
   type NextlyColumn,
   type RowAction,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -54,27 +55,17 @@ import { formatExportValue } from "../../../utils/export-formats";
 import { readPermissions } from "../../use-admin-permissions";
 import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
 
-import { SubmissionSheet } from "./SubmissionSheet";
+import {
+  listWhere,
+  LIST_SORT,
+  type StatusTab,
+  submissionPageAddress,
+} from "./submission-list-scope";
+import { formIdOf, type SubmissionRow, whenText } from "./submission-row";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-export interface SubmissionRow {
-  id: string;
-  form: string | { id: string; name?: string };
-  data: Record<string, unknown>;
-  status: string;
-  spamReason?: string | null;
-  notes?: string | null;
-  ipAddress?: string | null;
-  userAgent?: string | null;
-  submittedAt?: string | null;
-  editedAt?: string | null;
-  editedBy?: string | null;
-  /** The submission's version as the list read it; see `submissionPatch`. */
-  _rev?: string;
-}
 
 /**
  * What a change to a submission sends: the change, with the version its row
@@ -94,7 +85,7 @@ export function submissionPatch(
 const SUBMISSION_CHANGED_SINCE =
   "Someone changed this submission since the list loaded. The list now shows their change; make yours again.";
 
-export interface FormOption {
+interface FormOption {
   id: string;
   name: string;
   fields: FormField[];
@@ -108,8 +99,6 @@ interface SubmissionsViewProps {
    */
   formId?: string;
 }
-
-type StatusTab = "all" | "new" | "read" | "archived" | "spam";
 
 const STATUS_TABS: Array<{ value: StatusTab; label: string }> = [
   { value: "all", label: "All" },
@@ -127,20 +116,6 @@ const VISIBLE_FIELD_COLUMNS = 4;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formIdOf(row: SubmissionRow): string {
-  return typeof row.form === "object" ? row.form.id : row.form;
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
 
 /** A form entry as the entries API answers it. */
 type FormEntry = { id: string; name?: string; fields?: FormField[] };
@@ -244,7 +219,6 @@ export function SubmissionsView({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
   const [canUpdate, setCanUpdate] = useState(false);
   const [canDelete, setCanDelete] = useState(false);
 
@@ -312,20 +286,20 @@ export function SubmissionsView({
     setLoading(true);
     setError(null);
     try {
-      const where: Record<string, unknown> = {};
-      if (selectedFormId) where.form = { equals: selectedFormId };
-      // "All" means every human status; spam only shows when asked for —
-      // the same default the export route applies.
-      if (statusTab === "all") where.status = { not_equals: "spam" };
-      else where.status = { equals: statusTab };
+      // The list's filter, built where a submission's page builds it, so
+      // its newer and older move through this same list.
+      const where = listWhere({
+        ...(selectedFormId ? { form: selectedFormId } : {}),
+        status: statusTab,
+      });
 
       // `limit`, the entries API's page size: the pager counts pages of
       // PAGE_SIZE, so a page the server cut to its default would skip rows.
       const params = new URLSearchParams({
         page: String(page),
         limit: String(PAGE_SIZE),
-        sortBy: "submittedAt",
-        sortOrder: "desc",
+        sortBy: LIST_SORT.sortBy,
+        sortOrder: LIST_SORT.sortOrder,
         where: JSON.stringify(where),
       });
       const res = await fetch(
@@ -402,7 +376,7 @@ export function SubmissionsView({
         {
           name: "submittedAt",
           header: "Submitted",
-          accessor: row => formatDate(row.submittedAt),
+          accessor: row => whenText(row.submittedAt),
         },
       ];
     }
@@ -426,7 +400,7 @@ export function SubmissionsView({
       {
         name: "submittedAt",
         header: "Submitted",
-        accessor: row => formatDate(row.submittedAt),
+        accessor: row => whenText(row.submittedAt),
       },
     ];
   }, [selectedForm, formNameById, hiddenFieldColumns]);
@@ -480,7 +454,6 @@ export function SubmissionsView({
         { method: "DELETE", credentials: "include" }
       );
       if (!res.ok) throw new Error(`Delete failed (${res.status})`);
-      setOpenId(null);
       await fetchRows();
       void queryClient.invalidateQueries({ queryKey: SUBMISSION_COUNT_KEY });
     },
@@ -533,12 +506,6 @@ export function SubmissionsView({
   );
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  // The open record is tracked by ID: after a save refetch the row may
-  // move or leave the filtered view entirely — index tracking would silently
-  // show a different submission, while a missing ID just closes the drawer.
-  const openIndex = openId ? rows.findIndex(row => row.id === openId) : -1;
-  const openRow = openIndex === -1 ? null : rows[openIndex];
-
   return (
     <div className="space-y-4">
       {/* Toolbar: form filter, status tabs, export */}
@@ -550,7 +517,6 @@ export function SubmissionsView({
               onValueChange={value => {
                 setChosenFormId(value === "__all" ? "" : value);
                 setPage(1);
-                setOpenId(null);
               }}
             >
               <SelectTrigger
@@ -575,7 +541,6 @@ export function SubmissionsView({
             onValueChange={value => {
               setStatusTab(value as StatusTab);
               setPage(1);
-              setOpenId(null);
             }}
           >
             {/* No corner override: square is the primitive's guarantee, not
@@ -680,7 +645,16 @@ export function SubmissionsView({
             : "No submissions yet."
         }
         ariaLabel="Submissions"
-        onRowClick={row => setOpenId(row.id)}
+        // A submission opens as a page of its own, carrying this list's
+        // filter so its newer and older follow it.
+        onRowClick={row =>
+          navigateTo(
+            submissionPageAddress(submissionsSlug, row.id, {
+              ...(selectedFormId ? { form: selectedFormId } : {}),
+              status: statusTab,
+            })
+          )
+        }
         rowActions={rowActions}
       />
 
@@ -719,33 +693,6 @@ export function SubmissionsView({
           </Button>
         </div>
       </div>
-
-      {/* Detail drawer with prev/next over the current page */}
-      {openRow && (
-        <SubmissionSheet
-          submission={openRow}
-          form={
-            forms.find(form => form.id === formIdOf(openRow)) ?? {
-              id: formIdOf(openRow),
-              name: formNameById.get(formIdOf(openRow)) ?? "Form",
-              fields: [],
-            }
-          }
-          canUpdate={canUpdate}
-          onClose={() => setOpenId(null)}
-          onPrev={
-            openIndex > 0 ? () => setOpenId(rows[openIndex - 1].id) : undefined
-          }
-          onNext={
-            openIndex < rows.length - 1
-              ? () => setOpenId(rows[openIndex + 1].id)
-              : undefined
-          }
-          onSave={async changes => {
-            await patchSubmission(openRow.id, changes);
-          }}
-        />
-      )}
     </div>
   );
 }

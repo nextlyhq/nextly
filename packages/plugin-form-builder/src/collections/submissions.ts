@@ -287,10 +287,15 @@ export function submissionsCollection(
 
       components: {
         // The full submissions experience (per-form columns, status tabs,
-        // drawer detail, export) replaces the generic list.
+        // export) replaces the generic list.
         views: {
           List: {
             Component: "@nextlyhq/plugin-form-builder/admin#SubmissionsView",
+          },
+          // Each submission is a page of its own: its answers as asked, its
+          // activity, and its status, note and details beside them.
+          Edit: {
+            Component: "@nextlyhq/plugin-form-builder/admin#SubmissionPage",
           },
         },
       },
