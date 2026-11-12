@@ -751,6 +751,9 @@ export function useUpdateSingleDocument(
       void queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.all(),
       });
+      // And the dashboard's reads, the Content overview's among them, which
+      // name who edited each Single last and when.
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
     // The editor reports the failure itself. A refusal because the Single was
     // removed from code also reads its schema again, so an editor opened
