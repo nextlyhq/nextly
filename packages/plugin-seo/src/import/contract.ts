@@ -67,8 +67,12 @@ export type ImportSource =
       kind: "group";
       /** The group or component field the values are in. */
       field: string;
-      /** Where each of the group's fields goes. */
-      map: Record<string, ImportTarget>;
+      /**
+       * Where each of the group's fields goes. The import panel always sends
+       * one; a caller of the engine that sends none gets where each field's
+       * name says it goes.
+       */
+      map?: Record<string, ImportTarget>;
     }
   | {
       kind: ImportFileSource;
@@ -123,6 +127,29 @@ export interface DryRunLine {
   pages: number;
 }
 
+/**
+ * What an import does to one page, or to a record it passes over: sets
+ * values (`set`), finds every value the same as the page's automatic one
+ * (`same`), keeps values a person already typed (`kept`), or skips it, with
+ * why (`skipped`).
+ */
+export interface ImportReportEntry {
+  /** The page's content type key and id; none for a record matching no page. */
+  type?: string;
+  id?: string;
+  /** The page's name, or the record's as the source names it. */
+  label: string;
+  outcome: "set" | "same" | "kept" | "skipped";
+  /** The places it sets. */
+  set: ImportTarget[];
+  /** The places whose value is the same as the automatic one, left as they are. */
+  same: ImportTarget[];
+  /** The places a person already filled with another value, which keep it. */
+  kept: ImportTarget[];
+  /** Why it is skipped. */
+  reason?: string;
+}
+
 /** What a dry run answers. */
 export interface DryRunBody {
   /** The pages, or the file's records, it read. */
@@ -142,6 +169,8 @@ export interface DryRunBody {
   left: string[];
   /** What the person should know before applying it. */
   warnings: string[];
+  /** What the import does to each page it read and each record it passed over. */
+  documents: ImportReportEntry[];
   /** What the apply is checked against: the changes, as this run found them. */
   plan: string;
 }
