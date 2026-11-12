@@ -33,7 +33,7 @@ export {
 } from "./foreign-key-action";
 export type { ForeignKeyActionDialect } from "./foreign-key-action";
 export { quoteIdent } from "./identifier-quoting";
-export { MysqlUnsupportedOperationError } from "./mysql";
+export { MysqlUnsupportedOperationError, replaceMysqlCheckSql } from "./mysql";
 export { SqliteUnsupportedOperationError } from "./sqlite";
 export { sqliteTableRebuildStatements } from "./sqlite-rebuild";
 

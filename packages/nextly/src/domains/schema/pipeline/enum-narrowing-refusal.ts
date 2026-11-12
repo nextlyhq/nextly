@@ -32,6 +32,7 @@ import {
   enumValuesIn,
   removedEnumValues,
 } from "../extension/enum-check";
+import { toSnakeCase } from "../services/field-column-descriptor";
 
 import { querySqlRows } from "./classifier/count-helpers";
 import type { Operation } from "./diff/types";
@@ -46,6 +47,8 @@ interface Narrowing {
   column: string;
   /** The values the pair takes away, in the order the old check listed them. */
   values: string[];
+  /** The values the replacement check keeps, evaluated by the database. */
+  kept: string[];
 }
 
 /** The key a check's table and column pair by, folded as MySQL folds names. */
@@ -86,48 +89,67 @@ export function checkNarrowings(operations: readonly Operation[]): Narrowing[] {
   for (const op of operations) {
     if (op.type !== "add_check") continue;
     const column = enumColumnIn(op.check.sql);
-    if (column === null || enumValuesIn(op.check.sql) === null) continue;
+    const kept = enumValuesIn(op.check.sql);
+    if (column === null || kept === null) continue;
     for (const before of dropped.get(pairKey(op.tableName, column)) ?? []) {
       const values = removedEnumValues(before, op.check.sql);
       if (values.length === 0) continue;
-      narrowings.push({ table: op.tableName, column, values });
+      narrowings.push({ table: op.tableName, column, values, kept });
     }
   }
   return narrowings;
 }
 
-/** How many rows of `table` hold one of `values` in `column`. */
+/** How many rows of `table` hold a non-null `column` value outside `kept`. */
 function rowsHolding(
   table: string,
   column: string,
-  values: readonly string[]
+  kept: readonly string[]
 ): SQL {
   // The values are bound parameters, never spelled into the statement: they
   // came out of a check's expression, and one holding a quote would escape
-  // any quoting written by hand.
-  return sql`SELECT COUNT(*) AS n FROM ${sql.identifier(table)} WHERE ${sql.identifier(column)} IN (${sql.join(
-    values.map(value => sql`${value}`),
+  // any quoting written by hand. Querying `NOT IN (kept)` rather than the
+  // JS-derived removed set lets the column's own collation decide equivalence,
+  // so values retained under case- or accent-insensitive comparisons are not
+  // refused while NULL continues to pass CHECK.
+  const col = sql.identifier(column);
+  return sql`SELECT COUNT(*) AS n FROM ${sql.identifier(table)} WHERE ${col} IS NOT NULL AND ${col} NOT IN (${sql.join(
+    kept.map(value => sql`${value}`),
     sql`, `
   )})`;
 }
 
-/** The subject a refusal names: the table, as the entity it belongs to spells it. */
+/** The entity and field a table's column belongs to, as a refusal names them. */
 function subjectOf(
   desired: DesiredSchema,
-  table: string
-): { label: string; field: string } {
-  const lower = table.toLowerCase();
-  const entities: Record<string, { slug: string; tableName: string }> = {
-    ...desired.collections,
-    ...desired.singles,
-    ...desired.components,
-  };
-  for (const entity of Object.values(entities)) {
-    if (entity.tableName.toLowerCase() === lower) {
-      return { label: `Table '${entity.tableName}'`, field: entity.slug };
+  table: string,
+  column: string
+): { label: string; field: string; isEntity: boolean } {
+  const kinds = [
+    ["Collection", desired.collections],
+    ["Single", desired.singles],
+    ["Field group", desired.components],
+  ] as const;
+  // A translated field's column is on its entity's companion, named for the main table.
+  const mainTable = table.toLowerCase().replace(/_locales$/, "");
+  const lowerColumn = column.toLowerCase();
+  for (const [kind, entities] of kinds) {
+    for (const entity of Object.values(entities)) {
+      if (entity.tableName.toLowerCase() !== mainTable) continue;
+      const fields = entity.fields as
+        | ReadonlyArray<{ name?: string }>
+        | undefined;
+      const field = fields?.find(
+        f => typeof f.name === "string" && toSnakeCase(f.name) === lowerColumn
+      );
+      return {
+        label: `${kind} '${entity.slug}'`,
+        field: typeof field?.name === "string" ? field.name : column,
+        isEntity: true,
+      };
     }
   }
-  return { label: `Table '${table}'`, field: table };
+  return { label: `Table '${table}'`, field: column, isEntity: false };
 }
 
 /** `rows` counted, as a refusal words it. */
@@ -162,15 +184,19 @@ export async function refuseEnumNarrowingsOverRows(args: {
     const [row] = await querySqlRows<{ n: number | string }>(
       args.db,
       args.dialect,
-      rowsHolding(table, narrowing.column, narrowing.values)
+      rowsHolding(table, narrowing.column, narrowing.kept)
     );
     const count = Number(row?.n ?? 0);
     if (count === 0) continue;
-    const { label, field } = subjectOf(args.desired, narrowing.table);
+    const { label, field, isEntity } = subjectOf(
+      args.desired,
+      narrowing.table,
+      narrowing.column
+    );
     const those = count === 1 ? "that row" : "those rows";
     const values = narrowing.values.map(value => `'${value}'`).join(", ");
     errors.push({
-      path: `fields.${field}`,
+      path: isEntity ? `fields.${field}` : `tables.${narrowing.table}.${field}`,
       code: "ENUM_VALUE_HELD_BY_ROWS",
       message: `${label}: column '${narrowing.column}' cannot take ${values} away while ${rowsHold(count)} one of them. Move ${those} to a value that stays, or delete them, then apply again.`,
     });

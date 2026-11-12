@@ -242,7 +242,9 @@ function readEnumCheck(
   const canonical = normalizeCheckExpression(sql);
   // Only a column compared with string literals is a value set; the literal
   // list is matched whole, so `a IN (...) AND b IN (...)` is not read as one.
-  const column = `(\\w+|"(?:[^"]|"")*")`;
+  // Bare identifiers include `$` because schema validation allows it and
+  // normalizeCheckExpression prints `[a-z_][a-z0-9_$]*` without quotes.
+  const column = `([A-Za-z_][A-Za-z0-9_$]*|"(?:[^"]|"")*")`;
   const literal = `'(?:[^']|'')*'`;
   const match =
     new RegExp(`^\\s*${column}\\s*=\\s*(${literal})\\s*$`).exec(canonical) ??

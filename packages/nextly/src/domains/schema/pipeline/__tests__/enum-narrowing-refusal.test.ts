@@ -41,7 +41,7 @@ describe("checkNarrowings", () => {
       addCheck("t__items", NARROW),
     ]);
     expect(narrowings).toEqual([
-      { table: "t__items", column: "state", values: ["live"] },
+      { table: "t__items", column: "state", values: ["live"], kept: ["draft"] },
     ]);
   });
 
@@ -138,26 +138,98 @@ describe("refuseEnumNarrowingsOverRows", () => {
     });
   });
 
-  it("names the entity a table belongs to rather than the table", async () => {
+  it("names the entity and field path a table belongs to rather than the table", async () => {
     const desired = {
       collections: {
-        posts: { slug: "posts", tableName: "dc_posts" },
+        posts: {
+          slug: "posts",
+          tableName: "dc_posts",
+          fields: [{ name: "publishState" }],
+        },
       },
-      singles: {},
-      components: {},
+      singles: {
+        settings: { slug: "settings", tableName: "ds_settings", fields: [] },
+      },
+      components: {
+        meta: { slug: "meta", tableName: "comp_meta", fields: [] },
+      },
     } as unknown as DesiredSchema;
-    const refusal = refuseEnumNarrowingsOverRows({
-      db: dbCounting(1),
-      dialect: "sqlite",
-      desired,
-      operations: [dropCheck("dc_posts", WIDE), addCheck("dc_posts", NARROW)],
+
+    const assertEntity = async (
+      table: string,
+      column: string,
+      expectedLabel: string,
+      expectedPath: string
+    ) => {
+      const refusal = refuseEnumNarrowingsOverRows({
+        db: dbCounting(1),
+        dialect: "sqlite",
+        desired,
+        operations: [
+          dropCheck(table, `"${column}" IN ('draft', 'live')`),
+          addCheck(table, `"${column}" IN ('draft')`),
+        ],
+      });
+      await expect(refusal).rejects.toSatisfy((error: unknown) => {
+        const entry = (error as NextlyError).publicData as {
+          errors: Array<{ path: string; code: string; message: string }>;
+        };
+        expect(entry.errors).toHaveLength(1);
+        expect(entry.errors[0]?.path).toBe(expectedPath);
+        expect(entry.errors[0]?.message).toContain(`${expectedLabel}:`);
+        expect(entry.errors[0]?.message).not.toContain(`Table '${table}'`);
+        expect(entry.errors[0]?.message).toContain("1 row holds");
+        return true;
+      });
+    };
+
+    await assertEntity(
+      "dc_posts",
+      "publish_state",
+      "Collection 'posts'",
+      "fields.publishState"
+    );
+    await assertEntity(
+      "dc_posts_locales",
+      "state",
+      "Collection 'posts'",
+      "fields.state"
+    );
+    await assertEntity(
+      "ds_settings",
+      "state",
+      "Single 'settings'",
+      "fields.state"
+    );
+    await assertEntity(
+      "comp_meta",
+      "state",
+      "Field group 'meta'",
+      "fields.state"
+    );
+  });
+
+  it("queries rows outside the kept values so database collation decides", async () => {
+    const queries: Array<{ strings: string[]; params: unknown[] }> = [];
+    const db = {
+      execute: (query: unknown): Promise<[Array<{ n: number }>, unknown]> => {
+        const text = JSON.stringify(query);
+        queries.push({ strings: [text], params: [] });
+        return Promise.resolve([[{ n: 0 }], undefined]);
+      },
+    };
+    await refuseEnumNarrowingsOverRows({
+      db,
+      dialect: "mysql",
+      desired: emptyDesired,
+      operations: [
+        dropCheck("t__items", "`state` IN ('draft', 'live', 'Live')"),
+        addCheck("t__items", "`state` IN ('draft', 'Live')"),
+      ],
     });
-    await expect(refusal).rejects.toSatisfy((error: unknown) => {
-      expect(JSON.stringify((error as NextlyError).publicData)).toContain(
-        "1 row holds"
-      );
-      return true;
-    });
+    expect(queries[0]?.strings[0]).toContain("NOT IN");
+    expect(queries[0]?.strings[0]).toContain('"Live"');
+    expect(queries[0]?.strings[0]).not.toContain('"live"');
   });
 
   it("applies the narrowing when nothing holds a taken value", async () => {

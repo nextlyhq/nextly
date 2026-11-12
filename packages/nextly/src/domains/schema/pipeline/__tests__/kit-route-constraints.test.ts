@@ -46,21 +46,119 @@ const rekey: Operation[] = [
 ];
 
 describe("kitRouteConstraintStatements", () => {
-  it.each(["postgresql", "mysql"] as const)(
-    "drops before the kit and adds after it on %s",
-    dialect => {
-      const { before, after } = kitRouteConstraintStatements(
-        rekey,
-        [items, shelves],
-        dialect
-      );
-      expect(before).toHaveLength(1);
-      expect(before[0]).toMatch(/DROP (CONSTRAINT|CHECK)/);
-      expect(after).toHaveLength(2);
-      expect(after[0]).toContain("CHECK (status IN ('a', 'b'))");
-      expect(after[1]).toContain("FOREIGN KEY");
-    }
-  );
+  it("drops before the kit and adds after it on postgresql", () => {
+    const { before, after } = kitRouteConstraintStatements(
+      rekey,
+      [items, shelves],
+      "postgresql"
+    );
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatch(/DROP CONSTRAINT/);
+    expect(after).toHaveLength(2);
+    expect(after[0]).toContain("CHECK (status IN ('a', 'b'))");
+    expect(after[1]).toContain("FOREIGN KEY");
+  });
+
+  it("replaces a check atomically in one ALTER TABLE after the kit on mysql", () => {
+    const { before, after } = kitRouteConstraintStatements(
+      rekey,
+      [items, shelves],
+      "mysql"
+    );
+    expect(before).toEqual([]);
+    expect(after).toEqual([
+      "ALTER TABLE `cx__items` DROP CHECK `ck_cx__items_status_enum`, ADD CONSTRAINT `ck_cx__items_status_enum` CHECK (status IN ('a', 'b'))",
+      expect.stringContaining("FOREIGN KEY"),
+    ]);
+  });
+
+  it("replaces a renamed enum check atomically on mysql when the column is unchanged", () => {
+    const renamed: Operation[] = [
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_old", sql: "`status` IN ('a', 'b')" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_new", sql: "`status` IN ('a')" },
+      },
+    ];
+    expect(kitRouteConstraintStatements(renamed, [items], "mysql")).toEqual({
+      before: [],
+      after: [
+        "ALTER TABLE `cx__items` DROP CHECK `ck_old`, ADD CONSTRAINT `ck_new` CHECK (`status` IN ('a'))",
+      ],
+      liftRestores: [],
+    });
+  });
+
+  it("keeps drop_check before the kit on mysql when the constrained column is altered", () => {
+    const withTypeChange: Operation[] = [
+      ...rekey,
+      {
+        type: "change_column_type",
+        tableName: "cx__items",
+        columnName: "status",
+        fromType: "varchar(64)",
+        toType: "text",
+      },
+    ];
+    const { before, after } = kitRouteConstraintStatements(
+      withTypeChange,
+      [items, shelves],
+      "mysql"
+    );
+    expect(before).toEqual([
+      "ALTER TABLE `cx__items` DROP CHECK `ck_cx__items_status_enum`",
+    ]);
+    expect(after[0]).toContain("ADD CONSTRAINT `ck_cx__items_status_enum`");
+  });
+
+  it("replaces a non-enum check atomically on mysql by name unless a column on the table changes", () => {
+    const plain: Operation[] = [
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_qty", sql: "quantity >= 0" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_qty", sql: "quantity >= 10" },
+      },
+    ];
+    expect(kitRouteConstraintStatements(plain, [items], "mysql")).toEqual({
+      before: [],
+      after: [
+        "ALTER TABLE `cx__items` DROP CHECK `ck_qty`, ADD CONSTRAINT `ck_qty` CHECK (quantity >= 10)",
+      ],
+      liftRestores: [],
+    });
+
+    const withRenamedColumn = kitRouteConstraintStatements(
+      [
+        ...plain,
+        {
+          type: "rename_column",
+          tableName: "cx__items",
+          fromColumn: "qty",
+          toColumn: "quantity",
+          fromType: "integer",
+          toType: "integer",
+        },
+      ],
+      [items],
+      "mysql"
+    );
+    expect(withRenamedColumn.before).toEqual([
+      "ALTER TABLE `cx__items` DROP CHECK `ck_qty`",
+    ]);
+    expect(withRenamedColumn.after).toEqual([
+      "ALTER TABLE `cx__items` ADD CONSTRAINT `ck_qty` CHECK (quantity >= 10)",
+    ]);
+  });
 
   it("adds a kit-created table's constraints on PostgreSQL only", () => {
     const created: Operation[] = [{ type: "add_table", table: items }];
