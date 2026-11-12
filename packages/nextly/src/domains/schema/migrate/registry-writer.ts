@@ -82,6 +82,14 @@ export interface RegistryWriteDeps {
    * is that plugin's, not the app's.
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /**
+   * Which rows the registry already holds are brought to the source, by kind
+   * and slug; every one when absent. A row the registry lacks is written
+   * whatever this says. A development run passes it so a row a live sync
+   * edited is rewritten only where a migration it applied changed the entity
+   * (`reconcile-metadata.ts`).
+   */
+  rewrites?: (kind: SettingsEntityKind, slug: string) => boolean;
 }
 
 export interface RegistryWriteResult {
@@ -317,9 +325,22 @@ async function recordedRows(
       ? { cleared: cleared.get(`${kind}:${slug}`) }
       : {}),
   });
+  // A row the registry holds is left out unless `rewrites` asks for it. A
+  // registry that could not be read holds nothing known, so its rows are
+  // written, each read on its own as it is.
+  const chosen =
+    (
+      kind: SettingsEntityKind,
+      stored: ReadonlyMap<string, unknown> | undefined
+    ) =>
+    ([slug]: [string, RecordedEntitySettings]) =>
+      deps.rewrites === undefined ||
+      stored?.has(slug) !== true ||
+      deps.rewrites(kind, slug);
   const rows: RecordedRow[] = [
     ...Object.entries(entities.collections)
       .filter(kept)
+      .filter(chosen("collection", storedCollections))
       .map(([slug, recorded]) => ({
         kind: "collection" as const,
         slug,
@@ -332,6 +353,7 @@ async function recordedRows(
       })),
     ...Object.entries(entities.singles)
       .filter(kept)
+      .filter(chosen("single", storedSingles))
       .map(([slug, recorded]) => ({
         kind: "single" as const,
         slug,
@@ -344,6 +366,7 @@ async function recordedRows(
       })),
     ...Object.entries(entities.fieldGroups)
       .filter(kept)
+      .filter(chosen("fieldGroup", storedFieldGroups))
       .map(([slug, recorded]) => ({
         kind: "fieldGroup" as const,
         slug,

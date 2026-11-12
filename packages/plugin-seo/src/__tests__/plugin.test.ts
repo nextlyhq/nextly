@@ -122,6 +122,8 @@ describe("seoPlugin", () => {
       ["DELETE", "/redirects/:id", undefined, undefined],
       ["POST", "/redirects/import", undefined, undefined],
       ["GET", "/not-found", undefined, undefined],
+      // Whether the site's Proxy runs, which serves the redirects.
+      ["GET", "/proxy-status", undefined, undefined],
       // What search engines received: the pages it offers, and the check,
       // for anyone signed in.
       ["GET", "/received/pages", undefined, undefined],
@@ -181,7 +183,10 @@ describe("seoPlugin", () => {
 
     const asked = (plugin.contributes?.routes ?? [])
       .filter(
-        ({ path }) => path.startsWith("/redirects") || path === "/not-found"
+        ({ path }) =>
+          path.startsWith("/redirects") ||
+          path === "/not-found" ||
+          path === "/proxy-status"
       )
       .map(({ method, path, requiredPermission }) => [
         method,
@@ -196,6 +201,7 @@ describe("seoPlugin", () => {
       ["DELETE", "/redirects/:id", "manage-seo"],
       ["POST", "/redirects/import", "manage-seo"],
       ["GET", "/not-found", "manage-seo"],
+      ["GET", "/proxy-status", "manage-seo"],
     ]);
   });
 
@@ -218,6 +224,7 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
+      "/proxy-status",
       "/received/pages",
       "/received",
       "/resolve",
@@ -260,6 +267,7 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
+      "/proxy-status",
       "/received/pages",
       "/received",
       "/resolve",

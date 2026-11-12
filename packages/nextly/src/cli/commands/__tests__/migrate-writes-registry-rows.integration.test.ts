@@ -233,11 +233,46 @@ async function insertStatement(
   await writeFile(path, edited);
 }
 
+/**
+ * `fn` as a run under `next dev` sees it: `NODE_ENV=development` and the live
+ * sync not turned off, which is how a hand-run `nextly migrate` with no
+ * `NODE_ENV` reads too, since the command sets development itself.
+ */
+async function inDevelopment<T>(fn: () => Promise<T>): Promise<T> {
+  vi.stubEnv("NODE_ENV", "development");
+  vi.stubEnv("NEXTLY_DISABLE_HMR", undefined);
+  try {
+    return await fn();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}
+
+/**
+ * `fn` as a production `nextly migrate` runs it, with the two settings a
+ * production environment requires set to placeholders.
+ */
+async function inProduction<T>(fn: () => Promise<T>): Promise<T> {
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("NEXTLY_SECRET", "x".repeat(32));
+  vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
+  _resetEnvCache();
+  try {
+    return await fn();
+  } finally {
+    vi.unstubAllEnvs();
+    _resetEnvCache();
+  }
+}
+
 type Row = Record<string, unknown>;
 interface Selecting {
   select: () => { from: (table: unknown) => Promise<Row[]> };
   update: (table: unknown) => {
     set: (values: Row) => { where: (condition: unknown) => Promise<unknown> };
+  };
+  delete: (table: unknown) => {
+    where: (condition: unknown) => Promise<unknown>;
   };
 }
 
@@ -577,6 +612,196 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await collectionRow(instance!, dialect, "rr_posts"))?.description
       ).toBe("synced from the code");
+    });
+
+    // A run in development adds the rows a fresh database lacks, from the
+    // migrations it applies: nothing else writes them on a site whose start
+    // syncs no rows.
+    it("writes every row on a fresh database in development", async () => {
+      const declared = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "rr_posts",
+            description: "Posts",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "rr_site",
+            fields: [text({ name: "tagline" })],
+          }),
+        ],
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "rr_hero",
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      await migrateCreate(declared, "create_all");
+      await inDevelopment(() => migrated(declared));
+
+      const rows = await registryRows(instance!, dialect);
+      expect(rows.collections.map(row => row.slug)).toContain("rr_posts");
+      expect(rows.singles.map(row => row.slug)).toContain("rr_site");
+      expect(rows.fieldGroups.map(row => row.slug)).toContain("rr_hero");
+      expect(
+        fieldNames(rows.collections.find(row => row.slug === "rr_posts"))
+      ).toContain("title");
+    });
+
+    // The migration a development run applies changed the entity's table, so
+    // its row is brought to the migration's record, field and all.
+    it("writes the row of an entity a migration applied in development changes", async () => {
+      await migrateCreate(posts("Posts"), "create_posts");
+      await migrated(posts("Posts"));
+      const withBody = posts("Posts", text({ name: "body" }));
+      await migrateCreate(withBody, "add_body");
+      await inDevelopment(() => migrated(withBody));
+
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).toEqual(expect.arrayContaining(["title", "body"]));
+    });
+
+    // Only the entities the applied migration changes: another entity's row,
+    // edited by a live sync with no migration for the edit, is left as it is.
+    it("leaves a synced row in development while a migration for another entity applies", async () => {
+      const declared = (...extra: ReturnType<typeof text>[]) =>
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "rr_posts",
+              description: "Posts",
+              fields: [text({ name: "title" }), ...extra],
+            }),
+            defineCollection({
+              slug: "rr_tags",
+              description: "Tags",
+              fields: [text({ name: "label" })],
+            }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+      await migrateCreate(declared(), "create_both");
+      await migrated(declared());
+      const db = (
+        instance!.adapter as unknown as DrizzleAdapter
+      ).getDrizzle<Selecting>();
+      const { tables } = loadedDialect(dialect);
+      const { eq } = await import("drizzle-orm");
+      await db
+        .update(tables.dynamicCollections)
+        .set({ description: "synced from the code" })
+        .where(eq(tables.dynamicCollections.slug, "rr_tags"));
+
+      const withBody = declared(text({ name: "body" }));
+      await migrateCreate(withBody, "add_body");
+      await inDevelopment(() => migrated(withBody));
+
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
+      ).toEqual(expect.arrayContaining(["title", "body"]));
+      expect(
+        (await collectionRow(instance!, dialect, "rr_tags"))?.description
+      ).toBe("synced from the code");
+    });
+
+    /**
+     * A template's hand-written migration, as the blog template ships one: SQL
+     * creating a collection's and a Single's tables, beside a snapshot that
+     * lists them in the older shape (`collections`/`singles`, no
+     * `migrationHash` or `entities`).
+     */
+    async function writeOlderFormatMigration(): Promise<void> {
+      // MySQL keys no TEXT column without a length.
+      const id = dialect === "mysql" ? "varchar(36)" : "text";
+      await writeFile(
+        join(dir, "migrations", "0001_000000_legacy.sql"),
+        [
+          "-- UP",
+          `CREATE TABLE ${q}dc_rr_legacy${q} (${q}id${q} ${id} PRIMARY KEY, ${q}title${q} text);`,
+          `CREATE TABLE ${q}single_rr_legacy_site${q} (${q}id${q} ${id} PRIMARY KEY, ${q}tagline${q} text);`,
+          "",
+          "-- DOWN",
+          `DROP TABLE ${q}single_rr_legacy_site${q};`,
+          `DROP TABLE ${q}dc_rr_legacy${q};`,
+          "",
+        ].join("\n")
+      );
+      mkdirSync(join(dir, "migrations", "meta"), { recursive: true });
+      await writeFile(
+        join(dir, "migrations", "meta", "0001_000000_legacy.snapshot.json"),
+        JSON.stringify({
+          version: 1,
+          template: "blog",
+          collections: [
+            {
+              slug: "rr_legacy",
+              tableName: "dc_rr_legacy",
+              fields: [{ name: "title", type: "text" }],
+            },
+          ],
+          singles: [
+            {
+              slug: "rr_legacy_site",
+              tableName: "single_rr_legacy_site",
+              fields: [{ name: "tagline", type: "text" }],
+            },
+          ],
+        })
+      );
+    }
+
+    /** The slugs of the rows the older-format snapshot lists that the registry holds. */
+    async function olderFormatRows(): Promise<string[]> {
+      const rows = await registryRows(instance!, dialect);
+      return [
+        ...rows.collections.map(row => row.slug),
+        ...rows.singles.map(row => row.slug),
+      ]
+        .filter(slug => String(slug).startsWith("rr_legacy"))
+        .map(String)
+        .sort();
+    }
+
+    const noEntities = defineConfig({
+      collections: [],
+      db: { migrationsDir: "./migrations" },
+    });
+
+    // The rows its snapshot lists are added in development, as they always were.
+    it("adds the rows an older-format snapshot lists in development", async () => {
+      await writeOlderFormatMigration();
+      await inDevelopment(() => migrated(noEntities));
+      expect(await olderFormatRows()).toEqual(["rr_legacy", "rr_legacy_site"]);
+      expect(
+        fieldNames(await collectionRow(instance!, dialect, "rr_legacy"))
+      ).toContain("title");
+    });
+
+    // And outside development, where nothing else would add them once a
+    // production start syncs no rows: the newest applied snapshot is in the
+    // older shape, not unreadable, so its rows are added where absent.
+    it("adds the rows an older-format snapshot lists in production", async () => {
+      await writeOlderFormatMigration();
+      await inProduction(() => migrated(noEntities));
+      expect(await olderFormatRows()).toEqual(["rr_legacy", "rr_legacy_site"]);
+
+      // A later run, past the first, adds one gone missing: an install whose
+      // first run on this release wrote none of them gets them on its next.
+      const db = (
+        instance!.adapter as unknown as DrizzleAdapter
+      ).getDrizzle<Selecting>();
+      const { tables } = loadedDialect(dialect);
+      const { eq } = await import("drizzle-orm");
+      await db
+        .delete(tables.dynamicCollections)
+        .where(eq(tables.dynamicCollections.slug, "rr_legacy"));
+      await inProduction(() => migrated(noEntities));
+      expect(await olderFormatRows()).toEqual(["rr_legacy", "rr_legacy_site"]);
     });
 
     // The Builder's own registry upsert leaves a description or admin block

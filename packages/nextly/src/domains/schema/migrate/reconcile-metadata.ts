@@ -53,13 +53,17 @@ import { CollectionRegistryService } from "../../collections/services/collection
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
-import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
+import type {
+  EntitySettingsRecord,
+  SettingsEntityKind,
+} from "../migrate-create/entity-settings";
 import {
   inRegistryStep,
   newestAppliedAppMigration,
   writeRegistryRows,
 } from "../schema-version";
 
+import type { AppliedEntityChanges } from "./applied-entity-changes";
 import { registerFromMigrations } from "./metadata-register";
 import {
   isAwaitingMigration,
@@ -119,6 +123,13 @@ export interface ReconcileMetadataDeps {
    * in step with the code as it is edited.
    */
   registryRows?: "write" | "insert-missing";
+  /**
+   * The entities the migrations this run applied changed
+   * (`applied-entity-changes.ts`). Under `insert-missing`, their rows are
+   * brought to the newest applied snapshot as well as the missing ones added:
+   * the tables a migration just changed are no live sync's to keep.
+   */
+  appliedChanges?: AppliedEntityChanges;
   /** Seam for tests; defaults to the real registry writer. */
   writeRegistryFn?: typeof writeRegistryFromSource;
   /**
@@ -532,9 +543,10 @@ async function registerAndSweep(
  * registry source), each row is brought to it, written only where it
  * differs. Otherwise there is no source, and nothing is rewritten: the rows
  * an old template-shaped snapshot describes are still inserted where missing,
- * as they always were. The development boot asks for that insert alone
- * (`registryRows: "insert-missing"`), since its start syncs the rows from the
- * code as it is edited, ahead of any migration.
+ * as they always were. A development run (`registryRows: "insert-missing"`),
+ * whose start syncs the rows from the code as it is edited, ahead of any
+ * migration, adds only the rows the registry lacks, and rewrites only those of
+ * the entities its migrations changed (`deps.appliedChanges`).
  */
 async function registerRows(
   deps: ReconcileMetadataDeps,
@@ -566,6 +578,33 @@ async function registerRows(
       complete: rowsNotWritten.length === 0,
     };
   };
+  /** Brings the rows `source` records to it, the ones `rewrites` leaves aside excepted. */
+  const writeFrom = async (
+    source: Extract<RegistrySource, { kind: "snapshot" }>,
+    rewrites?: (kind: SettingsEntityKind, slug: string) => boolean
+  ): Promise<{ rows: RegisteredRows; complete: boolean }> => {
+    const written = await (deps.writeRegistryFn ?? writeRegistryFromSource)(
+      source,
+      {
+        adapter,
+        logger: asServiceLogger(logger),
+        ...(deps.collectionSources === undefined
+          ? {}
+          : { collectionSources: deps.collectionSources }),
+        ...(rewrites === undefined ? {} : { rewrites }),
+      }
+    );
+    return {
+      rows: {
+        collectionsRegistered: written.written.collection,
+        singlesRegistered: written.written.single,
+        fieldGroupsRegistered: written.written.fieldGroup,
+        rowsNotWritten: written.failed,
+        rowsRemoved: written.removed,
+      },
+      complete: written.failed.length === 0,
+    };
+  };
   // A first run with no migration carrying the metadata takes its rows from
   // the configuration, written as a registry source would be, whatever the
   // mode: the record it commits with them keeps them as the baseline.
@@ -573,19 +612,57 @@ async function registerRows(
     deps.configurationRows === undefined &&
     deps.registryRows === "insert-missing"
   ) {
-    return insertMissing();
+    // Where the newest applied snapshot records every entity, the rows it
+    // records that the registry lacks are added from it, and the rows of the
+    // entities this run's migrations changed are brought to it; every other
+    // row stays as the live sync left it. A snapshot in the older shape, or
+    // none, leaves the rows its entities list to be added as they always were.
+    const source = await readRegistrySource({ migrationsDir, isApplied });
+    if (source.kind !== "snapshot") return insertMissing();
+    const changed = deps.appliedChanges;
+    return writeFrom(
+      source,
+      (kind, slug) => changed?.[kind].has(slug) === true
+    );
   }
-  const source: RegistrySource =
-    deps.configurationRows === undefined
-      ? await readRegistrySource({ migrationsDir, isApplied })
-      : {
-          kind: "snapshot",
-          file: "the configuration",
-          entities: deps.configurationRows,
-        };
+  if (deps.configurationRows !== undefined) {
+    const fromConfiguration = await writeFrom({
+      kind: "snapshot",
+      file: "the configuration",
+      entities: deps.configurationRows,
+    });
+    // A first run whose migrations are a template's hand-written ones also
+    // adds the rows their older-format snapshot lists, which the
+    // configuration may not declare (a visual blog declares none of them).
+    const applied = await readRegistrySource({ migrationsDir, isApplied });
+    if (applied.kind !== "none" || applied.reason !== "older-format") {
+      return fromConfiguration;
+    }
+    const listed = await insertMissing();
+    return {
+      rows: {
+        collectionsRegistered:
+          fromConfiguration.rows.collectionsRegistered +
+          listed.rows.collectionsRegistered,
+        singlesRegistered:
+          fromConfiguration.rows.singlesRegistered +
+          listed.rows.singlesRegistered,
+        fieldGroupsRegistered: fromConfiguration.rows.fieldGroupsRegistered,
+        rowsNotWritten: [
+          ...fromConfiguration.rows.rowsNotWritten,
+          ...listed.rows.rowsNotWritten,
+        ],
+        rowsRemoved: fromConfiguration.rows.rowsRemoved,
+      },
+      complete: fromConfiguration.complete && listed.complete,
+    };
+  }
+  const source = await readRegistrySource({ migrationsDir, isApplied });
   if (source.kind !== "snapshot") {
     // Fail closed: an unreadable newest snapshot may record anything, so no
-    // row is written from it, nor from an older one in its place.
+    // row is written from it, nor from an older one in its place. A
+    // template's older-format snapshot is not unreadable: the rows it lists
+    // are added where absent, below, as for one with no record.
     if (source.reason === "unreadable") {
       logger.warn(
         `The registry rows were not written: the newest applied snapshot (${source.file ?? "unknown"}) could not be read.`
@@ -604,26 +681,7 @@ async function registerRows(
     }
     return insertMissing();
   }
-  const written = await (deps.writeRegistryFn ?? writeRegistryFromSource)(
-    source,
-    {
-      adapter,
-      logger: asServiceLogger(logger),
-      ...(deps.collectionSources === undefined
-        ? {}
-        : { collectionSources: deps.collectionSources }),
-    }
-  );
-  return {
-    rows: {
-      collectionsRegistered: written.written.collection,
-      singlesRegistered: written.written.single,
-      fieldGroupsRegistered: written.written.fieldGroup,
-      rowsNotWritten: written.failed,
-      rowsRemoved: written.removed,
-    },
-    complete: written.failed.length === 0,
-  };
+  return writeFrom(source);
 }
 
 /** What step 1 wrote, as the pass reports it. */

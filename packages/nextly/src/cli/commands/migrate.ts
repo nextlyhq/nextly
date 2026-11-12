@@ -68,6 +68,10 @@ import {
   appliedChecksums,
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
+import {
+  addAppliedEntityChanges,
+  noAppliedEntityChanges,
+} from "../../domains/schema/migrate/applied-entity-changes";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   pluginsRecordedNotInstalled,
@@ -187,6 +191,7 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
+  isOlderFormatSnapshot,
   parseSnapshotFile,
   type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
@@ -2215,6 +2220,9 @@ export async function migrateCore(
     unscopedMigrations: [] as string[],
     unreadable: [] as string[],
   };
+  // The entities the app migrations this run applies change, noted as each
+  // applies, for the rows a development run brings to the snapshot.
+  const appliedChanges = noAppliedEntityChanges();
 
   /**
    * Phase 3: the registry rows the applied migrations record, and the status
@@ -2242,6 +2250,7 @@ export async function migrateCore(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    appliedChanges,
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),
@@ -2556,7 +2565,10 @@ export async function migrateCore(
           runFiles,
           judgedFiles,
           firstRun.beforeApply,
-          markOrphans
+          async appliedMigration => {
+            addAppliedEntityChanges(appliedChanges, appliedMigration);
+            await markOrphans?.(appliedMigration);
+          }
         ));
       } catch (error) {
         // A file failed after earlier ones applied: their registry rows are
@@ -3672,16 +3684,9 @@ async function loadTargetSnapshot(
     // Invalid JSON - let parseSnapshotFile handle the error reporting
   }
 
-  // If it looks like a custom metadata format (has collections/singles, no migrationHash),
-  // treat as no snapshot so migration runs verbatim
-  if (
-    parsed &&
-    typeof parsed === "object" &&
-    !("migrationHash" in parsed) &&
-    ("collections" in parsed || "singles" in parsed)
-  ) {
-    return null;
-  }
+  // A template's older-format snapshot records no tables: no snapshot, so the
+  // migration runs verbatim.
+  if (isOlderFormatSnapshot(parsed)) return null;
 
   // Otherwise, parse as a drift snapshot. The whole file, because its
   // `contributions` say which parts of a foreign table the drift check may

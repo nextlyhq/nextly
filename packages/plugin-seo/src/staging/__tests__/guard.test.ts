@@ -159,6 +159,44 @@ describe("the Proxy handler", () => {
     ).toEqual({ headers: { "X-Robots-Tag": "noindex" } });
   });
 
+  it("without the environment, waits on the database for the first request only", async () => {
+    vi.useFakeTimers();
+    try {
+      let reads = 0;
+      let answer: Promise<{ data: unknown[] }> = Promise.resolve({
+        data: [{ id: "m1", path: "guarded" }],
+      });
+      const ctx = {
+        self: { collections: {} },
+        services: {
+          ownCollections: {
+            listEntries: () => {
+              reads += 1;
+              return answer;
+            },
+          },
+        },
+      } as unknown as PluginContext;
+      const guard = stagingGuard(rules([]));
+      const noindex = { headers: { "X-Robots-Tag": "noindex" } };
+      expect(
+        await guard.handle(new Request("https://acme.example/"), ctx)
+      ).toEqual(noindex);
+
+      // Past the half minute the database stops answering: the request is
+      // still answered at once, from what was read, and the read goes on in
+      // the background.
+      vi.advanceTimersByTime(31_000);
+      answer = new Promise(() => undefined);
+      expect(
+        await guard.handle(new Request("https://acme.example/"), ctx)
+      ).toEqual(noindex);
+      expect(reads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads the standing at most every half minute", async () => {
     const { ctx, reads } = context("listable");
     const guard = stagingGuard(rules([]));

@@ -18,13 +18,15 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly";
 import { createNextlyProxy } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
 import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
-import { putRedirect, type RedirectInput } from "../store";
+import { redirectsProxyHandler } from "../proxy-handler";
+import { PROXY_QUIET_MS, readProxyStatus } from "../proxy-seen";
+import { putRedirect, removeRedirect, type RedirectInput } from "../store";
 
 let current: TestNextly | undefined;
 
@@ -436,5 +438,91 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
       "en|/soon": "/back-soon temporary person",
     });
     expect(await ask("/soon")).toBe("302 https://example.com/back-soon");
+  });
+
+  it("passes a page request no redirect is for without reading the database", async () => {
+    const { seo } = await boot(dialect);
+    await put(seo, { source: "/old", target: "/new" });
+    await put(seo, { source: "/archive/*", target: "/past/*" });
+    // The plugin's context, its reads counted: the services are frozen, so
+    // they are counted through a copy the handler is handed instead.
+    let reads = 0;
+    const own = seo.services.ownCollections;
+    const counted = Object.fromEntries(
+      Object.entries(own).map(([name, value]) => [
+        name,
+        typeof value === "function"
+          ? (...args: unknown[]) => {
+              reads += 1;
+              return (value as (...a: unknown[]) => unknown).apply(own, args);
+            }
+          : value,
+      ])
+    ) as typeof own;
+    const ctx = {
+      ...seo,
+      services: { ...seo.services, ownCollections: counted },
+    } as PluginContext;
+    const handler = redirectsProxyHandler();
+    const served = async (path: string) => {
+      const answer = await handler.handle(
+        new Request(`https://example.com${path}`),
+        ctx
+      );
+      return answer?.response?.headers.get("location") ?? "served";
+    };
+    // The first request of a server reads which addresses redirects hold.
+    expect(await served("/about")).toBe("served");
+    await vi.waitFor(async () =>
+      expect((await readProxyStatus(seo)).state).toBe("running")
+    );
+
+    reads = 0;
+    for (const path of ["/about", "/blog/hello", "/archived", "/old-page"]) {
+      expect(await served(path)).toBe("served");
+    }
+    expect(reads).toBe(0);
+    // A request a redirect answers is still read, which shows the count
+    // sees the reads it is watching for.
+    expect(await served("/old")).toBe("https://example.com/new");
+    expect(await served("/archive/2020")).toBe("https://example.com/past/2020");
+    expect(reads).toBeGreaterThan(0);
+  });
+
+  it("stops serving a removed redirect at the next request", async () => {
+    const { seo } = await boot(dialect);
+    const added = await put(seo, { source: "/gone", target: "/here" });
+    if (!("saved" in added)) throw new Error("the redirect was not saved");
+    expect(await ask("/gone")).toBe("301 https://example.com/here");
+
+    await seo.services.collections.withTransaction(tx =>
+      removeRedirect(seo, tx, added.saved.id)
+    );
+
+    expect(await ask("/gone")).toBe("served");
+  });
+
+  it("notes that the Proxy runs, which a site that never wired it has no note of", async () => {
+    const { seo } = await boot(dialect);
+    expect(await readProxyStatus(seo)).toEqual({
+      state: "not-wired",
+      lastSeen: null,
+    });
+
+    await ask("/about");
+
+    // Noted in the background, so the request never waits on it.
+    await vi.waitFor(async () =>
+      expect((await readProxyStatus(seo)).state).toBe("running")
+    );
+    const { lastSeen } = await readProxyStatus(seo);
+    expect(
+      (
+        await readProxyStatus(
+          seo,
+          Date.parse(lastSeen ?? "") + PROXY_QUIET_MS + 1
+        )
+      ).state
+    ).toBe("quiet");
   });
 });
