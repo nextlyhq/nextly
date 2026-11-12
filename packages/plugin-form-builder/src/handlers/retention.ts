@@ -57,12 +57,12 @@ export interface RetentionDeps {
 
 /** The retention job, run by `run` until the deadline the runner gives it. */
 export function retentionJob(
-  run: (deadline: Date) => Promise<void>
+  run: (deadline: Date, cursor: RetentionCursor) => Promise<void>
 ): JobDefinition {
   return defineJob({
     slug: RETENTION_JOB,
-    handler: async (_input, context) => {
-      await run(context.deadline);
+    handler: async (input, context) => {
+      await run(context.deadline, retentionCursorOf(input));
     },
   });
 }
@@ -82,50 +82,128 @@ function pastDeadline(deadline: Date): boolean {
 }
 
 /**
- * Delete what is past keeping, until `deadline`. Answers whether it finished;
- * one that did not has queued its continuation.
+ * Where a run carries on from: past the spam, and past the forms already
+ * done, by id. Handed to the continuation, so a run that stops partway does
+ * not spend the next one re-reading the forms it finished.
+ */
+export interface RetentionCursor {
+  spamDone?: boolean;
+  afterForm?: string;
+}
+
+/** A continuation's cursor, read from its job input; none starts afresh. */
+export function retentionCursorOf(input: unknown): RetentionCursor {
+  if (!input || typeof input !== "object") return {};
+  const { spamDone, afterForm } = input as Record<string, unknown>;
+  return {
+    ...(spamDone === true ? { spamDone } : {}),
+    ...(typeof afterForm === "string" ? { afterForm } : {}),
+  };
+}
+
+/**
+ * Delete what is past keeping, until `deadline`, from `cursor`. Answers
+ * whether it finished; one that did not has queued its continuation, with
+ * where it stopped.
  */
 export async function runRetention(
   deps: RetentionDeps,
-  deadline: Date
+  deadline: Date,
+  cursor: RetentionCursor = {}
 ): Promise<"done" | "continued"> {
   const now = (deps.now ?? (() => new Date()))().getTime();
-  const spamCutoff = new Date(now - SPAM_KEEP_DAYS * DAY_MS);
-  const finished =
-    (await deleteWhere(
-      deps,
-      { status: { equals: "spam" }, createdAt: { less_than: spamCutoff } },
-      deadline
-    )) && (await deleteAgedPerForm(deps, now, deadline));
-  if (finished) return "done";
-  await deps.jobs.queue({ task: RETENTION_JOB, input: null });
+  if (!cursor.spamDone) {
+    const spamCutoff = new Date(now - SPAM_KEEP_DAYS * DAY_MS);
+    const where = {
+      status: { equals: "spam" },
+      createdAt: { less_than: spamCutoff },
+    };
+    if (!(await deleteWhere(deps, where, deadline))) {
+      return continueFrom(deps, {});
+    }
+  }
+  const stoppedAt = await deleteAgedPerForm(deps, now, deadline, cursor);
+  if (stoppedAt === "done") return "done";
+  return continueFrom(deps, { spamDone: true, ...stoppedAt });
+}
+
+/** Queue the continuation, with where this run stopped. */
+async function continueFrom(
+  deps: RetentionDeps,
+  cursor: RetentionCursor
+): Promise<"continued"> {
+  await deps.jobs.queue({
+    task: RETENTION_JOB,
+    input: Object.keys(cursor).length > 0 ? { ...cursor } : null,
+  });
   return "continued";
 }
 
-/** Each form that keeps submissions for a while: those older than that. */
+/**
+ * Each form that keeps submissions for a while, in id order from the cursor:
+ * those older than that. Answers "done", or where to carry on from: just
+ * before the form it stopped in.
+ */
 async function deleteAgedPerForm(
   deps: RetentionDeps,
   now: number,
+  deadline: Date,
+  cursor: RetentionCursor
+): Promise<"done" | { afterForm?: string }> {
+  let after = cursor.afterForm;
+  for (;;) {
+    const forms = await formsAfter(deps, after);
+    for (const form of forms) {
+      if (!(await retainForm(deps, form, now, deadline))) {
+        return after === undefined ? {} : { afterForm: after };
+      }
+      after = String(form.id);
+    }
+    if (forms.length < PAGE) return "done";
+  }
+}
+
+/** The next page of forms after `after`, by id. */
+async function formsAfter(
+  deps: RetentionDeps,
+  after: string | undefined
+): Promise<Array<{ id: unknown; settings?: unknown }>> {
+  const { data } = await deps.collections.listEntries(
+    deps.formsSlug,
+    {
+      ...(after === undefined
+        ? {}
+        : { where: { id: { greater_than: after } } }),
+      sort: { field: "id", direction: "asc" },
+      pagination: { limit: PAGE },
+      depth: 0,
+    },
+    { as: "system" }
+  );
+  return data;
+}
+
+/**
+ * One form: its submissions past keeping, if it keeps them for a while.
+ * Answers false when the deadline stopped it first.
+ */
+async function retainForm(
+  deps: RetentionDeps,
+  form: { id: unknown; settings?: unknown },
+  now: number,
   deadline: Date
 ): Promise<boolean> {
-  for (let page = 1; ; page++) {
-    const { data } = await deps.collections.listEntries(
-      deps.formsSlug,
-      { pagination: { limit: PAGE, page }, depth: 0 },
-      { as: "system" }
-    );
-    const forms = data as Array<{ id: unknown; settings?: unknown }>;
-    for (const form of forms) {
-      const { keepDays } = normalizeFormSettings(settingsOf(form.settings));
-      if (keepDays === undefined) continue;
-      const where = {
-        form: { equals: String(form.id) },
-        createdAt: { less_than: new Date(now - keepDays * DAY_MS) },
-      };
-      if (!(await deleteWhere(deps, where, deadline))) return false;
-    }
-    if (forms.length < PAGE) return true;
-  }
+  if (pastDeadline(deadline)) return false;
+  const { keepDays } = normalizeFormSettings(settingsOf(form.settings));
+  if (keepDays === undefined) return true;
+  return deleteWhere(
+    deps,
+    {
+      form: { equals: String(form.id) },
+      createdAt: { less_than: new Date(now - keepDays * DAY_MS) },
+    },
+    deadline
+  );
 }
 
 /**

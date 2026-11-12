@@ -297,8 +297,10 @@ export function formBuilder(
           if (rebuildDeps) await rebuildResponseKeys(rebuildDeps, deadline);
         }),
         // Deletes submissions past their form's keeping, and old spam.
-        retentionJob(async deadline => {
-          if (retentionDeps) await runRetention(retentionDeps, deadline);
+        retentionJob(async (deadline, cursor) => {
+          if (retentionDeps) {
+            await runRetention(retentionDeps, deadline, cursor);
+          }
         }),
       ],
       // Runs the retention pass each night.
