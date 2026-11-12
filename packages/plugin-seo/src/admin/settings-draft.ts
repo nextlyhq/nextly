@@ -403,29 +403,94 @@ const same = (a: unknown, b: unknown): boolean =>
 /**
  * `draft` moved from the settings it was made from onto newer ones: each
  * value edited since `before` stays as edited, and each other takes its
- * value in `after`, so a change made elsewhere meanwhile is kept.
+ * value in `after`, so a change made elsewhere meanwhile is kept. A map kept
+ * per content type (patterns, structured data) is moved entry by entry, and
+ * the hidden types item by item, so an edit to one type keeps another
+ * person's edit to another.
  */
 export function rebasedDraft(
   draft: SettingsDraft,
   before: SettingsDraft,
   after: SettingsDraft
 ): SettingsDraft {
-  const next: SettingsDraft = { ...after };
+  return {
+    ...after,
+    ...editedScalars(draft, before),
+    patterns: rebasedEntries(draft.patterns, before.patterns, after.patterns),
+    structuredData: rebasedEntries(
+      draft.structuredData,
+      before.structuredData,
+      after.structuredData
+    ),
+    hiddenTypes: rebasedSet(
+      draft.hiddenTypes,
+      before.hiddenTypes,
+      after.hiddenTypes
+    ),
+  };
+}
+
+/** The draft's own values, other than the per-type ones, edited since `before`. */
+function editedScalars(
+  draft: SettingsDraft,
+  before: SettingsDraft
+): Partial<SettingsDraft> {
+  const edited: Partial<SettingsDraft> = {};
   for (const key of Object.keys(draft) as (keyof SettingsDraft)[]) {
-    if (JSON.stringify(draft[key]) !== JSON.stringify(before[key])) {
-      keepEdited(next, draft, key);
+    if (
+      key === "patterns" ||
+      key === "structuredData" ||
+      key === "hiddenTypes"
+    ) {
+      continue;
     }
+    if (!sameValue(draft[key], before[key])) keepEdited(edited, draft, key);
   }
-  return next;
+  return edited;
 }
 
 /** `target`'s `key` set to `source`'s, the value edited here. */
 function keepEdited<K extends keyof SettingsDraft>(
-  target: SettingsDraft,
+  target: Partial<SettingsDraft>,
   source: SettingsDraft,
   key: K
 ): void {
   target[key] = source[key];
+}
+
+/** Whether two values hold the same, compared as stored. */
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** A map moved entry by entry: each entry edited here kept, every other the newer one. */
+function rebasedEntries<T>(
+  draft: Readonly<Record<string, T>>,
+  before: Readonly<Record<string, T>>,
+  after: Readonly<Record<string, T>>
+): Record<string, T> {
+  const next: Record<string, T> = { ...after };
+  for (const key of new Set([...Object.keys(draft), ...Object.keys(before)])) {
+    if (sameValue(draft[key], before[key])) continue;
+    const edited = draft[key];
+    if (edited === undefined) delete next[key];
+    else next[key] = edited;
+  }
+  return next;
+}
+
+/** A set moved item by item: what was added or taken out here, on the newer one. */
+function rebasedSet(
+  draft: readonly string[],
+  before: readonly string[],
+  after: readonly string[]
+): string[] {
+  const added = draft.filter(item => !before.includes(item));
+  const removed = before.filter(item => !draft.includes(item));
+  return [
+    ...after.filter(item => !removed.includes(item)),
+    ...added.filter(item => !after.includes(item)),
+  ];
 }
 
 export function changesOf(
