@@ -1105,23 +1105,26 @@ A redirect's From address is held like a page's address, so a published page and
 
 ### The redirects screen
 
-**SEO › Redirects** in the admin lists every redirect, who added it and when. Add one by typing its From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back.
+**SEO › Redirects** in the admin lists every redirect: its From and To addresses, the status the site answers with (301 permanent, 302 temporary, or 410 Gone), who made it (a page that moved, a file imported, or the person, "You" for your own), how many requests it has answered and when it last did. **Add redirect** opens a form: type the From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back. Choose **Gone (410)** for a page removed for good with nothing to replace it: the address answers `410 Gone`, which search engines drop sooner than a 404, and needs no To address. Each row's menu edits or removes it.
+
+Hits are counted by the site's Proxy as it answers each request, in the background, so no visitor waits on the count; a redirect saved before counting began shows none until its next request. Where the Proxy does not run, the list says the redirects are saved but not served, with a note to copy for a developer.
 
 The form refuses what would break: an address a published page holds, a second redirect from one address, and a redirect that would send visitors round in a loop. Where the To address already redirects onward, the new redirect goes straight to the end in one hop, and the form says so.
 
-The **Not found** tab lists the addresses people and search engines asked for that don't exist, most visited first. **Redirect…** fills the form with the address and the closest live page as a suggestion, for you to check before adding.
+The **Not found** tab (`redirects?tab=notfound`) lists the addresses people and search engines asked for that don't exist, most asked for first: how many times, when last, and where visitors came from (another site's name, a page on this site, or Direct). Choose the range by when an address was last asked for; the counts are all-time. **Redirect** opens the form with the address and the closest live page as a suggestion, for you to check before adding. **Ignore** sets an address aside; **Show ignored** lists the ones set aside, each with **Show again**. Bots probing for other systems' pages (`/wp-login.php`, `/.env` and the like) are left out.
 
 The screen, its import and the **Not found** tab are for someone holding `manage-seo`. The plugin keeps the redirects and the not-found log itself, so the permissions the role screen lists for their collections open nothing on their own.
 
 ### Importing redirects from a file
 
-**Import CSV** reads a file of redirects, one per line: the From address, the To address and, optionally, `temporary`. A first line naming the columns is skipped.
+**Import CSV** reads a file of redirects, one per line: the From address, the To address and, optionally, a type: `temporary` (or `302`, `307`) for one for now, `gone` (or `410`) for an address gone for good, whose To is left empty. A first line naming the columns is skipped.
 
 ```text
 From,To,Type
 /old-blog/*,/blog/*
 /guides/seo-basics,/resources
 /webinar,/events/spring-webinar,temporary
+/retired-offer,,gone
 ```
 
 Nothing changes until you confirm. The dry run shows what each row would do: a new redirect, one that joins a chain or replaces an existing redirect, one already there, or one that can't be imported, such as a loop. A file with any row that can't be imported is not imported at all; fix it and upload it again. A confirmed file is applied in full or not at all.
@@ -1205,7 +1208,7 @@ Keep the site's matcher, written out in the file. A request the site's own rules
 
 ### Addresses not found
 
-The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, so each can be given a redirect. Admin, API and asset requests are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
+The plugin keeps a log of the page addresses people and search engines asked for that did not exist, one row per address with how often and when, and where the last visitor sent from another page came from, so each can be given a redirect. Only another site's name, or the path of a page on this site, is kept: never a query or another site's path. Admin, API and asset requests, and bots' probes for other systems' pages, are left out, and the log keeps its most recent and most frequent addresses once it reaches 1,000.
 
 Log a request from the site's not-found page, with the request headers the Proxy passes on, after the page is sent:
 
