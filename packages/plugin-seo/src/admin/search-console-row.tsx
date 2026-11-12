@@ -89,7 +89,9 @@ function ReportLine({
       >
         {what}
       </span>
-      <span className="shrink-0 text-xs text-muted-foreground">{much}</span>
+      <span className="min-w-0 text-right text-xs [overflow-wrap:anywhere] text-muted-foreground">
+        {much}
+      </span>
     </li>
   );
 }

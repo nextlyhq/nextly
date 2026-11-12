@@ -396,7 +396,12 @@ export function SetupDialog({
         if (!next) void finishLater();
       }}
     >
-      <DialogContent size="lg">
+      {/* Held within the screen's height, scrolling inside, so a step taller
+          than a phone's screen still reaches its buttons. */}
+      <DialogContent
+        size="lg"
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto"
+      >
         <DialogHeader>
           <DialogTitle>{shown.title}</DialogTitle>
           <DialogDescription>{shown.lead}</DialogDescription>

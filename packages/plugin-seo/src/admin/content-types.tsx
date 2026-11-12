@@ -518,7 +518,9 @@ function StructuredData({
 }): JSX.Element {
   const id = useId();
   const chosen = structuredTypeOf(draft, type.key);
-  const needs = chosen === undefined ? [] : STRUCTURED_DATA_TYPES[chosen].needs;
+  // A type with details to map, needed or only used where the page has
+  // them, offers the mapping; one made from the page alone does not.
+  const mappable = chosen !== undefined && MAPPABLE_TYPES.includes(chosen);
   const missing =
     chosen === undefined ? [] : missingDetails(draft, type, chosen);
   return (
@@ -558,7 +560,7 @@ function StructuredData({
           <span className="text-xs text-muted-foreground">
             Article where a page has an author and a date, else Web page
           </span>
-        ) : needs.length === 0 ? (
+        ) : !mappable ? (
           <span className="text-xs text-muted-foreground">
             Made from the page itself
           </span>
@@ -695,6 +697,9 @@ export function ContentTypesTab({
           No content type has SEO yet. A developer chooses which do in the
           site&apos;s configuration.
         </p>
+        {switchedOff.length === 0 ? null : (
+          <SwitchedOffRow types={switchedOff} />
+        )}
       </SettingsCard>
     );
   }

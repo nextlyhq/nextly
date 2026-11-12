@@ -444,6 +444,8 @@ describe("Advanced", () => {
     );
     await user.type(screen.getByLabelText("Description when shared"), "Card");
     expect(writes.at(-1)).toEqual(["socialDescription", "Card"]);
+    // The shared card shows it, beside the page on Google.
+    expect(screen.getByTestId("seo-share-card")).toHaveTextContent("Card");
   });
 
   it("offers the structured data type, automatic first, and says what is missing", async () => {
@@ -520,6 +522,53 @@ describe("Advanced", () => {
       screen.getByRole("button", { name: "Add an author on the Content tab" })
     );
     expect(opened).toEqual(["author"]);
+  });
+
+  it("says a share image that couldn't be made, beside the notice and in its row", async () => {
+    const user = userEvent.setup();
+    const imaged: SeoTabContext = {
+      ...CONTEXT,
+      levels: {
+        ...LEVELS,
+        content: {
+          ...LEVELS.content,
+          image: {
+            value: { url: "/media/cover.webp", width: 800, height: 600 },
+            field: "coverImage",
+          },
+        },
+      },
+      shareImage: {
+        problems: [
+          { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+        ],
+      },
+    };
+    render(
+      <Harness
+        context={imaged}
+        onMakeShareImage={() => Promise.resolve(undefined)}
+      />
+    );
+    const [fromNotice] = screen.getAllByRole("button", {
+      name: "Make a share image",
+    });
+    await user.click(fromNotice as HTMLElement);
+    expect(
+      await screen.findByText(
+        /The share image couldn't be made\. Try again, or choose\s+another image under Advanced\./
+      )
+    ).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      within(inAdvanced()).getByRole("button", { name: "Make a share image" })
+    );
+    expect(
+      await within(inAdvanced()).findByText(
+        /The share image couldn't be made\. Try again, or choose another\s+image\./
+      )
+    ).toBeVisible();
   });
 
   it("says what keeps the share image from showing, and makes one of the right size", async () => {

@@ -180,7 +180,9 @@ function ShareCard({
   const fit = shareImageFit(image);
   return (
     <div data-testid="seo-share-card">
-      <div className="relative grid h-[104px] place-items-center overflow-hidden bg-muted text-muted-foreground">
+      {/* At the ratio networks draw a share card at, so a picture that
+          fits shows uncut. */}
+      <div className="relative grid aspect-[1.91/1] place-items-center overflow-hidden bg-muted text-muted-foreground">
         {image === undefined ? (
           <span className="flex items-center gap-1.5 text-xs">
             <ImageOff aria-hidden="true" className="size-4" />
@@ -216,6 +218,11 @@ function ShareCard({
         >
           {answer.socialTitle?.value ?? site.name ?? hostOf(site.origin)}
         </div>
+        {answer.socialDescription === undefined ? null : (
+          <div className="mt-0.5 line-clamp-2 text-[13px] leading-[1.4] text-muted-foreground">
+            {answer.socialDescription.value}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -28,7 +28,14 @@ import {
   useSingleDocument,
   useUpdateSingleDocument,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
 
 import { OVERVIEW_PAGE_HREF } from "../overview/contract";
 import {
@@ -255,10 +262,15 @@ function isStoredDocument(value: unknown): value is StoredSettings {
   );
 }
 
-/** Which stored settings a draft was made from: its version, else its time. */
+/**
+ * Which stored settings a draft was made from: the document, and its
+ * version, else its time.
+ */
 function versionOf(stored: StoredSettings): string {
   const version = stored._rev ?? stored.updatedAt;
-  return typeof version === "string" ? version : JSON.stringify(stored);
+  const id =
+    typeof stored.id === "string" ? stored.id : JSON.stringify(stored.id);
+  return `${id}@${typeof version === "string" ? version : JSON.stringify(stored)}`;
 }
 
 /**
@@ -353,6 +365,20 @@ function useSettingsSave(
     },
     [stored, update, reread, defaults]
   );
+
+  // A newer copy of the settings read since, such as the one a save made
+  // just before the screen was mounted again for another tab, becomes the
+  // baseline: the draft's changes are then compared with, and saved over,
+  // what is stored now.
+  const initialVersion = versionOf(initial);
+  const latestRead = useRef(initial);
+  latestRead.current = initial;
+  useEffect(() => {
+    // Only a new version read is a new baseline.
+    setStored(current =>
+      versionOf(current) === initialVersion ? current : latestRead.current
+    );
+  }, [initialVersion]);
 
   /** Lets go of every unsaved change. */
   const cancel = useCallback(() => {
@@ -547,11 +573,13 @@ function SettingsScreen({
   const { stored, draft, setDraft, save, cancel, saving, failure } =
     useSettingsSave(slug, initial, reread, defaults);
   const finished = draft.setupStep >= SETUP_STEPS;
+  // Read from the draft the screen starts from, a held one included, so a
+  // dismissal it holds keeps setup closed when the screen is mounted again.
   const [setupOpen, setSetupOpen] = useState(
-    () => !finished && !draftOf(initial, defaults).setupDismissed
+    () => !finished && !draft.setupDismissed
   );
   const changes = changesOf(stored, draft, defaults);
-  const problem = draftProblem(draft, types);
+  const problem = draftProblem(draft, types, serverAddresses);
   useLeaveWarning(changes !== null);
   useHeldDraft(slug, stored, draft, changes !== null);
 
