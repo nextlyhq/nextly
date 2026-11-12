@@ -131,7 +131,14 @@ export function foldChange(
   };
 }
 
-/** The send `queuedId` names, locked for the change, or undefined. */
+/**
+ * The send `queuedId` names, or undefined. Read with no lock: the change
+ * that asks holds its queued email's row (core changes it, or cancels it,
+ * under that row's lock before telling the plugin), so two changes of one
+ * send never fold at once. A row lock here, beside a deletion's own reads of
+ * a submission's sends, deadlocks MySQL when several submissions are deleted
+ * together.
+ */
 async function sendRow(
   ctx: Pick<PluginContext, "services" | "self">,
   transaction: Parameters<
@@ -147,7 +154,7 @@ async function sendRow(
       pagination: { limit: 1 },
       depth: 0,
     },
-    { lock: "update" }
+    { lock: "none" }
   );
   const [entry] = data;
   return entry ? sendRowOf(entry) : undefined;
