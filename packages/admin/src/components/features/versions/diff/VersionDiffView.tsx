@@ -51,6 +51,7 @@ import {
   ChangesLayoutToggle,
   layoutFor,
   useChangesLayoutPreference,
+  type ChangesLayout,
 } from "./changes-layout";
 import { childKey, FieldDiffNode, SystemFieldsProvider } from "./FieldDiffNode";
 
@@ -60,6 +61,16 @@ export interface VersionDiffViewProps {
   from: number;
   /** Newer version being compared. */
   to: number;
+  /**
+   * The view an address names: inline, or side by side. Absent, the reader's
+   * own remembered choice decides.
+   */
+  view?: "inline" | "side";
+  /**
+   * Hears the reader switch the view, for a page whose address names it;
+   * absent, the switch is remembered as the reader's own choice.
+   */
+  onViewChange?: (layout: ChangesLayout) => void;
 }
 
 function DiffSkeleton() {
@@ -189,8 +200,15 @@ export function VersionDiffView({
   scope,
   from,
   to,
+  view,
+  onViewChange,
 }: VersionDiffViewProps): JSX.Element {
-  const [preference, setLayout] = useChangesLayoutPreference();
+  const [remembered, remember] = useChangesLayoutPreference();
+  // The address's view wins over the remembered one, so a shared link opens
+  // the comparison as its sender saw it.
+  const preference: ChangesLayout =
+    view === undefined ? remembered : view === "side" ? "split" : "inline";
+  const setLayout = onViewChange ?? remember;
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [showSystem, setShowSystem] = useState(false);
   // Every field, so the count and the fold are of the whole document: the

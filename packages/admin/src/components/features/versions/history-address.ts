@@ -24,6 +24,11 @@ import { setSearchParams } from "@admin/lib/navigation";
 export const HISTORY_PARAM = "history";
 /** The key that names the version chosen in it. */
 export const VERSION_PARAM = "version";
+/**
+ * Set by the comparison page's "Restore…": opens the restore list for the
+ * version the address names, once, in the editor that takes the values.
+ */
+export const RESTORE_PARAM = "restore";
 
 /**
  * Every key the panel keeps, so a check that tells a move within the document
@@ -32,6 +37,7 @@ export const VERSION_PARAM = "version";
 export const HISTORY_ADDRESS_PARAMS: readonly string[] = [
   HISTORY_PARAM,
   VERSION_PARAM,
+  RESTORE_PARAM,
 ];
 
 /** Whether the address names history open right now. */
