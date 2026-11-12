@@ -1,10 +1,14 @@
-import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { ROUTES } from "@admin/constants/routes";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
 
 import type { MainMenuItem } from "../sidebar-types";
 
 import { CONTENT_RAIL_ID } from "./content-rail";
+import {
+  type StandaloneLandingReader,
+  standalonePluginLanding,
+} from "./standalone-plugin-landing";
 
 // Where a primary sidebar icon points.
 //
@@ -12,7 +16,8 @@ import { CONTENT_RAIL_ID } from "./content-rail";
 // routes pick the most-recently-created record server-side. Plugins follows the
 // same convention and lands on the installed list, which renders an empty table
 // when nothing is installed. Standalone plugins have no section page, so they
-// jump to their first registered collection instead.
+// go where `standalonePluginLanding` decides: the landing the plugin names, or
+// the first collection or menu item its panel lists for the reader.
 //
 // A pure function of the item and the caller's capabilities: every destination
 // here is decided by those two, and nothing about the answer depends on the
@@ -20,6 +25,9 @@ import { CONTENT_RAIL_ID } from "./content-rail";
 export function resolveItemHref(
   item: MainMenuItem,
   visibleStandalonePlugins: PluginMetadata[],
+  // What a standalone plugin's landing is decided from: the collections, the
+  // reader's capabilities and permissions its panel is drawn with.
+  standaloneReader: StandaloneLandingReader,
   // The first settings subpage the user can actually open. The default settings
   // href (/admin/settings) is guarded by `manage-settings`, so a user whose only
   // settings access is API Keys or Webhooks would be redirected away; the caller
@@ -45,10 +53,7 @@ export function resolveItemHref(
   if (item.id.startsWith("standalone-")) {
     const slug = item.id.replace("standalone-", "");
     const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
-    const firstCol = sp?.collections?.[0];
-    return firstCol
-      ? buildRoute(ROUTES.COLLECTION_ENTRIES, { slug: firstCol })
-      : "#";
+    return sp ? standalonePluginLanding(sp, standaloneReader) : "#";
   }
   return item.href;
 }

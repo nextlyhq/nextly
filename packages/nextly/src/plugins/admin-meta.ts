@@ -35,6 +35,10 @@ import type {
   PluginCategory,
   PluginDefinition,
 } from "./plugin-context";
+import {
+  resolvedPluginPlacement,
+  resolvePluginLanding,
+} from "./plugin-landing";
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginTranslations } from "./plugin-translations";
 import { collectPluginRoutes } from "./routes/collect-routes";
@@ -42,6 +46,7 @@ import { isRouteError } from "./routes/route-error";
 import {
   collectionContributors,
   renamedSlug,
+  retargetedTo,
   servedCollectionSlug,
 } from "./served-collection-slug";
 import { settingsPermissionOf } from "./settings-permission";
@@ -91,6 +96,15 @@ export interface PluginAdminMeta {
   placement: string;
   order?: number;
   after?: PluginOverride["after"];
+  /**
+   * Where the plugin's own rail item goes, as an admin address: the site's
+   * `pluginOverrides` landing or the plugin's `admin.landing`, resolved as a
+   * menu item's `to` is (`resolvePluginLanding`). Absent when neither names
+   * one of the plugin's pages or collections, and for a disabled plugin,
+   * whose pages are not drawn; the admin then falls back to the plugin's
+   * first visible collection.
+   */
+  landing?: string;
   appearance?: PluginAdminAppearance;
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
@@ -218,8 +232,8 @@ export { pluginAdminSlug } from "./plugin-slug";
  */
 /**
  * Build the `plugins[]` admin-meta array from the registered plugins, applying
- * host `pluginOverrides` (placement/order/after/appearance) and folding each
- * enabled plugin's `contributes.admin` menu/pages/settings.
+ * host `pluginOverrides` (placement/order/after/landing/appearance) and
+ * folding each enabled plugin's `contributes.admin` menu/pages/settings.
  *
  * Disabled plugins (`enabled: false`) keep their entry (their schema still
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
@@ -267,35 +281,6 @@ function resolvedMenuItem(
     // from exactly the readers who can open the list.
     requiredPermission: `read-${slug}`,
   };
-}
-
-/**
- * The item's destination, pointed at the slug the host registered.
- *
- * Returns the declared `to` UNCHANGED when nothing was renamed. Naming a
- * collection is how an item opts into rename-safety and RBAC, not a request to
- * be sent somewhere canonical, so an item whose destination carries list state
- * — `?status=draft`, a hash, a sub-path — keeps it. Overwriting it made adding
- * `collection` to a working link change where that link went.
- *
- * When the slug DID move, only the collection segment is rewritten and
- * whatever followed it is carried across. A destination that does not address
- * the declared collection at all is left alone: the item named a collection so
- * its permission still moves, but a path this function does not recognise is
- * not one it should be inventing a new spelling for.
- */
-function retargetedTo(to: string, declared: string, resolved: string): string {
-  if (declared === resolved) return to;
-
-  const prefix = `/admin/collections/${declared}`;
-  const addressesTheList =
-    to === prefix ||
-    to.startsWith(`${prefix}/`) ||
-    to.startsWith(`${prefix}?`) ||
-    to.startsWith(`${prefix}#`);
-  if (!addressesTheList) return to;
-
-  return `/admin/collections/${resolved}${to.slice(prefix.length)}`;
 }
 
 /**
@@ -505,8 +490,7 @@ export function buildPluginAdminMeta(
       ...(plugin.dependsOn && Object.keys(plugin.dependsOn).length > 0
         ? { dependsOn: plugin.dependsOn }
         : {}),
-      placement:
-        hostOverride?.placement ?? plugin.admin?.placement ?? "plugins",
+      placement: resolvedPluginPlacement(plugin, hostOverride),
       order: hostOverride?.order ?? plugin.admin?.order,
       after: hostOverride?.after ?? plugin.admin?.after,
       appearance: effectiveAppearance,
@@ -542,6 +526,12 @@ export function buildPluginAdminMeta(
     if (declared !== undefined) meta.translations = declared;
 
     // Behavioral admin UI only for enabled plugins.
+    // Resolved here so the admin follows the address and never re-derives it.
+    // An unknown landing is dropped in silence: this runs on every request,
+    // and start-up has already reported it (`pluginLandingWarnings`).
+    const landing = resolvePluginLanding(plugin, hostOverride);
+    if (isEnabled && landing.kind === "resolved") meta.landing = landing.href;
+
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
       if (admin.menu && admin.menu.length > 0) {

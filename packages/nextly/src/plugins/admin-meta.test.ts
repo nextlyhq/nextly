@@ -1580,3 +1580,60 @@ describe("the start-up report of a menu item left out", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+describe("buildPluginAdminMeta, a standalone plugin's landing", () => {
+  /** A plugin owning `reports` and an `overview` page, naming `landing`. */
+  function reports(landing?: string, extra: object = {}): PluginDefinition {
+    return definePlugin({
+      ...base,
+      ...extra,
+      admin: {
+        placement: "standalone",
+        ...(landing === undefined ? {} : { landing }),
+      },
+      contributes: {
+        collections: [{ slug: "reports" } as never],
+        admin: {
+          pages: [{ path: "overview", component: "@acme/p/admin#Overview" }],
+        },
+      },
+    } as unknown as PluginDefinition);
+  }
+
+  const landingOf = (
+    plugin: PluginDefinition,
+    overrides?: Parameters<typeof buildPluginAdminMeta>[1]
+  ) => buildPluginAdminMeta([plugin], overrides)[0].landing;
+
+  it("serializes a page landing as the address the admin mounts it at", () => {
+    expect(landingOf(reports("/admin/plugins/acme-p/overview"))).toBe(
+      "/admin/plugins/acme-p/overview"
+    );
+  });
+
+  it("serializes a collection landing through the host's rename", () => {
+    const plugin = reports("/admin/collections/reports");
+    // The control: unrenamed, the declared slug is the address.
+    expect(landingOf(plugin)).toBe("/admin/collections/reports");
+    const renamed = plugin.rename?.({ reports: "acme-reports" }) ?? plugin;
+    expect(landingOf(renamed)).toBe("/admin/collections/acme-reports");
+  });
+
+  it("lets the site's override win", () => {
+    expect(
+      landingOf(reports("/admin/collections/reports"), {
+        "acme-p": { landing: "/admin/plugins/acme-p/overview" },
+      })
+    ).toBe("/admin/plugins/acme-p/overview");
+  });
+
+  it("drops a landing naming nothing the plugin owns, and any when disabled", () => {
+    // The control for both: the same plugin with a landing it owns has one.
+    expect(landingOf(reports("/admin/collections/reports"))).toBeDefined();
+    expect(landingOf(reports("/admin/collections/posts"))).toBeUndefined();
+    expect(
+      landingOf(reports("/admin/collections/reports", { enabled: false }))
+    ).toBeUndefined();
+    expect(landingOf(reports())).toBeUndefined();
+  });
+});

@@ -6,6 +6,7 @@
  *
  * @module problems/site-checks
  */
+import { indexNowLine, type ConnectionAttempt } from "../connections/contract";
 import type { ListingProblem } from "../outputs/listing";
 
 import { WHOLE_SITE, type Problem, type ProblemSubject } from "./contract";
@@ -228,4 +229,41 @@ export function listingProblems(
       fix: { place: "page", tab: "content" },
     };
   });
+}
+
+/** What the optional connections last reported, as far as the list reads it. */
+export interface ConnectionsReport {
+  /** IndexNow's last notice, where IndexNow is switched on. */
+  indexNow?: ConnectionAttempt;
+  /** Search Console's last failure, where it is connected or connecting. */
+  searchConsole?: { message: string };
+}
+
+/**
+ * Each optional connection that is not working: IndexNow's last notice
+ * refused, rate limited or unsent, and Search Console's last failure. Each
+ * is fixed on the Connections tab, and none affects a page.
+ */
+export function connectionProblems(report: ConnectionsReport): Problem[] {
+  const problems: Problem[] = [];
+  const indexNow = indexNowLine(report.indexNow);
+  if (indexNow !== undefined && !indexNow.ok) {
+    problems.push({
+      kind: "connection",
+      subject: { label: "IndexNow" },
+      what: indexNow.text,
+      action: "Open Connections",
+      fix: { place: "settings", tab: "connections" },
+    });
+  }
+  if (report.searchConsole !== undefined) {
+    problems.push({
+      kind: "connection",
+      subject: { label: "Google Search Console" },
+      what: report.searchConsole.message,
+      action: "Open Connections",
+      fix: { place: "settings", tab: "connections" },
+    });
+  }
+  return problems;
 }

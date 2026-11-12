@@ -183,6 +183,22 @@ describe("one response per browser", () => {
     ).toBeNull();
   });
 
+  it("spells a moved browser key for the destination's version", async () => {
+    const moved = (responseKey: string, version: number) =>
+      responseKeyAfterUpdate({
+        digests,
+        settings: { oneResponse: "browser", oneResponseVersion: version },
+        patch: { form: "other" } as Record<string, unknown>,
+        stored: { status: "new", responseKey },
+        heldElsewhere: async () => false,
+        moved: true,
+      });
+    expect(await moved("browser:abc123", 1)).toBe("v1:browser:abc123");
+    expect(await moved("v3:browser:abc123", 0)).toBe("browser:abc123");
+    // Not a browser's key: nothing to carry.
+    expect(await moved("v1:0123abcd", 2)).toBeNull();
+  });
+
   it("tells a visitor's form where to send the token, only for a browser", () => {
     expect(publicOneResponse(browser)).toEqual({
       by: "browser",
