@@ -60,6 +60,7 @@ import type { PermissionSeedService } from "../domains/auth/services/permission-
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { publishCollectionDbOptions } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import { publishDeclaredCollectionFields } from "../domains/collections/services/declared-collection-fields";
 import { publishDeclaredEntities } from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { resealQueuedMessagesAtBoot } from "../domains/email/queued-send";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
@@ -3844,7 +3845,7 @@ function codeFirstCollectionConfigs(
 /**
  * What a production start does in place of the code-first sync: it publishes,
  * in this process, what the configuration declares (the collections' write
- * options, the Singles' live definitions, the code-defined
+ * options and declared fields, the Singles' live definitions, the code-defined
  * access, the declared entities and the workflows) and writes nothing. The
  * registry rows, the permissions and each entity's migration status stay as
  * `nextly migrate` left them, so a build older or newer than the one that
@@ -3858,6 +3859,7 @@ async function publishDeclaredCodeFirstEntities(
   workflows: ReadonlyMap<string, RegisteredWorkflow>
 ): Promise<void> {
   publishCollectionDbOptions(codeFirstCollectionConfigs(transformedConfig));
+  publishDeclaredCollectionFields(transformedConfig.collections ?? []);
   container
     .get<SingleRegistryService>("singleRegistryService")
     .setCodeFirstSingles(transformedConfig.singles ?? []);
@@ -3890,6 +3892,7 @@ async function syncCodeFirstCollections(
     // would leave whatever an earlier registration in this process published
     // — an `allowIdOnCreate` a later collection of the same slug would inherit.
     publishCollectionDbOptions([]);
+    publishDeclaredCollectionFields([]);
     return false;
   }
 
@@ -3920,6 +3923,9 @@ async function syncCodeFirstCollections(
   // the sync stores, and before it: they are the config's, not the
   // database's, so they hold whatever the rows below do.
   publishCollectionDbOptions(codeFirstConfigs);
+  // The fields each collection declares, kept in this process so a read or
+  // write that meets a declared field the database lacks names it.
+  publishDeclaredCollectionFields(transformedConfig.collections);
 
   const syncResult =
     await collectionRegistry.syncCodeFirstCollections(codeFirstConfigs);

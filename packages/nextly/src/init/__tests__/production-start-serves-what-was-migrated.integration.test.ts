@@ -14,10 +14,10 @@
  *   `nextly migrate` gives for it, and every read of it then failed.
  * - A collection and a Single whose newer build declares a field that neither
  *   the registry row nor the table has. The start writes neither row. The
- *   collection is served as its row describes it, without the field. A read of
- *   the Single through the Direct API, and a write of the field through REST,
- *   reach the field's column and answer ENTITY_NOT_MIGRATED, naming the field
- *   to trusted server code only. The registry row lacks the field, so the
+ *   collection is served as its row describes it, without the field. A write
+ *   of the field to either, through the Direct API and through REST, and a read
+ *   of the Single, reach the field's column and answer ENTITY_NOT_MIGRATED,
+ *   naming the field to trusted server code only. The registry row lacks the field, so the
  *   answer can only come from the fields the configuration declares.
  */
 
@@ -289,6 +289,17 @@ describe.each(getConfiguredTestDialects())(
       const listed = await nextly.find({ collection: "pssm_posts" });
       expect(listed.items).toEqual([]);
 
+      // A write of the field reaches its column: trusted server code is told
+      // the field, from the collection's declared fields.
+      expect(
+        await nextly
+          .create({
+            collection: "pssm_posts",
+            data: { title: "First", subtitle: "One" },
+          })
+          .then(() => ({ code: "answered" }), answer)
+      ).toEqual({ code: "ENTITY_NOT_MIGRATED", field: "subtitle" });
+
       // A read of the Single reaches the field's column: trusted server code
       // is told the field.
       expect(
@@ -324,12 +335,27 @@ describe.each(getConfiguredTestDialects())(
           field: json.error?.data?.field,
         };
       };
-      expect(
-        await rest("PATCH", ["singles", "pssm_banner"], {
+      expect({
+        collection: await rest(
+          "POST",
+          ["collections", "pssm_posts", "entries"],
+          {
+            title: "Second",
+            subtitle: "Two",
+          }
+        ),
+        single: await rest("PATCH", ["singles", "pssm_banner"], {
           subtitle: "One",
           _overwrite: true,
-        })
-      ).toEqual({ status: 409, code: "ENTITY_NOT_MIGRATED", field: undefined });
+        }),
+      }).toEqual({
+        collection: {
+          status: 409,
+          code: "ENTITY_NOT_MIGRATED",
+          field: undefined,
+        },
+        single: { status: 409, code: "ENTITY_NOT_MIGRATED", field: undefined },
+      });
     }, 240_000);
   }
 );
