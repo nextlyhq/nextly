@@ -274,7 +274,8 @@ async function servedAddressOf(
 async function mayReadEntry(
   ctx: PluginRouteContext,
   slug: string,
-  id: string
+  id: string,
+  locale: string | undefined
 ): Promise<boolean> {
   if (ctx.user === null) return false;
   const { data } = await ctx.services.collections.listEntries(
@@ -290,6 +291,9 @@ async function mayReadEntry(
       ...(ctx.authenticatedScope === undefined
         ? {}
         : { authenticatedScope: ctx.authenticatedScope }),
+      // In the language whose kept values are answered, so a rule reading a
+      // translated field judges that translation.
+      ...(locale === undefined ? {} : { locale }),
     }
   );
   return data.length > 0;
@@ -307,7 +311,7 @@ async function codeLevelOf(
 ): Promise<PageMetadataInput["code"]> {
   const id = body.id ?? undefined;
   if (body.kind === "collection") {
-    if (id === undefined || !(await mayReadEntry(ctx, body.slug, id))) {
+    if (id === undefined || !(await mayReadEntry(ctx, body.slug, id, locale))) {
       return {};
     }
   }

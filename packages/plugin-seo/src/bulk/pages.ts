@@ -61,8 +61,11 @@ export interface ReadPage {
   document: Record<string, unknown>;
   /** Its `seo` group's values, or none. */
   seo: Record<string, unknown>;
-  /** Its title and description without anything typed. */
-  auto: { title?: string; description?: string };
+  /**
+   * Its title and description without anything typed, and whether its
+   * route's code hides it from search.
+   */
+  auto: { title?: string; description?: string; hiddenByCode?: true };
   /**
    * Every level of the order for the page with nothing typed, which the
    * page's answer for any typed values is worked out over.
@@ -225,6 +228,7 @@ async function automaticOf(
       ...(answer.description === undefined
         ? {}
         : { description: answer.description.value }),
+      ...(answer.robots.from === "code" ? { hiddenByCode: true } : {}),
     },
   };
 }

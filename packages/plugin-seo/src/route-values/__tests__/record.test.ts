@@ -103,6 +103,33 @@ describe("the page a route's values are kept for", () => {
     ).toBeUndefined();
   });
 
+  it("keeps nothing for a draft a preview reads", async () => {
+    expect(
+      await routeValuesPageOf(
+        ctx,
+        entry({}, { id: "p1", slug: "news", status: "draft" }),
+        TYPES
+      )
+    ).toBeUndefined();
+    expect(
+      await routeValuesPageOf(
+        ctx,
+        entry(
+          {},
+          { id: "p1", slug: "news", status: "published", _isWorkingDraft: true }
+        ),
+        TYPES
+      )
+    ).toBeUndefined();
+    expect(
+      await routeValuesPageOf(
+        ctx,
+        entry({}, { id: "p1", slug: "news", status: "published" }),
+        TYPES
+      )
+    ).toEqual({ type: "posts", id: "p1", language: "en" });
+  });
+
   it("keeps a document whose own address ends in a page number as itself", async () => {
     const own = entry(
       { path: "/blog/archive/page/2" },

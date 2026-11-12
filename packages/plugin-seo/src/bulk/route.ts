@@ -62,6 +62,7 @@ import {
   SINGLE_AS_STORED,
   singleAccessOf,
   writeSingleSeo,
+  type SingleAccess,
 } from "./singles";
 
 /** What the bulk routes need from the plugin. */
@@ -200,6 +201,7 @@ function rowOf(page: ReadPage, writable: ReadonlySet<string>): BulkRow {
       : { autoDescription: page.auto.description }),
     ...(page.rev === undefined ? {} : { rev: page.rev }),
     editable: writable.has(page.id),
+    ...(page.auto.hiddenByCode === true ? { hiddenByCode: true } : {}),
   };
 }
 
@@ -522,12 +524,12 @@ async function storedForSave(
 }
 
 /**
- * Write a Single's `seo` group with `values` set over it as the caller, and
+ * Write a Single's `seo` group with `values` set over it as `access`, and
  * refuse, with the group put back, where its field rules kept out a value
  * sent. Answers the Single's new version, where it keeps one.
  */
 export async function saveSingleSeo(
-  ctx: PluginRouteContext,
+  access: SingleAccess,
   page: { type: string; id: string; label: string; rev?: string | undefined },
   stored: Record<string, unknown>,
   values: Readonly<Record<string, unknown>>,
@@ -538,7 +540,7 @@ export async function saveSingleSeo(
   try {
     rev = await writeSingleSeo(
       slug,
-      await singleAccessOf(ctx),
+      access,
       locale,
       seoWith(stored[SEO_GROUP], values),
       page.rev
@@ -546,8 +548,9 @@ export async function saveSingleSeo(
   } catch (error) {
     throw refusalAbout(error, page.label);
   }
-  const saved = await readSingle(slug, SINGLE_AS_STORED, locale);
+  // Read back and judged together, so a failed read puts the group back too.
   try {
+    const saved = await readSingle(slug, SINGLE_AS_STORED, locale);
     refuseDroppedValues(saved, values, page.id);
   } catch (error) {
     await restoreSingleSeo(slug, locale, stored[SEO_GROUP], rev);
@@ -585,7 +588,7 @@ async function saveSingle(
   const stored = await storedForSave(ctx, type, body, locale);
   const entry = stored.get(change.id) ?? {};
   const rev = await saveSingleSeo(
-    ctx,
+    await singleAccessOf(ctx),
     {
       type,
       id: change.id,

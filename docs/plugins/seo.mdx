@@ -181,8 +181,9 @@ The tab's values come from the same answer the page's head is built from, worked
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
 anyone who may read that collection or Single, a reader shown the page read-only too.
 What a page's route sets in its own code (the title, description and social values its
-`buildMetadata` returns) is recorded each time the page's head is worked out, and the tab
-shows it marked **Set in code**, "by this page's route". Until the route has answered once
+`buildMetadata` returns, and whether it hides the page) is recorded each time the page's head
+is worked out, and the tab shows it marked **Set in code**, "by this page's route"; a page its
+route hides says **Hidden from search by the page's code**. Until the route has answered once
 after it changed, for example before the first visit to a page after a deploy, the tab shows
 what it last recorded. A later page of a list (`/blog/page/2`) is that page's own, and is
 not recorded as the list's. What a [Page Builder design](#in-the-page-builder) sets is
@@ -1123,7 +1124,8 @@ it is published in and at its address there, as its head would be served, for:
 - structured data missing a detail its type needs;
 - a language the site's language links leave out, because search engines don't accept its code.
 
-A page hidden from search on purpose is checked only for broken links and alt text. The site as a
+A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
+checked only for broken links and alt text. The site as a
 whole is checked for a missing production address, a collection with no public address, a
 redirect whose To address redirects again, and a page left out of the sitemap because another page
 holds its address.
@@ -1220,7 +1222,8 @@ With no production address set, the screen asks for one and checks nothing.
 The **Bulk edit** screen, under SEO in the admin, shows the title and description of every page
 of one content type in one table. Each Single SEO is added to is a type of its own, with its one
 page. A cell left empty shows, in grey, what the page uses automatically: what its route last set
-in code, else the type's title pattern or its own content; typing in it sets the page's own.
+in code, else the type's title pattern or its own content; typing in it sets the page's own. A
+page whose route hides it from search says so under its name.
 **Show** narrows the table to the pages with something typed, or to those wholly automatic. Each
 cell counts its characters against what Google shows: about 60 for a title, 160 for a description.
 
@@ -1251,6 +1254,12 @@ The panel beside the table brings existing SEO values across. It reads:
 
 Pages in a file are matched by their address, or by their slug where the file names no address. A
 share image is matched to the media library by its file name.
+
+The import is one engine, whichever way it is started: it reads each page as the person
+importing and reports, for every page and every record it passes over, what it would set, what
+is already the same as the page's automatic value, what a person already typed (which it keeps),
+and why it skips one. Run again after an import, it sets nothing, since every place it filled is
+filled.
 
 **Do a dry run** shows what would change and changes nothing: how many pages each value would
 reach, the values left automatic because they are the same as what the page uses already, the

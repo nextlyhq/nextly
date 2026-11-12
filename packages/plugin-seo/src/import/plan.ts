@@ -18,6 +18,14 @@
  * first, as a step of its own, and put back as it was where any later step
  * is refused.
  *
+ * The engine holds no request and draws nothing: `planImport(engine, args)`
+ * and `applyImport(plan)` take the site's context and who the import is made
+ * as (`import/actor`), so the admin's import panel and a command run on the
+ * server take the same path. A plan reports, for each page and each record
+ * passed over, what it would set, what is the same as automatic, what a
+ * person already typed and keeps, and why a record is skipped. Run again
+ * after an apply, it sets nothing: every place it filled is filled.
+ *
  * @module import/plan
  */
 import { createHash } from "node:crypto";
@@ -26,8 +34,6 @@ import {
   NextlyError,
   type ParticipantTransaction,
   type PluginContext,
-  type PluginRouteContext,
-  type ServiceOpts,
 } from "@nextlyhq/plugin-sdk";
 
 import {
@@ -43,14 +49,8 @@ import {
   refuseIfNotStored,
   saveSingleSeo,
   seoWith,
-  writablePages,
 } from "../bulk/route";
-import {
-  restoreSingleSeo,
-  singleAccessOf,
-  singleDeclaration,
-  type SingleAccess,
-} from "../bulk/singles";
+import { restoreSingleSeo, singleDeclaration } from "../bulk/singles";
 import { productionAddressesOf, typedCanonical } from "../canonical";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
@@ -63,10 +63,12 @@ import type { ReadRules } from "../resolver/provider";
 import { SEPARATORS } from "../settings/patterns";
 import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
+import type { ImportActor } from "./actor";
 import type {
   DryRunBody,
   ImportGroup,
-  ImportRequest,
+  ImportReportEntry,
+  ImportSource,
   ImportTarget,
 } from "./contract";
 import { readRankMathCsv } from "./csv";
@@ -138,6 +140,10 @@ export interface PlannedPage {
   seo: Record<string, unknown>;
   /** The places it changes. */
   places: ImportTarget[];
+  /** The places whose value is the same as the page's automatic one. */
+  same: ImportTarget[];
+  /** The places a person already filled, which keep their value. */
+  kept: ImportTarget[];
 }
 
 /** One redirect the import adds. */
@@ -156,49 +162,83 @@ type AskedRedirect = Omit<PlannedRedirect, "locale"> & {
   address?: string;
 };
 
-/** An import worked out. */
-export interface ImportPlan {
-  body: DryRunBody;
-  pages: PlannedPage[];
-  redirects: PlannedRedirect[];
-  locale: string;
+/** What an import runs with: the site, who it is made as, and the plugin's setup. */
+export interface ImportEngine {
+  ctx: PluginContext;
+  actor: ImportActor;
+  setup: ImportSetup;
 }
 
-/** The pages of the types SEO is added to that the caller may read. */
+/** What an import is asked for. */
+export interface PlanImportArgs {
+  /** Where the values come from: a field group by name, or an export file. */
+  source: ImportSource;
+  /**
+   * The content types to import into, by key (a collection's slug, or
+   * `single:<slug>`); every type SEO is added to that the actor may read
+   * where none are named.
+   */
+  types?: readonly string[];
+  /**
+   * Where each of a field group's fields goes. Where none is given, the
+   * source's own `map`, else where each field's name says it goes.
+   */
+  mapping?: Readonly<Record<string, ImportTarget>>;
+  /** The language the values are imported into: the site's default one. */
+  locale?: string;
+}
+
+/** An import worked out, ready for `applyImport`. */
+export interface ImportPlan {
+  /** What a dry run shows, its per-page report and its digest included. */
+  body: DryRunBody;
+  /** The pages it changes, each with its writes. */
+  pages: PlannedPage[];
+  redirects: PlannedRedirect[];
+  /** The language it writes in. */
+  locale: string;
+  /** What it was worked out with, which its apply writes with. */
+  engine: ImportEngine;
+  /** What it was asked for. */
+  args: PlanImportArgs;
+}
+
+/**
+ * The types the import reads: those named, each one SEO is added to, or
+ * every one; of those, the ones the actor may read.
+ */
 async function readableTypes(
-  ctx: PluginRouteContext,
-  targets: readonly string[]
+  engine: ImportEngine,
+  named: readonly string[] | undefined
 ): Promise<string[]> {
-  const caller = ctx.caller;
-  if (caller === null) throw NextlyError.authRequired();
+  const { targets } = engine.setup;
+  const unknown = (named ?? []).filter(key => !targets.includes(key));
+  if (unknown.length > 0) {
+    throw NextlyError.invalidInput({
+      message: `SEO is not added to ${unknown.join(", ")}.`,
+      logContext: { reason: "seo-import-not-a-target", types: unknown },
+    });
+  }
   const readable: string[] = [];
-  for (const key of targets) {
-    if (await caller.can("read", pageTypeOf(key).slug)) readable.push(key);
+  for (const key of named ?? targets) {
+    if (await engine.actor.mayRead(key)) readable.push(key);
   }
   return readable;
 }
 
-/**
- * Every page of `types`, read as `as` in `locale`: a Single's as the same
- * person, through the read a Single takes.
- */
+/** Every page of `types`, read as the actor in `locale`. */
 async function everyPage(
-  ctx: PluginRouteContext,
+  engine: ImportEngine,
   types: readonly string[],
-  as: ServiceOpts,
   locale: string | undefined,
   rules: SiteRules
 ): Promise<ReadPage[]> {
   const pages: ReadPage[] = [];
-  let singleAs: SingleAccess | undefined;
   for (const key of types) {
-    if (pageTypeOf(key).kind === "single") {
-      singleAs ??= await singleAccessOf(ctx);
-    }
     pages.push(
-      ...(await readEveryPage(ctx, key, {
-        as,
-        ...(singleAs === undefined ? {} : { singleAs }),
+      ...(await readEveryPage(engine.ctx, key, {
+        as: engine.actor.as,
+        singleAs: engine.actor.single,
         ...(locale === undefined ? {} : { locale }),
         rules,
       }))
@@ -247,16 +287,18 @@ async function typeFields(
   return answer;
 }
 
-/** The groups the caller's readable types hold, for the import panel. */
+/**
+ * The field groups the types the actor may read hold, each field with how
+ * many pages fill it and where it is suggested to go.
+ */
 export async function importGroups(
-  ctx: PluginRouteContext,
-  setup: ImportSetup,
-  as: ServiceOpts,
+  engine: ImportEngine,
   locale: string | undefined
 ): Promise<ImportGroup[]> {
-  const types = await readableTypes(ctx, setup.targets);
-  const rules = await setup.readRules(ctx, locale);
-  const pages = await everyPage(ctx, types, as, locale, rules);
+  const { ctx } = engine;
+  const types = await readableTypes(engine, undefined);
+  const rules = await engine.setup.readRules(ctx, locale);
+  const pages = await everyPage(engine, types, locale, rules);
   return groupsOf(ctx, await typeFields(ctx, types), pages);
 }
 
@@ -266,19 +308,19 @@ function separatorOf(rules: SiteRules): string {
   return SEPARATORS.find(each => pattern.includes(` ${each} `)) ?? "|";
 }
 
-/** The source's records, read from the request. */
+/** The source's records, read with `mapping` for a field group. */
 function parsedSource(
-  request: ImportRequest,
+  source: ImportSource,
+  mapping: Readonly<Record<string, ImportTarget>>,
   pages: readonly ReadPage[],
   language: string
 ): ParsedSource {
-  const { source } = request;
   switch (source.kind) {
     case "group":
       return readGroup(
         pages,
         source.field,
-        source.field === SEO_GROUP ? OWN_FIELDS : source.map
+        source.field === SEO_GROUP ? OWN_FIELDS : mapping
       );
     case "yoast":
       return readYoast(source.text);
@@ -422,12 +464,12 @@ function ownAddress(
 
 /** The digest an apply is held to: every change, and each page's version. */
 function planDigest(
-  request: ImportRequest,
+  locale: string | undefined,
   pages: readonly PlannedPage[],
   redirects: readonly PlannedRedirect[]
 ): string {
   const hash = createHash("sha256");
-  hash.update(JSON.stringify({ locale: request.locale ?? null }));
+  hash.update(JSON.stringify({ locale: locale ?? null }));
   for (const page of pages) {
     hash.update(
       JSON.stringify([
@@ -461,11 +503,25 @@ interface Tally {
   unusableCanonicals: number;
 }
 
-/** One page's writes, and the places they fill. */
+/**
+ * One page's writes, the places they fill, and the places left as they are
+ * because their value is the same as the automatic one, or a person
+ * already filled them.
+ */
 interface Decision {
   writes: Record<string, unknown>;
   places: ImportTarget[];
+  same: ImportTarget[];
+  kept: ImportTarget[];
 }
+
+/** A decision that changes nothing yet. */
+const undecided = (): Decision => ({
+  writes: {},
+  places: [],
+  same: [],
+  kept: [],
+});
 
 /** What deciding one record's values needs about its page. */
 interface Deciding {
@@ -514,6 +570,12 @@ function fallsBackUnseen(
   return false;
 }
 
+/** A place a person already filled with another value: kept, and counted. */
+function keep(at: Deciding, place: ImportTarget): void {
+  at.tally.kept++;
+  at.decision.kept.push(place);
+}
+
 /** Write `value` into `place`, unless it is typed already or is automatic. */
 function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   const raw = at.record.values[place];
@@ -531,12 +593,14 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
     return;
   }
   if (at.unreadable.has(STORED[place])) {
-    at.tally.kept++;
+    keep(at, place);
     return;
   }
   const current = textValue(at.page.seo[STORED[place]]);
   if (current !== undefined) {
-    if (!same(current, value)) at.tally.kept++;
+    // Typed already: kept, and said so where the source holds another value.
+    if (same(current, value)) at.decision.same.push(place);
+    else keep(at, place);
     return;
   }
   const automatic =
@@ -546,6 +610,7 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
         same(value, automaticFor(place, at.page, at.decision.writes));
   if (automatic) {
     at.tally.same++;
+    at.decision.same.push(place);
     return;
   }
   if (place === "canonical" && !placeCanonical(at, value)) return;
@@ -588,12 +653,13 @@ function decideImage(at: Deciding, images: ReadonlyMap<string, string>): void {
     return;
   }
   if (at.unreadable.has(STORED.image)) {
-    at.tally.kept++;
+    keep(at, "image");
     return;
   }
   const current = chosenImage(at.page.seo[STORED.image]);
   if (current !== undefined) {
-    if (current !== id) at.tally.kept++;
+    if (current === id) at.decision.same.push("image");
+    else keep(at, "image");
     return;
   }
   at.decision.writes[STORED.image] = id;
@@ -604,7 +670,7 @@ function decideImage(at: Deciding, images: ReadonlyMap<string, string>): void {
 function decideHidden(at: Deciding): void {
   const hidden = at.record.values.hidden;
   if (hidden !== undefined && at.unreadable.has(STORED.hidden)) {
-    at.tally.kept++;
+    keep(at, "hidden");
     return;
   }
   const current = at.page.seo[STORED.hidden] === true;
@@ -612,11 +678,14 @@ function decideHidden(at: Deciding): void {
   // should show it: the page is left to the type.
   if (hidden === true && !current && at.page.levels.typeHidden === true) {
     at.tally.same++;
+    at.decision.same.push("hidden");
   } else if (hidden === true && !current) {
     at.decision.writes[STORED.hidden] = true;
     at.decision.places.push("hidden");
   } else if (hidden === false && current) {
-    at.tally.kept++;
+    keep(at, "hidden");
+  } else if (hidden !== undefined) {
+    at.decision.same.push("hidden");
   }
 }
 
@@ -640,7 +709,7 @@ function decide(
     page,
     templates,
     tally,
-    decision: { writes: {}, places: [] },
+    decision: undecided(),
   };
   for (const place of TEXT_PLACES) decideText(at, place);
   decideImage(at, images);
@@ -653,17 +722,18 @@ function decide(
  * the automatic ones, made automatic; every other value stays.
  */
 function tidyOwn(page: ReadPage, tally: Tally): Decision {
-  const writes: Record<string, unknown> = {};
-  const places: ImportTarget[] = [];
+  const decision = undecided();
   for (const place of ["title", "description"] as const) {
     const current = textValue(page.seo[STORED[place]]);
     if (current !== undefined && same(current, page.auto[place])) {
-      writes[STORED[place]] = "";
-      places.push(place);
+      decision.writes[STORED[place]] = "";
+      decision.places.push(place);
       tally.same++;
+    } else if (current !== undefined) {
+      decision.kept.push(place);
     }
   }
-  return { writes, places };
+  return decision;
 }
 
 /**
@@ -705,7 +775,7 @@ async function refusedRedirects(
 async function sourceTypes(
   ctx: PluginContext,
   readable: readonly string[],
-  source: ImportRequest["source"]
+  source: ImportSource
 ): Promise<string[]> {
   if (source.kind !== "group") return [...readable];
   const types = (await typeFields(ctx, readable))
@@ -808,15 +878,17 @@ function matchRecords(
     else if (planned.has(`${page.type}|${page.id}`)) {
       skipped.repeated.push(record.label);
     } else {
-      const { writes, places } = decideFor(record, page);
+      const decision = decideFor(record, page);
       planned.set(`${page.type}|${page.id}`, {
         type: page.type,
         id: page.id,
         label: page.label,
         ...(page.rev === undefined ? {} : { rev: page.rev }),
-        writes,
+        writes: decision.writes,
         seo: page.seo,
-        places,
+        places: decision.places,
+        same: decision.same,
+        kept: decision.kept,
       });
     }
   }
@@ -892,20 +964,24 @@ function linesOf(
  * those they may not, which the import leaves out.
  */
 async function writableOf(
-  ctx: PluginRouteContext,
+  engine: ImportEngine,
   changing: readonly PlannedPage[],
-  options: { locale: string | undefined; pagePermissions: boolean }
-): Promise<{ writable: PlannedPage[]; refused: string[]; drafted: string[] }> {
+  locale: string | undefined
+): Promise<{
+  writable: PlannedPage[];
+  refused: PlannedPage[];
+  drafted: PlannedPage[];
+}> {
   const allowed = new Set<string>();
   const drafting = new Set<string>();
   for (const type of new Set(changing.map(page => page.type))) {
-    if (await keepsDrafts(ctx, type)) drafting.add(type);
+    if (await keepsDrafts(engine.ctx, type)) drafting.add(type);
   }
   for (const type of new Set(changing.map(page => page.type))) {
     const ids = changing
       .filter(page => page.type === type)
       .map(page => page.id);
-    for (const id of await writablePages(ctx, type, ids, options)) {
+    for (const id of await engine.actor.writable(type, ids, locale)) {
       allowed.add(`${type}|${id}`);
     }
   }
@@ -913,13 +989,72 @@ async function writableOf(
   const left = changing.filter(page => !may(page));
   return {
     writable: changing.filter(may),
-    refused: left
-      .filter(page => !drafting.has(page.type))
-      .map(page => page.label),
-    drafted: left
-      .filter(page => drafting.has(page.type))
-      .map(page => page.label),
+    refused: left.filter(page => !drafting.has(page.type)),
+    drafted: left.filter(page => drafting.has(page.type)),
   };
+}
+
+/** Why a record or a page is passed over, in the report's words. */
+const SKIPPED = {
+  unmatched: "Not on this site.",
+  ambiguous: "Matches more than one page here.",
+  repeated: "Named more than once; the first is used.",
+  refused: "You may not change this page's SEO.",
+  drafted: "Its type keeps drafts: change its SEO in its own editor.",
+  empty: "The source holds no value for this page.",
+} as const;
+
+/**
+ * What the import does to each page it read, and each record it passed
+ * over: what it sets, what is the same as automatic, what a person already
+ * typed and keeps, and why one is skipped.
+ */
+function reportOf(
+  planned: readonly PlannedPage[],
+  skipped: Skipped,
+  left: { refused: readonly PlannedPage[]; drafted: readonly PlannedPage[] }
+): ImportReportEntry[] {
+  const refused = new Set(left.refused);
+  const drafted = new Set(left.drafted);
+  const entry = (
+    page: PlannedPage,
+    outcome: ImportReportEntry["outcome"],
+    reason?: string
+  ): ImportReportEntry => ({
+    type: page.type,
+    id: page.id,
+    label: page.label,
+    outcome,
+    set: outcome === "set" ? [...page.places] : [],
+    same: [...page.same],
+    kept: [...page.kept],
+    ...(reason === undefined ? {} : { reason }),
+  });
+  const pages = planned.map(page => {
+    if (refused.has(page)) return entry(page, "skipped", SKIPPED.refused);
+    if (drafted.has(page)) return entry(page, "skipped", SKIPPED.drafted);
+    if (page.places.length > 0) return entry(page, "set");
+    if (page.kept.length > 0) return entry(page, "kept");
+    if (page.same.length > 0) return entry(page, "same");
+    return entry(page, "skipped", SKIPPED.empty);
+  });
+  const passed = (labels: readonly string[], reason: string) =>
+    labels.map(
+      (label): ImportReportEntry => ({
+        label,
+        outcome: "skipped",
+        set: [],
+        same: [],
+        kept: [],
+        reason,
+      })
+    );
+  return [
+    ...pages,
+    ...passed(skipped.unmatched, SKIPPED.unmatched),
+    ...passed(skipped.ambiguous, SKIPPED.ambiguous),
+    ...passed(skipped.repeated, SKIPPED.repeated),
+  ];
 }
 
 /** Whether a stored value fills its place. */
@@ -1013,25 +1148,52 @@ async function placeRedirects(
   return { redirects, warnings };
 }
 
-/** The import worked out, changing nothing. */
+/**
+ * Where each of a field group's fields goes: as asked, else as the source
+ * says, else where each field's name says it goes, as the import panel
+ * suggests. Nothing for an export file, which says where its values go.
+ */
+async function mappingOf(
+  ctx: PluginContext,
+  args: PlanImportArgs,
+  types: readonly string[],
+  pages: readonly ReadPage[]
+): Promise<Readonly<Record<string, ImportTarget>>> {
+  const { source } = args;
+  if (source.kind !== "group") return {};
+  if (args.mapping !== undefined) return args.mapping;
+  if (source.map !== undefined) return source.map;
+  const group = groupsOf(ctx, await typeFields(ctx, types), pages).find(
+    each => each.field === source.field
+  );
+  return Object.fromEntries(
+    (group?.fields ?? []).map(field => [field.name, field.suggested])
+  );
+}
+
+/**
+ * The import `args` asks for, worked out and changing nothing: what each
+ * page would be set to, what each is left as and why, and the redirects it
+ * adds. `applyImport` writes exactly this.
+ */
 export async function planImport(
-  ctx: PluginRouteContext,
-  setup: ImportSetup,
-  request: ImportRequest,
-  as: ServiceOpts
+  engine: ImportEngine,
+  args: PlanImportArgs
 ): Promise<ImportPlan> {
-  const locale = request.locale ?? undefined;
+  const { ctx, actor, setup } = engine;
+  const locale = args.locale;
   const rules = await setup.readRules(ctx, locale);
-  const { source } = request;
+  const { source } = args;
   const types = await sourceTypes(
     ctx,
-    await readableTypes(ctx, setup.targets),
+    await readableTypes(engine, args.types),
     source
   );
-  const pages = await everyPage(ctx, types, as, locale, rules);
+  const pages = await everyPage(engine, types, locale, rules);
   const defaultLanguage =
     locale ?? (await ctx.publicAddresses.defaultLanguage());
-  const parsed = parsedSource(request, pages, defaultLanguage);
+  const mapping = await mappingOf(ctx, args, types, pages);
+  const parsed = parsedSource(source, mapping, pages, defaultLanguage);
   const unreadable = await unreadableFields(ctx, pages, locale);
   const own = source.kind === "group" && source.field === SEO_GROUP;
   const templates = templatesOf(rules);
@@ -1039,7 +1201,7 @@ export async function planImport(
   // Images are looked for only by someone who may read the media library,
   // so the import says nothing about files they may not see.
   const urls = imageUrls(parsed.records);
-  const mayReadMedia = (await ctx.caller?.can("read", "media")) === true;
+  const mayReadMedia = actor.mayReadMedia;
   const images = mayReadMedia
     ? await mediaIds(ctx, urls)
     : new Map<string, string>();
@@ -1072,9 +1234,9 @@ export async function planImport(
     refused: notYours,
     drafted,
   } = await writableOf(
-    ctx,
+    engine,
     matched.planned.filter(page => page.places.length > 0),
-    { locale, pagePermissions: setup.pagePermissions }
+    locale
   );
   // Not looked for, so not said to be missing from the library either.
   if (!mayReadMedia) tally.missingImages = 0;
@@ -1086,12 +1248,12 @@ export async function planImport(
   }
   if (notYours.length > 0) {
     warnings.push(
-      `${count(notYours.length, "page")} would change, but you may not change ${either(notYours.length, "its", "their")} SEO, so ${either(notYours.length, "it is", "they are")} left out: ${someOf(notYours)}.`
+      `${count(notYours.length, "page")} would change, but you may not change ${either(notYours.length, "its", "their")} SEO, so ${either(notYours.length, "it is", "they are")} left out: ${someOf(notYours.map(page => page.label))}.`
     );
   }
   if (drafted.length > 0) {
     warnings.push(
-      `${count(drafted.length, "page")} would change, but ${either(drafted.length, "its type keeps", "their types keep")} drafts, so ${either(drafted.length, "its", "their")} SEO is changed in ${either(drafted.length, "its", "each page's")} own editor and ${either(drafted.length, "it is", "they are")} left out: ${someOf(drafted)}.`
+      `${count(drafted.length, "page")} would change, but ${either(drafted.length, "its type keeps", "their types keep")} drafts, so ${either(drafted.length, "its", "their")} SEO is changed in ${either(drafted.length, "its", "each page's")} own editor and ${either(drafted.length, "it is", "they are")} left out: ${someOf(drafted.map(page => page.label))}.`
     );
   }
   const placed = await placeRedirects(
@@ -1110,6 +1272,8 @@ export async function planImport(
     pages: changing,
     redirects: kept,
     locale: defaultLanguage,
+    engine,
+    args,
     body: {
       checked: source.kind === "group" ? pages.length : parsed.records.length,
       fromFile: source.kind !== "group",
@@ -1120,7 +1284,11 @@ export async function planImport(
       redirects: kept.length,
       left: parsed.left,
       warnings,
-      plan: planDigest(request, changing, kept),
+      documents: reportOf(matched.planned, matched.skipped, {
+        refused: notYours,
+        drafted,
+      }),
+      plan: planDigest(locale, changing, kept),
     },
   };
 }
@@ -1138,12 +1306,14 @@ function redirectRefusal(redirect: PlannedRedirect, why: string): NextlyError {
  * refusal is thrown, which undoes everything written before it.
  */
 async function writeAll(
-  ctx: PluginRouteContext,
   transaction: Transaction,
   plan: ImportPlan,
-  stored: ReadonlyMap<string, Record<string, unknown>>,
-  as: ServiceOpts
+  stored: ReadonlyMap<string, Record<string, unknown>>
 ): Promise<void> {
+  const { ctx, actor } = plan.engine;
+  // Written as the actor, in the language the import was asked for.
+  const { locale } = plan.args;
+  const as = { ...actor.as, ...(locale === undefined ? {} : { locale }) };
   for (const page of plan.pages) {
     // A Single's page is written before the transaction (`writeSingles`).
     if (pageTypeOf(page.type).kind === "single") continue;
@@ -1180,7 +1350,7 @@ async function writeAll(
       target: redirect.target,
       permanent: redirect.permanent,
       origin: "import",
-      addedBy: ctx.user?.id ?? null,
+      addedBy: actor.userId,
     });
     if ("refused" in outcome) throw redirectRefusal(redirect, outcome.refused);
   }
@@ -1224,17 +1394,17 @@ async function restoreSingles(
  * refusal is thrown.
  */
 async function writeSingles(
-  ctx: PluginRouteContext,
   plan: ImportPlan,
   stored: ReadonlyMap<string, Record<string, unknown>>
 ): Promise<WrittenSingle[]> {
+  const { ctx, actor } = plan.engine;
   const written: WrittenSingle[] = [];
   for (const page of plan.pages) {
     if (pageTypeOf(page.type).kind !== "single") continue;
     const entry = stored.get(`${page.type}|${page.id}`) ?? {};
     try {
       const rev = await saveSingleSeo(
-        ctx,
+        actor.single,
         { type: page.type, id: page.id, label: page.label, rev: page.rev },
         entry,
         page.writes,
@@ -1250,25 +1420,17 @@ async function writeSingles(
 }
 
 /**
- * Apply the import the dry run `digest` showed: in one transaction, in full
- * or not at all. Refused, with nothing changed, where the import worked out
- * now is not that one.
+ * Write what `plan` worked out: in one transaction, in full or not at all,
+ * each Single's page a step of its own before it, put back where a later
+ * step is refused. Each write names the version its page was read at, so a
+ * page changed since the plan is refused rather than written over. Applied
+ * again, a plan worked out again sets nothing: every place it filled is
+ * filled.
  */
 export async function applyImport(
-  ctx: PluginRouteContext,
-  setup: ImportSetup,
-  request: ImportRequest,
-  digest: string,
-  as: ServiceOpts
+  plan: ImportPlan
 ): Promise<{ pages: number; redirects: number }> {
-  const plan = await planImport(ctx, setup, request, as);
-  if (plan.body.plan !== digest) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message:
-        "Pages have changed since the dry run, so it no longer shows what would happen. Nothing was imported. Do the dry run again.",
-    });
-  }
+  const { ctx, setup } = plan.engine;
   // The groups as stored, read before the transaction so it holds no lock
   // on the rows it then writes; each write sends its page's version, which
   // refuses it where the page changed since.
@@ -1289,10 +1451,10 @@ export async function applyImport(
       await ctx.services.collections.warmLocalizedReadiness(type);
     }
   }
-  const singles = await writeSingles(ctx, plan, stored);
+  const singles = await writeSingles(plan, stored);
   try {
     await ctx.services.collections.withTransaction(transaction =>
-      writeAll(ctx, transaction, plan, stored, as)
+      writeAll(transaction, plan, stored)
     );
   } catch (error) {
     await restoreSingles(ctx, singles, plan.locale);

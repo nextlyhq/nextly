@@ -37,7 +37,9 @@ import type {
   BulkSaveBody,
   BulkTypesBody,
 } from "../../bulk/contract";
+import { siteActor } from "../../import/actor";
 import type { DryRunBody, ImportGroupsBody } from "../../import/contract";
+import { applyImport, planImport } from "../../import/plan";
 import { MANAGE_SEO_PERMISSION } from "../../permissions";
 import { seoPlugin } from "../../plugin";
 import { checkSite, problemList, type Reader } from "../../problems/check";
@@ -144,6 +146,9 @@ async function boot(dialect: TestDialect, options: { drafts?: boolean } = {}) {
       defineCollection({
         slug: "notes",
         labels: { singular: "Note", plural: "Notes" },
+        // Kept per language on the site in two languages, so a note may be
+        // open in one language and closed in another.
+        ...(options.drafts === true ? { localized: true } : {}),
         // Anyone reads the open notes, and no one the others.
         access: { read: () => ({ team: { equals: "open" } }) },
         fields: [text({ name: "title" }), text({ name: "team" })],
@@ -368,6 +373,47 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(stale.status).toBe(409);
       expect((await home(t)).seo).toMatchObject({ metaTitle: "Rext AI, home" });
+    });
+
+    it("answers what is kept for a note only in a language its reader may read it in", async () => {
+      const { t, answer, editor } = await boot(dialect, { drafts: true });
+      const made = await t.nextly.create({
+        collection: "notes",
+        data: { title: "A note", team: "open" },
+      });
+      const id = String((made.item as { id: unknown }).id);
+      await t.nextly.update({
+        collection: "notes",
+        id,
+        locale: "de",
+        data: { title: "Eine Notiz", team: "closed", _overwrite: true },
+      });
+      for (const locale of ["en", "de"]) {
+        await answer({
+          locale,
+          source: {
+            kind: "entry",
+            collection: "notes",
+            entry: { id, title: "A note", team: "open" },
+          },
+          code: { title: `From code (${locale})` },
+          derived: {},
+        });
+      }
+      const codeIn = async (locale: string) =>
+        (
+          await ok<SeoTabContext>(
+            call(editor, "POST", "/resolve", {
+              kind: "collection",
+              slug: "notes",
+              id,
+              locale,
+              document: { title: "A note", team: "open" },
+            })
+          )
+        ).levels.code;
+      expect(await codeIn("en")).toEqual({ title: "From code (en)" });
+      expect(await codeIn("de")).toEqual({});
     });
 
     it("keeps a Single read-only only where it keeps working drafts, as its own write decides", async () => {
@@ -640,6 +686,124 @@ describe.each(getConfiguredTestDialects())(
         call(editor, "GET", "/bulk/rows?type=posts")
       );
       expect(again.rows[0]?.autoDescription).toBeUndefined();
+
+      // A route that hides its page is shown hiding it.
+      await answer({
+        source: { kind: "entry", collection: "posts", entry: post },
+        code: { title: "Plans and pricing", hidden: true },
+        derived: {},
+      });
+      const hidden = await ok<BulkRowsBody>(
+        call(editor, "GET", "/bulk/rows?type=posts")
+      );
+      expect(hidden.rows[0]?.hiddenByCode).toBe(true);
+      const hiddenTab = await ok<SeoTabContext>(
+        call(editor, "POST", "/resolve", {
+          kind: "collection",
+          slug: "posts",
+          id: String(post.id),
+          document: { title: "Pricing", slug: "pricing" },
+        })
+      );
+      expect(hiddenTab.levels.code.hidden).toBe(true);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the import engine, run as the site (%s)",
+  dialect => {
+    it("reports each page, sets only empty places, and sets nothing when run again", async () => {
+      const { t, ctx } = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: "home",
+        data: {
+          _overwrite: true,
+          title: "Welcome",
+          // A description an editor typed in the plugin's group.
+          seo: { metaDescription: "Typed by an editor" },
+          metaData: {
+            seoTitle: "AI article writer for SEO | Rext AI",
+            seoDescription: "From the old group",
+          },
+        },
+      });
+      await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "Surfer vs Rext",
+          slug: "surfer",
+          // The same as the post's automatic title.
+          metaData: { seoTitle: "Surfer vs Rext | Rext AI" },
+        },
+      });
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "Jasper vs Rext", slug: "jasper" },
+      });
+      const engine = {
+        ctx,
+        actor: siteActor(ctx),
+        setup: {
+          targets: ["posts", HOME],
+          readRules: readSeoRules,
+          checks: {
+            targets: ["posts"],
+            singles: ["home"],
+            readers: {
+              readRules: readSeoRules,
+              readStructuredDataRules: structuredDataFromSettings(
+                rulesFromOptions(undefined, undefined)
+              ),
+              readSocialCardRules: noSocialCardRules,
+            },
+          },
+          pagePermissions: false,
+        },
+      };
+      const args = {
+        source: { kind: "group", field: "metaData" },
+        types: ["posts", HOME],
+        mapping: { seoTitle: "title", seoDescription: "description" },
+      } as const;
+
+      const plan = await planImport(engine, args);
+      const byLabel = Object.fromEntries(
+        plan.body.documents.map(entry => [entry.label, entry])
+      );
+      expect(byLabel.Welcome).toMatchObject({
+        type: HOME,
+        outcome: "set",
+        set: ["title"],
+        kept: ["description"],
+      });
+      expect(byLabel["Surfer vs Rext"]).toMatchObject({
+        type: "posts",
+        outcome: "same",
+        same: ["title"],
+      });
+      expect(byLabel["Jasper vs Rext"]).toMatchObject({
+        outcome: "skipped",
+        reason: "The source holds no value for this page.",
+      });
+
+      expect(await applyImport(plan)).toEqual({ pages: 1, redirects: 0 });
+      expect((await home(t)).seo).toMatchObject({
+        metaTitle: "AI article writer for SEO | Rext AI",
+        metaDescription: "Typed by an editor",
+      });
+
+      // Run again, it finds every place filled and sets nothing.
+      const again = await planImport(engine, args);
+      expect(again.pages).toEqual([]);
+      expect(
+        again.body.documents.find(entry => entry.label === "Welcome")
+      ).toMatchObject({ outcome: "kept", set: [], same: ["title"] });
+      expect(await applyImport(again)).toEqual({ pages: 0, redirects: 0 });
+      expect((await home(t)).seo).toMatchObject({
+        metaTitle: "AI article writer for SEO | Rext AI",
+        metaDescription: "Typed by an editor",
+      });
     });
   }
 );

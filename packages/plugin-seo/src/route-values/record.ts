@@ -53,6 +53,17 @@ async function servesLaterListPage(
   return laterListPage(path, input.path) !== undefined;
 }
 
+/**
+ * Whether `document` is a draft a preview reads: a working draft over a
+ * published page, or a page never published. Its route's values are the
+ * draft's, not those the published page is served with, so they are not
+ * kept.
+ */
+function isDraft(document: Readonly<Record<string, unknown>>): boolean {
+  if (document._isWorkingDraft === true) return true;
+  return typeof document.status === "string" && document.status !== "published";
+}
+
 /** The id a document is stored under, as text, or none. */
 function idOf(document: Readonly<Record<string, unknown>>): string | undefined {
   const { id } = document;
@@ -71,6 +82,9 @@ export async function routeValuesPageOf(
   types: RouteValuesTypes
 ): Promise<RouteValuesPage | undefined> {
   const { source } = input;
+  if (isDraft(source.kind === "entry" ? source.entry : source.document)) {
+    return undefined;
+  }
   let type: string;
   let id: string;
   if (source.kind === "entry") {
