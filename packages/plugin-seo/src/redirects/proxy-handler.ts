@@ -116,7 +116,7 @@ export function redirectsProxyHandler(
     name: "redirects",
     async handle(request, ctx) {
       // Noted in the background, so the admin can tell the Proxy runs.
-      seen.note(ctx);
+      void seen.note(ctx);
       const url = new URL(request.url);
       const address = await pageAddressOf(ctx, request, url);
       if (address === "not-a-page") {
