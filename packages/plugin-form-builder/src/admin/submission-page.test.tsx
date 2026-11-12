@@ -26,9 +26,14 @@ import { senderOf } from "../utils/submission-title";
 import { SubmissionPage } from "./SubmissionPage";
 
 const navigateTo = vi.fn();
+// What the page last told the admin's leave guard, by key.
+const unsavedWork = new Map<string, boolean>();
 vi.mock("@nextlyhq/plugin-sdk/admin", async original => ({
   ...(await original<object>()),
   navigateTo: (href: string) => navigateTo(href),
+  useReportUnsavedWork: (key: string, dirty: boolean) => {
+    unsavedWork.set(key, dirty);
+  },
 }));
 
 beforeAll(() => {
@@ -42,6 +47,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   navigateTo.mockReset();
+  unsavedWork.clear();
   window.history.replaceState(null, "", "/");
 });
 
@@ -612,6 +618,50 @@ describe("a submission's page, writing", () => {
       ])
     );
     expect(await screen.findByText(/Saved\./)).toBeInTheDocument();
+  });
+
+  it("tells the leave guard while a changed answer is not saved", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+    });
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    // Editing, nothing changed yet.
+    expect(unsavedWork.get("forms.submission-answers")).toBe(false);
+    await user.type(screen.getByRole("textbox", { name: "Full name" }), "!");
+    expect(unsavedWork.get("forms.submission-answers")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(unsavedWork.get("forms.submission-answers")).toBe(false);
+  });
+
+  it("saves a note after one was cleared", async () => {
+    const store = { data: DATA, notes: "Call back" as string | undefined };
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      store,
+    });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toHaveValue("Call back"));
+    await user.clear(note);
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([{ notes: "", _rev: "rev-7" }])
+    );
+    await user.type(note, "Booked");
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "", _rev: "rev-7" },
+        { notes: "Booked", _rev: "rev-8" },
+      ])
+    );
+    expect(screen.queryByText(/Someone changed this submission/)).toBeNull();
   });
 
   it("says when a change could not be sent", async () => {

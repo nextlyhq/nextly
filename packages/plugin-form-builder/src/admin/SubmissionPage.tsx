@@ -17,6 +17,7 @@ import {
   PageFrame,
   PageHeader,
   TopBarPlace,
+  useReportUnsavedWork,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
@@ -473,6 +474,9 @@ function answersChanged(
   );
 }
 
+/** The key this page reports its unsaved answers under. */
+const UNSAVED_ANSWERS_KEY = "forms.submission-answers";
+
 /** The answers, as asked, and editing them for a person who may. */
 function AnswersBox({
   submission,
@@ -490,7 +494,15 @@ function AnswersBox({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   // The answers as they were when editing began, which the draft is made from.
-  const [draftBasis, setDraftBasis] = useState<unknown>(null);
+  const [draftBasis, setDraftBasis] = useState<Record<string, unknown> | null>(
+    null
+  );
+  // An answer changed and not yet saved holds the page: leaving it asks first.
+  useReportUnsavedWork(
+    UNSAVED_ANSWERS_KEY,
+    editing &&
+      answersChanged(form?.fields ?? [], draftBasis ?? undefined, draft)
+  );
   // Another submission opened: not editing it.
   useEffect(() => setEditing(false), [submission.id]);
   return (
@@ -652,7 +664,7 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
     const basis = expected.current;
     expected.current = text;
     pending.current += 1;
-    void save({ notes: text }, { notes: basis === "" ? null : basis })
+    void save({ notes: text }, { notes: basis })
       .then(() => setSavedText(text))
       .catch(() => {
         // Not stored: once no other note save is on its way, the next one
@@ -976,9 +988,12 @@ function holdsBasis(
 ): boolean {
   if (basis === undefined) return true;
   const now = (stored ?? {}) as Record<string, unknown>;
+  // Nothing, null and empty text are one value: a cleared note is stored as
+  // "" and read back as either.
+  const plain = (value: unknown) =>
+    JSON.stringify(value === undefined || value === "" ? null : value);
   return Object.entries(basis).every(
-    ([name, value]) =>
-      JSON.stringify(now[name] ?? null) === JSON.stringify(value ?? null)
+    ([name, value]) => plain(now[name]) === plain(value)
   );
 }
 
