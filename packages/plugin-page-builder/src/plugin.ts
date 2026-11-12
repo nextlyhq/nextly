@@ -127,6 +127,11 @@ import {
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
 import {
+  collectionReach,
+  mayBeTemplated,
+  type CollectionReach,
+} from "./collection-reach";
+import {
   ADDRESS_CLAIMS_SLUG,
   addressClaimsCollection,
 } from "./collections/address-claims";
@@ -1797,6 +1802,13 @@ export const pageBuilder = (
       templateAddresses.has(collection)
     )
   );
+  // Which collections a write may concern at all, known from the site's
+  // code (see `collection-reach`). Set by `init`, which a reload under HMR
+  // runs again; until then every collection may concern it.
+  let writeReach: CollectionReach = {
+    mayServeEntries: () => true,
+    mayHoldBlocks: () => true,
+  };
   // Who holds a path, for the site's content route, set by `init`.
   let contentAddresses: ContentAddressService | null = null;
   const requireContentAddresses = (): ContentAddressService => {
@@ -2026,6 +2038,9 @@ export const pageBuilder = (
           )
         );
     },
+    // A collection whose declaration holds no blocks field is not read
+    // again on each write to it to say so.
+    collectionMayHoldBlocks: collection => writeReach.mayHoldBlocks(collection),
     limits: () => opts.limits ?? DEFAULT_LIMITS,
     placeOf: at => {
       if (at.kind === "single") return "singles";
@@ -2461,6 +2476,14 @@ export const pageBuilder = (
         ctx.self.collections
       );
       installed = installContext(ctx, opts);
+      // Read per question from `ctx.config`, the declarations as every
+      // plugin's contributions and extensions leave them.
+      writeReach = collectionReach({
+        collections: () => ctx.config.collections,
+        fieldGroups: declaredFieldGroups(ctx),
+        addresses: templateAddresses,
+        own: () => new Set(Object.values(ctx.self.collections)),
+      });
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
       // The site's named queries and the ones plugins declare, into a
@@ -2954,6 +2977,9 @@ export const pageBuilder = (
         // A failed write marks the index dirty, so health stops calling it
         // whole until a full rebuild has walked the site again.
         markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
+        // A collection whose declaration holds no blocks field derives no
+        // rows, known without reading it.
+        mayHoldBlocks: collection => writeReach.mayHoldBlocks(collection),
       });
       // A write of the site style dropping a variable still in use is
       // refused before its transaction, by the check the remove route makes.
@@ -3231,21 +3257,22 @@ export const pageBuilder = (
             )
           ),
         // The page builder's own documents are pages, stores and
-        // bookkeeping, never entries served under a template address.
-        neverServed: collection =>
-          Object.values(ctx.self.collections).includes(collection),
+        // bookkeeping, never entries served under a template address; nor
+        // is an entry of a collection the site's code declares that no
+        // template may serve and no address in code names, such as another
+        // plugin's private records. Known from the code alone, so a write to
+        // one reads nothing (see `collection-reach`).
+        neverServed: collection => !writeReach.mayServeEntries(collection),
         // The template guard's own judgement of which collections may have
-        // one; a localized collection is refused an address.
+        // one; a localized collection is refused an address. The same rule
+        // `neverServed` asks of the code, asked of the registry's record.
         // Given a write's transaction, the registry is read on it.
         mayHaveTemplate: async (collection, tx) => {
-          const problem = await templateCollectionProblem(
+          const own = new Set(Object.values(ctx.self.collections));
+          return mayBeTemplated(
             collection,
-            slug => collectionRecord(slug, tx),
-            new Set(Object.values(ctx.self.collections))
-          );
-          return (
-            problem === null &&
-            (await collectionRecord(collection, tx))?.localized !== true
+            own.has(collection) ? null : await collectionRecord(collection, tx),
+            own
           );
         },
         storedAddressProblem: (address, collection) =>
@@ -3519,6 +3546,7 @@ export const pageBuilder = (
         ctx,
         runs: () => removalRunStore(ctx.db, ctx.dialect),
         definedBreakpoints,
+        mayHoldBlocks: collection => writeReach.mayHoldBlocks(collection),
       });
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in

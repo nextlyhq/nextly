@@ -187,9 +187,11 @@ export interface EntryClaimsDeps {
     ReadonlyMap<string, readonly string[]>
   >;
   /**
-   * Whether `collection` is one whose writes never move an entry's address:
-   * the page builder's own collections, whose documents are not entries
-   * served under a template address.
+   * Whether `collection` is one whose writes never move an entry's address,
+   * known without a read: the page builder's own collections, whose
+   * documents are not entries served under a template address, and one the
+   * site's code declares that no template may serve and no address in code
+   * names, such as another plugin's private records.
    */
   readonly neverServed: (collection: string) => boolean;
   /**
