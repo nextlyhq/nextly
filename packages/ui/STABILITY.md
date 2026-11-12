@@ -87,7 +87,7 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `IconField`, `IconPicker`, `IconGlyph`, `TableSearch`, `TableSkeleton`,
 `TreeView` and its `TREE_INDENT_PX`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
-`PageShell`, `Bleed`, `PageHeader`, `SHELL_MEASURE`),
+`PageShell`, `Bleed`, `PageHeader`, `PageFrame`, `PageFrameListener`, `SHELL_MEASURE`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
 

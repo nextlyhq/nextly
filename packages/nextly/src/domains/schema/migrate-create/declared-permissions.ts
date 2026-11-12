@@ -24,6 +24,7 @@
  */
 
 import {
+  APP_OWNER,
   collectCustomPermissions,
   type CollectedPermission,
 } from "../../../plugins/permissions/collect-permissions";
@@ -85,9 +86,6 @@ export interface DeclaredPermissionSources {
   /** The app's and the plugins' own permissions (`collectCustomPermissions`). */
   custom: readonly CollectedPermission[];
 }
-
-/** The owner key of the app's own permissions, as `collectCustomPermissions` names it. */
-const APP_OWNER = "app";
 
 /** `(action, resource)` as one key; permissions are identified by the pair. */
 const identity = (p: { action: string; resource: string }) =>

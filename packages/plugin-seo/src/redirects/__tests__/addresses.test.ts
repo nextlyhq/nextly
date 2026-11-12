@@ -59,6 +59,22 @@ describe("a redirect's From address", () => {
     ["/a/../b", "Write the From address without . or .. parts."],
     ["/a/%2E%2e/b", "Write the From address without . or .. parts."],
     ["/a\\b", "Use / rather than \\ in the From address."],
+    [
+      "/legacy/logo.png",
+      "Redirects answer page addresses only: the admin, the API and files such as images never reach them.",
+    ],
+    [
+      "/admin/old",
+      "Redirects answer page addresses only: the admin, the API and files such as images never reach them.",
+    ],
+    [
+      "/api/*",
+      "Redirects answer page addresses only: the admin, the API and files such as images never reach them.",
+    ],
+    [
+      "/_next/static/app.js",
+      "Redirects answer page addresses only: the admin, the API and files such as images never reach them.",
+    ],
   ])("refuses %j", (text, message) => {
     expect(parseSource(text)).toEqual({ ok: false, error: message });
   });

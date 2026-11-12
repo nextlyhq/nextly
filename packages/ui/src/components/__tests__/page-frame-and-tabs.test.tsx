@@ -6,9 +6,9 @@
  * shows them as link tabs under its header, each with its own address.
  */
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PageFrame } from "../page-frame";
+import { PageFrame, PageFrameListener } from "../page-frame";
 import { PageHeader, PageTab, PageTabs } from "../page-header";
 
 afterEach(cleanup);
@@ -161,5 +161,71 @@ describe("a page header's tabs", () => {
   it("draws no tab row when the page has no sections", () => {
     render(<PageHeader title="Users" />);
     expect(screen.queryByRole("navigation")).toBeNull();
+  });
+});
+
+describe("a page frame listener", () => {
+  it("hears the type of a frame drawn inside it, and that it is gone", () => {
+    const onFrame = vi.fn();
+    const { rerender } = render(
+      <PageFrameListener onFrame={onFrame}>
+        <div>
+          <PageFrame type="form">
+            <p>Body</p>
+          </PageFrame>
+        </div>
+      </PageFrameListener>
+    );
+    expect(onFrame).toHaveBeenLastCalledWith("form");
+
+    rerender(
+      <PageFrameListener onFrame={onFrame}>
+        <div>
+          <p>Body</p>
+        </div>
+      </PageFrameListener>
+    );
+    expect(onFrame).toHaveBeenLastCalledWith(null);
+  });
+
+  it("hears only the outermost frame, which is the page's own", () => {
+    const onFrame = vi.fn();
+    render(
+      <PageFrameListener onFrame={onFrame}>
+        <PageFrame type="workspace">
+          <PageFrame type="list">
+            <p>Body</p>
+          </PageFrame>
+        </PageFrame>
+      </PageFrameListener>
+    );
+    // The inner frame mounts first; were it heard, "list" would be among the
+    // calls.
+    expect(onFrame.mock.calls).toEqual([["workspace"]]);
+  });
+
+  it("hears nothing from content that draws no frame", () => {
+    const onFrame = vi.fn();
+    render(
+      <PageFrameListener onFrame={onFrame}>
+        <p>Body</p>
+      </PageFrameListener>
+    );
+    expect(onFrame).not.toHaveBeenCalled();
+    expect(screen.getByText("Body")).toBeTruthy();
+  });
+
+  it("is not heard by a frame outside it", () => {
+    // A host draws its own frame around the listener, and that frame must not
+    // count as the content's.
+    const onFrame = vi.fn();
+    render(
+      <PageFrame type="workspace">
+        <PageFrameListener onFrame={onFrame}>
+          <p>Body</p>
+        </PageFrameListener>
+      </PageFrame>
+    );
+    expect(onFrame).not.toHaveBeenCalled();
   });
 });

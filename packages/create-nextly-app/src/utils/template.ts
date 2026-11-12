@@ -2062,8 +2062,16 @@ export async function copyTemplate(
   // dashboard's SeedDemoContentCard after running /admin/setup — the
   // CLI no longer asks about it.)
 
+  // The template's hand-written SQL describes the tables a visual project
+  // registers its schema from, in the folder its visual config reads. A
+  // code-first project's schema is its config: its first migration is written
+  // from that config once it is installed (`installers/initial-migration.ts`),
+  // so it receives none of this SQL.
   const templateMigrationsDir = path.join(typeDir, "migrations");
-  if (await fs.pathExists(templateMigrationsDir)) {
+  if (
+    approach !== "code-first" &&
+    (await fs.pathExists(templateMigrationsDir))
+  ) {
     await fs.copy(templateMigrationsDir, path.join(targetDir, "migrations"), {
       overwrite: false,
     });

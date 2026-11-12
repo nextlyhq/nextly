@@ -13,7 +13,7 @@ import { includingHidden, test } from "./support/test";
 const RUN = Date.now().toString(36);
 
 async function choose(page: Page, type: RegExp) {
-  await gotoAdmin(page, "/email/sending/create");
+  await gotoAdmin(page, "/settings/email/sending/create");
   await page.getByRole("radio", { name: type }).click();
   await page.getByRole("button", { name: "Continue" }).click();
 }
@@ -54,7 +54,9 @@ test("sets up the Log provider: logged, not sent, then turned on", async ({
   await expect(turnOn).toHaveAttribute("aria-checked", "true");
 
   await page.getByRole("button", { name: "Done" }).click();
-  await expect(page).toHaveURL(/\/admin\/email\/sending$/, { timeout: 30_000 });
+  await expect(page).toHaveURL(/\/admin\/settings\/email\/sending$/, {
+    timeout: 30_000,
+  });
   // Rows render as buttons: the whole row opens the provider.
   const row = page.getByRole("button", { name: new RegExp(name) });
   await expect(row).toBeVisible();
@@ -80,7 +82,7 @@ test("refuses SMTP settings at the check, says what to check, and saves nothing"
   await expect(
     page.getByRole("heading", { name: /Connect SMTP/ })
   ).toBeVisible();
-  await gotoAdmin(page, "/email/sending");
+  await gotoAdmin(page, "/settings/email/sending");
   await expect(
     page.getByRole("button", { name: new RegExp(name) })
   ).toHaveCount(0);
@@ -117,7 +119,7 @@ for (const size of [
     test.setTimeout(120_000);
     await page.setViewportSize(size);
 
-    await gotoAdmin(page, "/email/sending");
+    await gotoAdmin(page, "/settings/email/sending");
     await expect(
       page.getByRole("heading", { name: "Default sender" })
     ).toBeVisible({ timeout: 30_000 });
@@ -127,7 +129,7 @@ for (const size of [
       contentType: "image/png",
     });
 
-    await gotoAdmin(page, "/email/sending/create");
+    await gotoAdmin(page, "/settings/email/sending/create");
     await expect(page.getByRole("radio").first()).toBeVisible({
       timeout: 30_000,
     });

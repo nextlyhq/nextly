@@ -314,8 +314,8 @@ export function $importTextWidgetMarkdown(content: string): void {
  * The editor's theme, with headings at card scale.
  *
  * Same tokens, same classes for everything a card has room for; only the
- * heading scale differs, because a widget is a panel among panels rather than
- * a page, and a page-scale `h1` inside one reads as a mistake.
+ * heading scale and the links differ, because a widget is a panel among panels
+ * rather than a page, and a page-scale `h1` inside one reads as a mistake.
  */
 export const TEXT_WIDGET_THEME: {
   readonly heading: {
@@ -398,4 +398,8 @@ export const TEXT_WIDGET_THEME: {
     h5: "text-sm font-medium mt-2 mb-1 first:mt-0",
     h6: "text-sm font-medium mt-2 mb-1 first:mt-0",
   },
+  // A link in a card's prose is the text's own colour, underlined: the editor's primary colour
+  // can fall under AA on a card once a brand replaces it. The padding grows its target to 24px
+  // without moving the lines around it.
+  link: "py-1 font-medium text-foreground underline decoration-control-border underline-offset-[3px] hover:decoration-foreground",
 } as const;

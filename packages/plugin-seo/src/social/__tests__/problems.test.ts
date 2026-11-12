@@ -10,7 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { socialCardRulesFromOptions } from "../card";
-import { shareImageSizeProblem } from "../contract";
+import { shareImageFormatProblem, shareImageSizeProblem } from "../contract";
 import { shareImageProblems } from "../problems";
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
@@ -53,6 +53,7 @@ const LIBRARY = {
     altText: "Cover",
   },
   card: { url: "/uploads/card.jpg", width: 1200, height: 630 },
+  vector: { url: "/uploads/card.svg", width: 1200, height: 630 },
 };
 
 function post(
@@ -107,6 +108,40 @@ describe("shareImageSizeProblem", () => {
   it("says nothing of a picture whose size is not known", () => {
     expect(shareImageSizeProblem({ width: 800 })).toBeUndefined();
     expect(shareImageSizeProblem({})).toBeUndefined();
+  });
+});
+
+describe("shareImageFormatProblem", () => {
+  it("names a vector picture, which no network shows on a card", () => {
+    expect(shareImageFormatProblem("/uploads/card.svg")).toBe(
+      "An SVG image, which networks don't show on a card"
+    );
+    expect(
+      shareImageFormatProblem("https://cdn.example.net/Card.SVG?v=2#top")
+    ).toBe("An SVG image, which networks don't show on a card");
+  });
+
+  it("names an AVIF or WebP picture, which some networks don't show", () => {
+    expect(shareImageFormatProblem("/uploads/card.avif")).toBe(
+      "An AVIF image, which X and many apps don't show on a card"
+    );
+    expect(shareImageFormatProblem("/uploads/card.webp")).toBe(
+      "A WebP image, which some apps don't show on a card"
+    );
+  });
+
+  it("finds nothing wrong with a JPEG, PNG or GIF, or an address with no file type", () => {
+    for (const url of [
+      "/uploads/card.jpg",
+      "/uploads/card.JPEG",
+      "/uploads/card.png",
+      "/uploads/card.gif",
+      "/og?title=Blog+%7C+Nextly",
+      "/opengraph-image",
+      "/og.svg/card.png",
+    ]) {
+      expect(shareImageFormatProblem(url)).toBeUndefined();
+    }
   });
 });
 
@@ -182,6 +217,44 @@ describe("shareImageProblems", () => {
     ]);
   });
 
+  it("names a share image in a format networks don't show, fixed by making one", async () => {
+    const problems = await shareImageProblems(
+      context(LIBRARY),
+      post({ title: "Harbour", seo: { ogImage: "vector" } }),
+      AT_EXAMPLE
+    );
+    expect(problems).toEqual([
+      {
+        detail: "format",
+        message: "An SVG image, which networks don't show on a card",
+        fix: "make",
+        from: "page",
+      },
+    ]);
+  });
+
+  it("sends a route's picture in such a format to the route", async () => {
+    const problems = await shareImageProblems(
+      context(LIBRARY),
+      post(
+        { title: "Harbour" },
+        {
+          code: {
+            image: {
+              url: "https://cdn.example.net/a.avif",
+              width: 1200,
+              height: 630,
+            },
+          },
+        }
+      ),
+      AT_EXAMPLE
+    );
+    expect(problems).toEqual([
+      expect.objectContaining({ detail: "format", fix: "route", from: "code" }),
+    ]);
+  });
+
   it("finds nothing wrong with a card-sized image on a site whose address is known", async () => {
     expect(
       await shareImageProblems(
@@ -204,6 +277,20 @@ describe("shareImageProblems", () => {
         from: "page",
       }),
     ]);
+  });
+
+  it("reads the site's address from the SEO settings when the caller gives no reader", async () => {
+    savedSettings = { productionAddresses: ["https://rext.ai"] };
+    try {
+      expect(
+        await shareImageProblems(
+          context(LIBRARY),
+          post({ title: "Harbour", seo: { ogImage: "card" } })
+        )
+      ).toEqual([]);
+    } finally {
+      savedSettings = {};
+    }
   });
 
   it("finds nothing wrong with a page that has no share image", async () => {

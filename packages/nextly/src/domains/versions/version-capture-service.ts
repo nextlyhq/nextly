@@ -35,6 +35,8 @@ export interface CaptureInput {
   label?: string | null;
   locale?: string | null;
   sourceVersionNo?: number | null;
+  /** The version each restored field came from; see `restored-from`. */
+  fieldSources?: Readonly<Record<string, number>> | null;
   /**
    * Durable versions retained for this document; `false` or omitted leaves
    * history unbounded. Applied in the caller's transaction right after the
@@ -204,6 +206,7 @@ async function insertWithRetry(
           label: input.label ?? null,
           locale: input.locale ?? null,
           sourceVersionNo: input.sourceVersionNo ?? null,
+          fieldSources: input.fieldSources ?? null,
           createdBy: input.createdBy ?? null,
         })
       );

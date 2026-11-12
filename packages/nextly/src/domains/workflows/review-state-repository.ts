@@ -10,7 +10,11 @@
  */
 import { createHash } from "node:crypto";
 
-import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  WhereClause,
+  WhereCondition,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import { REVIEW_STATES_TABLE } from "../../schemas/review-states";
 import type {
@@ -127,6 +131,25 @@ export function reviewStateKey(part: ReviewPart): string {
   return createHash("sha256").update(joined, "utf8").digest("hex");
 }
 
+/**
+ * The id of a part's review-state row, or null when it has none. The row is made afresh each time
+ * the part enters review again (a discard removes it), so the id names one review cycle, where the
+ * revision starts again at 1 with each.
+ */
+export async function readReviewStateId(
+  db: Pick<TransactionContext, "select">,
+  part: ReviewPart
+): Promise<string | null> {
+  const [row] = await db.select<{ id: string }>(REVIEW_STATES_TABLE, {
+    columns: ["id"],
+    where: {
+      and: [{ column: "partKey", op: "=", value: reviewStateKey(part) }],
+    },
+    limit: 1,
+  });
+  return row?.id ?? null;
+}
+
 /** A part's review state, or null when it has none, which reads as the workflow's first stage. */
 export async function readReviewState(
   db: ReviewStatesDb,
@@ -219,6 +242,110 @@ export async function updateReviewState(
     }
   );
   return affected > 0;
+}
+
+/**
+ * The review states of every document of a collection or Single that also meet `conditions`, in
+ * one read: what a sweep over one collection's documents reads, rather than a read per document.
+ */
+export async function readEntityReviewStates(
+  db: ReviewStatesDb,
+  entity: Pick<ReviewDocument, "scopeKind" | "scopeSlug">,
+  conditions: readonly WhereCondition[] = []
+): Promise<ReviewState[]> {
+  const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
+    where: {
+      and: [
+        { column: "scopeKind", op: "=", value: entity.scopeKind },
+        { column: "scopeSlug", op: "=", value: entity.scopeSlug },
+        ...conditions,
+      ],
+    },
+  });
+  return rows.map(fromRow);
+}
+
+/**
+ * The review states of every document of a collection or Single other than those `attached`
+ * names, in one read: the states a workflow no longer covers.
+ */
+export async function readReviewStatesOutside(
+  db: ReviewStatesDb,
+  attached: { collections: readonly string[]; singles: readonly string[] }
+): Promise<ReviewState[]> {
+  // An empty list names no scope, and `NOT IN ()` is no condition every dialect accepts.
+  const outside = (
+    scopeKind: ReviewScopeKind,
+    slugs: readonly string[]
+  ): WhereClause => ({
+    and: [
+      { column: "scopeKind", op: "=", value: scopeKind },
+      ...(slugs.length > 0
+        ? [{ column: "scopeSlug", op: "NOT IN" as const, value: [...slugs] }]
+        : []),
+    ],
+  });
+  const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
+    where: {
+      or: [
+        outside("collection", attached.collections),
+        outside("single", attached.singles),
+      ],
+    },
+  });
+  return rows.map(fromRow);
+}
+
+/**
+ * The collections and Singles that stored review states name, each once: the entities a
+ * definition sweep may write through, an entity whose workflow was detached among them.
+ */
+export async function readReviewStateScopes(db: {
+  select<T = unknown>(
+    table: string,
+    options?: { columns?: string[]; distinct?: boolean }
+  ): Promise<T[]>;
+}): Promise<{ collections: string[]; singles: string[] }> {
+  const rows = await db.select<{ scopeKind: string; scopeSlug: string }>(
+    REVIEW_STATES_TABLE,
+    { columns: ["scopeKind", "scopeSlug"], distinct: true }
+  );
+  const of = (kind: ReviewScopeKind) =>
+    rows.filter(row => row.scopeKind === kind).map(row => row.scopeSlug);
+  return { collections: of("collection"), singles: of("single") };
+}
+
+/**
+ * Points every review state of a collection or Single written under `from` at the definition
+ * hash `to`, leaving the rest of each row as it is. Answers how many moved.
+ */
+export function restampReviewStates(
+  db: ReviewStatesDb,
+  entity: Pick<ReviewDocument, "scopeKind" | "scopeSlug">,
+  from: string,
+  to: string
+): Promise<number> {
+  return db.updateCount(
+    REVIEW_STATES_TABLE,
+    { definitionHash: to, updatedAt: new Date() },
+    {
+      and: [
+        { column: "scopeKind", op: "=", value: entity.scopeKind },
+        { column: "scopeSlug", op: "=", value: entity.scopeSlug },
+        { column: "definitionHash", op: "=", value: from },
+      ],
+    }
+  );
+}
+
+/** Removes one part's review state. Answers how many rows went: 1, or 0 when it had none. */
+export function deletePartReviewState(
+  db: ReviewStatesDb,
+  part: ReviewPart
+): Promise<number> {
+  return db.delete(REVIEW_STATES_TABLE, {
+    and: [{ column: "partKey", op: "=", value: reviewStateKey(part) }],
+  });
 }
 
 /** Removes the review state of every part of a document. */

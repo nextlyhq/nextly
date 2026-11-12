@@ -107,6 +107,7 @@
     "plugin-applied-migration-removed",
     "plugin-client-config-not-json",
     "plugin-column-not-migrated",
+    "plugin-command-from-older-release",
     "plugin-dependency-not-installed",
     "plugin-disabled",
     "plugin-document-surface-collision",

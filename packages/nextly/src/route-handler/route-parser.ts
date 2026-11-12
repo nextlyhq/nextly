@@ -2880,6 +2880,7 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
+    content: { operation: "list", method: "getDashboardContent" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
@@ -2891,6 +2892,7 @@ const DASHBOARD_ROUTES: Readonly<
     summary: { operation: "list", method: "getDashboardSummary" },
     "new-types": { operation: "list", method: "getDashboardNewTypes" },
     setup: { operation: "list", method: "getDashboardSetup" },
+    diagnostics: { operation: "list", method: "getDashboardDiagnostics" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
@@ -2911,6 +2913,7 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
+ *   GET  /api/dashboard/content        → getDashboardContent
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
@@ -2926,6 +2929,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   POST /api/dashboard/new-types      → postDashboardNewType
  *   GET  /api/dashboard/setup          → getDashboardSetup
  *   PUT  /api/dashboard/setup          → putDashboardSetup
+ *   GET  /api/dashboard/diagnostics    → getDashboardDiagnostics
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.

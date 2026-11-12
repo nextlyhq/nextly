@@ -131,7 +131,7 @@ async function portOpen(port) {
 }
 
 /** The database a run of `dialect` uses, made empty, and the env that points at it. */
-async function freshDatabase(dialect, extra) {
+async function freshDatabase(dialect, extra, key = PORT) {
   if (dialect === "sqlite") {
     const file = path.join(PLAYGROUND, "data", "admin-speed.db");
     for (const suffix of ["", "-shm", "-wal"])
@@ -140,7 +140,9 @@ async function freshDatabase(dialect, extra) {
   }
   const serverUrl = process.env[`E2E_DB_SERVER_URL_${dialect.toUpperCase()}`];
   const database = e2eDatabase({
-    port: PORT,
+    // Names the database: the server's port, or a key of its own for a
+    // database kept beside another, as the start-only measurements' are.
+    port: key,
     env: {
       E2E_DB_DIALECT: dialect,
       ...(serverUrl ? { E2E_DB_SERVER_URL: serverUrl } : {}),
@@ -601,14 +603,41 @@ async function measureDialect(dialect, dir) {
   return out;
 }
 
-/** The start alone: its statements, with a delay or extra collections. */
-async function measureStart(dialect, dir, { delay = 0, extra = 0, label }) {
-  const { database, url } = await freshDatabase(dialect);
+/**
+ * A database for a start-only measurement, migrated, seeded and with the
+ * plugins installed, kept under its own `key` so it can be made before the
+ * build and stand beside the build's own.
+ */
+async function preparedDatabase(dialect, { key, extra = 0 }) {
+  const { database, url } = await freshDatabase(dialect, extra, key);
+  // Dropped at the end of the run too, so one made before the build is not
+  // left behind when a later step fails before its measurement drops it.
+  if (database) madeDatabases.push(database);
+  prepare(serverEnv(dialect, url, { extra }));
+  return { database, url };
+}
+
+/** Every database a start-only measurement made, dropped when the run ends. */
+const madeDatabases = [];
+
+/**
+ * The start alone: its statements, with a delay or extra collections. Served
+ * from `prepared` when given, a database made before the build, as a deploy
+ * migrates its database and then builds and starts: a database seeded after
+ * the build has changed every page that reads it, which the build's copies
+ * then no longer stand for.
+ */
+async function measureStart(
+  dialect,
+  dir,
+  { delay = 0, extra = 0, label, prepared }
+) {
+  const { database, url } =
+    prepared ?? (await preparedDatabase(dialect, { key: PORT, extra }));
   const log = path.join(dir, `${dialect}.${label}.statements.jsonl`);
   fs.rmSync(log, { force: true });
   let server;
   try {
-    prepare(serverEnv(dialect, url, { extra }));
     server = await startServer(
       serverEnv(dialect, url, { delay, extra, log, production: true })
     );
@@ -807,6 +836,19 @@ async function main() {
   }
   const dir = path.join(ROOT, "e2e", ".playwright", "admin-speed");
   fs.mkdirSync(dir, { recursive: true });
+  // The start-only measurements' databases are made before the build when
+  // there is one, so the build's copies of the pages stand for them.
+  const growth = DIALECTS.includes("postgresql") && !flag("no-growth");
+  const prepared = {};
+  if (growth && flag("build")) {
+    prepared.delay = await preparedDatabase("postgresql", {
+      key: PORT * 100 + 1,
+    });
+    prepared.extra = await preparedDatabase("postgresql", {
+      key: PORT * 100 + 2,
+      extra: EXTRA_COLLECTIONS,
+    });
+  }
   if (flag("build")) {
     // The build prerenders pages that read the database, so it is given a
     // seeded one, as the production browser suite seeds before it builds.
@@ -829,15 +871,17 @@ async function main() {
     measured[dialect] = await measureDialect(dialect, dir);
     console.log(JSON.stringify(measured[dialect]));
   }
-  if (DIALECTS.includes("postgresql") && !flag("no-growth")) {
+  if (growth) {
     const plain = measured.postgresql.start.statements;
     const delayed = await measureStart("postgresql", dir, {
       delay: DELAY_MS,
       label: "delay",
+      prepared: prepared.delay,
     });
     const extra = await measureStart("postgresql", dir, {
       extra: EXTRA_COLLECTIONS,
       label: "extra",
+      prepared: prepared.extra,
     });
     measured.growth = {
       [`withDelay${DELAY_MS}ms`]: delayed.statements - plain,
@@ -883,4 +927,10 @@ async function main() {
   }
 }
 
-await main();
+try {
+  await main();
+} finally {
+  // A database already dropped by its measurement is dropped again harmlessly.
+  for (const database of madeDatabases)
+    await dropServerDatabase(database).catch(() => {});
+}

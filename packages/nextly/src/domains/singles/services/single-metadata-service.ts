@@ -61,7 +61,10 @@ import type { Logger } from "../../../shared/types";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
-import { appLocalization } from "../../i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
@@ -79,6 +82,7 @@ import {
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
+import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
@@ -460,10 +464,13 @@ export class SingleMetadataService {
     // row owns the slug and refuses every retry, which is a worse state than the orphan it
     // prevents. That recovery half is the migration lock this relocation exists to unblock, and the
     // ordering changes with it rather than before it.
-    const record = await this.registry.registerSingle({
-      ...input,
-      migrationStatus,
-    });
+    // The row and the stored schema version in one transaction, so the
+    // version's count moves with the save it records (`writeRegistryRows`);
+    // the permissions are seeded once it has committed.
+    const record = await this.registry.registerSingle(
+      { ...input, migrationStatus },
+      { writeRow: write => writeRegistryRowsWith(this.adapter, write) }
+    );
 
     return { record, migrationStatus };
   }
@@ -841,9 +848,11 @@ export class SingleMetadataService {
     }
 
     // 3. RECORD, with the outcome already known.
-    const record = await this.registry.updateSingle(input.slug, updateData, {
-      source: "ui",
-    });
+    // The row and the stored schema version in one transaction
+    // (`writeRegistryRows`).
+    const record = await writeRegistryRowsWith(this.adapter, () =>
+      this.registry.updateSingle(input.slug, updateData, { source: "ui" })
+    );
 
     return { record, migrationStatus, refusedSettings };
   }
@@ -930,6 +939,7 @@ export class SingleMetadataService {
       builtBy: "collection",
       tableName: input.existing.tableName,
       defaultLocale: defaultLocale,
+      languageOrder: appLanguageOrder(),
       adapter: this.adapter,
       entity: input.slug,
       kind: "single",

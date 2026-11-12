@@ -629,5 +629,12 @@ export type {
 export { PageFrame } from "./components/page-frame";
 /** @experimental */
 export type { PageFrameProps, PageType } from "./components/page-frame";
+/**
+ * @experimental Hears whether content draws a `PageFrame`, for a host that
+ * frames unframed content and must not frame a framed page twice.
+ */
+export { PageFrameListener } from "./components/page-frame";
+/** @experimental */
+export type { PageFrameListenerProps } from "./components/page-frame";
 /** @experimental */
 export type { BleedProps, PageShellProps } from "./components/page-shell";

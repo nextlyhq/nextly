@@ -32,6 +32,8 @@ import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFr
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 import {
+  topLevelFieldNames,
+  useContentFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
@@ -45,7 +47,6 @@ import {
 } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
 import { DocumentBanners } from "@admin/components/features/entries/EntryForm/DocumentBanners";
 import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
-import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import {
   DOCUMENT_COLUMN_INSET,
   DocumentEditorLayout,
@@ -139,6 +140,7 @@ import {
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
+import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -452,6 +454,19 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
  * panel floats or is a sheet at, where it opens only when asked for. Without
  * it a single loses its language workflow whenever the column is away.
  */
+/**
+ * Whether the Single's shared fields hold unpublished changes, as its editor
+ * read says (`_sharedChangesPending`).
+ */
+function sharedChangesPendingOf(document: unknown): boolean {
+  return (
+    typeof document === "object" &&
+    document !== null &&
+    (document as { _sharedChangesPending?: unknown })._sharedChangesPending ===
+      true
+  );
+}
+
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
@@ -461,6 +476,7 @@ function SingleFormLanguagePanel({
   locale,
   onLocaleChange,
   panelDocked,
+  sharedChangesPending,
   translations,
 }: {
   actionsDisabled: boolean;
@@ -472,6 +488,8 @@ function SingleFormLanguagePanel({
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Whether the docked panel, which carries the language panel, is on screen. */
   panelDocked: boolean;
+  /** The Single's shared fields hold unpublished changes (`_sharedChangesPending`). */
+  sharedChangesPending: boolean;
   translations?: Record<string, { translated: boolean; status?: string }>;
 }) {
   if (!enabled) return null;
@@ -486,6 +504,7 @@ function SingleFormLanguagePanel({
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
+        sharedChangesPending={sharedChangesPending}
       />
     </div>
   );
@@ -1423,6 +1442,9 @@ export function SingleForm({
     }
   )._translations;
 
+  // Read once: the rail's language panel and the inline one say it alike.
+  const sharedChangesPending = sharedChangesPendingOf(document);
+
   // Adapt the SingleDocumentData shape into what the document bar and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
@@ -1443,6 +1465,9 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
+    // Forwarded for the rail's language panel, which says while the Single's
+    // shared fields hold unpublished changes, docked as inline.
+    _sharedChangesPending: sharedChangesPending,
   } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.
@@ -1510,6 +1535,10 @@ export function SingleForm({
     { kind: "single", single: schema.slug },
     document
   );
+  // The fields a plugin's tab edits are drawn in that tab, not here; every
+  // field keeps its value in the form, so Save still stores them.
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
   // The side panel's sections in the order the server placed them, with the
   // sections plugins declared at the Single's page among them, as on a
   // collection entry's page.
@@ -1908,6 +1937,8 @@ export function SingleForm({
                                       recovering,
                                       removedFromCode,
                                     })}
+                                    fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
                                     {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug
@@ -1949,6 +1980,9 @@ export function SingleForm({
                                       enabled={localizationEnabled}
                                       hasStatus={hasStatus}
                                       panelDocked={panel.docked}
+                                      sharedChangesPending={
+                                        sharedChangesPending
+                                      }
                                       {...(singleTranslations === undefined
                                         ? {}
                                         : { translations: singleTranslations })}
@@ -1968,7 +2002,7 @@ export function SingleForm({
                                       historicalFields={historicalFields}
                                       historicalValues={historicalValues}
                                       isSubmitting={isSubmitting}
-                                      mainFields={mainFields}
+                                      mainFields={contentFields}
                                       readOnly={lock.readOnly}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let

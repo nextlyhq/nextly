@@ -43,6 +43,36 @@ const state = vi.hoisted(() => {
 });
 const { calls, onInstall, onUninstall, registerServices } = state;
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
+// No release has recorded the preset roles' grants on this double's database, so neither
+// command is refused for the release it runs from; the refusal and the permissions, roles and
+// grants a recorded state brings are the integration suite's subject
+// (`plugin-lifecycle-writes-its-access.integration.test.ts`), so here they write nothing.
+vi.mock(
+  "../../../domains/meta/preset-grants-release",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/meta/preset-grants-release")
+    >()),
+    readPresetGrantsRelease: async () => undefined,
+  })
+);
+vi.mock("../../../domains/schema/migrate/command-access", () => ({
+  seedAccessOnCommandConnection: async () => {},
+  orphanOwnedPermissionsOnCommandConnection: async () => {},
+}));
+
 // The schema lock is exercised against real databases in its own suites. These drive the lifecycle hook's boot
 // through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
 vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({

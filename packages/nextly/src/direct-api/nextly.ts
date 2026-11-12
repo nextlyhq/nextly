@@ -96,6 +96,7 @@ import {
   createContentEventsNamespace,
   createJobsNamespace,
   createNoticesNamespace,
+  createVersionsNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailNamespace,
@@ -112,6 +113,7 @@ import {
   type ContentEventsNamespace,
   type JobsNamespace,
   type NoticesNamespace,
+  type VersionsNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailNamespace,
@@ -291,6 +293,8 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
+  /** @experimental A document's history: list, read, compare, name, restore. */
+  public readonly versions: VersionsNamespace;
   /** @experimental A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
@@ -325,6 +329,7 @@ export class Nextly implements NextlyContext {
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
     this.notices = createNoticesNamespace();
+    this.versions = createVersionsNamespace(this);
     this.contentEvents = createContentEventsNamespace(this);
     this.principals = createNextlyPrincipals();
 

@@ -1,4 +1,5 @@
 import { arrayMove } from "@dnd-kit/sortable";
+import { neverTranslatable } from "nextly/config";
 // The shared readers preserve both reference spellings across the builder
 // round trip: a migrated definition loads with its references intact and
 // saves them back resolved, rather than losing them into pluginOptions.
@@ -242,9 +243,13 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   // produces no column, so the flag is unbacked metadata — and a value saved
   // by the pre-gate editor must not keep riding every save now that the
   // switch no longer offers it.
+  //
+  // Nor does a password or virtual field, which is never translated: the server refuses
+  // `localized: true` on one, and a legacy definition may still carry it.
   if (
     typeof field.advanced?.localized === "boolean" &&
-    !isFieldGroupFieldType(field.type)
+    !isFieldGroupFieldType(field.type) &&
+    !neverTranslatable({ type: field.type })
   ) {
     definition.localized = field.advanced.localized;
   }

@@ -71,7 +71,10 @@ import type { PluginContributions } from "../../../../plugins/contributions";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { applyPluginSchemaContributions } from "../../../../plugins/schema/apply-contributions";
 import { resolvePostgresSchema } from "../../services/postgres-schema";
-import { fieldProducesColumn } from "../../services/field-column-descriptor";
+import {
+  fieldProducesColumn,
+  renderDialectType,
+} from "../../services/field-column-descriptor";
 import { resolveCollectionTableName } from "../../utils/resolve-table-name";
 import { emitDdl } from "../../pipeline/ddl-emitter";
 import {
@@ -1542,10 +1545,16 @@ const CAPABILITIES: Capability[] = [
       );
       // The column the database holds is the one the merged config seeded —
       // same kind, same nullability — so a contribution the merge or the
-      // seed mistyped never reaches the table unobserved.
+      // seed mistyped never reaches the table unobserved. The seed holds the
+      // column's kind and the spec the dialect's type for it (`int4` on
+      // PostgreSQL, `int` on MySQL), so the kind is compared as the dialect
+      // renders it.
       const seededPriority = seeded.find(c => c.name === "priority");
       const appliedPriority = spec.columns.find(c => c.name === "priority");
-      expect(seededPriority?.kind).toBe(appliedPriority?.type);
+      expect(seededPriority?.kind).toBe("integer");
+      expect(appliedPriority?.type).toBe(
+        renderDialectType("integer", ctx.dialect, {})
+      );
       expect(seededPriority?.nullable).toBe(appliedPriority?.nullable);
       await ctx.apply([spec]);
       const live = (await ctx.live([spec.name]))[0]!;

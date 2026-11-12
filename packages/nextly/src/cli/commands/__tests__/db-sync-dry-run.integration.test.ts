@@ -280,7 +280,27 @@ function ownTableShapes(
     ]);
 }
 
-describe.each(LOCK_DIALECTS)("a real db:sync on %s", dialect => {
+/**
+ * Every dialect the snapshots below are recorded for. A dialect this run cannot reach is
+ * declared and skipped rather than left out: a skipped test keeps its snapshots, while one never
+ * declared leaves them unchecked, which Vitest fails as obsolete wherever snapshots are not being
+ * updated, as on CI, where each leg reaches only some of the dialects.
+ */
+const SNAPSHOT_DIALECTS: readonly SupportedDialect[] = [
+  "sqlite",
+  "postgresql",
+  "mysql",
+];
+
+/** The snapshot test's name, which its snapshots are keyed by, skipped or run. */
+const REAL_SYNC_TEST =
+  "prints and changes what it did before the dry run shared its code";
+
+describe.each(SNAPSHOT_DIALECTS)("a real db:sync on %s", dialect => {
+  if (!LOCK_DIALECTS.includes(dialect)) {
+    it.skip(REAL_SYNC_TEST);
+    return;
+  }
   let world: LockWorld;
   let adapter: DrizzleAdapter;
   let project: string;
@@ -297,7 +317,7 @@ describe.each(LOCK_DIALECTS)("a real db:sync on %s", dialect => {
   }, 60_000);
 
   it(
-    "prints and changes what it did before the dry run shared its code",
+    REAL_SYNC_TEST,
     async () => {
       const nextly = nextlyIn(world, project);
       const first = await nextly(["db:sync"]);

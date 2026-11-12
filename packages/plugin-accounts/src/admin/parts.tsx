@@ -14,7 +14,9 @@ export function formatWhen(at: string | null, none = "—"): string {
 
 /**
  * A short label, drawn with the theme's tokens alone, so it reads in both
- * of the admin's modes. `strong` marks a state staff should notice.
+ * of the admin's modes. `strong` marks a state staff should notice, on the
+ * destructive SOLID fill: the plain `destructive` token is too light for its
+ * on-colour text, and the solid one is kept dark enough for it.
  */
 function Tag({
   children,
@@ -27,7 +29,7 @@ function Tag({
     <span
       className={
         strong
-          ? "inline-flex items-center rounded-full border border-destructive bg-destructive px-2 text-xs font-medium text-destructive-foreground"
+          ? "inline-flex items-center rounded-full border border-destructive-solid bg-destructive-solid px-2 text-xs font-medium text-destructive-foreground"
           : "inline-flex items-center rounded-full border border-border bg-muted px-2 text-xs font-medium text-muted-foreground"
       }
     >

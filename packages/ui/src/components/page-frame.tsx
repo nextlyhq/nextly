@@ -1,8 +1,15 @@
 import {
+  createContext,
   forwardRef,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useRef,
   type HTMLAttributes,
   type ForwardRefExoticComponent,
+  type JSX,
   type PropsWithoutRef,
+  type ReactNode,
   type RefAttributes,
 } from "react";
 
@@ -38,6 +45,67 @@ const SHELL_FOR: Record<
   form: { width: "form", align: "start" },
 };
 
+/**
+ * How a frame tells the listener above it that the page draws its own frame:
+ * it claims with its type on mount and releases on unmount. `null` where no
+ * listener is above, and inside a frame, so only a page's outermost frame
+ * speaks for the page.
+ */
+type ClaimFrame = (type: PageType) => () => void;
+
+const PageFrameClaimContext = createContext<ClaimFrame | null>(null);
+
+/** @experimental */
+export interface PageFrameListenerProps {
+  /**
+   * Called with the type of the outermost `PageFrame` drawn inside, as it
+   * mounts or changes, and with `null` once none is left.
+   */
+  onFrame: (type: PageType | null) => void;
+  children?: ReactNode;
+}
+
+/**
+ * Hears whether the content inside it draws a `PageFrame`, for a host that
+ * gives unframed content a frame of its own and must not frame content twice.
+ * Read from the frames themselves rather than from what the content is called,
+ * so a page that draws a frame through any component is heard the same way.
+ *
+ * The frame claims in a layout effect, so a host that changes its own markup
+ * in answer does so before the first paint.
+ * @experimental
+ */
+export function PageFrameListener({
+  onFrame,
+  children,
+}: PageFrameListenerProps): JSX.Element {
+  // The latest callback, read when a frame claims, so the claim function stays
+  // one value for the listener's life and no frame claims again on a render.
+  const onFrameRef = useRef(onFrame);
+  useLayoutEffect(() => {
+    onFrameRef.current = onFrame;
+  });
+  // Every frame claiming at once, in mount order; the page's frame is the
+  // last one standing, and none left answers `null`.
+  const claims = useRef<{ type: PageType }[]>([]);
+  const claim = useCallback<ClaimFrame>(type => {
+    const entry = { type };
+    claims.current = [...claims.current, entry];
+    onFrameRef.current(type);
+    return () => {
+      claims.current = claims.current.filter(other => other !== entry);
+      onFrameRef.current(
+        claims.current[claims.current.length - 1]?.type ?? null
+      );
+    };
+  }, []);
+  return (
+    <PageFrameClaimContext.Provider value={claim}>
+      {children}
+    </PageFrameClaimContext.Provider>
+  );
+}
+
 /** @experimental */
 export interface PageFrameProps extends HTMLAttributes<HTMLDivElement> {
   /** Which kind of page this is; it decides the width. */
@@ -53,7 +121,17 @@ export interface PageFrameProps extends HTMLAttributes<HTMLDivElement> {
 export const PageFrame: ForwardRefExoticComponent<
   PropsWithoutRef<PageFrameProps> & RefAttributes<HTMLDivElement>
 > = forwardRef<HTMLDivElement, PageFrameProps>(
-  ({ type, className, children, ...props }, ref) => {
+  ({ type, className, children: content, ...props }, ref) => {
+    // Tell a listener above, when there is one, that this page is framed, and
+    // hide the listener from frames inside this one: the page's own frame is
+    // its outermost.
+    const claim = useContext(PageFrameClaimContext);
+    useLayoutEffect(() => claim?.(type), [claim, type]);
+    const children = (
+      <PageFrameClaimContext.Provider value={null}>
+        {content}
+      </PageFrameClaimContext.Provider>
+    );
     if (type !== "form") {
       return (
         <div
