@@ -35,7 +35,7 @@ const CSS = `
 .nx-seo-sheet tr:last-child td{border-bottom:0}
 .nx-seo-sheet .nx-seo-pg{padding:9px 10px;font-size:13px}
 .nx-seo-sheet .nx-seo-pg b{font-weight:600;display:block;line-height:1.35;overflow-wrap:anywhere}
-.nx-seo-sheet .nx-seo-pg .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:11px!important;overflow-wrap:anywhere}
+.nx-seo-sheet .nx-seo-pg .nx-seo-mono{display:block;color:var(--nx-muted-foreground);font-size:11px;overflow-wrap:anywhere}
 .nx-seo-sheet .nx-seo-pg small{display:block;margin-top:4px;color:var(--nx-muted-foreground);font-size:12px}
 .nx-seo-cell{position:relative}
 .nx-seo-cell textarea{display:block;width:100%;border:0;background:transparent;padding:9px 10px 26px;resize:none;font:inherit;font-size:13px;line-height:1.45;min-height:64px;color:var(--nx-foreground);overflow:hidden}
