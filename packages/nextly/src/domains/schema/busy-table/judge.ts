@@ -332,6 +332,51 @@ export function targetTable(
   return tableName(tokens, pastModifiers(tokens, keyword + 1)) ?? null;
 }
 
+/** One table a statement renames: its name before and after, lower-cased. */
+export interface TableRename {
+  readonly from: string;
+  readonly to: string;
+}
+
+/** The pairs of MySQL's `RENAME TABLE a TO b, c TO d`, or "unread" where a name is not plain. */
+function renameTablePairs(
+  tokens: readonly StatementToken[]
+): TableRename[] | "unread" {
+  const pairs: TableRename[] = [];
+  let at = 2;
+  for (;;) {
+    const from = tableName(tokens, at);
+    const to = tokens[at + 1] === "TO" ? tableName(tokens, at + 2) : undefined;
+    if (from === undefined || to === undefined) return "unread";
+    pairs.push({ from, to });
+    if (tokens[at + 3] !== ",") return pairs;
+    at += 4;
+  }
+}
+
+/**
+ * The tables `statement` renames, where it renames any: `ALTER TABLE a RENAME TO b` (or `AS`, on
+ * MySQL), and MySQL's `RENAME TABLE a TO b`. "unread" where it renames a table whose names are not
+ * plain, so a caller tracking what a name means can fail closed; an empty list for any other
+ * statement, a column's or a constraint's rename included.
+ */
+export function renamedTables(
+  statement: string,
+  dialect: SupportedDialect
+): readonly TableRename[] | "unread" {
+  const tokens = statementTokens(statement, dialect);
+  if (startsWith(tokens, "RENAME", "TABLE")) return renameTablePairs(tokens);
+  if (!startsWith(tokens, "ALTER", "TABLE")) return [];
+  const fromAt = pastModifiers(tokens, 2);
+  const renameAt = fromAt + 1;
+  if (tokens[renameAt] !== "RENAME") return [];
+  const keyword = tokens[renameAt + 1];
+  if (keyword !== "TO" && keyword !== "AS") return [];
+  const from = tableName(tokens, fromAt);
+  const to = tableName(tokens, renameAt + 2);
+  return from === undefined || to === undefined ? "unread" : [{ from, to }];
+}
+
 /** Whether `tokens` start with `words`. */
 function startsWith(
   tokens: readonly StatementToken[],
@@ -469,4 +514,41 @@ export function judgeStatement(
   return judge === undefined
     ? noRetry("unread")
     : judge(tokens, dialect, hasTrigger);
+}
+
+/**
+ * The first of `statements`, in order, that a later try may not send again: its position (1 for
+ * the first, never its text, which can hold a literal value) and judgement; undefined where every
+ * one may run again. `triggerTables` are the tables with a trigger before the first statement. A
+ * table keeps its triggers through a rename, so a name an earlier statement gave such a table has
+ * one too; a rename this reading cannot follow counts every table as having one, failing closed.
+ */
+export function firstNoRetry(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  triggerTables: ReadonlySet<string>
+):
+  | {
+      readonly statementNumber: number;
+      readonly judgement: Extract<StatementJudgement, { kind: "no-retry" }>;
+    }
+  | undefined {
+  const triggered = new Set(triggerTables);
+  let renameUnread = false;
+  const hasTrigger = (table: string) => renameUnread || triggered.has(table);
+  for (const [index, statement] of statements.entries()) {
+    const judgement = judgeStatement(statement, dialect, hasTrigger);
+    if (judgement.kind === "no-retry") {
+      return { statementNumber: index + 1, judgement };
+    }
+    const renames = renamedTables(statement, dialect);
+    if (renames === "unread") {
+      renameUnread = true;
+      continue;
+    }
+    for (const { from, to } of renames) {
+      if (triggered.has(from)) triggered.add(to);
+    }
+  }
+  return undefined;
 }

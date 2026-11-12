@@ -181,18 +181,14 @@ describe("tableBusyError", () => {
         elapsedMs: 5_200,
         outcome: {
           kind: "part-way",
-          committed: [
-            'ALTER TABLE "posts" ADD COLUMN "slug" text',
-            'CREATE INDEX "posts_slug" ON "posts" ("slug")',
-          ],
+          committed: [1, 2],
         },
       })
     );
     expect(error.publicMessage).toBe(
       [
         "`0007_add_keys.sql` stopped part-way: table busy.",
-        "These statements had committed before the wait, and stay: " +
-          '`ALTER TABLE "posts" ADD COLUMN "slug" text`; `CREATE INDEX "posts_slug" ON "posts" ("slug")`.',
+        "Statements 1 and 2 had committed before the wait, and stay.",
         'It waited for table "posts" through 1 try over 5 s, held by session 4242 (user app, ' +
           'from 10.0.0.5, application "worker", transaction open 3 min).',
         "Nothing was applied before it in this run.",
@@ -225,7 +221,7 @@ describe("tableBusyError", () => {
           elapsedMs: 5_000,
           outcome: {
             kind: "no-retry",
-            statement: "SELECT setval('posts_id_seq', 10)",
+            statementNumber: 3,
             reason,
             restUndone: true,
           },
@@ -236,8 +232,8 @@ describe("tableBusyError", () => {
         "`0007_add_keys.sql` stopped after one try: table busy."
       );
       expect(lines[1]).toBe(
-        `It was not tried again, since ${kind} may not be sent again: ` +
-          "`SELECT setval('posts_id_seq', 10)`. The rest of the change was undone with its transaction."
+        `It was not tried again, since its statement 3, ${kind}, may not be sent again. ` +
+          "The rest of the change was undone with its transaction."
       );
       // Undone whole with its transaction: run again, never resolved as a part-way file.
       expect(lines[lines.length - 1]).toMatch(
@@ -254,18 +250,18 @@ describe("tableBusyError", () => {
         elapsedMs: 5_000,
         outcome: {
           kind: "no-retry",
-          statement:
-            'CREATE INDEX CONCURRENTLY "posts_slug" ON "posts" ("slug")',
+          statementNumber: 1,
           reason: "concurrent-index",
           restUndone: false,
         },
       })
     );
+    // Named by its position, never its text.
+    expect(error.publicMessage).toContain("since its statement 1, ");
     expect(error.publicMessage).toContain(
-      "may not be sent again: " +
-        '`CREATE INDEX CONCURRENTLY "posts_slug" ON "posts" ("slug")`. ' +
-        "What ran before it was not undone."
+      "may not be sent again. What ran before it was not undone."
     );
+    expect(error.publicMessage).not.toContain("CREATE INDEX");
     expect(error.publicMessage).not.toContain("undone with its transaction");
     // Statements committed outside a transaction stay: the file is resolved as a part-way one.
     expect(error.publicMessage).toContain("nextly migrate:resolve");

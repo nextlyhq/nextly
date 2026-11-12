@@ -55,12 +55,16 @@ export interface EndedTry {
 export type BusyTableOutcome =
   /** Nothing of the change is left: "table busy, nothing changed". */
   | { readonly kind: "nothing-changed" }
-  /** Statements of the change had committed before the wait: they stay, named. */
-  | { readonly kind: "part-way"; readonly committed: readonly string[] }
+  /**
+   * Statements of the change had committed before the wait: they stay, named by their position in
+   * the change (1 for the first). Never their text, which can hold a literal value.
+   */
+  | { readonly kind: "part-way"; readonly committed: readonly number[] }
   /** A statement that may not be sent again ran or waited: the run stopped after one try. */
   | {
       readonly kind: "no-retry";
-      readonly statement: string;
+      /** The statement's position in the change (1 for the first); never its text. */
+      readonly statementNumber: number;
       readonly reason: NoRetryReason;
       /** Whether the rest of the change was undone with its transaction. */
       readonly restUndone: boolean;

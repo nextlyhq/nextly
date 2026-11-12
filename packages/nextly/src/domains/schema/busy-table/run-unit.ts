@@ -27,7 +27,7 @@ import {
 import type { BusyTableBounds } from "./bounds";
 import { endedWaiting } from "./ended-waiting";
 import { readHolders } from "./holder";
-import { judgeStatement, targetTable } from "./judge";
+import { firstNoRetry, targetTable } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
 import type { HolderReport } from "./types";
@@ -142,16 +142,7 @@ export async function runUnitInTries(
         // The transaction was rolled back: nothing of the try stayed, and the next try runs the
         // unit from its start, unless a statement that ran may not run again.
         const ran = statements.slice(0, reached + 1);
-        let lasting: Extract<TryResult<number>, { kind: "ended" }>["lasting"];
-        for (const statement of ran) {
-          const judgement = judgeStatement(statement, dialect, table =>
-            triggers.has(table)
-          );
-          if (judgement.kind === "no-retry") {
-            lasting = { statement, judgement };
-            break;
-          }
-        }
+        const lasting = firstNoRetry(ran, dialect, triggers);
         const waiting = ran[ran.length - 1];
         return {
           kind: "ended",

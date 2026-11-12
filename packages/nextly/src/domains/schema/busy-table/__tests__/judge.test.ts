@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
-import { judgeStatement, targetTable } from "../judge";
+import { firstNoRetry, judgeStatement, targetTable } from "../judge";
 
 const DIALECTS: readonly SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -263,5 +263,66 @@ describe("targetTable", () => {
     ["SELECT 1", null],
   ])("reads %j as %j", (statement, table) => {
     expect(targetTable(statement, "postgresql")).toBe(table);
+  });
+});
+
+describe("firstNoRetry", () => {
+  const triggers = new Set(["audited"]);
+
+  it("follows a table with a trigger through a rename earlier in the same change", () => {
+    expect(
+      firstNoRetry(
+        [
+          "ALTER TABLE audited RENAME TO audited_v2",
+          "INSERT INTO audited_v2 (id) VALUES (1)",
+          "ALTER TABLE busy ADD COLUMN late integer",
+        ],
+        "postgresql",
+        triggers
+      )
+    ).toEqual({
+      statementNumber: 2,
+      judgement: { kind: "no-retry", reason: "trigger" },
+    });
+  });
+
+  it("follows MySQL's RENAME TABLE, pair by pair", () => {
+    expect(
+      firstNoRetry(
+        [
+          "RENAME TABLE other TO other_v2, audited TO audited_v2",
+          "UPDATE audited_v2 SET x = 1",
+        ],
+        "mysql",
+        triggers
+      )?.judgement
+    ).toEqual({ kind: "no-retry", reason: "trigger" });
+  });
+
+  it("counts every table as having a trigger after a rename it cannot follow", () => {
+    expect(
+      firstNoRetry(
+        [
+          'ALTER TABLE audit.log RENAME TO "log_v2"',
+          "INSERT INTO plain (id) VALUES (1)",
+        ],
+        "postgresql",
+        triggers
+      )?.statementNumber
+    ).toBe(2);
+  });
+
+  it("lets a change with no rename or trigger run again", () => {
+    expect(
+      firstNoRetry(
+        [
+          "ALTER TABLE plain RENAME COLUMN a TO b",
+          "INSERT INTO plain (id) VALUES (1)",
+          "ALTER TABLE busy ADD COLUMN late integer",
+        ],
+        "postgresql",
+        triggers
+      )
+    ).toBeUndefined();
   });
 });

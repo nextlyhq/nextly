@@ -27,13 +27,17 @@ export type TryResult<T> =
        * its judgement; undefined where everything the next try would run may run again.
        */
       readonly lasting?: {
-        readonly statement: string;
+        /** Its position in the change (1 for the first); never its text. */
+        readonly statementNumber: number;
         readonly judgement: Extract<StatementJudgement, { kind: "no-retry" }>;
       };
       /** Whether the rest of the change was undone with its transaction. */
       readonly undone: boolean;
-      /** The statements this try's change made durable before the wait (none in a transaction). */
-      readonly committed: readonly string[];
+      /**
+       * The positions (1 for the first) of the statements this try made durable before the wait;
+       * none in a transaction.
+       */
+      readonly committed: readonly number[];
     };
 
 export interface BusyTableTriesOptions {
@@ -76,7 +80,7 @@ function outcomeOf(
   if (result.lasting !== undefined) {
     return {
       kind: "no-retry",
-      statement: result.lasting.statement,
+      statementNumber: result.lasting.statementNumber,
       reason: result.lasting.judgement.reason,
       restUndone: result.undone,
     };
@@ -99,7 +103,7 @@ export async function withBusyTableTries<T>(
   const sleep = options.sleep ?? wait;
   const plannedTries = plannedTryStarts(options.bounds).length;
   const firstStartedAt = now();
-  let committed: readonly string[] = [];
+  let committed: readonly number[] = [];
   for (let tryNumber = 1; ; tryNumber++) {
     if (tryNumber > 1) await options.assertHeld();
     const result = await attempt(tryNumber);

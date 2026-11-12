@@ -133,20 +133,27 @@ function whatHappened(stop: BusyTableStop, why: string): string {
   }
 }
 
+/** "Statement 2", or "Statements 1, 2 and 4", of the change. */
+function statementsNamed(numbers: readonly number[]): string {
+  const listed = numbers.map(String);
+  if (listed.length === 1) return `Statement ${listed[0]}`;
+  return `Statements ${listed.slice(0, -1).join(", ")} and ${listed[listed.length - 1]}`;
+}
+
 /** What the outcome left: the committed statements, or the statement that was not tried again. */
 function outcomeLines(outcome: BusyTableOutcome): string[] {
   switch (outcome.kind) {
     case "nothing-changed":
       return [];
     case "part-way":
+      // Named by position, never by text: a statement can hold a literal value.
       return [
-        "These statements had committed before the wait, and stay: " +
-          `${outcome.committed.map(statement => `\`${statement}\``).join("; ")}.`,
+        `${statementsNamed(outcome.committed)} had committed before the wait, and stay.`,
       ];
     case "no-retry":
       return [
-        `It was not tried again, since ${NO_RETRY_KINDS[outcome.reason]} may not be sent again: ` +
-          `\`${outcome.statement}\`. ` +
+        `It was not tried again, since its statement ${String(outcome.statementNumber)}, ` +
+          `${NO_RETRY_KINDS[outcome.reason]}, may not be sent again. ` +
           (outcome.restUndone
             ? "The rest of the change was undone with its transaction."
             : "What ran before it was not undone."),
@@ -224,7 +231,7 @@ function plainOutcome(outcome: BusyTableOutcome): BusyTableOutcome {
     case "no-retry":
       return {
         kind: "no-retry",
-        statement: outcome.statement,
+        statementNumber: outcome.statementNumber,
         reason: outcome.reason,
         restUndone: outcome.restUndone,
       };

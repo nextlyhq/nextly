@@ -111,7 +111,7 @@ describe("withBusyTableTries", () => {
     const { run, starts, notices } = harness(() => ({
       ...ENDED,
       lasting: {
-        statement: "SELECT setval('posts_id_seq', 10)",
+        statementNumber: 2,
         judgement: { kind: "no-retry", reason: "setval" },
       },
     }));
@@ -120,7 +120,7 @@ describe("withBusyTableTries", () => {
     expect(notices).toEqual([]);
     expect(stopped.stop.outcome).toEqual({
       kind: "no-retry",
-      statement: "SELECT setval('posts_id_seq', 10)",
+      statementNumber: 2,
       reason: "setval",
       restUndone: true,
     });
@@ -130,12 +130,12 @@ describe("withBusyTableTries", () => {
     const { run } = harness(tryNumber => ({
       ...ENDED,
       undone: false,
-      committed: tryNumber === 1 ? ["ALTER TABLE a ADD COLUMN b integer"] : [],
+      committed: tryNumber === 1 ? [1] : [],
     }));
     const stopped = (await run.catch((error: unknown) => error)) as Stopped;
     expect(stopped.stop.outcome).toEqual({
       kind: "part-way",
-      committed: ["ALTER TABLE a ADD COLUMN b integer"],
+      committed: [1],
     });
   });
 
