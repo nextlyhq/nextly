@@ -31,9 +31,12 @@ function dayFromToday(days: number): string {
 /** The list's table, the desktop view of its rows. */
 const table = (page: Page) => page.getByRole("table", { name: "Submissions" });
 
-/** One row of the table, by text in it. */
+/**
+ * One row of the table, by text in it. By element rather than role: a row
+ * that opens its submission is named a button, not a row.
+ */
 const row = (page: Page, text: string) =>
-  table(page).getByRole("row").filter({ hasText: text });
+  table(page).locator("tbody tr").filter({ hasText: text });
 
 test("seeds a job application with three submissions", async ({ page }) => {
   const stamp = Date.now().toString(36);

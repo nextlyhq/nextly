@@ -18,6 +18,7 @@ import { answerReader } from "../../../utils/export-formats";
 
 import {
   formIdOf,
+  shortWhenText,
   STATUS_LOOK,
   type SubmissionRow,
   type SubmissionStatus,
@@ -66,7 +67,7 @@ function Lead({
       {unread && (
         <span
           aria-hidden="true"
-          className="size-1.5 shrink-0 rounded-full bg-primary"
+          className="size-1.5 shrink-0 rounded-full bg-info-solid"
         />
       )}
     </span>
@@ -109,10 +110,14 @@ const TRAILING_COLUMNS: NextlyColumn<SubmissionRow>[] = [
   {
     name: "submittedAt",
     header: "Submitted",
-    accessor: row => whenText(row.submittedAt),
+    accessor: row => shortWhenText(row.submittedAt),
+    // The full date and time on hover; the column keeps to the short one.
     cell: ({ row }) => (
-      <span className="whitespace-nowrap text-muted-foreground">
-        {whenText(row.submittedAt)}
+      <span
+        className="whitespace-nowrap text-muted-foreground"
+        title={whenText(row.submittedAt)}
+      >
+        {shortWhenText(row.submittedAt)}
       </span>
     ),
   },
@@ -223,7 +228,7 @@ export function allFormsColumns(
       hideOnMobile: true,
       accessor: row => summaryOf(row, formOf(row)),
       cell: ({ value }) => (
-        <span className="block max-w-sm truncate text-muted-foreground">
+        <span className="line-clamp-2 max-w-56 whitespace-normal text-muted-foreground">
           {typeof value === "string" ? value : ""}
         </span>
       ),

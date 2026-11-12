@@ -239,7 +239,7 @@ const CHOICE_TYPES: ReadonlySet<string> = new Set(["select", "radio"]);
  * engineer" rather than the stored `backend-engineer`; anything else as
  * `formatExportValue` reads it.
  */
-export function answerText(value: unknown, field: AskedField): string {
+function answerText(value: unknown, field: AskedField): string {
   if (value === null || value === undefined) return "";
   return CHOICE_TYPES.has(field.type)
     ? optionLabels(field, value)

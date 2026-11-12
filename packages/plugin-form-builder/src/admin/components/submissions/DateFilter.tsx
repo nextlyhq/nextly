@@ -150,7 +150,10 @@ export function DateFilter({
           />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-0">
+      <PopoverContent
+        align="start"
+        className="w-80 max-w-[calc(100vw-2rem)] p-0"
+      >
         <div role="group" aria-label="Date sent" className="p-1">
           {DATE_PRESETS.map(preset => (
             <PresetOption

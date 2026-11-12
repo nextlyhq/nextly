@@ -189,7 +189,9 @@ test("reviews spam in its tab and recovers it", async ({ page }) => {
   await page.getByRole("combobox", { name: "Filter by form" }).click();
   await page.getByRole("option", { name: formName }).click();
 
-  await page.getByRole("tab", { name: "Spam" }).click();
+  // The status filter: each status a pressed button, its count beside it.
+  const status = page.getByRole("group", { name: "Status" });
+  await status.getByRole("button", { name: /^Spam\b/ }).click();
   await expect(
     page.getByText(bot).filter({ visible: true }).first()
   ).toBeVisible();
@@ -207,8 +209,7 @@ test("reviews spam in its tab and recovers it", async ({ page }) => {
   ).toBeVisible({ timeout: 15_000 });
   await page.goBack();
 
-  // A tab's name carries its count once read ("New 3").
-  await page.getByRole("tab", { name: /^New\b/ }).click();
+  await status.getByRole("button", { name: /^New\b/ }).click();
   await expect(
     page.getByText(bot).filter({ visible: true }).first()
   ).toBeVisible({

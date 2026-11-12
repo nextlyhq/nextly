@@ -19,11 +19,8 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Tabs,
-  TabsList,
-  TabsTrigger,
 } from "@nextlyhq/ui";
-import { Columns3, FileText } from "lucide-react";
+import { Columns3 } from "lucide-react";
 import type { JSX, ReactNode } from "react";
 
 import type { DateChoice } from "./date-filter";
@@ -57,14 +54,7 @@ function FormPicker({
       value={value || ALL_FORMS}
       onValueChange={next => onChange(next === ALL_FORMS ? "" : next)}
     >
-      <SelectTrigger
-        aria-label="Filter by form"
-        className="w-full gap-2 sm:w-56"
-      >
-        <FileText
-          className="h-4 w-4 shrink-0 text-muted-foreground"
-          aria-hidden="true"
-        />
+      <SelectTrigger aria-label="Filter by form" className="w-full sm:w-56">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -79,8 +69,12 @@ function FormPicker({
   );
 }
 
-/** The status tabs, each with how many it holds once that is known. */
-function StatusTabs({
+/**
+ * The status filter, each with how many it holds once that is known. A
+ * segmented control of pressed buttons rather than tabs: choosing one
+ * filters the one list below, and there are no panels for tabs to control.
+ */
+function StatusFilter({
   value,
   counts,
   onChange,
@@ -90,24 +84,26 @@ function StatusTabs({
   onChange: (tab: StatusTab) => void;
 }): JSX.Element {
   return (
-    <Tabs
-      value={value}
-      onValueChange={next => onChange(next as StatusTab)}
-      className="max-w-full"
+    <div
+      role="group"
+      aria-label="Status"
+      className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-md bg-secondary p-0.5"
     >
-      <TabsList scrollable aria-label="Status">
-        {STATUS_TABS.map(tab => (
-          <TabsTrigger key={tab.value} value={tab.value} className="gap-1.5">
-            {tab.label}
-            {counts === undefined ? null : (
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {counts[tab.value]}
-              </span>
-            )}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-    </Tabs>
+      {STATUS_TABS.map(tab => (
+        <button
+          key={tab.value}
+          type="button"
+          aria-pressed={value === tab.value}
+          onClick={() => onChange(tab.value)}
+          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-sm px-2 text-sm sm:gap-1.5 sm:px-2.5 font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-card aria-pressed:text-foreground aria-pressed:ring-1 aria-pressed:ring-border"
+        >
+          {tab.label}
+          {counts === undefined ? null : (
+            <span className="text-xs tabular-nums">{counts[tab.value]}</span>
+          )}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -174,7 +170,7 @@ export function SubmissionsToolbar({
       {forms === undefined ? null : (
         <FormPicker forms={forms} value={formId} onChange={onFormChange} />
       )}
-      <StatusTabs value={status} counts={counts} onChange={onStatusChange} />
+      <StatusFilter value={status} counts={counts} onChange={onStatusChange} />
       <DateFilter choice={date} onChoose={onDateChange} />
       <div className="flex flex-wrap items-center gap-2 sm:ml-auto">{end}</div>
     </div>
