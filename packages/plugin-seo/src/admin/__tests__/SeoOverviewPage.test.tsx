@@ -222,23 +222,67 @@ describe("SeoOverviewPage", () => {
     );
   });
 
-  it("hides the checklist through its route, and shows it again", async () => {
+  it("hides the checklist through its route, and shows it again from the header with its progress", async () => {
     const shown = render(<SeoOverviewPage />);
+    // No way back is offered while the checklist shows.
+    expect(screen.queryByRole("button", { name: /^Show setup/ })).toBeNull();
     fireEvent.click(
       within(card("Set up SEO")).getByRole("button", { name: "Hide" })
     );
-    await vi.waitFor(() =>
-      expect(write).toHaveBeenCalledWith({ hidden: true })
-    );
+    await vi.waitFor(() => expect(write).toHaveBeenCalledWith({ hidden: true }));
     shown.unmount();
 
     serve({ "/overview/checklist": { ...CHECKLIST, hidden: true } });
     render(<SeoOverviewPage />);
     expect(screen.queryByRole("region", { name: "Set up SEO" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Show setup" }));
+    const back = screen.getByRole("button", { name: "Show setup · 4 of 6" });
+    // Beside Open pages, in the page's header.
+    expect(back.closest("header")).toBe(
+      screen.getByRole("link", { name: "Open pages" }).closest("header")
+    );
+    fireEvent.click(back);
     await vi.waitFor(() =>
       expect(write).toHaveBeenCalledWith({ hidden: false })
     );
+  });
+
+  it("offers no way back to a hidden checklist once every step is done", () => {
+    serve({
+      "/overview/checklist": {
+        ...CHECKLIST,
+        hidden: true,
+        items: CHECKLIST.items.map(item => ({ ...item, done: true })),
+      },
+    });
+    render(<SeoOverviewPage />);
+    expect(screen.queryByRole("button", { name: /^Show setup/ })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Set up SEO" })).toBeNull();
+  });
+
+  it("draws each connection's state as connected, not connected or failing", () => {
+    serve({
+      "/connections": {
+        searchConsole: {
+          configured: true,
+          connected: { email: "sara@acme.example" },
+        },
+        indexNow: { switchedOn: false },
+      } satisfies ConnectionsBody,
+      "/proxy-status": { state: "quiet", lastSeen: ago(30) },
+    });
+    render(<SeoOverviewPage />);
+    const connections = card("Connections");
+    expect(
+      within(connections).getByRole("link", { name: "Connected" })
+    ).toBeTruthy();
+    expect(
+      within(connections).getByRole("link", { name: "Not connected" })
+    ).toBeTruthy();
+    expect(
+      within(connections)
+        .getByRole("link", { name: "Failing · not running" })
+        .getAttribute("href")
+    ).toBe(`${SECTION}/redirects`);
   });
 
   it("gives the health verdict, each count equal to the list's and linking to it narrowed", () => {

@@ -123,10 +123,21 @@ function ReadState({
 }
 
 /** One line of a card: a name, and its number or link on the right. */
-function Line({ name, end }: { name: ReactNode; end: ReactNode }): JSX.Element {
+function Line({
+  name,
+  end,
+  truncate = false,
+}: {
+  name: ReactNode;
+  end: ReactNode;
+  /** Cut a long name to one line, as an address is; others wrap. */
+  truncate?: boolean;
+}): JSX.Element {
   return (
     <li className="flex items-center justify-between gap-2 text-sm">
-      <span className="min-w-0 truncate">{name}</span>
+      <span className={truncate ? "min-w-0 truncate" : "min-w-0 break-words"}>
+        {name}
+      </span>
       <span className="shrink-0">{end}</span>
     </li>
   );
@@ -145,7 +156,7 @@ function TextLink({
   return (
     <AdminLink
       href={href}
-      className={`font-medium underline-offset-4 hover:underline ${className ?? "text-foreground"}`}
+      className={`text-sm font-medium underline-offset-4 hover:underline ${className ?? "text-foreground"}`}
     >
       {children}
     </AdminLink>
@@ -201,48 +212,75 @@ function useSetupFirst(checklist: ChecklistBody | undefined): void {
   }, [waiting]);
 }
 
-/** The setup checklist, or the line that shows it again once hidden. */
-function SetupCard({
-  checklist,
-  pending,
-  error,
-}: {
-  checklist: ChecklistBody | undefined;
+/** Hiding and showing the checklist, for everyone who opens the Overview. */
+interface ChecklistVisibilityWrite {
+  set: (hidden: boolean) => Promise<void>;
   pending: boolean;
   error: Error | null;
-}): JSX.Element | null {
-  const titleId = useId();
-  const visibility = usePluginRouteMutation<ChecklistVisibility, object>({
+}
+
+function useChecklistVisibility(): ChecklistVisibilityWrite {
+  const write = usePluginRouteMutation<ChecklistVisibility, object>({
     plugin: SEO_PLUGIN_NAME,
     path: CHECKLIST_ROUTE_PATH,
     method: "POST",
     invalidates: [CHECKLIST_ROUTE_PATH],
   });
-  const setHidden = async (hidden: boolean) => {
-    const answer = await visibility.write({ hidden });
-    if (answer !== undefined) {
-      toastMutationResult(
-        hidden ? "Setup checklist hidden" : "Setup checklist shown",
-        undefined
-      );
-    }
+  return {
+    set: async hidden => {
+      const answer = await write.write({ hidden });
+      if (answer !== undefined) {
+        toastMutationResult(
+          hidden ? "Setup checklist hidden" : "Setup checklist shown",
+          undefined
+        );
+      }
+    },
+    pending: write.pending,
+    error: write.error,
   };
+}
 
-  if (checklist?.hidden === true) {
-    return (
-      <div className="flex justify-end">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={visibility.pending}
-          onClick={() => void setHidden(false)}
-        >
-          Show setup
-        </Button>
-      </div>
-    );
-  }
+/**
+ * The header's way back to a hidden checklist, with its progress, until
+ * every step is done; nothing while the checklist shows, or once it is done.
+ */
+function ShowSetup({
+  checklist,
+  visibility,
+}: {
+  checklist: ChecklistBody | undefined;
+  visibility: ChecklistVisibilityWrite;
+}): JSX.Element | null {
+  if (checklist?.hidden !== true) return null;
+  const total = checklist.items.length;
+  const done = checklist.items.filter(item => item.done).length;
+  if (done >= total) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      disabled={visibility.pending}
+      onClick={() => void visibility.set(false)}
+    >
+      {`Show setup · ${done} of ${total}`}
+    </Button>
+  );
+}
+
+/** The setup checklist, with its progress and the way to hide it. */
+function SetupCard({
+  checklist,
+  pending,
+  error,
+  visibility,
+}: {
+  checklist: ChecklistBody | undefined;
+  pending: boolean;
+  error: Error | null;
+  visibility: ChecklistVisibilityWrite;
+}): JSX.Element {
+  const titleId = useId();
   const items = checklist?.items ?? [];
   const done = items.filter(item => item.done).length;
   return (
@@ -264,7 +302,7 @@ function SetupCard({
                 variant="ghost"
                 size="sm"
                 disabled={visibility.pending}
-                onClick={() => void setHidden(true)}
+                onClick={() => void visibility.set(true)}
               >
                 Hide
               </Button>
@@ -447,6 +485,7 @@ function NotFoundCard(): JSX.Element {
               {rows.map(row => (
                 <Line
                   key={row.id}
+                  truncate
                   name={
                     <span className="font-mono" title={row.path}>
                       {row.path}
@@ -564,6 +603,7 @@ export function SeoOverviewPage(): JSX.Element {
     staleTime: 0,
   });
   useSetupFirst(checklist.data);
+  const visibility = useChecklistVisibility();
   // Read once for the page: the health card counts it, and it names the
   // site's production host.
   const problems = usePluginRoute<ProblemListBody>({
@@ -581,17 +621,23 @@ export function SeoOverviewPage(): JSX.Element {
         description={`How ${host} shows up in search, and what to do next.`}
         breadcrumbs={<SeoTrail steps={[{ label: "Overview" }]} />}
         actions={
-          <Button variant="outline" asChild>
-            <AdminLink href={PAGES_PAGE_HREF}>Open pages</AdminLink>
-          </Button>
+          <>
+            <ShowSetup checklist={checklist.data} visibility={visibility} />
+            <Button variant="outline" asChild>
+              <AdminLink href={PAGES_PAGE_HREF}>Open pages</AdminLink>
+            </Button>
+          </>
         }
       />
       <div className="flex flex-col gap-6">
-        <SetupCard
-          checklist={checklist.data}
-          pending={checklist.pending}
-          error={checklist.error}
-        />
+        {checklist.data?.hidden === true ? null : (
+          <SetupCard
+            checklist={checklist.data}
+            pending={checklist.pending}
+            error={checklist.error}
+            visibility={visibility}
+          />
+        )}
         <Grid cols={4} gap={4} responsive>
           <HealthCard list={problems} />
           <PagesCard />
