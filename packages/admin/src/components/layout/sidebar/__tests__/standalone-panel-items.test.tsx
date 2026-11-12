@@ -6,7 +6,13 @@
  * exactly as before.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -197,6 +203,66 @@ describe("a standalone plugin's panel", () => {
     expect(vi.mocked(protectedApi.get).mock.calls[0][0]).toBe(
       "/admin-meta/plugin-panel-numbers?plugin=%40acme%2Flibrary"
     );
+  });
+
+  it("draws each item's own number, whatever page it links to", async () => {
+    // Three items link to one page, in three parts of the panel; the third's
+    // number could not be read. A branch keeps its number through the copy
+    // the panel makes of it.
+    answer([
+      [0, 7],
+      [1, 2],
+      [3, 9],
+    ]);
+    branding = {
+      plugins: [
+        library(
+          [
+            {
+              label: "Reports",
+              to: "/admin/r",
+              group: "library",
+              count: { collection: "reports" },
+            },
+            {
+              label: "Reports to fix",
+              to: "/admin/r",
+              group: "checks",
+              badge: { attention: "acme/fix" },
+            },
+            {
+              label: "Reports again",
+              to: "/admin/r",
+              count: { collection: "unreadable" },
+            },
+            {
+              label: "Archive",
+              to: "/admin/a",
+              group: "library",
+              count: { collection: "archive" },
+              children: [{ label: "Old", to: "/admin/old" }],
+            },
+          ],
+          [
+            { id: "library", label: "Library" },
+            { id: "checks", label: "Checks" },
+          ]
+        ),
+      ],
+    } as AdminBranding;
+    renderPanel();
+
+    const library_ = screen.getByRole("group", { name: "Library" });
+    const checks = screen.getByRole("group", { name: "Checks" });
+    await within(library_).findByRole("link", { name: "Reports, 7" });
+    expect(
+      within(checks).getByRole("link", { name: "Reports to fix: 2" })
+    ).toBeDefined();
+    const again = screen.getByRole("link", { name: "Reports again" });
+    expect(again.getAttribute("aria-label")).toBeNull();
+    expect(
+      within(library_).getByRole("button", { name: "Archive, 9" })
+    ).toBeDefined();
   });
 
   it("draws no number for a count the server left out, and no error", async () => {
