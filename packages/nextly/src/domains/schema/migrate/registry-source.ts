@@ -27,7 +27,20 @@ import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
 /** The registry source at the newest applied point, or why there is none. */
 export type RegistrySource =
-  | { kind: "snapshot"; file: string; entities: EntitySettingsRecord }
+  | {
+      kind: "snapshot";
+      file: string;
+      entities: EntitySettingsRecord;
+      /**
+       * The applied records up to this one, oldest first, ending with
+       * `entities`: each applied snapshot before it back to the first that
+       * records nothing or cannot be read, which ends it. What the
+       * migrations changed is judged along it (`registry-history.ts`).
+       * Absent where the source is not read from the migrations (a first
+       * run's configuration).
+       */
+      chain?: readonly EntitySettingsRecord[];
+    }
   | {
       kind: "none";
       /**
@@ -73,11 +86,22 @@ export async function readRegistrySource(args: {
     .filter(name => name.endsWith(SNAPSHOT_SUFFIX))
     .sort()
     .reverse();
+  const applied: string[] = [];
   for (const file of newestFirst) {
-    if (!(await args.isApplied(ledgerNameOfSnapshot(file)))) continue;
-    return sourceIn(join(metaDir, file), file);
+    if (await args.isApplied(ledgerNameOfSnapshot(file))) applied.push(file);
   }
-  return { kind: "none", reason: "no-snapshot" };
+  const [newest, ...older] = applied;
+  if (newest === undefined) return { kind: "none", reason: "no-snapshot" };
+  const source = await sourceIn(join(metaDir, newest), newest);
+  if (source.kind !== "snapshot") return source;
+  // Older applied records, newest first, until one records nothing.
+  const chain = [source.entities];
+  for (const file of older) {
+    const earlier = await sourceIn(join(metaDir, file), file);
+    if (earlier.kind !== "snapshot") break;
+    chain.push(earlier.entities);
+  }
+  return { ...source, chain: chain.reverse() };
 }
 
 /** The source one snapshot file gives: its recorded declarations, or none. */
