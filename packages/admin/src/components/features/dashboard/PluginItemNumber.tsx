@@ -59,7 +59,7 @@ export function itemNumberName(
 
 /** The number as drawn, hidden from assistive technology: the name says it. */
 /** Where a quiet count sits: at the item's end, at least two digits wide. */
-const COUNT_SLOT = "ml-auto min-w-[2ch] shrink-0 text-right";
+const COUNT_SLOT = "ml-auto min-w-[2ch] shrink-0 text-right text-xs";
 
 export function PluginItemNumber({
   shown,
@@ -82,7 +82,7 @@ export function PluginItemNumber({
       className={
         shown.kind === "badge"
           ? "ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full border border-border px-1.5 text-[11px] font-semibold tabular-nums"
-          : `${COUNT_SLOT} text-xs tabular-nums text-muted-foreground`
+          : `${COUNT_SLOT} tabular-nums text-muted-foreground`
       }
     >
       {itemNumberText(number)}
