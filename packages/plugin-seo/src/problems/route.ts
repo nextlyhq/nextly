@@ -33,7 +33,7 @@ import {
 } from "./check";
 import { PROBLEMS_CHECK_ROUTE_PATH, PROBLEMS_ROUTE_PATH } from "./contract";
 import { singleKey } from "./page-types";
-import { inChunks, readerAs } from "./reader";
+import { callerReads, readerAs } from "./reader";
 
 /**
  * The types the caller may read, of those SEO is added to, by the key their
@@ -57,44 +57,13 @@ async function readableTypes(
   return readable;
 }
 
-/** How many ids one read of a type asks about. */
-const ID_CHUNK = 100;
-
 /** Which pages the route's caller may read, each read made as them. */
 async function readerOf(
   ctx: PluginRouteContext,
   types: ReadonlySet<string>
 ): Promise<Reader> {
-  const asCaller = {
-    as: "user" as const,
-    user: ctx.user ?? undefined,
-    ...(ctx.authenticatedScope === undefined
-      ? {}
-      : { authenticatedScope: ctx.authenticatedScope }),
-  };
-  return readerAs(
-    {
-      readable: (type, ids) =>
-        inChunks(ids, ID_CHUNK, async chunk => {
-          const { data } = await ctx.services.collections.listEntries(
-            type,
-            {
-              where: { id: { in: chunk } },
-              select: { id: true },
-              depth: 0,
-              pagination: { limit: chunk.length, page: 1 },
-            },
-            asCaller
-          );
-          return (data as { id?: unknown }[]).map(entry => String(entry.id));
-        }),
-      // Counted as the caller, so a rule admitting only some entries decides.
-      count: type => ctx.services.collections.count(type, {}, asCaller),
-    },
-    types,
-    // Redirects are site-wide SEO's: named only to someone holding it.
-    await seoCan(ctx, "manage")
-  );
+  // Redirects are site-wide SEO's: named only to someone holding it.
+  return readerAs(callerReads(ctx), types, await seoCan(ctx, "manage"));
 }
 
 /** The routes that read the list and check the site again. */

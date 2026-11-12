@@ -23,7 +23,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly";
+import { defineCollection, defineSingle, text } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -38,6 +38,9 @@ import { seoMetadata, seoStructuredData } from "../metadata";
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const PAGES = "seocp_pages";
 const LOCALIZED = "seocp_localized";
+const TEAM = "seocp_team";
+const PRIVATE = "seocp_private";
+const HOME = "seocp_home";
 const SITE = "https://acme.example";
 const PLUGIN = "@nextlyhq/plugin-seo";
 const CSRF = "c".repeat(64);
@@ -696,6 +699,107 @@ describe.each(getConfiguredTestDialects())(
           ?.filter(item => item.path === "/pricing")
           .map(({ source, standing }) => ({ source, standing }))
       ).toEqual([{ source: "entry", standing: "hidden" }]);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "pages a person may read (%s)",
+  (dialect: TestDialect) => {
+    it("lists only the entries whoever asks may read, and every page built in code", async () => {
+      const t = await createTestNextly({
+        dialect,
+        plugins: [
+          seoPlugin({
+            collections: [TEAM, PRIVATE],
+            singles: [HOME],
+            baseUrl: SITE,
+            nextBuildDir: BUILD,
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: TEAM,
+            status: true,
+            // Readers see only the open team's pages.
+            access: { read: () => ({ team: { equals: "open" } }) },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              text({ name: "team" }),
+            ],
+            publicAddress: "/team/{slug}",
+          }),
+          // Read only by those granted its own read permission.
+          defineCollection({
+            slug: PRIVATE,
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/private/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: HOME,
+            label: { singular: "Home" },
+            fields: [text({ name: "title" })],
+            publicAddress: "/",
+          }),
+        ],
+        seedPublic: true,
+      });
+      current = t;
+      await lastCatchUp();
+      const owner = await personWith(t, "owner", "all");
+      const page = (collection: string, data: Record<string, unknown>) =>
+        t.nextly.create({
+          collection,
+          data: { ...data, status: "published" },
+          overrideAccess: true,
+        });
+      await page(TEAM, { title: "Open plans", slug: "open", team: "open" });
+      await page(TEAM, {
+        title: "Closed plans",
+        slug: "closed",
+        team: "closed",
+      });
+      await page(PRIVATE, { title: "Salaries", slug: "salaries" });
+      await t.nextly.updateSingle({
+        slug: HOME,
+        data: { _overwrite: true, title: "Welcome" },
+      });
+      await lastCatchUp();
+      // Site-wide SEO, and the team's pages to read, which the collection's
+      // own rule narrows to the open team's.
+      const manager = await personWith(t, "manager", [
+        "manage-seo",
+        `read-${TEAM}`,
+      ]);
+
+      const all = (await addressesFor(owner)).items?.map(item => item.path);
+      const { status, items } = await addressesFor(manager);
+
+      // The owner reads every page, so each is there to leave out.
+      expect(all).toEqual(
+        expect.arrayContaining([
+          "/",
+          "/team/open",
+          "/team/closed",
+          "/private/salaries",
+        ])
+      );
+      expect(status).toBe(200);
+      const paths = items?.map(item => item.path) ?? [];
+      expect(paths).toContain("/team/open");
+      expect(paths).not.toContain("/team/closed");
+      expect(paths).not.toContain("/private/salaries");
+      expect(paths).not.toContain("/");
+      // Nothing of a left-out page is named, under any address.
+      expect(JSON.stringify(items)).not.toMatch(
+        /Closed plans|Salaries|Welcome/
+      );
+      // Pages built in code are site-wide SEO's, listed to whoever holds it.
+      expect(paths).toContain("/pricing");
     });
   }
 );

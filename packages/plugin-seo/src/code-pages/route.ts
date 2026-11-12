@@ -1,7 +1,8 @@
 /**
  * Pages' routes: every public address the site
  * knows of, and the save of a page with no entry's SEO, both site-wide SEO
- * for whoever holds `manage-seo`.
+ * for whoever holds `manage-seo`. The list names an entry only to someone
+ * who may read it, as the collection's own list would.
  *
  * @module code-pages/route
  */
@@ -14,10 +15,14 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import type { Candidate } from "../outputs/listing";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
+import { pageRefKey, type PageRef } from "../problems/check";
+import { singleKey } from "../problems/page-types";
+import { callerReads, readerAs } from "../problems/reader";
 import type { ReadRules } from "../resolver/provider";
 
-import { siteAddresses } from "./addresses";
+import { siteAddresses, type ReadableEntries } from "./addresses";
 import { heldByDocuments } from "./answers";
 import {
   ADDRESSES_ROUTE_PATH,
@@ -50,6 +55,34 @@ function originFor(req: Request, config: CodePageRoutesConfig): string {
   return config.origin() ?? new URL(req.url).origin;
 }
 
+/**
+ * The entries the route's caller may read, asked of the collections as them,
+ * as the problem list asks: none of a type they may not read, a Single's
+ * page where they may read the Single, and of a collection whose rule admits
+ * only some entries, those it admits.
+ */
+async function readableBy(ctx: PluginRouteContext): Promise<ReadableEntries> {
+  const caller = ctx.caller;
+  if (caller === null) throw NextlyError.authRequired();
+  const types = new Set<string>();
+  for (const type of await ctx.publicAddresses.types()) {
+    if (await caller.can("read", type.slug)) {
+      types.add(type.kind === "single" ? singleKey(type.slug) : type.slug);
+    }
+  }
+  // Redirects are never named here, so whether they may see them is moot.
+  const reader = readerAs(callerReads(ctx), types, false);
+  // A page is kept under the key its address is held by.
+  const refOf = ({ holder }: Candidate): PageRef => ({
+    type: holder.collection,
+    id: holder.id,
+  });
+  return async batch => {
+    const allowed = await reader.pages(batch.map(refOf));
+    return batch.filter(candidate => allowed.has(pageRefKey(refOf(candidate))));
+  };
+}
+
 /** The route that lists every public address the site knows of. */
 function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
   // Site-wide SEO, which the plugin keeps itself: `manage-seo` alone.
@@ -62,6 +95,7 @@ function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
         origin: originFor(req, config),
         routes: config.routes(),
         readRules: config.readRules,
+        readable: await readableBy(ctx),
       });
       return respondList(items, {
         total: items.length,

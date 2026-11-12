@@ -356,13 +356,22 @@ async function translationsOf(
 }
 
 /**
- * Each published entry at its declared address, in the site's language and
- * in each other language it is published in.
+ * Which of a read's entries a listing names: those the person asking may
+ * read, so a page they may not open is not named, nor any of its values.
+ */
+export type ReadableEntries = (
+  batch: readonly Candidate[]
+) => Promise<Candidate[]>;
+
+/**
+ * Each published entry `readable` keeps at its declared address, in the
+ * site's language and in each other language it is published in.
  */
 async function entryAddresses(
   ctx: PluginContext,
   origin: string,
-  readRules: ReadRules | undefined
+  readRules: ReadRules | undefined,
+  readable: ReadableEntries
 ): Promise<SiteAddress[]> {
   const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
   const options: EntryListing = {
@@ -372,7 +381,10 @@ async function entryAddresses(
     readRules,
   };
   const found: SiteAddress[] = [];
-  for await (const batch of candidates(ctx, { origin })) {
+  for await (const read of candidates(ctx, { origin })) {
+    // Left out before anything of them is worked out.
+    const batch = await readable(read);
+    if (batch.length === 0) continue;
     found.push(
       ...(await entriesIn(ctx, batch, {
         ...options,
@@ -387,7 +399,9 @@ async function entryAddresses(
 /**
  * Every public address the site knows of, by address: its entries first
  * where an entry and a route name one address, since the entry's `seo`
- * group is then the address's one home for its SEO.
+ * group is then the address's one home for its SEO. Of the entries, only
+ * those `readable` keeps are named; an address one it leaves out holds is
+ * still not a page built in code.
  */
 export async function siteAddresses(
   ctx: PluginContext,
@@ -395,13 +409,19 @@ export async function siteAddresses(
     origin: string;
     routes: readonly CodeRoute[];
     readRules?: ReadRules;
+    readable: ReadableEntries;
   }
 ): Promise<SiteAddress[]> {
   // The site's rules are read once per language for the whole listing, as
   // the sitemap reads them, not once a page.
   const readRules =
     options.readRules === undefined ? undefined : onceEach(options.readRules);
-  const entries = await entryAddresses(ctx, options.origin, readRules);
+  const entries = await entryAddresses(
+    ctx,
+    options.origin,
+    readRules,
+    options.readable
+  );
   const entryPaths = new Set(entries.map(entry => entry.path));
   // A route serving an address a document holds is serving that entry,
   // whatever language the address is in: its SEO is the entry's.
