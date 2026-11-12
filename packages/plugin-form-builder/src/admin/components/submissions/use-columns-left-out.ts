@@ -28,9 +28,9 @@ function overflows(box: HTMLElement | null): boolean {
 
 /**
  * The number of optional columns to leave out, at most `optional`. `columnSet`
- * names the columns on offer: a different set starts again from all of them.
- * `content` is what the table draws (its rows): new rows are measured again,
- * since they can widen a column as much as a narrower box can.
+ * names the columns on offer, and `content` is what the table draws (its
+ * rows): a change of either starts again from all of them, since new rows can
+ * narrow a column as well as widen it.
  */
 export function useColumnsLeftOut(
   box: RefObject<HTMLElement | null>,
@@ -39,11 +39,14 @@ export function useColumnsLeftOut(
   content: unknown
 ): number {
   // `width` is the box's, as last observed: a change of it is measured again.
-  const [fit, setFit] = useState({ columnSet, leftOut: 0, width: 0 });
-  // A new column set is measured afresh: derived during render rather than in
-  // an effect, so the first paint of the new set is not the old one's count.
-  if (fit.columnSet !== columnSet) setFit({ ...fit, columnSet, leftOut: 0 });
-  const leftOut = fit.columnSet === columnSet ? fit.leftOut : 0;
+  const [fit, setFit] = useState({ columnSet, content, leftOut: 0, width: 0 });
+  // New columns or rows are measured afresh, from all of the columns: derived
+  // during render rather than in an effect, so the first paint of the new
+  // ones is not the old ones' count. The measurement below then leaves out,
+  // before that paint, whatever does not fit.
+  const fresh = fit.columnSet !== columnSet || fit.content !== content;
+  if (fresh) setFit({ ...fit, columnSet, content, leftOut: 0 });
+  const leftOut = fresh ? 0 : fit.leftOut;
 
   // Once the columns, the rows or the box's width change, and again after
   // each column left out: one more out while the table overflows. Each step

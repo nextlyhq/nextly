@@ -673,6 +673,8 @@ describe("a form's tab while its form loads", () => {
 
 /** The box width `layOut` lays the list out in; a test may change it. */
 let laidOut = 0;
+/** Text whose row widens the table by 400 pixels, as a long answer does. */
+let wideWith: string | undefined;
 
 /**
  * Lays out every table at `perColumn` pixels a header cell, in a box `box`
@@ -681,6 +683,7 @@ let laidOut = 0;
  */
 function layOut(box: number, perColumn = 110): () => void {
   laidOut = box;
+  wideWith = undefined;
   const proto = HTMLElement.prototype;
   const saved = {
     clientWidth: Object.getOwnPropertyDescriptor(proto, "clientWidth"),
@@ -701,7 +704,10 @@ function layOut(box: number, perColumn = 110): () => void {
       const inner = table(this);
       if (!inner) return 0;
       const columns = inner.querySelectorAll("thead th").length;
-      return Math.max(laidOut, columns * perColumn);
+      const wide =
+        wideWith !== undefined &&
+        (inner.querySelector("tbody")?.textContent ?? "").includes(wideWith);
+      return Math.max(laidOut, columns * perColumn + (wide ? 400 : 0));
     },
   });
   return () => {
@@ -771,6 +777,58 @@ describe("a list in a narrow box", () => {
     });
     await waitFor(() =>
       expect(headers()).toEqual(["From", "Status", "Submitted"])
+    );
+  });
+
+  it("tries every column again when the rows change", async () => {
+    // Ali Shah's row is wide: with it, the seven columns (770) and its 400
+    // need the Summary and the Form column out to fit 1000. The New filter
+    // leaves Ali out, and every column fits again.
+    restore = layOut(1000);
+    wideWith = "Ali Shah";
+    // This server answers the status filter, so the New filter's rows differ.
+    const fetched = serveJob();
+    const answer = fetched.getMockImplementation();
+    if (answer === undefined) throw new Error("serveJob answers nothing");
+    fetched.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      const where = JSON.parse(url.searchParams.get("where") ?? "{}") as {
+        status?: { equals?: string };
+      };
+      const status = where.status?.equals;
+      if (
+        url.pathname === "/admin/api/collections/form-submissions/entries" &&
+        status !== undefined
+      ) {
+        return entriesPage(
+          APPLICATIONS.filter(row => row.status === status),
+          url
+        );
+      }
+      return answer(input, init);
+    });
+    const user = userEvent.setup();
+    renderList();
+    await screen.findAllByText("Ali Shah");
+    await waitFor(() =>
+      expect(headers()).toEqual(["From", "Status", "Submitted"])
+    );
+
+    await user.click(
+      within(screen.getByRole("group", { name: "Status" })).getByRole(
+        "button",
+        { name: /^New/ }
+      )
+    );
+    await waitFor(() => expect(screen.queryAllByText("Ali Shah")).toEqual([]));
+    await waitFor(() =>
+      expect(headers()).toEqual([
+        "From",
+        "Form",
+        "Summary",
+        "Status",
+        "Submitted",
+      ])
     );
   });
 
