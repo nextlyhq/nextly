@@ -171,6 +171,25 @@ async function cancelAndClear(
 }
 
 /**
+ * The rows `scope` queued, by the exact bytes of the scope. MySQL compares a
+ * column under its collation, which may ignore case and accents, so
+ * `plugin:cafe` would match `plugin:café`, another plugin's; the plain
+ * comparison stays so an index can still narrow the rows.
+ */
+function ownedBy(
+  queue: EmailQueueTables["queue"],
+  tables: EmailQueueTables,
+  scope: string
+): SQL | undefined {
+  return and(
+    eq(queue.scope, scope),
+    tables.dialect === "mysql"
+      ? sql`CAST(${queue.scope} AS BINARY) = CAST(${scope} AS BINARY)`
+      : undefined
+  );
+}
+
+/**
  * Cancel and clear the queued emails among `ids` that `scope` queued (a
  * plugin's own, `plugin:<name>`): an id another caller queued, or none at
  * all, is passed over. Read under the lock a deletion takes, so one being
@@ -190,7 +209,7 @@ export async function cancelQueuedEmailsAmong(
       db
         .select({ id: queue.id })
         .from(queue)
-        .where(and(inArray(queue.id, batch), eq(queue.scope, scope)))
+        .where(and(inArray(queue.id, batch), ownedBy(queue, tables, scope)))
         .limit(BATCH)
     )) as Array<{ id: string }>;
     if (rows.length > 0) {

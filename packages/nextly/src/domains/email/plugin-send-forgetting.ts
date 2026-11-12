@@ -19,8 +19,8 @@
  *
  * @module domains/email/plugin-send-forgetting
  */
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
+import type { OpenTransactionProbe } from "../../shared/lib/open-transaction";
 import { z } from "zod";
 
 import { getDialectTables } from "../../database/index";
@@ -48,6 +48,19 @@ import {
 import { assertIdempotencyKey, idempotencyKeyDigest } from "./send-claims";
 
 const OPERATION = "ctx.services.email.forgetSends";
+
+/** A transaction as forgetting uses it: its Drizzle handle. */
+interface ForgettingTransaction {
+  getDrizzle<D = unknown>(): D;
+}
+
+/**
+ * What forgetting needs of an adapter: a transaction of its own, and whether
+ * one is open in the calling flow. The plugin context's adapter is one.
+ */
+export type ForgettingAdapter = OpenTransactionProbe & {
+  transaction<T>(work: (tx: ForgettingTransaction) => Promise<T>): Promise<T>;
+};
 
 /** What a plugin forgets: the emails it queued, and the keys it sent with. */
 export interface ForgetSendsInput {
@@ -100,7 +113,8 @@ export async function forgetPluginSends(
   input: ForgetSendsInput,
   options: {
     tx?: unknown;
-    adapter: DrizzleAdapter;
+    /** The adapter of the context asking: its transactions, and whether one is open. */
+    adapter: ForgettingAdapter;
     secrets: readonly string[];
   }
 ): Promise<void> {
@@ -122,7 +136,7 @@ export async function forgetPluginSends(
     emailDeliveries: ErasableDeliveriesTable;
   };
   const server = rowLockServer(adapter, dialect);
-  const forget = async (tx: TransactionContext) => {
+  const forget = async (tx: ForgettingTransaction) => {
     const db = tx.getDrizzle<
       QueuedErasureDb & RecipientErasureCapableDb & PrincipalDigestDb
     >();

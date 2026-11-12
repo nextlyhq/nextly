@@ -215,6 +215,23 @@ describe.each(getConfiguredTestDialects())(
       expect(toAda()).toBe(attempts);
     });
 
+    it("leaves a plugin's whose name differs only by an accent", async () => {
+      const t = await boot(dialect);
+      const theirs = await waiting("ada@example.com");
+      // As another plugin's queued email, one MySQL's default collation
+      // reads as equal to this plugin's scope.
+      await t.adapter.update(
+        "email_queue",
+        { scope: "plugin:forget-förms" },
+        { and: [{ column: "id", op: "=", value: theirs }] }
+      );
+      const before = await queued(t, theirs);
+
+      await plugin().services.email.forgetSends({ queuedIds: [theirs] });
+
+      expect(await queued(t, theirs)).toEqual(before);
+    });
+
     it("erases the records of its keyed sends, and no one else's with the key", async () => {
       const t = await boot(dialect);
       await plugin().services.email.send({

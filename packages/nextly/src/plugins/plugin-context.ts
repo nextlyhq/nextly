@@ -26,7 +26,6 @@ import type { PluginAuthApi } from "../auth/plugin-auth-api";
 import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
-import { getService } from "../di/service-access";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
 import { collectionFields } from "../domains/collections/services/collection-utils";
 import type { StoredReads } from "../domains/collections/services/stored-field-read";
@@ -3000,7 +2999,8 @@ export function createPluginContext(
         ) =>
           forgetPluginSends(pluginKeyScope(pluginName), input, {
             tx: options?.tx,
-            adapter: getService("adapter"),
+            // The context's own adapter, as its other services use.
+            adapter: getServiceFn("adapter"),
             secrets: pluginSettingsSecrets(env),
           }),
       }),
