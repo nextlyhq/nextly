@@ -400,6 +400,34 @@ const same = (a: unknown, b: unknown): boolean =>
  * rather than overwritten. A document never saved has no version, and is
  * replaced. Null when nothing changed.
  */
+/**
+ * `draft` moved from the settings it was made from onto newer ones: each
+ * value edited since `before` stays as edited, and each other takes its
+ * value in `after`, so a change made elsewhere meanwhile is kept.
+ */
+export function rebasedDraft(
+  draft: SettingsDraft,
+  before: SettingsDraft,
+  after: SettingsDraft
+): SettingsDraft {
+  const next: SettingsDraft = { ...after };
+  for (const key of Object.keys(draft) as (keyof SettingsDraft)[]) {
+    if (JSON.stringify(draft[key]) !== JSON.stringify(before[key])) {
+      keepEdited(next, draft, key);
+    }
+  }
+  return next;
+}
+
+/** `target`'s `key` set to `source`'s, the value edited here. */
+function keepEdited<K extends keyof SettingsDraft>(
+  target: SettingsDraft,
+  source: SettingsDraft,
+  key: K
+): void {
+  target[key] = source[key];
+}
+
 export function changesOf(
   stored: StoredSettings,
   draft: SettingsDraft,

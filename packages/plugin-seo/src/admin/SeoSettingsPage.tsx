@@ -61,6 +61,7 @@ import { AdminLink, SeoTrail } from "./section";
 import {
   changesOf,
   draftOf,
+  rebasedDraft,
   structuredDataOf,
   type SettingsDefaults,
   type SettingsDraft,
@@ -367,18 +368,25 @@ function useSettingsSave(
   );
 
   // A newer copy of the settings read since, such as the one a save made
-  // just before the screen was mounted again for another tab, becomes the
-  // baseline: the draft's changes are then compared with, and saved over,
-  // what is stored now.
+  // just before the screen was mounted again for another tab, or another
+  // person's, becomes the baseline. The draft moves onto it: a value edited
+  // here stays as edited, every other takes the newer stored one, so a save
+  // never sends back a value someone else changed meanwhile.
   const initialVersion = versionOf(initial);
   const latestRead = useRef(initial);
   latestRead.current = initial;
+  const latestStored = useRef(stored);
+  latestStored.current = stored;
   useEffect(() => {
     // Only a new version read is a new baseline.
-    setStored(current =>
-      versionOf(current) === initialVersion ? current : latestRead.current
+    const was = latestStored.current;
+    if (versionOf(was) === initialVersion) return;
+    const fresh = latestRead.current;
+    setStored(fresh);
+    setDraft(current =>
+      rebasedDraft(current, draftOf(was, defaults), draftOf(fresh, defaults))
     );
-  }, [initialVersion]);
+  }, [initialVersion, defaults, setDraft]);
 
   /** Lets go of every unsaved change. */
   const cancel = useCallback(() => {
