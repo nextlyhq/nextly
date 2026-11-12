@@ -700,6 +700,49 @@ describe.each(getConfiguredTestDialects())(
       expect(calls).toHaveLength(before);
     });
 
+    it("refuses a resend stored after the submission was marked Spam", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      behaviour.refuse = new Set([OPS]);
+      const id = await submit();
+      behaviour.refuse = new Set();
+      const first = await groupOf(t, cookie, id);
+      // The route planned it while the submission was not Spam...
+      const plan = {
+        submission: id,
+        notification: "team",
+        ticked: [],
+        retire: [],
+        settled: first.sends.map(send => send.queuedId),
+      };
+      // ...then it was marked Spam before the request was stored.
+      await t.nextly.update({
+        collection: SUBMISSIONS,
+        id,
+        data: { status: "spam", _overwrite: true },
+      });
+      const before = calls.length;
+
+      await expect(
+        t.nextly.create({ collection: "form-submission-resends", data: plan })
+      ).rejects.toThrow();
+      expect(calls).toHaveLength(before);
+    });
+
+    it("does not list a send recorded before the history was kept", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      const id = await submit();
+      const listed = await sendsOf(t, cookie, id);
+      // As an earlier version recorded a send: no notification, no recipients.
+      await t.nextly.create({
+        collection: "form-submission-sends",
+        data: { submission: id, queuedId: "q-before", sendKey: "k-before" },
+      });
+
+      expect(await sendsOf(t, cookie, id)).toEqual(listed);
+    });
+
     it("sends a copied recipient who missed it a message of its own", async () => {
       const { t, owner, submit } = await boot(dialect, [visitor]);
       const cookie = await sessionOf(t, owner);

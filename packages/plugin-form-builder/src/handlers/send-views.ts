@@ -249,7 +249,10 @@ export async function submissionSends(
   const rows = await sendRows(ctx, {
     submission: { equals: submissionId },
   });
-  return groupByNotification(await upToDate(ctx, rows));
+  // A send recorded before the history was kept names no notification and
+  // no recipient, so nothing true can be said of it: it is not listed.
+  const kept = rows.filter(row => row.notification);
+  return groupByNotification(await upToDate(ctx, kept));
 }
 
 /** One recent send of a notification, as its page lists it. */

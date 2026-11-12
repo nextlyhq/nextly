@@ -115,6 +115,14 @@ function idText(id: unknown): string {
   return typeof id === "string" ? id : "";
 }
 
+/** The refusal of a resend of a submission marked Spam. */
+function markedSpam(): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message: "Mark this submission Not spam before sending its emails.",
+  });
+}
+
 /** What a resend of `notification` would do, worked out before it is asked. */
 interface Plan {
   exclude: string[];
@@ -242,12 +250,7 @@ export async function resendRoute(
     submissionId,
     { as: "user", user: ctx.user ?? undefined }
   )) as unknown as Record<string, unknown>;
-  if (submission.status === "spam") {
-    throw NextlyError.conflict({
-      reason: "state",
-      message: "Mark this submission Not spam before sending its emails.",
-    });
-  }
+  if (submission.status === "spam") throw markedSpam();
   const form = (await ctx.services.ownCollections.findEntryById(
     deps.formsSlug,
     formIdOf(submission.form) ?? ""
@@ -370,13 +373,17 @@ async function resendInTransaction(
         "A send of this notification is in progress. Wait for it to finish before sending it again.",
     });
   }
-  await retireFailed(ctx, write, sends, request.retire);
   const submission =
     (await ctx.services.ownCollections.findEntryByIdInTransaction(
       write.transaction,
       deps.submissionsSlug,
       request.submission
     )) as unknown as Record<string, unknown>;
+  // Marked Spam since the route looked: that cancelled its sends, and this
+  // would send again. The read above holds the row, so a Spam mark made now
+  // waits for this transaction.
+  if (submission.status === "spam") throw markedSpam();
+  await retireFailed(ctx, write, sends, request.retire);
   const form = (await ctx.services.ownCollections.findEntryByIdInTransaction(
     write.transaction,
     deps.formsSlug,
