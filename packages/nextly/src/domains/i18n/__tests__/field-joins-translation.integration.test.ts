@@ -423,11 +423,14 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
-    const injected = failStatementsMatching(
-      statement =>
-        statement.startsWith("INSERT INTO") &&
-        statement.includes("dc_posts_locales")
-    );
+    // On PostgreSQL and MySQL the schema lock marks each statement with a leading comment naming
+    // its claim, so the copy is recognised by what follows any leading comment.
+    const injected = failStatementsMatching(statement => {
+      const body = statement.replace(/^\s*\/\*[\s\S]*?\*\/\s*/, "");
+      return (
+        body.startsWith("INSERT INTO") && body.includes("dc_posts_locales")
+      );
+    });
 
     const failed = await dialog.change(TRANSLATED).then(
       () => undefined,
@@ -485,27 +488,59 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
-    // The registry write after the apply is refused, once.
-    const adapter = current.adapter as unknown as {
-      update(...args: unknown[]): Promise<unknown>;
-    };
-    const original = adapter.update.bind(adapter);
+    // The registry write after the apply is refused, once. It runs on the transaction it shares
+    // with the stored schema version (`writeRegistryRows`), so the refusal sits on that
+    // transaction's `update` of the registry row.
+    const adapter = current.adapter;
+    const original = adapter.transaction.bind(adapter);
     let refusedOnce = false;
-    const injected = vi
-      .spyOn(adapter, "update")
-      .mockImplementation((...args: unknown[]) => {
-        if (!refusedOnce && args[0] === "dynamic_collections") {
-          refusedOnce = true;
-          return Promise.reject(new Error("injected registry failure"));
-        }
-        return original(...args);
-      });
+    const injected = vi.spyOn(adapter, "transaction").mockImplementation(((
+      work: Parameters<typeof original>[0],
+      options?: Parameters<typeof original>[1]
+    ) =>
+      original(
+        tx =>
+          work(
+            new Proxy(tx, {
+              get(target, property) {
+                const value: unknown = Reflect.get(target, property);
+                if (property !== "update" || typeof value !== "function") {
+                  return typeof value === "function"
+                    ? (value as (...a: unknown[]) => unknown).bind(target)
+                    : value;
+                }
+                return (...args: Parameters<typeof tx.update>) => {
+                  if (!refusedOnce && args[0] === "dynamic_collections") {
+                    refusedOnce = true;
+                    return Promise.reject(
+                      new Error("injected registry failure")
+                    );
+                  }
+                  return tx.update(...args);
+                };
+              },
+            })
+          ),
+        options
+      )) as typeof original);
 
     // The registry write is not fatal to the apply, so it reports the change made.
     await dialog.change(TRANSLATED).catch(() => undefined);
     injected.mockRestore();
     expect(refusedOnce).toBe(true);
     expect(await mainHeading("dc_posts", id)).toBeUndefined();
+    // The registry still records the field shared: the next apply is a retry of this one.
+    const [registry] = await query<{ fields: unknown }>(
+      `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
+    );
+    const recorded = (
+      typeof registry?.fields === "string"
+        ? JSON.parse(registry.fields)
+        : registry?.fields
+    ) as { name: string; localized?: unknown }[];
+    expect(recorded.find(f => f.name === "heading")?.localized).not.toBe(
+      true
+    );
 
     await dialog.change(TRANSLATED);
 
