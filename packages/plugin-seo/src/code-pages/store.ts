@@ -89,6 +89,9 @@ function codeValuesOf(value: unknown): PageMetadataValues {
   }
   const image = imageOf(stored.image);
   if (image !== undefined) values.image = image;
+  // The route's code hid the page: kept, so the sitemap and the screen read
+  // the page hidden as it is served.
+  if (stored.hidden === true) values.hidden = true;
   return values;
 }
 

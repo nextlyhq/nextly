@@ -189,8 +189,9 @@ export interface ContentRouteConfig<TNode> {
    * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
    * answer decides the page's head and this is one of its inputs: the title,
    * description and social values set here are used where nobody set them for
-   * the page, and its `robots` and canonical are not used at all. Without such
-   * a plugin, this is served as returned.
+   * the page; its `robots` may hide the page, never list one the answer hides,
+   * and its other robots directives are kept; its canonical is kept only where
+   * the answer names none. Without such a plugin, this is served as returned.
    */
   buildMetadata?: (
     entry: ContentEntry,

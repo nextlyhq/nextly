@@ -29,6 +29,7 @@ import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
 import type {
   SchemaPreviewChange,
+  SchemaPreviewJoiningTranslation,
   SchemaPreviewLeavingTranslation,
   SchemaPreviewRenameCandidate,
   SchemaRenameResolution,
@@ -37,7 +38,10 @@ import type {
 } from "@admin/services/schemaApi";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
-import { LeavingTranslationNotice } from "./LeavingTranslationNotice";
+import {
+  JoiningTranslationNotice,
+  LeavingTranslationNotice,
+} from "./LeavingTranslationNotice";
 
 interface SchemaChangeDialogProps {
   open: boolean;
@@ -56,6 +60,8 @@ interface SchemaChangeDialogProps {
   interactiveFields: InteractiveField[];
   // Fields that stop being translated: what moves to the archive, or why the change is refused.
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
+  // Fields that become translated: how many values become the default language's.
+  joiningTranslation?: SchemaPreviewJoiningTranslation[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -75,6 +81,7 @@ export function SchemaChangeDialog({
   warnings,
   interactiveFields,
   leavingTranslation = [],
+  joiningTranslation = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps): JSX.Element {
@@ -278,6 +285,7 @@ export function SchemaChangeDialog({
         )}
 
         <LeavingTranslationNotice fields={leavingTranslation} />
+        <JoiningTranslationNotice fields={joiningTranslation} />
 
         {/* Rename candidates - one section per dropped column with a list
             of "rename to X" radios + a "drop and add new" option.

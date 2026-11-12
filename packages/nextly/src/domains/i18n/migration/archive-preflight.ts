@@ -49,6 +49,7 @@ import {
   withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { copyLiveness } from "./generate-down";
 import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
 import {
   buildLeavingFieldsArchiveStatements,
@@ -143,8 +144,14 @@ export async function archiveFieldsLeavingTranslation(args: {
   tableName: string;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
-  /** The language whose value becomes the shared one, and is therefore not archived. */
+  /** The language whose value becomes the shared one where it is live, and is not archived. */
   defaultLocale: string;
+  /**
+   * The site's languages in its order. With each row's own publish state, it decides the language
+   * an entry's shared value is taken from when the default language's is not what readers saw
+   * (`copyLiveness`); omitted, the default language's, else the first by code.
+   */
+  languageOrder?: readonly string[];
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
@@ -277,6 +284,7 @@ export async function archiveFieldsLeavingTranslation(args: {
       tableName: args.tableName,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
+      liveness: copyLiveness(args.languageOrder, live.has("_status")),
       // A field whose values an earlier apply already moved has none left here to ask.
       leaving: new Set(
         [...leaving].filter(
@@ -310,6 +318,8 @@ export async function archiveFieldsLeavingTranslation(args: {
       dialect,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
+      languageOrder: args.languageOrder,
+      companionHasStatus: live.has("_status"),
       // A moved field's archive rows were written by the apply that moved it.
       oldFields: oldFields.filter(f => !moved.has(f.name)),
       newFields: args.newFields,
@@ -803,6 +813,8 @@ export async function refuseLeavingSettingsTheValuesCannotTake(args: {
   tableName: string;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /** See `archiveFieldsLeavingTranslation`'s `languageOrder`. */
+  languageOrder?: readonly string[];
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   renamed?: FieldRename | null;
@@ -829,6 +841,7 @@ export async function refuseLeavingSettingsTheValuesCannotTake(args: {
     tableName: args.tableName,
     builtBy: args.builtBy,
     defaultLocale: args.defaultLocale,
+    liveness: copyLiveness(args.languageOrder, live.has("_status")),
     leaving,
     oldFields,
     newFields: args.newFields,

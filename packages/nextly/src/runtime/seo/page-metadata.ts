@@ -7,8 +7,9 @@
  * so a site without one serves exactly what it served before. With one, the
  * provider decides, and the route's code is one of its inputs rather than the
  * answer: its title, description and social values are passed in at their own
- * level of the order of who wins, and its visibility and canonical are never
- * used, so the page and every output built from the same answer agree.
+ * level of the order of who wins. Its visibility is a floor: a route may hide
+ * its page, never show one the answer hides. Its canonical is used only where
+ * the answer has none.
  *
  * The `next` import is type-only, like the rest of `runtime/seo`.
  *
@@ -75,10 +76,121 @@ function firstImage(images: unknown): PageMetadataImage | undefined {
   }) as PageMetadataImage;
 }
 
+/** Robots directives as Next.js's `robots` object spells them. */
+type RobotsDirectives = Record<string, string | number | boolean>;
+
+/** The robots words that set whether a page is listed, and its links followed. */
+const ROBOTS_WORDS: Readonly<Record<string, RobotsDirectives>> = {
+  all: { index: true, follow: true },
+  none: { index: false, follow: false },
+  index: { index: true },
+  noindex: { index: false },
+  follow: { follow: true },
+  nofollow: { follow: false },
+};
+
+/**
+ * Robots directives written as text, `"noindex, max-snippet:-1"`, as the
+ * object Next.js reads: a word alone is set, a `name:value` pair keeps its
+ * value, as a number where it is one.
+ */
+function directivesOfText(text: string): RobotsDirectives {
+  const directives: RobotsDirectives = {};
+  for (const part of text.split(",")) {
+    const word = part.trim();
+    if (word === "") continue;
+    const colon = word.indexOf(":");
+    if (colon === -1) {
+      const name = word.toLowerCase();
+      Object.assign(directives, ROBOTS_WORDS[name] ?? { [name]: true });
+      continue;
+    }
+    const name = word.slice(0, colon).trim().toLowerCase();
+    const value = word.slice(colon + 1).trim();
+    const number = Number(value);
+    directives[name] = value !== "" && Number.isFinite(number) ? number : value;
+  }
+  return directives;
+}
+
+/**
+ * The directives of a route's `robots` value, given as text or as an object,
+ * without Googlebot's own; undefined where it gives none. The deprecated
+ * `noindex` and `nofollow` keys a JavaScript route may still pass are read as
+ * the `index` and `follow` they stand for.
+ */
+function directivesOf(value: unknown): RobotsDirectives | undefined {
+  if (typeof value === "string") return directivesOfText(value);
+  if (!isRecord(value)) return undefined;
+  const directives: RobotsDirectives = {};
+  for (const [name, inner] of Object.entries(value)) {
+    if (name === "googleBot" || name === "noindex" || name === "nofollow") {
+      continue;
+    }
+    if (
+      typeof inner === "string" ||
+      typeof inner === "number" ||
+      typeof inner === "boolean"
+    ) {
+      directives[name] = inner;
+    }
+  }
+  if (value.noindex === true) directives.index = false;
+  if (value.nofollow === true) directives.follow = false;
+  return directives;
+}
+
+/**
+ * The robots a page is served: the answer's visibility, with the route's own
+ * as a floor, and every other directive the route gave, such as Google's
+ * preview limits (`max-image-preview`, `max-snippet`), kept. A route may hide
+ * its page or keep its links unfollowed, never list or follow what the answer
+ * does not; Googlebot's own rule is held to the same floor and keeps its own
+ * stricter values. With no visibility in the answer, the route's is served.
+ */
+function robotsOver(
+  own: Metadata["robots"],
+  answered: Metadata["robots"]
+): Metadata["robots"] {
+  const answer = directivesOf(answered);
+  if (answer === undefined) return own;
+  const code = directivesOf(own) ?? {};
+  const index = answer.index !== false && code.index !== false;
+  const follow = answer.follow !== false && code.follow !== false;
+  const robots: Record<string, unknown> = { ...code, ...answer, index, follow };
+  const googleBot = isRecord(own) ? own.googleBot : undefined;
+  if (googleBot !== undefined) {
+    const bot = directivesOf(googleBot) ?? {};
+    robots.googleBot = {
+      ...bot,
+      index: index && bot.index !== false,
+      follow: follow && bot.follow !== false,
+    };
+  }
+  return robots;
+}
+
+/**
+ * A title the answer decided, in the form it is served: whole, so a layout's
+ * title template cannot add the site's name to a title that already carries
+ * it. The route's own title is the exception, served as the route gave it,
+ * so a page whose title its code still supplies reads as it did without a
+ * provider.
+ */
+function servedTitle(
+  answered: unknown,
+  own: unknown
+): Metadata["title"] | undefined {
+  const text = textOf(answered);
+  if (text === undefined) return undefined;
+  if (textOf(own) === text) return own as Metadata["title"];
+  return { absolute: text };
+}
+
 /**
  * What a route's code set that the order of who wins takes from code: a title,
- * a description and the social card's values. Visibility and the canonical are
- * deliberately not read, since only the answer decides them.
+ * a description, the social card's values, and whether it hides the page.
+ * The canonical is not read: the answer decides it wherever it has one.
  */
 function codeValuesOf(code: Metadata | undefined): PageMetadataValues {
   if (code === undefined) return {};
@@ -100,6 +212,7 @@ function codeValuesOf(code: Metadata | undefined): PageMetadataValues {
           ? twitter.description
           : undefined,
     image: firstImage(openGraph.images) ?? firstImage(twitter.images),
+    hidden: directivesOf(code.robots)?.index === false ? true : undefined,
   });
 }
 
@@ -114,53 +227,86 @@ function without<T extends Record<string, unknown>>(
 }
 
 /** The fields of a card a page's answer decides, and code therefore does not. */
-const ANSWERED_CARD_FIELDS = ["title", "description", "images", "url"];
+const ANSWERED_CARD_FIELDS = ["title", "description", "images"];
+
+/**
+ * A card of the route's own with the answer's laid over it: the answer's
+ * title in the form it is served, and the route's address for the card where
+ * the answer names no canonical.
+ */
+function cardOver(
+  own: unknown,
+  answered: unknown,
+  answersAddress: boolean
+): Record<string, unknown> | undefined {
+  const kept = isRecord(own)
+    ? without(own, [
+        ...ANSWERED_CARD_FIELDS,
+        ...(answersAddress ? ["url"] : []),
+      ])
+    : {};
+  const answer = isRecord(answered) ? answered : {};
+  const card: Record<string, unknown> = { ...kept, ...answer };
+  const title = servedTitle(
+    answer.title,
+    isRecord(own) ? own.title : undefined
+  );
+  if (title !== undefined) card.title = title;
+  return Object.keys(card).length > 0 ? card : undefined;
+}
 
 /**
  * The route's own metadata with the answer laid over it.
  *
- * What the answer decides is taken from the answer alone: the title and
- * description, visibility, the canonical, and the card's title, description,
- * image and address. Whatever else the route set, such as an Open Graph
- * `type` or keywords, stays, since the answer does not speak to it.
+ * What the answer decides is taken from the answer: the title and
+ * description, and the card's title, description and image. Its visibility is
+ * served with the route's as a floor, and its canonical wherever it names one;
+ * a page the answer gives no canonical, such as one whose type declares no
+ * address, keeps the route's. Whatever else the route set, such as an Open
+ * Graph `type`, keywords or Google's preview limits, stays, since the answer
+ * does not speak to it.
  */
 function overCode(code: Metadata | undefined, answered: Metadata): Metadata {
-  if (code === undefined) return answered;
   const {
-    title: _title,
+    title,
     description: _description,
-    robots: _robots,
+    robots,
     alternates,
     openGraph,
     twitter,
     ...rest
-  } = code;
+  } = code ?? {};
   const merged: Metadata = { ...rest };
-  if (answered.title !== undefined) merged.title = answered.title;
+  const servedAs = servedTitle(answered.title, title);
+  if (servedAs !== undefined) merged.title = servedAs;
+  else if (title !== undefined) merged.title = title;
   if (answered.description !== undefined) {
     merged.description = answered.description;
+  } else if (code?.description !== undefined) {
+    merged.description = code.description;
   }
-  if (answered.robots !== undefined) merged.robots = answered.robots;
+  const servedRobots = robotsOver(robots, answered.robots);
+  if (servedRobots !== undefined && servedRobots !== null) {
+    merged.robots = servedRobots;
+  }
 
+  const answersAddress = answered.alternates?.canonical !== undefined;
   const keptAlternates = isRecord(alternates)
-    ? without(alternates, ["canonical"])
+    ? answersAddress
+      ? without(alternates, ["canonical"])
+      : alternates
     : {};
   const mergedAlternates = { ...keptAlternates, ...answered.alternates };
   if (Object.keys(mergedAlternates).length > 0) {
     merged.alternates = mergedAlternates;
   }
 
-  const keptCard = isRecord(openGraph)
-    ? without(openGraph, ANSWERED_CARD_FIELDS)
-    : {};
-  const mergedCard = { ...keptCard, ...answered.openGraph };
-  if (Object.keys(mergedCard).length > 0) merged.openGraph = mergedCard;
-
-  const keptTwitter = isRecord(twitter)
-    ? without(twitter, ["title", "description", "images"])
-    : {};
-  const mergedTwitter = { ...keptTwitter, ...answered.twitter };
-  if (Object.keys(mergedTwitter).length > 0) merged.twitter = mergedTwitter;
+  const card = cardOver(openGraph, answered.openGraph, answersAddress);
+  if (card !== undefined) merged.openGraph = card as Metadata["openGraph"];
+  const twitterCard = cardOver(twitter, answered.twitter, answersAddress);
+  if (twitterCard !== undefined) {
+    merged.twitter = twitterCard as Metadata["twitter"];
+  }
 
   return merged;
 }
@@ -209,6 +355,36 @@ function pageMetadataResolver(): PageMetadataResolver | undefined {
     });
   }
   return service;
+}
+
+/** Whether a worker that could not start Nextly has said so yet. */
+let toldNotStarted = false;
+
+/**
+ * Start Nextly where no boot has recorded its providers yet, so a page is
+ * asked of the provider rather than served the route's own head.
+ *
+ * A worker may serve a page before anything has started Nextly in it: every
+ * read the page made was a cache hit, or `next build` is prerendering it where
+ * `instrumentation.ts` does not run. Until a boot records the providers, a
+ * provider cannot be told from none, so the start is made here, as the
+ * site registered it, or awaited where one is under way. A start that cannot
+ * be made leaves the route's own head served, and is said once per worker.
+ */
+async function startForProviders(path: string | undefined): Promise<void> {
+  if (capabilityProvidersRecorded()) return;
+  try {
+    // Loaded here: Nextly's start imports the route helpers that import this.
+    const { getCachedNextly } = await import("../../init");
+    await getCachedNextly();
+  } catch (error) {
+    if (toldNotStarted) return;
+    toldNotStarted = true;
+    consoleLogger.warn(
+      "Nextly could not be started to ask the page-metadata provider; serving the route's own metadata until it starts. Start it in instrumentation.ts, or register how the app starts it with registerNextlyStart.",
+      { path, error }
+    );
+  }
 }
 
 /**
@@ -310,6 +486,7 @@ const pageMetadataAnswerSchema = z.object({
 async function pageAnswerFor(
   request: PageMetadataRequest
 ): Promise<PageMetadataAnswer | undefined> {
+  await startForProviders(request.path);
   const resolver = pageMetadataResolver();
   if (resolver === undefined) return undefined;
   const input: PageMetadataInput = {

@@ -75,6 +75,11 @@ export {
   type SeoMetaInput,
 } from "./runtime/seo";
 
+// @experimental Structured data placed in a page: the props of the JSON-LD
+// script element, `<script {...jsonLdScriptProps(data)} />`, escaped so no
+// value can end it.
+export { jsonLdScriptProps, type JsonLdScriptProps } from "./runtime/seo";
+
 // The page-metadata contract: what a plugin that works out a page's head is
 // asked and answers. The route helpers ask it by default; see
 // `runtime/seo/page-metadata-contract`.
@@ -232,6 +237,8 @@ export {
   isReservedPath,
   contentPageMetadata,
   contentPageStructuredData,
+  singlePageMetadata,
+  singlePageStructuredData,
   createContentRoute,
   createPublicContentRoute,
   createSingleRoute,
@@ -259,6 +266,8 @@ export {
   type NextlyContentReader,
   type SingleRoute,
   type SingleRouteArgs,
+  type SingleRouteParams,
+  type SinglePageAnswerConfig,
   type SingleRouteConfig,
   type SingleContext,
   type SingleDraftRequest,
