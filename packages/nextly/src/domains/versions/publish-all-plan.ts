@@ -26,6 +26,7 @@ import {
   combinedDraft,
   draftsKeptByPart,
   SHARED_DRAFT_SLOT,
+  sharedFieldsJudged,
 } from "./part-drafts";
 import {
   differingFields,
@@ -260,7 +261,7 @@ export async function judgeSharedValues(
     const fields = await outOfDateSharedFields(tx, {
       ref,
       locale: draft.locale,
-      shared: kept ? shared.filter(name => byHand.has(name)) : shared,
+      shared: sharedFieldsJudged(shared, byHand),
       live,
       pending: snapshotRecord(draft.snapshot),
       views,

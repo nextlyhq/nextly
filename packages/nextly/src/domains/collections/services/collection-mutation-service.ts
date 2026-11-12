@@ -318,6 +318,7 @@ import {
   holdsPendingChange,
   partKeysOf,
   SHARED_DRAFT_SLOT,
+  sharedFieldsJudged,
   storePartDrafts,
 } from "../../versions/part-drafts";
 import {
@@ -15154,14 +15155,14 @@ export class CollectionMutationService extends BaseService {
               // No per-row rule to enforce here; the permission above is the
               // only gate a promotion has to pass.
             }
-            // A language's pending change carries every shared value; one
-            // someone else published since the change began would be put
-            // back by this write, so the publish is refused, naming it. Kept
-            // by part, a language's draft carries no shared value.
-            if (documentLocalized && !promoteParts) {
-              const { live, shared, views } = await this.liveSharedDocument(
-                tx,
-                {
+            // A shared value someone else published since the change began
+            // would be put back by this write, so the publish is refused,
+            // naming it. Judged on the shared fields the change carries
+            // (`sharedFieldsJudged`): every one, or kept by part, the
+            // language's copy of a translated component's shared parts.
+            if (documentLocalized) {
+              const { live, shared, views, byHand } =
+                await this.liveSharedDocument(tx, {
                   collectionName: params.collectionName,
                   entryId: params.entryId,
                   tableName,
@@ -15173,8 +15174,7 @@ export class CollectionMutationService extends BaseService {
                     fields
                   ),
                   locale: draftLocaleKey,
-                }
-              );
+                });
               const stale = await outOfDateSharedFields(tx, {
                 ref: {
                   scopeKind: "collection",
@@ -15182,7 +15182,7 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                 },
                 locale: draftLocaleKey,
-                shared,
+                shared: sharedFieldsJudged(shared, byHand),
                 live,
                 // Judged as the publish writes it: the stored change with
                 // the caller's gated contribution merged over it. A request

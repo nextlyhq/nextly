@@ -223,3 +223,20 @@ export async function storePartDrafts(
     });
   }
 }
+
+/**
+ * The shared fields a pending change is judged on for being out of date, out
+ * of the document's `shared` ones. Kept by part, a language's draft holds no
+ * shared value but its copy of a translated component's shared parts
+ * (`byHand`), so those alone are judged, against the base the draft began
+ * from; otherwise the change carries every shared value, and every one is.
+ * The one answer every path that publishes a pending change judges with.
+ */
+export function sharedFieldsJudged(
+  shared: readonly string[],
+  byHand: ReadonlySet<string>
+): string[] {
+  return draftsKeptByPart()
+    ? shared.filter(name => byHand.has(name))
+    : [...shared];
+}
