@@ -38,10 +38,25 @@ vi.mock("nextly/runtime", async importOriginal => {
       handedSingles.push(config);
       return actual.createSingleRoute(config);
     },
+    // No site is booted here: no settings, and values judged by their shape.
+    readPublicSiteSettings: async () => {
+      throw new Error("no site settings");
+    },
+    bindingFieldShapes: async () => undefined,
+    // The public reader, told the fake's declarations (it hides no field).
+    createPublicReader: (
+      ...[source, binding]: Parameters<typeof actual.createPublicReader>
+    ) =>
+      actual.createPublicReader(source, {
+        ...binding,
+        declarations: { hiddenFields: () => [] },
+      }),
   };
 });
 
-const { createBlocksPage, createSinglePage } = await import("./next");
+const { createBlocksPage, createSinglePage, designMetadataFor } = await import(
+  "./next"
+);
 const { coreBlocks } = await import("./blocks");
 const { createBlockResolver } = await import("./resolver");
 
@@ -167,5 +182,64 @@ describe("a Page Builder Single's offer for the head", () => {
     expect(offered).toMatchObject({ title: "Pricing" });
     expect(afterOne).toBeGreaterThan(0);
     expect(lookups.mock.calls.length).toBe(afterOne);
+  });
+});
+
+describe("a design's offer for one entry's head, asked outside a route", () => {
+  it("is what the route hands the content route for a page drawing its own field", async () => {
+    createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader() as never,
+      blocks: createBlockResolver(coreBlocks),
+    });
+    const routes = await handed[0]?.derivedMetadata?.(ENTRY, CONTEXT);
+
+    const asked = await designMetadataFor({
+      config: {
+        nextly: reader() as never,
+        blocks: createBlockResolver(coreBlocks),
+      },
+      collection: "pages",
+      entry: ENTRY,
+      field: "content",
+    });
+
+    expect(asked).toEqual({
+      title: "Pricing",
+      description: "Plans for every team.",
+    });
+    expect(asked).toEqual(routes);
+  });
+
+  it("fills a design drawing the entry, its own SEO bound to the entry", async () => {
+    const template: BlockDocument = JSON.parse(
+      JSON.stringify({
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "template",
+        nodes: [],
+        settings: {
+          seo: {
+            title: [{ $bind: "slug" }, " | Acme"],
+            description: ["Our plans."],
+          },
+        },
+      })
+    ) as BlockDocument;
+
+    const asked = await designMetadataFor({
+      config: {
+        nextly: reader() as never,
+        blocks: createBlockResolver(coreBlocks),
+      },
+      collection: "pages",
+      entry: ENTRY,
+      document: template,
+    });
+
+    expect(asked).toEqual({
+      title: "pricing | Acme",
+      description: "Our plans.",
+    });
   });
 });

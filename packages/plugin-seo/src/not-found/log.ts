@@ -17,15 +17,13 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { within } from "../address-record/rows";
 
 import { notFoundSlug } from "./collection";
+import { notAPageAddress } from "./page-address";
 
 /** The most addresses the log keeps once it is pruned. */
 const NOT_FOUND_LIMIT = 1000;
 
 /** How far past its limit the log grows before it is pruned again. */
 const PRUNE_SLACK = 100;
-
-/** The longest address the log keeps; a longer one is not a page anyone links to. */
-const LONGEST_ADDRESS = 2048;
 
 /** How many rows one read takes. */
 const PAGE = 200;
@@ -46,6 +44,8 @@ interface NotFoundRow {
 export interface LoggedAddress {
   locale: string;
   path: string;
+  /** The address exactly as it was asked for, where it is known. */
+  asked?: string;
 }
 
 /** The stored key of an address in a language. */
@@ -53,29 +53,6 @@ function pathKey(address: LoggedAddress): string {
   return createHash("sha256")
     .update(`${address.locale}|${address.path}`, "utf8")
     .digest("hex");
-}
-
-/** The first path segments no public page is ever served under. */
-const LEFT_OUT_PREFIXES = ["/admin", "/api", "/_next"];
-
-/** Files a browser fetches for a page rather than pages: scripts, styles, images, fonts, media. */
-const ASSET_EXTENSION =
-  /\.(?:js|mjs|cjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|flac|m4a|mov)$/i;
-
-/**
- * Whether a request for `path` stays out of the log: the admin, the API,
- * Next.js's own files, a static asset, or an address too long to be a page.
- */
-export function notAPageAddress(path: string): boolean {
-  if (path.length > LONGEST_ADDRESS) return true;
-  if (
-    LEFT_OUT_PREFIXES.some(
-      prefix => path === prefix || path.startsWith(`${prefix}/`)
-    )
-  ) {
-    return true;
-  }
-  return ASSET_EXTENSION.test(path);
 }
 
 /** A stored row read back, every column checked rather than trusted. */
@@ -166,6 +143,7 @@ export async function recordNotFound(
       pathKey: key,
       locale: address.locale,
       path: address.path,
+      asked: address.asked ?? null,
       hits: 1,
       lastSeen,
       kind,

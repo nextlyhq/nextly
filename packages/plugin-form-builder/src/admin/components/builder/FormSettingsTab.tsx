@@ -380,6 +380,13 @@ const ONE_RESPONSE_TITLES = {
 const ONE_RESPONSE_CHOICES: readonly Choice<OneResponseMode>[] = [
   { value: "off", title: ONE_RESPONSE_TITLES.off },
   {
+    value: "browser",
+    title: ONE_RESPONSE_TITLES.browser,
+    // Earlier submissions kept no browser token, so they cannot be counted.
+    description:
+      "Counted from when you choose it. Someone who clears their browser's data, or uses another browser, can respond again.",
+  },
+  {
     value: "ip",
     title: ONE_RESPONSE_TITLES.ip,
     description:

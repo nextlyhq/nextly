@@ -94,6 +94,19 @@ describe.each(getConfiguredTestDialects())(
       expect(await logged(t)).toEqual({ "/missing": 2, "/blog/feed.xml": 1 });
     });
 
+    it("counts a request once, however many times its not-found page renders", async () => {
+      const { t } = await boot(dialect);
+      const once = await renderedWith("/twice");
+
+      // Next.js may render one request's not-found page more than once, and
+      // at the same time.
+      await Promise.all([logNotFound(once), logNotFound(once)]);
+      await logNotFound(once);
+      await logNotFound(await renderedWith("/twice"));
+
+      expect(await logged(t)).toEqual({ "/twice": 2 });
+    });
+
     it("counts every request for one address when they arrive at once", async () => {
       const { t, seo } = await boot(dialect);
 
@@ -227,24 +240,24 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("logs an address asked for with a trailing slash as the address without one", async () => {
-    const { t, seo } = await boot(dialect);
-    await logNotFound(await renderedWith("/gone/"));
-    await logNotFound(await renderedWith("/gone"));
-    expect(await logged(t)).toEqual({ "/gone": 2 });
+      const { t, seo } = await boot(dialect);
+      await logNotFound(await renderedWith("/gone/"));
+      await logNotFound(await renderedWith("/gone"));
+      expect(await logged(t)).toEqual({ "/gone": 2 });
 
-    await seo.services.collections.withTransaction(tx =>
-      putRedirect(seo, tx, {
-        locale: "en",
-        source: "/gone",
-        target: "/here",
-        origin: "person",
-      })
-    );
+      await seo.services.collections.withTransaction(tx =>
+        putRedirect(seo, tx, {
+          locale: "en",
+          source: "/gone",
+          target: "/here",
+          origin: "person",
+        })
+      );
 
-    expect(await logged(t)).toEqual({});
-  });
+      expect(await logged(t)).toEqual({});
+    });
 
-  it("takes an address off once a redirect answers it", async () => {
+    it("takes an address off once a redirect answers it", async () => {
       const { t, seo } = await boot(dialect);
       await logNotFound(await renderedWith("/gone"));
       await logNotFound(await renderedWith("/still-gone"));

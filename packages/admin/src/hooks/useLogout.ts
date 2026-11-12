@@ -6,6 +6,7 @@ import { toast } from "@admin/components/ui";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { invalidateSessionCache } from "@admin/lib/auth/session";
 import { resetSetupStatusCache } from "@admin/lib/auth/setup-status";
+import { forgetSignedInHere } from "@admin/lib/auth/signed-in-here";
 import { navigateTo } from "@admin/lib/navigation";
 
 import { ROUTES } from "../constants/routes";
@@ -38,6 +39,9 @@ export function useLogout(): (opts?: { message?: string }) => Promise<void> {
       invalidateSessionCache();
       resetSetupStatusCache();
       queryClient.clear();
+      // Signed out on purpose: the next visit from this browser opens on the
+      // sign-in form, not on a frame waiting for a session that is gone.
+      forgetSignedInHere();
       // Show success message and redirect
       toast.success(opts?.message ?? "You have been logged out successfully.");
       // Redirect to login page

@@ -129,6 +129,19 @@ export interface SubmissionOriginMarks {
    * to judging its bot check; the seam does not count it again.
    */
   rateCounted?: boolean;
+  /**
+   * The token the visitor's browser sent for one response per browser,
+   * read before the row keeps only the form's fields: the seam makes the
+   * submission's key from it.
+   */
+  browserToken?: string;
+  /**
+   * The one-response key the plugin made for this submission, written by
+   * itself alone (`one-response-rebuild`, and a key handed to the next
+   * submission when its holder leaves). The seam writes this key and nothing
+   * else; the hold checks it was made for the form's current version.
+   */
+  setKey?: string | null;
 }
 
 /** Mark `row` as this plugin's own write, and hand it back. */

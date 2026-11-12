@@ -95,7 +95,7 @@ interface ProviderOption {
  * imported because a plugin builds against the SDK, not the admin's routes.
  */
 function emailHubEditHref(templateId: string): string {
-  return `/admin/email/messages/edit/${encodeURIComponent(templateId)}`;
+  return `/admin/settings/email/messages/edit/${encodeURIComponent(templateId)}`;
 }
 
 interface TemplateOption {
