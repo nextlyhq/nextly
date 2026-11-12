@@ -20,7 +20,10 @@ import {
   type MigrationUnit,
 } from "../migrate/migration-transaction";
 import { statementTokens } from "../migrate/split-sql";
-import { assertSchemaLockHeld } from "../pipeline/schema-lock";
+import {
+  assertSchemaLockHeld,
+  schemaLockConfirmedUntil,
+} from "../pipeline/schema-lock";
 
 import type { BusyTableBounds } from "./bounds";
 import { endedWaiting } from "./ended-waiting";
@@ -121,6 +124,11 @@ export async function runUnitInTries(
       notice: tryNotice,
       assertHeld: assertSchemaLockHeld,
       stopped: tableBusyError,
+      // On SQLite the holder's write lock keeps the schema lock from renewing while the tries
+      // wait, so they end where the lock can still be shown held, and say why.
+      ...(dialect === "sqlite"
+        ? { leaseDeadline: schemaLockConfirmedUntil }
+        : {}),
     },
     async (): Promise<TryResult<number>> => {
       let session: string | undefined;
