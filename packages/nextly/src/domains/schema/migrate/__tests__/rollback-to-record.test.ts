@@ -150,7 +150,8 @@ function row(
   };
 }
 
-const APPLIED = new Date(Date.UTC(2026, 10, 12, 12, 0, 10, 600));
+/** When a mark was set, which the judgement never reads. */
+const MARKED = new Date(Date.UTC(2026, 10, 12, 12, 0, 10));
 
 describe("orphanMarksUndone", () => {
   const rolledBack: RolledBackMigration[] = [
@@ -158,18 +159,22 @@ describe("orphanMarksUndone", () => {
       snapshot: snapshot([["publish", "reports"]], {
         "@x/first": [["sync", "first"]],
       }),
-      appliedAt: APPLIED,
     },
   ];
 
-  function marks(rows: OrphanPassRow[], notInstalled: string[] = []) {
+  /** The marks over `rows`, with `@x/first` installed and `@x/second` and `app` configured but not. */
+  function marks(rows: OrphanPassRow[]) {
     return Object.fromEntries(
       orphanMarksUndone({
         rows,
-        baseline: ["read-users", "archive-reports"],
+        baseline: ["read-users", "archive-reports", "send-second"],
         rolledBack,
         installed: [{ action: "sync", resource: "first" }],
-        notInstalled: new Set(notInstalled),
+        pluginDeclared: [
+          { action: "sync", resource: "first", owner: "@x/first" },
+          { action: "send", resource: "second", owner: "@x/second" },
+          { action: "tally", resource: "app", owner: "app" },
+        ],
       })
     );
   }
@@ -184,29 +189,30 @@ describe("orphanMarksUndone", () => {
     ).toEqual({ "id-publish-reports": true });
   });
 
-  it("clears a mark set since the migration applied, in whole seconds, and keeps an older one", () => {
-    // Stored in whole seconds, rounded down: still the migration's.
-    const sameSecond = new Date(Date.UTC(2026, 10, 12, 12, 0, 10, 0));
-    const before = new Date(Date.UTC(2026, 10, 12, 12, 0, 9, 999));
+  it("clears the mark of the app's own permission the baseline holds, though a plugin named app is not installed", () => {
     expect(
       marks([
-        row("archive-reports", "app", sameSecond),
-        row("purge-third", "@x/third", sameSecond),
-        row("export-reports", "app", before),
+        row("archive-reports", "app", MARKED),
+        row("tally-app", "app", MARKED),
+        row("export-reports", "app", MARKED),
       ])
-    ).toEqual({ "id-archive-reports": false, "id-purge-third": false });
+    ).toEqual({ "id-archive-reports": false });
   });
 
-  it("keeps the mark of a plugin recorded uninstalled, and never clears a permission with no owner", () => {
-    const after = new Date(Date.UTC(2026, 10, 12, 12, 0, 20));
+  it("clears a plugin's mark only where it is installed and its current release declares it, whatever the baseline holds", () => {
     expect(
-      marks(
-        [
-          row("send-second", "@x/second", after),
-          row("read-pages", null, after),
-        ],
-        ["@x/second"]
-      )
-    ).toEqual({});
+      marks([
+        row("sync-first", "@x/first", MARKED),
+        row("send-second", "@x/second", MARKED),
+        row("drop-first", "@x/first", MARKED),
+        row("purge-gone", "@x/gone", MARKED),
+      ])
+    ).toEqual({ "id-sync-first": false });
+  });
+
+  it("clears the mark of an entity's or core's permission the baseline holds, and no other", () => {
+    expect(
+      marks([row("read-users", null, MARKED), row("read-pages", null, MARKED)])
+    ).toEqual({ "id-read-users": false });
   });
 });

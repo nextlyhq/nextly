@@ -986,7 +986,11 @@ at all:
   longer declared;
 - a permission one of them added is marked as no longer declared, keeping its grants, unless the
   baseline holds it or a plugin still installed declares it;
-- a permission one of them marked is declared again, unless its plugin is now uninstalled.
+- a permission one of them marked is declared again where the point it returns to declares it:
+  your app's own, a collection's or Single's, or Nextly's, where the baseline holds it; a
+  plugin's, where the plugin is installed and its current release declares it. A plugin's
+  permission is told from your app's by what each plugin declares, never by the owner name they
+  can share, so a plugin named `app` is told apart too.
 
 Everything else keeps its state: Nextly's own permissions, whichever release added them, and
 whatever a plugin's install or uninstall wrote in the meantime. A new site's record is at the

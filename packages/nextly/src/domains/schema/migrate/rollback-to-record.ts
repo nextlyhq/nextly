@@ -22,8 +22,10 @@
  *   declared it, is orphaned with its grants kept, unless the baseline holds
  *   it or the install of a plugin still recorded installed declares it; an
  *   entity's permissions go with its row this way;
- * - a mark a rolled-back migration set is cleared, unless the permission's
- *   plugin is now recorded as anything but installed.
+ * - a mark is cleared only where the point it returns to declares the
+ *   permission: the app's own, an entity's or core's where the baseline holds
+ *   it, and a plugin's where the plugin is recorded installed and its current
+ *   release declares it. A plugin's lifecycle otherwise keeps the mark.
  *
  * Every other permission keeps its state: core's own (no snapshot declares
  * one), one a plugin's install added or its uninstall orphaned, and one live
@@ -76,7 +78,7 @@ import {
   snapshotMetadataOf,
   type AppMigrationStanding,
 } from "./first-run";
-import { permissionsDeclaredBy } from "./permission-orphans";
+import { APP_OWNER, permissionsDeclaredBy } from "./permission-orphans";
 import {
   readRegistryRecord,
   takeRegistryBaseline,
@@ -92,8 +94,6 @@ type SnapshotPart = Pick<SnapshotFile, "entities" | "permissions">;
 export interface RolledBackMigration {
   /** Its snapshot, or null where it has none. */
   snapshot: SnapshotPart | null;
-  /** When the ledger records it applied: a mark it set was set at or after this. */
-  appliedAt: Date;
 }
 
 /** What the record makes of the point a rollback leaves the database at. */
@@ -157,54 +157,59 @@ function keyOf(p: { action: string; resource: string }): string {
   return `${String(p.action).toLowerCase()}|${String(p.resource).toLowerCase()}`;
 }
 
-/** Whole seconds: the finest every dialect stores an orphan mark's time in. */
-function seconds(at: Date): number {
-  return Math.floor(new Date(at).getTime() / 1000);
-}
-
 /**
  * The orphan marks a rollback to the record's point sets (true) and clears
- * (false), by permission id: the rolled-back migrations' own marks undone,
- * and every other permission left out.
+ * (false), by permission id, judged by declaration alone: what the point it
+ * returns to declares, and what each writer that is not a migration declares
+ * now. No time a mark was set is read.
  *
  * - Made live by a rolled-back migration: a permission its snapshot declares
  *   that the baseline does not hold and no plugin still recorded installed
  *   declares (`installed`). Orphaned, or left orphaned, whatever else marked
  *   it since. An entity's built-in permissions are declared with it, so they
  *   leave with the row of an entity the baseline does not hold.
- * - Marked by a rolled-back migration: an owned permission marked at or after
- *   the oldest of them applied. Nothing but an applied migration and a plugin's
- *   uninstall marks a permission, so a mark that recent whose plugin is not
- *   recorded uninstalled (`notInstalled`) is one of theirs, and is cleared. A
- *   permission with no owner is never marked by a migration. The comparison is
- *   in whole seconds, as a mark's time is stored on MySQL and SQLite.
+ * - Marked, and declared at the point it returns to: cleared. A plugin's
+ *   permission is told apart by what each configured plugin declares
+ *   (`pluginDeclared`), never by the owner key the app's own share with a
+ *   plugin named `app`; a row owned by any other key is a plugin's too, one
+ *   no longer configured. A plugin's is declared there only where the plugin
+ *   is recorded installed and its current release declares it (`installed`),
+ *   so a mark its uninstall set, or one its reinstalled release no longer
+ *   lifts, stays. Any other permission (the app's own, an entity's, core's)
+ *   is declared there where the baseline holds it.
  */
 export function orphanMarksUndone(args: {
   rows: readonly OrphanPassRow[];
   baseline: readonly string[];
   rolledBack: readonly RolledBackMigration[];
   installed: readonly { action: string; resource: string }[];
-  notInstalled: ReadonlySet<string>;
+  pluginDeclared: readonly {
+    action: string;
+    resource: string;
+    owner: string;
+  }[];
 }): Map<string, boolean> {
   const held = new Set(args.baseline);
   const installed = new Set(args.installed.map(keyOf));
+  const pluginOf = new Map(args.pluginDeclared.map(p => [keyOf(p), p.owner]));
   const declared = new Set(
     args.rolledBack.flatMap(m =>
       (permissionsDeclaredBy(m.snapshot) ?? []).map(keyOf)
     )
   );
-  const since = Math.min(...args.rolledBack.map(m => seconds(m.appliedAt)));
+  /** Whether the point the rollback returns to declares `row`. */
+  const declaredAtPoint = (row: OrphanPassRow, key: string): boolean => {
+    const plugin =
+      pluginOf.get(key) ??
+      (row.owner !== null && row.owner !== APP_OWNER ? row.owner : undefined);
+    return plugin === undefined ? held.has(row.slug) : installed.has(key);
+  };
   const marks = new Map<string, boolean>();
   for (const row of args.rows) {
     const key = keyOf(row);
     if (declared.has(key) && !held.has(row.slug) && !installed.has(key)) {
       marks.set(String(row.id), true);
-    } else if (
-      row.orphanedAt !== null &&
-      row.owner !== null &&
-      !args.notInstalled.has(row.owner) &&
-      seconds(row.orphanedAt) >= since
-    ) {
+    } else if (row.orphanedAt !== null && declaredAtPoint(row, key)) {
       marks.set(String(row.id), false);
     }
   }
@@ -423,15 +428,12 @@ export interface RollbackBookkeeping {
   summary?: string;
 }
 
-/** Each app migration the ledger records applied, by base name, with when it applied. */
-function appliedAppMigrations(
-  rows: readonly SchemaEventRow[]
-): Map<string, Date> {
-  const applied = new Map<string, Date>();
+/** Each app migration the ledger records applied, by base name. */
+function appliedAppMigrations(rows: readonly SchemaEventRow[]): Set<string> {
+  const applied = new Set<string>();
   for (const [filename, standing] of standingsByFilename(rows)) {
     if (isPluginLedgerRow(filename) || standing.state !== "applied") continue;
-    if (standing.outcome === undefined) continue;
-    applied.set(baseNameOf(filename), standing.outcome.startedAt);
+    applied.add(baseNameOf(filename));
   }
   return applied;
 }
@@ -447,11 +449,11 @@ function baseNameOf(filename: string): string {
  */
 async function remainingStandings(
   metaDir: string,
-  applied: ReadonlyMap<string, Date>,
+  applied: ReadonlySet<string>,
   targets: ReadonlySet<string>
 ): Promise<AppMigrationStanding[]> {
   const remaining: AppMigrationStanding[] = [];
-  const names = [...applied.keys()]
+  const names = [...applied]
     .filter(name => !targets.has(name))
     .sort(compareMigrationBaseNames);
   for (const name of names) {
@@ -466,13 +468,12 @@ async function remainingStandings(
 }
 
 /**
- * Each rolled-back migration with its snapshot and when it applied, and the
- * entities they record that `baseline` does not hold: the ones they added.
+ * Each rolled-back migration with its snapshot, and the entities they record
+ * that `baseline` does not hold: the ones they added.
  */
 async function rolledBackMigrations(
   metaDir: string,
   targets: ReadonlySet<string>,
-  applied: ReadonlyMap<string, Date>,
   baseline: RegistryBaseline
 ): Promise<{
   rolledBack: RolledBackMigration[];
@@ -486,7 +487,7 @@ async function rolledBackMigrations(
   };
   for (const name of targets) {
     const snapshot = await readMigrationSnapshot(metaDir, name);
-    rolledBack.push({ snapshot, appliedAt: applied.get(name) ?? new Date(0) });
+    rolledBack.push({ snapshot });
     if (snapshot === null || !carriesRegistryMetadata(snapshot)) continue;
     for (const { rows } of REGISTRIES) {
       Object.keys(snapshot.entities[rows])
@@ -532,12 +533,7 @@ export async function planRollbackBookkeeping(args: {
       ...args,
       point,
       baseline: judged.baseline,
-      ...(await rolledBackMigrations(
-        metaDir,
-        targets,
-        applied,
-        judged.baseline
-      )),
+      ...(await rolledBackMigrations(metaDir, targets, judged.baseline)),
     }),
   };
 }
@@ -563,9 +559,15 @@ async function baselineRestore(args: {
 }): Promise<() => Promise<void>> {
   const { adapter, baseline } = args;
   const notInstalled = await pluginsRecordedNotInstalled(adapter);
+  const plugins = args.config.plugins ?? [];
+  // Each configured plugin's declarations, told from the app's own by their
+  // source, and those of the plugins still declaring theirs.
+  const pluginDeclared = collectCustomPermissions(args.config, plugins).filter(
+    p => p.source === "plugin"
+  );
   const installed = collectCustomPermissions(
     args.config,
-    pluginsStillDeclaring(args.config.plugins ?? [], notInstalled)
+    pluginsStillDeclaring(plugins, notInstalled)
   ).filter(p => p.source === "plugin");
   const tables: DashboardTables = {
     dashboardPinsPresent: await dashboardPinsPresent(adapter),
@@ -577,7 +579,7 @@ async function baselineRestore(args: {
       baseline: baseline.permissions,
       rolledBack: args.rolledBack,
       installed,
-      notInstalled,
+      pluginDeclared,
     });
   return async () => {
     const outcome = await writeRegistryRows(

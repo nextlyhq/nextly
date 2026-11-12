@@ -37,8 +37,11 @@ import {
 
 import type { RegistryRecord } from "./registry-record";
 
-/** The owner key the app's own permissions are stored under. */
-const APP_OWNER = "app";
+/**
+ * The owner key the app's own permissions are stored under. A plugin may be
+ * named `app` too, so the key alone never says a permission is the app's.
+ */
+export const APP_OWNER = "app";
 
 /** What one applied migration orphans and clears, for `markOrphanedPermissions`. */
 export interface MigrationOrphanScope extends OrphanMarkScope {

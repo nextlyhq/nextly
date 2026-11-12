@@ -163,6 +163,40 @@ const THIRD_NEXT = definePlugin({
   },
 });
 
+/**
+ * A plugin named `app`, the owner key the app's own permissions are stored
+ * under, with a permission of its own.
+ */
+const APP_NAMED = definePlugin({
+  name: "app",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    permissions: [{ action: "tally", resource: "rb-app", label: "Tally" }],
+  },
+});
+/** A plugin whose first release declares two permissions. */
+const AGAIN = definePlugin({
+  name: "@test/rb-again",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    permissions: [
+      { action: "keep", resource: "rb-again", label: "Keep" },
+      { action: "drop", resource: "rb-again", label: "Drop" },
+    ],
+  },
+});
+/** Its next release, which no longer declares `drop-rb-again`. */
+const AGAIN_NEXT = definePlugin({
+  name: "@test/rb-again",
+  version: "1.1.0",
+  nextly: "*",
+  contributes: {
+    permissions: [{ action: "keep", resource: "rb-again", label: "Keep" }],
+  },
+});
+
 type Plugin = typeof FIRST;
 
 /**
@@ -638,7 +672,9 @@ describe.each(getConfiguredTestDialects())(
         ])
       );
 
-      const back = config([], undefined, plugins);
+      // The build goes back with the migration: the third plugin's release
+      // that still declares `purge-rb-third`.
+      const back = config([], undefined, all);
       const { failure, said } = await migrateDown(back);
 
       expect(failure, said.join("\n")).toBeUndefined();
@@ -656,6 +692,68 @@ describe.each(getConfiguredTestDialects())(
       expect(after.rows).toEqual(await baselineRows(url));
       expect(await disagreements(back)).toEqual(AGREES);
     }, 300_000);
+
+    it("clears the mark it set on the app's own permission, while a plugin named app is recorded uninstalled", async () => {
+      const url = await earlierReleaseDatabase("from-configuration");
+      // A plugin named `app` installed and uninstalled after the baseline:
+      // its own permission is orphaned, the app's are not.
+      const withApp = config([], undefined, [APP_NAMED]);
+      await install(APP_NAMED.name, withApp);
+      await uninstall(APP_NAMED.name, withApp);
+      const next = config(["extra"], ["export", "publish"], [APP_NAMED]);
+      await migrateCreate("added", next);
+      await migrate(next);
+      const applied = await bookkeeping(url);
+      expect(applied.permissions["tally-rb-app"]).toBe(true);
+      expect(applied.permissions[`archive-${REPORTS}`]).toBe(true);
+
+      const { failure, said } = await migrateDown(withApp);
+
+      expect(failure, said.join("\n")).toBeUndefined();
+      const after = await bookkeeping(url);
+      // The app's permission the migration orphaned is the app's, whatever
+      // owner key it shares with the plugin: its mark is cleared. The
+      // plugin's own stays as its uninstall left it.
+      expect(after.permissions[`archive-${REPORTS}`]).toBe(false);
+      expect(after.permissions["tally-rb-app"]).toBe(true);
+      expect(after.grants).toEqual(applied.grants);
+    }, 240_000);
+
+    it("leaves orphaned a permission a plugin's uninstall marked and its reinstalled release no longer declares", async () => {
+      const url = await earlierReleaseDatabase("from-configuration");
+      const next = config(["extra"], ["export", "publish"]);
+      await migrateCreate("added", next);
+      await migrate(next);
+      // After the migration: installed, uninstalled, and installed again at
+      // a release that no longer declares `drop-rb-again`.
+      await install(
+        AGAIN.name,
+        config(["extra"], ["export", "publish"], [AGAIN])
+      );
+      await uninstall(
+        AGAIN.name,
+        config(["extra"], ["export", "publish"], [AGAIN])
+      );
+      await install(
+        AGAIN.name,
+        config(["extra"], ["export", "publish"], [AGAIN_NEXT])
+      );
+      const applied = await bookkeeping(url);
+      expect(applied.permissions["drop-rb-again"]).toBe(true);
+      expect(applied.permissions["keep-rb-again"]).toBe(false);
+
+      const { failure, said } = await migrateDown(
+        config([], undefined, [AGAIN_NEXT])
+      );
+
+      expect(failure, said.join("\n")).toBeUndefined();
+      const after = await bookkeeping(url);
+      // Neither the baseline nor the rolled-back migration declared it, and
+      // the plugin's current release does not: its mark is the uninstall's.
+      expect(after.permissions["drop-rb-again"]).toBe(true);
+      expect(after.permissions["keep-rb-again"]).toBe(false);
+      expect(after.grants).toEqual(applied.grants);
+    }, 240_000);
 
     it("rolls a new site's first migration back to the point before any: no row, its permissions orphaned, core's live", async () => {
       const url = await scratch();
