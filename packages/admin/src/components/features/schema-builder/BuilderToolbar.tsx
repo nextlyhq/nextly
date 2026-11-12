@@ -7,10 +7,10 @@
 // read-only.
 import { Badge, Button } from "@nextlyhq/ui";
 import { ChevronLeft } from "lucide-react";
-import Link from "next/link";
 import type { JSX } from "react";
 
 import { Lock, Plus, Settings } from "@admin/components/icons";
+import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 
@@ -76,7 +76,10 @@ export function BuilderToolbar({
       <div className="flex items-center gap-3 min-w-0">
         {/* The crumb is a LINK, not a label: builder pages render standalone
             (no dashboard sidebar), so on a phone this is the only way back to
-            the list — plain text left the reader stranded after saving. */}
+            the list — plain text left the reader stranded after saving.
+            The admin's own Link: it moves through the admin's history, which
+            the page's unsaved-changes guard watches, so leaving with changes
+            pending asks first here as it does everywhere else. */}
         <Link
           href={KIND_LIST_ROUTE[config.kind]}
           className="flex items-center gap-0.5 min-w-0 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
