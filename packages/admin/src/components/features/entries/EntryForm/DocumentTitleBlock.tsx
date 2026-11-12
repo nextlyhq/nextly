@@ -327,7 +327,7 @@ function SlugLineNote({
   if (errorMsg) {
     return (
       <span
-        className="shrink-0 font-sans text-xs text-destructive-600"
+        className="shrink-0 font-sans text-xs text-danger-text"
         role="alert"
       >
         {errorMsg}

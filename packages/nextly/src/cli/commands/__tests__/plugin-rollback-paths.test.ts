@@ -43,6 +43,28 @@ const state = vi.hoisted(() => ({
   unlocks: 0,
   /** Whether another process holds the migrate lock for the whole wait. */
   lockHeld: false,
+  /** Whether the app's Builder manifest cannot be read. */
+  manifestBroken: false,
+}));
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
+// The permissions, roles and grants a recorded plugin state brings are the integration suite's
+// subject (`plugin-lifecycle-writes-its-access.integration.test.ts`); they reach every permission
+// and role service, so here they write nothing and the rollback paths are judged alone.
+vi.mock("../../../domains/schema/migrate/command-access", () => ({
+  seedAccessOnCommandConnection: async () => {},
+  orphanOwnedPermissionsOnCommandConnection: async () => {},
 }));
 
 // SQLite has no migrate lock of its own to hold from outside, so a held lock
@@ -85,6 +107,25 @@ vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => {
     }) as typeof real.withMigrateLock,
   };
 });
+
+// The app's manifest is read for the junction tables it declares. A broken one
+// throws there, as a malformed `ui-schema.json` does.
+vi.mock(
+  "../../../domains/schema/migrate/resolved-schema",
+  async importOriginal => {
+    const real =
+      await importOriginal<
+        typeof import("../../../domains/schema/migrate/resolved-schema")
+      >();
+    return {
+      ...real,
+      declaredNamesOf: ((...args: Parameters<typeof real.declaredNamesOf>) =>
+        state.manifestBroken
+          ? Promise.reject(new Error("ui-schema.json is malformed"))
+          : real.declaredNamesOf(...args)) as typeof real.declaredNamesOf,
+    };
+  }
+);
 
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
@@ -502,6 +543,19 @@ describe("plugins uninstall against a real database", () => {
     // migration rows of the modules migrate:down already undid.
     expect(await ownerStates()).toEqual([]);
     expect(await ledger()).toEqual([]);
+  });
+
+  it("rolls a plugin back while the app's manifest cannot be read", async () => {
+    // A plugin's DOWNs come from its definition and never from the app's
+    // folder, so the app's manifest has nothing to say about them.
+    state.migrations = [init, more];
+    state.manifestBroken = true;
+    try {
+      await rollBack(2);
+    } finally {
+      state.manifestBroken = false;
+    }
+    expect(tables()).not.toContain("fx__notes");
   });
 
   it("names only the elements on its own tables as dropped with them", async () => {

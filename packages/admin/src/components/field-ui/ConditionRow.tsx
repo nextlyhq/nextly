@@ -32,6 +32,11 @@ import type { JSX } from "react";
 import { RangeField } from "@admin/components/shared/range-field";
 
 /** Every operator a condition can use. */
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export type ConditionOperatorName =
   | "equals"
   | "notEquals"
@@ -58,6 +63,10 @@ export type ConditionOperatorName =
  * builder and already read by its runtime condition evaluator. A kit that
  * invented `from`/`to` would have made every existing stored condition wrong,
  * or needed a migration, to gain nothing.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export interface ConditionRange {
   min?: string | number;
@@ -65,12 +74,22 @@ export interface ConditionRange {
 }
 
 /** One choice a source field accepts, when it accepts a fixed set. */
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface ConditionSourceOption {
   value: string;
   label?: string;
 }
 
 /** A field this condition may be based on, as this component needs it. */
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface ConditionSource {
   /** The stored name, used as the condition's `field`. */
   name: string;
@@ -94,12 +113,22 @@ export interface ConditionSource {
 }
 
 /** One condition, in the shape this component reads and writes. */
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface ConditionValue {
   field: string;
   operator: ConditionOperatorName;
   value?: string | number | boolean | ConditionRange;
 }
 
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export interface ConditionRowProps {
   /** The condition being edited, or undefined for an empty row. */
   condition: ConditionValue | undefined;
@@ -165,6 +194,10 @@ const CHOICE_TYPES = new Set(["select", "radio"]);
  * offers "is greater than" for a checkbox. An unknown type gets equality rather
  * than nothing, because every type supports it and a surface with its own field
  * types should not lose the row entirely.
+ *
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
  */
 export function operatorsForType(
   sourceType: string | undefined
@@ -210,6 +243,11 @@ const VALUELESS_OPERATORS = new Set<ConditionOperatorName>([
 ]);
 
 /** Whether an operator takes a value at all. */
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export function operatorTakesValue(operator: ConditionOperatorName): boolean {
   return !VALUELESS_OPERATORS.has(operator);
 }
@@ -230,6 +268,11 @@ function scalar(value: ConditionValue["value"]): string {
   return String(value);
 }
 
+/**
+ * @deprecated Use `FieldSettingsPanel` from `@nextlyhq/plugin-sdk/admin`
+ *   instead. Removed no earlier than 0.0.2-alpha.75, and only once the Form
+ *   Builder and user custom fields use the shared picker and panel.
+ */
 export function ConditionRow({
   condition,
   sources,

@@ -41,9 +41,7 @@ describe("a declared widget's loading skeleton", () => {
     expect(table).not.toBeNull();
     if (table === null) return;
     expect(within(table).getAllByRole("columnheader")).toHaveLength(2);
-    expect(table.querySelectorAll("tbody tr")).toHaveLength(
-      rowsDrawn("large", null)
-    );
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(rowsDrawn(null));
   });
 
   it("draws a list's rows for a widget that loads as a list", () => {
@@ -55,6 +53,20 @@ describe("a declared widget's loading skeleton", () => {
     // the skeleton was the generic three lines.
     const list = skeleton.querySelector(".divide-y");
     expect(list).not.toBeNull();
-    expect(list?.children).toHaveLength(rowsDrawn("large", null));
+    expect(list?.children).toHaveLength(rowsDrawn(null));
+  });
+
+  it("holds the place of the card's own Number of entries, not the default five", () => {
+    // The rows its `load` reads and the card then draws: a full answer of 10 lands at the
+    // height the card loaded at, where a skeleton of the default five would grow on arrival.
+    render(
+      <WidgetRenderer
+        definition={declared("list")}
+        slot={undefined}
+        placement={{ id: "orders", settings: { limit: 10 } }}
+      />
+    );
+    const list = screen.getByTestId("card-skeleton").querySelector(".divide-y");
+    expect(list?.children).toHaveLength(10);
   });
 });

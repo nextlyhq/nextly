@@ -295,7 +295,21 @@ describe.each(LOCK_DIALECTS)(
       const saving = save();
       // Settled early only if the save failed before reaching the gate.
       void saving.catch(() => undefined);
-      await paused.reached;
+      // A save that ends without reaching the gate fails here at once, rather than leaving the
+      // test to wait out its timeout for a gate it will never reach.
+      await Promise.race([
+        paused.reached,
+        saving.then(
+          outcome => {
+            throw new Error(
+              `the save ended before reaching the gate: ${JSON.stringify(outcome)}`
+            );
+          },
+          (error: unknown) => {
+            throw error;
+          }
+        ),
+      ]);
       holder = startHolder(world, {
         command: "nextly db:sync",
         leaseSeconds: 30,
@@ -514,16 +528,34 @@ describe.each(LOCK_DIALECTS)(
     describe("holds the lock until the save has written", () => {
       it("for a collection create, through the registry write", async () => {
         const paused = gate();
-        const original = DynamicCollectionService.prototype.registerCollection;
-        const spy = vi
-          .spyOn(DynamicCollectionService.prototype, "registerCollection")
-          .mockImplementationOnce(async function (
-            this: DynamicCollectionService,
-            ...args: Parameters<typeof original>
-          ) {
-            await paused.wait();
-            return original.apply(this, args);
-          });
+        // The create's last registry write: a new row, or, where the save's migration ran and
+        // wrote the row, the rest of its metadata. Paused at whichever the create makes.
+        const register = DynamicCollectionService.prototype.registerCollection;
+        const update =
+          DynamicCollectionService.prototype.updateCollectionMetadata;
+        const spies = [
+          vi
+            .spyOn(DynamicCollectionService.prototype, "registerCollection")
+            .mockImplementationOnce(async function (
+              this: DynamicCollectionService,
+              ...args: Parameters<typeof register>
+            ) {
+              await paused.wait();
+              return register.apply(this, args);
+            }),
+          vi
+            .spyOn(
+              DynamicCollectionService.prototype,
+              "updateCollectionMetadata"
+            )
+            .mockImplementationOnce(async function (
+              this: DynamicCollectionService,
+              ...args: Parameters<typeof update>
+            ) {
+              await paused.wait();
+              return update.apply(this, args);
+            }),
+        ];
         try {
           const saved = await heldAcrossTheSave(paused, () =>
             collections().createCollection({
@@ -534,20 +566,43 @@ describe.each(LOCK_DIALECTS)(
           );
           expect(saved.success, JSON.stringify(saved)).toBe(true);
         } finally {
-          spy.mockRestore();
+          for (const spy of spies) spy.mockRestore();
         }
       }, 90_000);
 
       it("for a collection's confirmed schema apply, through the registry write", async () => {
         await createdCollection("bsl_latched_apply");
         const paused = gate();
-        const original = adapter.update.bind(adapter);
-        const spy = vi
-          .spyOn(adapter, "update")
-          .mockImplementation(async (...args: Parameters<typeof original>) => {
-            if (args[0] === "dynamic_collections") await paused.wait();
-            return original(...args);
-          });
+        // The registry write runs on the transaction it shares with the stored
+        // schema version (`writeRegistryRows`), so the gate sits on that
+        // transaction's `update` of the registry row.
+        const original = adapter.transaction.bind(adapter);
+        const spy = vi.spyOn(adapter, "transaction").mockImplementation(((
+          work: Parameters<typeof original>[0],
+          options?: Parameters<typeof original>[1]
+        ) =>
+          original(
+            tx =>
+              work(
+                new Proxy(tx, {
+                  get(target, property) {
+                    const value: unknown = Reflect.get(target, property);
+                    if (property !== "update" || typeof value !== "function") {
+                      return typeof value === "function"
+                        ? (value as (...a: unknown[]) => unknown).bind(target)
+                        : value;
+                    }
+                    return async (...args: Parameters<typeof tx.update>) => {
+                      if (args[0] === "dynamic_collections") {
+                        await paused.wait();
+                      }
+                      return tx.update(...args);
+                    };
+                  },
+                })
+              ),
+            options
+          )) as typeof original);
         try {
           await heldAcrossTheSave(paused, () =>
             dispatchCollections(

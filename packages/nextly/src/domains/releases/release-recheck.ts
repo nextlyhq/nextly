@@ -9,7 +9,6 @@
  * role's grants changed (a role's reach through inheritance is not recorded).
  *
  * @module domains/releases/release-recheck
- * @experimental
  */
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
@@ -22,8 +21,6 @@ export interface ReleaseRecheckDocument {
 
 /**
  * The members an event is about.
- *
- * @experimental
  */
 export type ReleaseRecheckTarget =
   | { documents: readonly ReleaseRecheckDocument[] }

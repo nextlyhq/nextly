@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { schemaVersionStoreSql } from "../../schema-version";
 import {
   applyRenameDecisionsForTest,
   buildDesiredSnapshotFromConfigForTest,
@@ -128,6 +129,46 @@ describe("generateMigration", () => {
     expect(sql.indexOf("/*posts*/")).toBeGreaterThan(
       sql.indexOf('CREATE TABLE "dc_posts"')
     );
+  });
+
+  it("moves the stored schema version right after the registry rows it writes, and only then", async () => {
+    const withRows = await generateMigration({
+      name: "create_posts",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [POSTS_V1],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+      metadataUpserts: [
+        {
+          tableName: "dc_posts",
+          sql: 'INSERT INTO "dynamic_collections" /*posts*/',
+        },
+      ],
+    });
+    const up = (await readFile(withRows!.sqlPath, "utf-8")).split("-- DOWN")[0];
+    const bump = schemaVersionStoreSql("postgresql");
+    // After the row, so on MySQL it sits with the rows rather than the DDL.
+    expect(up).toContain(bump);
+    expect(up.indexOf(bump)).toBeGreaterThan(up.indexOf("/*posts*/"));
+
+    // The control: a migration that writes no registry row stores nothing.
+    const otherDir = await mkdtemp(join(tmpdir(), "nextly-generate-test-"));
+    const withoutRows = await generateMigration({
+      name: "create_posts",
+      dialect: "postgresql",
+      migrationsDir: otherDir,
+      collections: [POSTS_V1],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    });
+    const plain = await readFile(withoutRows!.sqlPath, "utf-8");
+    expect(plain).toContain('CREATE TABLE "dc_posts"');
+    expect(plain).not.toContain("nextly_meta");
   });
 
   it("returns null when config matches latest snapshot (no changes)", async () => {

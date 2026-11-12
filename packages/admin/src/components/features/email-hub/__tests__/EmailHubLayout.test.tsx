@@ -6,8 +6,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { EMAIL_HUB_PERMISSIONS } from "@admin/constants/email-hub";
+import { SETTINGS_NAV } from "@admin/components/layout/sidebar/lib/settings-nav";
 import { MAIN_MENU_ITEMS } from "@admin/components/layout/sidebar/sidebar-types";
+import { EMAIL_HUB_PERMISSIONS } from "@admin/constants/email-hub";
+import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
@@ -86,15 +88,56 @@ describe("the Email hub's tabs", () => {
     const sending = screen.getByRole("tab", { name: "Sending" });
     fireEvent.mouseDown(sending, { button: 0 });
     fireEvent.click(sending);
-    expect(navigateTo).toHaveBeenCalledWith("/admin/email/sending");
+    expect(navigateTo).toHaveBeenCalledWith("/admin/settings/email/sending");
   });
 });
 
-describe("the hub's rail entry", () => {
-  it("is shown to anyone holding a grant that shows a tab", () => {
-    const entry = MAIN_MENU_ITEMS.find(item => item.id === "email");
-    expect(entry?.href).toBe("/admin/email");
-    expect(entry?.requiredPermission).toEqual([...EMAIL_HUB_PERMISSIONS]);
+describe("the hub's place in Settings", () => {
+  /** The trail's crumbs, as label and link, in order. */
+  function trail(): Array<[string, string | null]> {
+    const nav = screen.getByRole("navigation", { name: "Breadcrumb" });
+    return Array.from(nav.querySelectorAll("li"), item => [
+      item.textContent ?? "",
+      item.querySelector("a")?.getAttribute("href") ?? null,
+    ]);
+  }
+
+  it("reads Settings › Email in its trail", () => {
+    holding(["read-settings", "read-email-templates"]);
+    renderHub();
+    expect(trail()).toEqual([
+      ["Dashboard", ROUTES.DASHBOARD],
+      ["Settings", ROUTES.SETTINGS],
+      ["Email", null],
+    ]);
+  });
+
+  /*
+   * `/admin/settings` is General Settings, which refuses a reader without
+   * `read-settings`. Someone who may only see Email is sent to the first
+   * Settings page they can open, which is the hub itself.
+   */
+  it("leads the Settings crumb to a page the reader can open", () => {
+    holding(["read-email-templates"]);
+    renderHub();
+    expect(trail()[1]).toEqual(["Settings", ROUTES.EMAIL]);
+  });
+
+  it("has no rail entry of its own, and an entry in the Settings panel", () => {
+    expect(MAIN_MENU_ITEMS.map(item => item.id)).not.toContain("email");
+    // The control: the rail is populated, Settings among it.
+    expect(MAIN_MENU_ITEMS.map(item => item.id)).toContain("settings");
+
+    const entry = SETTINGS_NAV.flatMap(group => group.items).find(
+      item => item.id === "email"
+    );
+    expect(entry?.href).toBe(ROUTES.EMAIL);
+    expect(ROUTES.EMAIL).toBe("/admin/settings/email");
+    // Any grant that shows a tab shows the entry.
+    expect(entry?.gate).toEqual({
+      kind: "anyOf",
+      permissions: EMAIL_HUB_PERMISSIONS,
+    });
     expect(EMAIL_HUB_PERMISSIONS).toEqual(
       expect.arrayContaining(["read-email-templates", "read-email-providers"])
     );

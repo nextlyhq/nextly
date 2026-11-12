@@ -10,7 +10,7 @@
  * @module pages/dashboard/plugins
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import type React from "react";
 import { Suspense } from "react";
 
@@ -43,26 +43,21 @@ const PluginsOverviewPage: React.FC = () => {
         />
 
         {/* Page header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">
-              Installed Plugins
-            </h1>
-            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              The plugins installed in your application, what each one adds, and
-              whether it is enabled.
-            </p>
-          </div>
-
-          {/* In the header rather than only in the empty state: a project that
+        <PageHeader
+          title="Installed Plugins"
+          description="The plugins installed in your application, what each one adds, and whether it is enabled."
+          actions={
+            <>
+              {/* In the header rather than only in the empty state: a project that
               already has plugins is the one most likely to want another, and an
               action that appears only while the list is empty is unreachable
               exactly then. */}
-          <Button asChild variant="outline" size="sm">
-            <Link href={ROUTES.PLUGIN_BROWSE}>Browse plugins</Link>
-          </Button>
-        </div>
+              <Button asChild variant="outline" size="sm">
+                <Link href={ROUTES.PLUGIN_BROWSE}>Browse plugins</Link>
+              </Button>
+            </>
+          }
+        />
 
         {/* Plugins table */}
         <Suspense fallback={<PluginsTableSkeleton />}>

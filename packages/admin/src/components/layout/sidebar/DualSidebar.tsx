@@ -1,15 +1,11 @@
 "use client";
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import type React from "react";
 import { useCallback, useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
-import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
-import { Link } from "@admin/components/ui/link";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
-import { ROUTES } from "@admin/constants/routes";
 import {
   useBranding,
   useBrandingStatus,
@@ -25,6 +21,10 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
 import {
+  isMultilingual,
+  type LocalizationConfig,
+} from "@admin/lib/localization";
+import {
   filterCollectionItems,
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
@@ -32,11 +32,9 @@ import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placem
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
-import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
-import { shellAnswersMarker } from "../lib/shell-answers";
 
 import {
   CONTENT_RAIL_ID,
@@ -61,6 +59,7 @@ import {
   placeStandalonePlugins,
   standaloneEntryId,
 } from "./lib/place-standalone-plugins";
+import { KeepSidebarMenu } from "./lib/remembered-menu";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
@@ -70,7 +69,10 @@ import {
   railAnswersPending,
   settledRailItems,
 } from "./lib/settled-rail";
+import { standalonePluginCollections } from "./lib/standalone-plugin-collections";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
+import { RailAccount } from "./RailAccount";
+import { RailColumn, RailEntry, RailGhostItems } from "./RailColumn";
 import type {
   MainMenuCategory,
   MainMenuItem,
@@ -79,19 +81,64 @@ import type {
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
+/** Whether each rail entry's section has something to show, keyed by entry id. */
+type RailSections = Readonly<Record<string, boolean>>;
+
 /**
- * Where keyboard focus is on the rail: a ring, drawn on `:focus-visible`
- * alone, so a pointer click draws none. Offset onto the rail's own surface,
- * so it stays clear of a selected entry's fill and reads in both themes.
- *
- * The browser's outline is hidden only where the ring takes its place, and
- * by `outline-hidden` rather than `outline-none`: under forced colors, as in
- * Windows High Contrast, a box shadow is not drawn, and `outline-hidden`
- * draws a 2px outline there in the system's colour, where `outline-none`
- * would leave focus with nothing drawn at all.
+ * Whether a rail entry's section has anything to show. An entry with no
+ * section of its own (Dashboard, Releases) always has.
  */
-const RAIL_FOCUS_RING =
-  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar";
+function sectionHasContent(id: string, sections: RailSections): boolean {
+  return sections[id] ?? true;
+}
+
+/** What each rail entry's section holds, as the rail's own answers give it. */
+interface RailSectionAnswers {
+  hasCollectionsSection: boolean;
+  hasSinglesSection: boolean;
+  pluginsSectionVisible: boolean;
+  hasMediaSection: boolean;
+  hasSettingsSection: boolean;
+  hasBuildersSection: boolean;
+  branding: { locales?: LocalizationConfig } | null | undefined;
+}
+
+/**
+ * Whether each rail entry's section has anything to show, by the entry's id.
+ * Six booleans, cheap enough to build on every render.
+ */
+function railSections(answers: RailSectionAnswers): RailSections {
+  return {
+    // Shown while either kind has something to list; the panel shows only the
+    // kinds that do.
+    [CONTENT_RAIL_ID]:
+      answers.hasCollectionsSection || answers.hasSinglesSection,
+    plugins: answers.pluginsSectionVisible,
+    media: answers.hasMediaSection,
+    settings: answers.hasSettingsSection,
+    builders: answers.hasBuildersSection,
+    // Only a site with two or more locales has anything to translate.
+    translations: isMultilingual(answers.branding?.locales),
+  };
+}
+
+/**
+ * Whether a rail entry navigates (a link) rather than only opening its panel
+ * (a button). On mobile a category normally stays put and opens the panel
+ * instead of navigating. With the panel SUPPRESSED there is no panel to open,
+ * so staying put would do nothing at all and the drawer would stop navigating:
+ * the tap would only move a selection nobody can see.
+ */
+function railEntryNavigates(entry: {
+  href: string;
+  isMobile: boolean;
+  opensPanel: boolean;
+  panelReleased: boolean;
+}): boolean {
+  const staysOnPage =
+    entry.isMobile && entry.opensPanel && !entry.panelReleased;
+  return entry.href !== "#" && !staysOnPage;
+}
 
 interface DualSidebarProps {
   isMobile?: boolean;
@@ -287,6 +334,16 @@ export function DualSidebar({
   // Whether an entry shows, with an answer still loading read as "shown" for
   // the entries that say so below. The panel and the routes read this; what the
   // rail DRAWS is held to the entries already decided (`rail.items`).
+  const sections = railSections({
+    hasCollectionsSection,
+    hasSinglesSection,
+    pluginsSectionVisible,
+    hasMediaSection,
+    hasSettingsSection,
+    hasBuildersSection,
+    branding,
+  });
+
   const isMenuItemShown = useCallback(
     (item: MainMenuItem): boolean => {
       // A slug declared on the entry is a hard gate, ahead of the per-section
@@ -310,34 +367,9 @@ export function DualSidebar({
       if (item.id.startsWith("standalone-")) {
         return visibleStandaloneIds.has(item.id);
       }
-      switch (item.id) {
-        case CONTENT_RAIL_ID:
-          // Shown while either kind has something to list; the panel shows
-          // only the kinds that do.
-          return hasCollectionsSection || hasSinglesSection;
-        case "plugins":
-          return pluginsSectionVisible;
-        case "media":
-          return hasMediaSection;
-        case "settings":
-          return hasSettingsSection;
-        case "builders":
-          return hasBuildersSection;
-        default:
-          return true;
-      }
+      return sectionHasContent(item.id, sections);
     },
-    [
-      visibleStandaloneIds,
-      hasPermission,
-      hasPermissionDataPending,
-      hasCollectionsSection,
-      hasSinglesSection,
-      pluginsSectionVisible,
-      hasMediaSection,
-      hasSettingsSection,
-      hasBuildersSection,
-    ]
+    [visibleStandaloneIds, hasPermission, hasPermissionDataPending, sections]
   );
 
   const visibleMenuItems = useMemo(
@@ -434,14 +466,6 @@ export function DualSidebar({
 
   const { isActive } = useSidebarNavigation(SIDEBAR_NAVIGATION, pathname);
 
-  // Filtering logic for plugins
-  const authorizedPlugins = useMemo(() => {
-    const visible = (collectionsData?.items ?? []).filter(
-      c => !c.admin?.hidden && c.admin?.isPlugin
-    );
-    return filterCollectionItems(visible, capabilities);
-  }, [collectionsData, capabilities]);
-
   const suppressedChrome = useSuppressedChrome();
 
   const hasSubSidebarCategory = (id: string) =>
@@ -453,7 +477,9 @@ export function DualSidebar({
   // table and not to the chain became unreachable from the rail. Background
   // Jobs was exactly that — the entry appeared, the link fell through every
   // arm, and a jobs-only operator landed on General Settings, which answers to
-  // manage-settings and returns 403.
+  // manage-settings and returns 403. The Settings crumb of the pages inside
+  // the panel asks the same function (`useSettingsLanding`), so the two
+  // cannot disagree.
   const settingsHref = resolveSettingsLanding({
     hasPermission,
     canAccessApiKeys: apiKeysReachable,
@@ -464,6 +490,12 @@ export function DualSidebar({
     resolveItemHrefHelper(
       item,
       visibleStandalonePlugins,
+      // The panel's own inputs, so a rail item opens what its panel lists.
+      {
+        collections: collectionsData?.items ?? [],
+        capabilities,
+        can: hasPermission,
+      },
       settingsHref,
       capabilities.canManageSettings,
       contentItemHref({
@@ -473,24 +505,24 @@ export function DualSidebar({
       })
     );
 
-  // Resolve collections for the active standalone plugin section
+  // Resolve collections for the active standalone plugin section, by the same
+  // function its rail item's landing reads, so the two agree on the first.
   const pluginCollectionsForSection = useMemo(() => {
     if (!selectedMain.startsWith("standalone-")) return [];
     const slug = selectedMain.replace("standalone-", "");
     const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
     if (!sp) return [];
-    const collectionSlugs = new Set(sp.collections ?? []);
-    return authorizedPlugins
-      .filter(c => collectionSlugs.has(c.name))
-      .sort((a, b) => {
-        const orderA = a.admin?.order ?? 100;
-        const orderB = b.admin?.order ?? 100;
-        if (orderA !== orderB) return orderA - orderB;
-        return (a.labels?.plural || a.label || a.name).localeCompare(
-          b.labels?.plural || b.label || b.name
-        );
-      });
-  }, [selectedMain, visibleStandalonePlugins, authorizedPlugins]);
+    return standalonePluginCollections(
+      sp,
+      collectionsData?.items ?? [],
+      capabilities
+    );
+  }, [
+    selectedMain,
+    visibleStandalonePlugins,
+    collectionsData?.items,
+    capabilities,
+  ]);
 
   // Resolve the label for the active standalone plugin
   const standaloneLabel = useMemo(
@@ -505,111 +537,52 @@ export function DualSidebar({
 
   return (
     <div className="flex h-full overflow-hidden">
+      {/* The navigation as this reader sees it, kept on the device once every
+          answer the rail draws from is in, so the next fresh tab draws it
+          before the server answers. */}
+      <KeepSidebarMenu
+        settled={rail.settled}
+        items={rail.items}
+        hrefOf={resolveItemHref}
+        standalonePlugins={visibleStandalonePlugins}
+        parts={contentAvailable}
+      />
       {/* 1. Icon Sidebar (Main Menu) */}
-      <aside
-        className={cn(
-          "flex flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
-          "w-[72px] shrink-0"
-        )}
-        // Whether every answer the rail draws from is in, so a reader of the
-        // page (the layout-shift browser test) can tell when the rail is done.
-        data-shell-answers={shellAnswersMarker(rail.settled)}
+      <RailColumn
+        settled={rail.settled}
+        // The rail's foot: the reader's Inbox and account menu, the same on
+        // every page.
+        foot={<RailAccount className="mt-4 shrink-0" />}
       >
-        {/* Logo */}
-        <Link
-          href={ROUTES.DASHBOARD}
-          className={cn(
-            "mb-8 flex items-center justify-center h-10 w-10 rounded-md group",
-            RAIL_FOCUS_RING
-          )}
-        >
-          <ThemeAwareLogo
-            boxed
-            className="w-8 h-8 object-contain"
-            alt={branding.logoText ?? "Logo"}
+        {rail.items.map(item => {
+          const href = resolveItemHref(item);
+          return (
+            <RailEntry
+              key={item.id}
+              label={item.label}
+              icon={item.icon}
+              href={href}
+              selected={railItemOf(shownMain) === item.id}
+              asLink={railEntryNavigates({
+                href,
+                isMobile: Boolean(isMobile),
+                opensPanel: hasSubSidebarCategory(item.id),
+                panelReleased: suppressedChrome.has("subSidebar"),
+              })}
+              onSelect={() => selectRailItem(item.id)}
+            />
+          );
+        })}
+        {/* While the answers that decide the rest are out, neutral shapes
+            hold their places, so the rail never reads as empty; the entries
+            replace them where they stand. */}
+        {rail.settled ? null : (
+          <RailGhostItems
+            from={rail.items.length}
+            count={filteredMenuItems.length - rail.items.length}
           />
-        </Link>
-
-        {/* Main Icons */}
-        <nav className="flex-1 flex flex-col gap-4 w-full px-3">
-          {rail.items.map(item => {
-            const Icon = item.icon;
-            const isSelected = railItemOf(shownMain) === item.id;
-            const href = resolveItemHref(item);
-            /*
-             * On mobile a category normally stays put and opens the panel
-             * instead of navigating. With the panel SUPPRESSED there is no
-             * panel to open, so staying put does nothing at all and the drawer
-             * stops navigating — the tap only moves a selection nobody can see.
-             */
-            const stayOnPageMobile =
-              isMobile &&
-              hasSubSidebarCategory(item.id) &&
-              !suppressedChrome.has("subSidebar");
-            const renderAsLink = href !== "#" && !stayOnPageMobile;
-
-            // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
-            const className = cn(
-              "flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer relative",
-              RAIL_FOCUS_RING,
-              isSelected
-                ? // `sidebar-accent` rather than `muted`: it is the surface
-                  // `sidebar-accent-foreground` is declared against. Pairing
-                  // the sidebar's ink with a surface from another scale is a
-                  // combination no theme declares, so the contrast suite --
-                  // which asserts each token against its declared partner --
-                  // never checks it, and it goes unreadable in any theme that
-                  // does not happen to survive the mismatch.
-                  "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-muted-foreground hover-unified"
-            );
-
-            const iconContent = (
-              <>
-                <Icon className="h-5 w-5" />
-              </>
-            );
-
-            return (
-              <Tooltip key={item.id} delayDuration={0}>
-                <TooltipTrigger asChild>
-                  {renderAsLink ? (
-                    <Link
-                      href={href}
-                      onClick={() => selectRailItem(item.id)}
-                      className={className}
-                      data-active={isSelected}
-                      // Named for assistive technology: it draws an icon alone, and its tooltip
-                      // is shown on hover and does not name the control.
-                      aria-label={item.label}
-                    >
-                      {iconContent}
-                    </Link>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => selectRailItem(item.id)}
-                      className={className}
-                      data-active={isSelected}
-                      // Named as the link beside it is: an icon alone, with a tooltip that does
-                      // not name the control.
-                      aria-label={item.label}
-                    >
-                      {iconContent}
-                    </button>
-                  )}
-                </TooltipTrigger>
-                <TooltipContent
-                  side="right"
-                  className="bg-primary border-border text-primary-foreground"
-                >
-                  {item.label}
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
-        </nav>
-      </aside>
+        )}
+      </RailColumn>
 
       {/* 2. Sub Sidebar (Detail Menu) */}
       <SubSidebarPanel

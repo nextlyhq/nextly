@@ -31,7 +31,6 @@
  * object, so a feature can only record the data its own kind declares.
  *
  * @module domains/notices/notice-kinds
- * @experimental Until the notices feature is complete.
  */
 import type { z } from "zod";
 
@@ -57,7 +56,6 @@ export interface NoticeRenderContext {
  * A kind of notice.
  *
  * @typeParam TData - The snapshot each notice of this kind stores.
- * @experimental
  */
 export interface NoticeKind<TData = unknown> {
   /**
@@ -108,8 +106,6 @@ export const NOTICE_REFERENCE_MAX = 191;
  *
  * An identity function that exists for the types: `record()` reads `TData`
  * off the object this returns.
- *
- * @experimental
  */
 export function defineNoticeKind<TData>(
   kind: NoticeKind<TData>
@@ -143,8 +139,6 @@ const kinds = new Map<string, NoticeKind<unknown>>();
  * because each key is namespaced by its feature. A kind registered with a
  * different subject under an existing key is refused: that is two features
  * claiming one key, not a reload.
- *
- * @experimental
  */
 export function registerNoticeKind<TData>(kind: NoticeKind<TData>): void {
   defineNoticeKind(kind);

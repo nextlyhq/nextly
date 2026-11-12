@@ -28,6 +28,7 @@ import {
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
 } from "../domains/auth/system-write-policy";
+import { templateVariablesSchema } from "../domains/email/template-variables";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -42,12 +43,6 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
   return container.get<EmailTemplateService>("emailTemplateService");
 }
 
-const variableSchema = z.object({
-  name: z.string().min(1),
-  description: z.string(),
-  required: z.boolean().optional(),
-});
-
 const createTemplateSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   slug: z
@@ -61,7 +56,7 @@ const createTemplateSchema = z.object({
   subject: z.string().min(1, "Subject is required").max(500),
   htmlContent: z.string().min(1, "HTML content is required"),
   plainTextContent: z.string().optional().nullable(),
-  variables: z.array(variableSchema).optional().nullable(),
+  variables: templateVariablesSchema.optional(),
   useLayout: z.boolean().optional(),
   isActive: z.boolean().optional(),
   providerId: z.string().uuid().optional().nullable(),
@@ -142,8 +137,10 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailTemplateService();
+    // The checked body, passed as the dispatcher passes its own: a
+    // declaration's description may be absent at the check and is stored so.
     const template = await service.createTemplate(
-      validated,
+      validated as Parameters<typeof service.createTemplate>[0],
       actorFromAuthContext(auth)
     );
 

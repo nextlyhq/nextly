@@ -38,6 +38,10 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { CollectionTables } from "../../dynamic-collections/services/collection-tables";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import {
+  relationshipStoresJson,
+  toSnakeCase,
+} from "../services/field-column-descriptor";
 
 import type {
   ForeignKeySpec,
@@ -95,9 +99,18 @@ export function withBuilderForeignKeys(
   );
 
   // Kept: every key the live table holds whose columns the table keeps. A key
-  // over a column this push drops goes with the column.
-  const kept = (live?.foreignKeys ?? []).filter(fk =>
-    fk.columns.every(column => columns.has(lower(column)))
+  // over a column this push drops goes with the column, and so does one over a
+  // relationship now holding a list: its column becomes JSON, which no key to
+  // one row can hold, so the key is dropped (ahead of the conversion).
+  const listColumns = new Set(
+    fields
+      .filter(field => relationshipStoresJson(field))
+      .map(field => lower(toSnakeCase(field.name)))
+  );
+  const kept = (live?.foreignKeys ?? []).filter(
+    fk =>
+      fk.columns.every(column => columns.has(lower(column))) &&
+      !fk.columns.some(column => listColumns.has(lower(column)))
   );
   const keyed = new Set(kept.flatMap(fk => fk.columns.map(lower)));
 

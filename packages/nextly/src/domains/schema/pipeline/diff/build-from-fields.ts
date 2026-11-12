@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import { fieldGroupStructuralDefaults } from "../../../field-groups/services/field-group-schema-service";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   assertIndexBuildable,
@@ -42,6 +43,8 @@ import {
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
+  relationshipStoresJson,
+  relationStorageShape,
 } from "../../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
@@ -481,12 +484,7 @@ export function buildDesiredTableFromFields(
       options.builtBy
     );
     if (!desc) continue;
-    columns.push({
-      name: desc.name,
-      type: desc.dialectType,
-      nullable: desc.nullable,
-      default: undefined,
-    });
+    columns.push(userColumnSpec(field, desc, dialect));
   }
 
   const indexes = collectionIndexSpecs(tableName, fields, {
@@ -533,20 +531,51 @@ export function buildDesiredTableFromFields(
 }
 
 /**
- * Whether a component column is marked as holding a list of references, which makes a type change
- * into it a reference-list conversion.
- *
- * A relation keeping a list on the component row (a many-to-many or a `hasMany` relation), which an
- * older table may hold in a scalar column. A single polymorphic reference is JSON but not a list, so
- * it keeps the ordinary conversion. Not on SQLite, which keeps the list as text and has no form of
- * the conversion: a type change into the column there (an integer field becoming a many-to-many)
- * stays with SQLite's own route.
+ * The marker a collection or Single column of a relation carries for the conversion a switch
+ * between one related entry and many needs: a cast reads neither a bare id as a list nor a list's
+ * one id. SQLite keeps both as text, so its diff plans no type change to mark. A relation naming
+ * several targets is not marked as a list: it holds `{ relationTo, value }` references, which the
+ * list conversion does not make, and a switch to it over values is refused before anything runs.
  */
-function holdsReferenceListOn(
-  field: Parameters<typeof componentRelationshipHoldsReferenceList>[0],
-  dialect: SupportedDialect
-): boolean {
-  return dialect !== "sqlite" && componentRelationshipHoldsReferenceList(field);
+/**
+ * A user field's column as the desired schema states it, from its descriptor: the default is left
+ * to the application, and a relation's column carries its markers (`referenceMarkerOn`).
+ */
+function userColumnSpec(
+  field: MinimalFieldDef,
+  desc: { name: string; dialectType: string; nullable: boolean; kind: string },
+  dialect: SupportedDialect,
+  component = false
+): ColumnSpec {
+  return {
+    name: desc.name,
+    type: desc.dialectType,
+    nullable: desc.nullable,
+    default: undefined,
+    ...referenceMarkerOn(field, desc.kind, dialect, component),
+  };
+}
+
+function referenceMarkerOn(
+  field: MinimalFieldDef,
+  kind: string,
+  dialect: SupportedDialect,
+  component = false
+): Pick<
+  ColumnSpec,
+  "holdsReferenceList" | "holdsSingleReference" | "referenceShape"
+> {
+  // The shape on every dialect, so a migration snapshot records what the column holds.
+  const referenceShape = relationStorageShape(field, component);
+  const shape = referenceShape === undefined ? {} : { referenceShape };
+  if (dialect === "sqlite") return shape;
+  if (kind === "fkSingle") return { ...shape, holdsSingleReference: true };
+  const list =
+    kind === "json" &&
+    (component
+      ? componentRelationshipHoldsReferenceList(field)
+      : relationshipStoresJson(field) && !Array.isArray(field.relationTo));
+  return list ? { ...shape, holdsReferenceList: true } : shape;
 }
 
 /**
@@ -555,6 +584,18 @@ function holdsReferenceListOn(
  * _order, _component_type) instead of collection system columns (title, slug).
  * Used by previewDesiredSchema when processing desired.components.
  */
+/** Gives each of a field group's system columns the default its creator gives it. */
+function declareStructuralDefaults(
+  columns: ColumnSpec[],
+  dialect: SupportedDialect
+): void {
+  const structuralDefaults = fieldGroupStructuralDefaults(dialect);
+  for (const column of columns) {
+    const columnDefault = structuralDefaults.get(column.name);
+    if (columnDefault !== undefined) column.default = columnDefault;
+  }
+}
+
 export function buildDesiredTableFromComponentFields(
   tableName: string,
   fields: MinimalFieldDef[],
@@ -721,15 +762,7 @@ export function buildDesiredTableFromComponentFields(
       options.builtBy
     );
     if (!desc) continue;
-    columns.push({
-      name: desc.name,
-      type: desc.dialectType,
-      nullable: desc.nullable,
-      default: undefined,
-      ...(holdsReferenceListOn(field, dialect)
-        ? { holdsReferenceList: true }
-        : {}),
-    });
+    columns.push(userColumnSpec(field, desc, dialect, true));
   }
 
   // Timestamp columns — type tokens must match PostgreSQL udt_name / MySQL
@@ -775,6 +808,12 @@ export function buildDesiredTableFromComponentFields(
       default: undefined,
     });
   }
+
+  // The defaults the field group's creator gives its system columns
+  // (`fieldGroupStructuralDefaults`), declared from the same answer. Left out, every table the
+  // creator made read as carrying defaults the schema did not, and its first save dropped them, so
+  // an insert that leaves `_order` or a timestamp to the database stored NULL or failed NOT NULL.
+  declareStructuralDefaults(columns, dialect);
 
   // Component tables have no slug. They get a composite index on the parent-link
   // columns plus the system created_at index — mirroring field-group-schema-service.ts

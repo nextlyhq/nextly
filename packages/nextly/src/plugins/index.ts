@@ -33,6 +33,9 @@ export {
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
+  type PluginDurableEvents,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginDatabase,
   type PluginDefinition,
   type PluginEmailService,
@@ -72,6 +75,7 @@ export type {
   SecretData,
   TxOption,
 } from "./security/one-time-secrets";
+export type { KeyedDigests } from "./security/keyed-digest";
 export type { OpaqueSecrets } from "./security/opaque-secrets";
 export {
   standardWebhooks,
@@ -182,6 +186,9 @@ export type {
   Middleware,
   RouteMethod,
 } from "./routes/route-types";
+
+// Proxy handlers: `contributes.proxy`, asked by the app's Proxy.
+export type { PluginProxyHandler, ProxyAnswer } from "./proxy/proxy-types";
 
 // Plugin-defined kinds of signed-in person: `contributes.principals`, a
 // route's `principal`, `ctx.principals` and `nextly.principals`.

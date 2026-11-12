@@ -9,11 +9,16 @@ import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-co
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
+import { defineAddCommand } from "./add.command";
+
 /** Register the `nextly plugins` command group (D48). */
 export function registerPluginsCommand(program: Command): void {
   const plugins = program
     .command("plugins")
-    .description("Inspect installed plugins and their contributions");
+    .description("Add, install and inspect plugins");
+
+  // The one command that adds a plugin to a site; `nextly add` is the same.
+  defineAddCommand(plugins.command("add <package>"));
 
   plugins
     .command("list")

@@ -36,11 +36,17 @@ import {
   PanelRight,
   PanelRightClose,
 } from "@admin/components/icons";
-import { useCan } from "@admin/hooks/useCan";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
+
+import {
+  TopBarPlace,
+  useInTopBar,
+  useTopBarPlaceWidth,
+} from "@admin/components/layout/header/TopBarPlaces";
+import { useCan } from "@admin/hooks/useCan";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
@@ -58,6 +64,7 @@ import { useHostedDocumentActions } from "./DocumentActionsContext";
 import { DOCUMENT_PANEL_TOGGLE_ATTRIBUTE } from "./DocumentSidePanel";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { STATE_COMPACT_ATTRIBUTE } from "./narrow-bar";
 import {
   PreviewActions,
   previewChoices,
@@ -73,6 +80,14 @@ import type { EntryData, EntryFormMode } from "./useEntryForm";
  * (`useDocumentBarHeight`) for the document panel, which sticks under it.
  */
 const DOCUMENT_BAR_MIN_HEIGHT = "min-h-13";
+
+/**
+ * Below this width of the admin bar's right part (32rem at 16px), History, the
+ * preview and the panel toggle fold into the document's menu: the document's
+ * state, its own verbs and More still fit on the bar's one row, and the rest
+ * would push them over each other.
+ */
+const FOLD_BELOW_BAR_WIDTH = 512;
 
 export interface DocumentBarProps {
   /** Form mode — create mode offers no history, menu or panel toggle. */
@@ -242,9 +257,113 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
   // Its real height, for the panel that sticks under it. Called before the
   // early return below, as every hook is.
   const measureBar = useDocumentBarHeight();
+  // Inside the admin's shell the document's controls are drawn in its one top
+  // bar; a bar of the document's own is drawn only where there is no shell.
+  const inTopBar = useInTopBar();
 
   if (!form) {
     return null;
+  }
+
+  // The bar's content, drawn in the admin's one top bar inside the shell, or
+  // in a bar of its own where there is no shell (a page rendered alone).
+  const content = (
+    <>
+      <DocumentBarState
+        mode={mode}
+        hasStatus={hasStatus}
+        documentStatus={documentStatus}
+        languageCode={
+          entryLocale.isNonDefaultLocale ? entryLocale.locale : undefined
+        }
+        saveState={
+          <SaveStateIndicator
+            saveState={documentActions.saveState}
+            recovery={{
+              enabled: autosaveEnabled,
+              storedAt: autosaveLastSavedAt,
+              pendingOfferAt: pendingRecoveryAt,
+            }}
+            // The indicator reserves the width of its widest state so that
+            // nothing after it moves as the state changes. On a bar as
+            // narrow as the one where the preview's and History's words
+            // step aside, that reserve is width the actions need, and kept
+            // it wraps the bar onto a second row, so there it takes only
+            // what it shows.
+            className="@max-[51rem]/toolbar:min-w-0"
+          />
+        }
+      />
+
+      {/* Every action, right-aligned, in the bar's one order: a feature's
+        controls, History, Preview, the document's own verbs, then the panel
+        toggle at the far end.
+
+        On a phone (the panel's sheet mode) History, the preview and the
+        panel toggle fold into the document's menu as rows, so the actions
+        stay one row. The group also wraps inside itself, never past
+        the editor's edge: a preview pane can narrow the editor on a wide
+        screen, and a feature's contributed controls, which this cannot size,
+        must never push the bar's own off it. */}
+      <div
+        className={cn(
+          "ml-auto flex min-w-0 max-w-full items-center justify-end gap-1.5",
+          // The admin's bar is one row tall, so there the controls give up
+          // their words rather than wrap.
+          inTopBar ? "flex-nowrap" : "flex-wrap"
+        )}
+      >
+        {/* What a feature contributes, such as a takeover's mode switch:
+          first, so the document's own verbs keep their place at the end. It
+          stays while a past version is on screen, showing that version's
+          own mode. */}
+        {toolbarSlot}
+        <DocumentBarActions
+          {...props}
+          historyOffered={historyOffered}
+          historyOpen={historyOpen}
+          onOpenHistory={() => setHistoryOpen(true)}
+          documentActions={documentActions}
+          shareOpen={shareOpen}
+          onShareOpenChange={setShareOpen}
+        />
+      </div>
+      <DocumentBarLive
+        saveState={documentActions.saveState}
+        pendingRecovery={pendingRecoveryAt !== null}
+        entry={entry}
+      />
+
+      {/* Mounted at the bar's root so the panel survives whichever set of
+          actions is drawn. */}
+      {props.historyFields && entry?.id ? (
+        <DocumentBarHistory
+          {...props}
+          entryId={String(entry.id)}
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          liveStatus={documentActions.effectiveStatus}
+          editingLocale={entryLocale.locale}
+        />
+      ) : null}
+    </>
+  );
+
+  if (inTopBar) {
+    return (
+      <TopBarPlace name="end">
+        {/* After the trail, set apart from it; the document's state, then its
+            actions at the bar's right end, on the bar's one row. The bar is
+            the toolbar container these controls size themselves against. */}
+        <div
+          data-testid="document-bar"
+          className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-3"
+        >
+          <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
+          {content}
+        </div>
+      </TopBarPlace>
+    );
   }
 
   return (
@@ -264,80 +383,22 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
           "flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 @lg/toolbar:px-6"
         )}
       >
-        <DocumentBarState
-          mode={mode}
-          hasStatus={hasStatus}
-          documentStatus={documentStatus}
-          languageCode={
-            entryLocale.isNonDefaultLocale ? entryLocale.locale : undefined
-          }
-          saveState={
-            <SaveStateIndicator
-              saveState={documentActions.saveState}
-              recovery={{
-                enabled: autosaveEnabled,
-                storedAt: autosaveLastSavedAt,
-                pendingOfferAt: pendingRecoveryAt,
-              }}
-              // The indicator reserves the width of its widest state so that
-              // nothing after it moves as the state changes. On a bar as
-              // narrow as the one where the preview's and History's words
-              // step aside, that reserve is width the actions need, and kept
-              // it wraps the bar onto a second row, so there it takes only
-              // what it shows.
-              className="@max-[51rem]/toolbar:min-w-0"
-            />
-          }
-        />
-
-        {/* Every action, right-aligned, in the bar's one order: a feature's
-          controls, History, Preview, the document's own verbs, then the panel
-          toggle at the far end.
-
-          On a phone (the panel's sheet mode) History, the preview and the
-          panel toggle fold into the document's menu as rows, so the actions
-          stay one row. The group also wraps inside itself, never past
-          the editor's edge: a preview pane can narrow the editor on a wide
-          screen, and a feature's contributed controls, which this cannot size,
-          must never push the bar's own off it. */}
-        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
-          {/* What a feature contributes, such as a takeover's mode switch:
-            first, so the document's own verbs keep their place at the end. It
-            stays while a past version is on screen, showing that version's
-            own mode. */}
-          {toolbarSlot}
-          <DocumentBarActions
-            {...props}
-            historyOffered={historyOffered}
-            historyOpen={historyOpen}
-            onOpenHistory={() => setHistoryOpen(true)}
-            documentActions={documentActions}
-            shareOpen={shareOpen}
-            onShareOpenChange={setShareOpen}
-          />
-        </div>
+        {content}
       </div>
-
-      <DocumentBarLive
-        saveState={documentActions.saveState}
-        pendingRecovery={pendingRecoveryAt !== null}
-        entry={entry}
-      />
-
-      {/* Mounted at the bar's root so the panel survives whichever set of
-          actions is drawn. */}
-      {props.historyFields && entry?.id ? (
-        <DocumentBarHistory
-          {...props}
-          entryId={String(entry.id)}
-          open={historyOpen}
-          onOpenChange={setHistoryOpen}
-          liveStatus={documentActions.effectiveStatus}
-          editingLocale={entryLocale.locale}
-        />
-      ) : null}
     </div>
   );
+}
+
+/**
+ * Whether History, the preview and the panel toggle are menu rows rather than
+ * buttons: on a phone (the panel's sheet mode), and in the admin's bar where its
+ * right part, what remains after the trail, is too narrow for every control on
+ * one row.
+ */
+function useFoldedIntoMenu(panelMode: DocumentPanelMode | undefined): boolean {
+  const barWidth = useTopBarPlaceWidth("end");
+  if (panelMode === "sheet") return true;
+  return barWidth !== null && barWidth < FOLD_BELOW_BAR_WIDTH;
 }
 
 /**
@@ -363,7 +424,7 @@ function DocumentBarActions({
 }) {
   const pending = props.isSubmitting === true;
   // On a phone, History, the preview and the panel toggle are menu rows.
-  const folded = props.panelMode === "sheet";
+  const folded = useFoldedIntoMenu(props.panelMode);
   const panel = panelToggleFor(props, historyOpen);
   // What the version on screen offers in place of the document's own verbs.
   // A colleague's claim or a submit in flight withholds restoring, as it
@@ -518,6 +579,7 @@ function narrowItemsFor(
             id: "panel",
             label: panelToggleLabel(panel.collapsed),
             onSelect: panel.toggle,
+            togglesPanel: true,
           },
         ]
       : []),
@@ -824,8 +886,18 @@ function DocumentBarState({
   saveState: React.ReactNode;
 }) {
   // Each part decides its own case and draws nothing where it does not apply.
+  // In the admin's top bar, which is one row tall, the parts stay on that row.
+  const inTopBar = useInTopBar();
   return (
-    <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground">
+    <div
+      className={cn(
+        "flex flex-1 items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground",
+        inTopBar ? "min-w-0 flex-nowrap @max-lg/toolbar:gap-x-2" : "flex-wrap"
+      )}
+      // In the one-row bar each part draws its words only where there is
+      // room for them beside the verbs.
+      {...(inTopBar ? { [STATE_COMPACT_ATTRIBUTE]: "" } : {})}
+    >
       <BarStatusPill documentStatus={hasStatus ? documentStatus : undefined} />
       {saveState}
       <EditingLanguageChip code={languageCode} />

@@ -206,7 +206,7 @@ function BackToProviders() {
 /** The page's chrome around a state that is not the form. */
 function ProviderPageState({ children }: { children: ReactNode }) {
   return (
-    <PageContainer width="form">
+    <PageContainer type="form">
       <EmailSubpageLayout {...EMAIL_PROVIDER_PAGE}>
         {children}
       </EmailSubpageLayout>
@@ -445,7 +445,7 @@ function EditProvider({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         <EmailSubpageLayout
           {...EMAIL_PROVIDER_PAGE}
           actions={

@@ -40,6 +40,7 @@ import {
 } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
+import { useReturnFocusOnClose } from "./dialog-opener";
 import { isDefiniteRefusal, releaseErrorMessage } from "./release-error";
 import {
   describeAfterLostAnswer,
@@ -124,6 +125,8 @@ export function ReleaseRowActionDialog({
   onOpenChange,
   onDone,
 }: ReleaseRowActionDialogProps): JSX.Element {
+  // Focus goes back to what opened the dialog when it closes.
+  const returnFocus = useReturnFocusOnClose(open);
   // All three hooks, every render: which one runs is chosen by `action`, and a
   // hook called conditionally would change the order React reads them in.
   const publish = usePublishReleaseNow(release.id);
@@ -173,7 +176,7 @@ export function ReleaseRowActionDialog({
         onOpenChange(next);
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={returnFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle>{words.title}</AlertDialogTitle>
           <AlertDialogDescription>{words.body}</AlertDialogDescription>

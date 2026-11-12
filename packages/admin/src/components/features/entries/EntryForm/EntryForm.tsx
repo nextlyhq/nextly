@@ -78,7 +78,12 @@ import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
 import { pluginDocumentLock } from "./document-lock-affordances";
-import { useDocumentPanelParts, useDocumentPlace } from "./document-place";
+import {
+  topLevelFieldNames,
+  useContentFields,
+  useDocumentPanelParts,
+  useDocumentPlace,
+} from "./document-place";
 import { DocumentFormSource } from "./document-values";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
@@ -835,9 +840,24 @@ export function EntryForm({
    * warning the meta strip it covers would have shown. And after the lock,
    * whose read-only answer it shares with every other field.
    */
+  // The edit page's place: plugins' blocks around the bar and the editor,
+  // their tabs over the field column and their sections in the panel.
+  const documentPlace = useDocumentPlace(
+    {
+      kind: "collection",
+      collection: collectionSlug,
+      entryId: entry?.id ?? null,
+    },
+    entry ?? undefined
+  );
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  // The fields a surface draws beside a takeover field leave out those a
+  // plugin's tab takes over, by the same rule as the page's own content:
+  // they are drawn, and edited, in their tab.
+  const besideFields = useContentFields(documentPlace, fieldNames, allFields);
   const renderEntryFields = useCallback(
     (excludePath: string, presentation?: EntryFieldsPresentation) =>
-      fieldsBesidePanel(allFields, excludePath, {
+      fieldsBesidePanel(besideFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
@@ -846,7 +866,7 @@ export function EntryForm({
         ...(presentation === undefined ? {} : { presentation }),
       }),
     [
-      allFields,
+      besideFields,
       savePending,
       lock.readOnly,
       mode,
@@ -1124,16 +1144,9 @@ export function EntryForm({
   // Where the docked column is on screen, it carries the id and the language
   // panel, so the field column's own copies of them step aside.
   const panelDocked = mode === "edit" && panel.docked;
-  // The edit page's place: plugins' blocks around the bar and the editor,
-  // their tabs over the field column and their sections in the panel.
-  const documentPlace = useDocumentPlace(
-    {
-      kind: "collection",
-      collection: collectionSlug,
-      entryId: entry?.id ?? null,
-    },
-    entry ?? undefined
-  );
+  // The fields a plugin's tab edits are drawn in that tab, not here; every
+  // field keeps its value in the form, so Save still stores them.
+  const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
 
   /*
    * What deciding this document's actions reads. Every write handler goes
@@ -1618,6 +1631,8 @@ export function EntryForm({
                                     // held as a panel section is.
                                     form={form}
                                     documentLock={pluginLock}
+                                    fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
                                     {/* The title first and largest, then the slug
                                   on the line under it. The slug is a write,
@@ -1713,7 +1728,7 @@ export function EntryForm({
                       answers a published version through the same surface. Its
                       comparison bar is drawn among the banners under the bar. */}
                                     <ViewedVersionBody
-                                      fields={historicalFields ?? mainFields}
+                                      fields={historicalFields ?? contentFields}
                                       values={historicalValues ?? undefined}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let
@@ -1731,14 +1746,14 @@ export function EntryForm({
                                         entryId={entry?.id ?? null}
                                         {...(entry ? { entry } : {})}
                                       >
-                                        {mainFields.length > 0 && (
+                                        {contentFields.length > 0 && (
                                           <div className="@4xl/content:p-8 pt-6">
                                             {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
                                             <EntryFormContent
-                                              fields={mainFields}
+                                              fields={contentFields}
                                               disabled={savePending}
                                               readOnly={lock.readOnly}
                                               withCard

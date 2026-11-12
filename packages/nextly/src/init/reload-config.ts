@@ -25,7 +25,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
-import type { CollectionHooks } from "../collections/config/define-collection";
+import type {
+  CollectionConfig,
+  CollectionHooks,
+} from "../collections/config/define-collection";
 import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
@@ -60,6 +63,7 @@ import { compileAndPublishExtensionSchema } from "../domains/schema/extension/pu
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
+import { hasRelationSwitches } from "../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
 import { desiredCollectionTable } from "../domains/schema/pipeline/desired-collection-table";
 import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields";
@@ -70,8 +74,13 @@ import type {
   Operation,
   TableSpec,
 } from "../domains/schema/pipeline/diff/types";
+import {
+  columnsByTable,
+  heldBackChanges,
+  noteHeldBackServed,
+  keptScopeFields,
+} from "../domains/schema/pipeline/kept-scope-fields";
 import { RealPreCleanupExecutor } from "../domains/schema/pipeline/pre-cleanup/executor";
-import { ClackTerminalPromptDispatcher } from "../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { ttyRequiredDetail } from "../domains/schema/pipeline/prompt-dispatcher/errors";
 import { PushSchemaPipeline } from "../domains/schema/pipeline/pushschema-pipeline";
 import type {
@@ -83,6 +92,13 @@ import {
   noopPreRenameExecutor,
 } from "../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {
+  holdRecordedAtStart,
+  recordFieldsOnto,
+  registryRows,
+  takeRecordedAtStart,
+  type RecordedAtStart,
+} from "../domains/schema/pipeline/recorded-fields";
+import {
   isCodeOwned,
   mergeRegisteredCollectionsSafely,
 } from "../domains/schema/pipeline/registered-collections";
@@ -93,6 +109,10 @@ import type {
   DesiredSchema,
   DesiredSingle,
 } from "../domains/schema/pipeline/types";
+import {
+  currentWithheldScopeFields,
+  publishWithheldScopeFields,
+} from "../domains/schema/pipeline/withheld-scope-fields";
 import { DrizzleStatementExecutor } from "../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import {
@@ -1428,6 +1448,26 @@ const globalForReload = globalThis as unknown as {
  */
 export type ReloadOutcome = "refused" | "finished";
 
+/**
+ * The terminal's prompt dispatcher, loaded at its first dispatch and kept for
+ * the rest of the apply. Most reloads ask nothing, and the prompt brings the
+ * CLI's prompt and error reporting with it.
+ */
+function terminalPromptDispatcher(): PromptDispatcher {
+  let loaded: Promise<PromptDispatcher> | undefined;
+  return {
+    async dispatch(args) {
+      loaded ??= import(
+        "../domains/schema/pipeline/prompt-dispatcher/clack-terminal"
+      ).then(
+        ({ ClackTerminalPromptDispatcher }) =>
+          new ClackTerminalPromptDispatcher()
+      );
+      return (await loaded).dispatch(args);
+    },
+  };
+}
+
 export function reloadNextlyConfig(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
@@ -1702,6 +1742,12 @@ async function applyReloadHolding(
         registerFieldType(fieldType);
       }
     });
+    // The fold `loadConfig` runs publishes what each scope holds back from a
+    // switched-off type, process-wide. A refused reload keeps the previous
+    // configuration, so its held-back fields are put back with it, or the
+    // next apply would plan dropping a column the running site still keeps.
+    const previousWithheld = currentWithheldScopeFields();
+    reloadUndo.push(() => publishWithheldScopeFields(previousWithheld));
     clearConfigCache();
     const result = await loadConfig();
     // Watch exactly what this read: the config and every file it imported. Set
@@ -1863,7 +1909,13 @@ async function applyReloadHolding(
       // the reloaded config declares them, so a plugin added or changed in
       // development is rewritten into the map without a restart. The site
       // dashboard with them, as the loader carries it after every setup().
-      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
+      setAdminComponentPlugins(
+        newConfig.plugins,
+        newConfig.admin?.dashboard,
+        // The loader's collections, which this function's own type reads only
+        // in part: the check lists the views their `admin` names.
+        newConfig.collections as readonly CollectionConfig[] | undefined
+      );
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
@@ -2255,6 +2307,17 @@ async function applyReloadHolding(
   // a field leaving translation whose main column an earlier reload added
   // before it stopped: the move below is what finishes it.
   let hasChanges = startsAsChange(extensionSchemaChanged, leaving.entries);
+  // A plugin's field held back from a type switched off keeps its column
+  // while the database has it, as the apply keeps it: judged here the same
+  // way, so this gate and the apply see the same table (`kept-scope-fields.ts`).
+  const liveColumns = columnsByTable(liveSnapshot, dialect);
+  const keptFor = (
+    kind: "collection" | "single",
+    entry: DesiredCollection | DesiredSingle
+  ) => keptScopeFields(kind, entry, liveColumns);
+  // The rows a development start held, once this reload takes them (`recordRegistryHistory`), so a
+  // refused apply can hold them again.
+  const held: { atStart?: RecordedAtStart } = {};
   // True when a real schema diff existed but was NOT applied this cycle (an
   // unsafe change needing review, or a diff that threw). In that state the
   // registry's `fields` would disagree with the physical table, so the no-DDL
@@ -2296,12 +2359,10 @@ async function applyReloadHolding(
       const desiredTable = desiredCollectionTable(
         {
           ...entry,
-          fields: heldFields(
-            leaving.entries,
-            "collection",
-            target.slug,
-            entry.fields
-          ),
+          fields: heldFields(leaving.entries, "collection", target.slug, [
+            ...entry.fields,
+            ...keptFor("collection", entry),
+          ]),
         },
         dialect
       );
@@ -2353,7 +2414,10 @@ async function applyReloadHolding(
         : { tables: [] };
       const desiredTable = buildDesiredTableFromFields(
         target.tableName,
-        heldFields(leaving.entries, "single", target.slug, target.fields),
+        heldFields(leaving.entries, "single", target.slug, [
+          ...target.fields,
+          ...keptFor("single", entry),
+        ]),
         dialect,
         {
           // These branches apply a CONFIG edit, so the table is the pipeline's.
@@ -2441,6 +2505,36 @@ async function applyReloadHolding(
       deferredSchemaChange = true;
       deferredEntities.add(`fieldGroup:${target.slug}`);
     }
+  }
+
+  // What each code-first entity's registry row records from before this apply
+  // (`recordRegistryHistory`), so a relation switched between storage shapes is planned from it.
+  held.atStart = await recordRegistryHistory({
+    collections: desiredCollections,
+    singles: desiredSingles,
+    components: desiredComponents,
+    resolve,
+    adapter,
+  });
+
+  // A type switched off or on for a plugin's scope since its runtime tables
+  // were built: in the configuration or made in the Schema Builder, whose
+  // entities join the apply below. Its kept column may need relaxing, and its
+  // tables building again, which no column diff above shows.
+  const heldBackChanged = heldBackChanges();
+  if (heldBackChanged.length > 0) hasChanges = true;
+
+  // A relation switched between storage shapes is a change to apply even where the gate above
+  // saw none: SQLite keeps every shape as text, and a translated relation's column is on its
+  // companion, which the gate does not diff.
+  if (
+    hasRelationSwitches({
+      collections: desiredCollections,
+      singles: desiredSingles,
+      components: desiredComponents,
+    })
+  ) {
+    hasChanges = true;
   }
 
   // No schema (DDL) changes to apply. Registry-only metadata (versions,
@@ -2709,8 +2803,7 @@ async function applyReloadHolding(
   // pipeline/index.ts) so we can thread MySQL databaseName + the
   // resolved adapter into the F3 PushSchemaPipeline at this site.
   // F8 will collapse both seams into the unified pipeline.
-  const promptDispatcher =
-    opts?.dispatcher ?? new ClackTerminalPromptDispatcher();
+  const promptDispatcher = opts?.dispatcher ?? terminalPromptDispatcher();
   const apply = createApplyDesiredSchema({
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
@@ -2802,6 +2895,11 @@ async function applyReloadHolding(
     "code",
     { promptChannel: "terminal" }
   );
+  // A refused apply leaves the tables as they were, so the rows a start held still say what the
+  // fields were: held again, for the reload that retries it once the cause is fixed.
+  if (!applyResult.success && held.atStart !== undefined) {
+    holdRecordedAtStart(held.atStart);
+  }
 
   if (applyResult.success) {
     // Create the `_locales` companion of every localized entity, now that the apply
@@ -3221,6 +3319,10 @@ async function applyReloadHolding(
     } catch {
       // Non-fatal: same reasoning as SchemaRegistry block above.
     }
+    // The types' tables are now built from their declared fields, with the
+    // kept ones left out: recorded, so the next reload rebuilds them again
+    // only when a field moves between the two.
+    noteHeldBackServed(heldBackChanged);
 
     // Signal all connected browser tabs to reload so they immediately
     // reflect the updated schema without a manual F5.
@@ -3309,6 +3411,70 @@ async function applyReloadHolding(
   }
 }
 
+/**
+ * Gives each code-first entity the fields its registry row records from before this apply, which
+ * the registry sync after it replaces: on SQLite a relationship switched between one related entry
+ * and many is told by nothing else. A development start has already synced the rows, so it held
+ * them from before that sync (`holdRecordedAtStart`), and its apply takes those.
+ */
+async function recordRegistryHistory(args: {
+  collections: Record<string, DesiredCollection>;
+  singles: Record<string, DesiredSingle>;
+  components: Record<string, DesiredFieldGroup>;
+  resolve: (name: string) => unknown;
+  adapter: AdapterLike;
+}): Promise<RecordedAtStart | undefined> {
+  const atStart = takeRecordedAtStart();
+  // Whether a registry table is there, so a registry that cannot be read refuses the reload while
+  // one not created yet reads as empty (`registryRows`).
+  let tableNames: Promise<string[]> | undefined;
+  const registryTableExists = async (name: string): Promise<boolean> => {
+    tableNames ??= args.adapter.listTables();
+    return (await tableNames).some(table => table.toLowerCase() === name);
+  };
+  recordFieldsOnto(
+    args.collections,
+    atStart?.collections ??
+      (await registryRows(
+        async () =>
+          (
+            (await args.resolve(
+              "collectionRegistryService"
+            )) as CollectionRegistrySurface
+          )?.getAllCollections?.(),
+        { kind: "collections", tableExists: registryTableExists }
+      ))
+  );
+  recordFieldsOnto(
+    args.components,
+    atStart?.components ??
+      (await registryRows(
+        async () =>
+          (
+            (await args.resolve(
+              "fieldGroupRegistryService"
+            )) as ComponentRegistrySurface
+          )?.getAllComponents?.(),
+        { kind: "components", tableExists: registryTableExists }
+      ))
+  );
+  recordFieldsOnto(
+    args.singles,
+    atStart?.singles ??
+      (await registryRows(
+        async () =>
+          (
+            (await args.resolve(
+              "singleRegistryService"
+            )) as SingleRegistrySurface
+          )?.getAllSingles?.(),
+        { kind: "singles", tableExists: registryTableExists }
+      ))
+  );
+  // What a start held, for a refused apply to hold again.
+  return atStart;
+}
+
 // Decides whether a collection's ops can be auto-applied from code-first.
 //
 // Most destructive ops now flow into the pipeline's Classifier +
@@ -3318,7 +3484,8 @@ async function applyReloadHolding(
 // resolution UX:
 //
 //   - drop_table: no destructive-confirm event exists for tables yet.
-//   - change_column_type: only emits a warning, no resolution.
+//   - change_column_type: only emits a warning, no resolution. A relation
+//     switched from one related entry to many is not held: it keeps every value.
 //   - change_column_nullable (NOT NULL adds on existing rows): pipeline
 //     classifier emits add_not_null_with_nulls + asks the user, BUT
 //     only when there are actually NULL rows. Tables with no NULLs flow
@@ -3338,7 +3505,12 @@ function classifyForCodeFirst(
   for (const op of operations) {
     if (op.type === "drop_table") {
       reasons.push(`drops table '${op.tableName}'`);
-    } else if (op.type === "change_column_type") {
+    } else if (
+      op.type === "change_column_type" &&
+      op.conversion !== "referenceList"
+    ) {
+      // A relation switched from one related entry to many keeps every value, each id as a
+      // one-item list, so it is not held back for review as a plain retype is.
       reasons.push(
         `changes column '${op.columnName}' type from '${op.fromType}' to '${op.toType}'`
       );

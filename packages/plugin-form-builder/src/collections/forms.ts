@@ -17,10 +17,12 @@ import {
   checkbox,
   date,
   group,
+  number,
   json,
   relationship,
 } from "nextly";
 
+import { FORM_EDITOR_VIEW } from "../form-pages";
 import type { ResolvedFormBuilderConfig } from "../types";
 import {
   documentReachability,
@@ -743,6 +745,27 @@ function redirectRefusal(message: string, field: PickedDocumentField) {
   });
 }
 
+/**
+ * A field read rule admitting the callers who can update forms of this
+ * collection, and no one else: what the people managing a form may see, and
+ * a visitor may not.
+ *
+ * A super-admin is admitted by role. They may save any form, since the
+ * collection gate admits them before any rule, but field rules still apply
+ * to them, and their role need not hold `update-<slug>` as a stored grant. A
+ * field they could save but not read would come back empty to the editor
+ * and be saved empty. So everyone who can save a form can read these fields.
+ */
+function readableByFormEditors(
+  slug: string
+): (context: {
+  permissions: readonly string[];
+  roles: readonly string[];
+}) => boolean {
+  return ({ permissions, roles }) =>
+    permissions.includes(`update-${slug}`) || roles.includes("super-admin");
+}
+
 export function formsCollection(
   pluginConfig: ResolvedFormBuilderConfig
 ): ExtendedCollectionConfig {
@@ -834,14 +857,48 @@ export function formsCollection(
 
   // Add remaining settings fields
   settingsFields.push(
+    // Read as `oneResponse` and no longer written. Declared still, hidden,
+    // so a form saved before keeps the value its reader maps.
     checkbox({
       name: "allowMultipleSubmissions",
       label: "Allow Multiple Submissions",
-      defaultValue: true,
-      admin: {
-        description:
-          "Allow the same user/IP to submit this form multiple times",
-      },
+      admin: { hidden: true },
+    }),
+
+    // No stored default: unset is what lets the reader map a form's legacy
+    // key, including one an API caller still writes. The reader supplies the
+    // default.
+    select({
+      name: "oneResponse",
+      label: "One response per person",
+      options: [
+        { label: "Allow several responses", value: "off" },
+        { label: "One per email address", value: "email" },
+        { label: "One per browser", value: "browser" },
+        { label: "One per network (IP address)", value: "ip" },
+      ],
+    }),
+
+    text({
+      name: "oneResponseField",
+      label: "Email field for one response per person",
+    }),
+
+    number({
+      name: "oneResponseVersion",
+      label: "One-response version",
+      defaultValue: 0,
+      admin: { hidden: true },
+    }),
+
+    // The version whose earlier submissions have all been given their keys;
+    // behind `oneResponseVersion` while that is still being done. Written
+    // only by the plugin (`one-response-rebuild`); no stored default, so a
+    // form saved before it existed reads as up to date.
+    number({
+      name: "oneResponseKeyedVersion",
+      label: "One-response keys made for version",
+      admin: { hidden: true },
     }),
 
     checkbox({
@@ -853,13 +910,46 @@ export function formsCollection(
       },
     }),
 
+    // Read as `botCheck` and no longer written; hidden, as above.
     checkbox({
       name: "captchaEnabled",
       label: "Enable reCAPTCHA",
-      admin: {
-        description:
-          "Per-form reCAPTCHA override; unset inherits the plugin default",
-      },
+      admin: { hidden: true },
+    }),
+
+    // No stored default: unset is what lets the reader map a form's legacy
+    // key, including one an API caller still writes. The reader supplies the
+    // default.
+    select({
+      name: "botCheck",
+      label: "Bot check",
+      options: [
+        { label: "Site default", value: "default" },
+        { label: "Off", value: "off" },
+        { label: "reCAPTCHA", value: "recaptcha" },
+        { label: "Turnstile", value: "turnstile" },
+      ],
+    }),
+
+    date({ name: "closesAt", label: "Closes at" }),
+
+    number({ name: "submissionLimit", label: "Submission limit", min: 1 }),
+
+    checkbox({
+      name: "storeIpAndBrowser",
+      label: "Store IP address and browser",
+      defaultValue: true,
+    }),
+
+    number({ name: "keepDays", label: "Keep submissions for (days)", min: 1 }),
+
+    textarea({
+      name: "internalNote",
+      label: "Internal note",
+      // For the people who manage the form. The public read of a form returns
+      // its row, and the Public role may read forms, so the note is withheld
+      // from anyone who cannot edit them.
+      access: { read: readableByFormEditors(slug) },
     }),
 
     text({
@@ -941,6 +1031,12 @@ export function formsCollection(
         description:
           "Email notification rules. Managed by the Form Builder UI.",
       },
+      // Who is emailed is for the people who manage the form. The public read
+      // of a form returns its row, and the Public role may read forms, so the
+      // rules, with their recipients' addresses, are withheld from anyone who
+      // cannot edit forms. Sending reads the form as the system, which this
+      // rule does not limit.
+      access: { read: readableByFormEditors(slug) },
     }),
 
     // ============================================================
@@ -1025,7 +1121,7 @@ export function formsCollection(
         views: {
           // Replace default edit view with visual Form Builder
           Edit: {
-            Component: "@nextlyhq/plugin-form-builder/admin#FormBuilderView",
+            Component: FORM_EDITOR_VIEW,
           },
         },
       },

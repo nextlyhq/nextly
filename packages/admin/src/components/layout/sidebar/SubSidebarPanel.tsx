@@ -19,18 +19,19 @@
  * reader moves between the dashboard and a collection.
  */
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
 import { isContentSection } from "./lib/content-rail";
-import { isSubSidebarOpen } from "./lib/has-sub-sidebar";
+import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import {
   subSidebarBorderClass,
   subSidebarHoldsWidth,
 } from "./lib/sub-sidebar-classes";
+import { PanelGhostBody } from "./RailColumn";
 import { SubSidebarContent } from "./SubSidebarContent";
 
 /** The panel's own title, which is the selection's name unless it has one. */
@@ -50,25 +51,42 @@ export function SubSidebarPanel({
   isFolderTreeVisible,
   standaloneLabel,
   content,
+  outlineBody,
 }: {
   isMobile: boolean;
   selectedMain: string;
   visibleMenuItemIds: readonly string[];
   isFolderTreeVisible: boolean;
   standaloneLabel: string;
-  /** Everything `SubSidebarContent` needs, passed through unread. */
-  content: React.ComponentProps<typeof SubSidebarContent>;
+  /**
+   * Everything `SubSidebarContent` needs, passed through unread. Absent for
+   * the panel's outline, drawn before the session is confirmed: then the panel
+   * opens for the route's section alone and holds neutral rows where its
+   * links will be.
+   */
+  content?: React.ComponentProps<typeof SubSidebarContent>;
+  /**
+   * What the panel's outline holds in place of its neutral rows: the panel
+   * drawn from what this device remembered, where it remembered one.
+   */
+  outlineBody?: ReactNode;
 }): JSX.Element {
   const suppressed = useSuppressedChrome();
   const hasSubSidebar = isSubSidebarOpen(
     selectedMain,
-    visibleMenuItemIds,
+    // The outline knows no entries yet, so the route's section stands for
+    // the one entry it will open.
+    content === undefined ? [selectedMain] : visibleMenuItemIds,
     isFolderTreeVisible,
     suppressed
   );
   const layout = {
     isMobile,
     hasSubSidebar,
+    // From the selection alone, which follows the route: the track is held
+    // from the first paint on a page whose section has a panel, and absent on
+    // one whose section has none.
+    sectionHasPanel: isSubSidebarCategory(selectedMain, isFolderTreeVisible),
     released: suppressed.has("subSidebar"),
   };
 
@@ -81,9 +99,10 @@ export function SubSidebarPanel({
       className={cn(
         "flex flex-col bg-background overflow-hidden shrink-0",
         // The width is one decision (`subSidebarHoldsWidth`): on the wide
-        // layout the track keeps it whether or not a panel is showing, so the
-        // main column beside it never moves; on the narrow layout the panel
-        // overlays inside the drawer and has width only while open.
+        // layout the track has it on a page whose section owns a panel, from
+        // the first paint, and none on a page without one; on the narrow
+        // layout the panel overlays inside the drawer and has width only while
+        // open.
         subSidebarHoldsWidth(layout) ? "w-64" : "w-0",
         subSidebarBorderClass(layout),
         isMobile && "relative",
@@ -98,7 +117,7 @@ export function SubSidebarPanel({
         track's edge. What arrives in the track fades in, under motion-safe, so
         it reads as the panel opening in place rather than appearing.
       */}
-      <div className="h-16 px-6 flex items-center  border-b border-border">
+      <div className="h-(--admin-bar-height) shrink-0 px-6 flex items-center border-b border-border">
         {hasSubSidebar ? (
           <span className="font-bold text-base tracking-tight capitalize text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
             {panelTitle(selectedMain, standaloneLabel)}
@@ -116,7 +135,11 @@ export function SubSidebarPanel({
       */}
       {hasSubSidebar ? (
         <div className="flex-1 overflow-y-auto motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
-          <SubSidebarContent {...content} />
+          {content === undefined ? (
+            (outlineBody ?? <PanelGhostBody />)
+          ) : (
+            <SubSidebarContent {...content} />
+          )}
         </div>
       ) : null}
     </aside>

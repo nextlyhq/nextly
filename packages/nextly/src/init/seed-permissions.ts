@@ -13,6 +13,7 @@
  * @module init/seed-permissions
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { inArray } from "drizzle-orm";
 
 import type { AccessTarget } from "../auth/access/decide";
@@ -21,7 +22,9 @@ import {
   ROLE_PRESETS,
   seedRolePresets,
 } from "../database/seeders/role-presets";
+import type { NextlyServiceConfig } from "../di/register";
 import { getService } from "../di/service-access";
+import { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
@@ -40,12 +43,16 @@ import { RolePermissionService } from "../domains/auth/services/role-permission-
 import { isMissingTable } from "../domains/field-groups/migration/session";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
-import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import {
+  collectCustomPermissions,
+  type PermissionConfigSource,
+} from "../plugins/permissions/collect-permissions";
+import type { PluginDefinition } from "../plugins/plugin-context";
 import { collectPublicGrants } from "../plugins/public-grants/collect-public-grants";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
 import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
-import { consoleLogger } from "../shared/types";
+import { consoleLogger, type Logger } from "../shared/types";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
 
@@ -64,23 +71,48 @@ import { runBoundedDiagnostic } from "./bounded-diagnostic";
  * otherwise take a partial seeding for a whole one.
  */
 export async function seedAllPermissions(): Promise<void> {
-  const permissionSeedService = getService("permissionSeedService");
+  // What a start reads and writes comes from the registered services. It adds
+  // and updates, and marks nothing orphaned: a permission its build no longer
+  // declares leaves only when `nextly migrate` applies the recorded migration
+  // that drops it, so an older or a misconfigured build starting against the
+  // database cannot take a permission away.
+  await seedDeclaredPermissions({
+    permissionSeedService: getService("permissionSeedService"),
+    config: getService("config"),
+  });
+}
+
+/** What seeding the declared permissions reads the declarations from and writes through. */
+interface PermissionSeeding {
+  permissionSeedService: PermissionSeedService;
+  /** The configuration: its collections, Singles, own permissions and plugins. */
+  config: PermissionConfigSource & { plugins?: PluginDefinition[] };
+}
+
+/**
+ * Seed system, collection, single and app- and plugin-declared permissions,
+ * then grant whatever is new to super_admin: the one implementation a start
+ * (`seedAllPermissions`) and `nextly migrate`
+ * (`seedPermissionsRolesAndPresets`) share, so the two never add a different
+ * set. Neither marks a permission orphaned here: `nextly migrate` does that
+ * as each recorded migration applies, from the permissions its snapshot
+ * declares, never from the configuration a run or a start happens to have.
+ *
+ * Throws once everything that could be written has been, when a seeder
+ * counted a permission it could not write (see `seedAllPermissions`).
+ */
+async function seedDeclaredPermissions({
+  permissionSeedService,
+  config,
+}: PermissionSeeding): Promise<void> {
   const systemResult = await permissionSeedService.seedSystemPermissions();
   const collectionResult =
     await permissionSeedService.seedAllCollectionPermissions();
   const singleResult = await permissionSeedService.seedAllSinglePermissions();
 
-  const config = getService("config");
   const declared = collectCustomPermissions(config, config.plugins ?? []);
   const customResult =
     await permissionSeedService.seedCustomPermissions(declared);
-
-  // Seeding only ever adds. A permission whose package has stopped declaring
-  // it keeps the attribution it had, which is read to decide whether it is a
-  // plugin's — so a declaration that goes away quietly changes what the
-  // presets grant. Marked here, against the same list that was just seeded;
-  // grants are untouched and nothing is deleted.
-  await permissionSeedService.markOrphanedPermissions(declared);
 
   const allNewIds = [
     ...systemResult.newPermissionIds,
@@ -111,6 +143,48 @@ export async function seedAllPermissions(): Promise<void> {
       },
     });
   }
+}
+
+/**
+ * The permissions, the declared roles and the preset roles' grants, as
+ * `nextly migrate` writes them once its migrations and registry rows are in
+ * place: every missing permission (core's, each registered collection's and
+ * Single's, the app's and each configured plugin's), then each preset role's
+ * grants set by difference, then the roles the app and its plugins declare.
+ *
+ * The same services a start seeds through, on the command's own connection
+ * and configuration rather than the registered ones, which a command never
+ * has: `seedDeclaredPermissions`, `seedRolePresets` and `seedPluginRoles`.
+ * Each writes only where it finds a difference, so a database already in step
+ * is read and not written. It marks nothing orphaned (the command does that
+ * as each migration applies), and touches no Public role, which a start still
+ * makes.
+ *
+ * Throws when a permission could not be written, before any role is set: a
+ * declared role is made once and never revisited, so made against a partial
+ * set it would lack those grants for good. A run that throws is repeated
+ * whole by the next.
+ */
+export async function seedPermissionsRolesAndPresets(args: {
+  adapter: DrizzleAdapter;
+  logger: Logger;
+  /** The configuration the command loaded; `roles` only where a caller has them. */
+  config: PermissionSeeding["config"] & Pick<NextlyServiceConfig, "roles">;
+}): Promise<void> {
+  const { adapter, logger, config } = args;
+  await seedDeclaredPermissions({
+    permissionSeedService: new PermissionSeedService(adapter, logger),
+    config,
+  });
+  await seedRolePresets(adapter, logger);
+  // A declared role bundling a permission not seeded yet waits for a run that
+  // has it, rather than being made without it for good.
+  await seedPluginRoles(
+    adapter,
+    collectRoles(config, config.plugins ?? []),
+    logger,
+    { deferIncomplete: true }
+  );
 }
 
 /** How long after a failure to make the Public role it is tried again. */

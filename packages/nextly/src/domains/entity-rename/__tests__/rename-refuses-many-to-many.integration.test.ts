@@ -275,6 +275,8 @@ describe.each(getConfiguredTestDialects())(
         renameEntity(t().adapter, {
           dialect,
           move: { kind: "collection", from: "posts", to: "articles" },
+          // The target is free: what is refused here is the many-to-many link.
+          judgeTarget: async () => {},
           writeRegistry,
           logger: silentLogger,
         })

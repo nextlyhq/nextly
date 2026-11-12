@@ -409,8 +409,7 @@ export interface ApplyDueReleasesResult {
 /**
  * Apply every release whose instant has arrived; see the module note.
  *
- * @experimental Its dependency ports may change while releases settle. A
- * caller passing its own `repository` provides `isMemberApplied`, returns
+ * A caller passing its own `repository` provides `isMemberApplied`, returns
  * `appliedRevision` from `listMembersOf`, and settles a whole component in
  * `markReleasesPublished`; the built-in drain job (`createReleasesDrainJob`)
  * needs nothing.

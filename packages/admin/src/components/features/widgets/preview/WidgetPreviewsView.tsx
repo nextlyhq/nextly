@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * The widget preview page's body: every widget the reader may see, from the
+ * The widget preview board's body: every widget the reader may see, from the
  * development preview read, each drawn in every state at every size, with a
- * light and dark switch and the accessibility check.
+ * light and dark switch and the accessibility check. Drawn only by the test
+ * page the browser tests open (`WidgetPreviewBoard`); the admin draws it nowhere.
  *
  * Every card is drawn with the admin's own declaration of the widget, the one
  * the dashboard draws with (`resolveDashboardWidgets`, from the workspace
@@ -140,8 +141,8 @@ export function WidgetPreviewsView({
         <p className="max-w-3xl text-sm text-muted-foreground">
           Every widget you may see, drawn from its preview cases at its
           smallest, default and largest sizes, and in each state its card can be
-          in. Nothing here loads data. This page exists only while the server
-          runs in development.
+          in. Nothing here loads data. This is a test page: it exists only in
+          the browser test app, for its accessibility check.
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <div

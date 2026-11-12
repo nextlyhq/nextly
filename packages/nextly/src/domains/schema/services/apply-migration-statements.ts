@@ -41,6 +41,7 @@ import {
   isIdempotencyError,
   splitStatements,
 } from "../pipeline/sql-statement-utils";
+import { isRenameStatement } from "../rename-target";
 
 /**
  * The adapter surface this needs.
@@ -65,7 +66,10 @@ export async function applyMigrationStatements(
     try {
       await adapter.executeQuery(statement);
     } catch (error) {
-      if (!isIdempotencyError(error)) throw error;
+      // A rename's refusal is a rename that could not be made, never one already applied.
+      if (isRenameStatement(statement) || !isIdempotencyError(error)) {
+        throw error;
+      }
     }
   }
 }
@@ -222,7 +226,16 @@ async function runStatements(
       try {
         await db.execute(sql.raw(statement));
       } catch (error) {
-        if (!tolerate || !alreadyApplied(error)) throw error;
+        // A rename's refusal is never passed over: "the target already exists" is exactly a rename
+        // that could not be made, and recording it as made would leave the values under the old
+        // name while the registry names the new one.
+        if (
+          !tolerate ||
+          isRenameStatement(statement) ||
+          !alreadyApplied(error)
+        ) {
+          throw error;
+        }
       }
       progress.ran += 1;
     }

@@ -49,6 +49,7 @@ import {
 
 import { ensureI18nArchive } from "./ensure-archive";
 import {
+  countLegacyArchiveLabels,
   labelLegacyArchiveRows,
   legacyLabelFor,
   ownedSince,
@@ -136,6 +137,21 @@ export interface RestoreArchiveResult {
    * reported for a restore that names the kind to claim them.
    */
   rowsUnattributed: number;
+  /**
+   * A dry run only: what a real restore does to the archive itself before it reads it, which
+   * `ensureI18nArchive` and `labelLegacyArchiveRows` do.
+   */
+  archiveUpgrade?: ArchiveUpgrade;
+}
+
+/** What a restore does to the archive before reading it. */
+export interface ArchiveUpgrade {
+  /** The archive table, created when it is not there. */
+  createTable?: string;
+  /** The kind column, added to an archive older than it. */
+  addColumn?: { table: string; column: string };
+  /** The rows of unknown kind the labelling gives each kind, as `countLegacyArchiveLabels` counts them. */
+  labels: { kind: string; rows: number }[];
 }
 
 interface ArchiveRow {
@@ -275,7 +291,43 @@ async function archiveExists(
   return (await adapter.listTables()).includes(getTableName(nextlyI18nArchive));
 }
 
+/**
+ * What a restore does to the archive itself before it reads it, read and not done: the table
+ * created when it is not there (`ensureI18nArchive`), the kind column added to an archive older
+ * than it, and the rows of unknown kind the labelling gives each kind (`labelLegacyArchiveRows`'s
+ * own plan, counted).
+ */
+async function planArchiveUpgrade(
+  adapter: RestoreArchiveArgs["adapter"]
+): Promise<ArchiveUpgrade> {
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  const table = getTableName(archive);
+  if (!(await archiveExists(adapter)))
+    return { createTable: table, labels: [] };
+  const kindColumn = await companionHasColumn(
+    adapter,
+    table,
+    archive.entityKind.name
+  );
+  return {
+    ...(kindColumn
+      ? {}
+      : { addColumn: { table, column: archive.entityKind.name } }),
+    labels: await countLegacyArchiveLabels(adapter, { kindColumn }),
+  };
+}
+
 export async function restoreI18nArchive(
+  args: RestoreArchiveArgs
+): Promise<RestoreArchiveResult> {
+  if (args.dryRun !== true) return restoreFromArchive(args);
+  const archiveUpgrade = await planArchiveUpgrade(args.adapter);
+  return { ...(await restoreFromArchive(args)), archiveUpgrade };
+}
+
+async function restoreFromArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
   const { adapter, collection, kind, companionTableName, locale } = args;

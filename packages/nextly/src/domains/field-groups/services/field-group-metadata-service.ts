@@ -48,9 +48,11 @@ import {
 } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { writeRegistryRowsWith } from "../../schema/schema-version";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
+import { assertSaveLeavesNoFieldGroupCycle } from "../field-group-cycles";
 
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
@@ -217,6 +219,7 @@ export class FieldGroupMetadataService {
       input.fields,
       null
     );
+    await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     // A translated field marked unique needs an index this server may not be able to key. Refused
     // here, before the main table: the companion is provisioned after it, and a failure there is
     // recorded rather than raised. With no adapter, nothing is applied at all.
@@ -245,10 +248,11 @@ export class FieldGroupMetadataService {
     const migrationStatus = await this.applyCreateDdl(input, migrationSQL);
 
     // 3. RECORD, with the outcome already known.
-    const record = await this.registry.registerComponent({
-      ...input,
-      migrationStatus,
-    });
+    // The row and the stored schema version in one transaction, so the
+    // version's count moves with the save it records (`writeRegistryRows`).
+    const record = await writeRegistryRowsWith(this.adapter, () =>
+      this.registry.registerComponent({ ...input, migrationStatus })
+    );
 
     // 4. BIND the runtime schema, and only now.
     //
@@ -390,6 +394,7 @@ export class FieldGroupMetadataService {
         input.fields,
         existing.fields ?? []
       );
+      await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     }
 
     const localized = requestedLocalized ?? wasLocalized;
@@ -455,26 +460,30 @@ export class FieldGroupMetadataService {
 
     // 3. RECORD, after the physical change succeeded.
     try {
-      const record = await this.registry.updateComponent(
-        input.slug,
-        {
-          ...(input.label !== undefined ? { label: input.label } : {}),
-          ...(input.description !== undefined
-            ? { description: input.description }
-            : {}),
-          ...(input.admin !== undefined ? { admin: input.admin } : {}),
-          ...(requestedLocalized !== undefined
-            ? { localized: requestedLocalized }
-            : {}),
-          ...(input.fields !== undefined
-            ? {
-                fields:
-                  input.fields as unknown as DynamicFieldGroupInsert["fields"],
-                schemaHash: await this.hashFields(input.fields),
-              }
-            : {}),
-        },
-        { source: input.source ?? "ui" }
+      // The row and the stored schema version in one transaction
+      // (`writeRegistryRows`).
+      const record = await writeRegistryRowsWith(this.adapter, async () =>
+        this.registry.updateComponent(
+          input.slug,
+          {
+            ...(input.label !== undefined ? { label: input.label } : {}),
+            ...(input.description !== undefined
+              ? { description: input.description }
+              : {}),
+            ...(input.admin !== undefined ? { admin: input.admin } : {}),
+            ...(requestedLocalized !== undefined
+              ? { localized: requestedLocalized }
+              : {}),
+            ...(input.fields !== undefined
+              ? {
+                  fields:
+                    input.fields as unknown as DynamicFieldGroupInsert["fields"],
+                  schemaHash: await this.hashFields(input.fields),
+                }
+              : {}),
+          },
+          { source: input.source ?? "ui" }
+        )
       );
 
       return { record };
@@ -1061,6 +1070,21 @@ export class FieldGroupMetadataService {
    * Judge a new address by the one rule every road shares (`shared/address-rule`), and against the
    * other field groups' addresses: one with the same snake_case form names the same table.
    */
+  /**
+   * Refuse a save that would leave this field group placed inside itself, directly or through
+   * others. Judged inside the exclusion against every field group as stored now, so two saves that
+   * each close half of a cycle cannot both pass.
+   */
+  private async assertSaveLeavesNoCycle(
+    slug: string,
+    fields: unknown
+  ): Promise<void> {
+    assertSaveLeavesNoFieldGroupCycle({
+      saved: { slug, fields },
+      stored: await this.registry.getAllFieldLists(),
+    });
+  }
+
   private async assertAddressAllowed(slug: string): Promise<void> {
     assertAddressAllowed("fieldGroup", slug);
     const twin = findSameSnakeCaseAddress(

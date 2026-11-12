@@ -19,7 +19,9 @@ export function registerEventsCommand(program: Command): void {
     .description(
       "List deliveries held for a subscriber that is not registered, or out of attempts"
     )
-    .action(lazyAction(async () => (await import("./events")).eventsReportAction));
+    .action(
+      lazyAction(async () => (await import("./events")).eventsReportAction)
+    );
 
   // `--dry-run` carries the one meaning and help line it has everywhere.
   withDryRun(

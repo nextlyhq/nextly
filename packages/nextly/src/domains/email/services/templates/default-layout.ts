@@ -151,13 +151,31 @@ export const defaultLayoutTemplate: OwnerTemplate = {
   variables: [
     {
       name: "content",
+      type: "text",
+      label: "Body",
       description: "Template body injected here",
       required: true,
+      example: "Your email content appears here.",
     },
-    { name: "year", description: "Current year", required: false },
-    { name: "appName", description: "Application name", required: false },
+    {
+      name: "year",
+      type: "number",
+      label: "Year",
+      description: "Current year",
+      required: false,
+      example: 2026,
+    },
+    {
+      name: "appName",
+      type: "text",
+      label: "App name",
+      description: "Application name",
+      required: false,
+      example: "Acme",
+    },
     {
       name: "brand",
+      label: "Brand settings",
       description:
         "Brand settings: colours, font, logo and footer (brand.html holds the markup they make)",
       required: false,

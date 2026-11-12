@@ -64,6 +64,19 @@ export function writeComponent(
  */
 const settledModules = new Set<string>();
 
+/**
+ * Whether the app's generated component map has registered. It imports every
+ * module the admin resolves by string, at once, so from then on nothing
+ * more is on its way: a component still missing is missing.
+ */
+let componentMapComplete = false;
+
+/** Records that the generated component map has registered everything it lists. */
+export function markComponentMapComplete(): void {
+  componentMapComplete = true;
+  registryChanged();
+}
+
 /** Who to tell when a component arrives or a module's loading ends. */
 const registryListeners = new Set<() => void>();
 
@@ -89,11 +102,12 @@ function moduleOf(path: ComponentPath): string | undefined {
 
 /**
  * Whether a component path is settled: registered, or its module's loading
- * has ended, so a surface can tell "still loading" from "not there". A path
- * naming no module is settled, as nothing would load it.
+ * has ended, or the generated map has registered, so a surface can tell
+ * "still loading" from "not there". A path naming no module is settled, as
+ * nothing would load it.
  */
 export function componentSettled(path: ComponentPath): boolean {
-  if (componentRegistry.has(path)) return true;
+  if (componentRegistry.has(path) || componentMapComplete) return true;
   const module = moduleOf(path);
   return module === undefined || settledModules.has(module);
 }
@@ -111,9 +125,10 @@ export function registryVersionNow(): number {
   return registryVersion;
 }
 
-/** Forgets which modules have settled, with the registry, for tests. */
+/** Forgets which modules have settled, and the map, with the registry, for tests. */
 export function resetSettledModules(): void {
   settledModules.clear();
+  componentMapComplete = false;
   registryChanged();
 }
 
