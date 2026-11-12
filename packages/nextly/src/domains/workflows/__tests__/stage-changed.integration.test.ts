@@ -310,9 +310,15 @@ async function expectStageChanged(
   }>
 ): Promise<void> {
   const recorded = await outbox();
+  // The outbox is read with no order, and events recorded in one second need not come back in the
+  // order they were written (MySQL keeps times to the second), so each expected event is found in
+  // it, and nothing else is.
+  expect(recorded).toHaveLength(expected.length);
   expect(recorded).toEqual(
-    expected.map(each =>
-      expect.objectContaining({ type: STAGE_CHANGED, ...each })
+    expect.arrayContaining(
+      expected.map(each =>
+        expect.objectContaining({ type: STAGE_CHANGED, ...each })
+      )
     )
   );
   sentSoFar = [...sentSoFar, ...(await delivered())];
