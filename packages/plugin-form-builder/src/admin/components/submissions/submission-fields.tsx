@@ -173,6 +173,11 @@ const INPUTS: Readonly<Record<string, (props: InputProps) => JSX.Element>> = {
   phone: plainInput("text"),
 };
 
+/** Whether staff may edit an answer of this field type here. */
+export function canEditAnswer(type: string): boolean {
+  return type in INPUTS;
+}
+
 /** One editable input per field type; unsupported types render read-only. */
 export function FieldValueInput({
   field,

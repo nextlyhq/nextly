@@ -239,6 +239,15 @@ export function submissionsCollection(
       label: "Fields asked",
       admin: { hidden: true },
     }),
+
+    // Who sent it, as the admin names it (`submission-title`): its title in
+    // the breadcrumb and lists. Written by the plugin from the answers, never
+    // taken from a caller.
+    text({
+      name: "title",
+      label: "Sender",
+      admin: { hidden: true },
+    }),
   ];
 
   // Process additional fields from formSubmissionOverrides
@@ -279,7 +288,7 @@ export function submissionsCollection(
       isPlugin: true,
       group: "Forms",
       order: 51,
-      useAsTitle: "id",
+      useAsTitle: "title",
       description: "View and manage form submissions",
       // Submissions are created by visitors submitting forms — a hand-typed
       // "New Submission" would be fiction, so the admin never offers one.

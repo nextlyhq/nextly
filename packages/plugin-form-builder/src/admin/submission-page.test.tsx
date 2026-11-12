@@ -21,7 +21,9 @@ import type { AskedSnapshot } from "../utils/asked-fields";
 
 import { browserLabel } from "./components/submissions/browser-label";
 import { SubmissionAnswers } from "./components/submissions/SubmissionAnswers";
-import { SubmissionPage, senderOf } from "./SubmissionPage";
+import { senderOf } from "../utils/submission-title";
+
+import { SubmissionPage } from "./SubmissionPage";
 
 const navigateTo = vi.fn();
 vi.mock("@nextlyhq/plugin-sdk/admin", async original => ({
@@ -330,6 +332,6 @@ describe("the page's helpers", () => {
   it("names the sender from a name answer, else an email", () => {
     expect(senderOf(ASKED.fields, DATA)).toBe("Hina Rossi");
     expect(senderOf(ASKED.fields, { email: "a@b.co" })).toBe("a@b.co");
-    expect(senderOf(ASKED.fields, {})).toBe("Submission");
+    expect(senderOf(ASKED.fields, {})).toBeUndefined();
   });
 });

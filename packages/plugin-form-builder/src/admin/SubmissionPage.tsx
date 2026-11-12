@@ -53,10 +53,12 @@ import { type JSX, type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { FormField } from "../types";
 import { type AskedSnapshot, askedFieldsOf } from "../utils/asked-fields";
+import { senderOf } from "../utils/submission-title";
 
 import { SUBMISSION_COUNT_KEY } from "./components/editor/useSubmissionCount";
 import { browserLabel } from "./components/submissions/browser-label";
 import {
+  canEditAnswer,
   ConsentValue,
   FieldValueInput,
 } from "./components/submissions/submission-fields";
@@ -72,7 +74,10 @@ import {
   type SubmissionRow,
   whenText,
 } from "./components/submissions/submission-row";
-import { SubmissionAnswers } from "./components/submissions/SubmissionAnswers";
+import {
+  AnswerValue,
+  SubmissionAnswers,
+} from "./components/submissions/SubmissionAnswers";
 import { readPermissions } from "./use-admin-permissions";
 import { useBuilderConfig } from "./use-builder-config";
 
@@ -97,31 +102,6 @@ const STATUSES = [
   { value: "archived", label: "Archived", dot: "bg-muted-foreground/50" },
   { value: "spam", label: "Spam", dot: "bg-destructive" },
 ] as const;
-
-/**
- * Who sent it, as the page names it: the first answer to a field named or
- * labelled as a name, else the first email address, else "Submission".
- */
-export function senderOf(
-  fields: ReadonlyArray<{ name: string; label: string; type: string }>,
-  data: Record<string, unknown>
-): string {
-  const answer = (name: string) => {
-    const value = data[name];
-    return typeof value === "string" ? value.trim() : "";
-  };
-  const named = fields.find(
-    field =>
-      field.type === "text" &&
-      /name/i.test(`${field.name} ${field.label}`) &&
-      answer(field.name)
-  );
-  if (named) return answer(named.name);
-  const email = fields.find(
-    field => field.type === "email" && answer(field.name)
-  );
-  return email ? answer(email.name) : "Submission";
-}
 
 /** The initials a sender shows as, at most two. */
 function initialsOf(sender: string): string {
@@ -424,6 +404,38 @@ function SubmissionBar({
   );
 }
 
+/**
+ * One answer while editing: an input where staff may change it, and the
+ * answer as the page reads it where they may not (a file, a hidden value,
+ * a consent, which keeps what the visitor agreed to).
+ */
+function EditableAnswer({
+  field,
+  asked,
+  value,
+  onChange,
+}: {
+  field: FormField;
+  asked: AskedSnapshot;
+  value: unknown;
+  onChange: (value: unknown) => void;
+}): JSX.Element {
+  if (field.type === "consent") return <ConsentValue value={value} editing />;
+  if (canEditAnswer(field.type)) {
+    return <FieldValueInput field={field} value={value} onChange={onChange} />;
+  }
+  const shown = asked.fields.find(each => each.name === field.name) ?? {
+    name: field.name,
+    label: field.label || field.name,
+    type: field.type,
+  };
+  return (
+    <div className="text-sm">
+      <AnswerValue field={shown} value={value} />
+    </div>
+  );
+}
+
 /** The answers, as asked, and editing them for a person who may. */
 function AnswersBox({
   submission,
@@ -472,20 +484,14 @@ function AnswersBox({
               >
                 {field.label || field.name}
               </label>
-              {field.type === "consent" ? (
-                <ConsentValue value={draft[field.name]} editing />
-              ) : (
-                <FieldValueInput
-                  field={field}
-                  value={draft[field.name]}
-                  onChange={value =>
-                    setDraft(current => ({
-                      ...current,
-                      [field.name]: value,
-                    }))
-                  }
-                />
-              )}
+              <EditableAnswer
+                field={field}
+                asked={asked}
+                value={draft[field.name]}
+                onChange={value =>
+                  setDraft(current => ({ ...current, [field.name]: value }))
+                }
+              />
             </div>
           ))}
           <div className="flex justify-end gap-2 pt-2">
@@ -717,7 +723,7 @@ function SubmissionHeader({
       media={
         <span
           aria-hidden="true"
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border bg-card text-sm font-semibold text-foreground"
         >
           {initialsOf(sender)}
         </span>
@@ -829,7 +835,7 @@ function describe(
   const asked = askedFieldsOf(submission.asked, form?.fields ?? [], data);
   return {
     asked,
-    sender: senderOf(asked.fields, data),
+    sender: senderOf(asked.fields, data) ?? "Submission",
     formName: formNameOf(form, submission),
     when: whenText(submission.submittedAt ?? submission.createdAt),
   };

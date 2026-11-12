@@ -240,7 +240,7 @@ function isBlank(value: unknown): boolean {
 }
 
 /** One answer's value, by the kind of field it answers. */
-function AnswerValue({
+export function AnswerValue({
   field,
   value,
 }: {

@@ -112,6 +112,7 @@ import {
   SCHEMA_ONLY_CONTEXT,
   SCHEMA_ONLY_READ,
 } from "./utils/schema-only-read";
+import { senderOf } from "./utils/submission-title";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -1298,6 +1299,7 @@ export async function prepareSubmissionForWrite(
   // What it was asked is the plugin's to record, from the form, never a
   // caller's to set.
   delete submission.asked;
+  delete submission.title;
   const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
@@ -1447,6 +1449,7 @@ function recordAsked(
     (movedFrom !== null && movedFrom !== formId)
   ) {
     row.asked = askedSnapshotOf(fields, data);
+    titleFrom(row, fields, data);
     return;
   }
   const after = askedAfterEdit(
@@ -1456,6 +1459,17 @@ function recordAsked(
     data
   );
   if (after !== undefined) row.asked = after;
+  titleFrom(row, fields, data);
+}
+
+/** The submission's title: who sent it, from its answers as asked. */
+function titleFrom(
+  row: Record<string, unknown>,
+  fields: AnyFormField[],
+  data: Record<string, unknown>
+): void {
+  const asked = readAskedSnapshot(row.asked);
+  row.title = senderOf(asked?.fields ?? fields, data) ?? null;
 }
 
 /**

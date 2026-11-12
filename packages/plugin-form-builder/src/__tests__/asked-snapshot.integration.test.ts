@@ -83,6 +83,7 @@ async function boot(dialect: TestDialect) {
   const row = async (id: string) =>
     (await t.nextly.findByID({ collection: "form-submissions", id })) as {
       asked?: unknown;
+      title?: string | null;
       data: Record<string, unknown>;
     };
   const setFields = (fields: unknown[]) =>
@@ -203,6 +204,28 @@ describe.each(getConfiguredTestDialects())(
       expect(readAskedSnapshot((await row(id)).asked)?.fields[0]?.label).toBe(
         "Full name"
       );
+    });
+
+    it("is titled by who sent it, never by a caller", async () => {
+      const { t, submit, row } = await boot(dialect);
+      const id = await submit(
+        { name: "Hina Rossi", role: "backend" },
+        { title: "Forged" }
+      );
+      expect((await row(id)).title).toBe("Hina Rossi");
+      // Nor from a patch that carries nothing else.
+      await t.nextly.update({
+        collection: "form-submissions",
+        id,
+        data: { title: "Forged", _overwrite: true },
+      });
+      expect((await row(id)).title).toBe("Hina Rossi");
+      await t.nextly.update({
+        collection: "form-submissions",
+        id,
+        data: { data: { name: "Hina R.", role: "backend" }, _overwrite: true },
+      });
+      expect((await row(id)).title).toBe("Hina R.");
     });
   }
 );
