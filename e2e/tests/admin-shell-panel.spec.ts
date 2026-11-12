@@ -38,14 +38,15 @@ test("draws a collection reached from the dashboard as a direct load draws it", 
   expect(dashboard.x).toBe(direct.x - 256);
   expect(dashboard.width).toBe(direct.width + 256);
 
-  // On the wide layout the rail's Content entry opens its panel beside the column, which then
-  // stands where a collection's does.
+  // On the wide layout the rail's Content entry opens the Content overview with its panel
+  // beside the column, which then stands where a collection's does.
   // Found in the navigation: a dashboard card's title is the button that opens its quick
-  // settings, so the Content card draws a second button named "Content" in the main column.
+  // settings, so the Content card draws a second control named "Content" in the main column.
   await page
     .getByRole("navigation")
-    .getByRole("button", { name: "Content", exact: true })
+    .getByRole("link", { name: "Content", exact: true })
     .click();
+  await page.waitForURL(/\/admin\/content$/);
   const posts = panel.getByRole("link", { name: "Posts", exact: true });
   await expect(posts).toBeVisible();
   expect(await mainColumnBox(page)).toEqual(direct);
