@@ -723,6 +723,7 @@ export type {
   PluginUserService,
   PluginMediaService,
   PluginEmailService,
+  ForgetSendsInput,
   PluginVersionsService,
   PluginCollectionTransaction,
   PluginVersionPins,
