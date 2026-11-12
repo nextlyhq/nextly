@@ -7,7 +7,10 @@
 import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors";
-import type { SystemColumnEntity } from "../../lib/system-columns";
+import {
+  SYSTEM_COLUMNS,
+  type SystemColumnEntity,
+} from "../../lib/system-columns";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 import { documentSystemKeys } from "../versions/snapshot-system-keys";
 
@@ -29,7 +32,7 @@ export function approvalDigest(
   exemptFields: readonly string[] = []
 ): string {
   const value = readSnapshot(snapshot);
-  const system = documentSystemKeys(entity);
+  const system = keysLeftOut(entity);
   const exempt = new Set(exemptFields);
   // Only the top level carries the framework's keys and the exempt fields, which are named by a
   // top-level field name; nested content is the editor's.
@@ -48,6 +51,23 @@ export function approvalDigest(
   return createHash("sha256")
     .update(canonicalJson(content) ?? "", "utf8")
     .digest("hex");
+}
+
+/**
+ * The top-level keys a digest leaves out for a document of this kind: the framework's own keys
+ * every comparison leaves out (`documentSystemKeys`), and every framework column no client may
+ * write, in both spellings, since none of them is content an approval covers. Among those is when
+ * the document was first published, which SQLite and MySQL read back to the second while the
+ * version a publish writes holds it to the millisecond: counted, it would read as a change between
+ * two versions nobody edited.
+ */
+function keysLeftOut(entity: SystemColumnEntity): ReadonlySet<string> {
+  return new Set([
+    ...documentSystemKeys(entity),
+    ...SYSTEM_COLUMNS.filter(
+      column => column.appliesTo.includes(entity) && !column.writableByClient
+    ).flatMap(column => [column.name, column.camelName]),
+  ]);
 }
 
 /** A snapshot as the value it holds: stored as JSON text by some dialects. */

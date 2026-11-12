@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A save that changes nothing a language shows no longer withdraws that language's approval on SQLite and MySQL. The time a document was first published is now treated as the framework's own record, like its created and updated times, rather than as content: those databases read it back to the second while a publish's version holds it to the millisecond, so a held edit of another language could read it as a change.
+A save that changes nothing a language shows no longer withdraws that language's approval on SQLite and MySQL. An approval's record of the content it approved now leaves out every column the framework manages and no client writes, the time the document was first published among them. Those databases read that time back to the second, while the version a publish writes holds it to the millisecond, so a held edit of another language read it as a change.

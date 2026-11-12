@@ -21,10 +21,6 @@ const SHARED_KEYS = [
   "id",
   "createdAt",
   "updatedAt",
-  // When the document was first published: the framework's record, set once. SQLite and MySQL
-  // read it back to the second while the version a publish writes holds it to the millisecond,
-  // so counted as content it would read as a change between two versions nobody edited.
-  "firstPublishedAt",
   "status",
   DOCUMENT_VERSION_KEY,
   ...MIGRATE_STEP_COLUMN_NAMES,
