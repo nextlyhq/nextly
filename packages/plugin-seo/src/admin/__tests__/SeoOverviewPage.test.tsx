@@ -229,7 +229,9 @@ describe("SeoOverviewPage", () => {
     fireEvent.click(
       within(card("Set up SEO")).getByRole("button", { name: "Hide" })
     );
-    await vi.waitFor(() => expect(write).toHaveBeenCalledWith({ hidden: true }));
+    await vi.waitFor(() =>
+      expect(write).toHaveBeenCalledWith({ hidden: true })
+    );
     shown.unmount();
 
     serve({ "/overview/checklist": { ...CHECKLIST, hidden: true } });
@@ -355,7 +357,7 @@ describe("SeoOverviewPage", () => {
     render(<SeoOverviewPage />);
     expect(
       within(card("Not found, last 7 days")).getByText(
-        "No address was not found in the last 7 days."
+        "No addresses not found in the last 7 days."
       )
     ).toBeTruthy();
   });
@@ -391,12 +393,17 @@ describe("SeoOverviewPage", () => {
     expect(within(card("Set up SEO")).getByText("4 of 6 done")).toBeTruthy();
   });
 
-  it("sends a first visit on to setup while it still waits", () => {
+  it("sends a first visit on to setup while it still waits, once", () => {
     serve({ "/overview/checklist": { ...CHECKLIST, setupWaiting: true } });
-    render(<SeoOverviewPage />);
+    const first = render(<SeoOverviewPage />);
     expect(navigateTo).toHaveBeenCalledWith(`${SECTION}/settings`, {
       replace: true,
     });
+    first.unmount();
+    // Back from setup, a read cached before it was answered still says it
+    // waits: the reader is not sent away again.
+    render(<SeoOverviewPage />);
+    expect(navigateTo).toHaveBeenCalledTimes(1);
   });
 
   it("stays on the Overview once setup is answered", () => {

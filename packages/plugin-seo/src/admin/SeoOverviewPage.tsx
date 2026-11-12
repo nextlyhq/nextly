@@ -143,7 +143,7 @@ function Line({
   );
 }
 
-/** A link written as part of a line's text. */
+/** A link written as part of a line's text, underlined so colour is never its only sign. */
 function TextLink({
   href,
   className,
@@ -156,7 +156,7 @@ function TextLink({
   return (
     <AdminLink
       href={href}
-      className={`text-sm font-medium underline-offset-4 hover:underline ${className ?? "text-foreground"}`}
+      className={`text-sm font-medium underline underline-offset-4 ${className ?? "text-foreground"}`}
     >
       {children}
     </AdminLink>
@@ -204,11 +204,20 @@ function SmallCard({
   );
 }
 
+/**
+ * Whether this admin session has sent the reader on to setup already. A
+ * read cached before setup was answered still says it waits, so the reader
+ * is sent at most once until the admin loads again, when the read is fresh.
+ */
+let sentToSetup = false;
+
 /** First-time setup still waits: the first visit is sent on to it. */
 function useSetupFirst(checklist: ChecklistBody | undefined): void {
   const waiting = checklist?.setupWaiting === true;
   useEffect(() => {
-    if (waiting) navigateTo(SETTINGS_PAGE_HREF, { replace: true });
+    if (!waiting || sentToSetup) return;
+    sentToSetup = true;
+    navigateTo(SETTINGS_PAGE_HREF, { replace: true });
   }, [waiting]);
 }
 
@@ -476,7 +485,7 @@ function NotFoundCard(): JSX.Element {
           if (rows.length === 0) {
             return (
               <p className="text-sm text-muted-foreground">
-                No address was not found in the last 7 days.
+                No addresses not found in the last 7 days.
               </p>
             );
           }

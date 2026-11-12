@@ -273,7 +273,13 @@ test("its count is a Needs attention line linked to the problem list", async ({
   await writePage(title, `seo-e2e-attention-${stamp}`);
   await listNaming(page.request, title);
   // The errors and warnings, as the SEO section's Overview counts them for
-  // the same person, from the same list.
+  // the same person, from the same list; setup answered, so the Overview is
+  // drawn rather than sending a first visit on to it.
+  await ok(
+    await page.request.patch(`${API}/singles/seo-settings`, {
+      data: { setupStep: 3, _overwrite: true },
+    })
+  );
   await gotoAdmin(page, "/plugins/nextlyhq-plugin-seo/overview");
   const health = page.getByRole("region", { name: "Search health" });
   const countOf = async (name: string) =>
