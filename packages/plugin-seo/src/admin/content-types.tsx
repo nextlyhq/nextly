@@ -1,20 +1,34 @@
 /**
- * The Content types tab: each content type with SEO, where its pages live,
- * how their titles are made, whether the whole type is hidden from search,
- * and what its pages are described as in structured data, with the fields
- * each detail is read from.
+ * The Content types tab: one row per content type with SEO, saying where its
+ * pages live, how their titles are made, whether the whole type is hidden
+ * from search, and what its pages are described as in structured data, with
+ * the fields each detail is read from; then the types the site's code gives
+ * no SEO, greyed.
+ *
+ * Drawn as the other Settings tabs are, a card of rows from the admin's own
+ * parts, so the tab reads like the rest of the screen.
  *
  * @module admin/content-types
  */
-import { Button, Switch } from "@nextlyhq/plugin-sdk/admin";
-import { useId, useState, type JSX } from "react";
+import {
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SettingsRowGroup,
+  Switch,
+} from "@nextlyhq/plugin-sdk/admin";
+import { useId, useRef, useState, type JSX } from "react";
 
 import type {
   MappableField,
   SeoContentType,
   SwitchedOffType,
 } from "../settings/contract";
-import { tokenKey } from "../settings/patterns";
+import { SITE_NAME_TOKEN, TITLE_TOKEN, tokenKey } from "../settings/patterns";
 import {
   DETAIL_GUESSES,
   DETAIL_LABELS,
@@ -25,6 +39,7 @@ import {
   type StructuredDataTypeKey,
 } from "../structured-data/catalog";
 import type { DetailSource } from "../structured-data/rules";
+import { characters, TITLE_LIMIT } from "../tab/problems";
 
 import {
   FROM_THE_PAGE,
@@ -34,13 +49,14 @@ import {
   missingDetails,
   patternOf,
   patternProblem,
+  previewOf,
   structuredTypeOf,
   withDetailField,
   withHidden,
   withStructuredType,
 } from "./settings-draft";
-import { Icon } from "./styles";
-import { PatternEditor, type TabProps } from "./tabs";
+import { ControlNote, SettingsCard } from "./settings-parts";
+import type { TabProps } from "./tabs";
 
 /**
  * The types described with details, which are the only ones with any to
@@ -53,100 +69,157 @@ const MAPPABLE_TYPES: readonly StructuredDataTypeKey[] =
       STRUCTURED_DATA_TYPES[key].uses.length > 0
   );
 
-/** Which editor is open under a type's row, if any. */
-type OpenEditor =
-  | { key: string; kind: "pattern" }
-  | { key: string; kind: "map"; type: StructuredDataTypeKey };
+/**
+ * The choice of no structured data type, and of no field for a detail. The
+ * admin's select takes no empty value, so each "none" has a name no type or
+ * field can have.
+ */
+const AUTOMATIC = "=automatic";
+const FOUND = "=found";
+/** A fixed value the site's code gives a detail, in the field choice. */
+const FIXED = "=fixed";
 
-/** Where a type's pages live: their address, or that they have none yet. */
-function TypeAddress({ type }: { type: SeoContentType }): JSX.Element {
-  if (!type.public) {
-    return (
-      <>
-        <span className="nx-seo-notpublic">
-          <Icon name="warn" /> Not public yet
-        </span>
-        <p className="nx-seo-help">A developer sets where these pages live.</p>
-      </>
-    );
-  }
-  // One entry's address, shown as an example of where the type's pages live.
-  return type.example?.address ? (
-    <>
-      <span className="nx-seo-eg">e.g.</span>{" "}
-      <span className="nx-seo-code">{type.example.address}</span>
-    </>
-  ) : (
-    <span className="nx-seo-help">Set in code</span>
-  );
+/** A type's entry count in words, where the reader may count them. */
+function countText(count: number | undefined): string | undefined {
+  if (count === undefined) return undefined;
+  if (count === 0) return "No entries yet";
+  return `${count} ${count === 1 ? "entry" : "entries"}`;
 }
 
-/** A type's structured data choice, and how many details it still lacks. */
-function StructuredDataCell({
+/** What a type's row says under its name: how many, and where they live. */
+function typeSummary(type: SeoContentType): string {
+  const parts: string[] = [];
+  const count = countText(type.count);
+  if (count !== undefined) parts.push(count);
+  if (!type.public)
+    parts.push("Not public yet: a developer sets where these pages live");
+  else if (type.example?.address) parts.push(`e.g. ${type.example.address}`);
+  else parts.push("Address set in code");
+  return parts.join(" · ");
+}
+
+/** A type's title pattern: the field, its variables, and an example. */
+function PatternEditor({
   type,
   draft,
   change,
-  mapOpen,
-  toggleMap,
-}: TabProps & {
-  type: SeoContentType;
-  mapOpen: boolean;
-  toggleMap: (structuredType: StructuredDataTypeKey) => void;
-}): JSX.Element {
-  const chosen = structuredTypeOf(draft, type.key);
-  const needs = chosen === undefined ? [] : STRUCTURED_DATA_TYPES[chosen].needs;
-  const missing =
-    chosen === undefined ? [] : missingDetails(draft, type, chosen);
+}: TabProps & { type: SeoContentType }): JSX.Element {
+  const input = useRef<HTMLInputElement>(null);
+  const id = useId();
+  const { pattern, own } = patternOf(draft, type.key);
+  const problem = patternProblem(pattern, type);
+  const preview = previewOf(pattern, type, draft.siteName);
+  const siteName = draft.siteName.trim() || "your site's name";
+  const setPattern = (title: string) =>
+    change(current => ({
+      ...current,
+      patterns: {
+        ...current.patterns,
+        [type.key]: { ...current.patterns[type.key], title },
+      },
+    }));
+  const insert = (token: string) => {
+    const field = input.current;
+    const text = `{${token}}`;
+    const start = field?.selectionStart ?? pattern.length;
+    const end = field?.selectionEnd ?? start;
+    setPattern(pattern.slice(0, start) + text + pattern.slice(end));
+    // Back to the field, just after what was added.
+    requestAnimationFrame(() => {
+      field?.focus();
+      field?.setSelectionRange(start + text.length, start + text.length);
+    });
+  };
+  const reset = () =>
+    change(current => {
+      const { title: _title, ...rest } = current.patterns[type.key] ?? {};
+      const patterns = { ...current.patterns };
+      if (Object.keys(rest).length === 0) delete patterns[type.key];
+      else patterns[type.key] = rest;
+      return { ...current, patterns };
+    });
+  const tokens = [
+    TITLE_TOKEN,
+    ...type.fields.map(field => field.token),
+    SITE_NAME_TOKEN,
+  ];
+  const length = characters(preview.title);
   return (
-    <>
-      <select
-        className="nx-seo-select"
-        aria-label={`Structured data for ${type.label}`}
-        value={chosen ?? ""}
-        onChange={event => {
-          const value = event.target.value;
-          change(current =>
-            withStructuredType(
-              current,
-              type.key,
-              isStructuredDataTypeKey(value) ? value : undefined
-            )
-          );
-        }}
-      >
-        <option value="">Automatic</option>
-        {STRUCTURED_DATA_TYPE_KEYS.map(key => (
-          <option key={key} value={key}>
-            {STRUCTURED_DATA_TYPES[key].label}
-          </option>
-        ))}
-      </select>
-      <div className="nx-seo-sdstate">
-        {chosen === undefined ? (
-          <span className="nx-seo-help">
-            Article where a page has an author and a date, else Web page
-          </span>
-        ) : needs.length === 0 ? (
-          <span className="nx-seo-help">Made from the page itself</span>
+    <div className="grid gap-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={id} className="text-sm font-medium text-foreground">
+          Title pattern
+          <span className="sr-only"> for {type.label}</span>
+        </label>
+        {own ? (
+          <button
+            type="button"
+            className="text-xs font-medium text-foreground underline underline-offset-2 hover:decoration-2"
+            onClick={reset}
+          >
+            Reset to default
+          </button>
         ) : (
-          <>
-            <button
-              type="button"
-              className="nx-seo-linkbtn"
-              aria-expanded={mapOpen}
-              onClick={() => toggleMap(chosen)}
-            >
-              Map details
-            </button>{" "}
-            <span
-              className={missing.length > 0 ? "nx-seo-warnc" : "nx-seo-help"}
-            >
-              · {missing.length > 0 ? `${missing.length} missing` : "all set"}
-            </span>
-          </>
+          <span className="text-xs text-muted-foreground">Default</span>
         )}
       </div>
-    </>
+      <Input
+        ref={input}
+        id={id}
+        className="font-mono text-[13px]"
+        value={pattern}
+        aria-invalid={problem !== null}
+        aria-describedby={`${id}-example ${id}-problem`}
+        onChange={event => setPattern(event.target.value)}
+      />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">Click to add:</span>
+        {tokens.map(token => (
+          <Button
+            key={token}
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 font-mono text-xs"
+            onClick={() => insert(token)}
+          >
+            {`{${token}}`}
+          </Button>
+        ))}
+      </div>
+      <p
+        id={`${id}-example`}
+        aria-live="polite"
+        className="text-xs text-muted-foreground"
+      >
+        Example: <b className="font-medium text-foreground">{preview.title}</b>{" "}
+        <span
+          className={
+            length > TITLE_LIMIT ? "font-semibold text-warning-text" : undefined
+          }
+        >
+          {length} / {TITLE_LIMIT}
+        </span>
+      </p>
+      {preview.gaveWay ? (
+        <ControlNote>
+          This page leaves a variable empty, so it keeps its own title, as it
+          will on the site.
+        </ControlNote>
+      ) : null}
+      <p
+        id={`${id}-problem`}
+        role="alert"
+        className="text-xs font-medium text-danger-text empty:hidden"
+      >
+        {problem}
+      </p>
+      <ControlNote>
+        A page&apos;s own title wins over this pattern. &quot;
+        {`${draft.separator} ${siteName}`}&quot; is never added to a title that
+        already ends with {siteName}.
+      </ControlNote>
+    </div>
   );
 }
 
@@ -185,9 +258,6 @@ function optionLabels(fields: readonly MappableField[]): Map<string, string> {
     ])
   );
 }
-
-/** A fixed value the site's code gives a detail, in the field choice. */
-const FIXED = "=fixed";
 
 /** What a detail's row says under its choice. */
 function detailHelp(
@@ -234,7 +304,7 @@ function detailChoice(
   if (typeof source === "object") {
     return { ...base, value: FIXED, fixed: source.value };
   }
-  if (source === undefined) return { ...base, value: "" };
+  if (source === undefined) return { ...base, value: FOUND };
   if (!holdsField(type, source))
     return { ...base, value: source, gone: source };
   return type.mappableFields.some(field => field.name === source)
@@ -258,17 +328,19 @@ function DetailOptions({
       {/* No field chosen: the markup finds one by its name, shown as that
           field, or reads the page's own, so choosing it again returns a
           detail to being found that way. */}
-      <option value="">
+      <SelectItem value={FOUND}>
         {choice.guess?.label ?? FROM_THE_PAGE[detail] ?? "Not chosen yet"}
-      </option>
+      </SelectItem>
       {choice.fixed === undefined ? null : (
-        <option value={FIXED}>{`Always "${choice.fixed}"`}</option>
+        <SelectItem value={FIXED}>{`Always "${choice.fixed}"`}</SelectItem>
       )}
       {choice.gone === undefined ? null : (
-        <option value={choice.gone}>{`${choice.gone}, not found`}</option>
+        <SelectItem
+          value={choice.gone}
+        >{`${choice.gone}, not found`}</SelectItem>
       )}
       {choice.path === undefined ? null : (
-        <option value={choice.path}>{choice.path}</option>
+        <SelectItem value={choice.path}>{choice.path}</SelectItem>
       )}
       {type.mappableFields
         // The field found by its name is the first option while unchosen.
@@ -276,15 +348,15 @@ function DetailOptions({
           each => each.name !== choice.guess?.name || choice.value === each.name
         )
         .map(each => (
-          <option key={each.name} value={each.name}>
+          <SelectItem key={each.name} value={each.name}>
             {labels.get(each.name)}
-          </option>
+          </SelectItem>
         ))}
     </>
   );
 }
 
-/** One detail's row: the field it is read from, and where that leaves it. */
+/** One detail's line: the field it is read from, and where that leaves it. */
 function DetailLine({
   type,
   detail,
@@ -307,26 +379,39 @@ function DetailLine({
   const choice = detailChoice(type, detail, source);
   const shown =
     type.mappableFields.find(field => field.name === choice.value) ??
-    (choice.value === "" ? choice.guess : undefined);
+    (choice.value === FOUND ? choice.guess : undefined);
   const needed = required
     ? `Google needs this for ${typeLabel}`
     : `Optional for ${typeLabel}`;
   return (
-    <div className="nx-seo-mapline">
-      <span className="nx-seo-label">{DETAIL_LABELS[detail]}</span>
-      <select
-        className="nx-seo-select"
-        aria-label={`Field that holds ${DETAIL_LABELS[detail]}`}
-        aria-invalid={lacking}
+    <div className="grid items-center gap-x-3 gap-y-1 sm:grid-cols-[120px_minmax(0,220px)_1fr]">
+      <span className="text-sm font-medium text-foreground">
+        {DETAIL_LABELS[detail]}
+      </span>
+      <Select
         value={choice.value}
-        onChange={event => {
-          const next = event.target.value;
-          if (next !== FIXED) choose(next);
+        onValueChange={next => {
+          if (next === FIXED) return;
+          choose(next === FOUND ? "" : next);
         }}
       >
-        <DetailOptions type={type} detail={detail} choice={choice} />
-      </select>
-      <span className="nx-seo-help">
+        <SelectTrigger
+          aria-label={`Field that holds ${DETAIL_LABELS[detail]}`}
+          aria-invalid={lacking}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <DetailOptions type={type} detail={detail} choice={choice} />
+        </SelectContent>
+      </Select>
+      <span
+        className={
+          lacking
+            ? "text-xs font-medium text-warning-text"
+            : "text-xs text-muted-foreground"
+        }
+      >
         {detailHelp(type, detail, source, shown, needed)}
       </span>
     </div>
@@ -347,38 +432,37 @@ function DetailsEditor({
   setType: (structuredType: StructuredDataTypeKey) => void;
   onDone: () => void;
 }): JSX.Element {
-  const id = useId();
   const mapping = mappingOf(draft, type.key, structuredType);
   const missing = missingDetails(draft, type, structuredType);
   const { label, needs } = STRUCTURED_DATA_TYPES[structuredType];
   const isDefault = structuredTypeOf(draft, type.key) === structuredType;
   return (
-    <div className="nx-seo-pedit">
-      <div className="nx-seo-row nx-seo-mapfor">
-        <label className="nx-seo-label" htmlFor={id}>
-          Details for
-        </label>
-        <select
-          id={id}
-          className="nx-seo-select nx-seo-select-fit"
+    <div className="grid gap-3 rounded-md border border-border bg-muted/40 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-foreground">Details for</span>
+        <Select
           value={structuredType}
-          onChange={event => {
-            const value = event.target.value;
+          onValueChange={value => {
             if (isStructuredDataTypeKey(value)) setType(value);
           }}
         >
-          {MAPPABLE_TYPES.map(key => (
-            <option key={key} value={key}>
-              {STRUCTURED_DATA_TYPES[key].label}
-            </option>
-          ))}
-        </select>
-        <span className="nx-seo-help">
+          <SelectTrigger className="w-auto" aria-label="Details for">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {MAPPABLE_TYPES.map(key => (
+              <SelectItem key={key} value={key}>
+                {STRUCTURED_DATA_TYPES[key].label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="text-xs text-muted-foreground">
           on {type.label}
           {isDefault ? " (this type's default)" : ", for pages that choose it"}
         </span>
       </div>
-      <div className="nx-seo-mapgrid">
+      <div className="grid gap-2">
         {[...needs, ...STRUCTURED_DATA_TYPES[structuredType].uses].map(
           detail => (
             <DetailLine
@@ -404,14 +488,14 @@ function DetailsEditor({
           )
         )}
       </div>
-      <p className="nx-seo-help">
+      <ControlNote>
         {missing.length > 0
           ? `Until every needed detail has a field, ${label} details are left out of these pages and listed in Problems.`
           : "All set. Only details visible on the page are used."}{" "}
         If no field fits, a developer can add one.
-      </p>
+      </ControlNote>
       <div>
-        <Button type="button" size="sm" onClick={onDone}>
+        <Button type="button" variant="outline" size="sm" onClick={onDone}>
           Done
         </Button>
       </div>
@@ -419,182 +503,179 @@ function DetailsEditor({
   );
 }
 
-/** How many entries a type has, when the reader may count them. */
-function EntryCount({
-  count,
-}: {
-  count: number | undefined;
-}): JSX.Element | null {
-  const text = countText(count);
-  return text === undefined ? null : <small>{text}</small>;
-}
-
-/** A type's entry count in words, where the reader may count them. */
-function countText(count: number | undefined): string | undefined {
-  if (count === undefined) return undefined;
-  if (count === 0) return "No entries yet";
-  return `${count} ${count === 1 ? "entry" : "entries"}`;
-}
-
-/** A type the site's code gives no SEO: greyed, with nothing to set. */
-function SwitchedOffRow({ type }: { type: SwitchedOffType }): JSX.Element {
-  const count = countText(type.count);
-  return (
-    <tr className="nx-seo-off">
-      <td className="nx-seo-switchcell">
-        <Switch
-          checked={false}
-          disabled
-          aria-label={`SEO for ${type.label}`}
-          title="Set in the site's configuration by a developer"
-        />
-      </td>
-      <td className="nx-seo-tname">
-        <b>{type.label}</b>
-        <small>
-          {count === undefined
-            ? "SEO switched off in code"
-            : `${count} · SEO switched off in code`}
-        </small>
-      </td>
-      <td data-label="Public address">
-        <span className="nx-seo-help">
-          {type.public ? "Public, without SEO" : "No public pages"}
-        </span>
-      </td>
-      <td aria-hidden="true" />
-      <td aria-hidden="true" />
-      <td aria-hidden="true" />
-    </tr>
-  );
-}
-
-/** A type's title pattern as a chip that opens its editor, with any problem under it. */
-function PatternCell({
-  type,
-  draft,
-  open,
-  toggle,
-}: {
-  type: SeoContentType;
-  draft: TabProps["draft"];
-  open: boolean;
-  toggle: () => void;
-}): JSX.Element {
-  const { pattern, own } = patternOf(draft, type.key);
-  const problem = open ? null : patternProblem(pattern, type);
-  return (
-    <>
-      <button
-        type="button"
-        className="nx-seo-pattern"
-        aria-expanded={open}
-        aria-label={`Edit the title pattern for ${type.label}`}
-        onClick={toggle}
-      >
-        {pattern}
-        {own ? null : <small>default</small>}
-      </button>
-      {problem === null ? null : <p className="nx-seo-error">{problem}</p>}
-    </>
-  );
-}
-
-/** One content type's row, and the editor open under it, if any. */
-function TypeRows({
+/** A type's structured data choice, and the way to map its details. */
+function StructuredData({
   type,
   draft,
   change,
-  open,
-  setOpen,
+  mapping,
+  setMapping,
 }: TabProps & {
   type: SeoContentType;
-  open: OpenEditor | null;
-  setOpen: (open: OpenEditor | null) => void;
+  /** The type whose details are being mapped, if any. */
+  mapping: StructuredDataTypeKey | null;
+  setMapping: (structuredType: StructuredDataTypeKey | null) => void;
 }): JSX.Element {
-  const patternOpen = open?.key === type.key && open.kind === "pattern";
-  const map = open?.key === type.key && open.kind === "map" ? open : null;
-  const hidden = isHidden(draft, type.key);
+  const id = useId();
+  const chosen = structuredTypeOf(draft, type.key);
+  // A type with details to map, needed or only used where the page has
+  // them, offers the mapping; one made from the page alone does not.
+  const mappable = chosen !== undefined && MAPPABLE_TYPES.includes(chosen);
+  const missing =
+    chosen === undefined ? [] : missingDetails(draft, type, chosen);
   return (
-    <>
-      <tr>
-        <td className="nx-seo-switchcell">
+    <div className="grid gap-2">
+      <span id={id} className="text-sm font-medium text-foreground">
+        Structured data
+      </span>
+      <div className="flex flex-wrap items-center gap-3">
+        <Select
+          value={chosen ?? AUTOMATIC}
+          onValueChange={value =>
+            change(current =>
+              withStructuredType(
+                current,
+                type.key,
+                isStructuredDataTypeKey(value) ? value : undefined
+              )
+            )
+          }
+        >
+          <SelectTrigger
+            className="w-56"
+            aria-label={`Structured data for ${type.label}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUTOMATIC}>Automatic</SelectItem>
+            {STRUCTURED_DATA_TYPE_KEYS.map(key => (
+              <SelectItem key={key} value={key}>
+                {STRUCTURED_DATA_TYPES[key].label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {chosen === undefined ? (
+          <span className="text-xs text-muted-foreground">
+            Article where a page has an author and a date, else Web page
+          </span>
+        ) : !mappable ? (
+          <span className="text-xs text-muted-foreground">
+            Made from the page itself
+          </span>
+        ) : (
+          <span className="text-xs">
+            <button
+              type="button"
+              className="font-medium text-foreground underline underline-offset-2 hover:decoration-2"
+              aria-expanded={mapping !== null}
+              onClick={() => setMapping(mapping === null ? chosen : null)}
+            >
+              Map details
+            </button>{" "}
+            <span
+              className={
+                missing.length > 0
+                  ? "font-medium text-warning-text"
+                  : "text-muted-foreground"
+              }
+            >
+              · {missing.length > 0 ? `${missing.length} missing` : "all set"}
+            </span>
+          </span>
+        )}
+      </div>
+      {mapping === null ? null : (
+        <DetailsEditor
+          type={type}
+          structuredType={mapping}
+          draft={draft}
+          change={change}
+          setType={setMapping}
+          onDone={() => setMapping(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** One content type's row: its title pattern, hiding, and structured data. */
+function TypeRow({
+  type,
+  draft,
+  change,
+}: TabProps & { type: SeoContentType }): JSX.Element {
+  const [mapping, setMapping] = useState<StructuredDataTypeKey | null>(null);
+  const hidden = isHidden(draft, type.key);
+  const hideId = useId();
+  return (
+    <SettingsRowGroup label={type.label} description={typeSummary(type)}>
+      <div className="grid gap-5">
+        <PatternEditor type={type} draft={draft} change={change} />
+        <div className="flex items-start gap-3">
           <Switch
-            checked
-            disabled
-            aria-label={`SEO for ${type.label}`}
-            title="Set in the site's configuration by a developer"
-          />
-        </td>
-        <td className="nx-seo-tname">
-          <b>{type.label}</b>
-          <EntryCount count={type.count} />
-        </td>
-        <td data-label="Public address">
-          <TypeAddress type={type} />
-        </td>
-        <td data-label="Title pattern">
-          <PatternCell
-            type={type}
-            draft={draft}
-            open={patternOpen}
-            toggle={() =>
-              setOpen(patternOpen ? null : { key: type.key, kind: "pattern" })
-            }
-          />
-        </td>
-        <td data-label="Hide whole group">
-          <Switch
+            id={hideId}
             checked={hidden}
             aria-label={`Hide all ${type.label} from search`}
             onCheckedChange={checked =>
               change(current => withHidden(current, type.key, checked))
             }
           />
-        </td>
-        <td data-label="Structured data">
-          <StructuredDataCell
-            type={type}
-            draft={draft}
-            change={change}
-            mapOpen={map !== null}
-            toggleMap={structuredType =>
-              setOpen(
-                map === null
-                  ? { key: type.key, kind: "map", type: structuredType }
-                  : null
-              )
-            }
-          />
-        </td>
-      </tr>
-      {patternOpen || map !== null ? (
-        <tr className="nx-seo-editrow">
-          <td className="nx-seo-switchcell" aria-hidden="true" />
-          <td colSpan={5}>
-            {map === null ? (
-              <PatternEditor
-                type={type}
-                draft={draft}
-                change={change}
-                onDone={() => setOpen(null)}
-              />
-            ) : (
-              <DetailsEditor
-                type={type}
-                structuredType={map.type}
-                draft={draft}
-                change={change}
-                setType={structuredType =>
-                  setOpen({ key: type.key, kind: "map", type: structuredType })
-                }
-                onDone={() => setOpen(null)}
-              />
-            )}
-          </td>
-        </tr>
-      ) : null}
-    </>
+          <label htmlFor={hideId} className="grid gap-0.5">
+            <span className="text-sm font-medium text-foreground">
+              Hide the whole group from search
+            </span>
+            <span className="text-xs text-muted-foreground">
+              Its pages stay out of search, whatever each page says.
+            </span>
+          </label>
+        </div>
+        <StructuredData
+          type={type}
+          draft={draft}
+          change={change}
+          mapping={mapping}
+          setMapping={setMapping}
+        />
+      </div>
+    </SettingsRowGroup>
+  );
+}
+
+/** The site's types its code gives no SEO, greyed, with nothing to set. */
+function SwitchedOffRow({
+  types,
+}: {
+  types: readonly SwitchedOffType[];
+}): JSX.Element {
+  return (
+    <SettingsRowGroup
+      label="Without SEO"
+      description="Switched off in the site's code by a developer."
+    >
+      <ul className="grid gap-1.5">
+        {types.map(type => {
+          const count = countText(type.count);
+          return (
+            <li
+              key={type.key}
+              className="flex flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground"
+            >
+              <span className="font-medium">{type.label}</span>
+              <span className="text-xs">
+                {[
+                  count,
+                  type.public ? "Public, without SEO" : "No public pages",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </SettingsRowGroup>
   );
 }
 
@@ -604,75 +685,30 @@ export function ContentTypesTab({
   change,
   types,
   switchedOff = [],
-  editing,
-  setEditing,
 }: TabProps & {
   types: readonly SeoContentType[];
   /** The site's other types, which the site's code gives no SEO. */
   switchedOff?: readonly SwitchedOffType[];
-  /** The type whose title pattern is open, kept by the page across saves. */
-  editing: string | null;
-  setEditing: (key: string | null) => void;
 }): JSX.Element {
-  const [mapping, setMapping] = useState<OpenEditor | null>(null);
-  const open: OpenEditor | null =
-    editing !== null ? { key: editing, kind: "pattern" } : mapping;
-  const setOpen = (next: OpenEditor | null) => {
-    setEditing(next?.kind === "pattern" ? next.key : null);
-    setMapping(next?.kind === "map" ? next : null);
-  };
   if (types.length === 0) {
     return (
-      <p className="nx-seo-help">
-        No content type has SEO yet. A developer chooses which do in the
-        site&apos;s configuration.
-      </p>
+      <SettingsCard>
+        <p className="text-sm text-muted-foreground">
+          No content type has SEO yet. A developer chooses which do in the
+          site&apos;s configuration.
+        </p>
+        {switchedOff.length === 0 ? null : (
+          <SwitchedOffRow types={switchedOff} />
+        )}
+      </SettingsCard>
     );
   }
   return (
-    <>
-      {/* Wide enough for every column, scrolling sideways where the screen is
-          narrower, as the admin's other wide tables do; a phone stacks it. */}
-      <div className="nx-seo-tbox nx-seo-typescroll">
-        <table className="nx-seo-tbl nx-seo-types">
-          <thead>
-            <tr>
-              <th scope="col" className="nx-seo-switchcell">
-                SEO
-              </th>
-              <th scope="col">Content type</th>
-              <th scope="col">Public address</th>
-              <th scope="col">Title pattern</th>
-              <th scope="col">Hide whole group</th>
-              <th scope="col">Structured data</th>
-            </tr>
-          </thead>
-          <tbody>
-            {types.map(type => (
-              <TypeRows
-                key={type.key}
-                type={type}
-                draft={draft}
-                change={change}
-                open={open}
-                setOpen={setOpen}
-              />
-            ))}
-            {switchedOff.map(type => (
-              <SwitchedOffRow key={type.key} type={type} />
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="nx-seo-help nx-seo-lock">
-        <Icon name="lock" />
-        <span>
-          The SEO switch for a content type is set in the site&apos;s
-          configuration by a developer, so the database and the admin always
-          agree. Hiding a whole group keeps every page in it out of search,
-          whatever each page says.
-        </span>
-      </p>
-    </>
+    <SettingsCard>
+      {types.map(type => (
+        <TypeRow key={type.key} type={type} draft={draft} change={change} />
+      ))}
+      {switchedOff.length === 0 ? null : <SwitchedOffRow types={switchedOff} />}
+    </SettingsCard>
   );
 }

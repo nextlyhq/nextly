@@ -5,7 +5,7 @@
  *
  * @module admin/share-image-row
  */
-import { Button } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/plugin-sdk/admin";
 import { Check } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -192,6 +192,8 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
   } = props;
   // The copy made in this visit; the row says so while it is the page's image.
   const [copy, setCopy] = useState<Made | undefined>(undefined);
+  // Whether the last copy asked for could not be made, said in the row.
+  const [failed, setFailed] = useState(false);
   const chosen = values.ogImage !== null && values.ogImage !== undefined;
   const made =
     copy !== undefined && copy.id === imageIdOf(values.ogImage)
@@ -205,6 +207,7 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
       const from = madeFromOf(props, chosen);
       void onMakeShareImage().then(id => {
         setCopy(id === undefined ? undefined : { id, from });
+        setFailed(id === undefined);
       });
     });
   return (
@@ -244,6 +247,12 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
           </SourceRow>
         </div>
       </div>
+      {failed ? (
+        <Note tone="warning">
+          The share image couldn&apos;t be made. Try again, or choose another
+          image.
+        </Note>
+      ) : null}
       {made ? (
         <Note tone="success" icon={<Check className="size-4" />}>
           <span data-testid="seo-share-made">

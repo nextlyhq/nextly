@@ -417,26 +417,27 @@ a second time. To put something in the admin's top bar, such as a Save button, u
 plugin page draws the admin's own list, trail, checklist and settings rows rather than a
 copy of how they look.
 
-| Export                                             | What it draws                                                                                                                                         |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Breadcrumbs`                                      | The page's trail, in the admin's top bar. Pass it as `PageHeader`'s `breadcrumbs`; the last item is the page itself.                                  |
-| `ListView`                                         | `DataTableView` with the admin's list toolbar (search, filters, the columns menu, list actions), its empty state and slots above and below the table. |
-| `useTableColumns`, `useListColumns`                | The columns menu's control, with each reader's choice remembered per list.                                                                            |
-| `ListToolbar`, `ListColumnsMenu`, `ListEmptyState` | The parts of `ListView`, for a list laid out by hand.                                                                                                 |
-| `Badge`                                            | A status chip. `success`, `warning`, `destructive` and `info` draw a quiet chip with a status dot.                                                    |
-| `SegmentedChoice`                                  | A short choice kept in view, such as a View / Edit switch. `size="bordered"` for a setting in a form.                                                 |
-| `Checklist`, `ChecklistItem`                       | A setup list with a progress bar; steps are `open`, `done` or `skipped`. Takes `columns={2}` and `doneStyle="struck"`.                                |
-| `FieldShell` with `layout="row"`                   | A settings row: the label and its help on the left, the control on the right.                                                                         |
-| `SettingsRowGroup`                                 | The same row for a group of controls, named as one group.                                                                                             |
-| `ListView` with `grouping`, `rowDetail`            | Rows in groups, each under a header row with its title, a badge, a count and actions; and rows that open a region below them.                         |
-| `Stepper`                                          | Where a flow of a few steps is: each step done, current or to come, with a way back from a done step.                                                 |
-| `FormActions`                                      | The form's one action bar, held at the bottom of the page, saying when there are unsaved changes, or the page's own `message`.                        |
-| `Alert`, `AlertTitle`, `AlertDescription`          | A notice above the content. `variant` is `info`, `success`, `warning` or `destructive`.                                                               |
-| `Sheet` and its parts                              | A panel that slides in from an edge of the screen (`side` on `SheetContent`).                                                                         |
-| `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`   | Tabs inside a page. For tabs that are routes, use `PageTabs`.                                                                                         |
-| `Progress`                                         | A progress bar: `value` out of `max` (100 by default).                                                                                                |
-| `DropdownMenu` and its parts                       | The menu behind a button, such as a row's actions.                                                                                                    |
-| `Tooltip` and its parts                            | A hint on hover or focus. The admin provides `TooltipProvider`.                                                                                       |
+| Export                                             | What it draws                                                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Breadcrumbs`                                      | The page's trail, in the admin's top bar. Pass it as `PageHeader`'s `breadcrumbs`; the last item is the page itself.                                   |
+| `ListView`                                         | `DataTableView` with the admin's list toolbar (search, filters, the columns menu, list actions), its empty state and slots above and below the table.  |
+| `useTableColumns`, `useListColumns`                | The columns menu's control, with each reader's choice remembered per list.                                                                             |
+| `ListToolbar`, `ListColumnsMenu`, `ListEmptyState` | The parts of `ListView`, for a list laid out by hand.                                                                                                  |
+| `Badge`                                            | A status chip. `success`, `warning`, `destructive` and `info` draw a quiet chip with a status dot.                                                     |
+| `SegmentedChoice`                                  | A short choice kept in view, such as a View / Edit switch. `size="bordered"` for a setting in a form.                                                  |
+| `Checklist`, `ChecklistItem`                       | A setup list with a progress bar; steps are `open`, `done` or `skipped`. Takes `columns={2}` and `doneStyle="struck"`.                                 |
+| `FieldShell` with `layout="row"`                   | A settings row: the label and its help on the left, the control on the right.                                                                          |
+| `SettingsRowGroup`                                 | The same row for a group of controls, named as one group.                                                                                              |
+| `ListView` with `grouping`, `rowDetail`            | Rows in groups, each under a header row with its title, a badge, a count and actions; and rows that open a region below them.                          |
+| `Stepper`                                          | Where a flow of a few steps is: each step done, current or to come, with a way back from a done step.                                                  |
+| `FormActions`                                      | The form's one action bar, held at the bottom of the page, saying when there are unsaved changes, or the page's own `message`.                         |
+| `Alert`, `AlertTitle`, `AlertDescription`          | A notice above the content. `variant` is `info`, `success`, `warning` or `destructive`.                                                                |
+| `Sheet` and its parts                              | A panel that slides in from an edge of the screen (`side` on `SheetContent`).                                                                          |
+| `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`   | Tabs inside a page. For tabs that are routes, use `PageTabs`.                                                                                          |
+| `Progress`                                         | A progress bar: `value` out of `max` (100 by default).                                                                                                 |
+| `DropdownMenu` and its parts                       | The menu behind a button, such as a row's actions.                                                                                                     |
+| `Tooltip` and its parts                            | A hint on hover or focus. The admin provides `TooltipProvider`.                                                                                        |
+| `FileDropArea`                                     | A drop area a file is dragged onto or chosen from, as the Media library draws it, for a screen that reads the file itself; `onFiles` gets it as it is. |
 
 A list page with a trail, a search, a status filter, the columns menu and row actions:
 

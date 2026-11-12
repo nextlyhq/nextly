@@ -13,6 +13,7 @@ import {
   withStructuredType,
   draftOf,
   networkOf,
+  rebasedDraft,
   patternOf,
   patternProblem,
   previewOf,
@@ -291,11 +292,21 @@ describe("what setup ends on", () => {
       logo: "m1",
     };
     expect(attentionItems(withLogo, [posts])).toEqual([
-      { text: "No share image yet", fix: "Add a share image", tab: "general" },
+      { text: "No share image yet", fix: "Add a share image", tab: "images" },
     ]);
     expect(
       attentionItems({ ...withLogo, logo: null, image: "m2" }, [posts])
     ).toEqual([{ text: "No logo yet", fix: "Add a logo", tab: "brand" }]);
+  });
+
+  it("asks for no saved address where the server names one", () => {
+    expect(
+      attentionItems(
+        { ...empty, logo: "m1", image: "m2" },
+        [posts],
+        ["https://acme.com"]
+      )
+    ).toEqual([]);
   });
 
   it("is empty for a site with everything set", () => {
@@ -475,5 +486,52 @@ describe("a content type's structured data", () => {
     });
     const unmapped = withDetailField(mapped, "posts", "article", "author", "");
     expect(mappingOf(unmapped, "posts", "article")).toEqual({});
+  });
+});
+
+describe("a draft moved onto newer settings", () => {
+  const before = draftOf({
+    id: "s1",
+    siteName: "Acme",
+    description: "Old",
+    patterns: { posts: { title: "{Title}" }, pages: { title: "{Title}" } },
+    hiddenTypes: ["tags"],
+  });
+
+  it("keeps what was edited here and takes every other value as stored now", () => {
+    const draft = {
+      ...before,
+      description: "Edited here",
+      patterns: { ...before.patterns, posts: { title: "{Title} | Blog" } },
+      hiddenTypes: ["tags", "authors"],
+    };
+    const after = draftOf({
+      id: "s1",
+      siteName: "Acme Ltd",
+      description: "Old",
+      patterns: {
+        posts: { title: "{Title}" },
+        pages: { title: "{Title} | Docs" },
+      },
+      hiddenTypes: ["tags", "cases"],
+    });
+
+    const rebased = rebasedDraft(draft, before, after);
+    expect(rebased.siteName).toBe("Acme Ltd");
+    expect(rebased.description).toBe("Edited here");
+    // One type's pattern edited here, another's changed elsewhere: both kept.
+    expect(rebased.patterns).toEqual({
+      posts: { title: "{Title} | Blog" },
+      pages: { title: "{Title} | Docs" },
+    });
+    expect(rebased.hiddenTypes).toEqual(["tags", "cases", "authors"]);
+  });
+
+  it("takes out a type's entry taken out here, and a hidden type shown again", () => {
+    const { pages: _pages, ...rest } = before.patterns;
+    const draft = { ...before, patterns: rest, hiddenTypes: [] };
+    const rebased = rebasedDraft(draft, before, before);
+    expect(rebased.patterns).toEqual({ posts: { title: "{Title}" } });
+    expect(rebased.hiddenTypes).toEqual([]);
   });
 });

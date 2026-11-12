@@ -17,6 +17,7 @@ import {
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { originsFrom, PRODUCTION_ADDRESSES_ENV } from "../canonical";
 import { siteWide } from "../permissions";
 import { isRecord, textOf } from "../plain-values";
 
@@ -312,6 +313,9 @@ export function settingsDocumentRoute(): PluginRoute {
     handler: (_req, ctx) => {
       const body: SettingsDocumentBody = {
         single: ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG,
+        // Read on every request, as the canonical rule and the staging guard
+        // read it, so the screen says what the server serves.
+        serverAddresses: originsFrom(process.env[PRODUCTION_ADDRESSES_ENV]),
       };
       return Promise.resolve(respondDoc(body));
     },

@@ -1,238 +1,545 @@
 // @vitest-environment jsdom
 
 /**
- * Import, reached from Pages, as a person uses it: the import panel's dry
- * run of the matching chosen, and the import of exactly what it showed.
- * What each write sends is read from the write itself.
+ * Import as a person uses it: this site's field group first, matched field
+ * by field with an example of each, values a page's own code overrides
+ * skipped as never served unless included, the dry run's counts and each
+ * page's result, then the import applied, or refused with nothing written;
+ * and a file from another tool, read and summed up, or refused with one
+ * notice. What each request sends is read from the request itself.
  */
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   usePluginRoute: vi.fn(),
   writePluginRoute: vi.fn(),
-  toastMutationResult: vi.fn(),
+  navigateTo: vi.fn(),
 }));
 
 import { usePluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
 
-import type { DryRunBody, ImportGroupsBody } from "../../import/contract";
+import type {
+  DryRunBody,
+  ImportGroup,
+  ImportReportEntry,
+} from "../../import/contract";
 import { SeoImportPage } from "../SeoImportPage";
 
-const GROUPS: ImportGroupsBody = {
-  groups: [
+const OLD: ImportGroup = {
+  field: "seo-old",
+  label: "SEO (old)",
+  types: [
+    { slug: "posts", label: "Posts" },
+    { slug: "single:home", label: "Home" },
+    { slug: "single:changelog", label: "Changelog" },
+  ],
+  pages: 9,
+  withText: 7,
+  own: false,
+  fields: [
     {
-      field: "metaData",
-      label: "Search and sharing",
-      types: [{ slug: "posts", label: "Blog posts" }],
-      pages: 3,
-      own: false,
-      fields: [
-        { name: "seoTitle", label: "Seo title", filled: 2, suggested: "title" },
-        { name: "keywords", label: "Keywords", filled: 1, suggested: "skip" },
-        { name: "ogType", label: "Og type", filled: 0, suggested: "skip" },
-      ],
+      name: "metaTitle",
+      label: "Meta title",
+      filled: 6,
+      suggested: "title",
+      example: "Nextly pricing",
+    },
+    {
+      name: "metaDescription",
+      label: "Meta description",
+      filled: 5,
+      suggested: "description",
+      example: "Free and open source.",
     },
   ],
 };
-
-const DRY: DryRunBody = {
-  checked: 3,
-  fromFile: false,
-  lines: [{ target: "title", from: ["seoTitle"], pages: 2 }],
-  pages: 2,
-  same: 1,
-  kept: 0,
-  redirects: 0,
-  left: ["keywords"],
-  warnings: ["2 titles are longer than Google shows."],
-  plan: "digest",
+const OTHER: ImportGroup = {
+  ...OLD,
+  field: "meta-data",
+  label: "Search and sharing",
+  withText: 2,
 };
 
-let writes: { path: string; body?: unknown }[];
+/** A page's report entry. */
+function entry(more: Partial<ImportReportEntry>): ImportReportEntry {
+  return {
+    type: "pages",
+    id: more.label ?? "p",
+    label: "Page",
+    outcome: "set",
+    set: [],
+    same: [],
+    kept: [],
+    neverServed: [],
+    values: {},
+    ...more,
+  };
+}
+
+/** The dry run the fake engine answers, with or without never-served values. */
+function dryRun(include: boolean): DryRunBody {
+  const changelog = include
+    ? entry({
+        label: "Changelog",
+        set: ["title"],
+        values: { title: "Old changelog" },
+      })
+    : entry({
+        label: "Changelog",
+        outcome: "skipped",
+        neverServed: ["title"],
+        values: { title: "Old changelog" },
+        reason: "Never served",
+      });
+  return {
+    checked: 9,
+    fromFile: false,
+    held: 7,
+    lines: [],
+    pages: include ? 2 : 1,
+    same: 0,
+    kept: 0,
+    neverServed: include ? 0 : 1,
+    redirects: 0,
+    left: [],
+    warnings: [],
+    documents: [
+      entry({
+        label: "Pricing",
+        set: ["title", "description"],
+        values: { title: "Nextly pricing", description: "Free" },
+      }),
+      changelog,
+    ],
+    plan: include ? "plan-included" : "plan",
+  };
+}
+
+/** Every request the screen sent, by path, with its body. */
+let sent: { path: string; body: Record<string, unknown> }[];
+/** How the fake engine answers an apply. */
+let applying: () => Promise<unknown>;
 
 beforeEach(() => {
-  writes = [];
-  vi.mocked(usePluginRoute).mockImplementation((() => ({
-    data: GROUPS,
-    pending: false,
-    error: null,
-    refetch: vi.fn(),
-    fetching: false,
-  })) as unknown as typeof usePluginRoute);
-  vi.mocked(writePluginRoute).mockImplementation((async (request: {
-    path: string;
-    body?: unknown;
-  }) => {
-    writes.push({ path: request.path, body: request.body });
-    if (request.path === "/import/dry-run") return DRY;
-    return {
-      message: "Imported 2 pages in one step.",
-      pages: 2,
-      redirects: 0,
-    };
-  }) as unknown as typeof writePluginRoute);
+  sent = [];
+  applying = () =>
+    Promise.resolve({ message: "Imported", pages: 1, redirects: 0 });
+  vi.mocked(usePluginRoute).mockImplementation(
+    () =>
+      ({
+        data: {
+          groups: [OLD, OTHER],
+          ownSeo: [{ slug: "posts", label: "Posts", definedIn: "code" }],
+          language: "en",
+        },
+        pending: false,
+        error: null,
+        refetch: () => {},
+        fetching: false,
+      }) as ReturnType<typeof usePluginRoute>
+  );
+  vi.mocked(writePluginRoute).mockImplementation(async request => {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    sent.push({ path: request.path, body });
+    if (request.path.endsWith("/apply")) return applying();
+    const source = body.source as { kind: string; fileName?: string };
+    if (source.kind !== "group") {
+      return {
+        ...dryRun(false),
+        fromFile: true,
+        checked: 148,
+        held: source.fileName?.includes("empty") ? 0 : 96,
+      };
+    }
+    return dryRun(body.includeNeverServed === true);
+  });
 });
 
-describe("the import panel", () => {
-  it("dry-runs the matching the person chose, then imports exactly what it showed", async () => {
+/** Waits for the requests on their way. */
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 5; turn += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+}
+
+const dryRuns = () => sent.filter(each => each.path.endsWith("/dry-run"));
+
+/**
+ * The admin's table as wide screens show it: it draws its rows as cards for
+ * a phone as well, so each value is found in the table alone.
+ */
+const table = () => screen.getByRole("table");
+
+describe("importing this site's own field group", () => {
+  it("offers the group first, with what it holds, and another group beside it", () => {
     render(<SeoImportPage />);
     expect(
-      screen.getByText(/Found metaData on Blog posts, 3 fields/)
+      screen.getByRole("heading", { name: "Import SEO values" })
     ).toBeTruthy();
-    // A field with no values is not offered, and is said to be left out.
-    expect(screen.queryByLabelText("Import ogType into")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Import keywords into"), {
-      target: { value: "description" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
-    await screen.findByText("Pages that would change");
-    expect(writes[0]).toEqual({
-      path: "/import/dry-run",
-      body: {
-        source: {
-          kind: "group",
-          field: "metaData",
-          map: { seoTitle: "title", keywords: "description", ogType: "skip" },
-        },
+    const group = screen.getByRole("radio", { name: /SEO \(old\)/ });
+    expect(group.closest("label")?.textContent).toContain(
+      "A field group on Posts and 2 Singles. 7 pages have a title or description in it."
+    );
+    expect(
+      screen.getByRole("radio", { name: /Another field group/ })
+    ).toBeTruthy();
+    // The first step is current, on the admin's stepper.
+    expect(
+      screen
+        .getByRole("list", { name: "Steps" })
+        .querySelector('[aria-current="step"]')?.textContent
+    ).toContain("Choose the source");
+    expect(screen.getByRole("button", { name: "Continue" })).toHaveProperty(
+      "disabled",
+      true
+    );
+  });
+
+  it("matches each field with an example, skips never-served values unless included, and imports", async () => {
+    const user = userEvent.setup();
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+
+    // Each field, an example of it, where it goes, and how many hold one.
+    expect(screen.getByText("Field in SEO (old)")).toBeTruthy();
+    expect(screen.getAllByText("Nextly pricing").length).toBeGreaterThan(0);
+    expect(
+      within(table()).getByRole("combobox", { name: "Where Meta title goes" })
+        .textContent
+    ).toBe("Title on Google");
+    expect(dryRuns().at(-1)?.body).toEqual({
+      source: {
+        kind: "group",
+        field: "seo-old",
+        map: { metaTitle: "title", metaDescription: "description" },
       },
     });
-    expect(screen.getByText("Title on Google ← seoTitle")).toBeTruthy();
-    expect(screen.getByText("Same as automatic, left automatic")).toBeTruthy();
-    expect(screen.getByText(/2 titles are longer/)).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Import 2 pages, all or nothing" })
+    expect(
+      screen.getByText(
+        "1 page's values are never served, so they'll be skipped"
+      )
+    ).toBeTruthy();
+
+    // A field left out is tried again at once.
+    await user.click(
+      within(table()).getByRole("combobox", {
+        name: "Where Meta description goes",
+      })
     );
-    await screen.findByText("Imported 2 pages in one step.");
-    expect(writes[1]).toEqual({
+    await user.click(
+      await screen.findByRole("option", { name: "Don't import" })
+    );
+    await settle();
+    expect(
+      (dryRuns().at(-1)?.body.source as { map: Record<string, string> }).map
+    ).toEqual({ metaTitle: "title", metaDescription: "skip" });
+
+    // Included anyway, the dry run is asked to include them.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include anyway" }));
+    await settle();
+    expect(dryRuns().at(-1)?.body.includeNeverServed).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    // The counts in values, and each page's result.
+    const set = screen.getByText("on 2 pages").parentElement;
+    expect(set?.textContent).toContain("Will set");
+    expect(set?.textContent).toContain("3 values");
+    const pricing = within(table())
+      .getByText("Pricing")
+      .closest("tr") as HTMLElement;
+    expect(within(pricing).getAllByText("Will set")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Import 3 values" }));
+    await settle();
+    expect(sent.at(-1)).toEqual({
       path: "/import/apply",
       body: {
         source: {
           kind: "group",
-          field: "metaData",
-          map: { seoTitle: "title", keywords: "description", ogType: "skip" },
+          field: "seo-old",
+          map: { metaTitle: "title", metaDescription: "skip" },
         },
-        plan: "digest",
+        plan: "plan-included",
+        includeNeverServed: true,
       },
     });
-  });
-
-  it("asks for the export file before a dry run of a file", async () => {
-    render(<SeoImportPage />);
-    fireEvent.click(screen.getByLabelText(/Yoast SEO/));
+    expect(screen.getByText("3 values imported on 2 pages")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "See the pages" })).toBeTruthy();
     expect(
-      (
-        screen.getByRole("button", {
-          name: "Do a dry run",
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(true);
-    expect(
-      screen.getByText("Choose the export file first; the dry run reads it.")
+      screen.getByRole("button", { name: "Download the report" })
     ).toBeTruthy();
   });
 
-  it("drops a dry run's answer once the source it was asked for is left", async () => {
-    let answer: (body: DryRunBody) => void = () => undefined;
-    vi.mocked(writePluginRoute).mockImplementation((async (request: {
-      path: string;
-      body?: unknown;
-    }) => {
-      writes.push({ path: request.path, body: request.body });
-      return new Promise(resolve => {
-        answer = resolve as (body: DryRunBody) => void;
-      });
-    }) as unknown as typeof writePluginRoute);
+  it("says nothing was imported when the import stops part-way, and tries again", async () => {
+    // The server answered: it refused, and wrote nothing.
+    applying = () =>
+      Promise.reject(
+        Object.assign(new Error("The database didn't answer."), {
+          status: 500,
+        })
+      );
     render(<SeoImportPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
-    await waitFor(() => expect(writes).toHaveLength(1));
-    // Leaving the source once the answer is on its way.
-    fireEvent.click(screen.getByLabelText(/Yoast SEO/));
-    await act(async () => answer(DRY));
-    expect(screen.queryByText("Pages that would change")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 values" }));
+    await settle();
+
+    expect(screen.getByText("Nothing was imported")).toBeTruthy();
+    expect(
+      screen.getByText(/so every page was left exactly as it was/).textContent
+    ).toContain("The database didn't answer");
+    const before = dryRuns().length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await settle();
+    expect(dryRuns().length).toBe(before + 1);
+    expect(
+      screen.getByRole("button", { name: "Import 2 values" })
+    ).toBeTruthy();
   });
 
-  it("offers another dry run once an import is refused", async () => {
-    vi.mocked(writePluginRoute).mockImplementation((async (request: {
-      path: string;
-    }) => {
-      if (request.path === "/import/dry-run") return DRY;
-      throw new Error("Pages have changed since the dry run.");
-    }) as unknown as typeof writePluginRoute);
+  it("says how to import a type's own seo field, which the plugin can't rename in code", () => {
     render(<SeoImportPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Import 2 pages, all or nothing",
-      })
-    );
-    await screen.findByRole("button", { name: "Do a dry run" });
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Pages have changed"
-    );
-  });
-
-  it("offers to import the redirects a dry run found", async () => {
-    vi.mocked(writePluginRoute).mockImplementation((async (request: {
-      path: string;
-      body?: unknown;
-    }) => {
-      writes.push({ path: request.path, body: request.body });
-      return { ...DRY, lines: [], pages: 0, same: 0, redirects: 2 };
-    }) as unknown as typeof writePluginRoute);
-    render(<SeoImportPage />);
-    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
-    const button = (await screen.findByRole("button", {
-      name: "Import 2 redirects, all or nothing",
-    })) as HTMLButtonElement;
-    expect(button.disabled).toBe(false);
-  });
-
-  it("offers a yes/no visibility field to match though none of its values is yes", async () => {
-    vi.mocked(usePluginRoute).mockImplementation((() => ({
-      data: {
-        groups: [
-          {
-            ...GROUPS.groups[0]!,
-            fields: [
-              ...GROUPS.groups[0]!.fields,
-              {
-                name: "noIndex",
-                label: "No index",
-                filled: 0,
-                suggested: "hidden",
-              },
-            ],
-          },
-        ],
-      },
-      pending: false,
-      error: null,
-      refetch: vi.fn(),
-      fetching: false,
-    })) as unknown as typeof usePluginRoute);
-    render(<SeoImportPage />);
-    expect(screen.getByLabelText("Import noIndex into")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
-    await waitFor(() => expect(writes).toHaveLength(1));
-    expect(writes[0]?.body).toEqual({
-      source: {
-        kind: "group",
-        field: "metaData",
-        map: {
-          seoTitle: "title",
-          keywords: "skip",
-          ogType: "skip",
-          noIndex: "hidden",
-        },
-      },
+    expect(
+      screen.getByText('Posts have a field of their own called "seo".')
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "How to import it" }));
+    const dialog = screen.getByRole("dialog", {
+      name: 'Import the Posts\' own "seo" field',
     });
+    expect(dialog.textContent).toContain(
+      "It is defined in the site's code, so Nextly can't replace it from here. Rename it in the code, for example to legacySeo, and deploy."
+    );
+    // Nothing to confirm: the rename is the person's, in the site's code.
+    expect(
+      within(dialog).queryByRole("button", { name: /Replace/ })
+    ).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Got it" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("explains the plugin's own group from an earlier version, with nothing to match", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(
+      () =>
+        ({
+          data: {
+            groups: [{ ...OLD, field: "seo", label: "SEO", own: true }],
+            ownSeo: [],
+            language: "en",
+          },
+          pending: false,
+          error: null,
+          refetch: () => {},
+          fetching: false,
+        }) as ReturnType<typeof usePluginRoute>
+    );
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /^SEO/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    expect(screen.getByText(/become\s+automatic again/)).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("says it couldn't confirm an import whose answer never arrived, and checks again", async () => {
+    // No answer at all: the import may or may not have been written.
+    applying = () => Promise.reject(new TypeError("Failed to fetch"));
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 values" }));
+    await settle();
+    expect(screen.getByText("The import's answer didn't arrive")).toBeTruthy();
+    expect(screen.queryByText("Nothing was imported")).toBeNull();
+    const before = dryRuns().length;
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await settle();
+    expect(dryRuns().length).toBe(before + 1);
+  });
+
+  it("offers no way back on the stepper while an import is applied", async () => {
+    let finish = (_: unknown) => {};
+    applying = () =>
+      new Promise(resolve => {
+        finish = resolve;
+      });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 values" }));
+    await settle();
+    const steps = screen.getByRole("list", { name: "Steps" });
+    expect(within(steps).queryAllByRole("button")).toHaveLength(0);
+    finish({ message: "", pages: 1, redirects: 0 });
+    await settle();
+    expect(screen.getByText("2 values imported on 1 page")).toBeTruthy();
+  });
+
+  it("matches another group, chosen from the site's groups", async () => {
+    const user = userEvent.setup();
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Another field group/ }));
+    await user.click(screen.getByRole("combobox", { name: "Field group" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Search and sharing" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    expect(screen.getByText("Field in Search and sharing")).toBeTruthy();
+    expect((dryRuns().at(-1)?.body.source as { field: string }).field).toBe(
+      "meta-data"
+    );
+  });
+});
+
+describe("importing a file another tool exported", () => {
+  /** Chooses `text` as the file, named `name`. */
+  async function choose(name: string, text: string): Promise<void> {
+    // The chooser's own filter is the browser's: the screen judges the file.
+    const user = userEvent.setup({ applyAccept: false });
+    const input = document.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement;
+    await user.upload(input, new File([text], name));
+    await settle();
+  }
+
+  /** A WordPress export of one post holding Yoast's title. */
+  const WXR = `<?xml version="1.0"?>
+<rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/"><channel>
+<item><title><![CDATA[Pricing]]></title><link>https://old.example/pricing/</link>
+<wp:post_name><![CDATA[pricing]]></wp:post_name><wp:status><![CDATA[publish]]></wp:status>
+<wp:post_type><![CDATA[page]]></wp:post_type><content:encoded><![CDATA[${"A long page. ".repeat(500)}]]></content:encoded>
+<wp:postmeta><wp:meta_key><![CDATA[_yoast_wpseo_title]]></wp:meta_key><wp:meta_value><![CDATA[Nextly pricing]]></wp:meta_value></wp:postmeta>
+</item></channel></rss>`;
+
+  it("reads a WordPress export and says what it holds, with a way to another file", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /WordPress/ }));
+    expect(screen.getByText("Your WordPress export file")).toBeTruthy();
+    expect(
+      screen.getByText(/up to 50 MB. Nextly reads it once and doesn't keep it./)
+    ).toBeTruthy();
+
+    await choose("acme.WordPress.xml", WXR);
+    // Read here: only what the file holds for each page is sent, never the
+    // file, whose page content is most of it.
+    const sentSource = dryRuns().at(-1)?.body.source as {
+      kind: string;
+      tool: string;
+      fileName: string;
+      parsed: { records: { label: string; values: unknown }[] };
+    };
+    expect(sentSource).toMatchObject({
+      kind: "records",
+      tool: "yoast",
+      fileName: "acme.WordPress.xml",
+    });
+    expect(sentSource.parsed.records).toEqual([
+      expect.objectContaining({
+        label: "Pricing",
+        values: { title: "Nextly pricing" },
+      }),
+    ]);
+    expect(JSON.stringify(sentSource)).not.toContain("A long page.");
+    expect(screen.getByText("acme.WordPress.xml")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "148 posts and pages read. 96 have Yoast or Rank Math values. Next, match them to your pages."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Continue" })).toHaveProperty(
+      "disabled",
+      false
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose another file" })
+    );
+    expect(screen.queryByText("acme.WordPress.xml")).toBeNull();
+  });
+
+  it("imports a file that only adds redirects", async () => {
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      sent.push({ path: request.path, body });
+      if (request.path.endsWith("/apply"))
+        return { message: "", pages: 0, redirects: 2 };
+      return { ...dryRun(false), documents: [], held: 0, redirects: 2 };
+    });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Rank Math CSV/ }));
+    await choose("redirects.csv", "id,seo_title,redirect_to\n1,,/new");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 redirects" }));
+    await settle();
+    expect(sent.at(-1)?.path).toBe("/import/apply");
+    expect(screen.getByText(/2 redirects added/)).toBeTruthy();
+  });
+
+  it("reads no file until the site's language is known", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(
+      () =>
+        ({
+          data: undefined,
+          pending: true,
+          error: null,
+          refetch: () => {},
+          fetching: true,
+        }) as ReturnType<typeof usePluginRoute>
+    );
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Payload/ }));
+    await choose("export.json", '{"docs":[{"id":1,"meta":{"title":"T"}}]}');
+    expect(dryRuns()).toHaveLength(0);
+  });
+
+  it("refuses a file that isn't the tool's export, without sending it", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /WordPress/ }));
+    await choose("notes.txt", "just some notes");
+    expect(screen.getByText("This isn't a WordPress export file")).toBeTruthy();
+    expect(dryRuns()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Continue" })).toHaveProperty(
+      "disabled",
+      true
+    );
+  });
+
+  it("says a file with no SEO values in it holds none", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /WordPress/ }));
+    await choose("empty.xml", WXR);
+    expect(
+      screen.getByText("There are no SEO values in this file")
+    ).toBeTruthy();
+  });
+
+  it("says, in the reader's words, why a file it refuses can't be imported", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Payload/ }));
+    await choose("export.json", '{"docs":[]}');
+    expect(screen.getByText("This file can't be imported")).toBeTruthy();
+    expect(
+      screen.getByText("This Payload export holds no documents.")
+    ).toBeTruthy();
+    expect(dryRuns()).toHaveLength(0);
   });
 });

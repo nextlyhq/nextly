@@ -400,6 +400,94 @@ const same = (a: unknown, b: unknown): boolean =>
  * rather than overwritten. A document never saved has no version, and is
  * replaced. Null when nothing changed.
  */
+/**
+ * `draft` moved from the settings it was made from onto newer ones: each
+ * value edited since `before` stays as edited, and each other takes its
+ * value in `after`, so a change made elsewhere meanwhile is kept. A map kept
+ * per content type (patterns, structured data) is moved entry by entry, and
+ * the hidden types item by item, so an edit to one type keeps another
+ * person's edit to another.
+ */
+export function rebasedDraft(
+  draft: SettingsDraft,
+  before: SettingsDraft,
+  after: SettingsDraft
+): SettingsDraft {
+  return {
+    ...after,
+    ...editedScalars(draft, before),
+    patterns: rebasedEntries(draft.patterns, before.patterns, after.patterns),
+    structuredData: rebasedEntries(
+      draft.structuredData,
+      before.structuredData,
+      after.structuredData
+    ),
+    hiddenTypes: rebasedSet(
+      draft.hiddenTypes,
+      before.hiddenTypes,
+      after.hiddenTypes
+    ),
+  };
+}
+
+/** The draft's own values, other than the per-type ones, edited since `before`. */
+function editedScalars(
+  draft: SettingsDraft,
+  before: SettingsDraft
+): Partial<SettingsDraft> {
+  const edited: Partial<SettingsDraft> = {};
+  for (const key of Object.keys(draft) as (keyof SettingsDraft)[]) {
+    if (
+      key === "patterns" ||
+      key === "structuredData" ||
+      key === "hiddenTypes"
+    ) {
+      continue;
+    }
+    if (!same(draft[key], before[key])) keepEdited(edited, draft, key);
+  }
+  return edited;
+}
+
+/** `target`'s `key` set to `source`'s, the value edited here. */
+function keepEdited<K extends keyof SettingsDraft>(
+  target: Partial<SettingsDraft>,
+  source: SettingsDraft,
+  key: K
+): void {
+  target[key] = source[key];
+}
+
+/** A map moved entry by entry: each entry edited here kept, every other the newer one. */
+function rebasedEntries<T>(
+  draft: Readonly<Record<string, T>>,
+  before: Readonly<Record<string, T>>,
+  after: Readonly<Record<string, T>>
+): Record<string, T> {
+  const next: Record<string, T> = { ...after };
+  for (const key of new Set([...Object.keys(draft), ...Object.keys(before)])) {
+    if (same(draft[key], before[key])) continue;
+    const edited = draft[key];
+    if (edited === undefined) delete next[key];
+    else next[key] = edited;
+  }
+  return next;
+}
+
+/** A set moved item by item: what was added or taken out here, on the newer one. */
+function rebasedSet(
+  draft: readonly string[],
+  before: readonly string[],
+  after: readonly string[]
+): string[] {
+  const added = draft.filter(item => !before.includes(item));
+  const removed = before.filter(item => !draft.includes(item));
+  return [
+    ...after.filter(item => !removed.includes(item)),
+    ...added.filter(item => !after.includes(item)),
+  ];
+}
+
 export function changesOf(
   stored: StoredSettings,
   draft: SettingsDraft,
@@ -525,7 +613,7 @@ export function networkOf(url: string): string {
 export interface AttentionItem {
   text: string;
   fix: string;
-  tab: "general" | "types" | "brand";
+  tab: "general" | "types" | "images" | "brand";
 }
 
 /** What a logo and share image still missing are, said as one item. */
@@ -540,7 +628,7 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
   }
   return draft.logo === null
     ? { text: "No logo yet", fix: "Add a logo", tab: "brand" }
-    : { text: "No share image yet", fix: "Add a share image", tab: "general" };
+    : { text: "No share image yet", fix: "Add a share image", tab: "images" };
 }
 
 /**
@@ -550,10 +638,15 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
  */
 export function attentionItems(
   draft: SettingsDraft,
-  types: readonly SeoContentType[]
+  types: readonly SeoContentType[],
+  /** The addresses the server names, which stand in for saved ones. */
+  serverAddresses: readonly string[] = []
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
-  if (!draft.productionAddresses.some(address => address.trim() !== "")) {
+  if (
+    serverAddresses.length === 0 &&
+    !draft.productionAddresses.some(address => address.trim() !== "")
+  ) {
     items.push({
       text: "No production address is saved",
       fix: "Set the address",

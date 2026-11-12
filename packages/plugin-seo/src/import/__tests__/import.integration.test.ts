@@ -48,9 +48,13 @@ import { typedCanonical } from "../../canonical";
 import type { ChecklistBody } from "../../overview/contract";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../../redirects/collection";
+import { routeValuesKey } from "../../route-values/store";
 import { MANAGE_SEO_PERMISSION } from "../../permissions";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import type { DryRunBody, ImportGroupsBody, ImportSource } from "../contract";
+
+/** The collection a route's own values are kept in. */
+const ROUTE_VALUES = "nx_seo_route_values";
 
 /** Where the media library keeps uploads in a test. */
 const UPLOADS = path.resolve(import.meta.dirname, "../../../public");
@@ -223,6 +227,16 @@ async function boot(
         ],
         publicAddress: "/{slug}",
       }),
+      // A type SEO is not added to, holding a field of its own named `seo`,
+      // as nextlyhq.com's types do before the field is renamed.
+      defineCollection({
+        slug: "legacy",
+        labels: { singular: "Legacy page", plural: "Legacy pages" },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "seo", component: "page-seo" }),
+        ],
+      }),
     ],
   });
   current = t;
@@ -345,15 +359,27 @@ async function redirectCount(t: TestNextly): Promise<number> {
 }
 
 /** A dry run of `source`, as `key`. */
-async function dryRun(key: string, source: ImportSource): Promise<DryRunBody> {
-  const response = await call(key, "POST", "/import/dry-run", { source });
+async function dryRun(
+  key: string,
+  source: ImportSource,
+  more: { includeNeverServed?: boolean } = {}
+): Promise<DryRunBody> {
+  const response = await call(key, "POST", "/import/dry-run", {
+    source,
+    ...more,
+  });
   expect(response.status, await response.clone().text()).toBe(200);
   return (await response.json()) as DryRunBody;
 }
 
 /** The apply of the dry run `plan`, as `key`. */
-function apply(key: string, source: ImportSource, plan: string) {
-  return call(key, "POST", "/import/apply", { source, plan });
+function apply(
+  key: string,
+  source: ImportSource,
+  plan: string,
+  more: { includeNeverServed?: boolean } = {}
+) {
+  return call(key, "POST", "/import/apply", { source, plan, ...more });
 }
 
 /** A WordPress export of `items`, each with its stored values. */
@@ -608,6 +634,97 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(after.edition?.canonical).toBe("/edition?edition=original");
   });
 
+  it("leaves out values a page's own code overrides, as never served, unless included", async () => {
+    const { t, staff } = await boot(dialect);
+    await page(t, {
+      title: "Pricing",
+      slug: "pricing",
+      pageSeo: { metaTitle: "Nextly pricing" },
+    });
+    const changelog = await page(t, {
+      title: "Changelog",
+      slug: "changelog",
+      pageSeo: {
+        metaTitle: "Old changelog title",
+        metaDescription: "An old description the page never showed.",
+      },
+    });
+    // The changelog's route sets its own title and description in code, as
+    // the site's own page does, so its stored values never reached it.
+    await t.nextly.create({
+      collection: ROUTE_VALUES,
+      data: {
+        pageKey: routeValuesKey({
+          type: "pages",
+          id: changelog,
+          language: "en",
+        }),
+        type: "pages",
+        pageId: changelog,
+        language: "en",
+        codeValues: {
+          title: "Changelog | Nextly",
+          description: "What changed in each release.",
+        },
+      },
+    });
+    const source: ImportSource = {
+      kind: "group",
+      field: "pageSeo",
+      map: { metaTitle: "title", metaDescription: "description" },
+    };
+
+    // Each field is offered with an example of what it holds.
+    const groups = await call(staff.importer, "GET", "/import/groups");
+    const body = (await groups.json()) as ImportGroupsBody;
+    const offered = body.groups.find(group => group.field === "pageSeo");
+    // Both pages hold a title or a description in it.
+    expect(offered?.withText).toBe(2);
+    // A type with a field of its own named `seo` is named, with where it is
+    // defined, so the screen can say how to import it.
+    expect(body.ownSeo).toEqual([
+      { slug: "legacy", label: "Legacy pages", definedIn: "code" },
+    ]);
+    const fields = offered?.fields;
+    expect(fields?.find(field => field.name === "metaTitle")?.example).toMatch(
+      /^(Nextly pricing|Old changelog title)$/
+    );
+
+    const dry = await dryRun(staff.importer, source);
+    expect(dry).toMatchObject({ pages: 1, neverServed: 2, held: 2 });
+    const skipped = dry.documents.find(entry => entry.label === "Changelog");
+    expect(skipped).toMatchObject({
+      outcome: "skipped",
+      neverServed: ["title", "description"],
+      values: {
+        title: "Old changelog title",
+        description: "An old description the page never showed.",
+      },
+    });
+    expect(skipped?.reason).toMatch(/^Never served/);
+    expect(
+      dry.documents.find(entry => entry.label === "Pricing")?.values
+    ).toEqual({ title: "Nextly pricing" });
+
+    const applied = await apply(staff.importer, source, dry.plan);
+    expect(applied.status, await applied.clone().text()).toBe(200);
+    let after = await seoBySlug(t, "pages");
+    expect(after.pricing?.metaTitle).toBe("Nextly pricing");
+    expect(after.changelog?.metaTitle ?? "").toBe("");
+
+    // Included anyway, they are imported.
+    const anyway = await dryRun(staff.importer, source, {
+      includeNeverServed: true,
+    });
+    expect(anyway).toMatchObject({ pages: 1, neverServed: 0 });
+    const again = await apply(staff.importer, source, anyway.plan, {
+      includeNeverServed: true,
+    });
+    expect(again.status, await again.clone().text()).toBe(200);
+    after = await seoBySlug(t, "pages");
+    expect(after.changelog?.metaTitle).toBe("Old changelog title");
+  });
+
   it("makes the earlier plugin's typed values that match the automatic ones automatic, and keeps the rest", async () => {
     const { t, staff } = await boot(dialect);
     await post(t, {
@@ -628,6 +745,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     const source: ImportSource = { kind: "group", field: "seo", map: {} };
     const dry = await dryRun(staff.importer, source);
     expect(dry).toMatchObject({ pages: 1, same: 1, kept: 0 });
+    // The report shows what each page holds, so the change can be checked.
+    expect(
+      dry.documents.find(entry => entry.label === "Surfer vs Rext")?.values
+    ).toEqual({
+      title: "Surfer vs Rext | Rext AI",
+      description: "A description of its own.",
+    });
 
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status, await applied.clone().text()).toBe(200);

@@ -8,11 +8,11 @@
 import {
   Button,
   MediaPickerDialog,
+  SettingsRowGroup,
   useMediaItem,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useId, useState, type JSX } from "react";
-
-import { Icon } from "./styles";
+import { ImageIcon } from "lucide-react";
+import { useId, useState, type JSX, type ReactNode } from "react";
 
 /** The chosen image, small, with its file name and size; or what it is for. */
 function MediaSummary({
@@ -34,21 +34,29 @@ function MediaSummary({
   return (
     <>
       <div
-        className={shape === "square" ? "nx-seo-thumb square" : "nx-seo-thumb"}
+        className={`flex h-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted text-muted-foreground ${shape === "square" ? "w-14" : "w-[107px]"}`}
       >
         {media?.url ? (
-          <img src={media.thumbnailUrl ?? media.url} alt="" />
+          <img
+            src={media.thumbnailUrl ?? media.url}
+            alt=""
+            className="size-full object-cover"
+          />
         ) : (
-          <Icon name="image" />
+          <ImageIcon className="size-5" aria-hidden="true" />
         )}
       </div>
-      <div className="nx-seo-upl-text">
+      <div className="grid min-w-0 flex-1 gap-0.5">
         {value === null ? (
-          <p className="nx-seo-help">{emptyHelp}</p>
+          <p className="text-xs leading-normal text-muted-foreground">
+            {emptyHelp}
+          </p>
         ) : (
           <>
-            <span>{name}</span>
-            <span className="nx-seo-help">
+            <span className="truncate text-sm font-medium text-foreground">
+              {name}
+            </span>
+            <span className="text-xs text-muted-foreground">
               {[size, chosenHelp].filter(Boolean).join(" · ")}
             </span>
           </>
@@ -58,16 +66,23 @@ function MediaSummary({
   );
 }
 
-/** A media item's id, chosen in the media library, or none. */
+/**
+ * A media item's id, chosen in the media library, or none: as a Settings row
+ * (its label and sentence on the left) or, in first-time setup, stacked.
+ */
 export function MediaChoice({
   label,
+  description,
   value,
   onChange,
   emptyHelp,
   chosenHelp,
   shape = "wide",
+  layout = "row",
 }: {
   label: string;
+  /** The row's one plain sentence, beside the label. */
+  description?: ReactNode;
   value: string | null;
   onChange: (value: string | null) => void;
   /** What the image is for, said while none is chosen. */
@@ -76,22 +91,20 @@ export function MediaChoice({
   chosenHelp?: string;
   /** A logo is shown square; a share image wide. */
   shape?: "wide" | "square";
+  layout?: "row" | "stacked";
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const labelId = useId();
-  return (
-    <div className="nx-seo-field" role="group" aria-labelledby={labelId}>
-      <span className="nx-seo-label" id={labelId}>
-        {label}
-      </span>
-      <div className="nx-seo-upl">
+  const control = (
+    <>
+      <div className="flex flex-wrap items-center gap-3">
         <MediaSummary
           value={value}
           shape={shape}
           emptyHelp={emptyHelp}
           {...(chosenHelp === undefined ? {} : { chosenHelp })}
         />
-        <div className="nx-seo-upl-acts">
+        <div className="flex items-center gap-2">
           {value !== null ? (
             <Button
               type="button"
@@ -128,6 +141,21 @@ export function MediaChoice({
           setOpen(false);
         }}
       />
+    </>
+  );
+  if (layout === "row") {
+    return (
+      <SettingsRowGroup label={label} description={description}>
+        {control}
+      </SettingsRowGroup>
+    );
+  }
+  return (
+    <div className="grid gap-2" role="group" aria-labelledby={labelId}>
+      <span className="text-sm font-semibold text-foreground" id={labelId}>
+        {label}
+      </span>
+      {control}
     </div>
   );
 }

@@ -23,11 +23,11 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
+  Switch,
   toastMutationResult,
   useMediaItem,
   usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Switch } from "@nextlyhq/ui";
 import { Check, Info } from "lucide-react";
 import { useRef, useState, type JSX, type ReactNode } from "react";
 

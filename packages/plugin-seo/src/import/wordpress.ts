@@ -11,10 +11,9 @@
  *
  * @module import/wordpress
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-
 import type { ImportTarget } from "./contract";
 import {
+  ImportFileRefused,
   pathOfAddress,
   textValue,
   type ImportedRecord,
@@ -165,11 +164,10 @@ function itemOf(item: string): WordPressItem | undefined {
 /** Every post and page the export holds, or a refusal where it is not one. */
 export function wordPressItems(xml: string): WordPressItem[] {
   if (!/<rss[\s>]/i.test(xml) || !/xmlns:wp=/i.test(xml)) {
-    throw NextlyError.invalidInput({
-      message:
-        "This isn't a WordPress export. Make one in WordPress under Tools › Export, with All content chosen.",
-      logContext: { reason: "seo-import-not-wordpress" },
-    });
+    throw new ImportFileRefused(
+      "This isn't a WordPress export. Make one in WordPress under Tools › Export, with All content chosen.",
+      "seo-import-not-wordpress"
+    );
   }
   return blocks(xml, "item").flatMap(item => itemOf(item) ?? []);
 }

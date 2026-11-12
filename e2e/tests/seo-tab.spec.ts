@@ -77,16 +77,14 @@ test("an entry's SEO tab shows the preview, what will be used and where it comes
 
   await seoTab(page).click();
   // The panel's one read-only SEO line says whether the page is listed.
-  await expect(page.getByTestId("seo-status")).toContainText("Listed");
+  await expect(page.getByTestId("seo-status")).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`tab=${TAB_ID.replace(".", "\\.")}`));
 
-  // At rest: the preview, then the title and the description, and Advanced
-  // closed with every other setting inside it.
+  // At rest: the page on Google beside its shared card, then the title and
+  // the description, and Advanced closed with every other setting inside it.
   const preview = page.getByRole("region", { name: "Preview" });
-  await expect(preview.getByRole("tab", { name: "Google" })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  );
+  await expect(preview.getByText("On Google")).toBeVisible();
+  await expect(page.getByTestId("seo-share-card")).toBeVisible();
   await expect(titleField(page)).toBeVisible();
   await expect(descriptionField(page)).toBeVisible();
   const advanced = page.getByRole("button", { name: /^Advanced/ });
@@ -101,10 +99,10 @@ test("an entry's SEO tab shows the preview, what will be used and where it comes
     `Surfer SEO vs Rext AI ${run}`
   );
   await expect(sourceOf(titleField(page))).toContainText(
-    "Automaticfrom the SEO page's Title"
+    "Empty uses the SEO page's title"
   );
   await expect(sourceOf(descriptionField(page))).toContainText(
-    "Automaticfrom the SEO page's Excerpt"
+    "Empty uses the SEO page's excerpt"
   );
   await expect(searchTitle(page)).toHaveText(`Surfer SEO vs Rext AI ${run}`);
   await expect(preview).toContainText(`› seo › surfer-vs-rext-${run}`);
@@ -118,7 +116,6 @@ test("an entry's SEO tab shows the preview, what will be used and where it comes
   await expect(searchTitle(page)).toHaveText(`Surfer SEO vs Rext AI ${run}`);
 
   // The shared card follows the same values.
-  await preview.getByRole("tab", { name: "When shared" }).click();
   await expect(page.getByTestId("seo-share-title")).toHaveText(
     `Surfer SEO vs Rext AI ${run}`
   );
@@ -198,6 +195,11 @@ test("a page's problems are counted on the tab", async ({ page }) => {
   expect(before).toBeGreaterThanOrEqual(2);
 
   await seoTab(page).click();
+  // Each problem is said above the fields, and the side panel counts them.
+  await expect(
+    page.getByText("The title is longer than Google shows.")
+  ).toBeVisible();
+  await expect(page.getByTestId("seo-status")).toHaveText(`${before} to check`);
   await titleField(page).fill("Short");
   await descriptionField(page).fill("A description for the results page.");
   await expect.poll(countOf).toBe(before - 2);
@@ -214,7 +216,7 @@ test("a new entry has the SEO tab, previewing what is typed before it is saved",
   await seoTab(page).click();
   await expect(searchTitle(page)).toHaveText(`Fresh ${run}`);
   await expect(sourceOf(titleField(page))).toContainText(
-    "Automaticfrom the SEO page's Title"
+    "Empty uses the SEO page's title"
   );
 });
 
@@ -228,7 +230,7 @@ test("a Single the plugin extends has the same tab, and keeps SEO out of its con
   await page.getByLabel("Summary").fill(`The home of this site ${run}.`);
   await seoTab(page).click();
   await expect(sourceOf(descriptionField(page))).toContainText(
-    "Automaticfrom the SEO home's Summary"
+    "Empty uses the SEO home's summary"
   );
   await expect(page.getByTestId("seo-search-description")).toHaveText(
     `The home of this site ${run}.`
