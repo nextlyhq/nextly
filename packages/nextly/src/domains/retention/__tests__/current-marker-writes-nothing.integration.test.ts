@@ -21,12 +21,9 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import * as gate from "../gate";
 
 /** Every retention pass's marker key the gate module declares. */
-const MARKER_KEYS = Object.entries(gate)
-  .filter(
-    (entry): entry is [string, string] =>
-      entry[0].endsWith("_GATE_KEY") && typeof entry[1] === "string"
-  )
-  .map(([, key]) => key);
+const MARKER_KEYS: string[] = Object.entries(gate).flatMap(([name, value]) =>
+  name.endsWith("_GATE_KEY") && typeof value === "string" ? [value] : []
+);
 
 /** Whether `call` writes the `nextly_meta` table. */
 const writesMeta = (call: RecordedStatement) =>
