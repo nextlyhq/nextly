@@ -622,6 +622,9 @@ async function runInSync(args: ReconcileFileArgs): Promise<void> {
     await runRecordedAttempt(args);
   } catch (err) {
     if (isConcurrentRun(err)) throw err;
+    // A file that stopped waiting for a busy table already says so, with its own code, which a
+    // script tells from any other failure; wrapped, it would read as a statement that failed.
+    if (NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY") throw err;
     throw applyFailedError(file.filename, err);
   }
 }

@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
-import { judgeStatement } from "../judge";
+import { judgeStatement, targetTable } from "../judge";
 
 const DIALECTS: readonly SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -180,5 +180,88 @@ describe("judgeStatement", () => {
         reason: "unread",
       });
     });
+  });
+});
+
+describe("judgeStatement on the calls a plain word reading would miss", () => {
+  it.each([
+    [
+      "a schema-qualified function of the site's own",
+      "UPDATE posts SET slug = public.make_slug(title)",
+    ],
+    ["a quoted function name", 'INSERT INTO posts (id) VALUES ("audit_fn"())'],
+  ])("stops with no retry on %s", (_, statement) => {
+    expect(judgeStatement(statement, "postgresql", () => false)).toEqual({
+      kind: "no-retry",
+      reason: "unknown-code",
+    });
+  });
+
+  it("reads setval named through PostgreSQL's catalog as setval", () => {
+    expect(
+      judgeStatement(
+        "UPDATE posts SET n = pg_catalog.setval('s', 1)",
+        "postgresql",
+        () => false
+      )
+    ).toEqual({ kind: "no-retry", reason: "setval" });
+  });
+
+  it("lets a built-in named through PostgreSQL's catalog run again", () => {
+    expect(
+      judgeStatement(
+        "UPDATE posts SET title = pg_catalog.lower(title)",
+        "postgresql",
+        () => false
+      )
+    ).toEqual({ kind: "may-run-again" });
+  });
+
+  it.each([
+    ["an index method", 'CREATE INDEX "posts_c" ON "posts" USING btree ("c")'],
+    ["a gin index", 'CREATE INDEX "posts_d" ON "posts" USING gin ("d")'],
+    [
+      "an identity column",
+      'CREATE TABLE "posts" ("id" integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (sequence name "posts_id_seq" INCREMENT BY 1))',
+    ],
+    [
+      "a storage parameter list",
+      'CREATE INDEX "posts_e" ON "posts" ("e") WITH (fillfactor = 70)',
+    ],
+  ])("lets drizzle-kit's DDL run again: %s", (_, statement) => {
+    expect(judgeStatement(statement, "postgresql", () => false)).toEqual({
+      kind: "may-run-again",
+    });
+  });
+
+  it.each([
+    ["UPDATE ONLY posts SET x = 1"],
+    ["DELETE FROM ONLY posts WHERE id = 1"],
+  ])("checks the trigger of the table behind ONLY: %s", statement => {
+    expect(
+      judgeStatement(statement, "postgresql", table => table === "posts")
+    ).toEqual({ kind: "no-retry", reason: "trigger" });
+  });
+});
+
+describe("targetTable", () => {
+  it.each([
+    ["ALTER TABLE posts ADD COLUMN late integer", "posts"],
+    ['ALTER TABLE IF EXISTS ONLY "Posts" ADD COLUMN c integer', "posts"],
+    [
+      "CREATE TABLE IF NOT EXISTS posts (author int REFERENCES users (id) ON DELETE CASCADE)",
+      "posts",
+    ],
+    ["DROP TABLE IF EXISTS posts", "posts"],
+    [
+      "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ix ON ONLY posts (slug)",
+      "posts",
+    ],
+    ["INSERT INTO posts (id) VALUES (1)", "posts"],
+    ["UPDATE ONLY posts SET x = 1", "posts"],
+    ["DELETE FROM posts WHERE id = 1", "posts"],
+    ["SELECT 1", null],
+  ])("reads %j as %j", (statement, table) => {
+    expect(targetTable(statement, "postgresql")).toBe(table);
   });
 });

@@ -180,6 +180,15 @@ function nextStep(stop: BusyTableStop): string {
       "`--lock-timeout-total` (or `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`)."
     );
   }
+  // Stopped with no retry, in a transaction that rolled back whole: nothing of the file stayed but
+  // what the statement itself keeps (a sequence's position), and the file applies from its start.
+  if (stop.outcome.kind === "no-retry" && stop.outcome.restUndone) {
+    return (
+      `Run it again once the holder ends or the holding session is ended: \`${stop.change}\` ` +
+      "was undone whole and applies from its start. Check what the statement named above keeps " +
+      "(for `setval`, the sequence's position) before it runs again."
+    );
+  }
   return (
     `Resolve \`${stop.change}\` with \`nextly migrate:resolve\` as for any part-way file: finish ` +
     "its remaining statements by hand and mark it applied with `nextly migrate:resolve --applied`, " +

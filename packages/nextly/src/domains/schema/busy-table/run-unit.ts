@@ -19,7 +19,6 @@ import {
   runMigrationStatements,
   type MigrationUnit,
 } from "../migrate/migration-transaction";
-import { statementTokens } from "../migrate/split-sql";
 import {
   assertSchemaLockHeld,
   schemaLockConfirmedUntil,
@@ -28,9 +27,10 @@ import {
 import type { BusyTableBounds } from "./bounds";
 import { endedWaiting } from "./ended-waiting";
 import { readHolders } from "./holder";
-import { judgeStatement } from "./judge";
+import { judgeStatement, targetTable } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
+import type { HolderReport } from "./types";
 import { prepareTryWatchdog } from "./watchdog";
 
 /** What a run hands every unit it runs in tries. */
@@ -64,31 +64,6 @@ async function triggerTables(
     triggerTablesQuery(dialect)
   );
   return new Set(rows.map(row => String(row.name).toLowerCase()));
-}
-
-/** Words after which a statement names the table it changes or writes. */
-const TABLE_FOLLOWS = new Set(["TABLE", "INTO", "UPDATE", "FROM", "ON"]);
-
-/** The table `statement` changes or writes, as it names it; null where it names none plainly. */
-function tableOf(statement: string, dialect: SupportedDialect): string | null {
-  const tokens = statementTokens(statement, dialect);
-  for (let at = 0; at + 1 < tokens.length; at++) {
-    const word = tokens[at];
-    if (typeof word !== "string" || !TABLE_FOLLOWS.has(word)) continue;
-    const next = tokens[at + 1];
-    if (typeof next === "string") {
-      if (
-        /^[A-Z_][A-Z0-9_$]*$/.test(next) &&
-        next !== "IF" &&
-        next !== "ONLY"
-      ) {
-        return next.toLowerCase();
-      }
-      continue;
-    }
-    if (next.kind === "name" && next.written !== undefined) return next.written;
-  }
-  return null;
 }
 
 /** Whether a unit runs in tries: one transaction on PostgreSQL or SQLite. */
@@ -134,7 +109,14 @@ export async function runUnitInTries(
       let reached = -1;
       // Made before the unit's transaction opens, so the watch's asks on another connection never
       // run inside that transaction's flow; it starts once the session is known.
-      const watchdog = prepareTryWatchdog(adapter, dialect, tryMs);
+      // What holds the table, read by the watch just before it ends the try, while the session
+      // still waits; after the rollback it waits for nothing and the database names no holder.
+      let holder: HolderReport | undefined;
+      const watchdog = prepareTryWatchdog(adapter, dialect, tryMs, {
+        beforeCancel: async waiting => {
+          holder = await readHolders(adapter, dialect, waiting);
+        },
+      });
       try {
         const value = await runMigrationStatements(
           adapter,
@@ -174,8 +156,8 @@ export async function runUnitInTries(
         return {
           kind: "ended",
           ended: {
-            table: waiting === undefined ? null : tableOf(waiting, dialect),
-            holder: await readHolders(adapter, dialect, session),
+            table: waiting === undefined ? null : targetTable(waiting, dialect),
+            holder: holder ?? (await readHolders(adapter, dialect, session)),
           },
           lasting,
           undone: true,

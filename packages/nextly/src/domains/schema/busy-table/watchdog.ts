@@ -99,7 +99,14 @@ export function prepareTryWatchdog(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   tryMs: number,
-  options: { pollMs?: number } = {}
+  options: {
+    pollMs?: number;
+    /**
+     * Called once the session's waits reach the bound, just before it is ended: while it is still
+     * waiting, which is when the database can still say what it waits for.
+     */
+    beforeCancel?: (session: string) => Promise<void>;
+  } = {}
 ): PreparedTryWatchdog {
   if (dialect === "sqlite") return { ...NO_OP, watch: () => undefined };
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
@@ -128,6 +135,8 @@ export function prepareTryWatchdog(
     if (lastSeenWaitingAt !== undefined) waitedMs += now - lastSeenWaitingAt;
     lastSeenWaitingAt = now;
     if (waitedMs < tryMs || stopped) return;
+    // What holds the table is read before the cancel; a failed read leaves the cancel to go on.
+    await options.beforeCancel?.(String(target)).catch(() => undefined);
     if (dialect === "postgresql") {
       const cancelled = await adapter.queryStatement<{ cancelled: unknown }>(
         cancelQuery(dialect, target)

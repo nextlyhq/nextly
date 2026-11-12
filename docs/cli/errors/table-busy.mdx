@@ -22,7 +22,8 @@ If a signal (Ctrl+C) ended the tries, the first line says interrupted instead of
 ## Fix
 
 - **Nothing changed:** run the command again once the holding session ends, or end that session (on PostgreSQL `pg_terminate_backend`, on MySQL `KILL`, once you are sure it can go), or give the change longer with `--lock-timeout` (one try, in seconds) and `--lock-timeout-total` (every try together), or `NEXTLY_LOCK_TIMEOUT` and `NEXTLY_LOCK_TIMEOUT_TOTAL`.
-- **Stopped part-way, or after one try:** resolve the file as for any migration that stopped part-way. Finish its remaining statements by hand and mark it applied with `nextly migrate:resolve --applied`, or reverse what stayed and run `nextly migrate:resolve --failed-cleanup`. Then run `nextly migrate` again.
+- **Stopped after one try, the rest undone with its transaction:** nothing of the file stayed but what the named statement keeps itself (for a `setval`, the sequence's position). Check that, then run the command again once the holding session ends; the file applies from its start.
+- **Stopped part-way, or after one try outside a transaction:** resolve the file as for any migration that stopped part-way. Finish its remaining statements by hand and mark it applied with `nextly migrate:resolve --applied`, or reverse what stayed and run `nextly migrate:resolve --failed-cleanup`. Then run `nextly migrate` again.
 
 ## Example
 

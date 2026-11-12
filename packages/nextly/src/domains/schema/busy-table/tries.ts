@@ -133,7 +133,8 @@ export async function withBusyTableTries<T>(
         table: result.ended.table,
         holder: result.ended.holder,
         tryNumber: tryNumber + 1,
-        plannedTries,
+        // Tries that end early start sooner than planned, so more can fit: never "8 of up to 7".
+        plannedTries: Math.max(plannedTries, tryNumber + 1),
       })
     );
   }

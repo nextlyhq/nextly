@@ -77,6 +77,15 @@ const PAREN_KEYWORDS = new Set([
   "INTO",
   "REFERENCES",
   "FOREIGN",
+  "WITH",
+  "IDENTITY",
+  // PostgreSQL's index methods, as drizzle-kit writes them: `USING btree (`.
+  "BTREE",
+  "HASH",
+  "GIN",
+  "GIST",
+  "BRIN",
+  "SPGIST",
 ]);
 
 /** Type names written with a size or a list in parentheses. */
@@ -200,19 +209,42 @@ const NAME_FOLLOWS = new Set([
   "CONSTRAINT",
 ]);
 
-/** Whether the word at `at` is called: a bare word followed by a parenthesis, not a name. */
-function isCall(tokens: readonly StatementToken[], at: number): boolean {
-  const word = tokens[at];
-  if (typeof word !== "string" || !WORD.test(word) || tokens[at + 1] !== "(") {
-    return false;
-  }
+/** A word, schema-qualified or not: `MAKE_SLUG`, `PUBLIC.MAKE_SLUG`. */
+const QUALIFIED_WORD = /^[A-Z_][A-Z0-9_$]*(?:\.[A-Z_][A-Z0-9_$]*)*$/;
+
+/** The schema that holds the built-in functions on PostgreSQL. */
+const BUILT_IN_SCHEMA = "PG_CATALOG";
+
+/**
+ * The called function at `at`, upper-cased, or undefined where nothing is called there: a word or
+ * a quoted name followed by a parenthesis, not a name followed by its column list
+ * (`TABLE posts (`, `REFERENCES users (`). A quoted name is never a built-in, so it is returned as
+ * the empty string, which no list holds.
+ */
+function calledAt(
+  tokens: readonly StatementToken[],
+  at: number
+): string | undefined {
+  if (tokens[at + 1] !== "(") return undefined;
   const before = tokens[at - 1];
-  // A name followed by its column list (`TABLE posts (`, `REFERENCES users (`) is no call.
-  return !(typeof before === "string" && NAME_FOLLOWS.has(before));
+  if (typeof before === "string" && NAME_FOLLOWS.has(before)) return undefined;
+  const word = tokens[at];
+  if (typeof word !== "string") return word?.kind === "name" ? "" : undefined;
+  return QUALIFIED_WORD.test(word) ? word : undefined;
 }
 
-/** What a call of `word` makes of a statement; undefined for a keyword, a type or a built-in. */
-function callVerdict(word: string): StatementJudgement | undefined {
+/**
+ * What a call of `called` makes of a statement; undefined for a keyword, a type or a built-in. A
+ * schema-qualified call is a built-in only where the schema is PostgreSQL's own catalog.
+ */
+function callVerdict(called: string): StatementJudgement | undefined {
+  const parts = called.split(".");
+  const word = parts[parts.length - 1];
+  const qualifier = parts.length > 1 ? parts.slice(0, -1).join(".") : undefined;
+  if (word === "SETVAL") return noRetry("setval");
+  if (qualifier !== undefined && qualifier !== BUILT_IN_SCHEMA) {
+    return noRetry("unknown-code");
+  }
   if (PAREN_KEYWORDS.has(word) || PAREN_TYPES.has(word)) return undefined;
   if (BUILT_IN_FUNCTIONS.has(word) || SEQUENCE_FUNCTIONS.has(word)) {
     return undefined;
@@ -231,8 +263,9 @@ function callsVerdict(
   tokens: readonly StatementToken[]
 ): StatementJudgement | undefined {
   for (let at = 0; at + 1 < tokens.length; at++) {
-    if (!isCall(tokens, at)) continue;
-    const verdict = callVerdict(tokens[at] as string);
+    const called = calledAt(tokens, at);
+    if (called === undefined) continue;
+    const verdict = callVerdict(called);
     if (verdict !== undefined) return verdict;
   }
   return undefined;
@@ -255,6 +288,50 @@ function tableName(
     : undefined;
 }
 
+/** Words between a statement's keyword and the table it names, which name nothing. */
+const TABLE_MODIFIERS = new Set(["IF", "NOT", "EXISTS", "ONLY"]);
+
+/** The first position from `at` on that is not a modifier (`IF NOT EXISTS`, `ONLY`). */
+function pastModifiers(tokens: readonly StatementToken[], at: number): number {
+  let next = at;
+  for (;;) {
+    const token = tokens[next];
+    if (typeof token !== "string" || !TABLE_MODIFIERS.has(token)) return next;
+    next++;
+  }
+}
+
+/** The position of the word after which each kind of statement names its table. */
+function tableKeywordAt(tokens: readonly StatementToken[]): number | undefined {
+  const first = tokens[0];
+  const keyword =
+    first === "UPDATE"
+      ? "UPDATE"
+      : first === "INSERT"
+        ? "INTO"
+        : first === "DELETE"
+          ? "FROM"
+          : first === "CREATE" && tokens.includes("INDEX")
+            ? "ON"
+            : "TABLE";
+  const at = tokens.indexOf(keyword);
+  return at < 0 ? undefined : at;
+}
+
+/**
+ * The table `statement` creates, changes, drops or writes, as one plain name, lower-cased; null
+ * where it names none plainly. The table a busy-table report names as waited for.
+ */
+export function targetTable(
+  statement: string,
+  dialect: SupportedDialect
+): string | null {
+  const tokens = statementTokens(statement, dialect);
+  const keyword = tableKeywordAt(tokens);
+  if (keyword === undefined) return null;
+  return tableName(tokens, pastModifiers(tokens, keyword + 1)) ?? null;
+}
+
 /** Whether `tokens` start with `words`. */
 function startsWith(
   tokens: readonly StatementToken[],
@@ -271,7 +348,7 @@ function rowChange(
 ): StatementJudgement {
   const calls = callsVerdict(tokens);
   if (calls !== undefined) return calls;
-  const table = tableName(tokens, tableAt);
+  const table = tableName(tokens, pastModifiers(tokens, tableAt));
   if (table === undefined) return noRetry("unread");
   return hasTrigger(table) ? noRetry("trigger") : MAY_RUN_AGAIN;
 }

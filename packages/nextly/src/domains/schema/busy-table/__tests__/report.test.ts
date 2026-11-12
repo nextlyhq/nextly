@@ -239,9 +239,11 @@ describe("tableBusyError", () => {
         `It was not tried again, since ${kind} may not be sent again: ` +
           "`SELECT setval('posts_id_seq', 10)`. The rest of the change was undone with its transaction."
       );
+      // Undone whole with its transaction: run again, never resolved as a part-way file.
       expect(lines[lines.length - 1]).toMatch(
-        /^Resolve `0007_add_keys\.sql` with `nextly migrate:resolve` as for any part-way file:/
+        /^Run it again once the holder ends or the holding session is ended: `0007_add_keys\.sql` was undone whole/
       );
+      expect(error.publicMessage).not.toContain("migrate:resolve");
     }
   );
 
@@ -265,6 +267,8 @@ describe("tableBusyError", () => {
         "What ran before it was not undone."
     );
     expect(error.publicMessage).not.toContain("undone with its transaction");
+    // Statements committed outside a transaction stay: the file is resolved as a part-way one.
+    expect(error.publicMessage).toContain("nextly migrate:resolve");
   });
 
   it("names an unnamed holder's reason and SQLite's lease ending the tries early", () => {

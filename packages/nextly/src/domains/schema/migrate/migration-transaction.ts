@@ -357,10 +357,11 @@ async function runUnitStatements(
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
       if (bound !== undefined && dialect === "postgresql") {
-        // Each lock the try waits for is bounded by the try's bound, as a backstop; the watch on
-        // the session the tries start from its id ends the try once its waits add up to it.
+        // The watch on this session ends the try once its waits add up to the bound, having read
+        // what holds the table first. Each lock is also bounded by the database, half a second
+        // later, as a backstop for a watch that could not ask.
         await tx.execute(
-          `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs))}ms'`
+          `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
         );
         const session = await tx.session();
         if (session !== undefined) bound.onSession?.(session);

@@ -178,6 +178,10 @@ describe.each(DIALECTS)(
       expect(notices).toHaveLength(2);
       expect(await columnsOf(BUSY)).toEqual(["id"]);
       expect(String((stopped as Error).message)).toContain("nothing changed");
+      // The holder is read while the statement still waits, so the database names it.
+      if (dialect === "postgresql") {
+        expect(String((stopped as Error).message)).toMatch(/session \d+/);
+      }
     });
 
     it("applies on the next try once the holder ends during the third pause", async () => {
