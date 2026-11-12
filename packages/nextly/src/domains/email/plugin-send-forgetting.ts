@@ -142,6 +142,19 @@ export async function forgetPluginSends(
     const db = tx.getDrizzle<
       QueuedErasureDb & RecipientErasureCapableDb & PrincipalDigestDb
     >();
+    // The digest key's lock before any queued email's: a person's deletion
+    // takes them in that order, and taking them the other way round here
+    // could leave each transaction holding the lock the other waits for.
+    const stored =
+      keys.length === 0
+        ? undefined
+        : await readPrincipalDigests(
+            db,
+            server,
+            principalDigestTablesOf(getDialectTables(dialect)),
+            "shared",
+            secrets
+          );
     await cancelQueuedEmailsAmong(
       db,
       {
@@ -152,14 +165,7 @@ export async function forgetPluginSends(
       scope,
       queuedIds
     );
-    if (keys.length === 0) return;
-    const stored = await readPrincipalDigests(
-      db,
-      server,
-      principalDigestTablesOf(getDialectTables(dialect)),
-      "shared",
-      secrets
-    );
+    if (stored === undefined) return;
     await eraseKeyedDeliveries(
       db,
       tables.emailDeliveries,
