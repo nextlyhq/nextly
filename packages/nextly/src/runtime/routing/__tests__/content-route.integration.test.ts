@@ -2,7 +2,7 @@
  * `createContentRoute` against a real boot: `generateStaticParams` lists
  * published paths (segmented, drafts excluded), the page renders a resolved
  * entry, a genuine miss and a reserved path trigger `notFound`, and
- * `generateMetadata` maps the resolved entry.
+ * `generateMetadata` maps the resolved entry and answers a miss as not found.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -249,7 +249,7 @@ describe("createContentRoute (integration)", () => {
     ).rejects.toThrow();
   });
 
-  it("maps the resolved entry in generateMetadata, and returns {} on a miss", async () => {
+  it("maps the resolved entry in generateMetadata, and answers a miss as not found", async () => {
     // The access-enforced route reads as a visitor, judged by the Public
     // role a real boot makes, which reads `pages` by its rule.
     current = await createTestNextly({
@@ -262,8 +262,10 @@ describe("createContentRoute (integration)", () => {
     expect(await generateMetadata({ params: { slug: ["about"] } })).toEqual({
       title: "About",
     });
-    expect(await generateMetadata({ params: { slug: ["missing"] } })).toEqual(
-      {}
-    );
+    // A miss answers its head as not found, so a crawler, answered once the
+    // head is ready, gets a 404 rather than a 200 with a not-found body.
+    await expect(
+      generateMetadata({ params: { slug: ["missing"] } })
+    ).rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404/);
   });
 });
