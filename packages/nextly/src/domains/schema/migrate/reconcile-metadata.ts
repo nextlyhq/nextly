@@ -620,17 +620,43 @@ async function registerRows(
       (kind, slug) => changed?.[kind].has(slug) === true
     );
   }
-  const source: RegistrySource =
-    deps.configurationRows === undefined
-      ? await readRegistrySource({ migrationsDir, isApplied })
-      : {
-          kind: "snapshot",
-          file: "the configuration",
-          entities: deps.configurationRows,
-        };
+  if (deps.configurationRows !== undefined) {
+    const fromConfiguration = await writeFrom({
+      kind: "snapshot",
+      file: "the configuration",
+      entities: deps.configurationRows,
+    });
+    // A first run whose migrations are a template's hand-written ones also
+    // adds the rows their older-format snapshot lists, which the
+    // configuration may not declare (a visual blog declares none of them).
+    const applied = await readRegistrySource({ migrationsDir, isApplied });
+    if (applied.kind !== "none" || applied.reason !== "older-format") {
+      return fromConfiguration;
+    }
+    const listed = await insertMissing();
+    return {
+      rows: {
+        collectionsRegistered:
+          fromConfiguration.rows.collectionsRegistered +
+          listed.rows.collectionsRegistered,
+        singlesRegistered:
+          fromConfiguration.rows.singlesRegistered +
+          listed.rows.singlesRegistered,
+        fieldGroupsRegistered: fromConfiguration.rows.fieldGroupsRegistered,
+        rowsNotWritten: [
+          ...fromConfiguration.rows.rowsNotWritten,
+          ...listed.rows.rowsNotWritten,
+        ],
+      },
+      complete: fromConfiguration.complete && listed.complete,
+    };
+  }
+  const source = await readRegistrySource({ migrationsDir, isApplied });
   if (source.kind !== "snapshot") {
     // Fail closed: an unreadable newest snapshot may record anything, so no
-    // row is written from it, nor from an older one in its place.
+    // row is written from it, nor from an older one in its place. A
+    // template's older-format snapshot is not unreadable: the rows it lists
+    // are added where absent, below, as for one with no record.
     if (source.reason === "unreadable") {
       logger.warn(
         `The registry rows were not written: the newest applied snapshot (${source.file ?? "unknown"}) could not be read.`

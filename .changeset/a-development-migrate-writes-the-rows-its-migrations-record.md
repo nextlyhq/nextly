@@ -30,3 +30,5 @@
 ---
 
 A `nextly migrate` run in development mode, which is how it runs when `NODE_ENV` is not set, now writes the registry rows its migrations record. On a fresh database it adds every collection, Single and field group row the newest applied snapshot records, and it brings the row of each entity a migration it applied changed to that migration's record. Before, it added only the rows an older template-shaped snapshot listed, so a site migrated with `migrate:create` files had no registry rows until a development start synced them. Rows a live sync edited with no migration for the edit are still left as they are.
+
+A run in any mode also adds the rows a template's older-format snapshot lists (the blog template's hand-written migration), where the registry lacks them. Outside development such a snapshot was read as unreadable, so a site built from it got none of those rows from `nextly migrate`. A snapshot that cannot be read for another reason is still refused.

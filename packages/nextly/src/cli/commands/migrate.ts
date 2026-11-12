@@ -187,6 +187,7 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
+  isOlderFormatSnapshot,
   parseSnapshotFile,
   type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
@@ -3648,16 +3649,9 @@ async function loadTargetSnapshot(
     // Invalid JSON - let parseSnapshotFile handle the error reporting
   }
 
-  // If it looks like a custom metadata format (has collections/singles, no migrationHash),
-  // treat as no snapshot so migration runs verbatim
-  if (
-    parsed &&
-    typeof parsed === "object" &&
-    !("migrationHash" in parsed) &&
-    ("collections" in parsed || "singles" in parsed)
-  ) {
-    return null;
-  }
+  // A template's older-format snapshot records no tables: no snapshot, so the
+  // migration runs verbatim.
+  if (isOlderFormatSnapshot(parsed)) return null;
 
   // Otherwise, parse as a drift snapshot. The whole file, because its
   // `contributions` say which parts of a foreign table the drift check may
