@@ -23,6 +23,7 @@ import {
   resolveDataLossConsent,
   type DataLossConsent,
 } from "../../migrate/data-loss-consent";
+import { readSchemaLockState } from "../../pipeline/schema-lock";
 import { applyRepairs, type ConversionStepAt } from "../apply";
 import {
   COLUMN_REPAIRS_TABLE,
@@ -226,6 +227,46 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
         await run(`DROP TABLE IF EXISTS ${q(TABLE)}`);
         await run(`DROP TABLE IF EXISTS ${q(COLUMN_REPAIRS_TABLE)}`);
       }
+    });
+
+    it("a clearing still to run is asked about before the lock, and a yes resumes it; a no leaves it interrupted", async () => {
+      await stopAt(0, 0);
+      const before = await snapshot();
+      const lockWhileAsked: string[] = [];
+      const ask = (answer: boolean) =>
+        applyRepairs({
+          adapter: handle.adapter,
+          dialect,
+          entities: [ENTITY],
+          nextlyVersion: "test",
+          confirmClearing: async question => {
+            expect(question).toMatchObject({
+              table: TABLE,
+              column: "links",
+              count: NAMED.length,
+            });
+            lockWhileAsked.push(
+              (await readSchemaLockState(handle.adapter)).state
+            );
+            return answer;
+          },
+        });
+
+      const declined = await ask(false);
+      expect(recordOf(declined.result?.records, "links").outcome).toBe(
+        "interrupted"
+      );
+      expect(await snapshot()).toEqual(before);
+
+      const confirmed = await ask(true);
+      const record = recordOf(confirmed.result?.records, "links");
+      expect(record.outcome).toBe("converted");
+      expect(record.consent).toMatchObject({
+        given: "confirmed",
+        valuesCleared: NAMED.length,
+      });
+      expect(lockWhileAsked).toEqual(["free", "free"]);
+      await expectConverted("confirmed");
     });
 
     it("a run stopped before its retype keeps the cleared values and its count, and the next run retypes without consent", async () => {

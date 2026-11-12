@@ -21,6 +21,7 @@ import {
   resolveDataLossConsent,
   type DataLossConsent,
 } from "../../migrate/data-loss-consent";
+import { readSchemaLockState } from "../../pipeline/schema-lock";
 import { AFFECTED_ROWS_BOUND } from "../../value-conversion/judge-column";
 import { applyRepairs, type ClearingQuestion } from "../apply";
 import { COLUMN_REPAIRS_TABLE, readRepairs } from "../record";
@@ -357,15 +358,21 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("the person at the terminal", () => {
-      it("is asked once per lossy column with its count and first rows, and a yes converts it", async () => {
+      it("is asked once per lossy column with its count and first rows, before the schema lock is taken, and a yes converts it", async () => {
         const { entity, column, cleared } = await lossyTable();
         const questions: ClearingQuestion[] = [];
+        const lockWhileAsked: string[] = [];
         const document = await apply(entity, {
-          confirmClearing: question => {
+          confirmClearing: async question => {
             questions.push(question);
-            return Promise.resolve(true);
+            // Nothing is held while the person answers: another schema change could run now.
+            lockWhileAsked.push(
+              (await readSchemaLockState(handle.adapter)).state
+            );
+            return true;
           },
         });
+        expect(lockWhileAsked).toEqual(["free"]);
         expect(questions).toHaveLength(1);
         expect(questions[0]).toMatchObject({
           table: TABLE,

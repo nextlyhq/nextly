@@ -10,9 +10,10 @@
 //
 // A lossy column holds values the new type cannot hold. It converts only when the data-loss consent
 // names it as `table.column`, or the person at the terminal says yes to clearing its values; a
-// consent without a list, or naming only the table, never covers it (`consent.ts`). The question is
-// asked once the column has been judged under the schema lock and before its table is closed, so
-// the table is never held while a person answers. The values cleared, set to null, are exactly the
+// consent without a list, or naming only the table, never covers it (`consent.ts`). Every question
+// is asked before the run takes the schema lock, from a judgement made as a dry run makes it, so
+// nothing (no table and no schema lock) is held while a person answers; under the lock the run only
+// reads the answers, and a column no yes covers is skipped. The values cleared, set to null, are exactly the
 // rows the run's judgement named, read from the same pass over the column that classed it; where
 // the rows a yes was given for are no longer all of them, nothing is cleared and the column is
 // skipped. A difference that is both lossy and blocked is blocked, and nothing is cleared for it.
@@ -198,6 +199,18 @@ interface StepPlan {
 export async function applyRepairs(
   args: ApplyRepairsArgs
 ): Promise<RepairColumnsDocument> {
+  // Asked before the lock, so no other schema change waits on a person's answer. Only a run that
+  // may ask reads the database here; under the lock everything is read again.
+  const answers =
+    args.confirmClearing === undefined
+      ? new Map<string, ReadonlySet<string> | null>()
+      : await new ApplyRun({
+          ...args,
+          entities:
+            typeof args.entities === "function"
+              ? await args.entities()
+              : args.entities,
+        }).askBeforeLock();
   const held = await withSchemaLock(
     {
       adapter: args.adapter,
@@ -216,7 +229,7 @@ export async function applyRepairs(
         typeof args.entities === "function"
           ? await args.entities()
           : args.entities;
-      return new ApplyRun({ ...args, entities }).run();
+      return new ApplyRun({ ...args, entities, answers }).run();
     }
   );
   if (!held.ran) {
@@ -287,6 +300,11 @@ function consentWithheld(
   notice: string | null
 ): ColumnConsentFacts {
   return { given: null, valuesCleared: 0, flag, notice };
+}
+
+/** The key an answer asked before the lock is kept under: the column as the report names it. */
+function answerKey(finding: ColumnFinding): string {
+  return `${finding.location.table}.${finding.location.column}`;
 }
 
 /** The rows the judgement names for each reason that clears values, the bounded first keys. */
@@ -360,6 +378,11 @@ class ApplyRun {
   constructor(
     private readonly args: ApplyRepairsArgs & {
       entities: readonly RepairEntity[];
+      /**
+       * The answers asked before the lock: for each lossy column by `table.column`, the rows a
+       * yes was given for, or null for a no.
+       */
+      answers?: ReadonlyMap<string, ReadonlySet<string> | null>;
     }
   ) {
     this.adapter = args.adapter;
@@ -426,7 +449,7 @@ class ApplyRun {
       if (fresh === null) return null;
       let clearing: Clearing | null = null;
       if (clearable(fresh)) {
-        const decided = await this.consentFor(fresh);
+        const decided = this.consentFor(fresh);
         if (!("given" in decided)) {
           return {
             finding: decided.finding,
@@ -477,18 +500,16 @@ class ApplyRun {
   }
 
   /**
-   * Whether this run may clear a lossy column's values: the consent naming the column, or a yes
-   * from the person at the terminal, asked with the count and the first rows the run's judgement
-   * names now, before the column's table is closed. Otherwise the facts that say why not: its
-   * consent, and, for a column this run cannot clear, its failure.
+   * Whether this run may clear a lossy column's values: the consent naming the column, or the yes
+   * the person at the terminal gave before the lock, for the rows they were shown. Otherwise the
+   * facts that say why not: its consent, and, for a column this run cannot clear, its failure.
    */
-  private async consentFor(finding: DiffersFinding): Promise<
+  private consentFor(finding: DiffersFinding):
     | Clearing
     | {
         finding: DiffersFinding;
         facts: Pick<ColumnRunFacts, "consent" | "failure">;
-      }
-  > {
+      } {
     const { table, column } = finding.location;
     const verdict = consentForColumn(this.consent, table, column);
     const withheld = (on: DiffersFinding) => ({
@@ -520,13 +541,59 @@ class ApplyRun {
     if (verdict.covered) {
       return { given: "flag", confirmed: null, flag: verdict.flag };
     }
-    const ask = this.args.confirmClearing;
-    if (ask === undefined) return withheld(finding);
-    const judged = await this.judged(this.db, finding);
-    if (findingClass(judged.finding) !== "lossy") {
-      // Its values changed while it was judged: nothing to ask about until a run sees them.
-      return withheld(judged.finding);
+    // The answer given before the lock; a column nobody was asked about (it became lossy since)
+    // is skipped, as nothing is asked while the lock is held.
+    const confirmed = this.args.answers?.get(answerKey(finding)) ?? null;
+    if (confirmed === null) return withheld(finding);
+    return { given: "confirmed", confirmed, flag: verdict.flag };
+  }
+
+  /**
+   * Before the lock: ask the person at the terminal about each lossy column the consent does not
+   * name and this run could clear, judged as a dry run judges it, and each MySQL conversion a
+   * stopped run left with its clearing still to do. Returns each answer: the rows a yes was given
+   * for, or null for a no. Changes nothing.
+   */
+  async askBeforeLock(): Promise<Map<string, ReadonlySet<string> | null>> {
+    const answers = new Map<string, ReadonlySet<string> | null>();
+    const unfinished = await readUnfinishedRepairs(this.db, this.dialect);
+    const findings = await findColumnDifferences({
+      db: this.db,
+      dialect: this.dialect,
+      entities: this.args.entities,
+    });
+    for (const progress of unfinished) {
+      if (!clearsFirst(progress)) continue;
+      const live = await readLiveState(this.db, this.dialect, progress);
+      if ((await liveStepOf(this.db, this.dialect, progress, live)) !== 0) {
+        continue;
+      }
+      const finding = progressFinding(
+        progress,
+        findings,
+        this.args.entities,
+        live
+      );
+      if (finding.judged !== undefined) await this.askAbout(finding, answers);
     }
+    for (const finding of notResumed(findings, unfinished)) {
+      if (clearable(finding)) await this.askAbout(finding, answers);
+    }
+    return answers;
+  }
+
+  /** Ask about one lossy column, where a question is needed and a yes could be acted on. */
+  private async askAbout(
+    finding: DiffersFinding,
+    answers: Map<string, ReadonlySet<string> | null>
+  ): Promise<void> {
+    const ask = this.args.confirmClearing;
+    if (ask === undefined) return;
+    const { table, column } = finding.location;
+    if (consentForColumn(this.consent, table, column).covered) return;
+    if (this.clearingRefusal(finding) !== null) return;
+    const judged = await this.judged(this.db, finding);
+    if (findingClass(judged.finding) !== "lossy") return;
     const yes = await ask({
       table,
       column,
@@ -536,12 +603,10 @@ class ApplyRun {
         .filter(reason => reason.class === "lossy")
         .map(reason => reason.kind),
     });
-    if (!yes) return withheld(judged.finding);
-    return {
-      given: "confirmed",
-      confirmed: new Set(judged.cleared.map(rowKeyText)),
-      flag: verdict.flag,
-    };
+    answers.set(
+      answerKey(finding),
+      yes ? new Set(judged.cleared.map(rowKeyText)) : null
+    );
   }
 
   /**
@@ -1093,11 +1158,12 @@ class ApplyRun {
     if (finding.judged === undefined || finding.conversion === null)
       return interrupted;
     const offset = clearsFirst(progress) ? 1 : 0;
-    // The clearing still to run is asked about, or found covered, before the column is judged for
-    // it, so the rows it clears are the ones judged after any question was answered.
+    // The clearing still to run needs this run's consent naming the column, or the yes given for
+    // it before the lock; the rows it clears are the ones judged now, and under a yes only those
+    // the person was shown.
     let clearing: Clearing | null = null;
     if (offset === 1 && reached === 0) {
-      const decided = await this.consentFor(finding);
+      const decided = this.consentFor(finding);
       if (!("given" in decided)) {
         return {
           finding: decided.finding,
