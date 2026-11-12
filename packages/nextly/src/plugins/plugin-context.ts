@@ -30,6 +30,10 @@ import type { CollectionRegistryService } from "../domains/collections/services/
 import { collectionFields } from "../domains/collections/services/collection-utils";
 import type { StoredReads } from "../domains/collections/services/stored-field-read";
 import type { ContentEventSubject } from "../domains/content-events/record";
+import {
+  type ForgetSendsInput,
+  forgetPluginSends,
+} from "../domains/email/plugin-send-forgetting";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { JobRegistry } from "../domains/jobs/job-registry";
@@ -45,6 +49,7 @@ import {
   getDurableSubscribers,
   type DurableHandler,
 } from "../domains/plugin-events/subscribers";
+import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -150,6 +155,12 @@ import {
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
+import {
+  createKeyedDigests,
+  type DigestKeyAdapter,
+  type DigestKeyStore,
+  type KeyedDigests,
+} from "./security/keyed-digest";
 import {
   createOneTimeSecrets,
   type OneTimeSecrets,
@@ -657,7 +668,23 @@ export type { PluginMediaService } from "./plugin-media";
 export type PluginEmailService = Pick<
   EmailService,
   (typeof PLUGIN_EMAIL_METHODS)[number]
->;
+> & {
+  /**
+   * @experimental Forget email this plugin sent about something it has
+   * deleted: cancel the queued emails among `queuedIds` that are still
+   * waiting or could be retried, clear the message and recipients of every
+   * one of them, and erase the delivery records of the sends that carried
+   * `idempotencyKeys`. Only this plugin's own: another caller's ids and keys
+   * name nothing. Pass `tx`, the handle a `ctx.db.transaction` callback or an
+   * in-transaction handler received, to commit with your own deletion;
+   * without one it runs in a transaction of its own, and is refused inside
+   * an open one.
+   */
+  forgetSends(
+    input: ForgetSendsInput,
+    options?: { tx?: PluginTransaction }
+  ): Promise<void>;
+};
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
@@ -1046,6 +1073,11 @@ export interface PluginSecurityApi {
   readonly opaque: OpaqueSecrets;
   /** One-purpose links and codes, spent once. */
   readonly secrets: OneTimeSecrets;
+  /**
+   * Keyed one-way digests of values to compare without keeping them, under
+   * the plugin's own key, stable across secret rotations.
+   */
+  readonly digests: KeyedDigests;
   /** Verifying the webhooks the plugin receives, in a common scheme or its own. */
   readonly webhooks: PluginReceivedWebhooks;
 }
@@ -1257,6 +1289,37 @@ export interface PluginAdminConfig {
     | "users"
     | "settings";
 
+  /**
+   * Where the plugin's own rail item goes when it is opened, for a plugin
+   * placed `AdminPlacement.STANDALONE`. Written the way a menu item's `to` is:
+   *
+   * - one of the plugin's own pages, as `/admin/plugins/<slug>/<path>`, where
+   *   `<path>` is a `contributes.admin.pages` entry's `path`;
+   * - one of the plugin's own collections, as `/admin/collections/<slug>`,
+   *   with the slug the plugin declares. A host's `rename` is applied, as it
+   *   is to a menu item naming the collection, so the link follows the slug
+   *   the host registered. A sub-path, a query or a hash after either is kept.
+   *
+   * A reader who may not open it (a collection they cannot read, a page whose
+   * `requiredPermission` they lack) is sent where it would go without one.
+   * Without it, the rail item opens the first of the plugin's collections the
+   * reader can see, in the order its panel lists them, and with none, the
+   * first menu item its panel lists. A value naming anything else is ignored,
+   * as if unset, and reported at start-up in development.
+   *
+   * A site can override it per plugin in `admin.pluginOverrides`, as it can
+   * `placement` and `order`.
+   *
+   * @example
+   * ```ts
+   * admin: {
+   *   placement: AdminPlacement.STANDALONE,
+   *   landing: "/admin/plugins/analytics/overview",
+   * }
+   * ```
+   */
+  landing?: string;
+
   /** Plugin description shown on the plugin settings page */
   description?: string;
 
@@ -1309,7 +1372,9 @@ export interface PluginAdminConfig {
 export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   /**
    * Unique plugin name.
-   * Used for identification and error messages.
+   * Used for identification and error messages. `app`, in any letter case, is
+   * reserved: the site's own permissions are stored under that owner, and a
+   * plugin's under its name, so a plugin named `app` is refused at startup.
    */
   name: string;
 
@@ -1661,6 +1726,9 @@ export const PLUGIN_SERVICE_NAMES = [
   // registered, so a plugin's committed event is offered to the drain of the
   // instance that recorded it.
   "webhookFastDrainScheduler",
+  // `nextly_meta`, where each plugin's sealed digest key is kept
+  // (`ctx.security.digests`).
+  "metaService",
 ] as const;
 
 /** The app's own surface depends on no plugin: it owns what the app owns. */
@@ -1967,6 +2035,35 @@ function asSecretsAdapter(adapter: AdapterTransactions): SecretsAdapter {
     logMessage:
       "The adapter this plugin context resolves has no select or transactionOpenInFlow, which one-purpose secrets need.",
     logContext: { reason: "secrets-adapter-incomplete" },
+  });
+}
+
+/**
+ * The adapter as keyed digests use it: a session of its own for the first
+ * use, and whether the calling flow is in a transaction. Every adapter core
+ * ships has both; one that does not is refused with a clear error.
+ */
+function isDigestKeyAdapter(value: unknown): value is DigestKeyAdapter {
+  if (typeof value !== "object" || value === null) return false;
+  const methods: readonly (keyof DigestKeyAdapter)[] = [
+    "withSession",
+    "transactionOpenInFlow",
+  ];
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.dialect === "string" &&
+    methods.every(name => typeof record[name] === "function")
+  );
+}
+
+function asDigestKeyAdapter(adapter: AdapterTransactions): DigestKeyAdapter {
+  if (isDigestKeyAdapter(adapter)) return adapter;
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no dialect, withSession or transactionOpenInFlow, which keyed digests need.",
+    logContext: { reason: "digest-adapter-incomplete" },
   });
 }
 
@@ -2317,7 +2414,9 @@ export function createPluginContext(
                                     ? JobsPassDatabase
                                     : T extends "webhookFastDrainScheduler"
                                       ? WebhookFastDrainScheduler | null
-                                      : never,
+                                      : T extends "metaService"
+                                        ? DigestKeyStore
+                                        : never,
   hookRegistry: {
     register: (
       hookType: HookContextPhase,
@@ -2921,10 +3020,23 @@ export function createPluginContext(
       media: mediaForPlugin(mediaService),
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
-      email: methodFacade(
-        scopedSender(emailService, pluginKeyScope(pluginName)),
-        PLUGIN_EMAIL_METHODS
-      ),
+      email: Object.freeze({
+        ...methodFacade(
+          scopedSender(emailService, pluginKeyScope(pluginName)),
+          PLUGIN_EMAIL_METHODS
+        ),
+        // Its own sends only, by the same scope its keys are claimed in.
+        forgetSends: (
+          input: ForgetSendsInput,
+          options?: { tx?: PluginTransaction }
+        ) =>
+          forgetPluginSends(pluginKeyScope(pluginName), input, {
+            tx: options?.tx,
+            // The context's own adapter, as its other services use.
+            adapter: getServiceFn("adapter"),
+            secrets: pluginSettingsSecrets(env),
+          }),
+      }),
       // Resolved on access, not at construction: `createPluginContext` is
       // exported, and a resolver written before this service existed would
       // otherwise throw while building the context for callers that never
@@ -3017,6 +3129,21 @@ export function createPluginContext(
       // outlives a container being cleared, as on a reload while old plugins
       // finish tearing down. The install's secrets are read per call so a
       // rotation applies at once.
+      // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
+      // The store and the install's secrets are read per call, as above.
+      digests: createKeyedDigests({
+        owner,
+        store: () => getServiceFn("metaService"),
+        adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
+        // The keyed generations only: a key is sealed and opened with one.
+        secrets: () =>
+          secretGenerations(
+            env.NEXTLY_SECRET,
+            env.NEXTLY_SECRET_PREVIOUS
+          ).filter(
+            (generation): generation is string => typeof generation === "string"
+          ),
+      }),
       secrets: createOneTimeSecrets({
         owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),

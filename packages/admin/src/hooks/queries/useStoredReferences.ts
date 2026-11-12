@@ -59,9 +59,12 @@ export function useStoredEntry({
   locale,
   fallbackLocale,
   draft,
+  enabled = true,
 }: ReadScope & {
   collectionSlug?: string;
   entryId?: string;
+  /** False holds the read back, as `useEntry`'s option does. */
+  enabled?: boolean;
 }): UseQueryResult<Doc, Error> {
   return useQuery<Doc, Error>({
     queryKey: [
@@ -83,7 +86,7 @@ export function useStoredEntry({
         ...(draft !== undefined ? { draft } : {}),
       });
     },
-    enabled: !!collectionSlug && !!entryId,
+    enabled: enabled && !!collectionSlug && !!entryId,
     staleTime: 60_000,
   });
 }

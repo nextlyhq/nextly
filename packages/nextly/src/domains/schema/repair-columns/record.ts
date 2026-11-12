@@ -17,7 +17,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getTableColumns, sql, type SQL } from "drizzle-orm";
+import { getColumns, sql, type SQL } from "drizzle-orm";
 import {
   boolean as mysqlBoolean,
   datetime,
@@ -112,7 +112,7 @@ function declaredColumns(dialect: SupportedDialect) {
       : dialect === "mysql"
         ? mysqlColumnRepairs
         : sqliteColumnRepairs;
-  return Object.values(getTableColumns(table));
+  return Object.values(getColumns(table));
 }
 
 /** DDL for the repairs table, built from its declaration so the two cannot disagree. */

@@ -76,7 +76,7 @@ function Badge({
  * it names none, no block for an empty list, else the blocks and patterns it
  * names, the first few of them.
  */
-function blocksNote(allow: readonly string[] | undefined): string {
+function blocksPolicy(allow: readonly string[] | undefined): string {
   if (allow === undefined) return "Blocks: any block";
   if (allow.length === 0) return "Blocks: none accepted";
   const shown = allow.slice(0, 3).join(", ");
@@ -105,10 +105,45 @@ function fieldGroupNote(
   }
 }
 
+/** Why the blocks a field accepts are not shown yet, when they are not. */
+const BLOCKS_UNAVAILABLE: Record<
+  NonNullable<NonNullable<OutlineNode["blocks"]>["unavailable"]>,
+  string
+> = {
+  loading: "loading its blocks…",
+  failed: "its blocks could not be loaded",
+  unavailable: "block details need the Page Builder plugin",
+};
+
+/**
+ * A blocks field's note: its policy, then why its blocks are not shown, or
+ * the entries that admit no registered block. Said in the row, so a field
+ * showing no blocks is never taken for one accepting none.
+ */
+function blocksNote(blocks: NonNullable<OutlineNode["blocks"]>): string {
+  const policy = blocksPolicy(blocks.allow);
+  if (blocks.unavailable) {
+    return `${policy} (${BLOCKS_UNAVAILABLE[blocks.unavailable]})`;
+  }
+  return blocks.unmatched
+    ? `${policy} (no registered block matches ${blocks.unmatched.join(", ")})`
+    : policy;
+}
+
 /** What a row says beside its name, if anything. */
 function rowNote(node: OutlineNode): string | null {
-  if (node.blocks) return blocksNote(node.blocks.allow);
+  if (node.blocks) return blocksNote(node.blocks);
   return node.fieldGroup ? fieldGroupNote(node.fieldGroup) : null;
+}
+
+/**
+ * A field-group field's badge: shared, and in how many places, when that is
+ * known. The count is of fields, as the field-group list counts them.
+ */
+function sharedText(node: OutlineNode): string {
+  const usedIn = node.usedIn;
+  if (usedIn === undefined || usedIn === null) return "Shared";
+  return `Shared · used in ${usedIn} ${usedIn === 1 ? "place" : "places"}`;
 }
 
 /** The badges a row carries, in a fixed order; told in words, not colour. */
@@ -129,7 +164,14 @@ function RowBadges({
       show: node.readOnly,
       text: node.readOnly ? `Locked · ${describeReadOnly(node.readOnly)}` : "",
     },
-    { show: node.container === "field-group", text: "Shared" },
+    {
+      // A field using field groups, and each field group a field accepting
+      // several offers: both are shared, each with its own count when known.
+      show:
+        node.container === "field-group" ||
+        node.container === "field-group-entry",
+      text: sharedText(node),
+    },
   ];
   return (
     <span className="ml-auto flex flex-wrap items-center justify-end gap-1">

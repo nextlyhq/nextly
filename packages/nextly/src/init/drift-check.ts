@@ -32,9 +32,15 @@
 
 import type {
   DesiredCollection,
+  DesiredFieldGroup,
   DesiredSchema,
+  DesiredSingle,
 } from "../domains/schema/pipeline/types";
-import { resolveCollectionTableName } from "../domains/schema/utils/resolve-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
 
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -86,6 +92,55 @@ export function driftCheckCollections(
   }));
 }
 
+/** The parts of a config Single or field group the drift check reads. */
+interface ConfigEntityLike {
+  slug: string;
+  dbName?: string;
+  fields?: unknown[];
+  status?: boolean;
+}
+
+/** A Single or field group as the drift check compares it. */
+interface DriftCheckEntity {
+  slug: string;
+  tableName: string;
+  fields: unknown[];
+  status?: boolean;
+}
+
+/**
+ * The drift check's input, reduced from the config's Singles: the table a
+ * Single is stored in, its fields and its Draft/Published switch, as the
+ * collections' reduction carries them.
+ */
+export function driftCheckSingles(
+  singles: readonly ConfigEntityLike[]
+): DriftCheckEntity[] {
+  return singles.map(s => ({
+    slug: s.slug,
+    tableName: resolveSingleTableName({ slug: s.slug, dbName: s.dbName }),
+    fields: s.fields ?? [],
+    status: s.status === true,
+  }));
+}
+
+/** The drift check's input, reduced from the config's field groups. */
+export function driftCheckFieldGroups(
+  groups: readonly ConfigEntityLike[]
+): DriftCheckEntity[] {
+  return groups.map(g => ({
+    slug: g.slug,
+    tableName: resolveComponentTableName(g.slug),
+    fields: g.fields ?? [],
+  }));
+}
+
+/** One entity a drift preview is asked about, by its kind. */
+type DriftCheckAsk =
+  | { kind: "collection"; entity: DriftCheckCollection }
+  | { kind: "single"; entity: DriftCheckEntity }
+  | { kind: "fieldGroup"; entity: DriftCheckEntity };
+
 export interface RunDriftCheckDeps {
   previewDesiredSchema: (args: {
     desired: DesiredSchema;
@@ -103,6 +158,10 @@ export interface RunDriftCheckDeps {
 export interface RunDriftCheckArgs {
   adapter: AdapterLike;
   collections: DriftCheckCollection[];
+  /** Singles to compare as the collections are, each in a preview of its own. */
+  singles?: DriftCheckEntity[];
+  /** Field groups to compare as the collections are, each in a preview of its own. */
+  fieldGroups?: DriftCheckEntity[];
   logger: LoggerLike;
   deps?: Partial<RunDriftCheckDeps>;
 }
@@ -117,7 +176,22 @@ export async function runDriftCheck(
   const { adapter, collections, logger } = args;
   const deps = await resolveDeps(args.deps);
 
-  if (collections.length === 0) return { kind: "clean" };
+  // Every preview also compares the tables plugins and the app declare, so with
+  // no entity to ask about (a development start that skips every unchanged
+  // one), one preview of none still compares them.
+  const entities: DriftCheckAsk[] = [
+    ...collections.map(entity => ({ kind: "collection" as const, entity })),
+    ...(args.singles ?? []).map(entity => ({
+      kind: "single" as const,
+      entity,
+    })),
+    ...(args.fieldGroups ?? []).map(entity => ({
+      kind: "fieldGroup" as const,
+      entity,
+    })),
+  ];
+  const asks: ReadonlyArray<DriftCheckAsk | null> =
+    entities.length > 0 ? entities : [null];
 
   // Bounded-parallel preview. Earlier this was `Promise.all` of N parallel
   // calls, which against a Neon poolMax:5 with 10+ collections instantly
@@ -130,17 +204,20 @@ export async function runDriftCheck(
   > = [];
   let cursor = 0;
   const worker = async () => {
-    while (cursor < collections.length) {
+    while (cursor < asks.length) {
       const myIndex = cursor++;
-      const collection = collections[myIndex];
+      const ask = asks[myIndex];
+      // The one entity asked about, in its kind's place; the others empty.
+      const only = <T>(kind: DriftCheckAsk["kind"]): Record<string, T> =>
+        ask?.kind === kind
+          ? { [ask.entity.slug]: ask.entity as unknown as T }
+          : {};
       try {
         const preview = await deps.previewDesiredSchema({
           desired: {
-            collections: {
-              [collection.slug]: collection as unknown as DesiredCollection,
-            },
-            singles: {},
-            components: {},
+            collections: only<DesiredCollection>("collection"),
+            singles: only<DesiredSingle>("single"),
+            components: only<DesiredFieldGroup>("fieldGroup"),
           },
           db: adapter.getDrizzle(),
           dialect: adapter.dialect,
@@ -149,16 +226,15 @@ export async function runDriftCheck(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         logger.debug?.(
-          `[nextly] Drift preview failed for '${collection.slug}': ${msg} (continuing).`
+          `[nextly] Drift preview failed for '${ask?.entity.slug ?? "the plugin and app tables"}': ${msg} (continuing).`
         );
         results[myIndex] = { ok: false, error: msg };
       }
     }
   };
   await Promise.all(
-    Array.from(
-      { length: Math.min(DRIFT_CONCURRENCY, collections.length) },
-      () => worker()
+    Array.from({ length: Math.min(DRIFT_CONCURRENCY, asks.length) }, () =>
+      worker()
     )
   );
 
@@ -183,7 +259,7 @@ export async function runDriftCheck(
   // when drift introspection is broken on most collections.
   if (failureCount > 0) {
     logger.warn(
-      `[nextly] ${failureCount} of ${collections.length} drift previews failed. ` +
+      `[nextly] ${failureCount} of ${asks.length} drift previews failed. ` +
         `Run \`nextly db:sync\` to investigate.`
     );
   }

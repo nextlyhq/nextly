@@ -36,8 +36,8 @@ import {
 } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
-import { WORDS_IN_NARROW_BAR } from "./narrow-bar";
 import { OLDER_VERSION_WARNING } from "./AutosaveRecoveryBanner";
+import { WORDS_IN_NARROW_BAR } from "./narrow-bar";
 import {
   useClaimRecoveryOffer,
   type HostedRecoveryOffer,

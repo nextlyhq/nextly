@@ -16,6 +16,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { copiesEveryValue } from "../../schema/pipeline/classifier/type-widening";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
+import { ddlType } from "./ddl-types";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
 import type { LocalizedColumnKind, LocalizedColumnSpec } from "./types";
@@ -63,6 +64,22 @@ export function refusal(
 export type TranslationSurface = "builder" | "code";
 type Surface = TranslationSurface;
 type Constraint = "required" | "unique";
+
+/**
+ * Whether the database holds a field's values in a different column type under two descriptions
+ * of it, as this dialect renders each (`ddlType`). Two kinds can name one type: a translated
+ * unique field that states no width is unbounded text and its shared column a bounded string,
+ * which is `TEXT` against `VARCHAR(255)` on MySQL but `TEXT` both ways on PostgreSQL and SQLite.
+ * No description of either side is no difference, since there is nothing to judge.
+ */
+function rendersDifferently(
+  before: LocalizedColumnSpec | null | undefined,
+  after: LocalizedColumnSpec | null | undefined,
+  dialect: SupportedDialect
+): boolean {
+  if (!before || !after) return false;
+  return ddlType(before, dialect) !== ddlType(after, dialect);
+}
 
 /**
  * Whether a field's storage differs between two descriptions of its column: its kind, or its
@@ -188,8 +205,27 @@ export function leavingFieldConstraints(
 
 function reshapedRefusal(
   name: string,
-  surface: Surface
+  surface: Surface,
+  /** Its shared column is bounded where its translated one is not: a unique field with no width. */
+  boundedOnceShared = false
 ): LeavingTranslationRefusal {
+  if (boundedOnceShared) {
+    return refusal(
+      `fields.${name}`,
+      "RESHAPED_FIELD_LEAVES_TRANSLATION",
+      `"${name}" is unique and states no width, so stored shared its column is bounded to be ` +
+        "keyed whole, where translated it is not: its values cannot leave translation as they are.",
+      surface === "builder"
+        ? [
+            "Give the field a maximum length and save.",
+            "Or turn off Unique and save, before it stops being translated.",
+          ]
+        : [
+            "Give the field a `maxLength` and run `nextly migrate:create`.",
+            "Or set `unique: false` and run it, before it stops being translated.",
+          ]
+    );
+  }
   return refusal(
     `fields.${name}`,
     "RESHAPED_FIELD_LEAVES_TRANSLATION",
@@ -214,6 +250,9 @@ function reshapedRefusal(
  *   without the conversion and confirmation such a change goes through on its own. Judged against
  *   the column the values sit in now, described by `oldFields` or, where the caller has no old
  *   definition, by `previousColumns`; a field neither describes is not judged.
+ *
+ * - A field whose shared column is shaped otherwise than its translated one: a unique text field
+ *   that states no width is bounded on MySQL to be keyed whole, where translated it is not.
  *
  * A Required or Unique field is not refused here: every surface creates its shared column without
  * the setting and applies it after the copy (`withoutLeavingConstraints`), and whether the values
@@ -249,6 +288,16 @@ export function refusalsForFieldsLeavingTranslation(args: {
     if (!args.leaving.has(field.name)) continue;
     if (storageDiffers(previousColumnOf(field), columnOf(field))) {
       refusals.push(reshapedRefusal(field.name, args.surface));
+    } else if (
+      rendersDifferently(
+        columnOf(field),
+        fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy, "shared"),
+        args.dialect
+      )
+    ) {
+      // The same field shaped differently once shared: a unique field that states no width is a
+      // bounded column on MySQL, which its translated values may not fit.
+      refusals.push(reshapedRefusal(field.name, args.surface, true));
     }
   }
   return refusals;

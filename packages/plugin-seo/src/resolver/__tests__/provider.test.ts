@@ -15,7 +15,9 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fillPattern, type SiteRules } from "../page-levels";
+import { fillPattern } from "../../settings/patterns";
+import { seoSettingsCacheTags } from "../../settings/single";
+import type { SiteRules } from "../page-levels";
 import { answerOf, resolveSeo, seoPageMetadata } from "../provider";
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
@@ -126,7 +128,10 @@ const RULES: SiteRules = {
   siteName: "Acme",
   description: "Acme makes things.",
   image: { url: "/site.jpg" },
+  productionAddresses: [],
+  defaultPatterns: {},
   patterns: { posts: { title: "{Title} | {Site name}" } },
+  aiCrawlers: "all",
 };
 
 describe("one answer for each kind of page", () => {
@@ -284,6 +289,39 @@ describe("one answer for each kind of page", () => {
     expect(answer.title).toBe("Ideas");
   });
 
+  it("a page of a hidden type: not listed, whatever the page says", async () => {
+    const rules: SiteRules = {
+      ...RULES,
+      hiddenTypes: ["posts", "single:home"],
+    };
+    const post = await resolveSeo(
+      context(),
+      entryInput("posts", { slug: "hello", seo: { noindex: false } }),
+      async () => rules
+    );
+    expect(post.robots).toEqual({
+      value: { index: false, follow: true },
+      from: "type",
+    });
+    const home = await resolveSeo(
+      context(),
+      {
+        source: { kind: "single", slug: "home", document: {} },
+        code: {},
+        derived: {},
+      },
+      async () => rules
+    );
+    expect(home.robots.from).toBe("type");
+    // A type not named keeps each page's own setting.
+    const page = await resolveSeo(
+      context(),
+      entryInput("pages", { slug: "about" }),
+      async () => rules
+    );
+    expect(page.robots.from).toBe("site");
+  });
+
   it("a share image stored by id is looked up, and one that cannot be is skipped", async () => {
     const ctx = context({
       m1: {
@@ -384,6 +422,29 @@ describe("what the answer depends on", () => {
       entryInput("pages", { slug: "a", seo: { ogImage: "m1" } })
     );
     expect(tags).toEqual(expect.arrayContaining(["nextly:media"]));
+  });
+
+  it("names the SEO settings' tags, so a changed setting expires the head", () => {
+    const tags = seoPageMetadata(context()).tags?.(
+      entryInput("pages", { slug: "a" })
+    );
+    expect(tags).toEqual(expect.arrayContaining(seoSettingsCacheTags()));
+  });
+
+  it("a type with no pattern of its own takes the site's default pattern", async () => {
+    const answer = await resolveSeo(
+      context(),
+      entryInput("pages", { slug: "about", title: "About" }),
+      async () => ({
+        ...RULES,
+        defaultPatterns: { title: "{Title} — {Site name}" },
+      })
+    );
+    expect(answer.title).toEqual({
+      value: "About — Acme",
+      from: "pattern",
+      pattern: "{Title} — {Site name}",
+    });
   });
 });
 

@@ -41,6 +41,7 @@
  * dropped from the build and becomes a no-op at runtime. */
 @source "../../../plugin-form-builder/src/admin";
 @source "../../../plugin-page-builder/src/admin";
+@source "../../../plugin-seo/src/admin";
 
 /*
  * Native controls (scrollbars, inputs, date pickers) follow the admin's own

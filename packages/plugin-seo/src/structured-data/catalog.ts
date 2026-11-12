@@ -2,11 +2,13 @@
  * The structured data types a page can be described as, and the details each
  * one needs.
  *
- * Only types Google still shows a result for are offered, so a person never
- * picks one that changes nothing. Each type names the details it cannot be
- * described without: where one is missing, the type's markup is left out and
- * the page lists a problem naming the detail, rather than sending Google a
- * description it would reject.
+ * Each type offered is one search engines read: most can earn a rich result
+ * in Google, and the rest (an About or Contact page, technical writing,
+ * source code, an app without ratings) still tell search and answer engines
+ * what the page is. {@link StructuredDataType.richResult} says which. Each
+ * type names the details it cannot be described without: where one is
+ * missing, the type's markup is left out and the page lists a problem naming
+ * the detail, rather than sending Google a description it would reject.
  *
  * @module structured-data/catalog
  */
@@ -31,7 +33,16 @@ export type StructuredDataDetail =
   | "itemReviewed"
   | "itemType"
   | "streetAddress"
-  | "openingHours";
+  | "openingHours"
+  | "dateModified"
+  | "keywords"
+  | "articleSection"
+  | "wordCount"
+  | "applicationCategory"
+  | "codeRepository"
+  | "programmingLanguage"
+  | "license"
+  | "questions";
 
 /** Each detail as a person reads it, in a problem or a mapping. */
 export const DETAIL_LABELS: Readonly<Record<StructuredDataDetail, string>> = {
@@ -54,6 +65,15 @@ export const DETAIL_LABELS: Readonly<Record<StructuredDataDetail, string>> = {
   itemType: "item type",
   streetAddress: "street address",
   openingHours: "opening hours",
+  dateModified: "date modified",
+  keywords: "keywords",
+  articleSection: "section",
+  wordCount: "word count",
+  applicationCategory: "app category",
+  codeRepository: "code repository",
+  programmingLanguage: "programming language",
+  license: "license",
+  questions: "questions and answers",
 };
 
 /**
@@ -90,6 +110,32 @@ export const DETAIL_GUESSES: Readonly<
   itemType: ["itemType", "itemReviewedType"],
   streetAddress: ["streetAddress", "address"],
   openingHours: ["openingHours", "hours"],
+  // A correction or review date is the one a reader should see; the row's
+  // own `updatedAt` changes with every save, so it is the last guess.
+  dateModified: [
+    "dateModified",
+    "modifiedAt",
+    "correctedAt",
+    "revisedAt",
+    "lastReviewed",
+    "updatedAt",
+  ],
+  keywords: ["keywords", "tags"],
+  articleSection: ["articleSection", "section", "category", "categories"],
+  // Counted from the page's body where no field holds a count.
+  wordCount: ["wordCount"],
+  applicationCategory: ["applicationCategory", "appCategory"],
+  codeRepository: [
+    "codeRepository",
+    "repository",
+    "repositoryUrl",
+    "repo",
+    "sourceCode",
+  ],
+  programmingLanguage: ["programmingLanguage"],
+  license: ["license", "licence"],
+  // The route's own questions win; a field is read where it gives none.
+  questions: ["faq", "faqs", "questions"],
 };
 
 /** One structured data type a page can be described as. */
@@ -107,21 +153,42 @@ export interface StructuredDataType {
   readonly needs: readonly StructuredDataDetail[];
   /** The details it is described with where the page has them. */
   readonly uses: readonly StructuredDataDetail[];
+  /**
+   * Whether Google can show the page with a rich result for it once every
+   * detail Google asks for is there: `false` for a type that describes the
+   * page to search and answer engines without one, such as an About page,
+   * or an app with no ratings, and for questions and answers, which Google
+   * no longer shows as a rich result.
+   */
+  readonly richResult: boolean;
 }
 
 /** A type's key, as a content type's choice and a page's choice store it. */
 export type StructuredDataTypeKey =
   | "article"
   | "blogPosting"
+  | "techArticle"
   | "webPage"
+  | "aboutPage"
+  | "contactPage"
   | "collectionPage"
+  | "faqPage"
   | "profilePage"
   | "softwareApplication"
+  | "softwareSourceCode"
   | "product"
   | "event"
   | "videoObject"
   | "review"
   | "localBusiness";
+
+/** What an article of any kind is described with where the page has it. */
+const ARTICLE_EXTRAS: readonly StructuredDataDetail[] = [
+  "dateModified",
+  "keywords",
+  "articleSection",
+  "wordCount",
+];
 
 /** Every type offered, by its key. */
 export const STRUCTURED_DATA_TYPES: Readonly<
@@ -132,14 +199,26 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     schemaType: "Article",
     page: false,
     needs: ["author", "datePublished", "image"],
-    uses: [],
+    uses: ARTICLE_EXTRAS,
+    richResult: true,
   },
   blogPosting: {
     label: "Blog post",
     schemaType: "BlogPosting",
     page: false,
     needs: ["author", "datePublished", "image"],
-    uses: [],
+    uses: ARTICLE_EXTRAS,
+    richResult: true,
+  },
+  techArticle: {
+    label: "Technical article",
+    schemaType: "TechArticle",
+    page: false,
+    // Documentation often has no byline or date: described from its title,
+    // with whatever of the rest the page has.
+    needs: [],
+    uses: ["author", "datePublished", "image", ...ARTICLE_EXTRAS],
+    richResult: true,
   },
   webPage: {
     label: "Web page",
@@ -147,6 +226,23 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: true,
     needs: [],
     uses: [],
+    richResult: false,
+  },
+  aboutPage: {
+    label: "About page",
+    schemaType: "AboutPage",
+    page: true,
+    needs: [],
+    uses: [],
+    richResult: false,
+  },
+  contactPage: {
+    label: "Contact page",
+    schemaType: "ContactPage",
+    page: true,
+    needs: [],
+    uses: [],
+    richResult: false,
   },
   collectionPage: {
     label: "Collection page",
@@ -154,6 +250,17 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: true,
     needs: [],
     uses: [],
+    richResult: false,
+  },
+  faqPage: {
+    label: "Questions and answers",
+    schemaType: "FAQPage",
+    page: true,
+    needs: ["questions"],
+    uses: [],
+    // Google stopped showing these as a rich result in May 2026; other
+    // search and answer engines still read them, so they stay valid markup.
+    richResult: false,
   },
   profilePage: {
     label: "Profile page",
@@ -161,14 +268,35 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: true,
     needs: ["person"],
     uses: [],
+    richResult: true,
   },
   softwareApplication: {
     label: "Software app",
     schemaType: "SoftwareApplication",
     page: false,
-    // Google shows an app only with its rating, so the rating is needed too.
-    needs: ["operatingSystem", "price", "rating", "ratingCount"],
-    uses: ["currency", "image", "bestRating"],
+    // Google shows an app with a rich result only with a price and a
+    // rating. Without them it is still described, and no rating is ever
+    // made up to earn one.
+    needs: [],
+    uses: [
+      "operatingSystem",
+      "applicationCategory",
+      "price",
+      "currency",
+      "rating",
+      "ratingCount",
+      "bestRating",
+      "image",
+    ],
+    richResult: true,
+  },
+  softwareSourceCode: {
+    label: "Source code",
+    schemaType: "SoftwareSourceCode",
+    page: false,
+    needs: ["codeRepository"],
+    uses: ["programmingLanguage", "license"],
+    richResult: false,
   },
   product: {
     label: "Product",
@@ -176,6 +304,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: false,
     needs: ["price", "availability"],
     uses: ["currency", "image"],
+    richResult: true,
   },
   event: {
     label: "Event",
@@ -183,6 +312,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: false,
     needs: ["startDate", "location"],
     uses: ["image"],
+    richResult: true,
   },
   videoObject: {
     label: "Video",
@@ -191,6 +321,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     // Google needs a thumbnail, which is the page's image.
     needs: ["videoFile", "uploadDate", "image"],
     uses: [],
+    richResult: true,
   },
   review: {
     label: "Review",
@@ -199,6 +330,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     // Google needs who wrote a review and what kind of thing it reviews.
     needs: ["author", "itemReviewed", "itemType", "rating"],
     uses: ["bestRating"],
+    richResult: true,
   },
   localBusiness: {
     label: "Local business",
@@ -206,6 +338,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: false,
     needs: ["streetAddress", "openingHours"],
     uses: ["image"],
+    richResult: true,
   },
 };
 
@@ -251,8 +384,10 @@ export const REVIEWED_ITEM_TYPES = [
 
 /** The types a page hidden from search may be described as. */
 const HIDDEN_PAGE_TYPES: readonly StructuredDataTypeKey[] = [
-  "collectionPage",
   "webPage",
+  "aboutPage",
+  "contactPage",
+  "collectionPage",
 ];
 
 /**

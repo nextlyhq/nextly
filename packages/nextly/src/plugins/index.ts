@@ -75,6 +75,7 @@ export type {
   SecretData,
   TxOption,
 } from "./security/one-time-secrets";
+export type { KeyedDigests } from "./security/keyed-digest";
 export type { OpaqueSecrets } from "./security/opaque-secrets";
 export {
   standardWebhooks,
@@ -158,7 +159,18 @@ export type {
   PluginListFilterDeclaration,
   PluginListFilterOption,
   PluginMenuItem,
+  PluginMenuItemFields,
   PluginNavSection,
+  PluginAdminPanel,
+  PluginPanelGroup,
+  PluginItemCount,
+  PluginHeaderContributions,
+  PluginHeaderSlotContributions,
+  PluginHeaderUserMenuContributions,
+  PluginItemPlace,
+  PluginUserMenuAction,
+  PluginUserMenuItem,
+  PluginUserMenuLink,
 } from "./admin-contributions";
 export type { RowPredicate, RowPredicateValue } from "./row-predicate";
 export type { AdminContributionKind } from "./admin-places";

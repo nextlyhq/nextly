@@ -101,9 +101,28 @@ describe("resolveSettingsLanding", () => {
   });
 
   /**
-   * User Management sits in the panel but answers to its own grants, which the
-   * rail consults separately — so a reader holding only `read-users` still has
-   * a destination here.
+   * Email is a Settings destination. A reader whose only grants show its tabs
+   * lands on the hub, whose route admits every one of them and moves a reader
+   * who may not see Messages on to a tab they may see.
+   */
+  it.each(["read-email-templates", "read-email-providers"])(
+    "sends a reader holding only %s to Email",
+    grant => {
+      expect(resolveSettingsLanding(only(grant))).toBe(ROUTES.EMAIL);
+    }
+  );
+
+  /** Email follows General in the Site group, so a settings reader lands on General. */
+  it("sends a settings reader who also sees Email to General", () => {
+    expect(
+      resolveSettingsLanding(only("read-settings", "read-email-templates"))
+    ).toBe(ROUTES.SETTINGS);
+  });
+
+  /**
+   * People sits in the panel but answers to its own grants, which the rail
+   * consults separately — so a reader holding only `read-users` still has a
+   * destination here.
    */
   it("sends a user reader to Users", () => {
     expect(resolveSettingsLanding(only("read-users"))).toBe(ROUTES.USERS);

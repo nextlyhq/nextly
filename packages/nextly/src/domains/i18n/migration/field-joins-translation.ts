@@ -16,6 +16,10 @@ import type { TableSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnMovedToCompanion } from "../../schema/pipeline/moved-to-companion";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../per-language-storage";
 
 import { ddlType, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
@@ -276,8 +280,11 @@ interface ApplyEntity {
 
 /**
  * The fields a schema apply makes translated, and how their values move, read from the apply
- * itself: a translated field of a translated entity whose main column the diff drops still holds
- * the field's value, which is moved to the default language's companion row before the drop.
+ * itself: a translatable field of an entity whose translatable values live in its companion
+ * (`storesPerLanguage`: a translated entity, or any entity on a site that keeps every translatable
+ * field per language) whose main column the diff drops still holds the field's value, which is
+ * moved to the default language's companion row before the drop. A column the diff drops for a
+ * field the entity no longer declares is not one of them, so its drop is still asked about.
  *
  * One answer for every caller of the apply (the Schema Builder's dialogs, and code-first sync at
  * `next dev`, on reload and in `db:sync`), drawn from the live tables: a column the diff does not
@@ -328,7 +335,10 @@ export async function planJoiningMovesForApply(args: {
   const result: JoiningMovesForApply = { moved: [], statements: [] };
   for (const entry of entities) {
     const { e, builtBy } = entry;
-    if (e.localized !== true) continue;
+    // Every entity whose translatable values live in its companion, as the desired main table that
+    // drops their columns is laid out (`storesPerLanguage`): a translated one, or every one on a
+    // site that keeps every translatable field per language.
+    if (!storesPerLanguage(e)) continue;
     const joining = e.fields.flatMap(f => {
       if (!isFieldLocalized(f, true)) return [];
       const column = fieldToLocalizedColumnSpec(f, args.dialect, builtBy);
@@ -520,14 +530,16 @@ async function planEntityMove(
       names.has(f.name) ? { ...f, localized: false } : f
     ),
     newFields: e.fields,
-    // A companion created here has `_status` when the entity has Draft/Published, so the
-    // default-language rows it gets take each entry's publishing state.
+    // A companion created here has `_status` when the entity publishes each language on its own
+    // (`publishesPerLanguage`), so the default-language rows it gets take each entry's publishing
+    // state. An entity kept per language only by the site's setting publishes as a document, and
+    // its companion holds values only.
     status:
       onMain.has("status") &&
       (companionColumns === undefined
-        ? e.status === true
+        ? publishesPerLanguage(e)
         : onCompanion.has("_status")),
-    companionStatus: e.status === true,
+    companionStatus: publishesPerLanguage(e),
     companionExists: companionColumns !== undefined,
     companionColumns: onCompanion,
   });

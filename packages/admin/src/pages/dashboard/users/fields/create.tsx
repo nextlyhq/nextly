@@ -20,7 +20,9 @@ import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 
-export default function CreateUserFieldPage(): JSX.Element {
+import { UserFieldsGuard } from "./user-fields-guard";
+
+function CreateUserFieldPageContent(): JSX.Element {
   const { mutate: createField, isPending } = useCreateUserField();
 
   const handleSubmit = useCallback(
@@ -73,5 +75,14 @@ export default function CreateUserFieldPage(): JSX.Element {
         </PageContainer>
       </QueryErrorBoundary>
     </PermissionGuard>
+  );
+}
+
+/** The page, opened only to a reader who may also see users (`UserFieldsGuard`). */
+export default function CreateUserFieldPage(): JSX.Element {
+  return (
+    <UserFieldsGuard>
+      <CreateUserFieldPageContent />
+    </UserFieldsGuard>
   );
 }
