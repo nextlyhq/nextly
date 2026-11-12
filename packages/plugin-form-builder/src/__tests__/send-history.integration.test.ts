@@ -743,6 +743,65 @@ describe.each(getConfiguredTestDialects())(
       expect(await sendsOf(t, cookie, id)).toEqual(listed);
     });
 
+    it("keeps a recipient a cancelled resend left out as received", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      behaviour.refuse = new Set([OPS]);
+      const id = await submit();
+      behaviour.refuse = new Set();
+
+      // The resend's attempts fail until it is cancelled, so it never
+      // reports its recipients.
+      behaviour.failures = Number.MAX_SAFE_INTEGER;
+      expect((await resend(cookie, id, { notification: "team" })).status).toBe(
+        201
+      );
+      const resent = (await groupOf(t, cookie, id)).sends.at(-1)!;
+      await t.nextly.email.cancelQueued({
+        id: resent.queuedId,
+        user: { id: owner },
+        overrideAccess: false,
+      } as never);
+      behaviour.failures = 0;
+
+      expect(looks(await groupOf(t, cookie, id))).toEqual({
+        "t•••@example.com": "Sent",
+        "o•••@example.com": "Cancelled",
+      });
+      const before = calls.length;
+      expect((await resend(cookie, id, { notification: "team" })).status).toBe(
+        201
+      );
+      expect(calls.slice(before).map(call => call.to)).toEqual([[OPS]]);
+    });
+
+    it("records the recipients a resend leaves out as skipped, before any attempt", async () => {
+      const { t, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      behaviour.refuse = new Set([OPS]);
+      const id = await submit();
+      behaviour.refuse = new Set();
+      expect((await resend(cookie, id, { notification: "team" })).status).toBe(
+        201
+      );
+
+      const { items } = await t.nextly.find({
+        collection: "form-submission-sends",
+        where: { resend: { exists: true } },
+      });
+      const [stored] = items as Array<{
+        configured: Array<{ hint: string; outcome?: string }>;
+      }>;
+      // What a cancel before the first attempt would leave to read: the
+      // team, who had it, is not taken as sent to again.
+      expect(
+        stored!.configured.map(recipient => [recipient.hint, recipient.outcome])
+      ).toEqual([
+        ["t•••@example.com", "skipped"],
+        ["o•••@example.com", undefined],
+      ]);
+    });
+
     it("sends a copied recipient who missed it a message of its own", async () => {
       const { t, owner, submit } = await boot(dialect, [visitor]);
       const cookie = await sessionOf(t, owner);

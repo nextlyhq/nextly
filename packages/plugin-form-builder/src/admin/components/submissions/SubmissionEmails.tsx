@@ -29,6 +29,7 @@ import { RotateCcw, Send } from "lucide-react";
 import { type JSX, useState } from "react";
 
 import {
+  type AddressableRecipient,
   cancelText,
   notificationLook,
   recipientLook,
@@ -40,14 +41,6 @@ import { shortWhenText } from "./submission-row";
 
 /** Where the plugin's routes answer. */
 const ROUTES = "/admin/api/plugins/@nextlyhq/plugin-form-builder";
-
-/** A recipient the notification can address now, as the route lists it. */
-export interface AddressableRecipient {
-  digest: string;
-  hint: string;
-  source: string;
-  reached: boolean;
-}
 
 /** One notification's sends, as `GET /submissions/:id/sends` answers it. */
 export interface NotificationSendsView {

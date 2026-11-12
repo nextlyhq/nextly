@@ -171,22 +171,41 @@ export async function sendRows(
   where: Record<string, unknown>,
   options: { newestFirst?: boolean; limit?: number } = {}
 ): Promise<SendRow[]> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    sendsSlugOf(ctx),
-    {
+  const read = (page: number, limit: number) =>
+    ctx.services.ownCollections.listEntries(sendsSlugOf(ctx), {
       where,
       sort: {
         field: "createdAt",
         direction: options.newestFirst ? "desc" : "asc",
       },
-      pagination: { limit: options.limit ?? MOST_ROWS },
+      pagination: { limit, page },
       depth: 0,
-    }
-  );
+    });
+  // A feed asks for its few newest; everything else reads the whole history.
+  const rows =
+    options.limit === undefined
+      ? await everyPage(read)
+      : (await read(1, options.limit)).data;
   return orderedSends(
-    data.map(entry => sendRowOf(entry)),
+    rows.map(entry => sendRowOf(entry)),
     options
   );
+}
+
+/**
+ * Every row `read` pages through, a page at a time: a history read whole,
+ * since a result left on a later page would be taken as never having
+ * happened.
+ */
+export async function everyPage<T>(
+  read: (page: number, limit: number) => Promise<{ data: T[] }>
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let page = 1; ; page += 1) {
+    const { data } = await read(page, MOST_ROWS);
+    rows.push(...data);
+    if (data.length < MOST_ROWS) return rows;
+  }
 }
 
 /** One notification's sends of a submission, as its page shows them. */

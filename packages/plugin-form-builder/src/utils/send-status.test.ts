@@ -132,6 +132,31 @@ describe("a recipient's latest result across a notification's sends", () => {
   });
 });
 
+describe("a resend cancelled before any attempt", () => {
+  it("keeps a recipient it left out as it was, and its own as cancelled", () => {
+    const original: StoredSend = {
+      queuedId: "q1",
+      state: "sent",
+      recipients: [
+        { ...TEAM, outcome: "accepted" },
+        { ...OPS, outcome: "refused" },
+      ],
+    };
+    const resend: StoredSend = {
+      queuedId: "q2",
+      state: "cancelled",
+      cancel: { by: "person", userId: "u1" },
+      configured: [{ ...TEAM, outcome: "skipped" }, OPS],
+    };
+    expect(
+      latestByRecipient([original, resend]).map(each => [each.hint, each.state])
+    ).toEqual([
+      ["t•••@acme.test", "sent"],
+      ["o•••@acme.test", "cancelled"],
+    ]);
+  });
+});
+
 describe("who Resend can send to now", () => {
   const ADDED = {
     ...TEAM,

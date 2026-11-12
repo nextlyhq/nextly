@@ -36,12 +36,14 @@ import {
   reachedExcept,
   type RecipientStatus,
   sendInProgress,
+  type StoredRecipient,
 } from "../utils/send-status";
 
 import { type RecordedSend, recordSend } from "./forget-sends";
 import { formIdOf } from "./form-closing-hold";
 import { configuredRecipients, notificationSendDetails } from "./send-record";
 import {
+  everyPage,
   orderedSends,
   type SendRow,
   sendRowOf,
@@ -113,6 +115,18 @@ function notificationOf(
 function idText(id: unknown): string {
   if (typeof id === "number") return `${id}`;
   return typeof id === "string" ? id : "";
+}
+
+/** `configured`, with each recipient among `exclude` marked skipped. */
+function skipping(
+  configured: readonly StoredRecipient[] | undefined,
+  exclude: readonly string[]
+): StoredRecipient[] | undefined {
+  return configured?.map(recipient =>
+    exclude.includes(recipient.digest)
+      ? { ...recipient, outcome: "skipped" as const }
+      : recipient
+  );
 }
 
 /** The refusal of a resend of a submission marked Spam. */
@@ -301,18 +315,21 @@ async function lockedSends(
   submission: string,
   notification: string
 ): Promise<SendRow[]> {
-  const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
-    write.transaction,
-    sendsSlugOf(ctx),
-    {
-      where: {
-        submission: { equals: submission },
-        notification: { equals: notification },
+  const data = await everyPage((page, limit) =>
+    ctx.services.ownCollections.listEntriesInTransaction(
+      write.transaction,
+      sendsSlugOf(ctx),
+      {
+        where: {
+          submission: { equals: submission },
+          notification: { equals: notification },
+        },
+        sort: { field: "createdAt", direction: "asc" },
+        pagination: { limit, page },
+        depth: 0,
       },
-      pagination: { limit: 500 },
-      depth: 0,
-    },
-    { lock: "update" }
+      { lock: "update" }
+    )
   );
   // Oldest first, as every reading of the history takes them: the latest
   // result per recipient is the last one met.
@@ -416,13 +433,18 @@ async function resendInTransaction(
     excludeRecipients: exclude,
     record: async (sent, queued) => {
       recorded += 1;
+      const details = await notificationSendDetails(ctx, {
+        formId: formIdOf(submission.form) ?? "",
+        notifications: [notification],
+        email: queued,
+      });
       await recordSend(ctx, write.transaction, request.submission, {
         ...sent,
-        ...(await notificationSendDetails(ctx, {
-          formId: formIdOf(submission.form) ?? "",
-          notifications: [notification],
-          email: queued,
-        })),
+        ...details,
+        // Those left out are kept as skipped, so a resend cancelled before
+        // any attempt reports its recipients does not read as cancelled for
+        // someone it never meant to send to, wiping out that they had it.
+        configured: skipping(details.configured, exclude),
         ...(request.requestedBy ? { requestedBy: request.requestedBy } : {}),
         resend: String(write.id),
       });
