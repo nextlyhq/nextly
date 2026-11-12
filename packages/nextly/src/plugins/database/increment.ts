@@ -17,8 +17,14 @@
  */
 import { NextlyError } from "../../errors/nextly-error";
 
-/** Brands a value as an increment; a symbol, so no stored value can carry it. */
-const INCREMENT: unique symbol = Symbol("nextly.db.increment");
+/**
+ * Brands a value as an increment; a symbol, so no stored value can carry it.
+ * From the global registry (`Symbol.for`), not a fresh `Symbol()`: a site's
+ * bundler can load this module more than once (a not-found page and the
+ * plugin's boot are bundled apart), and an increment made by one copy must
+ * still be read as one by the `ctx.db` another copy built.
+ */
+const INCREMENT: unique symbol = Symbol.for("nextly.db.increment");
 
 /**
  * @experimental What `increment` returns: "this column plus `by`", for a

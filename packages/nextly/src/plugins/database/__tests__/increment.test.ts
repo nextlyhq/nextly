@@ -11,7 +11,7 @@ import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { SQLiteDialect } from "drizzle-orm/sqlite-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { toDrizzleTable } from "../../../domains/schema/extension/compile";
@@ -21,7 +21,7 @@ import type {
   SchemaOwner,
 } from "../../../domains/schema/extension/types";
 import { NextlyError } from "../../../errors/nextly-error";
-import { increment } from "../increment";
+import { increment, incrementBy, isIncrement } from "../increment";
 import { createPluginDatabase } from "../plugin-database";
 
 const counters = defineTable("counters", {
@@ -133,6 +133,17 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 );
 
 describe("increment()", () => {
+  it("is read as one by a copy of the module loaded apart", async () => {
+    // A site's bundler can load the module twice: an increment made by one
+    // copy reaches a `ctx.db` built by the other, which must still read it.
+    vi.resetModules();
+    const apart = await import("../increment");
+    expect(apart.increment).not.toBe(increment);
+
+    expect(isIncrement(apart.increment(3))).toBe(true);
+    expect(incrementBy(apart.increment(3))).toBe(3);
+  });
+
   it("refuses an amount that is not a finite number", () => {
     for (const by of [Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => increment(by)).toThrow(NextlyError);
