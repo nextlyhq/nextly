@@ -50,7 +50,9 @@ const MOST_CANDIDATES = 5000;
 const PAGE = 200;
 
 /** A redirect's type as a body names it: a gone address needs no To address. */
-const typeField = z.enum(["permanent", "temporary", "gone"]).default("permanent");
+const typeField = z
+  .enum(["permanent", "temporary", "gone"])
+  .default("permanent");
 
 const addBody = z.object({
   from: z.string().max(2048),
@@ -62,6 +64,21 @@ const editBody = z.object({
   to: z.string().max(2048).default(""),
   type: typeField,
 });
+
+/**
+ * What a body's type and its To address, read as kept (`to`), are stored
+ * as: a gone address keeps no To, and is permanent.
+ */
+function storedAs(
+  body: { to: string; type: RedirectType },
+  to: { locale?: string; path: string } | undefined
+): { target: string; permanent: boolean; gone: boolean } {
+  return {
+    target: to === undefined ? "" : to.locale === undefined ? body.to : to.path,
+    permanent: body.type !== "temporary",
+    gone: body.type === "gone",
+  };
+}
 
 /** The type a stored redirect is shown as. */
 function typeOf(redirect: StoredRedirect): RedirectType {
@@ -232,27 +249,17 @@ async function addRedirect(
     putRedirect(ctx, tx, {
       locale,
       source: from.path,
-      target: to === undefined ? "" : to.locale === undefined ? body.to : to.path,
-      permanent: body.type !== "temporary",
-      gone,
+      ...storedAs(body, to),
       origin: "person",
       addedBy: nameOf(ctx),
     })
   );
   if ("refused" in outcome) throw refusal(outcome);
   const view = await viewOf(outcome.saved, nameOf(ctx));
-  if (gone) {
-    return respondMutation(
-      `Added. ${view.from} answers 410 Gone from the next visit.`,
-      view,
-      { status: 201 }
-    );
-  }
-  return respondMutation(
-    `Added. It works from the next visit.${chainNote(body.to.trim(), outcome, view.to)}`,
-    view,
-    { status: 201 }
-  );
+  const said = gone
+    ? `Added. ${view.from} answers 410 Gone from the next visit.`
+    : `Added. It works from the next visit.${chainNote(body.to.trim(), outcome, view.to)}`;
+  return respondMutation(said, view, { status: 201 });
 }
 
 async function editRedirect(
@@ -291,22 +298,19 @@ async function editRedirect(
       {
         locale: found.locale,
         source: found.source,
-        target: to === undefined ? "" : to.locale === undefined ? body.to : to.path,
-        permanent: body.type !== "temporary",
-        gone,
+        ...storedAs(body, to),
         origin: found.origin,
       },
       id
     )
   );
   if ("refused" in outcome) throw refusal(outcome);
-  const view = await viewOf(outcome.saved, nameOf(ctx));
-  if (gone) {
-    return respondMutation(`Saved. ${view.from} now answers 410 Gone.`, view);
-  }
+  const saved = await viewOf(outcome.saved, nameOf(ctx));
   return respondMutation(
-    `Saved. ${view.from} now goes to ${view.to}, ${view.type}.${chainNote(body.to.trim(), outcome, view.to)}`,
-    view
+    gone
+      ? `Saved. ${saved.from} now answers 410 Gone.`
+      : `Saved. ${saved.from} now goes to ${saved.to}, ${saved.type}.${chainNote(body.to.trim(), outcome, saved.to)}`,
+    saved
   );
 }
 

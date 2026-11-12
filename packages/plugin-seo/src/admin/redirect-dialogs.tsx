@@ -25,7 +25,7 @@ import {
   SelectValue,
   type BadgeProps,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useRef, type JSX } from "react";
+import { useRef, type JSX } from "react";
 
 import type {
   ImportResult,
@@ -62,6 +62,74 @@ export interface DraftNote {
   existing?: string;
 }
 
+/** The form's Type, its choices each with the status the server answers. */
+function TypeField(props: {
+  value: RedirectType;
+  onChange: (type: RedirectType) => void;
+}): JSX.Element {
+  return (
+    <FieldShell label="Type" width="full">
+      {field => (
+        <Select
+          value={props.value}
+          onValueChange={value => props.onChange(value as RedirectType)}
+        >
+          <SelectTrigger id={field.id} aria-describedby={field.describedBy}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TYPES.map(type => (
+              <SelectItem key={type} value={type}>
+                {TYPE_TEXT[type].choice}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </FieldShell>
+  );
+}
+
+/**
+ * The line under the form: a hint, or the server's refusal, offering to
+ * edit the redirect already at the From address where that is why.
+ */
+function NoteLine(props: {
+  note: DraftNote | null;
+  onEditExisting: (id: string) => void;
+}): JSX.Element | null {
+  const { note } = props;
+  if (note === null) return null;
+  if (note.kind === "help") {
+    return (
+      <p className="text-sm text-muted-foreground" role="status">
+        {note.text}
+      </p>
+    );
+  }
+  const { existing } = note;
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>
+        {note.text}
+        {existing === undefined ? null : (
+          <>
+            {" "}
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              onClick={() => props.onEditExisting(existing)}
+            >
+              Edit that redirect
+            </Button>
+          </>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 /** The form that adds or edits one redirect, in a dialog. */
 export function RedirectDialog(props: {
   draft: RedirectDraft | null;
@@ -75,12 +143,6 @@ export function RedirectDialog(props: {
   const { draft, note } = props;
   const toRef = useRef<HTMLInputElement | null>(null);
   const editing = draft?.editing !== undefined;
-  // Filled from an address not found, the To address is what is left to
-  // type, so it takes the focus.
-  const prefilled = draft !== null && !editing && draft.from !== "";
-  useEffect(() => {
-    if (prefilled) toRef.current?.focus();
-  }, [prefilled]);
 
   return (
     <Dialog
@@ -89,7 +151,22 @@ export function RedirectDialog(props: {
         if (!open) props.onClose();
       }}
     >
-      <DialogContent size="md">
+      <DialogContent
+        size="md"
+        onOpenAutoFocus={event => {
+          // Opened filled from an address, the To address is what is left
+          // to type, so it takes the focus; otherwise the first field does.
+          if (
+            draft !== null &&
+            !editing &&
+            draft.from !== "" &&
+            toRef.current
+          ) {
+            event.preventDefault();
+            toRef.current.focus();
+          }
+        }}
+      >
         {draft === null ? null : (
           <form
             className="flex flex-col gap-4"
@@ -122,30 +199,10 @@ export function RedirectDialog(props: {
                 }
               />
             </FieldShell>
-            <FieldShell label="Type" width="full">
-              {field => (
-                <Select
-                  value={draft.type}
-                  onValueChange={value =>
-                    props.onChange({ ...draft, type: value as RedirectType })
-                  }
-                >
-                  <SelectTrigger
-                    id={field.id}
-                    aria-describedby={field.describedBy}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TYPES.map(type => (
-                      <SelectItem key={type} value={type}>
-                        {TYPE_TEXT[type].choice}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </FieldShell>
+            <TypeField
+              value={draft.type}
+              onChange={type => props.onChange({ ...draft, type })}
+            />
             {/* A gone address sends no one anywhere, so it has no To. */}
             {draft.type === "gone" ? null : (
               <FieldShell label="To" width="full">
@@ -161,32 +218,7 @@ export function RedirectDialog(props: {
                 />
               </FieldShell>
             )}
-            {note === null ? null : note.kind === "refused" ? (
-              <Alert variant="destructive">
-                <AlertDescription>
-                  {note.text}
-                  {note.existing === undefined ? null : (
-                    <>
-                      {" "}
-                      <Button
-                        type="button"
-                        variant="link"
-                        size="sm"
-                        onClick={() =>
-                          props.onEditExisting(note.existing ?? "")
-                        }
-                      >
-                        Edit that redirect
-                      </Button>
-                    </>
-                  )}
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <p className="text-sm text-muted-foreground" role="status">
-                {note.text}
-              </p>
-            )}
+            <NoteLine note={note} onEditExisting={props.onEditExisting} />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={props.onClose}>
                 Cancel
@@ -300,9 +332,7 @@ export function ImportDialog(props: {
           </Button>
           <Button
             type="button"
-            disabled={
-              file === null || props.busy || refused > 0 || saved === 0
-            }
+            disabled={file === null || props.busy || refused > 0 || saved === 0}
             onClick={() => {
               if (file !== null) props.onImport(file);
             }}

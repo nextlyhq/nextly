@@ -14,7 +14,13 @@
  * The lists are drawn as a table and, for a narrow screen, as cards, both in
  * the document; the table is read here.
  */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -218,8 +224,12 @@ describe("the Redirects tab", () => {
     ]);
     // Each tab says how many it holds; ignored addresses are not counted.
     const tabs = screen.getByRole("navigation", { name: "Redirects" });
-    expect(within(tabs).getByRole("link", { name: "Redirects 3" })).toBeTruthy();
-    expect(within(tabs).getByRole("link", { name: "Not found 2" })).toBeTruthy();
+    expect(
+      within(tabs).getByRole("link", { name: "Redirects 3" })
+    ).toBeTruthy();
+    expect(
+      within(tabs).getByRole("link", { name: "Not found 2" })
+    ).toBeTruthy();
   });
 
   it("names who made a redirect: a page's move, a file, you, or the person", () => {
@@ -258,7 +268,10 @@ describe("the Redirects tab", () => {
   });
 
   it("adds a redirect from its dialog, and says what was done", async () => {
-    answer = () => ({ message: "Added. It works from the next visit.", item: {} });
+    answer = () => ({
+      message: "Added. It works from the next visit.",
+      item: {},
+    });
     render(<SeoRedirectsPage />);
     fireEvent.click(screen.getByRole("button", { name: "Add redirect" }));
     const dialog = screen.getByRole("dialog");
@@ -268,7 +281,9 @@ describe("the Redirects tab", () => {
     fireEvent.change(within(dialog).getByLabelText("To"), {
       target: { value: "/new" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Add redirect" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Add redirect" })
+    );
     await waitFor(() =>
       expect(toastMutationResult).toHaveBeenCalledWith(
         "Added. It works from the next visit.",
@@ -294,7 +309,9 @@ describe("the Redirects tab", () => {
     await user.click(within(dialog).getByRole("combobox", { name: "Type" }));
     await user.click(screen.getByRole("option", { name: "Gone (410)" }));
     expect(within(dialog).queryByLabelText("To")).toBeNull();
-    await user.click(within(dialog).getByRole("button", { name: "Add redirect" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add redirect" })
+    );
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0]?.body).toEqual({ from: "/retired", to: "", type: "gone" });
   });
@@ -316,7 +333,9 @@ describe("the Redirects tab", () => {
     fireEvent.change(within(dialog).getByLabelText("To"), {
       target: { value: "/elsewhere" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Add redirect" }));
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Add redirect" })
+    );
     const refusal = await within(dialog).findByRole("alert");
     expect(refusal.textContent).toContain("/webinar already has a redirect.");
     fireEvent.click(
@@ -341,7 +360,9 @@ describe("the Redirects tab", () => {
     const toField = within(dialog).getByLabelText("To");
     await user.clear(toField);
     await user.type(toField, "/clients");
-    await user.click(within(dialog).getByRole("button", { name: "Save redirect" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save redirect" })
+    );
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0]).toEqual({
       path: "/redirects/r1",
@@ -413,12 +434,17 @@ describe("the Redirects tab", () => {
     };
     answer = request =>
       (request.body as { apply?: boolean }).apply === true
-        ? { message: "Imported 1 redirect in one step", item: { ...clean, applied: true } }
+        ? {
+            message: "Imported 1 redirect in one step",
+            item: { ...clean, applied: true },
+          }
         : { message: "1 row read.", item: clean };
     fireEvent.change(input, {
       target: { files: [new File(["/old-blog/*,/blog/*"], "fixed.csv")] },
     });
-    const fixed = await screen.findByRole("dialog", { name: "Import fixed.csv" });
+    const fixed = await screen.findByRole("dialog", {
+      name: "Import fixed.csv",
+    });
     fireEvent.click(
       within(fixed).getByRole("button", { name: "Import 1 redirect" })
     );
@@ -501,7 +527,7 @@ describe("the Not found tab", () => {
     });
   });
 
-  it("opens a redirect from an address, its To the closest live page", () => {
+  it("opens a redirect from an address, its To the closest live page", async () => {
     onNotFound();
     render(<SeoRedirectsPage />);
     fireEvent.click(
@@ -510,17 +536,21 @@ describe("the Not found tab", () => {
       })
     );
     const dialog = screen.getByRole("dialog");
-    expect((within(dialog).getByLabelText("From") as HTMLInputElement).value).toBe(
-      "/pricing-plans"
-    );
-    expect((within(dialog).getByLabelText("To") as HTMLInputElement).value).toBe(
-      "/pricing"
-    );
+    expect(
+      (within(dialog).getByLabelText("From") as HTMLInputElement).value
+    ).toBe("/pricing-plans");
+    expect(
+      (within(dialog).getByLabelText("To") as HTMLInputElement).value
+    ).toBe("/pricing");
     expect(
       within(dialog).getByText(
         "Suggested: /pricing, the closest live page. Change it if it's wrong."
       )
     ).toBeTruthy();
+    // What is left to type, the To address, has the focus.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(dialog).getByLabelText("To"))
+    );
   });
 });
 
@@ -545,11 +575,11 @@ describe("a link asking for a new redirect", () => {
     );
     render(<SeoRedirectsPage />);
     const dialog = screen.getByRole("dialog");
-    expect((within(dialog).getByLabelText("From") as HTMLInputElement).value).toBe(
-      "/gone"
-    );
-    expect((within(dialog).getByLabelText("To") as HTMLInputElement).value).toBe(
-      "/here"
-    );
+    expect(
+      (within(dialog).getByLabelText("From") as HTMLInputElement).value
+    ).toBe("/gone");
+    expect(
+      (within(dialog).getByLabelText("To") as HTMLInputElement).value
+    ).toBe("/here");
   });
 });

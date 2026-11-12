@@ -40,7 +40,14 @@ import {
   writePluginRoute,
   type NextlyColumn,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useId, useRef, useState, type JSX } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type JSX,
+  type RefObject,
+} from "react";
 
 import { proxyProblems } from "../problems/site-checks";
 import {
@@ -63,7 +70,7 @@ import {
   type RedirectDraft,
 } from "./redirect-dialogs";
 import { lastSeenWhen } from "./redirect-format";
-import { AdminLink, SeoTrail } from "./section";
+import { AdminLink, SeoTrail, type TrailStep } from "./section";
 
 /** Where the redirects screen is, and its Not found tab. */
 const REDIRECTS_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
@@ -147,15 +154,16 @@ export function madeBy(redirect: RedirectView): string {
   return redirect.addedBy ?? "Someone";
 }
 
-/** The ranges the Not found tab narrows to, by when an address was last asked for. */
-const RANGES = [
+/** A range the Not found tab narrows to, by when an address was last asked for. */
+type Range = "1" | "7" | "30" | "all";
+
+/** The ranges, as the tab offers them, each its number of days back. */
+const RANGES: readonly { value: Range; label: string; days: number }[] = [
   { value: "1", label: "Last 24 hours", days: 1 },
   { value: "7", label: "Last 7 days", days: 7 },
   { value: "30", label: "Last 30 days", days: 30 },
   { value: "all", label: "All time", days: Number.POSITIVE_INFINITY },
-] as const;
-
-type Range = (typeof RANGES)[number]["value"];
+];
 
 /**
  * The addresses not found the tab shows: the ignored ones only when asked
@@ -489,30 +497,215 @@ function useImport(run: ReturnType<typeof useBusy>["run"], reread: () => void) {
   return { file, read, apply, close: () => setFile(null) };
 }
 
+/** The Redirects and Not found tabs, each an address of its own, with its count. */
+function RedirectsTabs(props: {
+  tab: Tab;
+  redirects: number;
+  notFound: number;
+}): JSX.Element {
+  return (
+    <PageTabs label="Redirects">
+      <PageTab asChild current={props.tab === "list"}>
+        <AdminLink href={REDIRECTS_HREF}>
+          Redirects{" "}
+          <span className="font-normal text-muted-foreground">
+            {props.redirects}
+          </span>
+        </AdminLink>
+      </PageTab>
+      <PageTab asChild current={props.tab === "notfound"}>
+        <AdminLink href={NOT_FOUND_HREF}>
+          Not found{" "}
+          <span className="font-normal text-muted-foreground">
+            {props.notFound}
+          </span>
+        </AdminLink>
+      </PageTab>
+    </PageTabs>
+  );
+}
+
+/** Import CSV, with its hidden file input, and Add redirect. */
+function ListActions(props: {
+  busy: boolean;
+  fileRef: RefObject<HTMLInputElement | null>;
+  onFile: (file: File) => void;
+  onAdd: () => void;
+}): JSX.Element {
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={props.busy}
+        onClick={() => props.fileRef.current?.click()}
+      >
+        Import CSV
+      </Button>
+      <Button type="button" onClick={props.onAdd}>
+        Add redirect
+      </Button>
+      <input
+        ref={props.fileRef}
+        type="file"
+        accept=".csv,text/csv"
+        hidden
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={event => {
+          const chosen = event.target.files?.[0];
+          // Emptied so choosing the same file again reads it again.
+          event.target.value = "";
+          if (chosen !== undefined) props.onFile(chosen);
+        }}
+      />
+    </>
+  );
+}
+
+/** Why a list could not be read, as the table shows it, or null. */
+function readFailure(what: string, error: unknown): string | null {
+  return error === null || error === undefined
+    ? null
+    : `The ${what} could not be read. ${apiErrorMessage(error)}`;
+}
+
+/** The Redirects tab's list, with the note where they are not served. */
+function RedirectsList(props: {
+  rows: RedirectView[];
+  pending: boolean;
+  error: unknown;
+  proxy: ProxyStatus | undefined;
+  busy: boolean;
+  onEdit: (row: RedirectView) => void;
+  onRemove: (row: RedirectView) => void;
+}): JSX.Element {
+  return (
+    <ListView<RedirectView>
+      ariaLabel="Redirects"
+      columns={REDIRECT_COLUMNS}
+      rows={props.rows}
+      rowActions={row => [
+        { id: "edit", label: "Edit", onSelect: props.onEdit },
+        {
+          id: "remove",
+          label: "Remove",
+          destructive: true,
+          isDisabled: () => props.busy,
+          onSelect: () => props.onRemove(row),
+        },
+      ]}
+      loading={props.pending}
+      error={readFailure("redirects", props.error)}
+      empty={{
+        title: "No redirects yet",
+        description:
+          "Pages that move get one automatically. Add one by hand, or import a CSV file.",
+      }}
+      slots={{
+        beforeList: (
+          <NotServed status={props.proxy} redirects={props.rows.length} />
+        ),
+      }}
+    />
+  );
+}
+
+/** The Not found tab's list, narrowed by its own filters. */
+function NotFoundList(props: {
+  rows: NotFoundView[];
+  pending: boolean;
+  error: unknown;
+  busy: boolean;
+  onRedirect: (row: NotFoundView) => void;
+  onIgnore: (row: NotFoundView) => void;
+}): JSX.Element {
+  const [range, setRange] = useState<Range>("7");
+  const [showIgnored, setShowIgnored] = useState(false);
+  return (
+    <ListView<NotFoundView>
+      ariaLabel="Addresses not found"
+      columns={notFoundColumns(props)}
+      rows={shownNotFound(props.rows, range, showIgnored)}
+      loading={props.pending}
+      error={readFailure("addresses not found", props.error)}
+      hasActiveFilters={range !== "all" || showIgnored}
+      empty={{
+        title: "No addresses not found",
+        description:
+          "New ones appear here, most asked for first, as people or search engines ask for them.",
+      }}
+      emptyFiltered={{
+        title: "None in this range",
+        description:
+          "No address was asked for and not found in this time. Choose a longer range to see older ones.",
+      }}
+      slots={{
+        beforeList: (
+          <NotFoundFilters
+            range={range}
+            showIgnored={showIgnored}
+            onRange={setRange}
+            onShowIgnored={setShowIgnored}
+          />
+        ),
+        afterList: (
+          <p className="text-xs text-muted-foreground">
+            Bots probing for admin pages of other systems (/wp-login.php and the
+            like) are left out.
+          </p>
+        ),
+      }}
+    />
+  );
+}
+
+/** The three reads the screen draws from, each read afresh on every visit. */
+function useRedirectReads() {
+  return {
+    redirects: usePluginRoute<ListBody<RedirectView>>({
+      plugin: SEO_PLUGIN_NAME,
+      path: REDIRECT_ROUTES.list,
+      staleTime: 0,
+    }),
+    notFound: usePluginRoute<ListBody<NotFoundView>>({
+      plugin: SEO_PLUGIN_NAME,
+      path: REDIRECT_ROUTES.notFound,
+      staleTime: 0,
+    }),
+    proxy: usePluginRoute<ProxyStatus>({
+      plugin: SEO_PLUGIN_NAME,
+      path: REDIRECT_ROUTES.proxy,
+      staleTime: 0,
+    }),
+  };
+}
+
+/** Each tab's line under the title, and its trail. */
+const TAB_TEXT: Record<Tab, { description: string; steps: TrailStep[] }> = {
+  list: {
+    description:
+      "Send an old address to its new one. Pages that move get one automatically.",
+    steps: [{ label: "Redirects" }],
+  },
+  notfound: {
+    description:
+      "Addresses visitors asked for that no page answered. Redirect the ones that matter.",
+    steps: [
+      { label: "Redirects", href: REDIRECTS_HREF },
+      { label: "Not found" },
+    ],
+  },
+};
+
 /** The redirects screen, as the admin mounts it. */
 export function SeoRedirectsPage(): JSX.Element {
-  const redirects = usePluginRoute<ListBody<RedirectView>>({
-    plugin: SEO_PLUGIN_NAME,
-    path: REDIRECT_ROUTES.list,
-    staleTime: 0,
-  });
-  const notFound = usePluginRoute<ListBody<NotFoundView>>({
-    plugin: SEO_PLUGIN_NAME,
-    path: REDIRECT_ROUTES.notFound,
-    staleTime: 0,
-  });
-  const proxy = usePluginRoute<ProxyStatus>({
-    plugin: SEO_PLUGIN_NAME,
-    path: REDIRECT_ROUTES.proxy,
-    staleTime: 0,
-  });
+  const { redirects, notFound, proxy } = useRedirectReads();
   // The admin remounts a page whose address changes, so each tab, and a
   // link asking for a new redirect, is read from the address once.
   const [tab] = useState<Tab>(() =>
     typeof window === "undefined" ? "list" : tabIn(window.location.search)
   );
-  const [range, setRange] = useState<Range>("7");
-  const [showIgnored, setShowIgnored] = useState(false);
   const { busy, run } = useBusy();
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -567,158 +760,48 @@ export function SeoRedirectsPage(): JSX.Element {
       reread();
     }, toastRefused);
 
-  const listed = missing.filter(row => !row.ignored).length;
-  const shown = shownNotFound(missing, range, showIgnored);
-
   return (
     <PageFrame type="list">
       <PageHeader
         title="Redirects"
-        description={
-          tab === "list"
-            ? "Send an old address to its new one. Pages that move get one automatically."
-            : "Addresses visitors asked for that no page answered. Redirect the ones that matter."
-        }
-        breadcrumbs={
-          <SeoTrail
-            steps={
-              tab === "list"
-                ? [{ label: "Redirects" }]
-                : [{ label: "Redirects", href: REDIRECTS_HREF }, { label: "Not found" }]
-            }
-          />
-        }
+        description={TAB_TEXT[tab].description}
+        breadcrumbs={<SeoTrail steps={TAB_TEXT[tab].steps} />}
         actions={
           tab === "list" ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={busy}
-                onClick={() => fileRef.current?.click()}
-              >
-                Import CSV
-              </Button>
-              <Button
-                type="button"
-                onClick={() =>
-                  form.open({ from: "", to: "", type: "permanent" })
-                }
-              >
-                Add redirect
-              </Button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".csv,text/csv"
-                hidden
-                aria-hidden="true"
-                tabIndex={-1}
-                onChange={event => {
-                  const chosen = event.target.files?.[0];
-                  // Emptied so choosing the same file again reads it again.
-                  event.target.value = "";
-                  if (chosen !== undefined) void importer.read(chosen);
-                }}
-              />
-            </>
+            <ListActions
+              busy={busy}
+              fileRef={fileRef}
+              onFile={chosen => void importer.read(chosen)}
+              onAdd={() => form.open({ from: "", to: "", type: "permanent" })}
+            />
           ) : null
         }
         tabs={
-          <PageTabs label="Redirects">
-            <PageTab asChild current={tab === "list"}>
-              <AdminLink href={REDIRECTS_HREF}>
-                Redirects{" "}
-                <span className="font-normal text-muted-foreground">
-                  {rows.length}
-                </span>
-              </AdminLink>
-            </PageTab>
-            <PageTab asChild current={tab === "notfound"}>
-              <AdminLink href={NOT_FOUND_HREF}>
-                Not found{" "}
-                <span className="font-normal text-muted-foreground">
-                  {listed}
-                </span>
-              </AdminLink>
-            </PageTab>
-          </PageTabs>
+          <RedirectsTabs
+            tab={tab}
+            redirects={rows.length}
+            notFound={missing.filter(row => !row.ignored).length}
+          />
         }
       />
       {tab === "list" ? (
-        <ListView<RedirectView>
-          ariaLabel="Redirects"
-          columns={REDIRECT_COLUMNS}
+        <RedirectsList
           rows={rows}
-          rowActions={row => [
-            { id: "edit", label: "Edit", onSelect: form.edit },
-            {
-              id: "remove",
-              label: "Remove",
-              destructive: true,
-              isDisabled: () => busy,
-              onSelect: () => void remove(row),
-            },
-          ]}
-          loading={redirects.pending}
-          error={
-            redirects.error === null
-              ? null
-              : `The redirects could not be read. ${apiErrorMessage(redirects.error)}`
-          }
-          empty={{
-            title: "No redirects yet",
-            description:
-              "Pages that move get one automatically. Add one by hand, or import a CSV file.",
-          }}
-          slots={{
-            beforeList: (
-              <NotServed status={proxy.data} redirects={rows.length} />
-            ),
-          }}
+          pending={redirects.pending}
+          error={redirects.error}
+          proxy={proxy.data}
+          busy={busy}
+          onEdit={form.edit}
+          onRemove={row => void remove(row)}
         />
       ) : (
-        <ListView<NotFoundView>
-          ariaLabel="Addresses not found"
-          columns={notFoundColumns({
-            onRedirect: fromAddress,
-            onIgnore: row => void ignore(row),
-            busy,
-          })}
-          rows={shown}
-          loading={notFound.pending}
-          error={
-            notFound.error === null
-              ? null
-              : `The addresses not found could not be read. ${apiErrorMessage(notFound.error)}`
-          }
-          hasActiveFilters={range !== "all" || showIgnored}
-          empty={{
-            title: "No addresses not found",
-            description:
-              "New ones appear here, most asked for first, as people or search engines ask for them.",
-          }}
-          emptyFiltered={{
-            title: "None in this range",
-            description:
-              "No address was asked for and not found in this time. Choose a longer range to see older ones.",
-          }}
-          slots={{
-            beforeList: (
-              <NotFoundFilters
-                range={range}
-                showIgnored={showIgnored}
-                onRange={setRange}
-                onShowIgnored={setShowIgnored}
-              />
-            ),
-            afterList: (
-              <p className="text-xs text-muted-foreground">
-                Bots probing for admin pages of other systems (/wp-login.php
-                and the like) are left out.
-              </p>
-            ),
-          }}
+        <NotFoundList
+          rows={missing}
+          pending={notFound.pending}
+          error={notFound.error}
+          busy={busy}
+          onRedirect={fromAddress}
+          onIgnore={row => void ignore(row)}
         />
       )}
       <RedirectDialog

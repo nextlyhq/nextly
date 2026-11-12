@@ -48,6 +48,8 @@ export function isBotProbe(path: string): boolean {
   return segments.some(
     segment =>
       PROBE_SEGMENTS.has(segment) ||
+      // `.env.local`, `.env.production`: every variant of an env file.
+      segment.startsWith(".env.") ||
       (segment.includes(".") &&
         PROBE_ENDINGS.some(ending => segment.endsWith(ending)))
   );

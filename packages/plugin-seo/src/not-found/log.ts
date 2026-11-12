@@ -226,10 +226,11 @@ export async function setNotFoundIgnored(
 ): Promise<Record<string, unknown> | undefined> {
   const slug = notFoundSlug(ctx);
   try {
-    return (await ctx.services.collections.updateEntry(slug, id, {
+    const { item } = await ctx.services.collections.updateEntry(slug, id, {
       ignored,
       _overwrite: true,
-    })) as Record<string, unknown>;
+    });
+    return item;
   } catch (error) {
     if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
     throw error;
