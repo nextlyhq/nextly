@@ -57,6 +57,7 @@ function args(over: Record<string, unknown> = {}) {
       coreChanged: false,
       ran: true,
     })),
+    provisionUserFields: vi.fn(async () => {}),
     ...over,
   };
 }

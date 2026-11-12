@@ -30,7 +30,11 @@
  *   install, which writes it in the transaction recording the install.
  * - Migrations at start (`db.runMigrationsOnBoot`) add the permissions and
  *   make the Public role and its grants as `nextly migrate` does: on a new
- *   database, and for a collection added later.
+ *   database, and for a collection added later, its rules asked in the
+ *   languages stored in Settings before the start has read them itself.
+ * - Migrations at start provision the user fields as `nextly migrate` does: a
+ *   newly declared field gets its definition and its `user_ext` column, and
+ *   the start serves it.
  */
 
 // Set before anything reads it (env validation reads it once).
@@ -62,6 +66,7 @@ import { runPluginInstall } from "../../cli/commands/plugin-lifecycle-runner";
 import { defineCollection, defineConfig, text } from "../../config";
 import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
+import { getService } from "../../di/service-access";
 import { _resetPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
@@ -334,6 +339,34 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
+    /** The names of the user fields defined in `user_field_definitions`, sorted. */
+    async function definedUserFields(): Promise<string[]> {
+      const adapter = await open();
+      try {
+        const rows = await adapter.executeQuery<{ name: unknown }>(
+          `SELECT ${q}name${q} AS name FROM ${q}user_field_definitions${q}`
+        );
+        return rows.map(row => String(row.name)).sort();
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
+    }
+
+    /** Whether `user_ext` has the column `column`: a read of it that succeeds. */
+    async function userExtHas(column: string): Promise<boolean> {
+      const adapter = await open();
+      try {
+        await adapter.executeQuery(
+          `SELECT ${q}${column}${q} FROM ${q}user_ext${q} WHERE 1 = 0`
+        );
+        return true;
+      } catch {
+        return false;
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
+    }
+
     /** English, the default, and French, stored in Settings as it writes them. */
     async function storeLanguages(): Promise<void> {
       const adapter = await open();
@@ -399,8 +432,13 @@ describe.each(getConfiguredTestDialects())(
 
     /** `collections`, migrated at start from the test's migrations folder. */
     function migratedAtStart(...collections: (typeof OPEN)[]) {
+      return withMigrationsAtStart({ collections });
+    }
+
+    /** `config`, migrated at start from the test's migrations folder. */
+    function withMigrationsAtStart(config: Parameters<typeof defineConfig>[0]) {
       return defineConfig({
-        collections,
+        ...config,
         db: {
           migrationsDir: join(state.dir, "migrations"),
           runMigrationsOnBoot: true,
@@ -417,12 +455,7 @@ describe.each(getConfiguredTestDialects())(
       config: unknown,
       collections: readonly string[]
     ): Promise<{ statuses: Record<string, number>; media: string }> {
-      vi.stubEnv("NODE_ENV", "production");
-      _resetEnvCache();
-      try {
-        const sanitized = sanitizeConfig(config as never) as never;
-        const nextly = await getNextly({ config: sanitized });
-        await startSettled();
+      return atProductionStart(config, async (nextly, sanitized) => {
         const handlers = createDynamicHandlers({ config: sanitized });
         const statuses: Record<string, number> = {};
         for (const slug of collections) {
@@ -439,6 +472,24 @@ describe.each(getConfiguredTestDialects())(
             `refused: ${(error as { code?: string }).code ?? String(error)}`
         );
         return { statuses, media };
+      });
+    }
+
+    /** What `read` finds once a production start of `config` has settled. */
+    async function atProductionStart<T>(
+      config: unknown,
+      read: (
+        nextly: Awaited<ReturnType<typeof getNextly>>,
+        sanitized: never
+      ) => Promise<T>
+    ): Promise<T> {
+      vi.stubEnv("NODE_ENV", "production");
+      _resetEnvCache();
+      try {
+        const sanitized = sanitizeConfig(config as never) as never;
+        const nextly = await getNextly({ config: sanitized });
+        await startSettled();
+        return await read(nextly, sanitized);
       } finally {
         await shutdownNextly();
         await shutdownServices();
@@ -562,6 +613,46 @@ describe.each(getConfiguredTestDialects())(
         ])
       );
       expect(await publicHolds()).toContain("read-mpr-added");
+    }, 240_000);
+
+    it("asks a read rule in the stored languages when migrations run at start", async () => {
+      const site = {
+        experimental: { perLanguageStorage: true },
+      } as const;
+      const before = withMigrationsAtStart({ ...site, collections: [OPEN] });
+      await migrateCreate("initial", before);
+      await asVisitor(before, []);
+      await storeLanguages();
+
+      const after = withMigrationsAtStart({
+        ...site,
+        collections: [OPEN, STORED_FRENCH],
+      });
+      await migrateCreate("french", after);
+      await asVisitor(after, []);
+
+      expect(await publicHolds()).toContain("read-mpr-french");
+    }, 240_000);
+
+    it("provisions a newly declared user field when migrations run at start", async () => {
+      const before = migratedAtStart(OPEN);
+      await migrateCreate("initial", before);
+      await asVisitor(before, []);
+      expect(await definedUserFields()).not.toContain("nickname");
+
+      const after = withMigrationsAtStart({
+        collections: [OPEN],
+        users: { fields: [text({ name: "nickname" })] },
+      });
+      const served = await atProductionStart(after, async () =>
+        getService("userExtSchemaService")
+          .getMergedFieldConfigs()
+          .map(field => ("name" in field ? field.name : undefined))
+      );
+
+      expect(served).toContain("nickname");
+      expect(await definedUserFields()).toContain("nickname");
+      expect(await userExtHas("nickname")).toBe(true);
     }, 240_000);
 
     it("gives the Public role a plugin's public grant at its install", async () => {

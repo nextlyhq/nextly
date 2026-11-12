@@ -124,7 +124,9 @@ function storedLanguagesWhereWritten(
 /**
  * Runs `work` with code rules told what a start of `config` would tell them.
  * Where services are registered (a command that started Nextly, or migrations
- * at a start), they already answer and are used as they are. Otherwise the
+ * at a start), they answer, their stored languages brought up to date first:
+ * migrations at a start ask the rules before the start has read the stored
+ * list itself, and a registry that has not read it knows none. Otherwise the
  * configuration and its languages, the stored ones read once where the
  * command writes (`storedLanguagesWhereWritten`), are lent to the container
  * for the length of `work` and taken back after, leaving any service
@@ -135,7 +137,15 @@ export async function withRuleContextOf<T>(
   config: RuleContextConfig,
   work: () => Promise<T>
 ): Promise<T> {
-  if (container.has("config")) return work();
+  if (container.has("config")) {
+    // Read now where the list is unread or older than its interval; inside an
+    // open transaction it keeps the list it holds, which a start reads before
+    // it serves (`LanguageRegistry.refresh`).
+    if (container.has("languageRegistry")) {
+      await container.get<LanguageRegistry>("languageRegistry").refresh();
+    }
+    return work();
+  }
   const languages = languageRegistryFor(
     adapter,
     config,
