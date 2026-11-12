@@ -358,7 +358,8 @@ async function strandedListed(slug: "posts" | "pages") {
     overrideAccess: true,
   } as never);
   return {
-    ids: (listed as { items: { id: string }[] }).items.map(item => item.id),
+    // Ids come back as stored; the caller compares them as text.
+    ids: listed.items.map(item => String(item.id)),
     total: (counted as { total: number }).total,
   };
 }
