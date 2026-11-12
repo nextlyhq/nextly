@@ -21,6 +21,7 @@ import { runJobsPass } from "nextly";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SUBMISSION_SENDS_SLUG } from "../collections/sends";
+import { DELETE_PAGE } from "../handlers/forget-sends";
 import { FORM_SUBMISSION_TEMPLATE } from "../emails/starter-messages";
 import { formBuilder } from "../plugin";
 
@@ -83,9 +84,14 @@ interface QueueRow {
   message: string | null;
 }
 
-async function boot(dialect: TestDialect) {
+async function boot(dialect: TestDialect, sendsSlug = SUBMISSION_SENDS_SLUG) {
   const fb = formBuilder();
-  current = await createTestNextly({ dialect, plugins: [fb.plugin, mailer] });
+  // A host may rename the collection the sends are kept in.
+  const plugin =
+    sendsSlug === SUBMISSION_SENDS_SLUG
+      ? fb.plugin
+      : fb.plugin.rename!({ [SUBMISSION_SENDS_SLUG]: sendsSlug });
+  current = await createTestNextly({ dialect, plugins: [plugin, mailer] });
   const t = current;
   // What a real start does after boot, which the test instance does not run.
   const owners = t.getService(
@@ -151,8 +157,9 @@ async function boot(dialect: TestDialect) {
   const sendsOf = async (id: string) =>
     (
       await t.nextly.find({
-        collection: SUBMISSION_SENDS_SLUG,
+        collection: sendsSlug,
         where: { submission: { equals: id } },
+        limit: 1000,
       })
     ).items as Array<{ queuedId: string; sendKey: string }>;
 
@@ -170,7 +177,7 @@ async function boot(dialect: TestDialect) {
       now: () => new Date(Date.now() + 2 * 60 * 60_000),
     });
 
-  return { t, formId, submit, sendsOf, queued, trigger };
+  return { t, formId, submit, sendsOf, queued, trigger, sendsSlug };
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -229,6 +236,39 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await keyed()).toBe(0);
     }, 60_000);
+
+    it("forgets them in a collection the host renamed", async () => {
+      const { t, submit, sendsOf, queued } = await boot(
+        dialect,
+        "notification-records"
+      );
+      behaviour.mode = "retryable";
+      const id = await submit("hello");
+      const [send] = await sendsOf(id);
+      expect(send).toBeDefined();
+
+      await t.nextly.delete({ collection: "form-submissions", id });
+
+      expect((await queued(send!.queuedId)).state).toBe("cancelled");
+      expect(await sendsOf(id)).toEqual([]);
+    }, 60_000);
+
+    it("forgets every record of a submission with more than one batch of them", async () => {
+      const { t, submit, sendsOf, sendsSlug } = await boot(dialect);
+      const id = await submit("hello");
+      // Records past the first batch, for sends that name nothing queued.
+      for (let n = 0; n < DELETE_PAGE; n++) {
+        await t.nextly.create({
+          collection: sendsSlug,
+          data: { submission: id, queuedId: `none-${n}`, sendKey: `key-${n}` },
+        });
+      }
+      expect(await sendsOf(id)).toHaveLength(DELETE_PAGE + 1);
+
+      await t.nextly.delete({ collection: "form-submissions", id });
+
+      expect(await sendsOf(id)).toEqual([]);
+    }, 120_000);
 
     it("forgets each one a bulk deletion takes, and no other", async () => {
       const { t, submit, sendsOf, queued } = await boot(dialect);

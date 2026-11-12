@@ -23,11 +23,25 @@ type InTransactionHandler = Parameters<
 >[1];
 type InTransactionContext = Parameters<InTransactionHandler>[0];
 
-/** The plugin's services and hooks this needs. */
-type ForgettingContext = Pick<PluginContext, "hooks" | "services">;
+/** The plugin's services, hooks and own slugs this needs. */
+type ForgettingContext = Pick<PluginContext, "hooks" | "services" | "self">;
 
-/** How many of a form's submissions a form deletion reads at a time. */
-const DELETE_PAGE = 200;
+/**
+ * How many rows a deletion reads at a time: a form's submissions, or a
+ * submission's sends. Below the services' cap on one page, and drained until
+ * none is left, so a large form or a submission with many notifications is
+ * forgotten whole.
+ */
+export const DELETE_PAGE = 200;
+
+/**
+ * The sends collection's slug as this install has it: a host may rename a
+ * collection the plugin contributes, and the services know only the name it
+ * was given.
+ */
+function sendsSlugOf(ctx: Pick<PluginContext, "self">): string {
+  return ctx.self.collections[SUBMISSION_SENDS_SLUG] ?? SUBMISSION_SENDS_SLUG;
+}
 
 /**
  * The forms each transaction is deleting, by the transaction's key. A
@@ -52,11 +66,11 @@ export interface RecordedSend {
 
 /** Record that `submissionId` queued a notification. */
 export async function recordSend(
-  ctx: Pick<PluginContext, "services">,
+  ctx: Pick<PluginContext, "services" | "self">,
   submissionId: string,
   send: RecordedSend
 ): Promise<void> {
-  await ctx.services.collections.createEntry(SUBMISSION_SENDS_SLUG, {
+  await ctx.services.collections.createEntry(sendsSlugOf(ctx), {
     submission: submissionId,
     ...send,
   });
@@ -68,17 +82,32 @@ async function forgetSubmissionSends(
   write: InTransactionContext
 ): Promise<void> {
   if (write.operation !== "delete" || write.id === undefined) return;
-  const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
-    write.transaction,
-    SUBMISSION_SENDS_SLUG,
-    {
-      where: { submission: { equals: String(write.id) } },
-      pagination: { limit: 1000 },
-      depth: 0,
-    }
-  );
-  const sends = data as Array<{ id: unknown } & Partial<RecordedSend>>;
-  if (sends.length === 0) return;
+  const slug = sendsSlugOf(ctx);
+  // Each batch's records are deleted once forgotten, so the first page is
+  // always the next batch.
+  for (;;) {
+    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
+      write.transaction,
+      slug,
+      {
+        where: { submission: { equals: String(write.id) } },
+        pagination: { limit: DELETE_PAGE },
+        depth: 0,
+      }
+    );
+    const sends = data as Array<{ id: unknown } & Partial<RecordedSend>>;
+    if (sends.length > 0) await forgetBatch(ctx, write, slug, sends);
+    if (sends.length < DELETE_PAGE) return;
+  }
+}
+
+/** Forget a batch of a submission's sends, and delete their records. */
+async function forgetBatch(
+  ctx: ForgettingContext,
+  write: InTransactionContext,
+  slug: string,
+  sends: Array<{ id: unknown } & Partial<RecordedSend>>
+): Promise<void> {
   await ctx.services.email.forgetSends(
     {
       queuedIds: sends.flatMap(send => (send.queuedId ? [send.queuedId] : [])),
@@ -91,7 +120,7 @@ async function forgetSubmissionSends(
   for (const send of sends) {
     await ctx.services.collections.deleteEntryInTransaction(
       write.transaction,
-      SUBMISSION_SENDS_SLUG,
+      slug,
       String(send.id)
     );
   }
