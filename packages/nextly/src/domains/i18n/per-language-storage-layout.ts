@@ -14,7 +14,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../errors/nextly-error";
-import { introspectLiveSnapshot } from "../schema/pipeline/diff/introspect-live";
+import { introspectLiveColumns } from "../schema/pipeline/diff/introspect-live";
 import {
   readIdentifierCaseRules,
   type IdentifierCaseAdapter,
@@ -138,7 +138,8 @@ export async function refuseMixedStorage(
     return;
   }
 
-  const snapshot = await introspectLiveSnapshot(
+  // The columns alone: the refusal compares columns and nothing else.
+  const snapshot = await introspectLiveColumns(
     adapter.getDrizzle(),
     adapter.dialect,
     candidates.map(({ entity }) => entity.tableName)
@@ -182,7 +183,8 @@ async function refuseValuesKeptPerLanguage(
   candidates: readonly { entity: LaidOutEntity; columns: string[] }[],
   rules: IdentifierCaseRules
 ): Promise<void> {
-  const snapshot = await introspectLiveSnapshot(
+  // The columns alone: the refusal compares columns and nothing else.
+  const snapshot = await introspectLiveColumns(
     adapter.getDrizzle(),
     adapter.dialect,
     candidates.flatMap(({ entity }) => [
