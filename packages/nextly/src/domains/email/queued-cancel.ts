@@ -25,7 +25,6 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { inArray } from "drizzle-orm";
 
 import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
@@ -36,43 +35,13 @@ import {
   type QueuedErasureDb,
   type ReachedQueuedEmail,
 } from "./queued-erasure";
+import { attemptsOn, type QueueDialect } from "./queued-send-read";
 import {
   changesObserved,
   notifyQueuedEmailChange,
   type QueuedEmailCancelCause,
   type QueuedEmailChange,
 } from "./queued-send-changes";
-
-/** The dialects whose tables a cancel reads. */
-type QueueDialect = "postgresql" | "mysql" | "sqlite";
-
-/** The Drizzle surface reading the jobs' attempt counts needs. */
-interface AttemptsDb {
-  select(fields: Record<string, unknown>): {
-    from(table: unknown): {
-      where(condition: unknown): PromiseLike<unknown[]>;
-    };
-  };
-}
-
-/** How many attempts each job has made, by job id. */
-async function attemptsOf(
-  tx: TransactionContext,
-  dialect: QueueDialect,
-  jobIds: readonly string[]
-): Promise<Map<string, number>> {
-  if (jobIds.length === 0) return new Map();
-  const jobs = loadedDialect(dialect).tables.nextlyJobs;
-  const rows = (await tx
-    .getDrizzle<AttemptsDb>()
-    .select({ id: jobs.id, attemptCount: jobs.attemptCount })
-    .from(jobs)
-    .where(inArray(jobs.id, [...jobIds]))) as Array<{
-    id: string;
-    attemptCount: number;
-  }>;
-  return new Map(rows.map(row => [row.id, Number(row.attemptCount)]));
-}
 
 /** What the plugin that queued `email` is told of a cancel reaching it. */
 function changeFor(
@@ -104,7 +73,7 @@ export async function tellCancelReached(
 ): Promise<void> {
   const told = reached.filter(email => changesObserved(email.scope));
   if (told.length === 0) return;
-  const attempts = await attemptsOf(
+  const attempts = await attemptsOn(
     tx,
     dialect,
     told.flatMap(email => (email.jobId ? [email.jobId] : []))
