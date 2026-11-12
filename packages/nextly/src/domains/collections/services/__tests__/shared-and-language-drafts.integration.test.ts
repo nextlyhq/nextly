@@ -24,7 +24,13 @@ import {
   userWhoMay,
 } from "../../../../__tests__/fixtures/permission-holders";
 
-import { defineCollection, number, text } from "../../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  number,
+  text,
+} from "../../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -41,6 +47,9 @@ const REQUIRED = "partreqs";
 /** Translated, with a publish rule that refuses Spanish. */
 const GUARDED = "partguards";
 const PUBLISHER = "part-publisher";
+/** Translated, with a translated component holding a shared sub-field. */
+const BANNERED = "partbanners";
+const BANNER = "partbanner";
 
 /** Translatable: `title` and `body`. Shared: `views` (a number). */
 const FIELDS = () => [
@@ -62,7 +71,28 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
   handle = await createTestNextly({
     dialect,
     perLanguageStorage: true,
+    fieldGroups: [
+      // Kept per language, with a shared sub-field.
+      defineFieldGroup({
+        slug: BANNER,
+        localized: true,
+        fields: [
+          text({ name: "words" }),
+          text({ name: "code", localized: false }),
+        ],
+      }),
+    ],
     collections: [
+      defineCollection({
+        slug: BANNERED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "banner", component: BANNER }),
+        ],
+      }),
       defineCollection({
         slug: TRANSLATED,
         localized: true,
@@ -456,5 +486,71 @@ describe.each(getConfiguredTestDialects())(
         expect((await read(entries, REQUIRED, id, locale)).views).toBe(80);
       }
     }, 90_000);
+
+    // A translated component's shared sub-field rides in each language's
+    // draft. English's draft holding the value Spanish has since replaced is
+    // out of date on every path that publishes it: refused or kept, never put
+    // back.
+    describe.each([
+      { path: "a publish of English" },
+      { path: "a publish of every language" },
+    ])("$path", ({ path }) => {
+      it("never puts back a component's shared value another language published since", async () => {
+        const entries = await boot(dialect);
+        const created = await entries.createEntry(
+          { collectionName: BANNERED, overrideAccess: true, locale: "en" },
+          {
+            title: "en title",
+            banner: { words: "en words", code: "c1" },
+            status: "published",
+          }
+        );
+        expect(created.success, JSON.stringify(created)).toBe(true);
+        const id = (created.data as { id: string }).id;
+        await save(entries, BANNERED, id, "es", {
+          title: "es title",
+          banner: { words: "es words", code: "c1" },
+          status: "published",
+        });
+        // English holds an edit of its words, with the shared code it began from.
+        await save(entries, BANNERED, id, "en", {
+          banner: { words: "en words 2", code: "c1" },
+        });
+        // Spanish then publishes a new shared code.
+        await save(entries, BANNERED, id, "es", {
+          banner: { words: "es words 2", code: "c2" },
+          status: "published",
+        });
+        const codeIn = async (locale: string) =>
+          (
+            (await read(entries, BANNERED, id, locale)).banner as {
+              code?: unknown;
+            } | null
+          )?.code;
+        // The control: Spanish's publish put its new code live.
+        expect(await codeIn("es")).toBe("c2");
+
+        const published =
+          path === "a publish of English"
+            ? await entries.updateEntry(
+                {
+                  collectionName: BANNERED,
+                  entryId: id,
+                  overrideAccess: true,
+                  locale: "en",
+                },
+                { status: "published", _overwrite: true }
+              )
+            : await entries.publishAllLocales({
+                collectionName: BANNERED,
+                entryId: id,
+                overrideAccess: true,
+                data: { _overwrite: true },
+              });
+
+        if (!published.success) expect(published.statusCode).toBe(409);
+        expect(await codeIn("es")).toBe("c2");
+      }, 90_000);
+    });
   }
 );
