@@ -1,5 +1,5 @@
 /**
- * What the server and the Pages and addresses screen agree on: where the
+ * What the server and Pages agree on: where the
  * screen is, the routes it reads and saves through, and the shape of every
  * address it lists. It imports only the settings' contract, which imports
  * nothing, so the admin's client bundle reads it without bringing any server
@@ -9,7 +9,7 @@
  */
 import { SEO_ADMIN_SLUG } from "../settings/contract";
 
-/** The Pages and addresses screen: its path under the plugin, and its component. */
+/** Pages: its path under the plugin, and its component. */
 export const PAGES_PAGE: {
   readonly path: "pages";
   readonly component: "@nextlyhq/plugin-seo/admin#SeoPagesPage";
@@ -18,7 +18,7 @@ export const PAGES_PAGE: {
   component: "@nextlyhq/plugin-seo/admin#SeoPagesPage",
 };
 
-/** Where the Pages and addresses screen is, for a link. */
+/** Where Pages is, for a link. */
 export const PAGES_PAGE_HREF: string = `/admin/plugins/${SEO_ADMIN_SLUG}/${PAGES_PAGE.path}`;
 
 /** Where the screen reads every public address the site knows of. */

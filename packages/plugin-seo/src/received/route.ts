@@ -32,7 +32,7 @@ import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 import { CHECK_SEO_PERMISSION } from "../permissions";
-import { isRecord as isPlainRecord, textOf } from "../plain-values";
+import { isRecord, textOf } from "../plain-values";
 import { SEO_TAB_ID } from "../problems/contract";
 import { designLevelOf } from "../resolver/design-level";
 import type { SeoLevel, Sourced } from "../resolver/order";
@@ -85,9 +85,6 @@ const MAX_RUNNING = 4;
 let running = 0;
 
 const CHECK_BODY = z.object({ address: z.string().min(1).max(2048) });
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** The site's production addresses, the only places a page may be fetched. */
 async function originsOf(
@@ -334,7 +331,7 @@ async function heldStructuredData(
   const nodes = answer.structuredData ?? [];
   const problems = await structuredDataProblems(ctx, input, readers);
   return {
-    items: nodes.filter(isPlainRecord).map(node => {
+    items: nodes.filter(isRecord).map(node => {
       const name = nodeName(node);
       return { type: nodeType(node), ...(name === undefined ? {} : { name }) };
     }),
