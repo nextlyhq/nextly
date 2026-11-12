@@ -308,6 +308,20 @@ describe("SeoProblemsPage", () => {
     await vi.waitFor(() => expect(tableRows()).toHaveLength(1));
   });
 
+  it("keeps the list shown when a refresh fails, saying why above it", () => {
+    serving(LIST);
+    vi.mocked(usePluginRoute).mockReturnValue({
+      data: LIST,
+      pending: false,
+      error: new Error("The server could not be reached."),
+    } as unknown as ReturnType<typeof usePluginRoute>);
+    render(<SeoProblemsPage />);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The server could not be reached."
+    );
+    expect(tableRows()).toHaveLength(3);
+  });
+
   it("says so where nothing was found", () => {
     serving({ ...LIST, problems: [] });
     render(<SeoProblemsPage />);

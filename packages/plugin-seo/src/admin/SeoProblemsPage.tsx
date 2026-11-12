@@ -11,11 +11,13 @@
  * (`severityCounts`), so the three always agree.
  *
  * Drawn only from the admin's own parts (`PageFrame`, `PageHeader`,
- * `ListView`, `SegmentedChoice`, `Badge`, `Button`).
+ * `ListView`, `SegmentedChoice`, `Badge`, `Button`, `Alert`).
  *
  * @module admin/SeoProblemsPage
  */
 import {
+  Alert,
+  AlertDescription,
   apiErrorMessage,
   Badge,
   Button,
@@ -341,10 +343,12 @@ export function SeoProblemsPage(): JSX.Element {
             </div>
           ),
           beforeTable:
+            // A check or read that failed over a list already shown: the
+            // list stays, with why it may be out of date above it.
             failed !== null && list !== undefined ? (
-              <p className="text-sm text-danger-text" role="alert">
-                {apiErrorMessage(failed)}
-              </p>
+              <Alert variant="destructive">
+                <AlertDescription>{apiErrorMessage(failed)}</AlertDescription>
+              </Alert>
             ) : null,
         }}
       />
