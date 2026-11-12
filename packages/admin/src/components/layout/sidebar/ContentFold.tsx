@@ -22,8 +22,12 @@ interface ContentFoldProps {
   /** The key the fold is remembered under. */
   foldKey: string;
   label: string;
-  /** How many items the part lists for the search; none for a sub-heading. */
-  count?: number;
+  /**
+   * How many items the part lists for the search: `null` while its list is
+   * still arriving, when no number is drawn rather than one that will change;
+   * absent for a sub-heading, which shows none.
+   */
+  count?: number | null;
   /** A heading, or a sub-heading one step quieter. */
   level: "heading" | "group";
   folds: ContentFolds;
@@ -48,7 +52,12 @@ export function ContentFold({
         aria-expanded={!folded}
         aria-controls={regionId}
         // Heard as "Collections, 4": its text alone runs the two together.
-        aria-label={count === undefined ? undefined : `${label}, ${count}`}
+        // While the count is unknown it is named by its label alone.
+        aria-label={
+          count === undefined || count === null
+            ? undefined
+            : `${label}, ${count}`
+        }
         onClick={() => folds.toggle(foldKey)}
         className={cn(
           "flex w-full items-center gap-1.5 rounded-md px-3 text-left outline-none",
@@ -70,7 +79,12 @@ export function ContentFold({
         />
         <span className="min-w-0 truncate">{label}</span>
         {count === undefined ? null : (
-          <span className="ml-auto font-medium tracking-normal tabular-nums text-muted-foreground">
+          // The count's slot is held while the list arrives, so nothing
+          // moves when the number lands in it.
+          <span
+            aria-hidden={count === null ? true : undefined}
+            className="ml-auto min-w-[2ch] text-right font-medium tracking-normal tabular-nums text-muted-foreground"
+          >
             {count}
           </span>
         )}

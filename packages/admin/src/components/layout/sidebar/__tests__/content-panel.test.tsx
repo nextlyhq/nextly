@@ -316,6 +316,26 @@ describe("ContentPanel", () => {
     expect(outline()).toEqual(["Collections0", "Singles0"]);
   });
 
+  it("draws no count on a heading whose list is still arriving, and names it without one", () => {
+    lists.singlesComplete = false;
+    const arriving = renderPanel();
+
+    // Named by its label alone, not "Singles, 0" while its pages arrive.
+    const singles = within(contentNav()).getByRole("button", {
+      name: "Singles",
+    });
+    expect(singles).not.toHaveAttribute("aria-label");
+    expect(singles).toHaveTextContent(/^Singles$/);
+    // The other heading's list is complete: its count is drawn.
+    expect(heading("Collections")).toHaveAccessibleName("Collections, 2");
+    arriving.unmount();
+
+    // POPULATION CONTROL: once every page is in, the count is drawn.
+    lists.singlesComplete = true;
+    renderPanel();
+    expect(heading("Singles")).toHaveAccessibleName("Singles, 2");
+  });
+
   it("doesn't say nothing matched while Singles are still arriving", () => {
     lists.singlesComplete = false;
     const first = renderPanel({ search: "pricing" });
