@@ -845,3 +845,43 @@ describe("the bulk edit screen, Codex round 5", () => {
     expect(screen.getByText("1 change")).toBeTruthy();
   });
 });
+
+describe("the bulk edit screen, Codex round 6", () => {
+  it("keeps one type's refused read and its way out while another type is read again", async () => {
+    twoTypes();
+    vi.mocked(readPluginRoute).mockImplementation((async (args: {
+      path: string;
+    }) => {
+      if (args.path.includes("type=pages")) {
+        throw new Error("The pages could not be read.");
+      }
+      return { type: "posts", rows: ROWS, total: 4, more: false };
+    }) as unknown as typeof readPluginRoute);
+    let finishSave: (value: unknown) => void = () => undefined;
+    vi.mocked(writePluginRoute).mockImplementation(
+      (async () =>
+        new Promise(resolve => {
+          finishSave = resolve;
+        })) as unknown as typeof writePluginRoute
+    );
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    chooseType("pages");
+    await screen.findByRole("button", { name: "Read again" });
+    await act(async () =>
+      finishSave({ message: "Saved 1 page.", saved: 1, revs: {} })
+    );
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(readPluginRoute)
+          .mock.calls.filter(([args]) =>
+            (args as { path: string }).path.includes("type=posts")
+          )
+      ).toHaveLength(2)
+    );
+    expect(screen.getByRole("button", { name: "Read again" })).toBeTruthy();
+  });
+});

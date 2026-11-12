@@ -94,10 +94,9 @@ function readRows(slug: string, page: number) {
  */
 function useRows(type: string | undefined) {
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
-  // A refused read, with the type it was asked of: shown on that type alone.
-  const [error, setError] = useState<{ slug: string; message: string } | null>(
-    null
-  );
+  // Each type's refused read: shown on that type alone, and put away only
+  // by a read of that type.
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [reading, setReading] = useState(false);
   // The latest read asked of each type: only its answer counts, so a later
   // read of one type never puts away another's.
@@ -121,7 +120,7 @@ function useRows(type: string | undefined) {
       latest.current[slug] = asked;
       const current = () => latest.current[slug] === asked;
       setReading(true);
-      setError(null);
+      setErrors(({ [slug]: _cleared, ...others }) => others);
       try {
         const rows = [...keep];
         let body: BulkRowsBody | undefined;
@@ -138,7 +137,10 @@ function useRows(type: string | undefined) {
           [slug]: { rows, total: answer.total, more: answer.more, pages },
         }));
       } catch (failure) {
-        if (current()) setError({ slug, message: apiErrorMessage(failure) });
+        if (current()) {
+          const message = apiErrorMessage(failure);
+          setErrors(others => ({ ...others, [slug]: message }));
+        }
       } finally {
         if (current()) setReading(false);
       }
@@ -155,7 +157,7 @@ function useRows(type: string | undefined) {
 
   return {
     loaded: known ?? null,
-    error: error !== null && error.slug === type ? error.message : null,
+    error: (type === undefined ? undefined : errors[type]) ?? null,
     reading,
     more: () => {
       if (type !== undefined && known !== undefined) {
