@@ -60,6 +60,7 @@ import type { PermissionSeedService } from "../domains/auth/services/permission-
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { publishCollectionDbOptions } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import { publishDeclaredCollectionFields } from "../domains/collections/services/declared-collection-fields";
 import { publishDeclaredEntities } from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { resealQueuedMessagesAtBoot } from "../domains/email/queued-send";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
@@ -81,7 +82,7 @@ import type {
   LanguageAddressRule,
   SanitizedLocalizationConfig,
 } from "../domains/i18n/config/types";
-import { LanguageRegistry } from "../domains/i18n/language-registry";
+import type { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
   publishesPerLanguage,
@@ -89,7 +90,6 @@ import {
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
-import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type {
   AnyJobDefinition,
   JobRegistry,
@@ -183,7 +183,12 @@ import {
   unchangedSinceLastStart,
 } from "../init/boot-apply";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
+import {
+  codeDefinedAccessTargets,
+  languageRegistryFor,
+} from "../init/code-rule-context";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
+import { isProductionStart } from "../init/production-start";
 import { bootSeedingFollows } from "../init/seed-permissions";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
@@ -780,8 +785,21 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   registerReleaseServices(ctx);
 }
 
+/** How a caller registers the services. */
+export interface RegisterServicesOptions {
+  /**
+   * Whether this registration is a start: `getNextly()`'s, whichever entry
+   * point began it, or the request path's own. A production start reads the
+   * registry and writes none of it (`isProductionStart`). A command and the
+   * test harness register without it, and keep the code-first sync whatever
+   * `NODE_ENV` says.
+   */
+  start?: boolean;
+}
+
 export async function registerServices(
-  config: NextlyServiceConfig
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions = {}
 ): Promise<void> {
   // One registration at a time per process. Both boot paths — the
   // instrumentation/Direct API boot and the request path — can arrive while
@@ -817,7 +835,7 @@ export async function registerServices(
   // Nothing awaits between the loop above finding no attempt in flight and
   // this line publishing one, so no other caller can start an attempt in
   // between.
-  await startRegistrationAttempt(config);
+  await startRegistrationAttempt(config, options);
 }
 
 /**
@@ -830,8 +848,14 @@ export async function registerServices(
  * attempt's container. The latch is cleared before the attempt settles, so a
  * waiter resuming from it finds either the next attempt or none.
  */
-function startRegistrationAttempt(config: NextlyServiceConfig): Promise<void> {
-  const attempt: Promise<void> = runRegistrationAttempt(config).finally(() => {
+function startRegistrationAttempt(
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions
+): Promise<void> {
+  const attempt: Promise<void> = runRegistrationAttempt(
+    config,
+    options
+  ).finally(() => {
     if (globalForReg.__nextly_registrationInFlight === attempt) {
       globalForReg.__nextly_registrationInFlight = undefined;
     }
@@ -842,7 +866,8 @@ function startRegistrationAttempt(config: NextlyServiceConfig): Promise<void> {
 
 /** One registration, releasing what it acquired when it fails. */
 async function runRegistrationAttempt(
-  config: NextlyServiceConfig
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions
 ): Promise<void> {
   // Plugins an earlier registration started and nobody tore down: the one
   // `clearServices()` ended, which empties the container but cannot await a
@@ -886,7 +911,7 @@ async function runRegistrationAttempt(
   // registration's plugins running.
   ensureSupportedFrameworkVersions(config.appRoot ?? process.cwd());
   try {
-    await registerServicesOnce(config);
+    await registerServicesOnce(config, options);
   } catch (error) {
     // Anything that fails before registration completes leaves a connected
     // adapter and a partly populated container that no `shutdownServices`
@@ -901,7 +926,8 @@ async function runRegistrationAttempt(
 
 /** The registration itself; see `registerServices` for what surrounds it. */
 async function registerServicesOnce(
-  config: NextlyServiceConfig
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions
 ): Promise<void> {
   const {
     transformedConfig,
@@ -1178,13 +1204,8 @@ async function registerServicesOnce(
         logger: resolvedLogger,
         config: transformedConfig,
         basePath: resolvedBasePath,
-        languages: new LanguageRegistry({
-          configured: transformedConfig.localization,
-          reader: storedLanguageReader(adapter),
-          // A site keeping every translatable field per language stores its values under one
-          // language even before it declares any.
-          implicitLanguage: transformedConfig.perLanguageStorage === true,
-        }),
+        // The construction a command builds for its rules too (`withRuleContextOf`).
+        languages: languageRegistryFor(adapter, transformedConfig),
         schemasDir,
         migrationsDir,
         deferredExtends,
@@ -1232,12 +1253,19 @@ async function registerServicesOnce(
           judgeWorkflows(transformedConfig, changedComponents),
       });
 
-      await syncCodeFirstEntities(
-        adapter,
-        resolvedLogger,
-        transformedConfig,
-        workflows
-      );
+      // A production start writes no registry row, no permission and no
+      // migration status: it serves the registry `nextly migrate` wrote, and
+      // only publishes what the configuration declares in this process.
+      if (options.start === true && isProductionStart()) {
+        await publishDeclaredCodeFirstEntities(transformedConfig, workflows);
+      } else {
+        await syncCodeFirstEntities(
+          adapter,
+          resolvedLogger,
+          transformedConfig,
+          workflows
+        );
+      }
 
       await runBootMigrations(config, transformedConfig, deferredExtends, {
         adapter,
@@ -3715,14 +3743,12 @@ function registerCodeDefinedAccess(
   const rbacService = container.get<RBACAccessControlService>(
     "rbacAccessControlService"
   );
-  for (const collection of transformedConfig.collections ?? []) {
-    if (collection.access) {
-      rbacService.registerCollectionAccess(collection.slug, collection.access);
-    }
-  }
-  for (const single of transformedConfig.singles ?? []) {
-    if (single.access) {
-      rbacService.registerSingleAccess(single.slug, single.access);
+  // The targets a command asks the same rules through (`codeDefinedAccessTargets`).
+  for (const target of codeDefinedAccessTargets(transformedConfig)) {
+    if (target.kind === "collection") {
+      rbacService.registerCollectionAccess(target.slug, target.access);
+    } else {
+      rbacService.registerSingleAccess(target.slug, target.access);
     }
   }
 }
@@ -3806,6 +3832,58 @@ async function publishBootDeferrals(
 }
 
 /**
+ * The configuration's collections as the code-first sync stores them: the
+ * projection every sync route shares, so what boot stores and publishes for a
+ * collection is what reload and `db:sync` store and publish for it.
+ */
+function codeFirstCollectionConfigs(
+  transformedConfig: NextlyServiceConfig
+): CodeFirstCollectionConfig[] {
+  // Provenance (D14): tag each collection by who contributed it. A slug that a
+  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
+  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
+  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
+  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
+    pluginCollectionSources(transformedConfig.plugins ?? []);
+  return (transformedConfig.collections ?? []).map(collection =>
+    toCodeFirstCollectionConfig(
+      collection,
+      sourceBySlug.get(collection.slug) ?? "code"
+    )
+  );
+}
+
+/**
+ * What a production start does in place of the code-first sync: it publishes,
+ * in this process, what the configuration declares (the collections' write
+ * options and declared fields, the Singles' live definitions, the code-defined
+ * access, the declared entities and the workflows) and writes nothing. The
+ * registry rows, the permissions and each entity's migration status stay as
+ * `nextly migrate` left them, so a build older or newer than the one that
+ * migrated the database changes none of them, and the number of statements
+ * the start sends does not grow with the number of entities. A declared field
+ * the database was not migrated for is answered as not migrated where a read
+ * or write reaches it.
+ */
+async function publishDeclaredCodeFirstEntities(
+  transformedConfig: NextlyServiceConfig,
+  workflows: ReadonlyMap<string, RegisteredWorkflow>
+): Promise<void> {
+  publishCollectionDbOptions(codeFirstCollectionConfigs(transformedConfig));
+  publishDeclaredCollectionFields(transformedConfig.collections ?? []);
+  container
+    .get<SingleRegistryService>("singleRegistryService")
+    .setCodeFirstSingles(transformedConfig.singles ?? []);
+  registerCodeDefinedAccess(transformedConfig);
+  publishDeclaredEntities(transformedConfig);
+  // Nothing was refused a write, since nothing was written: this start's
+  // set replaces whatever an earlier registration in this process published.
+  await publishBootDeferrals("collection", undefined);
+  await publishBootDeferrals("single", undefined);
+  publishWorkflows(workflows);
+}
+
+/**
  * Answers whether the collections registry was found not yet created (every
  * sync error a missing table), which boot tolerates so `/setup` can run.
  */
@@ -3825,6 +3903,7 @@ async function syncCodeFirstCollections(
     // would leave whatever an earlier registration in this process published
     // — an `allowIdOnCreate` a later collection of the same slug would inherit.
     publishCollectionDbOptions([]);
+    publishDeclaredCollectionFields([]);
     return false;
   }
 
@@ -3849,27 +3928,15 @@ async function syncCodeFirstCollections(
     }
   }
 
-  // Provenance (D14): tag each collection by who contributed it. A slug that a
-  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
-  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
-  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
-  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
-    pluginCollectionSources(transformedConfig.plugins ?? []);
-
-  // The projection every sync route shares, so what boot stores and publishes
-  // for a collection is what reload and `db:sync` store and publish for it.
-  const codeFirstConfigs: CodeFirstCollectionConfig[] =
-    transformedConfig.collections.map(collection =>
-      toCodeFirstCollectionConfig(
-        collection,
-        sourceBySlug.get(collection.slug) ?? "code"
-      )
-    );
+  const codeFirstConfigs = codeFirstCollectionConfigs(transformedConfig);
 
   // Boot's one publish of the collection db options, from the same projection
   // the sync stores, and before it: they are the config's, not the
   // database's, so they hold whatever the rows below do.
   publishCollectionDbOptions(codeFirstConfigs);
+  // The fields each collection declares, kept in this process so a read or
+  // write that meets a declared field the database lacks names it.
+  publishDeclaredCollectionFields(transformedConfig.collections);
 
   // A start's own seeding ensures every entity's permissions once it has
   // registered the services, so the sync leaves them to it and each is
@@ -5536,6 +5603,33 @@ function handleUnresolvedExtends(
 }
 
 /**
+ * Of `entities`, those the layout refusal could find laid out the other way, for it to read.
+ *
+ * On SQLite each table's columns take a statement of their own to read, where PostgreSQL and MySQL
+ * read every table's at once. With the setting off, the refusal can only find an entity whose
+ * per-language table exists, so on SQLite the entities are first narrowed to those, from one
+ * listing of the tables: a start then sends the same number of statements however many entities
+ * the site has. With the setting on, any entity's main table may still hold the columns, so every
+ * entity is read.
+ */
+async function entitiesTheLayoutCanRefuse<T extends { tableName: string }>(
+  adapter: DrizzleAdapter,
+  entities: T[],
+  perLanguage: boolean
+): Promise<T[]> {
+  if (perLanguage || adapter.getCapabilities().dialect !== "sqlite") {
+    return entities;
+  }
+  // SQLite compares table names without regard to case.
+  const tables = new Set(
+    (await adapter.listTables()).map(name => name.toLowerCase())
+  );
+  return entities.filter(entity =>
+    tables.has(`${entity.tableName}_locales`.toLowerCase())
+  );
+}
+
+/**
  * Refuses the boot of a site keeping every translatable field per language over a database whose
  * main tables still hold the translatable columns of an entity: one its configuration declares, or
  * one the Schema Builder made, read from the registries (`readLayoutScanEntities`).
@@ -5606,7 +5700,11 @@ async function refuseMixedStorageInConfig(
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
   judged.push(...(await readLayoutScanEntities(adapter, declaredTables)));
-  await refuseMixedStorage(adapter, judged, perLanguage);
+  await refuseMixedStorage(
+    adapter,
+    await entitiesTheLayoutCanRefuse(adapter, judged, perLanguage),
+    perLanguage
+  );
   // With no languages declared in the configuration or in Settings, the site would serve the
   // implicit language alone: refused where its per-language tables hold others, so translations
   // never read as gone after a `localization` block is removed.
