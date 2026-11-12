@@ -26,6 +26,8 @@ const state = vi.hoisted(() => ({
   singles: [] as Fixture[],
   loading: false,
   singlesError: null as Error | null,
+  /** Whether later pages of Singles are still on their way. */
+  singlesArriving: false,
   content: { isLoading: false, hasAnswer: true, error: null as Error | null },
   /** Per slug: what the reader may do. */
   caps: {} as Record<
@@ -96,7 +98,8 @@ vi.mock("@admin/hooks/useSidebarContentLists", async importOriginal => {
         pinnedSingles: new Set(),
       }),
       isLoading: state.loading,
-      isComplete: !state.loading && state.singlesError === null,
+      isComplete:
+        !state.loading && !state.singlesArriving && state.singlesError === null,
       error: state.singlesError,
       retry: singlesRetry,
     }),
@@ -245,6 +248,7 @@ beforeEach(() => {
   fetchCollections.mockImplementation(pagedCollections);
   singlesRetry.mockReset();
   state.singlesError = null;
+  state.singlesArriving = false;
   get.mockReset();
   get.mockImplementation(async () => ({ rows: serverRows() }));
   state.loading = false;
@@ -564,6 +568,20 @@ describe("a list that could not be read", () => {
 
     await user.click(screen.getByRole("button", { name: /try again/i }));
     expect(singlesRetry).toHaveBeenCalled();
+  });
+});
+
+describe("a list still arriving", () => {
+  it("decides nothing until every page of Singles is in", async () => {
+    // The first page holds no Single the reader may open, and more are on
+    // their way: taken as all there is, it would send the reader away.
+    state.singles = [];
+    state.singlesArriving = true;
+    await draw("singles");
+
+    expect(replaceTo).not.toHaveBeenCalled();
+    expect(screen.queryByText("No content you can open")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 });
 
