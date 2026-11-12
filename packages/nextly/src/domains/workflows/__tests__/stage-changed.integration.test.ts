@@ -550,144 +550,159 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
-    it("a boot with a changed definition records each approval it withdraws, as the system", async () => {
-      await boot(dialect);
-      await subscribe();
-      const page = await entry(app(), "pages");
-      await seedState(app(), partOf("pages", page, null), "ok", {
-        definitionHash: "an-earlier-definition",
-        approval: await approvalOf("pages", page, null),
-      });
+    // SQLite only: a deploy boots again on the same database, and the test harness releases a
+    // server-backed database when the next instance boots, so the second boot would find it gone.
+    // What a deploy records goes through the same outbox writer on every dialect.
+    it.skipIf(dialect !== "sqlite")(
+      "a boot with a changed definition records each approval it withdraws, as the system",
+      async () => {
+        await boot(dialect);
+        await subscribe();
+        const page = await entry(app(), "pages");
+        await seedState(app(), partOf("pages", page, null), "ok", {
+          definitionHash: "an-earlier-definition",
+          approval: await approvalOf("pages", page, null),
+        });
 
-      await redeploy(dialect, {});
+        await redeploy(dialect, {});
 
-      await expectStageChanged([
-        {
-          resource: { kind: "entry", collection: "pages", id: page },
-          data: {
-            document: document("pages", page),
-            part: null,
-            from: "ok",
-            to: "draft",
-            cause: "definition",
-            approvalWithdrawn: true,
-            definitionHash: DESK,
+        await expectStageChanged([
+          {
+            resource: { kind: "entry", collection: "pages", id: page },
+            data: {
+              document: document("pages", page),
+              part: null,
+              from: "ok",
+              to: "draft",
+              cause: "definition",
+              approvalWithdrawn: true,
+              definitionHash: DESK,
+            },
+            actor: { type: "system" },
           },
-          actor: { type: "system" },
-        },
-      ]);
-    });
+        ]);
+      }
+    );
 
-    it("a deploy that renames a stage records each part it follows, keeping its approval", async () => {
-      await boot(dialect);
-      await subscribe();
-      const page = await entry(app(), "pages");
-      await seedState(app(), partOf("pages", page, null), "hold", {
-        definitionHash: DESK,
-      });
+    it.skipIf(dialect !== "sqlite")(
+      "a deploy that renames a stage records each part it follows, keeping its approval",
+      async () => {
+        await boot(dialect);
+        await subscribe();
+        const page = await entry(app(), "pages");
+        await seedState(app(), partOf("pages", page, null), "hold", {
+          definitionHash: DESK,
+        });
 
-      await redeploy(dialect, { posts: deskRenamed, pages: deskRenamed });
+        await redeploy(dialect, { posts: deskRenamed, pages: deskRenamed });
 
-      await expectStageChanged([
-        {
-          resource: { kind: "entry", collection: "pages", id: page },
+        await expectStageChanged([
+          {
+            resource: { kind: "entry", collection: "pages", id: page },
+            data: {
+              document: document("pages", page),
+              part: null,
+              from: "hold",
+              to: "paused",
+              cause: "rename",
+              approvalWithdrawn: false,
+              definitionHash: workflowDefinitionHash(deskRenamed),
+            },
+            actor: { type: "system" },
+          },
+        ]);
+      }
+    );
+
+    it.skipIf(dialect !== "sqlite")(
+      "a deploy that redirects a removed stage, and the recovery command, record each part moved",
+      async () => {
+        await boot(dialect);
+        await subscribe();
+        const held = await entry(app(), "pages");
+        const shelved = await entry(app(), "pages");
+        await seedState(app(), partOf("pages", held, null), "hold", {
+          definitionHash: DESK,
+          approval: await approvalOf("pages", held, null),
+        });
+        await seedState(app(), partOf("pages", shelved, null), "archive", {
+          definitionHash: DESK,
+        });
+        const now = workflowDefinitionHash(deskRedrawn);
+
+        await redeploy(dialect, { posts: deskRedrawn, pages: deskRedrawn });
+
+        const redirected = {
+          resource: { kind: "entry", collection: "pages", id: held },
           data: {
-            document: document("pages", page),
+            document: document("pages", held),
             part: null,
             from: "hold",
-            to: "paused",
-            cause: "rename",
-            approvalWithdrawn: false,
-            definitionHash: workflowDefinitionHash(deskRenamed),
-          },
-          actor: { type: "system" },
-        },
-      ]);
-    });
-
-    it("a deploy that redirects a removed stage, and the recovery command, record each part moved", async () => {
-      await boot(dialect);
-      await subscribe();
-      const held = await entry(app(), "pages");
-      const shelved = await entry(app(), "pages");
-      await seedState(app(), partOf("pages", held, null), "hold", {
-        definitionHash: DESK,
-        approval: await approvalOf("pages", held, null),
-      });
-      await seedState(app(), partOf("pages", shelved, null), "archive", {
-        definitionHash: DESK,
-      });
-      const now = workflowDefinitionHash(deskRedrawn);
-
-      await redeploy(dialect, { posts: deskRedrawn, pages: deskRedrawn });
-
-      const redirected = {
-        resource: { kind: "entry", collection: "pages", id: held },
-        data: {
-          document: document("pages", held),
-          part: null,
-          from: "hold",
-          to: "draft",
-          cause: "redirect",
-          approvalWithdrawn: true,
-          definitionHash: now,
-        },
-        actor: { type: "system" },
-      };
-      await expectStageChanged([redirected]);
-
-      await person(app(), "ops", []);
-      await moveStrandedReviewStates(app().adapter, {
-        to: "draft",
-        as: "ops@example.test",
-        comment: "Back to work",
-      });
-
-      await expectStageChanged([
-        redirected,
-        {
-          resource: { kind: "entry", collection: "pages", id: shelved },
-          data: {
-            document: document("pages", shelved),
-            part: null,
-            from: "archive",
             to: "draft",
-            cause: "recovery",
-            approvalWithdrawn: false,
+            cause: "redirect",
+            approvalWithdrawn: true,
             definitionHash: now,
           },
-          actor: { type: "user", id: "ops" },
-        },
-      ]);
-    });
-
-    it("a deploy that detaches a workflow records each part whose review state it removes", async () => {
-      await boot(dialect);
-      await subscribe();
-      const page = await entry(app(), "pages");
-      await seedState(app(), partOf("pages", page, null), "ok", {
-        definitionHash: DESK,
-        approval: await approvalOf("pages", page, null),
-      });
-
-      await redeploy(dialect, { pages: null });
-
-      await expectStageChanged([
-        {
-          resource: { kind: "entry", collection: "pages", id: page },
-          data: {
-            document: document("pages", page),
-            part: null,
-            from: "ok",
-            to: null,
-            cause: "detach",
-            approvalWithdrawn: true,
-            definitionHash: DESK,
-          },
           actor: { type: "system" },
-        },
-      ]);
-    });
+        };
+        await expectStageChanged([redirected]);
+
+        await person(app(), "ops", []);
+        await moveStrandedReviewStates(app().adapter, {
+          to: "draft",
+          as: "ops@example.test",
+          comment: "Back to work",
+        });
+
+        await expectStageChanged([
+          redirected,
+          {
+            resource: { kind: "entry", collection: "pages", id: shelved },
+            data: {
+              document: document("pages", shelved),
+              part: null,
+              from: "archive",
+              to: "draft",
+              cause: "recovery",
+              approvalWithdrawn: false,
+              definitionHash: now,
+            },
+            actor: { type: "user", id: "ops" },
+          },
+        ]);
+      }
+    );
+
+    it.skipIf(dialect !== "sqlite")(
+      "a deploy that detaches a workflow records each part whose review state it removes",
+      async () => {
+        await boot(dialect);
+        await subscribe();
+        const page = await entry(app(), "pages");
+        await seedState(app(), partOf("pages", page, null), "ok", {
+          definitionHash: DESK,
+          approval: await approvalOf("pages", page, null),
+        });
+
+        await redeploy(dialect, { pages: null });
+
+        await expectStageChanged([
+          {
+            resource: { kind: "entry", collection: "pages", id: page },
+            data: {
+              document: document("pages", page),
+              part: null,
+              from: "ok",
+              to: null,
+              cause: "detach",
+              approvalWithdrawn: true,
+              definitionHash: DESK,
+            },
+            actor: { type: "system" },
+          },
+        ]);
+      }
+    );
 
     it("a discard records each part whose review it closes, as the person who discarded", async () => {
       await boot(dialect);
