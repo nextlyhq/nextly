@@ -34,6 +34,9 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
  * altogether, which is the browser's own prompt rather than the guard's.
  * Through `history.pushState`, which is how the admin's own links move: its
  * router hears it and draws the page.
+ *
+ * That whole-document leave is the same `beforeunload` prompt a reload and a
+ * closed tab get, and the last two tests here cover it.
  */
 async function withPendingChange(
   page: Page,
