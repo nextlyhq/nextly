@@ -9,8 +9,7 @@ import {
   RemovedFromCodeMark,
   removedFromCodeMarkId,
 } from "@admin/components/features/entries/RemovedFromCodeNotice";
-import * as Icons from "@admin/components/icons";
-import { Bookmark, Globe, type LucideIcon } from "@admin/components/icons";
+import { Bookmark } from "@admin/components/icons";
 import {
   SidebarMenuAction,
   SidebarMenuButton,
@@ -20,6 +19,7 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useSidebarSingleList } from "@admin/hooks/useSidebarContentLists";
+import { contentIcon } from "@admin/lib/content-icons";
 import {
   searchSidebarSingles,
   singleDisplayName,
@@ -31,8 +31,6 @@ interface DynamicSingleNavProps {
   /** Search query to filter singles */
   search?: string;
 }
-
-const iconMap = Icons as unknown as Record<string, LucideIcon>;
 
 /**
  * DynamicSingleNav Component
@@ -102,10 +100,16 @@ export function DynamicSingleNav({
                         : undefined
                     }
                   >
+                    {/* The icon it names, else the framed page that marks a
+                        Single. */}
                     {React.createElement(
-                      iconMap[single.admin?.icon || ""] || Globe,
+                      contentIcon("single", single.admin?.icon),
                       {
-                        className: cn("h-4 w-4 shrink-0"),
+                        "aria-hidden": true,
+                        className: cn(
+                          "h-4 w-4 shrink-0",
+                          !isItemActive && "text-muted-foreground"
+                        ),
                       }
                     )}
                     {/* Truncated itself: the button truncates only its last

@@ -7,10 +7,12 @@ import {
   PluginMenuItems,
 } from "@admin/components/features/dashboard/PluginMenuItems";
 import * as Icons from "@admin/components/icons";
-import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
+import { Layers, Puzzle, FileText } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { contentIcon } from "@admin/lib/content-icons";
 import { CHANGE_SETTINGS } from "@admin/lib/permissions/system-policy";
+import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { ContentPanel } from "./ContentPanel";
@@ -84,7 +86,6 @@ export function SubSidebarContent({
   if (isContentSection(selectedMain)) {
     return (
       <ContentPanel
-        part={selectedMain}
         search={contentSearch}
         onSearchChange={onContentSearchChange}
         hasCollections={hasCollectionsSection}
@@ -166,12 +167,12 @@ export function SubSidebarContent({
                 collection.labels?.plural ||
                 collection.label ||
                 collection.name;
-              const iconMap = Icons as unknown as Record<
-                string,
-                React.ElementType
-              >;
-              const iconName = collection.admin?.icon || "Database";
-              const IconComponent = iconMap[iconName] || Database;
+              // The icon every panel draws for a collection: the one it
+              // names, else the list.
+              const IconComponent = contentIcon(
+                "collection",
+                collection.admin?.icon
+              );
 
               return (
                 <SidebarMenuItem key={collection.id}>
@@ -181,7 +182,13 @@ export function SubSidebarContent({
                     className="justify-start px-3"
                   >
                     <Link href={href}>
-                      <IconComponent className="h-4 w-4" />
+                      <IconComponent
+                        aria-hidden="true"
+                        className={cn(
+                          "h-4 w-4",
+                          !isActiveItem && "text-muted-foreground"
+                        )}
+                      />
                       <span>{displayName}</span>
                     </Link>
                   </SidebarMenuButton>
