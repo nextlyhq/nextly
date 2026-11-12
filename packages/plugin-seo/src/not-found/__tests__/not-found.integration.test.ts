@@ -242,6 +242,54 @@ describe.each(getConfiguredTestDialects())(
       expect(statements).toHaveLength(1);
     });
 
+    it("moves where visitors came from and whether the address is ignored, merging with an address logged since", async () => {
+      const { t, seo } = await boot(dialect);
+      await moveLoggedRows(seo);
+      const earlier = (path: string, fields: Record<string, unknown>) =>
+        t.nextly.create({
+          collection: NOT_FOUND_SLUG,
+          data: {
+            pathKey: pathKey({ locale: "en", path }),
+            locale: "en",
+            path,
+            hits: 2,
+            lastSeen: "2026-10-01T00:00:00.000Z",
+            kind: "missing",
+            ...fields,
+          },
+        });
+      await earlier("/copied", { cameFrom: "news.example.org", ignored: true });
+      await earlier("/merged", { cameFrom: "news.example.org", ignored: true });
+      await earlier("/sourced", { cameFrom: "/blog/launch", ignored: false });
+      // Asked for since this version started: one from a newer source, one
+      // directly, which knows no source.
+      await recordNotFound(seo, {
+        locale: "en",
+        path: "/merged",
+        cameFrom: "/pricing",
+      });
+      await recordNotFound(seo, { locale: "en", path: "/sourced" });
+
+      await moveLoggedRows(seo);
+
+      const rows = await readNotFoundLog(seo);
+      expect(
+        Object.fromEntries(
+          rows.map(row => [
+            row.path,
+            `${String(row.hits)} ${String(row.cameFrom)} ${String(row.ignored)}`,
+          ])
+        )
+      ).toEqual({
+        // As the earlier version kept it.
+        "/copied": "2 news.example.org true",
+        // Ignored where either side was; the newer side's source.
+        "/merged": "3 /pricing true",
+        // The newer visit knew no source, so the earlier one stands.
+        "/sourced": "3 /blog/launch false",
+      });
+    });
+
     it("keeps off the log an address a redirect was saved for before its earlier row moved", async () => {
       const { t, seo } = await boot(dialect);
       // The start's own move has found nothing: the rows below are what an

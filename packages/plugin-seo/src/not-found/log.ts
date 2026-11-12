@@ -88,21 +88,23 @@ function isoOf(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/** Stored text, or none where the column holds none (or the empty text). */
+function textOf(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
 /** A stored row read back, every column checked rather than trusted. */
 function loggedRowOf(row: Record<string, unknown>): LoggedRow {
   return {
     id: String(row.id),
-    locale: typeof row.locale === "string" ? row.locale : "",
-    path: typeof row.path === "string" ? row.path : "",
-    asked: typeof row.asked === "string" ? row.asked : null,
-    hits: typeof row.hits === "number" ? row.hits : Number(row.hits ?? 0),
+    locale: textOf(row.locale) ?? "",
+    path: textOf(row.path) ?? "",
+    asked: textOf(row.asked),
+    hits: Number(row.hits ?? 0),
     firstSeen: isoOf(row.firstSeen),
     lastSeen: isoOf(row.lastSeen),
     kind: row.kind === "moved" ? "moved" : "missing",
-    cameFrom:
-      typeof row.cameFrom === "string" && row.cameFrom !== ""
-        ? row.cameFrom
-        : null,
+    cameFrom: textOf(row.cameFrom),
     // A boolean, or 0/1 where the dialect keeps one as a number.
     ignored: row.ignored === true || row.ignored === 1,
   };
@@ -473,15 +475,26 @@ function moveOne(
           firstSeen,
           lastSeen,
           kind: row.kind,
+          cameFrom: row.cameFrom,
+          ignored: row.ignored,
         });
         return;
       }
+      // The newer side's source where it knows one, as a hit with none
+      // leaves the source it finds; ignored where either side was, since a
+      // person chose it and no visit undoes that.
+      const earlierIsNewer = lastSeen > there.lastSeen;
+      const [newer, older] = earlierIsNewer
+        ? [row.cameFrom, there.cameFrom]
+        : [there.cameFrom, row.cameFrom];
       await tx
         .update(notFoundLog, {
           hits: increment(row.hits),
           firstSeen: firstSeen < there.firstSeen ? firstSeen : there.firstSeen,
-          lastSeen: lastSeen > there.lastSeen ? lastSeen : there.lastSeen,
+          lastSeen: earlierIsNewer ? lastSeen : there.lastSeen,
           ...(row.kind === "moved" ? { kind: "moved" } : {}),
+          cameFrom: newer ?? older,
+          ignored: row.ignored || there.ignored,
         })
         .where(eq(columns.id, there.id));
     });
