@@ -15,11 +15,11 @@ import {
   apiErrorMessage,
   Button,
   MediaPickerDialog,
+  Switch,
   toastMutationResult,
   useMediaItem,
   usePluginRouteMutation,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Switch } from "@nextlyhq/ui";
 import { Check, Info } from "lucide-react";
 import {
   useEffect,

@@ -162,12 +162,16 @@ describe("the panel of a page built in code", () => {
       within(panel).getByText(/doesn't call the SEO function yet/)
     ).toBeTruthy();
     // Nothing typed: the automatic title, shown in the preview.
-    expect(within(panel).getByText("Pricing | Acme")).toBeTruthy();
+    expect(within(panel).getByTestId("seo-search-title")).toHaveTextContent(
+      "Pricing | Acme"
+    );
 
     fireEvent.change(within(panel).getByLabelText("Title on Google"), {
       target: { value: "Plans and prices" },
     });
-    expect(within(panel).getByText("Plans and prices")).toBeTruthy();
+    expect(within(panel).getByTestId("seo-search-title")).toHaveTextContent(
+      "Plans and prices"
+    );
     expect(within(panel).getByText("Typed for this address")).toBeTruthy();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
@@ -210,7 +214,6 @@ describe("the share image of a page built in code", () => {
     render(<SeoPagesPage />);
     fireEvent.click(screen.getAllByRole("button", { name: "Edit SEO" })[2]);
     const panel = screen.getByRole("dialog", { name: "SEO for /about" });
-    fireEvent.click(within(panel).getByRole("tab", { name: "When shared" }));
     fireEvent.click(within(panel).getByRole("button", { name: /Advanced/ }));
 
     fireEvent.click(within(panel).getByRole("button", { name: "Remove" }));

@@ -36,7 +36,7 @@ import { SeoPagesPage as PagesScreen } from "./SeoPagesPage";
 import { SeoProblemsPage as ProblemsScreen } from "./SeoProblemsPage";
 import { SeoReceivedPage } from "./SeoReceivedPage";
 import { SeoRedirectsPage as RedirectsScreen } from "./SeoRedirectsPage";
-import { SeoSettingsPage as SettingsScreen } from "./SeoSettingsPage";
+import { SeoSettingsPage } from "./SeoSettingsPage";
 import { SeoTab } from "./SeoTab";
 import { SeoStatusSection } from "./status";
 
@@ -52,9 +52,6 @@ export const SeoProblemsPage: () => JSX.Element = withTrail(ProblemsScreen, [
 ]);
 export const SeoRedirectsPage: () => JSX.Element = withTrail(RedirectsScreen, [
   { label: "Redirects" },
-]);
-export const SeoSettingsPage: () => JSX.Element = withTrail(SettingsScreen, [
-  { label: "Settings" },
 ]);
 /** Bulk edit, at its own address until Pages' Edit mode takes it over. */
 export const SeoBulkPage: () => JSX.Element = withTrail(BulkScreen, [
@@ -91,6 +88,7 @@ registerComponents({
 });
 
 export { SeoOverviewPage } from "./SeoOverviewPage";
+export { SeoSettingsPage } from "./SeoSettingsPage";
 export { SeoReceivedMoved } from "./section";
 export { SeoReceivedPage } from "./SeoReceivedPage";
 export { SeoTab } from "./SeoTab";
