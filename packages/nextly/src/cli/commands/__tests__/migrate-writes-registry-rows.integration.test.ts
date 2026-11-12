@@ -1291,6 +1291,60 @@ describe.each(getConfiguredTestDialects())(
         expect(await probedType()).toBe("number");
       });
 
+      // In a transaction the conversion and its row commit together: a ledger
+      // write that fails after both leaves neither. MySQL commits its DDL as
+      // it runs, so there is no transaction to undo the column with.
+      it.skipIf(dialect === "mysql")(
+        "rolls back the column and its row together when the file cannot be recorded",
+        async () => {
+          await migrateCreate(scores("text"), "create_scores");
+          await migrated(scores("text"));
+          await migrateCreate(scores("number"), "points_number");
+          const { SchemaEventsRepository } = await import(
+            "../../../domains/schema/events/schema-events-repository"
+          );
+          const record = vi
+            .spyOn(SchemaEventsRepository.prototype, "markApplied")
+            .mockRejectedValue(new Error("ledger write refused"));
+          let run: { code: number | undefined; said: string[] };
+          let recorded: number;
+          try {
+            run = await migrate(scores("number"), { acceptDataLoss: true });
+          } finally {
+            recorded = record.mock.calls.length;
+            record.mockRestore();
+          }
+          expect(run.code, run.said.join("\n")).not.toBeUndefined();
+          // Stopped by the refused record, after the conversion and its row.
+          expect(recorded).toBeGreaterThan(0);
+          expect(
+            fieldType(
+              await collectionRow(instance!, dialect, "rr_scores"),
+              "points"
+            )
+          ).toBe("text");
+          const adapter = instance!.adapter as unknown as DrizzleAdapter;
+          const columns =
+            dialect === "sqlite"
+              ? (
+                  await adapter.executeQuery<{ name: string; type: string }>(
+                    `PRAGMA table_info("dc_rr_scores")`
+                  )
+                ).map(c => ({ name: c.name, type: c.type }))
+              : (
+                  await adapter.executeQuery<{
+                    column_name: string;
+                    data_type: string;
+                  }>(
+                    `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'dc_rr_scores'`
+                  )
+                ).map(c => ({ name: c.column_name, type: c.data_type }));
+          expect(
+            columns.find(c => c.name === "points")?.type.toLowerCase()
+          ).toMatch(/text|char/);
+        }
+      );
+
       it("records it with its DOWN when migrate:down rolls it back, before the next DOWN", async () => {
         await migrateCreate(scores("text"), "create_scores");
         await migrated(scores("text"));

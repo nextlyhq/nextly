@@ -4145,7 +4145,9 @@ export async function runFileMigrations(args: {
         dialect,
         repo,
         executeSql: executeFileSql,
-        ...(withFile === undefined ? {} : { beforeRecorded: withFile }),
+        ...(withFile === undefined
+          ? {}
+          : { beforeRecorded: () => withFile(m.transaction) }),
       });
       applied++;
       lastApplied = filename;

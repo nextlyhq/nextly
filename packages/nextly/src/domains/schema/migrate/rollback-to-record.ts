@@ -95,6 +95,7 @@ import { removeRegistryRow, type RemovalScope } from "./registry-row-removal";
 import {
   typeChangedRowsWriter,
   writeRegistryFromSource,
+  writesInFileTransaction,
   type RegistryWriteDeps,
 } from "./registry-writer";
 
@@ -427,13 +428,13 @@ export interface RollbackBookkeeping {
    * changed goes back to it, and the row of an entity one of them added,
    * which it does not record, is removed (`undoToOwnSource`).
    */
-  restore?: () => Promise<void>;
+  restore?: (inFileTransaction: boolean) => Promise<void>;
   /**
    * By rolled-back filename: the registry rows written with that DOWN, those
    * of the entities whose field types it changes back, in its transaction
    * where it runs in one (`typeChangedRowsWriter`).
    */
-  perFile?: ReadonlyMap<string, () => Promise<void>>;
+  perFile?: ReadonlyMap<string, (inFileTransaction: boolean) => Promise<void>>;
   /** What a dry run says of it. */
   summary?: string;
 }
@@ -573,8 +574,11 @@ async function typeChangedRowsPerDown(args: {
   applied: ReadonlySet<string>;
   rolledBack: readonly string[];
   deps: RegistryWriteDeps;
-}): Promise<Map<string, () => Promise<void>>> {
-  const perFile = new Map<string, () => Promise<void>>();
+}): Promise<Map<string, (inFileTransaction: boolean) => Promise<void>>> {
+  const perFile = new Map<
+    string,
+    (inFileTransaction: boolean) => Promise<void>
+  >();
   const inOrder = [...args.applied].sort(compareMigrationBaseNames);
   for (const filename of args.rolledBack) {
     const name = baseNameOf(filename);
@@ -647,7 +651,8 @@ async function undoToOwnSource(args: {
   const named = pointNamed(args.point);
   return {
     summary: `The registry rows would go back to what ${named} records.`,
-    restore: async () => {
+    restore: async (inFileTransaction: boolean) => {
+      if (inFileTransaction) writesInFileTransaction(args.deps, named);
       const outcome = await writeRegistryRows(
         args.deps.adapter,
         () => writeRegistryFromSource(source, args.deps, plan),

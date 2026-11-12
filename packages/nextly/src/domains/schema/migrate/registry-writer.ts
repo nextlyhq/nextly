@@ -601,7 +601,7 @@ export function typeChangedRowsWriter(args: {
   to: Pick<SnapshotFile, "entities"> | null;
   file: string;
   deps: RegistryWriteDeps;
-}): (() => Promise<void>) | undefined {
+}): ((inFileTransaction: boolean) => Promise<void>) | undefined {
   const { from, to } = args;
   if (from === null || to === null) return undefined;
   if (!carriesRegistryMetadata(from) || !carriesRegistryMetadata(to)) {
@@ -617,11 +617,36 @@ export function typeChangedRowsWriter(args: {
     // the file itself cleared is cleared with it.
     chain: [from.entities, to.entities],
   };
-  return async () => {
+  // Told whether the file runs in a transaction, which the rows must then
+  // join (`writesInFileTransaction`); false for one marked to run outside.
+  return async (inFileTransaction: boolean) => {
+    if (inFileTransaction) writesInFileTransaction(args.deps, args.file);
     await writeRegistryRows(
       args.deps.adapter,
       () => writeRegistryFromSource(source, args.deps, { only, strict: true }),
       { wrote: written => RECORDED_KINDS.some(([k]) => written.written[k] > 0) }
     );
   };
+}
+
+/**
+ * Refuses, before anything is written, rows meant for a migration file's
+ * transaction that would not join it. They are written through the adapter,
+ * whose `transaction()` joins the transaction the calling flow is inside
+ * (the file's, opened on the same adapter), so they commit or roll back
+ * with the file's statements. A write that would open a transaction of its
+ * own could commit while the file rolls back, which is the one outcome
+ * writing the row with the file exists to prevent.
+ */
+export function writesInFileTransaction(
+  deps: Pick<RegistryWriteDeps, "adapter">,
+  file: string
+): void {
+  if (deps.adapter.inTransaction()) return;
+  throw NextlyError.internal({
+    logContext: {
+      reason: "registry rows written outside their file's transaction",
+      file,
+    },
+  });
 }

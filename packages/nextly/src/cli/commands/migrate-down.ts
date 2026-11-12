@@ -1070,8 +1070,8 @@ export async function migrateDownCore(
           p,
           held,
           inTurn(
-            bookkeeping?.perFile?.get(p.filename),
-            last ? bookkeeping?.restore : undefined
+            withTransaction(bookkeeping?.perFile?.get(p.filename), p),
+            last ? withTransaction(bookkeeping?.restore, p) : undefined
           )
         );
         rolledBack.push(p.filename);
@@ -1082,6 +1082,14 @@ export async function migrateDownCore(
   );
 
   return { rolledBack };
+}
+
+/** `step`, told whether `p`'s DOWN runs in a transaction its writes must join. */
+function withTransaction(
+  step: ((inFileTransaction: boolean) => Promise<void>) | undefined,
+  p: Pick<PlannedDown, "transaction">
+): (() => Promise<void>) | undefined {
+  return step === undefined ? undefined : () => step(p.transaction);
 }
 
 /** Each of `steps` given, one after the other; undefined where none is. */
