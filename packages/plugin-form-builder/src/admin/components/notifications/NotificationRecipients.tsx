@@ -123,7 +123,8 @@ function AddressList({
           onBlur={add}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
-          className="sm:max-w-sm"
+          // No width of its own: the page sets the form's measure, and the
+          // input fills the row beside its Add button within it.
         />
         <Button type="button" variant="outline" onClick={add}>
           Add
