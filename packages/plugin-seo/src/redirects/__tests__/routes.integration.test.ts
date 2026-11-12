@@ -110,7 +110,9 @@ async function call(
   const [routePath, id] =
     path.startsWith("/redirects/") && path !== "/redirects/import"
       ? ["/redirects/:id", path.slice("/redirects/".length)]
-      : [path, undefined];
+      : path.startsWith("/not-found/")
+        ? ["/not-found/:id", path.slice("/not-found/".length)]
+        : [path, undefined];
   const route = redirectRoutes().find(
     each => each.method === method && each.path === routePath
   );
@@ -174,6 +176,73 @@ describe.each(getConfiguredTestDialects())(
           addedBy: "Sara Khan",
         },
       });
+    });
+
+    it("adds an address as gone, with no To, marked as the reader's own, and imports gone rows", async () => {
+      const { seo } = await boot(dialect);
+      const added = await call(seo, "POST", "/redirects", {
+        from: "/retired",
+        type: "gone",
+      });
+      expect(added.status).toBe(201);
+      expect(added.body).toMatchObject({
+        message: "Added. /retired answers 410 Gone from the next visit.",
+        item: { from: "/retired", to: "", type: "gone", byYou: true },
+      });
+
+      const imported = await call(seo, "POST", "/redirects/import", {
+        file: "/legacy,,410\n",
+        apply: true,
+      });
+      expect(imported.body).toMatchObject({
+        item: { applied: true, rows: [{ kind: "new" }] },
+      });
+
+      const listed = items((await call(seo, "GET", "/redirects")).body);
+      expect(
+        listed.map(item => [item.from, item.to, item.type, item.hits, item.lastHit])
+      ).toEqual(
+        expect.arrayContaining([
+          ["/retired", "", "gone", 0, null],
+          ["/legacy", "", "gone", 0, null],
+        ])
+      );
+      // Added through the screen by the reader; imported, not by hand.
+      expect(listed.find(item => item.from === "/retired")?.byYou).toBe(true);
+      expect(listed.find(item => item.from === "/legacy")?.byYou).toBe(false);
+    });
+
+    it("ignores an address not found, and lists it again, leaving bots' probes out", async () => {
+      const { seo } = await boot(dialect);
+      await recordNotFound(seo, { locale: "en", path: "/old-pricing" });
+      // A probe logged before probes were left out, as an older log holds.
+      await seo.services.collections.createEntry(NOT_FOUND_SLUG, {
+        pathKey: "probe-key",
+        locale: "en",
+        path: "/wp-admin/setup-config.php",
+        hits: 40,
+        lastSeen: new Date().toISOString(),
+        kind: "missing",
+      });
+
+      const listed = items((await call(seo, "GET", "/not-found")).body);
+      expect(listed.map(item => [item.path, item.ignored, item.cameFrom])).toEqual([
+        ["/old-pricing", false, null],
+      ]);
+
+      const id = String(listed[0]?.id);
+      const ignored = await call(seo, "PATCH", `/not-found/${id}`, {
+        ignored: true,
+      });
+      expect(ignored.body).toMatchObject({ item: { ignored: true } });
+      expect(
+        items((await call(seo, "GET", "/not-found")).body)[0]?.ignored
+      ).toBe(true);
+
+      await call(seo, "PATCH", `/not-found/${id}`, { ignored: false });
+      expect(
+        items((await call(seo, "GET", "/not-found")).body)[0]?.ignored
+      ).toBe(false);
     });
 
     it("lists every redirect newest first, with addresses as visitors open them", async () => {

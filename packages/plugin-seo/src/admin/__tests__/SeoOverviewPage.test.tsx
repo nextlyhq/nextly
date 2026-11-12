@@ -122,6 +122,8 @@ const NOT_FOUND: NotFoundView[] = [
     lastSeen: ago(1),
     kind: "missing",
     suggestion: "/docs/getting-started",
+    cameFrom: null,
+    ignored: false,
   },
   {
     id: "2",
@@ -131,6 +133,8 @@ const NOT_FOUND: NotFoundView[] = [
     lastSeen: ago(20),
     kind: "missing",
     suggestion: null,
+    cameFrom: null,
+    ignored: false,
   },
 ];
 

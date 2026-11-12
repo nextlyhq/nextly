@@ -220,11 +220,12 @@ test("an address not found is redirected from the Overview, the redirect saved f
 
   await card.getByRole("link", { name: `Redirect ${missing}` }).click();
   await expect(page).toHaveURL(new RegExp(`${SECTION}/redirects\\?from=`));
-  const from = page.getByLabel("From");
+  const dialog = page.getByRole("dialog", { name: "Add redirect" });
+  const from = dialog.getByLabel("From");
   await expect(from).toHaveValue(missing);
-  const to = page.getByLabel("To");
+  const to = dialog.getByLabel("To");
   if ((await to.inputValue()) === "") await to.fill("/");
-  await page.getByRole("button", { name: /Add redirect/ }).click();
+  await dialog.getByRole("button", { name: "Add redirect" }).click();
 
   await expect(async () => {
     const { items } = await ok<{ items: { from: string }[] }>(

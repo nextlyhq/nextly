@@ -502,6 +502,71 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     expect(await ask("/gone")).toBe("served");
   });
 
+  it("answers 410 for an address gone for good, and a redirect sent there ends there", async () => {
+    const { seo } = await boot(dialect);
+    const gone = await put(seo, { source: "/retired", target: "", gone: true });
+    expect(gone).toMatchObject({ saved: { gone: true, target: "" } });
+
+    const response = await proxy(new Request("https://example.com/retired"));
+    expect(response?.status).toBe(410);
+    expect(response?.headers.get("location")).toBeNull();
+
+    // One hop to the gone address, which answers it: not a chain to join.
+    expect(
+      await put(seo, { source: "/older", target: "/retired" })
+    ).toMatchObject({ saved: { target: "/retired" }, chain: ["/retired"] });
+    expect(await ask("/older")).toBe("301 https://example.com/retired");
+
+    // Made a redirect again, it sends visitors on.
+    if (!("saved" in gone)) throw new Error("the address was not saved");
+    await seo.services.collections.withTransaction(tx =>
+      putRedirect(
+        seo,
+        tx,
+        { locale: "en", origin: "person", source: "/retired", target: "/now" },
+        gone.saved.id
+      )
+    );
+    expect(await ask("/retired")).toBe("301 https://example.com/now");
+  });
+
+  it("counts each request a redirect answers, in the background, with when it last did", async () => {
+    const { t, seo } = await boot(dialect);
+    await put(seo, { source: "/counted", target: "/here" });
+    await put(seo, { source: "/removed-for-good", target: "", gone: true });
+
+    const before = Date.now();
+    await ask("/counted");
+    await ask("/counted?ref=1");
+    await proxy(new Request("https://example.com/removed-for-good"));
+    await ask("/not-redirected");
+
+    await vi.waitFor(async () => {
+      const { items } = await t.nextly.find({
+        collection: REDIRECTS_SLUG,
+        limit: 10,
+      });
+      const counted = Object.fromEntries(
+        (items as Record<string, unknown>[]).map(row => [
+          String(row.source),
+          Number(row.hits),
+        ])
+      );
+      expect(counted).toEqual({ "/counted": 2, "/removed-for-good": 1 });
+    });
+    const { items } = await t.nextly.find({
+      collection: REDIRECTS_SLUG,
+      limit: 10,
+    });
+    const counted = (items as Record<string, unknown>[]).find(
+      row => row.source === "/counted"
+    );
+    const lastHit = counted?.lastHit;
+    expect(
+      Date.parse(lastHit instanceof Date ? lastHit.toISOString() : String(lastHit))
+    ).toBeGreaterThanOrEqual(before - 1000);
+  });
+
   it("notes that the Proxy runs, which a site that never wired it has no note of", async () => {
     const { seo } = await boot(dialect);
     expect(await readProxyStatus(seo)).toEqual({
