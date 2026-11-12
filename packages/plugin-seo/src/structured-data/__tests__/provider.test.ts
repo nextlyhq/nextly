@@ -94,8 +94,9 @@ describe("withStructuredData", () => {
     const article = answer.structuredData?.find(
       node => node["@type"] === "Article"
     );
-    // The head's own title, not one worked out beside it.
-    expect(article?.headline).toBe("Hello, answered");
+    // The entry's own title, as its heading shows it: the head's title is
+    // the one its pattern made for search results.
+    expect(article?.headline).toBe("Hello");
     expect(resolver.tags?.(input)).toEqual(["media"]);
   });
 
@@ -124,12 +125,14 @@ describe("the plugin's page-metadata provider", () => {
 
     const answer = await resolver.resolve(input);
 
-    // No site name or brand is set, so only the page is described.
+    // No site name or brand is set, so only the page and its trail are
+    // described.
     expect(answer.structuredData?.map(node => node["@type"])).toEqual([
       "WebPage",
+      "BreadcrumbList",
     ]);
     expect(answer.structuredData?.[0]?.["@id"]).toBe(
-      "https://example.com/blog/hello"
+      "https://example.com/blog/hello#webpage"
     );
   });
 });
@@ -178,7 +181,7 @@ describe("the problem list with no readers given", () => {
 
 describe("the plugin's structured data options", () => {
   it.each([
-    ["a type not offered", { posts: { type: "faqPage" } }],
+    ["a type not offered", { posts: { type: "recipe" } }],
     ["a mapping for a type not offered", { posts: { details: { faq: {} } } }],
     [
       "a detail no type has",

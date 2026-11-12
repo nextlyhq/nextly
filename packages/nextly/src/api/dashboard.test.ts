@@ -87,6 +87,7 @@ import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import {
   getDashboardActivity,
+  getDashboardContent,
   getDashboardRecentEntries,
   getDashboardStats,
 } from "./dashboard";
@@ -688,5 +689,104 @@ describe("dashboard read scope for an API-KEY caller", () => {
         scope: { kind: "some", resources: new Set(["posts"]) },
       })
     );
+  });
+});
+
+describe("getDashboardContent", () => {
+  const ROWS = [
+    {
+      kind: "collection",
+      slug: "posts",
+      label: "Posts",
+      count: 12,
+      draft: 2,
+      canCreate: true,
+      updatedAt: "2026-11-01T10:00:00.000Z",
+    },
+    {
+      kind: "single",
+      slug: "site-settings",
+      label: "Site settings",
+      canUpdate: false,
+      updatedAt: "2026-11-02T10:00:00.000Z",
+      userId: "u2",
+      userName: "Ayesha",
+    },
+  ];
+
+  it("answers every row in one respondData body, private and unstored", async () => {
+    const getContentOverview = vi.fn().mockResolvedValue(ROWS);
+    serviceStub = { getContentOverview };
+
+    const res = await getDashboardContent(
+      makeReq("http://localhost/api/dashboard/content")
+    );
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json).not.toHaveProperty("data");
+    expect(json).toEqual({ rows: ROWS });
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(res.headers.get("Vary")).toBe("Cookie");
+    expect(getContentOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the rows for exactly what the access layer admitted, as the resolved caller", async () => {
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "user-1",
+      roles: ["role-7"],
+    });
+    (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "editor",
+    ]);
+    readableEntities.mockResolvedValue(new Set(["posts"]));
+    const getContentOverview = vi.fn().mockResolvedValue([]);
+    serviceStub = { getContentOverview };
+
+    await getDashboardContent(
+      makeReq("http://localhost/api/dashboard/content")
+    );
+
+    expect(getContentOverview).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set(["posts"]) },
+      caller: expect.objectContaining({
+        user: expect.objectContaining({ id: "user-1", roles: ["editor"] }),
+      }),
+    });
+  });
+
+  it("refuses a caller without a session, and reads nothing", async () => {
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+      statusCode: 401,
+      error: "Authentication required",
+    });
+    const getContentOverview = vi.fn();
+    serviceStub = { getContentOverview };
+
+    const res = await getDashboardContent(
+      makeReq("http://localhost/api/dashboard/content")
+    );
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(getContentOverview).not.toHaveBeenCalled();
+  });
+
+  it("refuses a query parameter it does not take, naming it, and reads nothing", async () => {
+    const getContentOverview = vi.fn();
+    serviceStub = { getContentOverview };
+
+    const res = await getDashboardContent(
+      makeReq("http://localhost/api/dashboard/content?limit=5")
+    );
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as {
+      error: { code: string; data?: { errors?: Array<{ path: string }> } };
+    };
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.data?.errors?.map(error => error.path)).toEqual([
+      "limit",
+    ]);
+    expect(getContentOverview).not.toHaveBeenCalled();
   });
 });

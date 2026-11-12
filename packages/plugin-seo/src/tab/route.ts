@@ -9,10 +9,10 @@
  * preview follows each keystroke and agrees with what the page serves. Levels
  * are read by `levelsOf`, the resolver's own reading of a page, never a copy.
  *
- * What a route's code supplies cannot be known here: the admin does not run
- * the page's route. That level is left empty until the address record keeps
- * what each route supplies. The design drawing the page is asked of the Page
- * Builder where it is installed (`designOf`).
+ * What a route's code supplies is not known here, since the admin does not
+ * run the page's route: it is read as the route last supplied it, recorded
+ * as the page's head was answered (`route-values`). The design drawing the
+ * page is asked of the Page Builder where it is installed (`designOf`).
  *
  * Answered to anyone who may read the collection or the Single, an editor or
  * a reader shown the page read-only, with whether they may change its SEO. The page's images are looked up only for
@@ -32,10 +32,12 @@ import { z } from "nextly/zod";
 import { productionAddressesOf } from "../canonical";
 import { servedAt } from "../languages/versions";
 import { mayChangePageSeo } from "../permissions";
+import { singleKey } from "../problems/page-types";
 import { designOf } from "../resolver/design-level";
 import type { Levels } from "../resolver/order";
 import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
+import { routeValuesOf } from "../route-values/store";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
@@ -264,6 +266,63 @@ async function servedAddressOf(
   return servedAt(address, await ctx.publicAddresses.defaultLanguage());
 }
 
+/**
+ * Whether the caller may read the entry `id` of `slug` itself: a person let
+ * read only some of a collection's entries opens the tab, so what is kept
+ * for one entry is answered only where its own read lets them see it.
+ */
+async function mayReadEntry(
+  ctx: PluginRouteContext,
+  slug: string,
+  id: string,
+  locale: string | undefined
+): Promise<boolean> {
+  if (ctx.user === null) return false;
+  const { data } = await ctx.services.collections.listEntries(
+    slug,
+    {
+      where: { id: { equals: id } },
+      pagination: { limit: 1, page: 1 },
+      depth: 0,
+    },
+    {
+      as: "user",
+      user: ctx.user,
+      ...(ctx.authenticatedScope === undefined
+        ? {}
+        : { authenticatedScope: ctx.authenticatedScope }),
+      // In the language whose kept values are answered, so a rule reading a
+      // translated field judges that translation.
+      ...(locale === undefined ? {} : { locale }),
+    }
+  );
+  return data.length > 0;
+}
+
+/**
+ * What the page's route last supplied in code, in `locale` (the site's
+ * default language where none): nothing for an entry not yet saved, which
+ * no route has answered, or one the caller may not read.
+ */
+async function codeLevelOf(
+  ctx: PluginRouteContext,
+  body: ResolveBody,
+  locale: string | undefined
+): Promise<PageMetadataInput["code"]> {
+  const id = body.id ?? undefined;
+  if (body.kind === "collection") {
+    if (id === undefined || !(await mayReadEntry(ctx, body.slug, id, locale))) {
+      return {};
+    }
+  }
+  const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
+  return routeValuesOf(ctx, {
+    type: body.kind === "single" ? singleKey(body.slug) : body.slug,
+    id: id ?? "",
+    language,
+  });
+}
+
 /** The route the SEO tab reads its levels from. */
 export function seoTabRoute(setup: SeoTabRouteSetup): {
   method: "POST";
@@ -309,7 +368,8 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
       const input: PageMetadataInput = {
         ...(locale === undefined ? {} : { locale }),
         source,
-        code: {},
+        // What the page's route supplied when its head was last answered.
+        code: await codeLevelOf(ctx, body, locale),
         // The design drawing the page, as its route would hand it: the
         // template level the tab shows a value coming from.
         derived: design.values,

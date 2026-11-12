@@ -50,6 +50,7 @@ import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
 import {
   getDashboardStats,
+  getDashboardContent,
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
@@ -81,6 +82,7 @@ import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
+import { getPluginPanelNumbers } from "./api/plugin-panel-numbers";
 import {
   listPreviewLinks,
   mintPreviewLink,
@@ -503,6 +505,8 @@ async function handleDashboardRequest(
   switch (method) {
     case "getDashboardStats":
       return getDashboardStats(req);
+    case "getDashboardContent":
+      return getDashboardContent(req);
     case "getDashboardRecentEntries":
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
@@ -2608,6 +2612,15 @@ async function handleGet(req: Request, params: string[]): Promise<Response> {
   // passes the REST limit first, as that function's own routes do.
   if (params[0] === "admin-meta" && params[1] === "workspace") {
     return withinBuiltInLimit(() => handleAdminMetaWorkspaceRequest(req));
+  }
+  // One plugin's panel numbers, for the signed-in reader: matched here for the
+  // same reason, before the public payload's branch.
+  if (
+    params.length === 2 &&
+    params[0] === "admin-meta" &&
+    params[1] === "plugin-panel-numbers"
+  ) {
+    return withinBuiltInLimit(() => getPluginPanelNumbers(req));
   }
   if (params[0] === "admin-meta") {
     return withinBuiltInLimit(() => handleAdminMetaRequest());

@@ -21,6 +21,7 @@ import type { SystemColumnEntity } from "../../lib/system-columns";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
 import type { VersionsDbApi } from "./db-api";
+import { sourcesHeld, type FieldSources } from "./restored-from";
 import { documentSystemKeys } from "./snapshot-system-keys";
 import type { VersionCaptureService } from "./version-capture-service";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
@@ -49,6 +50,8 @@ export interface DraftSaveInput {
   createdBy: string | null;
   /** The version this save restored, when it is a restore. */
   sourceVersionNo?: number | null;
+  /** The fields named as restored, and their versions; see `restored-from`. */
+  restoredFrom?: FieldSources;
   /**
    * Durable versions kept for the document, from its versions config; `false`
    * or omitted leaves history unbounded, as for every capture.
@@ -121,13 +124,18 @@ export async function storeDraftSave(
     });
   }
 
+  const recorded = withoutStatus(input.snapshot);
+  const fieldSources = input.restoredFrom
+    ? await sourcesHeld(tx, input.ref, input.restoredFrom, recorded)
+    : undefined;
   const { versionNo } = await capture.capture(tx, {
     ref: input.ref,
     status: "draft",
-    snapshot: withoutStatus(input.snapshot),
+    snapshot: recorded,
     createdBy: input.createdBy,
     locale: versionLocaleOf(input),
     sourceVersionNo: input.sourceVersionNo ?? null,
+    fieldSources: fieldSources ?? null,
     maxPerDoc: input.maxPerDoc,
     lifecycle: true,
   });

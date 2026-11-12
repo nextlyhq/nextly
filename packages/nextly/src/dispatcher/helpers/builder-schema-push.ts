@@ -9,7 +9,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { appLocalization } from "../../domains/i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../domains/i18n/configured-locales";
 import {
   fieldsLeavingTranslationUnder,
   refuseLeavingSettingsTheValuesCannotTake,
@@ -199,6 +202,7 @@ export function leavingSettingsStep(args: {
       await refuseLeavingSettingsTheValuesCannotTake({
         ...args,
         defaultLocale: appLocalization()?.defaultLocale ?? "en",
+        languageOrder: appLanguageOrder(),
       });
       const settled = await args.push();
       if (!settled.success) throw leavingSettingsNotApplied(args, settled);

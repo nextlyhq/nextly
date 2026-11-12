@@ -33,6 +33,7 @@ import {
   TEMPLATE_COLLECTION_FIELD_COMPONENT,
 } from "../collections/templates";
 import { BLOCKS_FIELD_COMPONENT } from "../fields/blocksField";
+import { PAGE_BUILDER_PAGES } from "../overview/admin-panel";
 
 // Captured rather than reconstructed. The assertion is about what this module
 // ACTUALLY registers on load, so a test that rebuilt the map from its own
@@ -96,6 +97,21 @@ describe("the admin entry's component registration", () => {
         TEMPLATE_DESIGN_DETAILS_COMPONENT,
         TEMPLATE_DELETE_COMPONENT,
       ]) {
+        expect(registered[path], path).toBeTypeOf("function");
+      }
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
+
+  it(
+    "registers the component of every admin page the plugin declares",
+    async () => {
+      await import("./index");
+      // Read from the declaration, so a page added there without its
+      // component here fails: its route would draw nothing.
+      const paths = PAGE_BUILDER_PAGES.map(page => page.component);
+      expect(paths.length).toBeGreaterThan(1);
+      for (const path of paths) {
         expect(registered[path], path).toBeTypeOf("function");
       }
     },
