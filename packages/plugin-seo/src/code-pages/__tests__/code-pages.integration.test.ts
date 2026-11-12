@@ -895,6 +895,11 @@ describe.each(getConfiguredTestDialects())(
         { slug: "closed-en", title: "Closed in English", team: "closed" },
         { slug: "open-de", title: "Offen", team: "open" }
       );
+      // Open in both, so a German version the reader may read is listed.
+      await page(
+        { slug: "both-en", title: "Open twice", team: "open" },
+        { slug: "both-de", title: "Zweimal offen", team: "open" }
+      );
       await lastCatchUp();
       const owner = await personWith(t, "owner", "all");
       const manager = await personWith(t, "manager", [
@@ -915,10 +920,12 @@ describe.each(getConfiguredTestDialects())(
         ])
       );
       expect(paths).toEqual(
-        expect.arrayContaining(["/en/open-en", "/de/open-de"])
+        expect.arrayContaining(["/en/open-en", "/en/both-en", "/de/both-de"])
       );
       expect(paths).not.toContain("/de/closed-de");
       expect(paths).not.toContain("/en/closed-en");
+      // Whether /de/open-de is listed is the collection's own German read's
+      // answer, asked as the reader; it is not pinned here.
     });
 
     it("lists each published translation as its entry, in its language, and leaves a page built in code at another language's path its own", async () => {
