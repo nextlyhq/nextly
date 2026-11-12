@@ -1050,4 +1050,21 @@ describe("what review asked of the tabs", () => {
     await settle();
     expect(sent).toEqual([{ description: "Things.", _rev: "6" }]);
   });
+
+  it("keeps a value someone else changed meanwhile, saving only what was edited here", async () => {
+    serving({ _rev: "5", siteName: "Acme", setupStep: 3 });
+    const { rerender } = render(<SeoSettingsPage />);
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "Things." },
+    });
+    // Another person renames the site, and the read moves on.
+    stored = { ...stored, siteName: "Acme Ltd", _rev: "6" };
+    rerender(<SeoSettingsPage />);
+    expect((screen.getByLabelText("Site name") as HTMLInputElement).value).toBe(
+      "Acme Ltd"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect(sent).toEqual([{ description: "Things.", _rev: "6" }]);
+  });
 });
