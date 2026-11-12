@@ -770,9 +770,15 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       getDrizzle(...args: unknown[]): unknown;
     };
     const realGetDrizzle = adapter.getDrizzle.bind(adapter);
-    const textOf = (query: unknown) =>
-      ((query as { queryChunks?: { value?: unknown }[] }).queryChunks ?? [])
-        .map(chunk => (Array.isArray(chunk.value) ? chunk.value.join("") : ""))
+    // The text of a Drizzle query, nested queries included: a statement marked with the lock's
+    // comment is the marker followed by the statement as a query of its own.
+    const textOf = (query: unknown): string =>
+      ((query as { queryChunks?: unknown[] }).queryChunks ?? [])
+        .map(chunk => {
+          const { value } = chunk as { value?: unknown };
+          if (Array.isArray(value)) return value.join("");
+          return textOf(chunk);
+        })
         .join("");
     const wrap = (db: object): object =>
       new Proxy(db, {

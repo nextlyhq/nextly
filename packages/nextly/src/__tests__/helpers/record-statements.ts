@@ -24,9 +24,12 @@ import type { TestDialect } from "../../plugins/test-nextly";
 
 import { asWritten } from "./statement-as-written";
 
-/** One statement as the driver was handed it. */
+/** One statement the driver was handed. */
 export interface RecordedStatement {
+  /** The statement as its caller wrote it, without a schema-lock holder's comments (`asWritten`). */
   text: string;
+  /** The statement exactly as the driver was handed it, those comments included. */
+  sent: string;
   /** Its bound values, where the call carried any. */
   values: readonly unknown[];
   /**
@@ -41,7 +44,7 @@ export interface RecordedStatement {
 
 /** What a recorder has seen so far, and how to take it off. */
 export interface StatementRecorder {
-  /** Each statement's text, in the order the driver was handed them. */
+  /** Each statement as its caller wrote it, in the order the driver was handed them. */
   readonly statements: string[];
   /** Each statement with its values, in the same order. */
   readonly calls: RecordedStatement[];
@@ -162,6 +165,7 @@ export async function recordStatements(
           statements.push(text);
           calls.push({
             text,
+            sent,
             values: sqlite ? args : statementValues(args),
             ...(options.stacks === true ? { stack: new Error().stack } : {}),
             ...(options.context ? { context: options.context() } : {}),
