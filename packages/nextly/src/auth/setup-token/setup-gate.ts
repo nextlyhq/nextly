@@ -7,6 +7,8 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
+
 import {
   OPERATOR_TOKEN_MIN_DISTINCT,
   OPERATOR_TOKEN_MIN_LENGTH,
@@ -20,9 +22,6 @@ import {
 
 /** The `nextly_meta` key a setup in progress holds. */
 export const SETUP_CLAIM_META_KEY = "auth.setup-claim";
-
-/** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
-const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 
 /**
  * How long a claim stands before another setup may take it over: a setup that
@@ -160,7 +159,7 @@ export async function issueSetupTokenAtBoot(input: {
   // A token issued there would be stored, and its only copy printed into the
   // build's output; the server that later serves setup would find it already
   // issued and print nothing. Only a server that serves setup issues one.
-  if ((input.env ?? process.env).NEXT_PHASE === NEXT_PRODUCTION_BUILD_PHASE) {
+  if (isNextBuildPhase(input.env ?? process.env)) {
     return;
   }
   try {

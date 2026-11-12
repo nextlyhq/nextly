@@ -631,12 +631,24 @@ export {
   FormActions,
 } from "@nextlyhq/admin";
 export type {
+  FieldLayout,
   FieldShellProps,
   FieldShellRenderProps,
   FieldWidth,
   FormSectionProps,
   FormActionsProps,
 } from "@nextlyhq/admin";
+
+/**
+ * The status badge a table cell or a header carries (@experimental here; the
+ * component is `@public` in `@nextlyhq/ui`). Its `success`, `warning`,
+ * `destructive` and `info` variants are quiet chips with a status dot, so a
+ * column of statuses reads calm and the word carries the meaning. Forwarded
+ * so a plugin page assembles a table, its statuses and its form from one
+ * import, the same component the admin's own lists draw.
+ */
+export { Badge } from "@nextlyhq/admin";
+export type { BadgeProps } from "@nextlyhq/admin";
 
 /**
  * Ask the admin to hide its own chrome while an immersive surface is mounted
@@ -804,6 +816,110 @@ export type {
   RowAction,
   BulkAction,
 } from "@nextlyhq/admin";
+
+/**
+ * The admin's list surface around that table (@experimental): `ListView`
+ * composes `DataTableView` with the one toolbar every admin list draws — the
+ * search field, filters in a dropdown or inline, the columns menu and
+ * list-wide actions — the empty state (with a separate one for a search that
+ * matched nothing), and slots above and below the table. Every table prop is
+ * forwarded untouched. `useTableColumns` gives the columns to render and the
+ * columns menu's control from one remembered choice per list, keeping the
+ * row's identifying column out of the menu; `useListColumns` is the lower
+ * half, for a list that offers every column. `ListToolbar`, `ListColumnsMenu`
+ * and `ListEmptyState` are the parts, for a surface that lays out its own
+ * list.
+ *
+ * Intended to be stable: these are the components the admin's own lists draw
+ * today, and they graduate once a first-party plugin's list exercises them.
+ */
+export {
+  ListView,
+  ListToolbar,
+  ListColumnsMenu,
+  ListEmptyState,
+  useListColumns,
+  useTableColumns,
+} from "@nextlyhq/admin";
+export type {
+  ListViewProps,
+  ListToolbarProps,
+  ListColumnsControl,
+  ListEmpty,
+  ListSearch,
+  ListSlots,
+  UseListColumnsOptions,
+  UseTableColumnsOptions,
+  UseTableColumnsResult,
+} from "@nextlyhq/admin";
+
+/**
+ * Where a plugin's page sits, drawn in the admin's top bar (@experimental).
+ * Pass `<Breadcrumbs items={...} />` as `PageHeader`'s `breadcrumbs`: inside
+ * the admin shell the trail is drawn in the top bar's left part, the last item
+ * as the page itself and the one before it as the way back on a narrow bar;
+ * rendered outside the shell (a test, a standalone page) it is drawn where it
+ * stands. `placement: "inline"` keeps a trail inside the page's content, such
+ * as a folder path.
+ *
+ * Intended to be stable: every core page draws its trail with it.
+ */
+export { Breadcrumbs } from "@nextlyhq/admin";
+export type { BreadcrumbItem, BreadcrumbsProps } from "@nextlyhq/admin";
+
+/**
+ * A segmented control (@experimental): a radio group drawn as one row of
+ * options, for a short choice that should stay in view — a page's View / Edit
+ * switch, a filter of three states, a setting such as a title separator.
+ * Arrow keys, Home and End move the choice, as a radio group does. `compact`
+ * (the default) sits on a muted track for a header or toolbar; `bordered` is
+ * the form setting's look. Name it with `aria-label` or `aria-labelledby`.
+ *
+ * Intended to be stable: it is the control the dashboard's card settings use.
+ */
+export { SegmentedChoice } from "@nextlyhq/admin";
+export type {
+  SegmentedChoiceProps,
+  SegmentedChoiceSize,
+  SegmentedOption,
+} from "@nextlyhq/admin";
+
+/**
+ * A checklist with progress (@experimental), the one the dashboard's "Set up
+ * your project" card draws: `Checklist` puts a progress bar over an ordered
+ * list, and `ChecklistItem` is one step, marked open, done or skipped, with
+ * its name, a hint line and its buttons. The bar is a picture only; say the
+ * count in words beside the list's title ("4 of 6 done"). `ChecklistMark` and
+ * `ChecklistProgress` are the parts, for a layout of its own.
+ *
+ * Intended to be stable once a first-party plugin's setup list exercises it.
+ */
+export {
+  Checklist,
+  ChecklistItem,
+  ChecklistMark,
+  ChecklistProgress,
+} from "@nextlyhq/admin";
+export type {
+  ChecklistProps,
+  ChecklistItemProps,
+  ChecklistMarkProps,
+  ChecklistProgressProps,
+  ChecklistStatus,
+} from "@nextlyhq/admin";
+
+/**
+ * A settings row whose control is a group (@experimental): label and help on
+ * the left, several controls on the right, named as one group with
+ * `role="group"`. For a single control use `FieldShell` with
+ * `layout="row"`, which draws the same two-column grid and points its label
+ * at the control.
+ *
+ * Intended to be stable: the admin's own settings pages draw their grouped
+ * rows with it.
+ */
+export { SettingsRowGroup } from "@nextlyhq/admin";
+export type { SettingsRowGroupProps } from "@nextlyhq/admin";
 
 /**
  * The field-UI kit (@experimental): controlled, form-library-agnostic
@@ -1156,6 +1272,16 @@ export type {
   PluginFieldTypeDocumentView,
   PluginMenuItem,
   PluginPanelSection,
+} from "nextly";
+/**
+ * @experimental A standalone plugin's panel declarations, as the package root
+ * exports them: its groups, and the count or badge on a menu item.
+ */
+export type {
+  PluginAdminPanel,
+  PluginItemCount,
+  PluginMenuItemFields,
+  PluginPanelGroup,
 } from "nextly";
 
 /**

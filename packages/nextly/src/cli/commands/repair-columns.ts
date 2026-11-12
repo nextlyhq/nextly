@@ -13,6 +13,13 @@
  * each safe column and records each repair; a lock still held after the wait is a run that could
  * not run.
  *
+ * A lossy column converts only under the data-loss consent naming it (`--accept-data-loss=
+ * table.column`, or `NEXTLY_ACCEPT_DATA_LOSS`), or, in a run that may ask, a yes at the terminal.
+ * Whether a run may ask is decided once, before anything is asked, from whether standard input and
+ * output are both terminals (`canPrompt`, which `--non-interactive` and CI turn off); a run that
+ * may not never reads standard input, and skips and reports such a column. A `--json` run never
+ * asks, as its standard output holds the document alone.
+ *
  * The domain modules are imported when the command runs, not when the CLI loads, so listing the
  * CLI's commands does not pull in the schema services.
  */
@@ -21,6 +28,9 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import type { ClearingQuestion } from "../../domains/schema/repair-columns/apply";
+import { describeKey } from "../../domains/schema/repair-columns/report";
 import type { RepairColumnsDocument } from "../../domains/schema/repair-columns/report-json";
 import { getCoreVersion } from "../../plugins/core-version";
 import { databaseEnvError, printCliError, toCliError } from "../errors";
@@ -28,6 +38,11 @@ import { cliErrorDocsUrl } from "../errors/registry";
 import type { CommandContext, GlobalOptions } from "../program";
 import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
+import {
+  askToDeleteInTerminal,
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 export interface RepairColumnsOptions {
@@ -37,6 +52,24 @@ export interface RepairColumnsOptions {
   json?: boolean;
   /** Convert each safe column, rather than only report. */
   apply?: boolean;
+  /** The data-loss consent's flag, as the option parser hands it over. */
+  acceptDataLoss?: AcceptDataLossOption;
+  /**
+   * Whether the run may ask the person at the terminal, decided before anything is asked. False
+   * when left out, so a caller that did not decide never reaches a question.
+   */
+  interactive?: boolean;
+}
+
+/** The question a run that may ask puts before clearing a lossy column's values. */
+export function clearingQuestionText(question: ClearingQuestion): string {
+  const values = question.count === 1 ? "1 value" : `${question.count} values`;
+  const shown = question.first.map(describeKey).join(", ");
+  const more =
+    question.count > question.first.length
+      ? `, and ${question.count - question.first.length} more`
+      : "";
+  return `${question.table}.${question.column}: ${values} the new type cannot hold would be cleared (set to null), in rows ${shown}${more}. Clear them and convert the column?`;
 }
 
 /**
@@ -80,6 +113,12 @@ async function report(
   const env = validateDatabaseEnv();
   if (!env.valid || env.dialect === undefined) throw databaseEnvError(env);
   const dialect = env.dialect;
+  // Read before anything else, so a list that does not parse stops the run having changed nothing.
+  // Its notices go to standard error, which a `--json` run keeps clear of its document.
+  const consent = readDataLossConsent({
+    flag: options.acceptDataLoss,
+    warn: message => process.stderr.write(`${message}\n`),
+  });
   const cwd = options.cwd ?? context.cwd;
   const { config, projectRoot, deferredExtends } = await loadConfig({
     configPath: options.config,
@@ -121,7 +160,17 @@ async function report(
       });
     const run = { adapter, dialect, nextlyVersion: getCoreVersion() };
     return options.apply === true
-      ? await applyRepairs({ ...run, entities: readEntities })
+      ? await applyRepairs({
+          ...run,
+          entities: readEntities,
+          consent,
+          ...(options.interactive === true
+            ? {
+                confirmClearing: (question: ClearingQuestion) =>
+                  askToDeleteInTerminal(clearingQuestionText(question)),
+              }
+            : {}),
+        })
       : await dryRunReport({ ...run, entities: await readEntities() });
   } finally {
     await adapter.disconnect();
@@ -157,10 +206,31 @@ async function printRun(
 export function repairColumnsAction(
   createContext: (options: GlobalOptions) => CommandContext
 ) {
-  return async (options: { json?: boolean; apply?: boolean }, cmd: Command) => {
+  return async (
+    options: {
+      json?: boolean;
+      apply?: boolean;
+      acceptDataLoss?: AcceptDataLossOption;
+    },
+    cmd: Command
+  ) => {
     const globals = cmd.optsWithGlobals<GlobalOptions>();
     const context = createContext(globals);
     const json = options.json === true;
+    // Decided here, before anything is asked, and never by reading standard input: only an apply
+    // asks, and never under `--json`.
+    const interactive = options.apply === true && !json && canPrompt();
+    // A dry run clears nothing, so a consent given to it covers nothing; said once, on standard
+    // error, so a `--json` document stays whole.
+    if (
+      options.apply !== true &&
+      options.acceptDataLoss !== undefined &&
+      options.acceptDataLoss !== false
+    ) {
+      process.stderr.write(
+        "--accept-data-loss takes effect only with --apply: this run changes nothing.\n"
+      );
+    }
     // Under `--json` standard output holds the document alone: the logger, which writes to it,
     // keeps to errors, which go to standard error.
     if (json)
@@ -175,6 +245,8 @@ export function repairColumnsAction(
         verbose: globals.verbose,
         json,
         apply: options.apply === true,
+        acceptDataLoss: options.acceptDataLoss,
+        interactive,
       },
       context
     );

@@ -79,12 +79,8 @@ export function DualSidebarOutline({
         isFolderTreeVisible={isFolderTreeVisible}
         standaloneLabel=""
         outlineBody={
-          remembersContent(menu, shown) && menu !== undefined ? (
-            <RememberedContentBody
-              menu={menu}
-              part={shown}
-              pathname={pathname}
-            />
+          remembersContent(menu, shown) ? (
+            <RememberedContentBody menu={menu} pathname={pathname} />
           ) : undefined
         }
       />

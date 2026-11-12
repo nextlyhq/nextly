@@ -24,13 +24,12 @@ import type { CollectionConfig } from "nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionSendsCollection } from "./collections/sends";
-import { submissionsCollection } from "./collections/submissions";
-import { newSubmissionsWidget } from "./dashboard/widget";
 import {
-  asFormDocument,
-  asSubmissionDocument,
-  asSubmissionDocuments,
-} from "./document-shapes";
+  submissionExtensionFields,
+  submissionsCollection,
+} from "./collections/submissions";
+import { newSubmissionsWidget } from "./dashboard/widget";
+import { asFormDocument, asSubmissionDocument } from "./document-shapes";
 import { submissionAnswers } from "./emails/answers";
 import { formsEmailTemplates } from "./emails/starter-messages";
 import { addressedFormPages, FORM_EDITOR_VIEW } from "./form-pages";
@@ -84,6 +83,7 @@ import {
 } from "./handlers/retention";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
 import { publicFormRoutes } from "./routes/public-forms";
+import { submissionsExportRoute } from "./routes/submissions-export";
 import type {
   AnyFormField,
   BeforeEmailFilterContext,
@@ -93,20 +93,32 @@ import type {
   ResolvedFormBuilderConfig,
 } from "./types";
 import {
+  askedAfterEdit,
+  askedSnapshotOf,
+  readAskedSnapshot,
+} from "./utils/asked-fields";
+import {
   CONSENT_EDIT_REFUSED,
   editedConsents,
   isConsentAnswer,
   storedConsentNames,
 } from "./utils/consent";
-import { evaluateSingleCondition } from "./utils/evaluate-conditions";
-import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
 import { normalizeFormSettings } from "./utils/form-settings";
+import {
+  attachFieldsOf,
+  attachmentsFrom,
+  fieldsMarkedToAttach,
+  conditionsMet,
+  conditionsOf,
+  teamAddressesOf,
+} from "./utils/notification-model";
 import { normalizeRedirectRelationships } from "./utils/redirect-target";
 import {
   SCHEMA_ONLY_CONTEXT,
   SCHEMA_ONLY_READ,
 } from "./utils/schema-only-read";
+import { submissionTitleOf } from "./utils/submission-title";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -264,6 +276,7 @@ export function formBuilder(
 
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
+  const submissionFields = submissionExtensionFields(resolvedConfig);
   const sendsCol = submissionSendsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
@@ -369,120 +382,17 @@ export function formBuilder(
           danger: true,
         },
       ],
-      // HTTP route — exported at
-      // /api/plugins/@nextlyhq/plugin-form-builder/submissions/export. Secure by
-      // default: gated by the custom `export-submissions` permission. Reads
-      // via the secure-by-default service path as the authed user and
-      // resolves its OWN slug through `ctx.self`. The canonical
-      // contributes.routes example for third-party authors.
+      // HTTP routes. The submissions export, gated by the custom
+      // `export-submissions` permission, is the canonical contributes.routes
+      // example for third-party authors (`routes/submissions-export`).
       routes: [
         // The public form endpoints, at the addresses core used to serve
         // before this plugin took them over. Root-mounted, so no caller's URL
         // changes; see `routes/public-forms`.
         ...publicFormRoutes(resolvedConfig),
-        {
-          method: "GET",
-          path: "/submissions/export",
-          requiredPermission: "export-submissions",
-          handler: async (req, ctx) => {
-            const declaredSlug = resolvedConfig.formSubmissionOverrides.slug;
-            const slug = ctx.self.collections[declaredSlug] ?? declaredSlug;
-            const url = new URL(req.url);
-            const format = url.searchParams.get("format") ?? "json";
-            const formId = url.searchParams.get("form");
-            const status = url.searchParams.get("status");
-
-            // Spam stays out of exports unless it is explicitly requested —
-            // an export is "what people submitted", not "what bots sent".
-            const where: Record<string, unknown> = {};
-            if (formId) where.form = { equals: formId };
-            if (status) where.status = { equals: status };
-            else where.status = { not_equals: "spam" };
-
-            const opts = { as: "user", user: ctx.user ?? undefined } as const;
-
-            // CSV needs its form BEFORE any submissions are read: the
-            // columns come from one form's fields, and a malformed request
-            // must fail fast instead of paginating the whole table first.
-            let form: Record<string, unknown> | undefined;
-            if (format === "csv") {
-              if (!formId) {
-                return Response.json(
-                  {
-                    error: {
-                      code: "VALIDATION_ERROR",
-                      message: "CSV export requires a form parameter.",
-                    },
-                  },
-                  { status: 400 }
-                );
-              }
-              const formsSlugDeclared = resolvedConfig.formOverrides.slug;
-              const formsSlug =
-                ctx.self.collections[formsSlugDeclared] ?? formsSlugDeclared;
-              const formResult = await ctx.services.collections.listEntries(
-                formsSlug,
-                { where: { id: { equals: formId } } },
-                opts
-              );
-              form = formResult.data[0];
-              if (!form) {
-                return Response.json(
-                  { error: { code: "NOT_FOUND", message: "Form not found." } },
-                  { status: 404 }
-                );
-              }
-            }
-
-            // Page through the export with a hard ceiling: an unbounded loop
-            // over a high-traffic form could hold the whole table in memory.
-            // Hitting the ceiling is reported in a header, never silent.
-            const MAX_EXPORT_ROWS = 50_000;
-            const items: unknown[] = [];
-            const pageSize = 200;
-            let truncated = false;
-            for (let page = 1; ; page += 1) {
-              const result = await ctx.services.collections.listEntries(
-                slug,
-                { where, pagination: { limit: pageSize, page } },
-                opts
-              );
-              items.push(...result.data);
-              const pageWasFull = result.data.length === pageSize;
-              if (items.length >= MAX_EXPORT_ROWS) {
-                truncated = pageWasFull || items.length > MAX_EXPORT_ROWS;
-                items.length = MAX_EXPORT_ROWS;
-                break;
-              }
-              if (!pageWasFull) break;
-            }
-            const truncationHeaders: Record<string, string> = truncated
-              ? { "X-Export-Truncated": "true" }
-              : {};
-
-            if (format !== "csv" || !form) {
-              return Response.json({ items }, { headers: truncationHeaders });
-            }
-
-            // The service returns parsed entries; the export helpers declare
-            // the document shapes — the boundary cast is through unknown.
-            const csv = exportToCSV(
-              asSubmissionDocuments(items),
-              asFormDocument(form)
-            );
-            const filename = generateExportFilename(
-              typeof form.slug === "string" ? form.slug : "form",
-              "csv"
-            );
-            return new Response(csv, {
-              headers: {
-                "Content-Type": "text/csv; charset=utf-8",
-                "Content-Disposition": `attachment; filename="${filename}"`,
-                ...truncationHeaders,
-              },
-            });
-          },
-        },
+        // What a submissions list shows, as CSV or JSON; see
+        // `routes/submissions-export`.
+        submissionsExportRoute(resolvedConfig),
         {
           // The builder UI reads the host's resolved field enable/disable map
           // from here, so the plugin option actually gates the type picker.
@@ -532,6 +442,20 @@ export function formBuilder(
                 },
               })
             ),
+        },
+        {
+          // The fields a host added to submissions, which a submission's
+          // page shows in its details. Gated on reading submissions rather
+          // than forms: a person who may read submissions sees their values
+          // in the submission itself, and may lack any right to forms. Asked
+          // of the collection as installed, so a renamed one gates on its
+          // own read permission.
+          method: "GET",
+          path: "/submission-fields",
+          requiredPermission: ({ collection }) =>
+            collection(resolvedConfig.formSubmissionOverrides.slug, "read"),
+          handler: () =>
+            Promise.resolve(Response.json({ fields: submissionFields })),
         },
       ],
     },
@@ -866,27 +790,7 @@ export function collectAttachmentInputs(
   fields: Array<Record<string, unknown>>,
   submittedData: Record<string, unknown>
 ): Array<{ mediaId: string }> {
-  const attachments: Array<{ mediaId: string }> = [];
-
-  for (const field of fields) {
-    if (field.type !== "file" || !field.attachToEmail) continue;
-
-    const name = field.name as string;
-    const value = submittedData[name];
-    if (value == null) continue;
-
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        if (typeof item === "string" && item) {
-          attachments.push({ mediaId: item });
-        }
-      }
-    } else if (typeof value === "string" && value) {
-      attachments.push({ mediaId: value });
-    }
-  }
-
-  return attachments;
+  return attachmentsFrom(fieldsMarkedToAttach(fields), submittedData);
 }
 
 // ---------------------------------------------------------------------------
@@ -982,12 +886,10 @@ export function buildNotificationEmails(input: {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // An unmet send condition skips the rule for this submission — an
-    // expected state, never an error.
-    if (
-      notification.condition &&
-      !evaluateSingleCondition(notification.condition, submittedData)
-    ) {
+    // Unmet send conditions skip the rule for this submission — an expected
+    // state, never an error. Read through the notification model, so a rule
+    // saved with one condition and one saved with several both count.
+    if (!conditionsMet(conditionsOf(notification), submittedData)) {
       skipped.push({
         notificationId: notification.id,
         reason: "condition-unmet",
@@ -995,15 +897,9 @@ export function buildNotificationEmails(input: {
       continue;
     }
 
-    // Trim every address on the way out: whitespace-only values must count
-    // as empty, and stray spaces must not reach the provider as headers.
-    const to = (
-      notification.recipientType === "field"
-        ? resolveFieldRef(notification.to, submittedData)
-        : notification.to
-    ).trim();
+    const to = recipientsFor(notification, submittedData);
 
-    if (!to) {
+    if (to === undefined) {
       skipped.push({
         notificationId: notification.id,
         reason: "empty-recipient",
@@ -1044,10 +940,33 @@ export function buildNotificationEmails(input: {
       cc,
       bcc,
       notificationId: notification.id,
+      attachments: attachmentsFrom(
+        attachFieldsOf(notification, input.fields ?? []),
+        submittedData
+      ),
     });
   }
 
   return { emails, skipped };
+}
+
+/**
+ * Who a notification goes to for these answers: the visitor's address from
+ * the field it names, or the team's addresses, one as a string as before and
+ * several as a list. Every address is trimmed on the way out, so
+ * whitespace-only values count as empty and stray spaces never reach the
+ * provider as headers. Undefined when nobody is left to send to.
+ */
+function recipientsFor(
+  notification: FormNotification,
+  data: Record<string, unknown>
+): string | string[] | undefined {
+  if (notification.recipientType === "field") {
+    return resolveFieldRef(notification.to, data).trim() || undefined;
+  }
+  const addresses = teamAddressesOf(notification);
+  if (addresses.length === 0) return undefined;
+  return addresses.length === 1 ? addresses[0] : addresses;
 }
 
 /**
@@ -1290,6 +1209,10 @@ export async function prepareSubmissionForWrite(
   // A submission's one-response key is the plugin's to write, never a
   // caller's: one posting a key could take a value's place before its owner.
   delete submission.responseKey;
+  // What it was asked is the plugin's to record, from the form, never a
+  // caller's to set.
+  delete submission.asked;
+  delete submission.title;
   const stored = ctx.originalData;
 
   // A patch need not repeat the relationship, so the stored row is what says
@@ -1392,6 +1315,7 @@ export async function prepareSubmissionForWrite(
       ctx.data.data as Record<string, unknown>
     );
   }
+  recordAsked(ctx, form.fields as AnyFormField[], formId);
   stampRequestAddress(ctx, ctx.data);
   if (ctx.operation === "create") {
     // Made from what is stored, after the spam verdict: spam takes no key.
@@ -1411,6 +1335,54 @@ export async function prepareSubmissionForWrite(
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
   return ctx.data;
+}
+
+/**
+ * Keep with the submission what it was asked (`asked-fields`): the form's
+ * fields as the visitor saw them on create, or as staff edited an answer to
+ * on update. A submission moved to another form is read with that form's
+ * fields from then on; one stored before submissions kept this keeps none.
+ */
+function recordAsked(
+  ctx: {
+    operation?: string;
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+  },
+  fields: AnyFormField[],
+  formId: string
+): void {
+  const row = ctx.data;
+  if (!row) return;
+  const data = submittedPayload(row.data);
+  const stored = ctx.originalData;
+  const movedFrom = stored ? parentFormId(stored) : null;
+  if (
+    ctx.operation === "create" ||
+    (movedFrom !== null && movedFrom !== formId)
+  ) {
+    row.asked = askedSnapshotOf(fields, data);
+    titleFrom(row, fields, data);
+    return;
+  }
+  const after = askedAfterEdit(
+    readAskedSnapshot(stored?.asked),
+    fields,
+    stored?.data === undefined ? {} : submittedPayload(stored.data),
+    data
+  );
+  if (after !== undefined) row.asked = after;
+  titleFrom(row, fields, data);
+}
+
+/** The submission's title: who sent it, from its answers as asked. */
+function titleFrom(
+  row: Record<string, unknown>,
+  fields: AnyFormField[],
+  data: Record<string, unknown>
+): void {
+  const asked = readAskedSnapshot(row.asked);
+  row.title = submissionTitleOf(asked?.fields ?? fields, data) ?? null;
 }
 
 /**
@@ -1931,6 +1903,9 @@ export async function queueNotificationEmails(input: {
       templateSlug: email.templateSlug,
       notificationId: email.notificationId,
     };
+    // The notification's own files, or for an email a filter added, the
+    // files of the fields marked to attach, as every email had before.
+    const files = email.attachments ?? fileAttachments;
     const sendKey = notificationKey(
       input.submissionId,
       index,
@@ -1948,7 +1923,7 @@ export async function queueNotificationEmails(input: {
           replyTo: email.replyTo,
           cc: email.cc,
           bcc: email.bcc,
-          attachments: fileAttachments.length > 0 ? fileAttachments : undefined,
+          attachments: files.length > 0 ? files : undefined,
           idempotencyKey: sendKey,
         }
       );
@@ -1966,7 +1941,7 @@ export async function queueNotificationEmails(input: {
           ...identity,
           queuedId: queued.id,
           state: queued.state,
-          attachmentCount: fileAttachments.length,
+          attachmentCount: files.length,
         });
       }
     } catch (err) {

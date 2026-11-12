@@ -21,6 +21,8 @@ import type { AnyRelations, SQL } from "drizzle-orm";
 import {
   bindStructuredAsJson,
   isJsonColumn,
+  jsonColumnText,
+  valueForJsonColumn,
   type ColumnKindInput,
 } from "./column-kinds";
 import { buildDrizzleOrderBy } from "./drizzle-order";
@@ -1676,15 +1678,9 @@ export abstract class DrizzleAdapter {
     for (const [key, value] of Object.entries(data)) {
       const jsKey = sqlToJs.get(key) ?? key;
       // Parse pre-stringified JSON for JSON/JSONB columns to avoid double-encoding
-      if (jsonColumns.has(jsKey) && typeof value === "string") {
-        try {
-          mapped[jsKey] = JSON.parse(value);
-        } catch {
-          mapped[jsKey] = value;
-        }
-      } else {
-        mapped[jsKey] = value;
-      }
+      mapped[jsKey] = jsonColumns.has(jsKey)
+        ? valueForJsonColumn(value)
+        : value;
     }
     return mapped;
   }
@@ -1881,9 +1877,48 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * Encode a row's JSON values as the JSON text a Drizzle query would bind for
+   * them (`jsonColumnText`), so a document written through a raw-SQL statement
+   * is stored as the document. Handed the bare value, mysql2 writes an object
+   * as `[object Object]` and node-postgres an array as a PostgreSQL array
+   * literal; neither is JSON.
+   *
+   * Only columns the model declares as JSON (`isJsonColumn`) are touched, and
+   * `null` is left as SQL NULL. Keys may be spelled either way, as for dates.
+   */
+  protected mapJsonValuesToDriver(
+    tableObj: unknown,
+    data: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (!tableObj || typeof tableObj !== "object" || !data) return data;
+
+    const jsonKeys = new Set<string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (!colDef || typeof colDef !== "object") continue;
+      if (!isJsonColumn(colDef)) continue;
+      jsonKeys.add(jsName);
+      const sqlName = (colDef as { name?: unknown }).name;
+      if (typeof sqlName === "string") jsonKeys.add(sqlName);
+    }
+    if (jsonKeys.size === 0) return data;
+
+    let encoded: Record<string, unknown> | undefined;
+    for (const [key, value] of Object.entries(data)) {
+      if (!jsonKeys.has(key) || value === null || value === undefined) {
+        continue;
+      }
+      encoded ??= { ...data };
+      encoded[key] = jsonColumnText(value);
+    }
+    return encoded ?? data;
+  }
+
+  /**
    * Bring a row about to be written through a raw-SQL statement into the shape
    * a Drizzle query would have bound: SQL column names for keys, encoded values
-   * for date columns.
+   * for date and JSON columns.
    *
    * The mirror of {@link mapRowFromRawSql}. The raw-SQL write paths exist
    * because a dialect needs SQL a Drizzle query cannot express, not because
@@ -1893,9 +1928,12 @@ export abstract class DrizzleAdapter {
     tableObj: unknown,
     data: Record<string, unknown>
   ): Record<string, unknown> {
-    return this.mapDateValuesToDriver(
+    return this.mapJsonValuesToDriver(
       tableObj,
-      this.mapKeysToSqlColumns(tableObj, data)
+      this.mapDateValuesToDriver(
+        tableObj,
+        this.mapKeysToSqlColumns(tableObj, data)
+      )
     );
   }
 

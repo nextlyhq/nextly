@@ -68,6 +68,10 @@ export const nextlyVersionsSqlite = sqliteTable(
     // A recovery point's base, as the PostgreSQL schema says.
     baseVersionNo: integer("base_version_no"),
     baseDraftRevision: integer("base_draft_revision"),
+    // Each restored field's source version, as the PostgreSQL schema says.
+    fieldSources: text("field_sources", { mode: "json" }).$type<
+      Record<string, number>
+    >(),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

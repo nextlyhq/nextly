@@ -27,6 +27,7 @@ export const FULL_CHECK_MAX_AGE_MS: number = 24 * 60 * 60 * 1000;
 /** Every kind of problem the list checks for. */
 export type ProblemKind =
   | "productionAddress"
+  | "proxyNotWired"
   | "connection"
   | "noAddress"
   | "redirectChain"
@@ -55,6 +56,12 @@ export const KIND_TEXT: Readonly<
   productionAddress: {
     title: "Production address missing",
     explain: "Nextly can't tell the real site from a test copy.",
+    siteWide: true,
+  },
+  proxyNotWired: {
+    title: "Redirects saved but not served",
+    explain:
+      "The site's Proxy isn't running, so visitors and search engines asking for an old address get “not found”, and addresses not found aren't logged.",
     siteWide: true,
   },
   connection: {
@@ -111,12 +118,12 @@ export const KIND_TEXT: Readonly<
   },
   longTitle: {
     title: "Title longer than Google shows",
-    explain: `Google cuts a title after about ${TITLE_LIMIT} characters.`,
+    explain: `Google shows about ${TITLE_LIMIT} characters of a title and cuts the rest to fit the screen. The title is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   longDescription: {
     title: "Description longer than Google shows",
-    explain: `Google cuts a description after about ${DESCRIPTION_LIMIT} characters.`,
+    explain: `Google shows about ${DESCRIPTION_LIMIT} characters of a description and cuts the rest. The description is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   canonical: {
@@ -132,7 +139,8 @@ export const KIND_TEXT: Readonly<
   },
   shareImage: {
     title: "Share image missing or the wrong size",
-    explain: "Networks crop images that aren't about 1200 × 630.",
+    explain:
+      "Networks crop images that aren't about 1200 × 630, and not every network shows an SVG, AVIF or WebP image.",
     siteWide: false,
   },
   imageAlt: {
@@ -155,6 +163,7 @@ export const KIND_TEXT: Readonly<
 export const KIND_ORDER: readonly ProblemKind[] = [
   "productionAddress",
   "noAddress",
+  "proxyNotWired",
   "connection",
   "redirectChain",
   "languageCode",

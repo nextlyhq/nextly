@@ -369,3 +369,79 @@ expectTypeOf<adminEntry.FieldSettingsField>().toHaveProperty("type");
 expectTypeOf(
   adminEntry.writePluginRoute<{ message: string }>
 ).returns.toEqualTypeOf<Promise<{ message: string } | undefined>>();
+
+// ---------------------------------------------------------------------------
+// The admin's page building blocks (@experimental): the list surface, the
+// top-bar trail, the segmented control, the checklist, the grouped settings
+// row, the row layout of `FieldShell` and the status badge.
+//
+// Each component's first parameter is asserted EQUAL to its published props
+// type, so a plugin typing a wrapper against `ListViewProps` is typing it
+// against the component itself rather than a copy that agreed once; and the
+// props a plugin page actually passes are pinned, so one going missing in the
+// forwarding through two barrels fails here rather than in a plugin's build.
+// ---------------------------------------------------------------------------
+
+type Row = { id: string; title: string };
+expectTypeOf(adminEntry.ListView<Row>)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.ListViewProps<Row>>();
+expectTypeOf<adminEntry.ListViewProps<Row>>().toMatchTypeOf<
+  adminEntry.DataTableViewProps<Row>
+>();
+expectTypeOf<adminEntry.ListViewProps<Row>>().toMatchTypeOf<{
+  search?: adminEntry.ListSearch;
+  filters?: React.ReactNode;
+  inlineFilters?: React.ReactNode;
+  columnsControl?: adminEntry.ListColumnsControl<Row>;
+  empty?: adminEntry.ListEmpty;
+  emptyFiltered?: adminEntry.ListEmpty;
+  slots?: adminEntry.ListSlots;
+}>();
+expectTypeOf(adminEntry.useTableColumns<Row>)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.UseTableColumnsOptions<Row>>();
+expectTypeOf(adminEntry.useTableColumns<Row>).returns.toEqualTypeOf<
+  adminEntry.UseTableColumnsResult<Row>
+>();
+expectTypeOf(adminEntry.useListColumns<Row>).returns.toEqualTypeOf<
+  adminEntry.ListColumnsControl<Row>
+>();
+
+expectTypeOf(adminEntry.Breadcrumbs)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.BreadcrumbsProps>();
+expectTypeOf<adminEntry.BreadcrumbItem>().toMatchTypeOf<{
+  label: React.ReactNode;
+  href?: string;
+}>();
+
+expectTypeOf(adminEntry.SegmentedChoice)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.SegmentedChoiceProps>();
+expectTypeOf<adminEntry.SegmentedChoiceSize>().toEqualTypeOf<
+  "compact" | "bordered"
+>();
+
+expectTypeOf(adminEntry.Checklist)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.ChecklistProps>();
+expectTypeOf(adminEntry.ChecklistItem)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.ChecklistItemProps>();
+expectTypeOf<adminEntry.ChecklistStatus>().toEqualTypeOf<
+  "open" | "done" | "skipped"
+>();
+
+expectTypeOf(adminEntry.SettingsRowGroup)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.SettingsRowGroupProps>();
+expectTypeOf<FieldShellProps["layout"]>().toEqualTypeOf<
+  adminEntry.FieldLayout | undefined
+>();
+expectTypeOf<adminEntry.FieldLayout>().toEqualTypeOf<"stacked" | "row">();
+
+// The status variants a table cell draws are among the badge's variants.
+expectTypeOf<"success" | "warning" | "destructive" | "info">().toMatchTypeOf<
+  NonNullable<adminEntry.BadgeProps["variant"]>
+>();

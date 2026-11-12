@@ -16,15 +16,18 @@
  * integration suites in this package boot a real Nextly instance and have no
  * use for a DOM.
  */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  SubmissionsView,
-  submissionPatch,
-  type SubmissionRow,
-} from "./SubmissionsView";
+import type { SubmissionRow } from "./submission-row";
+import { SubmissionsView, submissionPatch } from "./SubmissionsView";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { SUBMISSION_COUNT_KEY } from "../editor/useSubmissionCount";
@@ -358,5 +361,266 @@ describe("the list fixed to one form", () => {
     expect(
       screen.queryByRole("combobox", { name: "Filter by form" })
     ).toBeNull();
+  });
+});
+
+// The job application's list, as its Submissions tab draws it: a select whose
+// stored values differ from its labels, and two submissions.
+const JOB = {
+  id: "job",
+  name: "Job application",
+  fields: [
+    { name: "full_name", label: "Full name", type: "text" },
+    { name: "email", label: "Email", type: "email" },
+    {
+      name: "role",
+      label: "Role",
+      type: "select",
+      options: [
+        { value: "backend-engineer", label: "Backend engineer" },
+        { value: "designer", label: "Product designer" },
+      ],
+    },
+    { name: "years", label: "Years", type: "number" },
+  ],
+};
+
+const APPLICATIONS = [
+  {
+    id: "app-1",
+    form: "job",
+    title: "Hina Rossi",
+    data: {
+      full_name: "Hina Rossi",
+      email: "hina@example.com",
+      role: "backend-engineer",
+      years: 4,
+    },
+    status: "new",
+    submittedAt: "2026-11-10T14:15:00.000Z",
+    _rev: "1",
+  },
+  {
+    id: "app-2",
+    form: "job",
+    title: "Ali Shah",
+    data: {
+      full_name: "Ali Shah",
+      email: "ali@example.com",
+      role: "designer",
+      years: 2,
+    },
+    status: "read",
+    submittedAt: "2026-11-09T10:00:00.000Z",
+    _rev: "1",
+  },
+  {
+    id: "app-3",
+    form: "job",
+    title: "Noor Garcia",
+    data: { full_name: "Noor Garcia", role: "designer" },
+    status: "new",
+    submittedAt: "2026-11-08T10:00:00.000Z",
+    _rev: "1",
+  },
+];
+
+/** The job form's server, for a person holding `permissions`. */
+function serveJob(permissions: unknown = { isSuperAdmin: true }) {
+  const fetched = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname.endsWith("/bulk-update")) {
+        const body = JSON.parse(String(init?.body)) as { ids: string[] };
+        return Response.json({
+          message: "Updated",
+          items: body.ids.map(id => ({ id })),
+          errors: [],
+        });
+      }
+      switch (url.pathname) {
+        case "/admin/api/plugins/@nextlyhq/plugin-form-builder/builder-config":
+          return Response.json({
+            slugs: { forms: "forms", submissions: "form-submissions" },
+          });
+        case "/admin/api/me/permissions":
+          return Response.json(permissions);
+        case "/admin/api/collections/forms/entries/job":
+          return Response.json(JOB);
+        case "/admin/api/collections/forms/entries":
+          return entriesPage([JOB], url);
+        case "/admin/api/collections/form-submissions/entries":
+          return entriesPage(APPLICATIONS, url);
+        default:
+          return new Response(null, { status: 404 });
+      }
+    }
+  );
+  vi.stubGlobal("fetch", fetched);
+  return fetched;
+}
+
+function renderList(props: { formId?: string } = {}) {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <SubmissionsView collectionSlug="form-submissions" {...props} />
+    </QueryClientProvider>
+  );
+}
+
+/** Ticks the rows named, by their lead text in the table. */
+async function tick(user: ReturnType<typeof userEvent.setup>, names: string[]) {
+  const table = await screen.findByRole("table", { name: "Submissions" });
+  for (const name of names) {
+    const row = (await within(table).findByText(name)).closest("tr");
+    if (row === null) throw new Error(`no row for ${name}`);
+    await user.click(within(row).getByRole("checkbox"));
+  }
+}
+
+describe("a form's Submissions tab", () => {
+  it("has the form's labels as columns, and a choice by its option's label", async () => {
+    serveJob();
+    renderList({ formId: "job" });
+    const table = await screen.findByRole("table", { name: "Submissions" });
+    await within(table).findByText("Hina Rossi");
+    const headers = within(table)
+      .getAllByRole("columnheader")
+      .map(header => header.textContent);
+    expect(headers).toEqual(
+      expect.arrayContaining(["Full name", "Email", "Role", "Years"])
+    );
+    expect(within(table).getByText("Backend engineer")).toBeInTheDocument();
+    expect(within(table).queryByText("backend-engineer")).toBeNull();
+  });
+});
+
+describe("adding a submission", () => {
+  it.each([
+    ["a form's tab", { formId: "job" }],
+    ["every form's list", {}],
+  ])("is offered nowhere on %s", async (_, props) => {
+    serveJob();
+    renderList(props);
+    await screen.findAllByText("Hina Rossi");
+    const offers = [
+      ...screen.queryAllByRole("button"),
+      ...screen.queryAllByRole("link"),
+    ].filter(control =>
+      /\b(new|add|create)\b/i.test(control.textContent ?? "")
+    );
+    expect(offers).toEqual([]);
+  });
+});
+
+describe("ticked rows", () => {
+  it("are acted on alone: Archive sends exactly those rows", async () => {
+    const fetched = serveJob();
+    const user = userEvent.setup();
+    renderList({ formId: "job" });
+    await tick(user, ["Hina Rossi", "Noor Garcia"]);
+
+    const bar = await screen.findByRole("region", {
+      name: "Selected submissions",
+    });
+    expect(within(bar).getByText(/2 selected/)).toBeInTheDocument();
+    await user.click(within(bar).getByRole("button", { name: "Archive" }));
+
+    const bulk = fetched.mock.calls.find(([input]) =>
+      String(input).endsWith("/bulk-update")
+    );
+    expect(bulk).toBeDefined();
+    expect(JSON.parse(String(bulk?.[1]?.body))).toEqual({
+      ids: ["app-1", "app-3"],
+      data: { status: "archived", spamReason: null },
+      revs: { "app-1": "1", "app-3": "1" },
+    });
+    expect(
+      await screen.findByText("Archived 2 submissions.")
+    ).toBeInTheDocument();
+  });
+
+  it("export exactly the ticked rows", async () => {
+    serveJob();
+    const user = userEvent.setup();
+    renderList({ formId: "job" });
+    await tick(user, ["Hina Rossi", "Ali Shah"]);
+    const bar = await screen.findByRole("region", {
+      name: "Selected submissions",
+    });
+    await user.click(within(bar).getByRole("button", { name: "Export" }));
+    const csv = await screen.findByRole("menuitem", { name: /CSV/ });
+    const address = new URL(csv.getAttribute("href") ?? "", "http://x");
+    expect(address.searchParams.get("ids")).toBe("app-1,app-2");
+    expect(address.searchParams.get("form")).toBe("job");
+    expect(address.searchParams.get("format")).toBe("csv");
+  });
+
+  it("offer only what the person's role allows", async () => {
+    serveJob({ permissions: ["read-form-submissions", "read-forms"] });
+    const user = userEvent.setup();
+    renderList({ formId: "job" });
+    await tick(user, ["Hina Rossi"]);
+    const bar = await screen.findByRole("region", {
+      name: "Selected submissions",
+    });
+    for (const name of [
+      "Mark as read",
+      "Archive",
+      "Spam",
+      "Export",
+      "Delete",
+    ]) {
+      expect(within(bar).queryByRole("button", { name })).toBeNull();
+    }
+  });
+
+  it("delete only once the person confirms", async () => {
+    const fetched = serveJob();
+    const user = userEvent.setup();
+    renderList({ formId: "job" });
+    await tick(user, ["Ali Shah"]);
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(
+      fetched.mock.calls.some(([input]) =>
+        String(input).includes("bulk-delete")
+      )
+    ).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "Keep them" }));
+    expect(
+      fetched.mock.calls.some(([input]) =>
+        String(input).includes("bulk-delete")
+      )
+    ).toBe(false);
+  });
+});
+
+describe("the date filter", () => {
+  it("asks the server for the dates chosen", async () => {
+    const fetched = serveJob();
+    const user = userEvent.setup();
+    renderList({ formId: "job" });
+    await screen.findAllByText("Hina Rossi");
+    await user.click(screen.getByRole("button", { name: /^Date sent:/ }));
+    await user.click(
+      await screen.findByRole("button", { name: "Last 7 days" })
+    );
+
+    await waitFor(() => {
+      const wheres = fetched.mock.calls
+        .map(([input]) => new URL(String(input), "http://localhost"))
+        .filter(
+          url =>
+            url.pathname === "/admin/api/collections/form-submissions/entries"
+        )
+        .map(url => JSON.parse(url.searchParams.get("where") ?? "{}"));
+      expect(wheres.at(-1)?.submittedAt?.greater_than_equal).toEqual(
+        expect.any(String)
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Date sent: Last 7 days" })
+    ).toBeInTheDocument();
   });
 });

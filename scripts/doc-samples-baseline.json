@@ -137,8 +137,8 @@
       "compiled": 2
     },
     "docs/guides/routing-and-seo.mdx": {
-      "samples": 15,
-      "compiled": 12
+      "samples": 16,
+      "compiled": 14
     },
     "docs/jobs/index.mdx": {
       "samples": 5,
@@ -165,8 +165,8 @@
       "compiled": 0
     },
     "docs/page-builder/index.mdx": {
-      "samples": 10,
-      "compiled": 8
+      "samples": 11,
+      "compiled": 9
     },
     "docs/page-builder/layouts.mdx": {
       "samples": 1,
@@ -193,8 +193,8 @@
       "compiled": 7
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 21,
-      "compiled": 14
+      "samples": 29,
+      "compiled": 17
     },
     "docs/plugins/api-reference.mdx": {
       "samples": 37,
@@ -221,8 +221,8 @@
       "compiled": 1
     },
     "docs/plugins/form-builder.mdx": {
-      "samples": 23,
-      "compiled": 17
+      "samples": 24,
+      "compiled": 18
     },
     "docs/plugins/index.mdx": {
       "samples": 6,
@@ -261,11 +261,11 @@
       "compiled": 3
     },
     "docs/plugins/seo.mdx": {
-      "samples": 15,
-      "compiled": 10
+      "samples": 19,
+      "compiled": 13
     },
     "docs/plugins/services.mdx": {
-      "samples": 15,
+      "samples": 16,
       "compiled": 1
     },
     "docs/plugins/signed-in-people.mdx": {
@@ -285,7 +285,7 @@
       "compiled": 4
     },
     "docs/versions/index.mdx": {
-      "samples": 3,
+      "samples": 4,
       "compiled": 3
     },
     "docs/webhooks/index.mdx": {
@@ -488,10 +488,10 @@
       "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "uninstalled #20 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "uninstalled #28 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
-      "reader-file #18 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
+      "reader-file #25 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1
     },
@@ -571,8 +571,8 @@
       "reader-file #2 error TS2307: Cannot find module './blocks' or its corresponding type declarations.": 1
     },
     "docs/page-builder/index.mdx": {
-      "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #4 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/page-builder/named-queries.mdx": {
       "reader-file #1 error TS2307: Cannot find module './app/named-queries' or its corresponding type declarations.": 1,
@@ -592,7 +592,8 @@
       "reader-file #0 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/seo.mdx": {
-      "reader-file #10 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #12 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #13 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
@@ -619,9 +620,9 @@
       "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'Media'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Posts'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Users'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Media'.": 1
+      "reader-name #21 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #21 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #21 error TS2304: Cannot find name 'Media'.": 1
     }
   }
 }
