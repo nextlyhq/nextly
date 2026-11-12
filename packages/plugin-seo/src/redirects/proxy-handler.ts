@@ -26,6 +26,7 @@ import { notAPageAddress } from "../not-found/page-address";
 import { destinationOf, withQuery } from "./addresses";
 import { redirectsSlug } from "./collection";
 import { heldRedirectKeys, type HeldRedirectKeys } from "./held-keys";
+import { redirectHits, type RedirectHits } from "./hits";
 import { redirectMeeting } from "./meeting";
 import { proxySeenNotes } from "./proxy-seen";
 import { askedAddress } from "./served";
@@ -104,19 +105,29 @@ async function pageAddressOf(
   return { ...asked, path: asked.path.slice(0, -1) };
 }
 
+/** What an address that is gone for good answers: 410, and a line to read. */
+function goneResponse(): Response {
+  return new Response("This page is gone.", {
+    status: 410,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+}
+
 /**
  * The handler the plugin contributes to the site's Proxy, answering from
- * `keys`: the plugin forgets them when a redirect saved here commits.
+ * `keys`: the plugin forgets them when a redirect saved here commits. Each
+ * request a redirect answers is counted on it by `hits`, in the background.
  */
 export function redirectsProxyHandler(
-  keys: HeldRedirectKeys = heldRedirectKeys()
+  keys: HeldRedirectKeys = heldRedirectKeys(),
+  hits: RedirectHits = redirectHits()
 ): PluginProxyHandler {
   const seen = proxySeenNotes();
   return {
     name: "redirects",
     async handle(request, ctx) {
       // Noted in the background, so the admin can tell the Proxy runs.
-      seen.note(ctx);
+      void seen.note(ctx);
       const url = new URL(request.url);
       const address = await pageAddressOf(ctx, request, url);
       if (address === "not-a-page") {
@@ -129,6 +140,10 @@ export function redirectsProxyHandler(
       const redirect = (await keys.mayMeet(ctx, address))
         ? await redirectFor(ctx, address)
         : undefined;
+      if (redirect?.gone === true) {
+        hits.note(ctx, redirect.id);
+        return { response: goneResponse() };
+      }
       const location =
         redirect !== undefined
           ? await locationOf(redirect, address, url)
@@ -140,6 +155,7 @@ export function redirectsProxyHandler(
         location !== undefined &&
         location !== url.href
       ) {
+        hits.note(ctx, redirect.id);
         return {
           response: new Response(null, {
             status: redirect.permanent ? 301 : 302,

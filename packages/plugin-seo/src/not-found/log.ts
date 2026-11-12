@@ -18,6 +18,7 @@ import { within } from "../address-record/rows";
 
 import { notFoundSlug } from "./collection";
 import { notAPageAddress } from "./page-address";
+import { isBotProbe } from "./probes";
 
 /** The most addresses the log keeps once it is pruned. */
 const NOT_FOUND_LIMIT = 1000;
@@ -46,6 +47,11 @@ export interface LoggedAddress {
   path: string;
   /** The address exactly as it was asked for, where it is known. */
   asked?: string;
+  /**
+   * Where the visitor came from, as the log keeps it (`cameFromOf`): kept
+   * on the address's row, the latest one known.
+   */
+  cameFrom?: string;
 }
 
 /** The stored key of an address in a language. */
@@ -82,7 +88,8 @@ function bumpLogged(
   ctx: PluginContext,
   key: string,
   lastSeen: string,
-  kind: NotFoundKind
+  kind: NotFoundKind,
+  cameFrom: string | undefined
 ): Promise<boolean> {
   const slug = notFoundSlug(ctx);
   return ctx.services.collections.withTransaction(async transaction => {
@@ -107,6 +114,8 @@ function bumpLogged(
         hits: row.hits + 1,
         lastSeen,
         ...(kind === "moved" ? { kind } : {}),
+        // A direct visit leaves the last known source as it was.
+        ...(cameFrom === undefined ? {} : { cameFrom }),
         _overwrite: true,
       }
     );
@@ -129,7 +138,8 @@ export async function recordNotFound(
     slack: PRUNE_SLACK,
   }
 ): Promise<void> {
-  if (notAPageAddress(address.path)) return;
+  // Bots probing for other systems' pages are not addresses worth a redirect.
+  if (notAPageAddress(address.path) || isBotProbe(address.path)) return;
   // `/gone/` is the address `/gone`, as redirects and the Proxy read it.
   if (address.path.length > 1 && address.path.endsWith("/")) {
     address = { ...address, path: address.path.slice(0, -1) };
@@ -137,13 +147,14 @@ export async function recordNotFound(
   const slug = notFoundSlug(ctx);
   const lastSeen = now.toISOString();
   const key = pathKey(address);
-  if (await bumpLogged(ctx, key, lastSeen, kind)) return;
+  if (await bumpLogged(ctx, key, lastSeen, kind, address.cameFrom)) return;
   try {
     await ctx.services.collections.createEntry(slug, {
       pathKey: key,
       locale: address.locale,
       path: address.path,
       asked: address.asked ?? null,
+      cameFrom: address.cameFrom ?? null,
       hits: 1,
       lastSeen,
       kind,
@@ -151,7 +162,7 @@ export async function recordNotFound(
   } catch (error) {
     // Another request made the row first: count this one on it.
     if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-    await bumpLogged(ctx, key, lastSeen, kind);
+    await bumpLogged(ctx, key, lastSeen, kind, address.cameFrom);
     return;
   }
   if (
@@ -200,6 +211,29 @@ export async function pruneNotFound(
     if (!keep.has(row.id)) {
       await ctx.services.collections.deleteEntry(slug, row.id);
     }
+  }
+}
+
+/**
+ * Mark the log's row `id` ignored, or not: an ignored address is listed only
+ * when someone asks to see the ignored ones. Answers the row, or none where
+ * it is gone (a redirect answered it, or the log was pruned).
+ */
+export async function setNotFoundIgnored(
+  ctx: PluginContext,
+  id: string,
+  ignored: boolean
+): Promise<Record<string, unknown> | undefined> {
+  const slug = notFoundSlug(ctx);
+  try {
+    const { item } = await ctx.services.collections.updateEntry(slug, id, {
+      ignored,
+      _overwrite: true,
+    });
+    return item;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
+    throw error;
   }
 }
 
