@@ -34,7 +34,7 @@ import {
   LayoutDashboard,
   LayoutTemplate,
   List,
-  PanelsTopLeft,
+  PanelRight,
   Plus,
   type LucideIcon,
 } from "lucide-react";
@@ -85,7 +85,7 @@ const LIBRARY_WORDS: Readonly<
     name: "Layouts",
     about: "Page frames: header, footer and the content area",
     create: "New layout",
-    icon: PanelsTopLeft,
+    icon: PanelRight,
   },
   templates: {
     name: "Templates",

@@ -126,7 +126,9 @@ function libraryItem(
 export const PAGE_BUILDER_MENU: PluginMenuItem[] = [
   libraryItem("Patterns", PATTERNS_SLUG, "LayoutTemplate"),
   libraryItem("Components", COMPONENTS_SLUG, "Component"),
-  libraryItem("Layouts", LAYOUTS_SLUG, "PanelsTopLeft"),
+  // A frame beside the content: the framed page with a header row is the
+  // admin's icon for a Single.
+  libraryItem("Layouts", LAYOUTS_SLUG, "PanelRight"),
   // The designs collections' entries are drawn with, and where each
   // collection's entries are served.
   libraryItem("Templates", TEMPLATES_SLUG, "LayoutDashboard"),
