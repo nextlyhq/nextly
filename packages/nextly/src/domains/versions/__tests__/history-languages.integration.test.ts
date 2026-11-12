@@ -120,6 +120,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "code" }),
         ],
       }),
+      // The same, kept with the working drafts a restore writes.
+      defineCollection({
+        slug: "regional_drafts",
+        localized: true,
+        status: true,
+        versions: true,
+        hooks: { afterRead: [closedRegion] },
+        fields: [
+          text({ name: "title", localized: true }),
+          text({ name: "region", localized: true }),
+          text({ name: "code" }),
+        ],
+      }),
       // No languages of its own, in an install that has them.
       defineCollection({
         slug: "plain",
@@ -297,35 +310,38 @@ async function revIn(
  * field is a version of the language it was saved in, and an event of the
  * shared part.
  */
-async function regionalDocument(t: TestNextly): Promise<string> {
+async function regionalDocument(
+  t: TestNextly,
+  slug = "regional"
+): Promise<string> {
   const created = await t.nextly.create({
-    collection: "regional",
+    collection: slug,
     data: { title: "hello", region: "open", code: "c1" },
     locale: "en",
   });
   const id = (created.item as { id: string }).id;
   for (const title of ["hola", "hola de nuevo"]) {
     await t.nextly.update({
-      collection: "regional",
+      collection: slug,
       id,
       data: {
         title,
         region: "closed",
-        _rev: await revIn(t, "regional", id, "es"),
+        _rev: await revIn(t, slug, id, "es"),
       },
       locale: "es",
     });
   }
   await t.nextly.update({
-    collection: "regional",
+    collection: slug,
     id,
-    data: { code: "c2", _rev: await revIn(t, "regional", id, "en") },
+    data: { code: "c2", _rev: await revIn(t, slug, id, "en") },
     locale: "en",
   });
   await t.nextly.update({
-    collection: "regional",
+    collection: slug,
     id,
-    data: { title: "hello again", _rev: await revIn(t, "regional", id, "en") },
+    data: { title: "hello again", _rev: await revIn(t, slug, id, "en") },
     locale: "en",
   });
   return id;
@@ -737,18 +753,28 @@ describe.each(getConfiguredTestDialects())(
 
     it("asks a version's own language before naming or restoring it, and names it only there", async () => {
       const t = await boot(dialect);
-      const key = await keyHolding(t, ["read-regional", "update-regional"]);
-      const reader = await personHolding(t, ["read-regional"]);
-      const id = await regionalDocument(t);
+      // Kept with drafts, which a restore writes.
+      const key = await keyHolding(t, [
+        "read-regional_drafts",
+        "update-regional_drafts",
+      ]);
+      const reader = await personHolding(t, ["read-regional_drafts"]);
+      const id = await regionalDocument(t, "regional_drafts");
       const byLanguage = await versionsByLanguage(
         t,
         "collection",
-        "regional",
+        "regional_drafts",
         id
       );
       const [es] = byLanguage.get("es") ?? [];
       const [en] = byLanguage.get("en") ?? [];
-      const versions = ["collections", "regional", "entries", id, "versions"];
+      const versions = [
+        "collections",
+        "regional_drafts",
+        "entries",
+        id,
+        "versions",
+      ];
       const okOrNot = (response: Promise<Response>) =>
         response.then(r => (r.ok ? "done" : "refused"));
 
@@ -778,12 +804,20 @@ describe.each(getConfiguredTestDialects())(
       await t
         .getService("versionsService")
         .setLabel(
-          { scopeKind: "collection", scopeSlug: "regional", entryId: id },
+          {
+            scopeKind: "collection",
+            scopeSlug: "regional_drafts",
+            entryId: id,
+          },
           es!,
           "Spanish name",
           { actor: { type: "system" } }
         );
-      const subject = { kind: "collection" as const, slug: "regional", id };
+      const subject = {
+        kind: "collection" as const,
+        slug: "regional_drafts",
+        id,
+      };
       const named = (await t.nextly.contentEvents.list({ subject })).items
         .filter(e => e.kind === "named")
         .map(e => [e.payload?.label, e.parts]);
