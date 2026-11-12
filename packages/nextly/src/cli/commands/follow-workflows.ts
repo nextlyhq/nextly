@@ -2,10 +2,12 @@
  * Bringing review state into line with the configuration's workflows, as `nextly migrate` does it
  * on a deploy.
  *
- * A development start does this at boot. A production start reads nothing of the schema, so the
- * deploy step does it instead, after its migrations: review state recorded under an earlier
- * configuration follows the workflows (a detached collection's removed, renamed and mapped stages
- * followed), and approvals given under an earlier definition are withdrawn unless it keeps them.
+ * A development start does this at boot, and so does a production start that applies its own
+ * migrations (`db.runMigrationsOnBoot`). Any other production start reads nothing of the schema,
+ * so the deploy step does it instead, after its migrations: review state recorded under an
+ * earlier configuration follows the workflows (a detached collection's removed, renamed and
+ * mapped stages followed), and approvals given under an earlier definition are withdrawn unless
+ * it keeps them.
  *
  * **Runtime restriction:** CLI-only. Do NOT import from runtime code.
  *
@@ -17,25 +19,43 @@ import type { SanitizedNextlyConfig } from "../../collections/config/define-conf
 import { withdrawApprovalsUnderEarlierDefinitions } from "../../domains/workflows/approval-follows-content";
 import { followWorkflowDefinitions } from "../../domains/workflows/definition-sweep";
 import { buildWorkflowRegistry } from "../../domains/workflows/registry";
+import { readReviewStateScopes } from "../../domains/workflows/review-state-repository";
+import { REVIEW_STATES_TABLE } from "../../schemas/review-states";
+import type { Logger } from "../../services/shared";
+import { withCommandServicesLent } from "../utils/lend-command-services";
 
-import { installStrandedRunResolver } from "./workflow-stranded";
+import { installEntityTablesResolver } from "./workflow-stranded";
 
 /**
- * Runs both passes on `adapter`, for the workflows `config` declares, through the tables the
- * attached collections and Singles keep, registered here since a command has no boot to have
- * registered them.
+ * Runs both passes on `adapter` for the workflows `config` declares, with none declared too, since
+ * removing the last workflow detaches every document it held. The workflows are judged as boot
+ * judges them, the configuration's components as written and any other (one made in the admin)
+ * from the registry, on the services lent for the command. The tables written through are those
+ * of every entity attached, and of every entity stored review state names, a detached one
+ * included: registered here, since a command has no boot to have registered them.
  */
 export async function followWorkflowsAfterMigrate(
   config: SanitizedNextlyConfig,
   configPath: string | null,
-  adapter: DrizzleAdapter
+  adapter: DrizzleAdapter,
+  logger: Logger
 ): Promise<void> {
-  const registry = await buildWorkflowRegistry(config, configPath, {
-    components: config.fieldGroups ?? [],
-    readRegistry: false,
+  await withCommandServicesLent(adapter, logger, async () => {
+    const registry = await buildWorkflowRegistry(config, configPath, {
+      components: config.fieldGroups ?? [],
+    });
+    const workflows = [...registry.values()];
+    const stored = (await adapter.tableExists(REVIEW_STATES_TABLE))
+      ? await readReviewStateScopes(adapter)
+      : { collections: [], singles: [] };
+    await installEntityTablesResolver(adapter, {
+      collections: [
+        ...workflows.flatMap(each => each.collections),
+        ...stored.collections,
+      ],
+      singles: [...workflows.flatMap(each => each.singles), ...stored.singles],
+    });
+    await followWorkflowDefinitions(adapter, workflows);
+    await withdrawApprovalsUnderEarlierDefinitions(adapter, workflows);
   });
-  if (registry.size === 0) return;
-  await installStrandedRunResolver(adapter, registry.values());
-  await followWorkflowDefinitions(adapter, registry.values());
-  await withdrawApprovalsUnderEarlierDefinitions(adapter, registry.values());
 }

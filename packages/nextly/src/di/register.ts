@@ -1239,19 +1239,25 @@ async function registerServicesOnce(
         workflows
       );
 
-      await runBootMigrations(config, transformedConfig, deferredExtends, {
-        adapter,
-        logger: resolvedLogger,
-      });
+      const migratedAtBoot = await runBootMigrations(
+        config,
+        transformedConfig,
+        deferredExtends,
+        {
+          adapter,
+          logger: resolvedLogger,
+        }
+      );
 
       // After the boot migrations, which store a new version where they run:
       // the database's schema version against the build's, read once.
       await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
 
-      // A development start brings review state into line with the workflows it registered; a
-      // production start reads nothing of the schema, so there `nextly migrate`, the deploy step,
-      // does this instead (`followWorkflowsAfterMigrate`).
-      if (!isProductionRuntime()) {
+      // A development start brings review state into line with the workflows it registered, and
+      // so does a production start that applied its own migrations, as `nextly migrate` would
+      // have. Any other production start reads nothing of the schema, so there `nextly migrate`,
+      // the deploy step, does this instead (`followWorkflowsAfterMigrate`).
+      if (!isProductionRuntime() || migratedAtBoot) {
         // Review state recorded under an earlier configuration follows the workflows this boot
         // registered first: a detached collection's is removed, and renamed or mapped stages are
         // followed. Before the approvals are judged below, so a part a rename kept is judged under
@@ -2646,17 +2652,17 @@ async function runBootMigrations(
   transformedConfig: NextlyServiceConfig,
   deferredExtends: DeferredExtends,
   deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
-): Promise<void> {
+): Promise<boolean> {
   const { runProdMigrationsIfEnabled } = await import(
     "../init/prod-migrations"
   );
-  if (config.db) {
-    // The raw `db` block with the schema this boot actually runs; see
-    // `bootMigrationsArgs` for why the two come from different configs.
-    await runProdMigrationsIfEnabled(
-      bootMigrationsArgs(config.db, transformedConfig, deferredExtends, deps)
-    );
-  }
+  if (!config.db) return false;
+  // The raw `db` block with the schema this boot actually runs; see
+  // `bootMigrationsArgs` for why the two come from different configs. Answers whether the
+  // migrations applied, so the start can do the deploy step's other work as well.
+  return await runProdMigrationsIfEnabled(
+    bootMigrationsArgs(config.db, transformedConfig, deferredExtends, deps)
+  );
 }
 
 /**

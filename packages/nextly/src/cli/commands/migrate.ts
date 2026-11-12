@@ -736,7 +736,13 @@ export async function runMigrate(
         await followWorkflowsAfterMigrate(
           configResult.config,
           configResult.configPath ?? null,
-          adapter as unknown as DrizzleAdapter
+          adapter as unknown as DrizzleAdapter,
+          {
+            debug: (message: string) => logger.debug(message),
+            info: (message: string) => logger.info(message),
+            warn: (message: string) => logger.warn(message),
+            error: (message: string) => logger.error(message),
+          }
         );
       }
     } catch (err) {

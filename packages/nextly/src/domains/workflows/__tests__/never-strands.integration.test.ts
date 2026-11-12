@@ -12,10 +12,19 @@
  *
  * Each is observed on the review states, the record of content events and the history's pins.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { followWorkflowsAfterMigrate } from "../../../cli/commands/follow-workflows";
-import { defineCollection, defineConfig, text } from "../../../config";
+import {
+  defineCollection,
+  defineConfig,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { clearServices } from "../../../di/register";
 import {
   createTestNextly,
@@ -23,7 +32,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { seedBuilderComponent } from "../../../plugins/__tests__/seed-builder-entity";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { _resetEnvCache } from "../../../shared/lib/env";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -196,7 +207,29 @@ let t: TestNextly | undefined;
 afterEach(async () => {
   await t?.destroy();
   t = undefined;
+  vi.unstubAllEnvs();
+  _resetEnvCache();
 });
+
+/** A logger that says nothing, for the deploy step's lent services. */
+const quiet = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
+/** The deploy step `nextly migrate` runs, for the configuration `collections` describe. */
+const deployStep = (collections: ReturnType<typeof collectionsOn>) =>
+  followWorkflowsAfterMigrate(
+    defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections,
+    }),
+    null,
+    app().adapter,
+    quiet
+  );
 
 const app = (): TestNextly => {
   if (!t) throw new Error("not booted");
@@ -584,16 +617,8 @@ describe.each(getConfiguredTestDialects())(
           definitionHash: DESK,
         });
 
-        await followWorkflowsAfterMigrate(
-          defineConfig({
-            localization: { locales: ["en", "es"], defaultLocale: "en" },
-            collections: collectionsOn({
-              posts: deskRenamed,
-              pages: deskRenamed,
-            }),
-          }),
-          null,
-          app().adapter
+        await deployStep(
+          collectionsOn({ posts: deskRenamed, pages: deskRenamed })
         );
 
         expect(
@@ -603,6 +628,122 @@ describe.each(getConfiguredTestDialects())(
           definitionHash: workflowDefinitionHash(deskRenamed),
         });
       });
+    });
+
+    describe("the deploy step, as configurations change", () => {
+      it("detaches every document when the last workflow is removed", async () => {
+        await boot(dialect);
+        const post = await entry(app(), "posts");
+        await seedState(app(), partOf("posts", post, "en"), "legal", {
+          definitionHash: DESK,
+        });
+
+        await deployStep(collectionsOn({ posts: null, pages: null }));
+
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toBeNull();
+      });
+
+      it("detaches a collection whose workflow was removed while another keeps its own", async () => {
+        await boot(dialect);
+        const post = await entry(app(), "posts");
+        const page = await entry(app(), "pages");
+        await seedState(app(), partOf("posts", post, "en"), "legal", {
+          definitionHash: DESK,
+        });
+        await seedState(app(), partOf("pages", page, null), "legal", {
+          definitionHash: DESK,
+        });
+
+        // Pages' table is reached though nothing attaches a workflow to it any more.
+        await deployStep(collectionsOn({ pages: null }));
+
+        expect(await stateOf(app(), partOf("pages", page, null))).toBeNull();
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
+          {
+            stage: "legal",
+          }
+        );
+      });
+
+      it("judges an attachment whose field group was made in the admin", async () => {
+        await boot(dialect);
+        // A field group the configuration does not define: only the registry holds it.
+        await seedBuilderComponent(app().adapter, {
+          slug: "aside",
+          fields: [{ name: "note", type: "text" }],
+        });
+        const parked = await entry(app(), "posts");
+        await seedState(app(), partOf("posts", parked, "en"), "hold", {
+          definitionHash: DESK,
+        });
+
+        const [posts, pages] = collectionsOn({
+          posts: deskRenamed,
+          pages: deskRenamed,
+        });
+        await deployStep([
+          {
+            ...posts,
+            fields: [
+              ...posts.fields,
+              fieldGroup({ name: "aside", component: "aside" }),
+            ],
+          },
+          pages,
+        ]);
+
+        expect(
+          await stateOf(app(), partOf("posts", parked, "en"))
+        ).toMatchObject({ stage: "paused" });
+      });
+
+      // SQLite only, as every redeploy here: the harness releases a server-backed database when
+      // the next instance boots on it.
+      it.skipIf(dialect !== "sqlite")(
+        "follows the workflows at a production start that applies its own migrations, and only then",
+        async () => {
+          await boot(dialect);
+          const parked = await entry(app(), "posts");
+          await seedState(app(), partOf("posts", parked, "en"), "hold", {
+            definitionHash: DESK,
+          });
+          const migrationsDir = await mkdtemp(join(tmpdir(), "nextly-ns-"));
+          const productionStart = async (runMigrationsOnBoot: boolean) => {
+            const adapter = app().adapter;
+            clearServices();
+            vi.stubEnv("NODE_ENV", "production");
+            vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
+            _resetEnvCache();
+            t = await createTestNextly({
+              adapter,
+              localization: { locales: ["en", "es"], defaultLocale: "en" },
+              collections: collectionsOn({
+                posts: deskRenamed,
+                pages: deskRenamed,
+              }),
+              db: {
+                migrationsDir,
+                uiSchemaFile: join(migrationsDir, "ui-schema.json"),
+                runMigrationsOnBoot,
+              },
+            });
+          };
+          try {
+            // A production start that migrates nothing reads nothing of the schema.
+            await productionStart(false);
+            expect(
+              await stateOf(app(), partOf("posts", parked, "en"))
+            ).toMatchObject({ stage: "hold" });
+
+            await productionStart(true);
+            expect(
+              await stateOf(app(), partOf("posts", parked, "en"))
+            ).toMatchObject({ stage: "paused" });
+          } finally {
+            await rm(migrationsDir, { recursive: true, force: true });
+          }
+        }
+      );
     });
 
     describe("deleting a document", () => {
