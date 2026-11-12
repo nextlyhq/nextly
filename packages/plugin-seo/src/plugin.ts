@@ -945,8 +945,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       releaseOnCollectionDelete(ctx);
       // A redirect saved here applies from this server's next request.
       ctx.events.on(REDIRECTS_CHANGED, () => redirectKeys.forget());
-      // Kept for the site's not-found page, which logs through it, and for
-      // the pages built in code, which read their SEO through it.
+      // Kept for the routes that answer not found, which log through it, and
+      // for the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);

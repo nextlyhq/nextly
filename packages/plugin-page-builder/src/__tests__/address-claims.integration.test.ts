@@ -428,6 +428,7 @@ describe.each(getConfiguredTestDialects())(
         locales: ["en"],
         nextly: { find: async () => ({ items: [PAGED_LIST_PAGE] }) },
         readPage: async (_tx, id) => (id === "list" ? PAGED_LIST_PAGE : null),
+        readPages: async ids => (ids.includes("list") ? [PAGED_LIST_PAGE] : []),
         withTransaction: work => saving(claims, work),
         warn: (message, context) => {
           throw new Error(`${message} ${JSON.stringify(context)}`);
