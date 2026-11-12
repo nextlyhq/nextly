@@ -1763,6 +1763,12 @@ importers:
       '@nextlyhq/admin':
         specifier: workspace:*
         version: link:../admin
+      '@nextlyhq/blocks-react':
+        specifier: workspace:*
+        version: link:../blocks-react
+      '@nextlyhq/plugin-page-builder':
+        specifier: workspace:*
+        version: link:../plugin-page-builder
       '@nextlyhq/plugin-sdk':
         specifier: workspace:*
         version: link:../plugin-sdk

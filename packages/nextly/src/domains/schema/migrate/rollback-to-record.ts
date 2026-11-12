@@ -42,6 +42,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { compareMigrationBaseNames } from "../../../cli/utils/migration-discovery";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  APP_OWNER,
   collectCustomPermissions,
   type PermissionConfigSource,
 } from "../../../plugins/permissions/collect-permissions";
@@ -78,7 +79,7 @@ import {
   snapshotMetadataOf,
   type AppMigrationStanding,
 } from "./first-run";
-import { APP_OWNER, permissionsDeclaredBy } from "./permission-orphans";
+import { permissionsDeclaredBy } from "./permission-orphans";
 import {
   readRegistryRecord,
   takeRegistryBaseline,

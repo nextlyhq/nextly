@@ -45,6 +45,11 @@ interface PluginDefinition {
 }
 ```
 
+`name` is unique among the app's plugins, and `app` is reserved, in any letter case: the site's
+own permissions are stored under the owner `app` and a plugin's under its name, so startup and
+every CLI command refuse a plugin named `app` (`PLUGIN_RESOLUTION_ERROR`, `logContext.reason`
+`plugin-name-reserved`). Choose another name.
+
 ## `PluginContributions`
 
 ```ts

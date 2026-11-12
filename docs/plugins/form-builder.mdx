@@ -363,6 +363,7 @@ A form's Settings can limit each person to one response. The server compares a k
 | Setting (`settings.oneResponse`) | Compares | Notes |
 | --- | --- | --- |
 | `off` | nothing | The default: anyone may respond again. |
+| `email` | the answer to the chosen Email field (`settings.oneResponseField`), ignoring case | The field must be required and not hidden by a condition, so every response carries an address. Saving a form that breaks this is refused, and the builder will not delete the field, make it optional or give it a condition while it is chosen. |
 | `ip` | the network address | People sharing an office or home network count as one. Needs the trusted IP above. |
 | `browser` | a token the visitor's browser keeps | Counted from when it is chosen. Someone who clears their browser's data, or uses another browser, can respond again. |
 
@@ -423,6 +424,10 @@ When the sweep finishes it records that on the form, which moves the form's revi
 **When a response stops counting.** If the submission holding a value is deleted, marked as spam, or edited to another address, the earliest other submission with the same value takes its place. A person who sent two responses before the form compared them still can't send a third.
 
 If a form's setting changes while a submission is on its way, the submission is refused with "This form's settings changed while your response was being sent. Please send it again." and is judged by the new setting when it is sent again.
+
+### Privacy: not keeping IP addresses
+
+A form's **Settings › Privacy › Store IP address and browser** (`settings.storeIpAndBrowser`, on by default) decides whether a new submission keeps the address it came from and the visitor's browser. Off, it keeps neither. One per network still works on such a form: the address's keyed digest is made before the address is dropped, and only the digest is stored. Earlier submissions keep what they stored. A form that keeps no addresses cannot count its earlier responses by network after a change of setting, since it has none to count.
 
 ### Validation
 

@@ -38,7 +38,7 @@ import { heldRefusal } from "./form-closing-hold";
 import {
   keysBehind,
   oneResponseIdentityOf,
-  responseKeyOf,
+  storedRowKeyOf,
 } from "./one-response";
 import { asPluginSubmission } from "./prepare-submission";
 
@@ -281,7 +281,7 @@ async function keyInSave(
   held: Set<string>,
   row: Row
 ): Promise<void> {
-  const own = await responseKeyOf(deps.digests, settings, row);
+  const own = await storedRowKeyOf(deps.digests, settings, row);
   const target = own === null || held.has(own) ? null : own;
   if (target !== null) held.add(target);
   if ((row.responseKey ?? null) === target) return;
@@ -483,7 +483,7 @@ async function targetKeyOf(
   settings: FormSettings,
   row: Row
 ): Promise<string | null | undefined> {
-  const own = await responseKeyOf(deps.digests, settings, row);
+  const own = await storedRowKeyOf(deps.digests, settings, row);
   if (own === null) return null;
   // Holding its own value's key already: the holder, with nothing to ask.
   // Most rows of a sweep that resumes are these, so they cost no query.

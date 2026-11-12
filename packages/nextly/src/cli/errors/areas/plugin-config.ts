@@ -363,6 +363,14 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
         why: "A limit rule is checked when the configuration loads, so a rule that cannot be enforced stops the start rather than letting every request past.",
         next: `Correct the limit rule "${field(error, "rule")}" so that it does what the message says it must.`,
       })),
+      ...resolved("plugin-name-reserved", error => ({
+        ...whatThenNext(
+          detail(error),
+          " Choose another",
+          "Choose another name for the plugin."
+        ),
+        why: "The site's own permissions are stored under the owner `app`, and a plugin's under its name, so a plugin named `app` could not be told apart from the site.",
+      })),
       ...resolved("duplicate-admin-slug", error => ({
         ...whatThenNext(detail(error), " Rename one", "Rename one of them."),
         why: "A plugin's admin slug is made from its name, and these two names make the same one.",

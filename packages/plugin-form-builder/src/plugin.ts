@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 import {
+  type AuthUser,
   definePlugin,
   type HookContext,
   NextlyError,
@@ -40,13 +41,17 @@ import {
   judgeBotCheck,
   warnUncheckedBotChecks,
 } from "./handlers/bot-check";
-import { registerFormClosing } from "./handlers/form-closing-hold";
+import {
+  registerFormClosing,
+  respondedRefusal,
+} from "./handlers/form-closing-hold";
 import {
   browserTokenOf,
   responseKeyAfterUpdate,
   responseKeyOf,
   touchesResponseKey,
 } from "./handlers/one-response";
+import { refuseOneResponseFieldProblem } from "./handlers/one-response-field-check";
 import {
   oneResponseOptions,
   REBUILD_KEYS_JOB,
@@ -695,6 +700,13 @@ export function formBuilder(
         warn: (message, context) => nextly.logger.warn?.(message, context),
       });
 
+      // A form saved to compare one response per email has an Email field
+      // it can compare, however it is saved.
+      nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
+        refuseOneResponseFieldProblem(context);
+        return (context as { data?: unknown }).data;
+      });
+
       // One response per person after a form changes how it tells people
       // apart: the save moves the form's version on, and once it commits the
       // earlier submissions are given keys for it (`one-response-rebuild`).
@@ -1131,6 +1143,56 @@ async function keysFitInSave(
 }
 
 /**
+ * On a form that keeps no addresses, compare a keyed submission's address
+ * with the earlier submissions' before it is dropped: the hold compares
+ * stored addresses, and this one will have none. An earlier submission with
+ * the address but without a key for the current version (one stored before
+ * the form stopped keeping addresses, while its keys are made) would
+ * otherwise let the network respond again. Read outside the form's lock,
+ * which is enough: the earlier submissions it guards against are not being
+ * written, and new ones race on their keys, which the unique index decides.
+ */
+async function refuseEarlierAddress(
+  settings: { oneResponse?: string; storeIpAndBrowser?: boolean },
+  ctx: { collection?: string; data?: Record<string, unknown> },
+  formId: string,
+  nextly: NextlyInstance
+): Promise<void> {
+  const row = ctx.data;
+  if (settings.storeIpAndBrowser !== false || settings.oneResponse !== "ip") {
+    return;
+  }
+  if (typeof row?.ipAddress !== "string" || !row.responseKey) return;
+  const earlier = await nextly.services.collections.count(
+    ctx.collection ?? "form-submissions",
+    {
+      where: {
+        form: { equals: formId },
+        ipAddress: { equals: row.ipAddress },
+        status: { not_equals: "spam" },
+      },
+    },
+    // Elevated: the earlier submission counts whoever may read it.
+    { as: "system" }
+  );
+  if (earlier > 0) throw respondedRefusal(formId);
+}
+
+/**
+ * A form that keeps no IP address or browser (Settings › Privacy) stores
+ * neither with a new submission. Cleared after the one-response key is made,
+ * so one per network still compares the address, by its keyed digest only.
+ */
+function withholdAddress(
+  settings: { storeIpAndBrowser?: boolean },
+  row: Record<string, unknown>
+): void {
+  if (settings.storeIpAndBrowser !== false) return;
+  row.ipAddress = null;
+  row.userAgent = null;
+}
+
+/**
  * A request's address as the server judged it, never one the caller posted:
  * the collection grants public create, and a posted address would choose the
  * network one response per person compares. A create no request produced
@@ -1278,6 +1340,8 @@ export async function prepareSubmissionForWrite(
       { ...ctx.data, browserToken }
     );
     warnTokenless(settings, browserToken, ctx, formId, nextly);
+    await refuseEarlierAddress(settings, ctx, formId, nextly);
+    withholdAddress(settings, ctx.data);
   } else {
     await rekeyAfterUpdate(ctx, formsSlug, formId, nextly, form);
   }
@@ -1317,6 +1381,7 @@ async function rekeyAfterUpdate(
     data?: Record<string, unknown>;
     originalData?: Record<string, unknown>;
     collection?: string;
+    user?: { id?: string };
   },
   formsSlug: string,
   formId: string,
@@ -1349,6 +1414,84 @@ async function rekeyAfterUpdate(
         { as: "system" }
       )) > 0,
   });
+  await refuseTakenAddress(ctx, formId, nextly, parent);
+}
+
+/**
+ * Refuse an edit that moves a submission onto an email address another
+ * submission of the form already holds, saying which one only to a person who
+ * may read it. The holder is found as the system, since the address is taken
+ * whoever may see it; whether to name it is the editor's own read, judged by
+ * the access gate. Anyone else is told only that the address is used, so the
+ * refusal never shows a submission they could not open. The unique index
+ * still refuses a holder that commits after this look, without the name.
+ */
+async function refuseTakenAddress(
+  ctx: {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
+    collection?: string;
+    user?: { id?: string };
+  },
+  formId: string,
+  nextly: NextlyInstance,
+  form: Record<string, unknown>
+): Promise<void> {
+  const key = ctx.data?.responseKey;
+  const stored = ctx.originalData;
+  if (typeof key !== "string" || key === stored?.responseKey) return;
+  if (normalizeFormSettings(form.settings).oneResponse !== "email") return;
+  const collection = ctx.collection ?? "form-submissions";
+  const { data: holders } = await nextly.services.collections.listEntries(
+    collection,
+    {
+      where: {
+        form: { equals: formId },
+        responseKey: { equals: key },
+        ...(stored?.id ? { id: { not_equals: stored.id } } : {}),
+      },
+      pagination: { limit: 1 },
+    },
+    { as: "system" }
+  );
+  const id = (holders?.[0] as { id?: unknown } | undefined)?.id;
+  if (typeof id !== "string" && typeof id !== "number") return;
+  const holderId = String(id);
+  const named = await mayRead(nextly, collection, holderId, ctx.user);
+  throw NextlyError.duplicate({
+    message: named
+      ? `This email address is already used by submission ${holderId} of this form.`
+      : "This email address is already used by another submission of this form.",
+    logContext: { formId, holderId },
+  });
+}
+
+/** Whether a hook's user is a signed-in person the access gate can judge. */
+function isAuthUser(user: unknown): user is AuthUser {
+  if (!user || typeof user !== "object") return false;
+  const { id, email } = user as Record<string, unknown>;
+  return typeof id === "string" && typeof email === "string";
+}
+
+/** Whether `user` may read the submission `id`, asked of the access gate. */
+async function mayRead(
+  nextly: NextlyInstance,
+  collection: string,
+  id: string,
+  user: unknown
+): Promise<boolean> {
+  if (!isAuthUser(user)) return false;
+  try {
+    const count = await nextly.services.collections.count(
+      collection,
+      { where: { id: { equals: id } } },
+      { as: "user", user }
+    );
+    return count > 0;
+  } catch {
+    // Refused by the gate: this person may not read it.
+    return false;
+  }
 }
 
 /**

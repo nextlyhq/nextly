@@ -48,6 +48,7 @@ import {
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
+  type DocumentSeo,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   isBlockOrigin,
@@ -82,7 +83,7 @@ import {
   type NodeLocation,
   type TreePosition,
 } from "./tree";
-import { isNodeType, isNodeVersion } from "./validation";
+import { documentSeoIssues, isNodeType, isNodeVersion } from "./validation";
 
 /**
  * The fields an `update` op may carry.
@@ -1121,7 +1122,36 @@ export type BuilderOp =
       readonly patch: EnvelopePatch;
       /** Envelope fields to REMOVE, named for the reason `update`'s are. */
       readonly unset?: readonly EnvelopeField[];
+    }
+  | {
+      /**
+       * An edit to what a document states for its page as a whole: its
+       * metadata (`settings.seo`), which no node op can reach. Written whole,
+       * so one change of the title, the description, the shared title and the
+       * image together is one undo step; `null` removes it.
+       *
+       * Judged as a save judges `settings.seo`, by its shape; whether its
+       * bindings fit the schema is the save's question. A `settings` record
+       * this edit leaves empty is removed, so undoing the first metadata of a
+       * document leaves nothing behind.
+       *
+       * A sixth member of a published union, as `envelope` is the fifth.
+       *
+       * @experimental Settles with the template SEO panel.
+       */
+      readonly kind: "seo";
+      readonly seo: DocumentSeo | null;
     };
+
+/**
+ * Whether an op edits the document's envelope or settings rather than a
+ * block: no Layers lock stands in its way, and no block is its subject.
+ */
+export function addressesNoNode(
+  op: BuilderOp
+): op is Extract<BuilderOp, { readonly kind: "envelope" | "seo" }> {
+  return op.kind === "envelope" || op.kind === "seo";
+}
 
 /**
  * The envelope fields an `envelope` op may write: what a component offers its
@@ -2882,7 +2912,7 @@ export interface ApplyOptions {
  * unlock.
  */
 function layersLockRefusal(
-  op: Exclude<BuilderOp, { readonly kind: "envelope" }>,
+  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" }>,
   lockedId: string,
   where: LayersLockBreak["where"]
 ): string {
@@ -2934,9 +2964,9 @@ function assertKeepsLayersLocks(
   options: ApplyOptions
 ): void {
   if (options.layersLocks === "ignore") return;
-  // An envelope edit changes what placements may set, not a block, so no
-  // Layers lock stands in its way.
-  if (op.kind === "envelope") return;
+  // An envelope or metadata edit changes no block, so no Layers lock stands
+  // in its way.
+  if (addressesNoNode(op)) return;
   // Refused rather than exempting the inverse from the lock: see the insert
   // branch of `applyOp`. With the lock ignored, the inverse is a remove the
   // same option lets through, so the round trip still holds.
@@ -3612,6 +3642,9 @@ export function applyOp(
     case "envelope":
       return applyEnvelope(document, op, limits);
 
+    case "seo":
+      return applySeo(document, op, limits);
+
     default: {
       // The discriminant is exhausted above, so TypeScript never reaches this.
       // A JavaScript caller, a queued agent edit and a buffer written by a
@@ -3691,6 +3724,79 @@ function applyEnvelope(
       ...(absent.length > 0 ? { unset: absent } : {}),
     },
   };
+}
+
+/**
+ * Apply a `seo` op: write a document's metadata whole, or remove it.
+ *
+ * Held as `envelope` is: the value is one JSON writes unchanged and a save
+ * would accept, an edit that changes nothing is refused, the result is judged
+ * against the document's caps, and the inverse is read from the document.
+ */
+function applySeo(
+  document: BlockDocument,
+  op: Extract<BuilderOp, { kind: "seo" }>,
+  limits: DocumentLimits
+): AppliedOp {
+  const written: unknown = op.seo;
+  if (written !== null) assertDocumentSeo(written);
+  const held = document as unknown as Record<string, unknown>;
+  const settingsValue = ownValue(held, "settings");
+  const settings = isPlainRecord(settingsValue) ? settingsValue : {};
+  const prior = ownValue(settings, "seo");
+  const unchanged =
+    written === null
+      ? prior === undefined
+      : equalWithin(prior, written, COMPARISON_BUDGET);
+  if (unchanged) {
+    throw new OpError(
+      `seo: the document already holds this metadata, so the edit changes ` +
+        `nothing. A history entry for it would undo to no visible effect.`
+    );
+  }
+  const result = withSeo(held, settings, written);
+  assertFitsCaps(document, result, "seo", limits);
+  return {
+    document: result,
+    // Detached, as `envelope`'s prior values are.
+    inverse: {
+      kind: "seo",
+      seo: prior === undefined ? null : snapshot(prior),
+    },
+  };
+}
+
+/** Refuse a `seo` op's value that is not metadata a save would accept. */
+function assertDocumentSeo(written: unknown): void {
+  if (!isPlainRecord(written) || !isJsonValue(written)) {
+    throw new OpError(
+      `seo: ${describe(written)} is not a document's metadata. A seo op ` +
+        `carries the metadata record, or null to remove it.`
+    );
+  }
+  const problem = documentSeoIssues(written).find(
+    issue => issue.severity === "error"
+  );
+  if (problem !== undefined) {
+    throw new OpError(`seo: ${problem.path}: ${problem.message}`);
+  }
+}
+
+/** The document with `written` as its metadata, or none for null. */
+function withSeo(
+  held: Record<string, unknown>,
+  settings: Record<string, unknown>,
+  written: unknown
+): BlockDocument {
+  const nextSettings: Record<string, unknown> = { ...settings };
+  if (written === null) delete nextSettings.seo;
+  else nextSettings.seo = snapshot(written);
+  const next: Record<string, unknown> = { ...held };
+  // Removed rather than left empty, so undoing a document's first metadata
+  // gives back the document it was.
+  if (Object.keys(nextSettings).length === 0) delete next.settings;
+  else next.settings = nextSettings;
+  return next as unknown as BlockDocument;
 }
 
 /**

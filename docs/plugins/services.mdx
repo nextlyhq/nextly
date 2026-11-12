@@ -130,7 +130,7 @@ its methods.
 | `collections` | `PluginCollectionService` | the methods above                                                                                                                                                                                                                                                                                               |
 | `users`       | `PluginUserService`       | `create`, `findById`, `listUsersByIds`, `findByEmail`, `listUsers`, `update`, `delete`, `authenticate`, `changePassword`, `hasPassword`, `updateProfile`                                                                                                                                                        |
 | `media`       | `PluginMediaService`      | `upload`, `findById`, `listMedia`, `update`, `delete`, `bulkUpload`, `bulkDelete`, `moveToFolder`, `getStorageType`, `hasStorage`, `createFolder`, `findFolderById`, `listRootFolders`, `listSubfolders`, `getFolderContents`, `updateFolder`, `deleteFolder`, `isImage`, `validateImage`, `getImageDimensions` |
-| `email`       | `PluginEmailService`      | `send`, `sendWithTemplate`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate`                                                                                                                                                                       |
+| `email`       | `PluginEmailService`      | `send`, `sendWithTemplate`, `queue`, `queueWithTemplate`, `forgetSends`, `sendPasswordResetEmail`, `sendEmailVerificationEmail`, `sendWelcomeEmail`, `isConfigured`, `canSendTemplate`                                                                                                                          |
 | `versions`    | `PluginVersionsService`   | `list`, `get`, `setLabel`, `deleteWorkingDraft`, `autosave`, `getAutosave`, `pendingEditRows`, and `pins` (version pins on the plugin's own transaction; see [Pinning a version](/docs/versions#from-a-plugin))                                                                                                 |
 
 `ctx.services` also has `singles` (the declared Singles), `jobs` (queue
@@ -686,3 +686,36 @@ namespace.
 a reviewer can read, not an enforced boundary: plugins run as trusted code.
 
 See also: [Permissions](/docs/plugins/permissions) · [HTTP routes](/docs/plugins/routes).
+
+## Forgetting what you sent
+
+When your plugin deletes a record whose data its emails carried (a form
+submission, say), `ctx.services.email.forgetSends` forgets those emails with
+it. Hand it the ids `queue` and `queueWithTemplate` answered and the
+idempotency keys the sends carried:
+
+- each of those queued emails still waiting, or failed and retryable, is
+  cancelled, and every one of them has its message and recipients cleared;
+  one already with the provider finishes as it is;
+- every delivery record of those sends is erased: its address and key digests
+  go, the row stays.
+
+A send is found by its key. When a person named on a send has already been
+deleted, their deletion cleared that key from every record of the send, so the
+records of the send's other recipients (a CC, say) are no longer found by it:
+they are those people's records, erased with their own deletion.
+
+Only your plugin's own emails and keys are touched. Pass `tx`, the handle a
+`ctx.db.transaction` callback or an in-transaction handler received, to commit
+it with your deletion; without one it runs in a transaction of its own and is
+refused inside an open one.
+
+```ts
+ctx.hooks.onInTransaction("orders", async write => {
+  if (write.operation !== "delete") return;
+  await ctx.services.email.forgetSends(
+    { queuedIds: ["0b5c…"], idempotencyKeys: [`order:${write.id}`] },
+    { tx: write.db }
+  );
+});
+```

@@ -1192,6 +1192,11 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
    */
   image?: string;
   /**
+   * The title a shared link shows, where the document's own metadata gives
+   * one; the page's title otherwise. Blocks offer none.
+   */
+  socialTitle?: string;
+  /**
    * The path the page renders at, for a canonical URL.
    *
    * Absent when the stored slug is not addressable — one holding a `.`/`..`
@@ -1204,7 +1209,7 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
 
 /**
  * What a page's blocks offer for its head, as a page-metadata provider takes
- * it: the title, description and picture. The canonical is left out, since
+ * it: the title, description, shared title and picture. The canonical is left out, since
  * the provider works out the page's address itself and is never told one by
  * the content.
  */
@@ -1214,6 +1219,9 @@ function metadataValuesOf(derived: DerivedPageSeo): PageMetadataValues {
     ...(derived.description === undefined
       ? {}
       : { description: derived.description }),
+    ...(derived.socialTitle === undefined
+      ? {}
+      : { socialTitle: derived.socialTitle }),
     ...(derived.image === undefined ? {} : { image: { url: derived.image } }),
   };
 }
@@ -1383,6 +1391,7 @@ async function derivePageSeo(
     ...derived,
     ...(own.title === undefined ? {} : { title: own.title }),
     ...(own.description === undefined ? {} : { description: own.description }),
+    ...(own.socialTitle === undefined ? {} : { socialTitle: own.socialTitle }),
   };
   const imageCandidates =
     own.image === undefined ? blockImages : [own.image, ...(blockImages ?? [])];

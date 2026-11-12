@@ -71,6 +71,10 @@ export const myPlugin = (opts: MyPluginOptions = {}) =>
   });
 ```
 
+Give the plugin its package name. The name `app` is reserved, in any letter case, because the
+site's own permissions are stored under it: a plugin named `app` is refused at startup and by
+every CLI command.
+
 ### Choosing the `nextly` range
 
 The floor names **the release that introduced the newest core API your plugin

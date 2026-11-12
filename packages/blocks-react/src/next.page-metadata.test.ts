@@ -222,6 +222,7 @@ describe("a design's offer for one entry's head, asked outside a route", () => {
           seo: {
             title: [{ $bind: "slug" }, " | Acme"],
             description: ["Our plans."],
+            socialTitle: ["Plans: ", { $bind: "slug" }],
           },
         },
       })
@@ -240,6 +241,7 @@ describe("a design's offer for one entry's head, asked outside a route", () => {
     expect(asked).toEqual({
       title: "pricing | Acme",
       description: "Our plans.",
+      socialTitle: "Plans: pricing",
     });
   });
 });
