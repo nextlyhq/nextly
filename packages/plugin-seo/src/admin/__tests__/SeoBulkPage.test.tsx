@@ -409,3 +409,192 @@ describe("the import panel, for a file that only brings redirects", () => {
     expect(button.disabled).toBe(false);
   });
 });
+
+describe("the bulk edit screen, Codex round 1", () => {
+  it("drops an edit typed back to what its page holds, and the version it captured", async () => {
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "X" } });
+    expect(screen.getByText("1 change")).toBeTruthy();
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "" } });
+    expect(screen.queryByText("1 change")).toBeNull();
+    // Read again at a newer version: a new edit is made from that one.
+    vi.mocked(readPluginRoute).mockImplementation((async () => ({
+      type: "posts",
+      rows: ROWS.map(row => ({ ...row, rev: "9" })),
+      total: 4,
+      more: false,
+    })) as unknown as typeof readPluginRoute);
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Import 2 pages, all or nothing",
+      })
+    );
+    await waitFor(() => expect(readPluginRoute).toHaveBeenCalledTimes(2));
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "Y" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await waitFor(() =>
+      expect(writes.some(write => write.path === "/bulk/save")).toBe(true)
+    );
+    expect(writes.find(write => write.path === "/bulk/save")?.body).toEqual({
+      type: "posts",
+      changes: [{ id: "p1", rev: "9", title: "Y" }],
+    });
+  });
+
+  it("offers a yes/no visibility field to match though none of its values is yes", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/bulk/types"
+          ? TYPES
+          : {
+              groups: [
+                {
+                  ...GROUPS.groups[0]!,
+                  fields: [
+                    ...GROUPS.groups[0]!.fields,
+                    {
+                      name: "noIndex",
+                      label: "No index",
+                      filled: 0,
+                      suggested: "hidden",
+                    },
+                  ],
+                },
+              ],
+            },
+      pending: false,
+      error: null,
+      refetch: vi.fn(),
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoBulkPage />);
+    expect(screen.getByLabelText("Import noIndex into")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]?.body).toEqual({
+      source: {
+        kind: "group",
+        field: "metaData",
+        map: {
+          seoTitle: "title",
+          keywords: "skip",
+          ogType: "skip",
+          noIndex: "hidden",
+        },
+      },
+    });
+  });
+
+  it("shows another type's first read when a save's reread of this type ends after it was asked", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/bulk/types"
+          ? {
+              types: [
+                ...TYPES.types,
+                {
+                  ...TYPES.types[0]!,
+                  slug: "pages",
+                  label: "Pages",
+                  singular: "Page",
+                },
+              ],
+            }
+          : GROUPS,
+      pending: false,
+      error: null,
+      refetch: vi.fn(),
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    let answerPages: (value: unknown) => void = () => undefined;
+    vi.mocked(readPluginRoute).mockImplementation((async (args: {
+      path: string;
+    }) => {
+      if (args.path.includes("type=pages")) {
+        return new Promise(resolve => {
+          answerPages = resolve;
+        });
+      }
+      return { type: "posts", rows: ROWS, total: 4, more: false };
+    }) as unknown as typeof readPluginRoute);
+    let finishSave: (value: unknown) => void = () => undefined;
+    vi.mocked(writePluginRoute).mockImplementation(
+      (async () =>
+        new Promise(resolve => {
+          finishSave = resolve;
+        })) as unknown as typeof writePluginRoute
+    );
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    // Pages is opened while the save runs; its first read is on its way.
+    fireEvent.change(screen.getByLabelText("Content type"), {
+      target: { value: "pages" },
+    });
+    await act(async () =>
+      finishSave({ message: "Saved 1 page.", saved: 1, revs: {} })
+    );
+    await act(async () =>
+      answerPages({
+        type: "pages",
+        rows: [{ ...ROWS[0]!, id: "g1", label: "About us" }],
+        total: 1,
+        more: false,
+      })
+    );
+    expect(
+      await screen.findByLabelText("Title on Google for About us")
+    ).toBeTruthy();
+  });
+
+  it("keeps a refused save and its way out with the type it was made on", async () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/bulk/types"
+          ? {
+              types: [
+                ...TYPES.types,
+                {
+                  ...TYPES.types[0]!,
+                  slug: "pages",
+                  label: "Pages",
+                  singular: "Page",
+                },
+              ],
+            }
+          : GROUPS,
+      pending: false,
+      error: null,
+      refetch: vi.fn(),
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    vi.mocked(writePluginRoute).mockImplementation((async () => {
+      throw new Error("Saved by someone else.");
+    }) as unknown as typeof writePluginRoute);
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.change(titleOf("Surfer vs Rext"), { target: { value: "New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save all" }));
+    await screen.findByRole("button", {
+      name: "Discard changes and read again",
+    });
+    fireEvent.change(screen.getByLabelText("Content type"), {
+      target: { value: "pages" },
+    });
+    expect(
+      screen.queryByRole("button", { name: "Discard changes and read again" })
+    ).toBeNull();
+    fireEvent.change(screen.getByLabelText("Content type"), {
+      target: { value: "posts" },
+    });
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Discard changes and read again",
+      })
+    );
+    await waitFor(() => expect(titleOf("Surfer vs Rext").value).toBe(""));
+  });
+});

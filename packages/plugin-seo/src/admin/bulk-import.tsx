@@ -29,6 +29,7 @@ import {
   type ApplyBody,
   type DryRunBody,
   type ImportFileSource,
+  type GroupField,
   type ImportGroup,
   type ImportGroupsBody,
   type ImportSource,
@@ -113,12 +114,34 @@ function groupDetail(groups: readonly ImportGroup[]): string {
 }
 
 /** The matching a group starts with: each field where its name says. */
+/**
+ * The fields of a group a person matches: each holding a value, and each
+ * a yes/no visibility field, whose values may all be no and still mean
+ * something once matched the other way round.
+ */
+function offeredFields(group: ImportGroup): GroupField[] {
+  return group.fields.filter(
+    field =>
+      field.filled > 0 ||
+      field.suggested === "hidden" ||
+      field.suggested === "shown"
+  );
+}
+
+/**
+ * The matching a group starts with: each offered field where its name says,
+ * every other one left out, so what is sent is what is shown.
+ */
 function suggestedMap(
   group: ImportGroup | undefined
 ): Record<string, ImportTarget> {
   if (group === undefined) return {};
+  const offered = new Set(offeredFields(group).map(field => field.name));
   return Object.fromEntries(
-    group.fields.map(field => [field.name, field.suggested])
+    group.fields.map(field => [
+      field.name,
+      offered.has(field.name) ? field.suggested : "skip",
+    ])
   );
 }
 
@@ -134,7 +157,7 @@ function MatchFields({
   busy: boolean;
   onMap: (field: string, target: ImportTarget) => void;
 }): JSX.Element {
-  const holding = group.fields.filter(field => field.filled > 0);
+  const holding = offeredFields(group);
   const empty = group.fields.length - holding.length;
   return (
     <div className="nx-seo-field">

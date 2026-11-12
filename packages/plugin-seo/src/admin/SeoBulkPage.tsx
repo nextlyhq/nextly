@@ -93,11 +93,15 @@ function useRows(type: string | undefined) {
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
-  const latest = useRef(0);
+  // The latest read asked of each type: only its answer counts, so a later
+  // read of one type never puts away another's.
+  const latest = useRef<Record<string, number>>({});
 
   const read = useCallback(
     async (slug: string, pages: number, keep: readonly BulkRow[]) => {
-      const asked = ++latest.current;
+      const asked = (latest.current[slug] ?? 0) + 1;
+      latest.current[slug] = asked;
+      const current = () => latest.current[slug] === asked;
       setReading(true);
       setError(null);
       try {
@@ -106,7 +110,7 @@ function useRows(type: string | undefined) {
         const first = keep.length === 0 ? 1 : pages;
         for (let page = first; page <= pages; page++) {
           body = await readRows(slug, page);
-          if (body === undefined || asked !== latest.current) return;
+          if (body === undefined || !current()) return;
           rows.push(...body.rows);
         }
         if (body === undefined) return;
@@ -116,9 +120,9 @@ function useRows(type: string | undefined) {
           [slug]: { rows, total: answer.total, more: answer.more, pages },
         }));
       } catch (failure) {
-        if (asked === latest.current) setError(apiErrorMessage(failure));
+        if (current()) setError(apiErrorMessage(failure));
       } finally {
-        if (asked === latest.current) setReading(false);
+        if (current()) setReading(false);
       }
     },
     []
@@ -383,7 +387,12 @@ function useBulkEdits(
   const [edits, setEdits] = useState<Record<string, BulkEdits>>({});
   const [revs, setRevs] = useState<Record<string, Record<string, string>>>({});
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
+  // A refused save, with the type it was made on: shown, and read again,
+  // on that type alone.
+  const [refused, setRefused] = useState<{
+    type: string;
+    message: string;
+  } | null>(null);
   const typeEdits = (type === undefined ? undefined : edits[type]) ?? {};
   const typeRevs = (type === undefined ? undefined : revs[type]) ?? {};
   const changes = changesOf(rows, typeEdits, typeRevs);
@@ -404,10 +413,25 @@ function useBulkEdits(
 
   const edit = (row: BulkRow, field: BulkField, value: string) => {
     if (type === undefined) return;
-    setEdits(current => ({
-      ...current,
-      [type]: { ...current[type], [editKey(row.id, field)]: value },
-    }));
+    const next: Record<string, string> = {
+      ...typeEdits,
+      [editKey(row.id, field)]: value,
+    };
+    // A cell typed back to what its page holds is no change; a row with no
+    // change left lets go of its version, so its next edit takes the
+    // version its page has then.
+    if (value === row[field]) delete next[editKey(row.id, field)];
+    setEdits(current => ({ ...current, [type]: next }));
+    const pending = (["title", "description"] as const).some(
+      each => next[editKey(row.id, each)] !== undefined
+    );
+    if (!pending) {
+      setRevs(current => {
+        const { [row.id]: _released, ...kept } = current[type] ?? {};
+        return { ...current, [type]: kept };
+      });
+      return;
+    }
     if (row.rev !== undefined && typeRevs[row.id] === undefined) {
       const rev = row.rev;
       setRevs(current => ({
@@ -421,7 +445,7 @@ function useBulkEdits(
     if (type === undefined || changes.length > BULK_SAVE_LIMIT) return;
     const request: BulkSaveRequest = { type, changes };
     setBusy(true);
-    setFailed(null);
+    setRefused(null);
     try {
       const answer = await writePluginRoute<BulkSaveBody & { message: string }>(
         { plugin: SEO_PLUGIN_NAME, path: BULK_SAVE_PATH, body: request }
@@ -431,7 +455,7 @@ function useBulkEdits(
       forget(type, new Set(changes.map(change => change.id)));
       onSaved(type);
     } catch (error) {
-      setFailed(apiErrorMessage(error));
+      setRefused({ type, message: apiErrorMessage(error) });
     } finally {
       setBusy(false);
     }
@@ -446,8 +470,14 @@ function useBulkEdits(
     },
     save,
     busy,
-    failed,
-    dismiss: () => setFailed(null),
+    failed: refused !== null && refused.type === type ? refused.message : null,
+    // Discard the refused type's edits, and read that type again.
+    readAgain: () => {
+      if (refused === null) return;
+      forget(refused.type);
+      setRefused(null);
+      onSaved(refused.type);
+    },
   };
 }
 
@@ -653,11 +683,7 @@ export function SeoBulkPage(): JSX.Element {
             {...(editing.failed === null
               ? {}
               : {
-                  onReadAgain: () => {
-                    editing.clear();
-                    editing.dismiss();
-                    rows.again();
-                  },
+                  onReadAgain: editing.readAgain,
                 })}
           />
           <ChangesBar
