@@ -92,6 +92,20 @@ describe("moving a field by key", () => {
     expect(document.activeElement).toBe(row("body"));
   });
 
+  it("unfolds a folded container a field moves into, and focuses the field there", async () => {
+    const { user } = setup(WHOLE);
+    // Left on an open container folds it.
+    row("details").focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.queryByTestId("field-row-subtitle")).toBeNull();
+
+    row("body").focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    says("Moved Body into Details, position 2 of 2.");
+    expect(document.activeElement).toBe(row("body"));
+    expect(row("subtitle")).toBeInTheDocument();
+  });
+
   it("says why when there is nowhere to go, and changes nothing", async () => {
     const { probe, user } = setup(WHOLE);
     row("title").focus();
