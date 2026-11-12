@@ -227,6 +227,68 @@ describe.each(getConfiguredTestDialects())("a consent field (%s)", dialect => {
     expect(await answers(id)).toEqual(before);
   });
 
+  it("keeps a consent through edits once the form no longer has its field", async () => {
+    const { t, formId, submit, answers } = await boot(dialect);
+    await submit({ name: "Ada", privacy: "on" });
+    const id = await onlySubmission(t);
+    const before = await answers(id);
+
+    await t.nextly.update({
+      collection: "forms",
+      id: formId,
+      data: {
+        fields: FIELDS.filter(field => field.type !== "consent"),
+        _overwrite: true,
+      },
+    });
+    const edit = (data: Record<string, unknown>) =>
+      t.nextly.update({
+        collection: "form-submissions",
+        id,
+        data: { data, _overwrite: true },
+      });
+
+    // As the admin sends it: every stored answer, one of them edited.
+    await edit({ ...before, name: "Ada Lovelace" });
+    expect(await answers(id)).toEqual({ ...before, name: "Ada Lovelace" });
+    // Changing or dropping the consent is still refused.
+    const refusal = {
+      publicData: {
+        errors: [{ path: "privacy", message: CONSENT_EDIT_REFUSED }],
+      },
+    };
+    await expect(
+      edit({ ...before, privacy: { agreed: false, text: AGREEMENT } })
+    ).rejects.toMatchObject(refusal);
+    await expect(edit({ name: "Ada" })).rejects.toMatchObject(refusal);
+    expect((await answers(id)).privacy).toEqual(before.privacy);
+  });
+
+  it("refuses a form saved with a consent that has no text", async () => {
+    const { t, formId } = await boot(dialect);
+    const blank = FIELDS.map(field =>
+      field.type === "consent" ? { ...field, agreementText: "  " } : field
+    );
+    const refusal = {
+      publicData: {
+        errors: [{ path: "fields.privacy.agreementText", code: "REQUIRED" }],
+      },
+    };
+    await expect(
+      t.nextly.update({
+        collection: "forms",
+        id: formId,
+        data: { fields: blank, _overwrite: true },
+      })
+    ).rejects.toMatchObject(refusal);
+    await expect(
+      t.nextly.create({
+        collection: "forms",
+        data: { name: "Other", slug: "other", fields: blank },
+      })
+    ).rejects.toMatchObject(refusal);
+  });
+
   it("keeps the text agreed to through an edit made after the form's text changed", async () => {
     const { t, formId, submit, answers } = await boot(dialect);
     await submit({ name: "Ada", privacy: "on" });

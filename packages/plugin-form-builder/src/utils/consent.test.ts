@@ -9,9 +9,11 @@ import { prepareSubmission } from "../handlers/prepare-submission";
 import type { AnyFormField, ConsentFormField } from "../types";
 
 import {
+  blankConsentFields,
   CONSENT_REQUIRED_REASON,
   consentFieldEdit,
   editedConsents,
+  storedConsentNames,
 } from "./consent";
 import { formatExportValue } from "./export-formats";
 
@@ -123,5 +125,45 @@ describe("the builder's consent", () => {
   it("leaves other fields' edits alone", () => {
     const edited = { ...NAME, required: false };
     expect(consentFieldEdit(NAME, edited)).toEqual({ field: edited });
+  });
+});
+
+describe("the consents a stored submission holds", () => {
+  const answer = { agreed: true, text: "I agree" };
+
+  it("are the form's consent fields and stored consents whose field is gone", () => {
+    expect(
+      storedConsentNames([NAME, CONSENT], {
+        name: "Ada",
+        privacy: answer,
+        terms: answer,
+      })
+    ).toEqual(["privacy", "terms"]);
+    // A field still on the form keeps its own type's meaning.
+    expect(
+      storedConsentNames([{ ...NAME, name: "terms" }], { terms: answer })
+    ).toEqual([]);
+  });
+
+  it("are held to the stored answer once their field is gone", () => {
+    expect(
+      editedConsents([NAME], { terms: answer }, { name: "Grace" })
+    ).toEqual(["terms"]);
+    expect(
+      editedConsents([NAME], { terms: answer }, { terms: answer })
+    ).toEqual([]);
+  });
+});
+
+describe("a consent with no text", () => {
+  it.each([undefined, "", "   "])("is found for a text of %j", text => {
+    const field = { ...CONSENT, agreementText: text } as AnyFormField;
+    expect(blankConsentFields([NAME, field]).map(f => f.name)).toEqual([
+      "privacy",
+    ]);
+  });
+
+  it("is not found for a consent with a text", () => {
+    expect(blankConsentFields([NAME, CONSENT])).toEqual([]);
   });
 });

@@ -52,19 +52,38 @@ function sameConsent(before: unknown, after: unknown): boolean {
 }
 
 /**
- * The consent fields whose stored answer an edit would change: the edit's
- * answers against the stored ones, for each consent field of the form. One
- * left out of the edit is a change too, since it would drop the answer.
+ * The answers of a stored submission that are consents: each consent field
+ * of the form, and any answer stored as a consent whose field the form no
+ * longer has. Read from the submission as well as the form, since a form can
+ * lose its consent field while its submissions keep what was agreed to.
+ */
+export function storedConsentNames(
+  fields: readonly AnyFormField[],
+  stored: Record<string, unknown>
+): string[] {
+  const onForm = new Set(fields.map(field => field.name));
+  const names = fields
+    .filter(field => field.type === "consent")
+    .map(field => field.name);
+  for (const [name, value] of Object.entries(stored)) {
+    if (!onForm.has(name) && isConsentAnswer(value)) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * The consents whose stored answer an edit would change: the edit's answers
+ * against the stored ones, for each consent the submission holds. One left
+ * out of the edit is a change too, since it would drop the answer.
  */
 export function editedConsents(
   fields: readonly AnyFormField[],
   stored: Record<string, unknown>,
   edited: Record<string, unknown>
 ): string[] {
-  return fields
-    .filter(field => field.type === "consent")
-    .map(field => field.name)
-    .filter(name => !sameConsent(stored[name], edited[name]));
+  return storedConsentNames(fields, stored).filter(
+    name => !sameConsent(stored[name], edited[name])
+  );
 }
 
 /** Said when the builder is asked to make a consent optional. */
@@ -93,4 +112,25 @@ export function consentFieldEdit(
         typeof text === "string" ? text : "I agree to the privacy policy",
     } as ConsentFormField,
   };
+}
+
+/** Said when a consent has no text to agree to. */
+export const CONSENT_TEXT_REQUIRED =
+  "A consent field needs the text the visitor agrees to.";
+
+/**
+ * The consent fields with no text to agree to. A consent with a blank text
+ * would record agreement to nothing, so a form holding one is not saved, by
+ * the builder or any other door.
+ */
+export function blankConsentFields(
+  fields: readonly AnyFormField[]
+): ConsentFormField[] {
+  return fields.filter(
+    (field): field is ConsentFormField =>
+      field.type === "consent" &&
+      (typeof (field as { agreementText?: unknown }).agreementText !==
+        "string" ||
+        (field as ConsentFormField).agreementText.trim() === "")
+  );
 }

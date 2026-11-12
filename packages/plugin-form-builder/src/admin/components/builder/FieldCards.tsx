@@ -15,8 +15,8 @@
  * Reordering is triple-redundant on purpose: drag handles (pointer), the
  * same handle with Space + arrow keys (dnd-kit keyboard sensor), and
  * explicit Move up / Move down menu items. Deleting a field that another
- * field's condition or a notification references is blocked with the list
- * of referrers instead of silently breaking them.
+ * field's condition, a notification or a form setting references is blocked
+ * with the list of referrers instead of silently breaking them.
  *
  * @module admin/components/builder/FieldCards
  */
@@ -490,8 +490,8 @@ export function FieldCards({
   // One O(N^2) pass per fields/notifications change; each row then looks
   // its blockers up in O(1) instead of re-walking everything per render.
   const referenceMap = useMemo(
-    () => buildFieldReferenceMap(fields, notifications),
-    [fields, notifications]
+    () => buildFieldReferenceMap(fields, notifications, settings),
+    [fields, notifications, settings]
   );
 
   const labels = useMemo(

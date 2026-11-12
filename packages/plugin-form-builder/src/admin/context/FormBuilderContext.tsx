@@ -615,6 +615,12 @@ export function FormBuilderProvider({
         setNotifications(prev =>
           renameInNotifications(prev, referencesFrom, next.name)
         );
+        // The Email field one response per person compares, by name.
+        setSettings(prev =>
+          prev.oneResponseField === referencesFrom
+            ? { ...prev, oneResponseField: next.name }
+            : prev
+        );
       }
       record(fieldChangeKey(currentDocument().fields, fieldName));
       followRename(fieldName, next.name);

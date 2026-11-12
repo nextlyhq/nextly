@@ -40,6 +40,7 @@ import {
   judgeBotCheck,
   warnUncheckedBotChecks,
 } from "./handlers/bot-check";
+import { refuseBlankConsentText } from "./handlers/consent-text-check";
 import {
   registerFormClosing,
   respondedRefusal,
@@ -50,6 +51,7 @@ import {
   responseKeyOf,
   touchesResponseKey,
 } from "./handlers/one-response";
+import { refuseOneResponseFieldProblem } from "./handlers/one-response-field-check";
 import {
   oneResponseOptions,
   REBUILD_KEYS_JOB,
@@ -77,7 +79,11 @@ import type {
   FormEmailNotification,
   ResolvedFormBuilderConfig,
 } from "./types";
-import { CONSENT_EDIT_REFUSED, editedConsents } from "./utils/consent";
+import {
+  CONSENT_EDIT_REFUSED,
+  editedConsents,
+  storedConsentNames,
+} from "./utils/consent";
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
@@ -698,6 +704,15 @@ export function formBuilder(
           ).data ?? [],
         readSettings: normalizeFormSettings,
         warn: (message, context) => nextly.logger.warn?.(message, context),
+      });
+
+      // A form saved to compare one response per email has an Email field
+      // it can compare, and each consent has a text to agree to, however it
+      // is saved.
+      nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
+        refuseOneResponseFieldProblem(context);
+        refuseBlankConsentText(context);
+        return (context as { data?: unknown }).data;
       });
 
       // One response per person after a form changes how it tells people
@@ -1381,8 +1396,8 @@ function consentsKept(
 
 /**
  * The stored consent answers an update carries over as they were. Checking an
- * update re-reads a consent with the form's current text; this puts back the
- * text the visitor was shown.
+ * update re-reads a consent with the form's current text, and drops one whose
+ * field the form no longer has; this puts back what the visitor agreed to.
  */
 function storedConsents(
   form: { fields?: unknown },
@@ -1390,10 +1405,11 @@ function storedConsents(
 ): Record<string, unknown> {
   if (stored === undefined) return {};
   const kept: Record<string, unknown> = {};
-  for (const field of form.fields as AnyFormField[]) {
-    if (field.type === "consent" && stored[field.name] !== undefined) {
-      kept[field.name] = stored[field.name];
-    }
+  for (const name of storedConsentNames(
+    form.fields as AnyFormField[],
+    stored
+  )) {
+    if (stored[name] !== undefined) kept[name] = stored[name];
   }
   return kept;
 }

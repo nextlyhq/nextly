@@ -33,11 +33,24 @@ import {
   type FieldSettingsSurface,
   type FieldSettingsSurfaceControlProps,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Checkbox, FormLabelWithTooltip, Input, Textarea } from "@nextlyhq/ui";
+import {
+  Checkbox,
+  FormLabelWithTooltip,
+  Input,
+  Label,
+  Switch,
+  Textarea,
+} from "@nextlyhq/ui";
 import { type JSX, type ReactNode, useCallback, useState } from "react";
 
 import type { AnyFieldValidation, AnyFormField } from "../../../types";
 import { enforcedValidationRules } from "../../../utils/enforced-validation";
+import { oneResponseEmailField } from "../../../utils/field-references";
+import {
+  comparesByEmail,
+  ONE_RESPONSE_FIELD_REASON,
+} from "../../../utils/one-response-field";
+import { useFormBuilder } from "../../context/FormBuilderContext";
 
 import { ConditionalLogicEditor } from "./ConditionalLogicEditor";
 import { fromPanelField, toPanelField, withFormOnly } from "./panel-field";
@@ -210,9 +223,53 @@ function FormTypeSettings(
       return <NumberStep {...props} />;
     case "hidden":
       return <HiddenValue {...props} />;
+    case "email":
+      return <OneResponseUse {...props} />;
     default:
       return null;
   }
+}
+
+/**
+ * Whether this Email field is the one one response per email compares: chosen
+ * here or in Settings, offered only while Settings compares by email and the
+ * field can be compared (required, never hidden by a condition). Another
+ * field is chosen to change it, so the switch is not turned off here.
+ */
+function OneResponseUse(props: FieldSettingsSurfaceControlProps): JSX.Element {
+  const { form } = useFormField(props);
+  const { settings, updateSettings } = useFormBuilder();
+  const id = `${props.field.id}-one-response`;
+  const byEmail = settings.oneResponse === "email";
+  const chosen = byEmail && settings.oneResponseField === form.name;
+  const help = !byEmail
+    ? 'Only when Settings › One response per person is "One per email address".'
+    : chosen
+      ? "Compared for one response per person, so it stays required and always shown. Choose another Email field to change it."
+      : comparesByEmail(form)
+        ? "Compare this field for one response per person instead."
+        : "Make it required, with no condition, to use it.";
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="space-y-1">
+        <Label htmlFor={id}>Use for one response per person</Label>
+        <p id={`${id}-help`} className="text-xs text-muted-foreground">
+          {help}
+        </p>
+      </div>
+      <Switch
+        id={id}
+        aria-describedby={`${id}-help`}
+        checked={chosen}
+        disabled={
+          props.readOnly || !byEmail || chosen || !comparesByEmail(form)
+        }
+        onCheckedChange={on => {
+          if (on) updateSettings({ oneResponseField: form.name });
+        }}
+      />
+    </div>
+  );
 }
 
 /** A text area's height. */
@@ -433,6 +490,7 @@ function FileSizeSetting(
  */
 function FormConditions(props: FieldSettingsConditionsProps): JSX.Element {
   const { form, update } = useFormField(props);
+  const { settings } = useFormBuilder();
   const siblings = props.siblings.map(fromPanelField);
   return (
     <fieldset disabled={props.readOnly} className="contents">
@@ -440,6 +498,12 @@ function FormConditions(props: FieldSettingsConditionsProps): JSX.Element {
         field={form}
         allFields={siblings}
         onUpdate={update}
+        // The Email field one response per email compares is always shown.
+        lockedReason={
+          oneResponseEmailField(settings) === form.name
+            ? ONE_RESPONSE_FIELD_REASON
+            : undefined
+        }
       />
     </fieldset>
   );
