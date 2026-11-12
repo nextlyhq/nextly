@@ -2,18 +2,17 @@
   "racy": {},
   "sqlite": {
     "start": {
-      "statements": 1125
+      "statements": 110
     },
     "screens": {
       "login": {
-        "requests": 5,
+        "requests": 4,
         "rounds": 3,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
           "GET /admin/api/admin-meta/workspace": 1,
-          "GET /admin/api/auth/session": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
@@ -21,7 +20,7 @@
       },
       "signin": {
         "requests": 8,
-        "rounds": 7,
+        "rounds": 6,
         "statements": 173,
         "kinds": {
           "GET /admin/api/auth/csrf": 1,
@@ -94,18 +93,17 @@
   },
   "postgresql": {
     "start": {
-      "statements": 1045
+      "statements": 113
     },
     "screens": {
       "login": {
-        "requests": 5,
-        "rounds": 3,
+        "requests": 4,
+        "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
           "GET /admin/api/admin-meta/workspace": 1,
-          "GET /admin/api/auth/session": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
@@ -186,18 +184,17 @@
   },
   "mysql": {
     "start": {
-      "statements": 1058
+      "statements": 123
     },
     "screens": {
       "login": {
-        "requests": 5,
-        "rounds": 3,
+        "requests": 4,
+        "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
           "GET /admin/api/admin-meta/workspace": 1,
-          "GET /admin/api/auth/session": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
@@ -254,7 +251,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 85,
+        "statements": 83,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -277,7 +274,7 @@
     }
   },
   "growth": {
-    "withDelay100ms": 4,
-    "with45MoreCollections": 1169
+    "withDelay100ms": 3,
+    "with45MoreCollections": -2
   }
 }
