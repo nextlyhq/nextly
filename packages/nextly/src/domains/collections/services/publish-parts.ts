@@ -255,7 +255,7 @@ async function refusalsOf(
       issues.push({
         path: SHARED_PATH,
         code: "LANGUAGES_STILL_LIVE",
-        message: `The shared part stays live while ${stillLive.map(languageName).join(", ")} ${stillLive.length === 1 ? "is" : "are"} published: unpublish ${stillLive.length === 1 ? "it" : "them"} too, or keep the shared part.`,
+        message: `The shared part stays live while ${stillLive.map(locale => `${languageName(locale)} (${locale})`).join(", ")} ${stillLive.length === 1 ? "is" : "are"} published: unpublish ${stillLive.length === 1 ? "it" : "them"} too, or keep the shared part.`,
       });
     }
   }
