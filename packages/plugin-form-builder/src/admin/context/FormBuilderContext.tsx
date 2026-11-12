@@ -369,8 +369,10 @@ export function createNotification(
     kind,
     name: "Notify your team",
     recipientType: "static",
+    // One address, as a caller may set it (a site's default recipient): the
+    // list is written only once the addresses are edited, so it never
+    // outranks an address set afterwards.
     to: "",
-    recipients: [],
     // Replying from the team's inbox answers the visitor.
     ...(visitorRef === undefined ? {} : { replyTo: visitorRef }),
     // The team's starter message, so a new notification sends as soon as it

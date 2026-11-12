@@ -233,12 +233,26 @@ describe("adding a notification", () => {
     expect(created).toMatchObject({
       kind: "team",
       recipientType: "static",
-      recipients: [],
       replyTo: "{{email}}",
       templateSlug: FORM_SUBMISSION_TEMPLATE,
       attachFields: [],
     });
     expect(window.location.search).toBe(`?notification=${created.id}`);
+  });
+
+  it("sends a team preset to an address set on it afterwards", async () => {
+    const { createNotification } = await import(
+      "../../context/FormBuilderContext"
+    );
+    const { teamAddressesOf } = await import(
+      "../../../utils/notification-model"
+    );
+    // As the editor seeds a new form with the site's default recipient.
+    const seeded = {
+      ...createNotification("team", fields),
+      to: "team@site.test",
+    };
+    expect(teamAddressesOf(seeded)).toEqual(["team@site.test"]);
   });
 
   it("starts the visitor's confirmation at the form's Email field", async () => {
