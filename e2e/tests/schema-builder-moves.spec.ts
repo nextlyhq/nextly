@@ -180,7 +180,13 @@ test.describe("moving fields in the Builder outline", () => {
     await says(page, `${NOT_YET} Nothing moved.`);
     expect(await topLevel(page)).toEqual(before);
     await expect(row(page, "meta/summary_a")).toHaveCount(0);
-    await expect(page.getByText(/unsaved change/)).toHaveCount(0);
+    // Nothing to save: the refused drop left no change behind.
+    await expect(
+      page.getByText("No unsaved changes", { exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Save", exact: true })
+    ).toBeDisabled();
   });
 
   test("moves by key within a container, announced, with focus kept", async ({
