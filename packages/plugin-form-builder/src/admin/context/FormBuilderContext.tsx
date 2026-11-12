@@ -24,7 +24,10 @@ import {
   type ReactNode,
 } from "react";
 
-import { FORM_SUBMISSION_TEMPLATE } from "../../emails/starter-messages";
+import {
+  FORM_CONFIRMATION_TEMPLATE,
+  FORM_SUBMISSION_TEMPLATE,
+} from "../../emails/starter-messages";
 import type {
   AnyFormField,
   FormFieldTypeId,
@@ -333,16 +336,43 @@ function fieldChangeKey(fields: readonly AnyFormField[], name: string): string {
 export const DEFAULT_SETTINGS: FormSettings = DEFAULT_FORM_SETTINGS;
 
 /** Create a new notification rule with default values */
-export function createNotification(): FormNotification {
+export function createNotification(
+  kind: "team" | "visitor" = "team",
+  fields: readonly AnyFormField[] = []
+): FormNotification {
   const id = `notif_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-  return {
+  // The visitor's address, and where a team member's reply lands: the form's
+  // first Email field, when it has one.
+  const email = fields.find(field => field.type === "email")?.name;
+  const visitorRef = email === undefined ? undefined : `{{${email}}}`;
+  const shared = {
     id,
-    name: "New notification",
     enabled: true,
-    recipientType: "static",
-    to: "",
     cc: [],
     bcc: [],
+    // A new notification attaches nothing until its files are chosen.
+    attachFields: [],
+  };
+  if (kind === "visitor") {
+    return {
+      ...shared,
+      kind,
+      name: "Confirmation to the visitor",
+      recipientType: "field",
+      to: visitorRef ?? "",
+      // The visitor's starter message, so the confirmation sends at once.
+      templateSlug: FORM_CONFIRMATION_TEMPLATE,
+    };
+  }
+  return {
+    ...shared,
+    kind,
+    name: "Notify your team",
+    recipientType: "static",
+    to: "",
+    recipients: [],
+    // Replying from the team's inbox answers the visitor.
+    ...(visitorRef === undefined ? {} : { replyTo: visitorRef }),
     // The team's starter message, so a new notification sends as soon as it
     // has an address, rather than starting without one and never sending.
     templateSlug: FORM_SUBMISSION_TEMPLATE,

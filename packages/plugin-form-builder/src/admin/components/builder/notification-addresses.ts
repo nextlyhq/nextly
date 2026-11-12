@@ -12,11 +12,6 @@ export function isValidEmail(value: string): boolean {
   return EMAIL_PATTERN.test(value.trim());
 }
 
-// Re-exported rather than re-implemented. Whether a value is a field reference
-// is the SEND path's question — a value the editor treats as one and delivery
-// does not goes out with its braces intact — so both read the same parser.
-export { parseFieldRef };
-
 /** The address fields a notification can get wrong. */
 export type AddressField = "senderEmail" | "to" | "replyTo";
 
