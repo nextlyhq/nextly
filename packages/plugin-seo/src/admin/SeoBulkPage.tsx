@@ -106,6 +106,14 @@ function useRows(type: string | undefined) {
   // are read when it is chosen again, so an edit on a later page stays in
   // the changes.
   const putAway = useRef<Record<string, number>>({});
+  // The type shown and the rows read, as they are now: a save or an import
+  // that ends later reads again what is shown then, not what was when it
+  // began.
+  const now = useRef({ type, loaded });
+  useLayoutEffect(() => {
+    now.current = { type, loaded };
+  }, [type, loaded]);
+  const pagesOf = (slug: string) => now.current.loaded[slug]?.pages ?? 1;
 
   const read = useCallback(
     async (slug: string, pages: number, keep: readonly BulkRow[]) => {
@@ -156,7 +164,7 @@ function useRows(type: string | undefined) {
     },
     // Every page read so far, read again from the first.
     again: (slug: string | undefined = type) => {
-      if (slug !== undefined) void read(slug, loaded[slug]?.pages ?? 1, []);
+      if (slug !== undefined) void read(slug, pagesOf(slug), []);
     },
     // A save's values and new versions put into its rows at once, then the
     // type read again: no row shows what the save replaced meanwhile, and an
@@ -174,25 +182,26 @@ function useRows(type: string | undefined) {
           [slug]: { ...known, rows: savedRows(known.rows, changes, revs) },
         };
       });
-      void read(slug, loaded[slug]?.pages ?? 1, []);
+      void read(slug, pagesOf(slug), []);
     },
     // An import may change pages of any type: the type shown is read again,
     // and every other one is put away, with any read of it on its way, to be
     // read when it is chosen.
     afterImport: () => {
+      const shown = now.current.type;
       for (const slug of Object.keys(latest.current)) {
-        if (slug !== type)
+        if (slug !== shown)
           latest.current[slug] = (latest.current[slug] ?? 0) + 1;
       }
-      for (const [slug, each] of Object.entries(loaded)) {
-        if (slug !== type) putAway.current[slug] = each.pages;
+      for (const [slug, each] of Object.entries(now.current.loaded)) {
+        if (slug !== shown) putAway.current[slug] = each.pages;
       }
       setLoaded(current =>
-        type === undefined || current[type] === undefined
+        shown === undefined || current[shown] === undefined
           ? {}
-          : { [type]: current[type] }
+          : { [shown]: current[shown] }
       );
-      if (type !== undefined) void read(type, loaded[type]?.pages ?? 1, []);
+      if (shown !== undefined) void read(shown, pagesOf(shown), []);
     },
   };
 }

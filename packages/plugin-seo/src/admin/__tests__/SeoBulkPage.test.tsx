@@ -785,3 +785,63 @@ describe("the bulk edit screen, Codex round 4", () => {
     expect(screen.getByText("1 change")).toBeTruthy();
   });
 });
+
+describe("the bulk edit screen, Codex round 5", () => {
+  it("reads again every page shown when an import ends, those read while it ran included", async () => {
+    vi.mocked(readPluginRoute).mockImplementation((async (args: {
+      path: string;
+    }) =>
+      args.path.includes("page=2")
+        ? { type: "posts", rows: [ROWS[1]!], total: 2, more: false }
+        : {
+            type: "posts",
+            rows: [ROWS[0]!],
+            total: 2,
+            more: true,
+          }) as unknown as typeof readPluginRoute);
+    let finishImport: (value: unknown) => void = () => undefined;
+    vi.mocked(writePluginRoute).mockImplementation((async (request: {
+      path: string;
+      body?: unknown;
+    }) => {
+      writes.push({ path: request.path, body: request.body });
+      if (request.path === "/import/dry-run") return DRY;
+      return new Promise(resolve => {
+        finishImport = resolve;
+      });
+    }) as unknown as typeof writePluginRoute);
+    render(<SeoBulkPage />);
+    await screen.findByLabelText("Title on Google for Surfer vs Rext");
+    fireEvent.click(screen.getByRole("button", { name: "Do a dry run" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Import 2 pages, all or nothing",
+      })
+    );
+    await waitFor(() =>
+      expect(writes.some(write => write.path === "/import/apply")).toBe(true)
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await screen.findByLabelText("Title on Google for Jasper vs Rext");
+    fireEvent.change(titleOf("Jasper vs Rext"), {
+      target: { value: "Jasper, again" },
+    });
+    await act(async () =>
+      finishImport({
+        message: "Imported 2 pages in one step.",
+        pages: 2,
+        redirects: 0,
+      })
+    );
+    await waitFor(() =>
+      expect(vi.mocked(readPluginRoute).mock.calls.length).toBeGreaterThan(3)
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Title on Google for Jasper vs Rext")
+      ).not.toBeNull()
+    );
+    expect(titleOf("Jasper vs Rext").value).toBe("Jasper, again");
+    expect(screen.getByText("1 change")).toBeTruthy();
+  });
+});
