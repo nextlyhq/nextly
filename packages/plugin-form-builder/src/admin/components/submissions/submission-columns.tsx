@@ -185,54 +185,88 @@ function summaryOf(row: SubmissionRow, form: FormOption | undefined): string {
     .join(" · ");
 }
 
-/** Who sent a submission, and their address, as the From column draws them. */
+/**
+ * Who sent a submission, and their address, as the From column draws them;
+ * with `formName`, the form leads the second line, for a list too narrow for
+ * a Form column of its own.
+ */
 function From({
   row,
   form,
+  formName,
 }: {
   row: SubmissionRow;
   form: FormOption | undefined;
+  formName?: string;
 }): JSX.Element {
   const email = emailOf(row, form);
   const sender = row.title || email;
+  const second = [formName, email && email !== sender ? email : ""]
+    .filter(Boolean)
+    .join(" · ");
+  // Bounded, so a long name or address truncates rather than widening the
+  // column past the list's box.
   return (
-    <span className="flex min-w-0 flex-col">
+    <span className="flex min-w-0 max-w-64 flex-col">
       <Lead text={sender} unread={row.status === "new"} />
-      {email && email !== sender ? (
-        <span className="truncate text-xs text-muted-foreground">{email}</span>
+      {second ? (
+        <span className="truncate text-xs text-muted-foreground">{second}</span>
       ) : null}
     </span>
   );
 }
 
-/** The columns of every form's list. */
+/**
+ * The columns every form's list can do without when its box is narrow, in the
+ * order it gives them up: the Summary first, then the Form column, whose name
+ * moves under the sender's.
+ */
+export const ALL_FORMS_OPTIONAL_COLUMNS = 2;
+
+/**
+ * The columns of every form's list, with the last `leftOut` of its optional
+ * ones ({@link ALL_FORMS_OPTIONAL_COLUMNS}) left out.
+ */
 export function allFormsColumns(
-  forms: ReadonlyMap<string, FormOption>
+  forms: ReadonlyMap<string, FormOption>,
+  leftOut = 0
 ): NextlyColumn<SubmissionRow>[] {
   const formOf = (row: SubmissionRow) => forms.get(formIdOf(row));
+  const formNameOf = (row: SubmissionRow) => formOf(row)?.name ?? formIdOf(row);
+  const withSummary = leftOut < 1;
+  const withForm = leftOut < 2;
+  const from: NextlyColumn<SubmissionRow> = {
+    name: "from",
+    header: "From",
+    accessor: row => row.title ?? "",
+    cell: ({ row }) => (
+      <From
+        row={row}
+        form={formOf(row)}
+        formName={withForm ? undefined : formNameOf(row)}
+      />
+    ),
+  };
+  const formColumn: NextlyColumn<SubmissionRow> = {
+    name: "form",
+    header: "Form",
+    accessor: formNameOf,
+  };
+  const summary: NextlyColumn<SubmissionRow> = {
+    name: "summary",
+    header: "Summary",
+    hideOnMobile: true,
+    accessor: row => summaryOf(row, formOf(row)),
+    cell: ({ value }) => (
+      <span className="line-clamp-2 max-w-56 whitespace-normal text-muted-foreground">
+        {typeof value === "string" ? value : ""}
+      </span>
+    ),
+  };
   return [
-    {
-      name: "from",
-      header: "From",
-      accessor: row => row.title ?? "",
-      cell: ({ row }) => <From row={row} form={formOf(row)} />,
-    },
-    {
-      name: "form",
-      header: "Form",
-      accessor: row => formOf(row)?.name ?? formIdOf(row),
-    },
-    {
-      name: "summary",
-      header: "Summary",
-      hideOnMobile: true,
-      accessor: row => summaryOf(row, formOf(row)),
-      cell: ({ value }) => (
-        <span className="line-clamp-2 max-w-56 whitespace-normal text-muted-foreground">
-          {typeof value === "string" ? value : ""}
-        </span>
-      ),
-    },
+    from,
+    ...(withForm ? [formColumn] : []),
+    ...(withSummary ? [summary] : []),
     ...TRAILING_COLUMNS,
   ];
 }
