@@ -387,7 +387,7 @@ const ONE_RESPONSE_DESCRIPTIONS = {
   // Earlier submissions kept no browser token, so they cannot be counted.
   browser:
     "Counted from when you choose it. Someone who clears their browser's data, or uses another browser, can respond again.",
-  ip: "People in one office or home count as one person, so only one of them can respond.",
+  ip: "People in one office or home count as one person, so only one of them can respond. It needs your site to see each visitor's real address (the trusted proxy setting); until it can, every response is accepted.",
 } as const;
 
 /**
