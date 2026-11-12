@@ -320,6 +320,7 @@ export function RichTextToolbar({
                   className="h-8 w-8 relative"
                   onClick={() => fontColorRef.current?.click()}
                   disabled={disabled}
+                  aria-label="Text Color"
                 >
                   <Baseline className="h-4 w-4" />
                   <span
@@ -329,6 +330,12 @@ export function RichTextToolbar({
                   <input
                     ref={fontColorRef}
                     type="color"
+                    // The button around it is the control: a pointer lands on
+                    // this input, which opens the picker, and the keyboard
+                    // reaches it through the button. Hidden from assistive
+                    // technology so the button is not announced as holding a
+                    // second, unnamed control.
+                    aria-hidden="true"
                     value={fontColor}
                     onChange={e => applyFontColor(e.target.value)}
                     className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
@@ -350,6 +357,7 @@ export function RichTextToolbar({
                   className="h-8 w-8 relative"
                   onClick={() => bgColorRef.current?.click()}
                   disabled={disabled}
+                  aria-label="Background Color"
                 >
                   <Paintbrush className="h-4 w-4" />
                   <span
@@ -359,6 +367,8 @@ export function RichTextToolbar({
                   <input
                     ref={bgColorRef}
                     type="color"
+                    // Hidden as the text colour input above is.
+                    aria-hidden="true"
                     value={bgColor}
                     onChange={e => applyBgColor(e.target.value)}
                     className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"

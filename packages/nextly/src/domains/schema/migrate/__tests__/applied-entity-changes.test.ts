@@ -3,7 +3,11 @@
  * the newest snapshot before it: the rows a development run of `nextly migrate`
  * brings to the snapshot beside the ones it adds.
  */
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type {
   EntitySettingsRecord,
@@ -12,6 +16,7 @@ import type {
 import {
   addAppliedEntityChanges,
   noAppliedEntityChanges,
+  outstandingEntityChanges,
   type AppliedEntityChanges,
 } from "../applied-entity-changes";
 
@@ -128,5 +133,96 @@ describe("the entities an applied migration changed", () => {
       before: { entities: first },
     });
     expect(listed(changes).collection).toEqual(["posts", "tags"]);
+  });
+});
+
+describe("the rows the applied migrations still owe", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "nextly-owed-rows-"));
+    mkdirSync(join(dir, "meta"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A snapshot of today's shape beside migration `base`, recording `entities`. */
+  function snapshot(base: string, entities: EntitySettingsRecord): void {
+    writeFileSync(
+      join(dir, "meta", `${base}.snapshot.json`),
+      JSON.stringify({
+        version: 1,
+        migrationHash: "a".repeat(64),
+        snapshot: { tables: [] },
+        entities,
+      })
+    );
+  }
+  const applied =
+    (...names: string[]) =>
+    (file: string) =>
+      Promise.resolve(names.map(name => `${name}.sql`).includes(file));
+
+  const first = "20260101_000000_000_create";
+  const second = "20260102_000000_000_add_body";
+  const third = "20260103_000000_000_add_tags";
+  beforeEach(() => {
+    snapshot(first, record({ posts: entity(["title"]) }));
+    snapshot(second, record({ posts: entity(["title", "body"]) }));
+    snapshot(
+      third,
+      record({ posts: entity(["title", "body"]), tags: entity(["label"]) })
+    );
+  });
+
+  it("are what the applied migrations after the stored version changed", async () => {
+    const owed = await outstandingEntityChanges({
+      migrationsDir: dir,
+      isApplied: applied(first, second, third),
+      writtenThrough: first,
+    });
+    expect(listed(owed).collection).toEqual(["posts", "tags"]);
+  });
+
+  // A run that applied `second` and failed to write its row left the version
+  // at `first`: the next run still owes posts' row, though it applies nothing.
+  it("include a migration a failed run applied without writing its rows", async () => {
+    const owed = await outstandingEntityChanges({
+      migrationsDir: dir,
+      isApplied: applied(first, second),
+      writtenThrough: first,
+    });
+    expect(listed(owed).collection).toEqual(["posts"]);
+  });
+
+  it("are none once the version names the newest applied migration", async () => {
+    const owed = await outstandingEntityChanges({
+      migrationsDir: dir,
+      isApplied: applied(first, second),
+      writtenThrough: second,
+    });
+    expect(listed(owed)).toEqual({
+      collection: [],
+      single: [],
+      fieldGroup: [],
+    });
+  });
+
+  it("are every applied migration's changes where no version names one", async () => {
+    const owed = await outstandingEntityChanges({
+      migrationsDir: dir,
+      isApplied: applied(first, second, third),
+      writtenThrough: null,
+    });
+    expect(listed(owed).collection).toEqual(["posts", "tags"]);
+  });
+
+  it("leave out a migration not applied", async () => {
+    const owed = await outstandingEntityChanges({
+      migrationsDir: dir,
+      isApplied: applied(first),
+      writtenThrough: null,
+    });
+    expect(listed(owed).collection).toEqual(["posts"]);
   });
 });
