@@ -31,6 +31,7 @@ import { hasPasswordField } from "../../shared/lib/password-fields";
 import { consoleLogger } from "../../shared/types";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 
+import { draftsKeptByPart } from "./part-drafts";
 import { resolveVersionsConfig } from "./resolve-config";
 import type { ComponentSchemas } from "./restore-snapshot";
 import { resolveComponentSchemas } from "./restore-version";
@@ -50,13 +51,14 @@ export interface DraftSplitEligibilityInput {
    * a `null` map is never reached while still eligible.
    */
   componentSchemas: ComponentSchemas | null;
-  /**
-   * The entity's kind, and whether the document itself is localized, for the
-   * rule only a Single applies yet: see `localized-component`. A caller that
-   * passes neither, as the collection paths do, is judged without it.
-   */
+  /** The entity's kind, collection or Single, for the caller's own record. */
   entityKind?: "collection" | "single";
-  documentLocalized?: boolean;
+  /**
+   * Whether the document itself is localized, for the `localized-component`
+   * rule. Required: a caller that left it out would be judged as a localized
+   * document, which that rule never refuses.
+   */
+  documentLocalized: boolean;
 }
 
 /** Why the split does not run for a collection that asked for it. */
@@ -68,10 +70,12 @@ export type DraftSplitDisabledReason =
   /** A component the fields reference has no record in the registry. */
   | "unresolvable-component"
   /**
-   * A Single that is not localized reaches a localized component. Its working
-   * draft is keyed with no language, while the component stores a value per
-   * language, so one draft would hold several languages' edits and a publish
-   * could write one language's into another's.
+   * A collection or Single that is not localized reaches a localized
+   * component, without per-language storage. Its working draft is keyed with
+   * no language, while the component stores a value per language, so one
+   * draft would hold several languages' edits and a publish could write one
+   * language's into another's. Under per-language storage every draft is
+   * keyed by its language, so the rule does not apply there.
    */
   | "localized-component";
 
@@ -151,7 +155,9 @@ export function evaluateDraftSplitEligibility(
       componentSlug: withPassword[0],
     };
   }
-  if (input.entityKind === "single" && input.documentLocalized === false) {
+  // Kept by part, every document's draft is keyed by its language
+  // (`workingDraftLocale`), so a localized component's values are never mixed.
+  if (input.documentLocalized === false && !draftsKeptByPart()) {
     // A component named only by virtual fields stores no rows, so it holds no
     // per-language values for a language-less draft to mix.
     const virtualOnly = reachedOnlyThroughVirtualFields(
@@ -218,12 +224,13 @@ export interface SchemaEligibilityCollection {
   fields: FieldConfig[];
   /** Names the entity in the warning an unresolvable component emits. */
   slug?: string;
-  /** Whether the document itself is localized; see `entityKind`. */
-  localized?: boolean;
   /**
-   * The entity's kind. A Single passes it, with `localized`, so a schema read
-   * reports the `localized-component` rule its writes apply.
+   * Whether the document itself is localized, so a schema read reports the
+   * `localized-component` rule its writes apply. Required, as the write's own
+   * input is: an absent value would be read as not localized.
    */
+  localized: boolean | undefined;
+  /** The entity's kind, collection or Single, for the caller's own record. */
   entityKind?: "collection" | "single";
 }
 
@@ -332,7 +339,7 @@ export async function schemaDraftsEnabled(
  */
 export type AuthoredDraftSplitCollection = Pick<
   CollectionConfig,
-  "status" | "versions" | "fields"
+  "status" | "versions" | "fields" | "localized"
 > & {
   slug?: CollectionConfig["slug"];
 };
@@ -362,6 +369,7 @@ export async function collectionDraftSplit(
     versions: resolveVersionsConfig(collection.versions, collection.status),
     fields: collection.fields,
     slug: collection.slug,
+    localized: collection.localized,
   });
 }
 

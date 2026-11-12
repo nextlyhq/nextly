@@ -259,6 +259,7 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { versionConflictRetries } from "../../versions/version-conflict";
+import { carriesComponentValues } from "../../versions/version-language";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -4784,15 +4785,13 @@ export class SingleMutationService extends BaseService {
               {
                 ref: draftRef,
                 locale: singleDraftLocale,
-                // A Single without languages whose snapshot carries a
-                // component records the save under the language that
-                // component was read in, as its other saves are.
+                // A Single without languages that carries a component records
+                // the save under the language that component was read in,
+                // empty or not, as its other saves are
+                // (`carriesComponentValues`).
                 versionLocale:
                   singleDraftLocale ??
-                  (fieldConfigs.some(
-                    field =>
-                      isFieldGroupField(field) && pending[field.name] != null
-                  )
+                  (carriesComponentValues(fieldConfigs)
                     ? (snapshotLocale ?? null)
                     : null),
                 snapshot: pending,
@@ -5089,7 +5088,7 @@ export class SingleMutationService extends BaseService {
                 locale:
                   Object.keys(previousCompanionValues).length > 0 ||
                   previousCompanionStatus !== null ||
-                  Object.keys(preRestoreComponents).length > 0
+                  carriesComponentValues(fieldConfigs)
                     ? (snapshotLocale ?? null)
                     : null,
                 label: "Before restore",
@@ -5098,7 +5097,7 @@ export class SingleMutationService extends BaseService {
 
             const capturedLocalizedComponents =
               snapshotLocale !== undefined &&
-              Object.keys(components).length > 0;
+              carriesComponentValues(fieldConfigs);
 
             // Whether this snapshot holds locale-specific state and is therefore
             // tagged with `snapshotLocale`. Includes `overlaidPriorTranslations`

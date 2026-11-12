@@ -30,10 +30,12 @@ import {
   schemaDraftsEnabled,
 } from "../draft-split-eligibility";
 
+/** A localized drafts collection with `fields`. */
 const draftsCollection = (fields: FieldConfig[]) => ({
   status: true,
   versions: { drafts: { enabled: true } },
   fields,
+  localized: true,
 });
 
 const componentFields = [
@@ -81,6 +83,26 @@ describe("schemaDraftsEnabled", () => {
     ).resolves.toBe(true);
   });
 
+  // An unlocalized collection's draft has no language, while the component
+  // stores one value per language: the schema read says why drafts are off.
+  it("reports the localized-component rule for an unlocalized collection", async () => {
+    getComponentBySlugSpy.mockResolvedValue({
+      fields: [{ name: "heading", type: "text" }],
+      localized: true,
+    });
+
+    await expect(
+      schemaDraftSplit({
+        ...draftsCollection(componentFields),
+        localized: false,
+      })
+    ).resolves.toEqual({
+      eligible: false,
+      reason: "localized-component",
+      componentSlug: "hero",
+    });
+  });
+
   it("never touches the registry when the collection has no components", async () => {
     await expect(
       schemaDraftsEnabled(draftsCollection(plainFields))
@@ -94,6 +116,7 @@ describe("schemaDraftsEnabled", () => {
         status: true,
         versions: null,
         fields: componentFields,
+        localized: true,
       })
     ).resolves.toBe(false);
     expect(getComponentBySlugSpy).not.toHaveBeenCalled();

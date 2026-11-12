@@ -145,6 +145,7 @@ export const GET = withErrorHandler(
       versions: collection.versions,
       fields: collection.fields,
       slug: (collection as { slug?: string }).slug,
+      localized: (collection as { localized?: boolean }).localized,
     });
 
     return respondDoc({

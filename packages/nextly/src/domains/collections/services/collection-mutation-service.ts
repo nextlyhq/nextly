@@ -399,6 +399,7 @@ import {
   VersionCaptureService,
 } from "../../versions/version-capture-service";
 import { versionConflictRetries } from "../../versions/version-conflict";
+import { carriesComponentValues } from "../../versions/version-language";
 import {
   type VersionRef,
   VersionsRepository,
@@ -2613,7 +2614,7 @@ export class CollectionMutationService extends BaseService {
         // and nothing to disambiguate.
         locale:
           args.localeTag ??
-          (Object.keys(args.documentParts.components ?? {}).length > 0
+          (carriesComponentValues(args.fields)
             ? this.componentSnapshotLocale(undefined)
             : null),
         maxPerDoc: args.versionsConfig.maxPerDoc,
@@ -4489,6 +4490,7 @@ export class CollectionMutationService extends BaseService {
       draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
       fields: fields as unknown as FieldConfig[],
       componentSchemas: splitComponentSchemas,
+      documentLocalized,
     });
     return {
       // Every language: the wildcard resolves to the unlocalized write.
@@ -8051,7 +8053,7 @@ export class CollectionMutationService extends BaseService {
             // them the version would be unlabelled and unrestorable.
             locale:
               localizedWrite?.writeLocale ??
-              (Object.keys(snapshotComponents ?? {}).length > 0
+              (carriesComponentValues(fields)
                 ? this.componentSnapshotLocale(params.locale)
                 : null),
             maxPerDoc: versionsConfig.maxPerDoc,
@@ -13322,14 +13324,12 @@ export class CollectionMutationService extends BaseService {
       // from `workingDraftLocale`.
       locale: draftLocale,
       // The version is keyed the same way, except where the document has no
-      // languages and the snapshot carries a component: that was read in the
-      // language the write named, and is recorded under it as every other
-      // save is.
+      // languages and carries a component: that was read in the language the
+      // write named, empty or not, and is recorded under it as every other
+      // save is (`carriesComponentValues`).
       versionLocale:
         draftLocale ??
-        ((fields as unknown as FieldConfig[]).some(
-          field => isFieldGroupField(field) && draftDocument[field.name] != null
-        )
+        (carriesComponentValues(fields)
           ? this.componentSnapshotLocale(params.locale)
           : null),
       snapshot: draftDocument,
@@ -14696,6 +14696,7 @@ export class CollectionMutationService extends BaseService {
         draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
         fields: fields as unknown as FieldConfig[],
         componentSchemas: splitComponentSchemas,
+        documentLocalized,
       });
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
@@ -15008,7 +15009,7 @@ export class CollectionMutationService extends BaseService {
             captureBeforeRestore = async () => {
               const previousHoldsLocaleState =
                 Object.keys(previousLocalizedValues).length > 0 ||
-                Object.keys(previousComponents ?? {}).length > 0 ||
+                carriesComponentValues(fields) ||
                 previousCompanionStatus !== null;
               // For a per-locale restore into a locale whose companion row is
               // absent (a locale disabled then re-enabled), the prior per-locale
@@ -15815,7 +15816,7 @@ export class CollectionMutationService extends BaseService {
               // Components were read as the write locale just above, so a
               // translation edit touching only embedded component content is
               // locale-specific too — the singles path counts it the same way.
-              Object.keys(snapshotComponents ?? {}).length > 0;
+              carriesComponentValues(fields);
 
             // Which media items the entry uses now, from what this update
             // stored; a held working draft's media count once it is

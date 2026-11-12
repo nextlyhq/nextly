@@ -711,6 +711,7 @@ export class CollectionsHandler {
           | undefined,
         fields: originalFields,
         slug: data.slug as string | undefined,
+        localized: data.localized as boolean | undefined,
       });
       Object.assign(data, draftSplitResponseFields(draftSplit));
     }
