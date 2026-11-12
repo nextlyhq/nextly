@@ -855,6 +855,9 @@ function tidyOwn(page: ReadPage, tally: Tally): Decision {
   const decision = undecided();
   for (const place of ["title", "description"] as const) {
     const current = textValue(page.seo[STORED[place]]);
+    // What the page holds is what the report shows, so a value made
+    // automatic again can be checked before it is.
+    if (current !== undefined) decision.values[place] = current;
     if (current !== undefined && same(current, page.auto[place])) {
       decision.writes[STORED[place]] = "";
       decision.places.push(place);

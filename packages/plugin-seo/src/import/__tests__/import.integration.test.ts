@@ -745,6 +745,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     const source: ImportSource = { kind: "group", field: "seo", map: {} };
     const dry = await dryRun(staff.importer, source);
     expect(dry).toMatchObject({ pages: 1, same: 1, kept: 0 });
+    // The report shows what each page holds, so the change can be checked.
+    expect(
+      dry.documents.find(entry => entry.label === "Surfer vs Rext")?.values
+    ).toEqual({
+      title: "Surfer vs Rext | Rext AI",
+      description: "A description of its own.",
+    });
 
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status, await applied.clone().text()).toBe(200);
