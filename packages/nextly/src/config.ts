@@ -217,6 +217,7 @@ export { pluginAdminSlug } from "./plugins/plugin-slug";
 // plugin's contributions against is the one the admin renders them from.
 export {
   CORE_ADMIN_PLACES,
+  isCoreAdminPlace,
   type AdminPlaceId,
   type AdminPlaces,
   type CoreAdminPlaceId,

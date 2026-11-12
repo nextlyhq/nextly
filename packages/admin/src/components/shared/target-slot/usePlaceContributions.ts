@@ -18,6 +18,7 @@
  */
 import {
   CORE_ADMIN_PLACES,
+  isCoreAdminPlace,
   type AdminContributionsMeta,
   type AdminPlaceId,
   type DeliveredAdminEntry,
@@ -37,7 +38,7 @@ function catalogueBuiltIns(
   place: AdminPlaceId,
   kind: PlaceKind
 ): readonly DeliveredAdminEntry[] {
-  if (!Object.hasOwn(CORE_ADMIN_PLACES, place)) return [];
+  if (!isCoreAdminPlace(place)) return [];
   const builtIns: Partial<Record<PlaceKind, readonly string[]>> =
     CORE_ADMIN_PLACES[place].builtIns;
   return (builtIns[kind] ?? []).map(name => ({ builtIn: name }));

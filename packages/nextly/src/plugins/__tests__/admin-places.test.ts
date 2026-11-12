@@ -6,6 +6,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   CORE_ADMIN_PLACES,
+  isCoreAdminPlace,
   isWellFormedAdminPlaceName,
   reservedAdminPlaceSegmentOf,
   type AdminPlaceId,
@@ -59,6 +60,20 @@ describe("the core admin places", () => {
     expect(Object.isFrozen(CORE_ADMIN_PLACES)).toBe(true);
     for (const place of Object.values(CORE_ADMIN_PLACES)) {
       expect(Object.isFrozen(place)).toBe(true);
+    }
+  });
+
+  it("tells core's places from a plugin's, and narrows to core's ids", () => {
+    for (const id of CORE_IDS) expect(isCoreAdminPlace(id)).toBe(true);
+    // A plugin's place, as a plugin that types it adds to `AdminPlaceId`.
+    expect(isCoreAdminPlace("nextlyhq-plugin-page-builder.settings")).toBe(
+      false
+    );
+    // Not a key of the object itself, though every object has it.
+    expect(isCoreAdminPlace("toString")).toBe(false);
+    const place: string = "dashboard";
+    if (isCoreAdminPlace(place)) {
+      expectTypeOf(place).toEqualTypeOf<CoreAdminPlaceId>();
     }
   });
 

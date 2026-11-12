@@ -141,6 +141,16 @@ export const CORE_ADMIN_PLACES = Object.freeze({
 } as const);
 
 /**
+ * @experimental Whether `place` is one of core's admin places, and not one a
+ * plugin declared. A plugin's place is in {@link AdminPlaceId} once the plugin
+ * types it, so a lookup in {@link CORE_ADMIN_PLACES} asks this first rather
+ * than indexing the core list with an id it may not hold.
+ */
+export function isCoreAdminPlace(place: string): place is CoreAdminPlaceId {
+  return Object.prototype.hasOwnProperty.call(CORE_ADMIN_PLACES, place);
+}
+
+/**
  * @experimental The built-in parts of one kind at a core place, in the order
  * the page draws them, or none.
  */
@@ -148,11 +158,9 @@ export function coreAdminPlaceBuiltIns(
   place: string,
   kind: AdminContributionKind
 ): readonly string[] {
-  if (!Object.prototype.hasOwnProperty.call(CORE_ADMIN_PLACES, place)) {
-    return [];
-  }
+  if (!isCoreAdminPlace(place)) return [];
   const builtIns: Partial<Record<AdminContributionKind, readonly string[]>> =
-    CORE_ADMIN_PLACES[place as CoreAdminPlaceId].builtIns;
+    CORE_ADMIN_PLACES[place].builtIns;
   return builtIns[kind] ?? [];
 }
 
@@ -164,10 +172,8 @@ export function coreAdminPlaceNotReplaceable(
   place: string,
   kind: AdminContributionKind
 ): readonly string[] {
-  if (!Object.prototype.hasOwnProperty.call(CORE_ADMIN_PLACES, place)) {
-    return [];
-  }
-  const entry = CORE_ADMIN_PLACES[place as CoreAdminPlaceId];
+  if (!isCoreAdminPlace(place)) return [];
+  const entry = CORE_ADMIN_PLACES[place];
   if (!("notReplaceable" in entry)) return [];
   const kept: Partial<Record<AdminContributionKind, readonly string[]>> =
     entry.notReplaceable;

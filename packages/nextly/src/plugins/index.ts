@@ -178,6 +178,7 @@ export type { AdminContributionKind } from "./admin-places";
 // The places on admin pages plugins add to, and the ids every surface takes.
 export {
   CORE_ADMIN_PLACES,
+  isCoreAdminPlace,
   type AdminPlaceId,
   type AdminPlaces,
   type CoreAdminPlaceId,
