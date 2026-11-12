@@ -323,6 +323,13 @@ export interface ChangeColumnTypeOp {
    */
   conversion?: "referenceList" | "referenceScalar" | "requireEmpty";
   /**
+   * This conversion clears the values the new type cannot hold and converts the rest (a lossy
+   * change of a saved field's type). Set by the planner that writes such a conversion; a type change
+   * without it keeps every value or is refused. It makes the change a deletion in its column:
+   * `migrate:create` lists it, marks its file destructive and asks the data-loss consent for it.
+   */
+  clearsValues?: true;
+  /**
    * The nullability and default the column must still have afterwards, when the caller knows them.
    *
    * 🔴 Only MySQL needs these, and it needs them absolutely. Its type change is spelled
