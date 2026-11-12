@@ -357,6 +357,10 @@ when it comes after one that carries the metadata or after the record, since not
 record the registry after it. Replace it with one written by this release's
 `nextly migrate:create`.
 
+`nextly migrate:down` stops at the point the record names: a rollback to it puts the registry back
+to the baseline, and one past it is refused. See
+[Rolling back to the registry record](#rolling-back-to-the-registry-record).
+
 ### A permission your build no longer declares
 
 A permission leaves only through a recorded migration. When your app stops declaring one of its
@@ -963,6 +967,42 @@ starts from that same migration again. On MySQL each DDL statement commits as
 it runs, so part of the DOWN may have taken effect; `nextly migrate:status`
 lists every applied migration whose latest rollback failed, and flags the MySQL
 ones, so the schema can be checked before anything is run again.
+
+### Rolling back to the registry record
+
+Once the database has its [registry record](#the-first-nextly-migrate-on-this-release), every
+point a rollback can leave it at must have something recording the registry there: that point's
+own snapshot, or the registry baseline at the point the record was taken at.
+
+A rollback that brings the database back to the record's point, where the record keeps a
+baseline, undoes what the rolled-back migrations did to the registry and the permissions, and
+nothing else. It runs under the schema lock, in the same transaction as the last migration it
+rolls back, so on PostgreSQL and SQLite the tables and the bookkeeping go back together or not
+at all:
+
+- each collection, Single and field group row the baseline holds goes back to how it stood when
+  the record was written, so no row keeps a field whose column the rollback removed;
+- the row of an entity those migrations added is removed, and its permissions are marked as no
+  longer declared;
+- a permission one of them added is marked as no longer declared, keeping its grants, unless the
+  baseline holds it or a plugin still installed declares it;
+- a permission one of them marked is declared again, unless its plugin is now uninstalled.
+
+Everything else keeps its state: Nextly's own permissions, whichever release added them, and
+whatever a plugin's install or uninstall wrote in the meantime. A new site's record is at the
+point before any app migration, so its first migration can be rolled back, leaving no registry
+row.
+
+A rollback that would leave the database at any other point where nothing records the registry
+is refused before it changes anything, naming that point: a migration whose snapshot an earlier
+release wrote without the registry metadata, other than the record's, or the point before any
+app migration when the record is at a migration. Write a new migration that undoes the change
+instead.
+
+On MySQL, where each schema statement commits as it runs, the bookkeeping is written after the
+last DOWN's statements and before its rollback is recorded. If it cannot be written, the
+migration stays recorded applied with a failed rollback, as any DOWN that stops part-way there,
+and `nextly migrate:status` flags it so the schema can be checked first.
 
 **In production, prefer rolling forward** (a new corrective migration) or
 restoring from a backup. `migrate:down` is a manual, CLI-only break-glass tool;

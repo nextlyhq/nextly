@@ -76,6 +76,18 @@ function everyPermission(
   );
 }
 
+/**
+ * Every permission `snapshot` declares, by action and resource, or undefined
+ * where it says nothing about permissions: what a migration made live as it
+ * applied, which a rollback to the registry record's point withdraws.
+ */
+export function permissionsDeclaredBy(
+  snapshot: SnapshotPart | null
+): { action: string; resource: string }[] | undefined {
+  const record = declaredBy(snapshot);
+  return record === undefined ? undefined : everyPermission(record);
+}
+
 /** What a record declares for each plugin it records. */
 function eachPluginsPermissions(
   record: PermissionRecord
