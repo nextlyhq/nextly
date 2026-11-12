@@ -219,6 +219,12 @@ page passes it down from the form state that already tracks it, so `@nextlyhq/ui
 never depends on `react-hook-form`. No first-party plugin exercises it yet, so it
 stays on the experimental list above.
 
+`FormActions` takes a `message`, said in its live region while `dirty` is true in place of
+the default "You have unsaved changes": a bar committing several records at once says
+what changed ("1 page changed"). Like `dirty`, the page states it from the state that
+already knows, and the bar counts nothing. The region is the same element whichever text
+it holds, so a changed count is announced as a change. Omitted, the bar reads as before.
+
 The measure it sits at belongs to `PageShell`, reached through the page. A
 `FormLayout` export used to own that instead, applying its own centred `max-w` and
 side padding from inside the form; it is gone. Two components deciding one page's
