@@ -46,6 +46,35 @@ function seoOf(document: BlockDocument): DocumentSeo | undefined {
   return document.settings?.seo;
 }
 
+/** What the editor's document is to the place, once all of it is known. */
+function placeContextOf(
+  document: "page" | "template" | null,
+  identity: ReturnType<typeof useDocumentIdentity>,
+  userId: string | null | undefined,
+  drawn: string | undefined,
+  ownEntry: string | null | undefined
+): PageBuilderSettingsContext | null {
+  if (document === null || identity?.kind !== "collection") return null;
+  if (userId === null || userId === undefined) return null;
+  return {
+    userId,
+    document,
+    collection: identity.slug,
+    entryId: identity.documentId ?? null,
+    draws: drawsOf(document, drawn, ownEntry),
+  };
+}
+
+/** The collection a design draws, and the one entry an own design draws. */
+function drawsOf(
+  document: "page" | "template",
+  drawn: string | undefined,
+  ownEntry: string | null | undefined
+): PageBuilderSettingsContext["draws"] {
+  if (document !== "template" || drawn === undefined) return null;
+  return { collection: drawn, entryId: ownEntry ?? null };
+}
+
 /**
  * The place for the document the editor has open: a page or a design, never
  * a Layout or a component, which state nothing for a page of their own.
@@ -61,20 +90,10 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
   const ownEntry = useOwnDesignEntry(control);
   const document: "page" | "template" | null =
     kind === "page" ? "page" : kind === "template" ? "template" : null;
-  const context = useMemo((): PageBuilderSettingsContext | null => {
-    if (document === null || identity?.kind !== "collection") return null;
-    if (userId === null || userId === undefined) return null;
-    return {
-      userId,
-      document,
-      collection: identity.slug,
-      entryId: identity.documentId ?? null,
-      draws:
-        document === "template" && drawn !== undefined
-          ? { collection: drawn, entryId: ownEntry ?? null }
-          : null,
-    };
-  }, [document, identity, userId, drawn, ownEntry]);
+  const context = useMemo(
+    () => placeContextOf(document, identity, userId, drawn, ownEntry),
+    [document, identity, userId, drawn, ownEntry]
+  );
   const { apply } = editor;
   const value = seoOf(editor.document);
   const tabProps = useMemo(

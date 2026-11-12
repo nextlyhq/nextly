@@ -10,6 +10,9 @@
  * the SEO plugin's template route, asked as an editor is, with the design
  * as edited.
  */
+import { rmdir } from "node:fs/promises";
+import path from "node:path";
+
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
@@ -22,8 +25,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly";
+import { defineCollection, number, text, upload } from "nextly";
 import { createDynamicHandlers } from "nextly/runtime";
+import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { PRODUCTION_ADDRESSES_ENV } from "../../canonical";
@@ -31,12 +35,53 @@ import { seoPlugin } from "../../plugin";
 import { resolveOrder } from "../../resolver/order";
 import type { TemplateContext } from "../contract";
 
+/**
+ * Where the media library keeps uploads in a test, as it serves them: the
+ * package's own `public` folder, the default local storage.
+ */
+const UPLOADS = path.resolve(import.meta.dirname, "../../../public");
+
 let current: TestNextly | undefined;
+/** The media items a test added, deleted with every file made for them. */
+const uploaded: string[] = [];
 
 afterEach(async () => {
+  for (const id of uploaded.splice(0)) {
+    await current?.nextly.media.delete({ id });
+  }
   await current?.destroy();
   current = undefined;
+  // The folders the uploads were put in, where nothing else is left in them.
+  const month = new Date();
+  for (const folder of [
+    `uploads/${String(month.getFullYear())}/${String(month.getMonth() + 1).padStart(2, "0")}`,
+    `uploads/${String(month.getFullYear())}`,
+    "uploads",
+    "",
+  ]) {
+    await rmdir(path.join(UPLOADS, folder)).catch(() => undefined);
+  }
 });
+
+/** A picture in the media library, named `name`. */
+async function picture(t: TestNextly, name: string): Promise<string> {
+  const data = await sharp({
+    create: {
+      width: 1200,
+      height: 630,
+      channels: 3,
+      background: { r: 15, g: 61, b: 42 },
+    },
+  })
+    .png()
+    .toBuffer();
+  const image = await t.nextly.media.upload({
+    file: { data, name, mimetype: "image/png", size: data.length },
+    altText: name,
+  });
+  uploaded.push(image.id);
+  return image.id;
+}
 
 /** A posts template whose own metadata is `rule`. */
 function design(rule: Record<string, unknown>) {
@@ -70,14 +115,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         labels: { singular: "Post", plural: "Posts" },
         status: true,
         access: { read: () => true },
-        fields: [text({ name: "title" }), text({ name: "slug", unique: true })],
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug", unique: true }),
+          number({ name: "readingMinutes" }),
+          upload({ name: "cover", relationTo: "media" }),
+        ],
       }),
     ],
   });
   return current;
 }
 
-/** An API key whose role reads posts, as an editor's does. */
+/** An API key whose role reads posts and media, as an editor's does. */
 async function readerKey(t: TestNextly): Promise<string> {
   const direct = t.nextly as unknown as {
     users: {
@@ -105,13 +155,16 @@ async function readerKey(t: TestNextly): Promise<string> {
     },
   });
   const seeded = await direct.permissions.find({ limit: 500 });
-  const read = seeded.items.find(item => item.slug === "read-posts");
-  if (read === undefined) throw new Error("read-posts is not seeded");
+  const ids = ["read-posts", "read-media"].map(slug => {
+    const found = seeded.items.find(item => item.slug === slug);
+    if (found === undefined) throw new Error(`${slug} is not seeded`);
+    return found.id;
+  });
   const role = await direct.roles.create({
     data: {
       name: "Template reader",
       slug: "template-reader",
-      permissionIds: [read.id],
+      permissionIds: ids,
     },
   });
   const keys = t.getService("apiKeyService") as unknown as {
@@ -267,6 +320,38 @@ describe.each(getConfiguredTestDialects())(
         description: "A post called Second post.",
       });
       expect(before).toEqual({ hello, second });
+    });
+
+    it("offers only fields a variable fills as text, and previews the page's content image under its own", async () => {
+      const t = await boot(dialect);
+      const cover = await picture(t, "cover.png");
+      const own = await picture(t, "own.png");
+      const created = await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "Hello world",
+          slug: "hello",
+          readingMinutes: 4,
+          cover,
+          seo: { ogImage: own },
+          status: "published",
+        },
+      });
+      const id = String((created as { item: { id: unknown } }).item.id);
+      const context = await panelContext(
+        await readerKey(t),
+        id,
+        design(FIRST_RULE)
+      );
+
+      expect(context.fields.map(field => field.name)).not.toContain(
+        "readingMinutes"
+      );
+      // The rule's preview leaves the page's own image out, so the image the
+      // page's content offers is the one shown.
+      expect(context.previewed?.levels.content.image?.value.url).toMatch(
+        /cover.*\.png$/
+      );
     });
 
     it("previews on the site's production address, the environment's winning, else on the admin's own", async () => {

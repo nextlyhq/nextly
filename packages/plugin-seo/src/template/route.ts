@@ -25,7 +25,8 @@ import { z } from "nextly/zod";
 
 import { isRecord, textOf } from "../plain-values";
 import { designLevelOf } from "../resolver/design-level";
-import { levelsOf, NO_RULES } from "../resolver/page-levels";
+import type { Levels } from "../resolver/order";
+import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import type { PatternField } from "../settings/contract";
 import { tokenOf } from "../settings/pattern-fields";
@@ -51,13 +52,12 @@ const TEMPLATE_BODY = z.object({
 
 type TemplateBody = z.infer<typeof TEMPLATE_BODY>;
 
-/** Field types whose value is words a rule can put in a title. */
-const TEXT_TYPES: ReadonlySet<string> = new Set([
-  "text",
-  "textarea",
-  "email",
-  "number",
-]);
+/**
+ * Field types whose value is words a rule can put in a title. A number is
+ * not one: the Page Builder fills a number into text only with a format,
+ * which a variable does not carry.
+ */
+const TEXT_TYPES: ReadonlySet<string> = new Set(["text", "textarea", "email"]);
 
 /** The request body, parsed, or a refusal naming what is wrong. */
 async function bodyOf(req: Request): Promise<TemplateBody> {
@@ -162,6 +162,63 @@ async function readablePages(
   };
 }
 
+/**
+ * The page `wanted` names: from the listed pages, else read alone where the
+ * reader may read it published. Nothing where no page is wanted.
+ */
+async function previewedRowOf(
+  ctx: PluginRouteContext,
+  body: TemplateBody,
+  wanted: string | undefined,
+  listed: readonly Record<string, unknown>[],
+  published: Record<string, unknown> | undefined
+): Promise<Record<string, unknown> | undefined> {
+  if (wanted === undefined) return undefined;
+  const found = listed.find(row => String(row.id) === wanted);
+  if (found !== undefined) return found;
+  const one = await readablePages(
+    ctx,
+    body,
+    { and: [{ id: { equals: wanted } }, ...(published ? [published] : [])] },
+    1
+  );
+  return one.rows[0];
+}
+
+/** Every level of `row`'s answer with the design as edited drawing it. */
+async function previewLevels(
+  reading: PluginRouteContext,
+  body: TemplateBody,
+  row: Record<string, unknown>,
+  rules: SiteRules
+): Promise<Levels> {
+  const locale = body.locale ?? undefined;
+  const source: PageMetadataInput["source"] = {
+    kind: "entry",
+    collection: body.collection,
+    entry: row,
+  };
+  const input: PageMetadataInput = {
+    ...(locale === undefined ? {} : { locale }),
+    source,
+    code: {},
+    // The design as edited, drawing this page, as its route will.
+    derived: await designLevelOf(reading, source, locale, body.document),
+  };
+  return levelsOf(reading, withoutOwnSeo(input), rules);
+}
+
+/**
+ * The page read without its own SEO, as the rule's preview shows it: a
+ * value the page's own text sets would keep a lower level's from being read
+ * at all (its content's image, where it has its own).
+ */
+function withoutOwnSeo(input: PageMetadataInput): PageMetadataInput {
+  if (input.source.kind !== "entry") return input;
+  const { seo: _own, ...entry } = input.source.entry;
+  return { ...input, source: { ...input.source, entry } };
+}
+
 /** The route a template's SEO panel reads. */
 export function seoTemplateRoute(setup: {
   readRules?: ReadRules;
@@ -204,25 +261,13 @@ export function seoTemplateRoute(setup: {
         .map(row => entryOf(row, fields))
         .filter((entry): entry is TemplateEntry => entry !== undefined);
       // The page asked for where the reader may read it, else the newest.
-      const wanted = body.entryId ?? entries[0]?.id;
-      let previewedRow =
-        wanted === undefined
-          ? undefined
-          : listed.rows.find(row => String(row.id) === wanted);
-      if (previewedRow === undefined && wanted !== undefined) {
-        const one = await readablePages(
-          ctx,
-          body,
-          {
-            and: [
-              { id: { equals: wanted } },
-              ...(published ? [published] : []),
-            ],
-          },
-          1
-        );
-        previewedRow = one.rows[0];
-      }
+      const previewedRow = await previewedRowOf(
+        ctx,
+        body,
+        body.entryId ?? entries[0]?.id,
+        listed.rows,
+        published
+      );
       const locale = body.locale ?? undefined;
       const rules = await readRules(ctx, locale);
       const answer: TemplateContext = {
@@ -235,25 +280,13 @@ export function seoTemplateRoute(setup: {
         site: siteOf(rules, setup.baseUrl, req),
       };
       if (previewedRow !== undefined) {
-        const source: PageMetadataInput["source"] = {
-          kind: "entry",
-          collection: body.collection,
-          entry: previewedRow,
-        };
         const reading = mediaReadFor(
           ctx,
           (await caller.can("read", "media")) === true
         );
-        const input: PageMetadataInput = {
-          ...(locale === undefined ? {} : { locale }),
-          source,
-          code: {},
-          // The design as edited, drawing this page, as its route will.
-          derived: await designLevelOf(reading, source, locale, body.document),
-        };
         answer.previewed = {
           id: String(previewedRow.id),
-          levels: await levelsOf(reading, input, rules),
+          levels: await previewLevels(reading, body, previewedRow, rules),
         };
       }
       return Response.json(answer);

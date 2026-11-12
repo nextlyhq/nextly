@@ -3739,20 +3739,7 @@ function applySeo(
   limits: DocumentLimits
 ): AppliedOp {
   const written: unknown = op.seo;
-  if (written !== null) {
-    if (!isPlainRecord(written) || !isJsonValue(written)) {
-      throw new OpError(
-        `seo: ${describe(written)} is not a document's metadata. A seo op ` +
-          `carries the metadata record, or null to remove it.`
-      );
-    }
-    const problem = documentSeoIssues(written).find(
-      issue => issue.severity === "error"
-    );
-    if (problem !== undefined) {
-      throw new OpError(`seo: ${problem.path}: ${problem.message}`);
-    }
-  }
+  if (written !== null) assertDocumentSeo(written);
   const held = document as unknown as Record<string, unknown>;
   const settingsValue = ownValue(held, "settings");
   const settings = isPlainRecord(settingsValue) ? settingsValue : {};
@@ -3767,15 +3754,7 @@ function applySeo(
         `nothing. A history entry for it would undo to no visible effect.`
     );
   }
-  const nextSettings: Record<string, unknown> = { ...settings };
-  if (written === null) delete nextSettings.seo;
-  else nextSettings.seo = snapshot(written);
-  const next: Record<string, unknown> = { ...held };
-  // Removed rather than left empty, so undoing a document's first metadata
-  // gives back the document it was.
-  if (Object.keys(nextSettings).length === 0) delete next.settings;
-  else next.settings = nextSettings;
-  const result = next as unknown as BlockDocument;
+  const result = withSeo(held, settings, written);
   assertFitsCaps(document, result, "seo", limits);
   return {
     document: result,
@@ -3785,6 +3764,39 @@ function applySeo(
       seo: prior === undefined ? null : snapshot(prior),
     },
   };
+}
+
+/** Refuse a `seo` op's value that is not metadata a save would accept. */
+function assertDocumentSeo(written: unknown): void {
+  if (!isPlainRecord(written) || !isJsonValue(written)) {
+    throw new OpError(
+      `seo: ${describe(written)} is not a document's metadata. A seo op ` +
+        `carries the metadata record, or null to remove it.`
+    );
+  }
+  const problem = documentSeoIssues(written).find(
+    issue => issue.severity === "error"
+  );
+  if (problem !== undefined) {
+    throw new OpError(`seo: ${problem.path}: ${problem.message}`);
+  }
+}
+
+/** The document with `written` as its metadata, or none for null. */
+function withSeo(
+  held: Record<string, unknown>,
+  settings: Record<string, unknown>,
+  written: unknown
+): BlockDocument {
+  const nextSettings: Record<string, unknown> = { ...settings };
+  if (written === null) delete nextSettings.seo;
+  else nextSettings.seo = snapshot(written);
+  const next: Record<string, unknown> = { ...held };
+  // Removed rather than left empty, so undoing a document's first metadata
+  // gives back the document it was.
+  if (Object.keys(nextSettings).length === 0) delete next.settings;
+  else next.settings = nextSettings;
+  return next as unknown as BlockDocument;
 }
 
 /**

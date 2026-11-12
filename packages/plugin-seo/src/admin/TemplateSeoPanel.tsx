@@ -15,6 +15,7 @@
  *
  * @module admin/TemplateSeoPanel
  */
+import { useDocumentLocale } from "@nextlyhq/plugin-sdk/admin";
 import { Input, Switch } from "@nextlyhq/ui";
 import { Info } from "lucide-react";
 import {
@@ -89,21 +90,60 @@ function draftOf(
   };
 }
 
-/** The draft as the design stores it; nothing where it sets nothing. */
+/**
+ * One of the draft's texts as stored: the stored segments themselves where
+ * the text is the one they read as, so what a binding says beyond a variable
+ * (a fallback, a format, another source) is kept until the text is changed.
+ */
+function segmentsOf(
+  text: string,
+  stored: readonly RuleSegment[] | undefined,
+  fields: readonly PatternField[]
+): RuleSegment[] {
+  if (stored !== undefined && textOfRule(stored, fields).text === text) {
+    return [...stored];
+  }
+  return ruleOfText(text, fields).segments;
+}
+
+/**
+ * The draft as the design stores it, over the rule `stored`; nothing where
+ * it sets nothing.
+ */
 function ruleOf(
   draft: RuleDraft,
-  fields: readonly PatternField[]
+  fields: readonly PatternField[],
+  stored: DesignSeo | undefined
 ): DesignSeo | null {
-  const rule: DesignSeo = {};
-  const title = ruleOfText(draft.title, fields).segments;
-  const description = ruleOfText(draft.description, fields).segments;
-  if (title.length > 0) rule.title = title;
-  if (description.length > 0) rule.description = description;
+  const was: DesignSeo = stored ?? {};
+  const rule: DesignSeo = defined({
+    title: segmentsOf(draft.title, was.title, fields),
+    description: segmentsOf(draft.description, was.description, fields),
+    image: imageRuleOf(draft.image, was.image),
+  });
   if (draft.shareDiff) {
-    rule.socialTitle = ruleOfText(draft.socialTitle, fields).segments;
+    rule.socialTitle = segmentsOf(draft.socialTitle, was.socialTitle, fields);
   }
-  if (draft.image !== null) rule.image = { $bind: draft.image };
   return Object.keys(rule).length === 0 ? null : rule;
+}
+
+/** `rule` without the parts it leaves unset: no text, or no image. */
+function defined(rule: DesignSeo): DesignSeo {
+  return Object.fromEntries(
+    Object.entries(rule).filter(
+      ([, value]) =>
+        value !== undefined && !(Array.isArray(value) && value.length === 0)
+    )
+  );
+}
+
+/** The share image rule for `field`, the stored options kept for the same one. */
+function imageRuleOf(
+  field: string | null,
+  stored: DesignSeo["image"]
+): DesignSeo["image"] {
+  if (field === null) return undefined;
+  return stored?.$bind === field ? stored : { $bind: field };
 }
 
 /** The variables a field's text names that no field fills. */
@@ -173,12 +213,23 @@ function useRuleDraft(
   }, [fields, valueKey, seo.value]);
   const commit = (next: RuleDraft): void => {
     if (fields === undefined) return;
-    const value = ruleOf(next, fields);
+    const value = ruleOf(next, fields, seo.value);
     const key = JSON.stringify(value);
     if (key === stored.current) return;
     stored.current = key;
     seo.set(value);
   };
+  // A text still being typed is stored as the panel closes: closing the
+  // Settings dialog takes the field away without its blur.
+  const latest = useRef({ draft, commit });
+  latest.current = { draft, commit };
+  useEffect(
+    () => () => {
+      const { draft: open, commit: store } = latest.current;
+      if (open !== undefined) store(open);
+    },
+    []
+  );
   return { draft, setDraft, commit };
 }
 
@@ -216,14 +267,17 @@ export function TemplateSeoPanel(props: TemplateSeoPanelProps): ReactNode {
   const rule =
     draft === undefined || fields === undefined
       ? seo.value
-      : ruleOf(draft, fields);
+      : ruleOf(draft, fields, seo.value);
+  // The language being edited: its pages, rules and values are previewed.
+  const locale = useDocumentLocale()?.code;
   const request = useMemo(
     () => ({
       collection: draws.collection,
       ...(previewWith === null ? {} : { entryId: previewWith }),
+      ...(locale === undefined ? {} : { locale }),
       document: designWith(design, rule),
     }),
-    [design, draws.collection, previewWith, rule]
+    [design, draws.collection, previewWith, locale, rule]
   );
   const { context, status } = useTemplateContext(request);
   useEffect(() => {
@@ -334,11 +388,12 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
       <PreviewCard
         answer={answer}
         site={context.site}
+        // A failed read again is said, over the last answer read.
         status={
-          answer !== undefined
-            ? "ready"
-            : status === "failed"
-              ? "failed"
+          status === "failed"
+            ? "failed"
+            : answer !== undefined
+              ? "ready"
               : "loading"
         }
         sharedTitleTyped={draft.shareDiff && draft.socialTitle.trim() !== ""}

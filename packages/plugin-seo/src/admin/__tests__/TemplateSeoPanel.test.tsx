@@ -25,6 +25,11 @@ import type { TemplateContext } from "../../template/contract";
 
 /** Each request the panel sent the route. */
 const sent = vi.hoisted(() => [] as Record<string, unknown>[]);
+/** The editor's language, and whether the route fails to answer. */
+const editing = vi.hoisted(() => ({
+  locale: null as string | null,
+  failing: false,
+}));
 
 /** A rule's text pieces filled as the Page Builder fills them for the post. */
 function filled(segments: unknown): string | undefined {
@@ -44,8 +49,11 @@ function filled(segments: unknown): string | undefined {
 }
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  useDocumentLocale: () =>
+    editing.locale === null ? null : { code: editing.locale },
   writePluginRoute: ({ body }: { body: Record<string, unknown> }) => {
     sent.push(body);
+    if (editing.failing) return Promise.reject(new Error("offline"));
     const document = body.document as {
       settings?: { seo?: Record<string, unknown> };
     };
@@ -128,6 +136,8 @@ function Host({ initial }: { initial: DesignSeo | undefined }): ReactNode {
 beforeEach(() => {
   sent.length = 0;
   stored = [];
+  editing.locale = null;
+  editing.failing = false;
 });
 afterEach(cleanup);
 
@@ -234,6 +244,54 @@ describe("a template's SEO panel", () => {
       expect(sent.some(body => body.entryId === "p2")).toBe(true)
     );
     expect(within(heading).getAllByRole("option")).toHaveLength(2);
+  });
+
+  it("keeps what a stored binding says beyond a variable where its text is not changed", async () => {
+    const user = userEvent.setup();
+    const kept: DesignSeo = {
+      title: [{ $bind: "title", fallback: "Untitled" }, " | Rext AI"],
+      description: [{ $bind: "excerpt" }],
+      image: { $bind: "cover", size: "card" },
+    };
+    await open(kept);
+    const description = screen.getByLabelText("Description on Google");
+    await user.clear(description);
+    await user.type(description, "Read it");
+    await user.tab();
+    expect(stored.at(-1)).toEqual({
+      title: kept.title,
+      description: ["Read it"],
+      image: kept.image,
+    });
+  });
+
+  it("asks the route in the language being edited", async () => {
+    editing.locale = "fr";
+    await open();
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ locale: "fr" }));
+  });
+
+  it("stores a rule still being typed when the panel closes", async () => {
+    const user = userEvent.setup();
+    const title = await open();
+    await user.clear(title);
+    await user.type(title, "New {{Post title}");
+    cleanup();
+    expect(stored.at(-1)).toMatchObject({
+      title: ["New ", { $bind: "title" }],
+    });
+  });
+
+  it("says the preview is the last one read when reading it again fails", async () => {
+    const user = userEvent.setup();
+    const title = await open();
+    await screen.findByTestId("seo-search-title");
+    editing.failing = true;
+    await user.type(title, "!");
+    await user.tab();
+    expect(
+      await screen.findByText(/could not be read again just now/)
+    ).toBeTruthy();
   });
 
   it("draws its choices in the SEO screens' select styling", async () => {
