@@ -15,7 +15,7 @@ import type { JSX, ReactNode } from "react";
 
 import type { AskedField, AskedSnapshot } from "../../../utils/asked-fields";
 import { isConsentAnswer } from "../../../utils/consent";
-import { formatExportValue } from "../../../utils/export-formats";
+import { formatExportValue, optionLabels } from "../../../utils/export-formats";
 
 import { ConsentValue } from "./submission-fields";
 
@@ -199,19 +199,6 @@ function fileIds(value: unknown): string[] {
 // the border token falls far below that in dark.
 const linkClass =
   "text-foreground underline decoration-muted-foreground underline-offset-4 hover:decoration-foreground";
-
-/** An option answer by its label as asked, several joined. */
-function optionLabels(field: AskedField, value: unknown): string {
-  const values = Array.isArray(value) ? value : [value];
-  return values
-    .map(each => {
-      const text = typeof each === "string" ? each : formatExportValue(each);
-      return (
-        field.options?.find(option => option.value === text)?.label ?? text
-      );
-    })
-    .join(", ");
-}
 
 /** An answer as text: the text itself, or read the way exports read it. */
 function textOf(value: unknown): string {
