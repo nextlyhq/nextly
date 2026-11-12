@@ -302,7 +302,7 @@ function Strip({ answer }: { answer: Checked }): JSX.Element {
         return (
           <div
             key={crawler.key}
-            className="flex flex-col gap-0.5 border-b border-r border-border px-3.5 py-3 last:border-r-0"
+            className="flex flex-col gap-0.5 border-b border-r border-border px-3.5 py-3 last:border-r-0 lg:border-b-0"
           >
             <span className="text-xs text-muted-foreground">
               {crawler.name}

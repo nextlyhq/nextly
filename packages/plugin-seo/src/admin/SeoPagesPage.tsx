@@ -159,7 +159,7 @@ function ModeActions({
     <div className="flex flex-wrap items-center gap-2">
       {/* Import is reached from Pages, as its one way in. */}
       {mode === "view" ? (
-        <Button variant="outline" asChild>
+        <Button variant="outline" size="sm" asChild>
           <AdminLink href={IMPORT_PAGE_HREF}>Import</AdminLink>
         </Button>
       ) : null}
