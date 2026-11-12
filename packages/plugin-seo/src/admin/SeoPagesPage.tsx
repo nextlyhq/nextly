@@ -126,13 +126,16 @@ function usePages(filter: PagesFilter) {
   useEffect(() => {
     if (!addresses.fetching) setReads(count => count + 1);
   }, [addresses.fetching]);
-  // No list yet, or one that couldn't be read: every status is unknown.
+  // No list yet, one that couldn't be read, or a site never checked whole:
+  // every status is unknown, since nothing was examined.
+  const checked =
+    problems.list?.checkedAt === undefined ? undefined : problems.list;
   const byPage = useMemo(
     () =>
-      problems.list === undefined
+      checked === undefined
         ? undefined
-        : problemsByPage(problems.list.problems, problems.list.types),
-    [problems.list]
+        : problemsByPage(checked.problems, checked.types),
+    [checked]
   );
   const shown = useMemo(
     () => shownPages(items ?? [], filter, item => statusOf(item, byPage)),
@@ -150,7 +153,7 @@ function usePages(filter: PagesFilter) {
     failure,
     loading: items === undefined && failure === null,
     problemsFailed:
-      problems.list === undefined && problems.failed !== null
+      checked === undefined && problems.failed !== null
         ? `The problem list couldn't be read, so each page's status is unknown. ${apiErrorMessage(problems.failed)}`
         : null,
     // Once a save has run, the list and the problems are read again.

@@ -123,6 +123,7 @@ const BLOG_WARNING: Problem = {
 
 const PROBLEMS: ProblemListBody = {
   problems: [BLOG_WARNING],
+  checkedAt: "2026-11-12T18:00:00Z",
   pagesChecked: 2,
   outOfDate: false,
   due: false,
@@ -267,6 +268,30 @@ describe("the list", () => {
     );
     expect(table().queryByText("Good")).toBeNull();
     expect(rowOf("Home").getByText("Not checked")).toBeTruthy();
+  });
+
+  it("says no status is known while the site has never been checked, and why a first check failed", () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/problems"
+          ? { problems: [], pagesChecked: 0, outOfDate: false, due: true }
+          : { items: listed },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    vi.mocked(usePluginRouteMutation).mockImplementation((() => ({
+      write: vi.fn(async () => undefined),
+      pending: false,
+      error: new Error("The check couldn't run."),
+    })) as unknown as typeof usePluginRouteMutation);
+    render(<SeoPagesPage />);
+    expect(table().queryByText("Good")).toBeNull();
+    expect(rowOf("Home").getByText("Not checked")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The check couldn't run."
+    );
   });
 
   it("finds a page by part of its address or name", async () => {
