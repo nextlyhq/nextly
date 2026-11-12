@@ -457,6 +457,36 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 240_000);
 
+    it("asked for some tables, reads and changes those and their translation tables alone", async () => {
+      const t = await boot(dialect);
+      await olderSite(t);
+
+      const { added } = await addDocumentColumns({
+        db: t.adapter.getDrizzle(),
+        dialect: t.adapter.dialect as FreshDatabase["dialect"],
+        tables: [TABLES.codeCollection],
+      });
+
+      expect(added).toBeGreaterThan(0);
+      for (const table of [
+        TABLES.codeCollection,
+        TABLES.codeCollectionLanguages,
+      ]) {
+        expect({ [table]: await columnsOf(t, table) }).toEqual({
+          [table]: expect.arrayContaining(PER_DOCUMENT_COLUMNS),
+        });
+      }
+      for (const table of ALL_TABLES.filter(
+        table =>
+          table !== TABLES.codeCollection &&
+          table !== TABLES.codeCollectionLanguages
+      )) {
+        expect({ [table]: await columnsOf(t, table) }).toEqual({
+          [table]: expect.not.arrayContaining(PER_DOCUMENT_COLUMNS),
+        });
+      }
+    }, 240_000);
+
     it("a run stopped part-way finishes on the next, keeping counters already there", async () => {
       const t = await boot(dialect);
       await seed(t);

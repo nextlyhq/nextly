@@ -177,9 +177,14 @@ import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import {
   bootApplyEnabled,
   checkRelationsBeforePlugins,
+  markNotInLine,
+  markStartIncomplete,
+  readStartFingerprints,
+  unchangedSinceLastStart,
 } from "../init/boot-apply";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
+import { bootSeedingFollows } from "../init/seed-permissions";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
@@ -1150,6 +1155,14 @@ async function registerServicesOnce(
       // with it on, the push that follows would plan to drop translatable columns a database laid
       // out before the setting still holds on its main tables; with it off, reads would ask main
       // tables for columns the setting kept per language.
+      // At a development start, what the last one recorded of each entity's declaration, read once
+      // before any per-entity work, so the reads below can skip what has not changed.
+      await readStartFingerprints(
+        adapter,
+        resolvedLogger,
+        transformedConfig,
+        bootExtensionSchema?.fingerprint ?? null
+      );
       await refuseMixedStorageInConfig(
         adapter,
         transformedConfig,
@@ -3858,8 +3871,13 @@ async function syncCodeFirstCollections(
   // database's, so they hold whatever the rows below do.
   publishCollectionDbOptions(codeFirstConfigs);
 
-  const syncResult =
-    await collectionRegistry.syncCodeFirstCollections(codeFirstConfigs);
+  // A start's own seeding ensures every entity's permissions once it has
+  // registered the services, so the sync leaves them to it and each is
+  // ensured once. A caller with no seeding to follow has the sync seed them.
+  const syncResult = await collectionRegistry.syncCodeFirstCollections(
+    codeFirstConfigs,
+    { seedPermissions: !bootSeedingFollows() }
+  );
 
   logger.info?.(
     `Collections registered: ${syncResult.created.length} created, ${syncResult.updated.length} updated, ${syncResult.unchanged.length} unchanged`
@@ -3874,6 +3892,8 @@ async function syncCodeFirstCollections(
   // by migrations yet, so every sync fails with "does not exist". That's
   // expected — the app should still start so the /setup endpoint works.
   if (syncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of syncResult.errors) markNotInLine("collection", slug);
     const allAreMissingTable = syncResult.errors.every(
       e =>
         e.error.includes("does not exist") ||
@@ -3907,6 +3927,21 @@ async function syncCodeFirstCollections(
   const collectionsBySlug = new Map(
     (transformedConfig.collections ?? []).map(c => [c.slug, c])
   );
+  // Asked of one listing of the tables there are, read once, rather than of the
+  // database once per collection: a table dropped since the last start is
+  // still found missing, at the same cost for five collections as for fifty.
+  // Compared exactly, as the database compares a quoted table name.
+  let existingTables: Promise<Set<string> | null> | undefined;
+  const tableIsThere = async (tableName: string): Promise<boolean> => {
+    // In the schema the tables are configured to live in (PostgreSQL), which
+    // the listing would otherwise read as `public`.
+    existingTables ??= adapter.listTables(adapter.getConfiguredSchema?.()).then(
+      names => new Set(names),
+      () => null
+    );
+    const listed = await existingTables;
+    return listed ? listed.has(tableName) : adapter.tableExists(tableName);
+  };
   for (const slug of syncResult.unchanged) {
     const collection = collectionsBySlug.get(slug);
     const baseTableName = collection?.dbName ?? slug.replace(/-/g, "_");
@@ -3914,7 +3949,7 @@ async function syncCodeFirstCollections(
       ? baseTableName
       : `dc_${baseTableName}`;
     try {
-      const tableExists = await adapter.tableExists(tableName);
+      const tableExists = await tableIsThere(tableName);
       if (!tableExists) {
         logger.info?.(
           `Table ${tableName} missing for registered collection ${slug}, adding to sync`
@@ -4150,6 +4185,10 @@ async function syncCodeFirstComponents(
   );
 
   if (componentSyncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of componentSyncResult.errors) {
+      markNotInLine("fieldGroup", slug);
+    }
     const errorDetails = componentSyncResult.errors
       .map(e => `  - ${e.slug}: ${e.error}`)
       .join("\n");
@@ -4354,8 +4393,10 @@ async function syncCodeFirstSingles(
     ReturnType<SingleRegistryService["syncCodeFirstSingles"]>
   > | null = null;
   try {
+    // As for collections: left to the start's seeding when one follows.
     singleSyncResult = await singleRegistry.syncCodeFirstSingles(
-      codeFirstSingleConfigs
+      codeFirstSingleConfigs,
+      { seedPermissions: !bootSeedingFollows() }
     );
     logger.info?.(
       `Singles registered: ${singleSyncResult.created.length} created, ${singleSyncResult.updated.length} updated, ${singleSyncResult.unchanged.length} unchanged`
@@ -4389,6 +4430,9 @@ async function syncCodeFirstSingles(
   // not-found for a single the config declares. Reported rather than
   // swallowed, so the boot says which single and why.
   if (singleSyncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of singleSyncResult.errors)
+      markNotInLine("single", slug);
     const allAreMissingTable = singleSyncResult.errors.every(
       entry =>
         entry.error.includes("does not exist") ||
@@ -4747,11 +4791,14 @@ async function createMissingCodeFirstTables(
         promptChannel: "terminal",
       });
       if (!result.success) {
+        // Tables this start could not create: nothing it did is vouched for.
+        markStartIncomplete();
         logger.warn?.(
           `Auto-sync tables failed (${result.error.code}): ${result.error.message}`
         );
       }
     } catch (error) {
+      markStartIncomplete();
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.warn?.(`Auto-sync tables failed: ${errorMsg}`);
     }
@@ -4768,6 +4815,8 @@ async function createMissingCodeFirstTables(
       // Reported as missing below.
     }
     try {
+      // A table still missing is not in line, so the next start checks again.
+      if (!exists) markStartIncomplete();
       await (exists ? followUp.afterCreate() : followUp.onMissing());
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -5544,15 +5593,20 @@ async function refuseMixedStorageInConfig(
       })
     ),
   ];
+  const declaredTables = new Set(entities.map(entity => entity.tableName));
+  // At a development start, an entity whose declaration a start already brought in line under the
+  // same settings is not read again: nothing about its layout can have changed since.
+  const judged = entities.filter(
+    entity =>
+      !unchangedSinceLastStart(
+        entity.kind === "component" ? "fieldGroup" : entity.kind,
+        entity.slug
+      )
+  );
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
-  entities.push(
-    ...(await readLayoutScanEntities(
-      adapter,
-      new Set(entities.map(entity => entity.tableName))
-    ))
-  );
-  await refuseMixedStorage(adapter, entities, perLanguage);
+  judged.push(...(await readLayoutScanEntities(adapter, declaredTables)));
+  await refuseMixedStorage(adapter, judged, perLanguage);
   // With no languages declared in the configuration or in Settings, the site would serve the
   // implicit language alone: refused where its per-language tables hold others, so translations
   // never read as gone after a `localization` block is removed.

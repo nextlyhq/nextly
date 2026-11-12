@@ -51,7 +51,8 @@ export function railEntryDecided(
     case "media":
     case "settings":
       return !pending.permissions;
-    // Shown by the site's locales, which arrive with the workspace answer.
+    // The builders, and the translations shown by the site's locales: both
+    // arrive with the workspace answer.
     case "builders":
     case "translations":
       return !pending.workspace;
