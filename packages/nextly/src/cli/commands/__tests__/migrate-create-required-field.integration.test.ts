@@ -293,9 +293,7 @@ describe.each(getConfiguredTestDialects())(
         expect(refused.refused, refused.said).toBe(true);
         expect(refused.said).toContain("(DATA_LOSS_CONSENT_REQUIRED)");
         expect(refused.said).toContain(`- column ${TABLE}.subtitle`);
-        expect(refused.said).toContain(
-          `--accept-data-loss=${TABLE}.subtitle`
-        );
+        expect(refused.said).toContain(`--accept-data-loss=${TABLE}.subtitle`);
         expect(await applied(dialect, file)).toBe(false);
         // The consent naming the column covers the run; consent to another
         // column of the same table would not.
@@ -318,8 +316,9 @@ describe.each(getConfiguredTestDialects())(
         r2: "two",
       });
       // The column is NOT NULL now: a row without a value is refused.
-      await expect(insert(dialect, "subtitle", [{ id: "r3", value: null }]))
-        .rejects.toThrow();
+      await expect(
+        insert(dialect, "subtitle", [{ id: "r3", value: null }])
+      ).rejects.toThrow();
     });
 
     it("a field made required over a row holding no value: refused before any statement runs", async () => {
@@ -343,7 +342,10 @@ describe.each(getConfiguredTestDialects())(
       expect(await attempts(dialect, file)).toEqual([]);
       // Nothing ran: the NULL is still there, no server blanked it, and the
       // column still takes one.
-      expect(await values(dialect, "subtitle")).toEqual({ r1: "one", r2: null });
+      expect(await values(dialect, "subtitle")).toEqual({
+        r1: "one",
+        r2: null,
+      });
       await insert(dialect, "subtitle", [{ id: "r3", value: null }]);
     });
 

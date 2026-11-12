@@ -39,22 +39,6 @@ export const NO_CYCLE = [
 
 /** Each cycle as its member files, relative to `NEXTLY_SOURCE`. */
 export const IMPORT_CYCLES = [
-  // The Direct API and `init`, through the content-event namespaces.
-  [
-    "api/subject-events.ts",
-    "api/versions-access.ts",
-    "direct-api/namespaces/content-events.ts",
-    "direct-api/namespaces/index.ts",
-    "direct-api/nextly.ts",
-    "init.ts",
-  ],
-  // The REST route handler and the dispatcher it routes through.
-  [
-    "dispatcher/dispatcher.ts",
-    "dispatcher/handlers/collection-dispatcher.ts",
-    "dispatcher/handlers/single-dispatcher.ts",
-    "routeHandler.ts",
-  ],
   [
     "domains/collections/services/collection-registry-service.ts",
     "domains/collections/services/collection-sync-service.ts",
