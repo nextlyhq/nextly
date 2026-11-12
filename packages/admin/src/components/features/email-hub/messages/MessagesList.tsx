@@ -55,6 +55,7 @@ import {
   compareGroups,
   type MessageGroup,
   type MessagesQuery,
+  type KnownPlugins,
   type OwnerGroup,
   type StateFilter,
 } from "./messages-model";
@@ -297,6 +298,19 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+/** Each owner the list holds, once, in owner order: the owner filter's options. */
+function ownerOptions(
+  messages: EmailTemplateRecord[],
+  plugins: KnownPlugins
+): OwnerGroup[] {
+  const seen = new Map<string, OwnerGroup>();
+  for (const record of messages) {
+    const group = ownerGroupOf(record.owner, plugins);
+    seen.set(group.key, group);
+  }
+  return [...seen.values()].sort(compareGroups);
+}
+
 /**
  * Messages: every email the site sends, grouped by who owns it.
  *
@@ -323,14 +337,10 @@ export function MessagesList(): JSX.Element {
   // A plugin's group is labelled with the name the admin shows for it.
   const { plugins } = useBranding();
   const messages = useMemo(() => templates.filter(isMessage), [templates]);
-  const owners = useMemo(() => {
-    const seen = new Map<string, OwnerGroup>();
-    for (const record of messages) {
-      const group = ownerGroupOf(record.owner, plugins);
-      seen.set(group.key, group);
-    }
-    return [...seen.values()].sort(compareGroups);
-  }, [messages, plugins]);
+  const owners = useMemo(
+    () => ownerOptions(messages, plugins),
+    [messages, plugins]
+  );
   const groups = useMemo(
     () =>
       groupByOwner(
