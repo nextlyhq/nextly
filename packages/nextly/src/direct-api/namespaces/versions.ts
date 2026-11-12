@@ -51,9 +51,7 @@ import {
 } from "./helpers";
 
 /** The document whose history a call reads: an entry, or a Single. */
-export type VersionTarget =
-  | { collection: string; id: string }
-  | { single: string };
+type VersionTarget = { collection: string; id: string } | { single: string };
 
 /** Every call names its document, and may say who it acts for. */
 type VersionCall = VersionTarget & DirectAPIConfig;

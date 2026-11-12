@@ -55,7 +55,10 @@ import {
   lastLookedAtByPart,
   markLastViewed,
 } from "../domains/versions/version-views";
-import type { VersionRef } from "../domains/versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRef,
+} from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
 import {
   errorFromServiceEnvelope,
@@ -1031,7 +1034,8 @@ async function resolveEnrichedFields(
  */
 export async function readableFieldSources<
   Row extends {
-    versionNo: number;
+    // Null on an autosave row, which records no sources.
+    versionNo: number | null;
     fieldSources?: Readonly<Record<string, number>> | null;
   },
 >(
@@ -1043,10 +1047,15 @@ export async function readableFieldSources<
   }
 ): Promise<Row[]> {
   const naming = rows.filter(
-    row => row.fieldSources && Object.keys(row.fieldSources).length > 0
+    (row): row is Row & { versionNo: number } =>
+      row.versionNo !== null &&
+      !!row.fieldSources &&
+      Object.keys(row.fieldSources).length > 0
   );
   if (naming.length === 0) return [...rows];
-  const snapshots = await getService("versionsService").snapshotsOf(
+  const snapshots = await new VersionsRepository(
+    getService("adapter")
+  ).snapshotsByVersionNo(
     args.ref,
     naming.map(row => row.versionNo)
   );
@@ -1054,8 +1063,13 @@ export async function readableFieldSources<
     rows.map(async row => {
       const sources = row.fieldSources;
       if (!sources || Object.keys(sources).length === 0) return row;
+      // A row naming sources with no version number of its own was never
+      // read above, so its snapshot is judged as empty: every source is still
+      // judged, never passed unexamined.
       const entry = structuredClone(
-        snapshotObject(snapshots.get(row.versionNo))
+        snapshotObject(
+          row.versionNo === null ? undefined : snapshots.get(row.versionNo)
+        )
       );
       for (const name of Object.keys(sources)) {
         if (!(name in entry)) entry[name] = null;
@@ -1070,6 +1084,7 @@ export async function readableFieldSources<
       const readable = Object.entries(sources).filter(
         ([name]) => !withheld.has(name)
       );
+      // The row as given, with only its readable sources: the same shape.
       return {
         ...row,
         fieldSources: readable.length > 0 ? Object.fromEntries(readable) : null,

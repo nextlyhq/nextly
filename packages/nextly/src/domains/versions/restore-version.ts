@@ -601,11 +601,6 @@ export async function restoreVersion(
     }
   );
 
-  // Status is never restored: the restore is an edit held as a draft, and
-  // carrying a version's status would publish or retract with it.
-  delete payload.status;
-  keepOnlyChosen(payload, args.fields);
-
   // Field-level READ rules decide what of the snapshot this caller was ever
   // allowed to see. A field hidden from them must not be written back from a
   // version they could not have read — the history endpoints redact the same
@@ -630,6 +625,20 @@ export async function restoreVersion(
       droppedFields
     );
   }
+
+  // Status is never restored: the restore is an edit held as a draft, and
+  // carrying a version's status would publish or retract with it.
+  delete payload.status;
+  // Nor is it reported as left behind when a read rule withheld it.
+  if (droppedFields.includes("status")) {
+    droppedFields.splice(droppedFields.indexOf("status"), 1);
+  }
+  // The fields chosen, narrowed only now: the read rules above judged each
+  // field against the whole version, as a version read does, since a rule
+  // may consult values the restore does not bring back. What is reported as
+  // left behind is narrowed to the chosen fields too.
+  keepOnlyChosen(payload, args.fields);
+  narrowToChosen(droppedFields, args.fields);
 
   // Field-level write rules strip denied keys inside the update path, silently
   // and after it has already reported success. Evaluating the same rules here
@@ -819,6 +828,17 @@ function keepOnlyChosen(
   for (const key of Object.keys(payload)) {
     if (!keep.has(key)) delete payload[key];
   }
+}
+
+/** Narrow a list of field names to the chosen ones, in place; all, when none were chosen. */
+function narrowToChosen(
+  names: string[],
+  chosen: readonly string[] | undefined
+): void {
+  if (chosen === undefined) return;
+  const keep = new Set(chosen);
+  const kept = names.filter(name => keep.has(name));
+  names.splice(0, names.length, ...kept);
 }
 
 /**

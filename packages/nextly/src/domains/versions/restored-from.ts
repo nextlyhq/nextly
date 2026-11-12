@@ -72,9 +72,23 @@ export function sourcesStillRestored(
     const values = versionValues.get(versionNo);
     if (!values || !Object.hasOwn(saved, field)) continue;
     if (!Object.hasOwn(values, field)) continue;
-    if (deepEqual(saved[field], values[field])) kept[field] = versionNo;
+    if (deepEqual(storedForm(saved[field]), storedForm(values[field]))) {
+      kept[field] = versionNo;
+    }
   }
   return Object.keys(kept).length > 0 ? kept : undefined;
+}
+
+/**
+ * A value as a version's JSON snapshot stores it. A version read back holds a
+ * date as its ISO string while the save being recorded may hold it as a Date,
+ * so both sides are compared in this form: compared as they arrive, an
+ * unchanged restored date would lose its source.
+ */
+function storedForm(value: unknown): unknown {
+  return value === undefined
+    ? undefined
+    : (JSON.parse(JSON.stringify(value)) as unknown);
 }
 
 /**

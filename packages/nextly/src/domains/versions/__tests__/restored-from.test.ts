@@ -76,6 +76,26 @@ describe("sourcesStillRestored", () => {
     ).toBeUndefined();
   });
 
+  it("compares a date as stored, so a restored date the save holds as a Date keeps its source", () => {
+    // A version's snapshot is read back from JSON, where a date is its ISO
+    // string; the save being recorded holds the same date as a Date.
+    const stored = new Map([[1, { when: "2026-01-02T03:04:05.000Z" }]]);
+    expect(
+      sourcesStillRestored(
+        { when: 1 },
+        { when: new Date("2026-01-02T03:04:05.000Z") },
+        stored
+      )
+    ).toEqual({ when: 1 });
+    expect(
+      sourcesStillRestored(
+        { when: 1 },
+        { when: new Date("2026-01-03T03:04:05.000Z") },
+        stored
+      )
+    ).toBeUndefined();
+  });
+
   it("is undefined when nothing is left", () => {
     expect(
       sourcesStillRestored({ title: 1 }, { title: "t9" }, versions)
