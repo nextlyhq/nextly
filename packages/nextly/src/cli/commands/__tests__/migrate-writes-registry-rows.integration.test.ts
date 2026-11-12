@@ -1208,10 +1208,12 @@ describe.each(getConfiguredTestDialects())(
           tick();
           const { context } = command();
           setNonInteractive(true);
-          const code = await exiting(() =>
-            runMigrateDown({ cwd: dir, acceptDataLoss: true }, context)
-          ).finally(() => setNonInteractive(false));
-          expect(code).not.toBeUndefined();
+          // The command itself throws; its action turns that into an exit.
+          await expect(
+            runMigrateDown({ cwd: dir, acceptDataLoss: true }, context).finally(
+              () => setNonInteractive(false)
+            )
+          ).rejects.toThrow(/registry row refused/);
         } finally {
           write.mockRestore();
         }
