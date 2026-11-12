@@ -6,10 +6,12 @@
  * @module components/features/email-hub/messages/messages-model
  */
 
+import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import type {
   EmailTemplateOwner,
   EmailTemplateRecord,
 } from "@admin/services/emailTemplateApi";
+import type { PluginMetadata } from "@admin/types/branding";
 
 /** The default layout wraps every email and is never deleted. */
 export const DEFAULT_LAYOUT_SLUG = "default-layout";
@@ -21,18 +23,50 @@ export interface OwnerGroup {
   label: string;
 }
 
-export function ownerGroupOf(owner: EmailTemplateOwner): OwnerGroup {
+/**
+ * The installed plugins as the admin knows them (`branding.plugins`), which
+ * name a plugin owner's group. Required rather than optional, so no caller can
+ * leave a group labelled with the package name by forgetting it.
+ */
+export type KnownPlugins = readonly PluginMetadata[] | undefined;
+
+/**
+ * The group an email's owner puts it in. A plugin's group keeps its package
+ * name as the key, so filters and grouping stay stable, and is labelled with
+ * the name the admin shows for the plugin everywhere else.
+ */
+export function ownerGroupOf(
+  owner: EmailTemplateOwner,
+  plugins: KnownPlugins
+): OwnerGroup {
+  const key = ownerKeyOf(owner);
   switch (owner.kind) {
     case "core":
-      return { key: "core", label: "Nextly" };
+      return { key, label: "Nextly" };
     case "plugin":
-      return { key: `plugin:${owner.name}`, label: owner.name };
+      return { key, label: pluginLabel(owner.name, plugins) };
     case "site":
-      return { key: "site", label: "This site" };
+      return { key, label: "This site" };
   }
 }
 
-/** Core first, then each plugin by name, then the site's own. */
+/** The stable key of an owner's group, which the owner filter compares. */
+function ownerKeyOf(owner: EmailTemplateOwner): string {
+  return owner.kind === "plugin" ? `plugin:${owner.name}` : owner.kind;
+}
+
+/**
+ * A plugin's name as the rail and panels show it (`pluginDisplayName`: its
+ * appearance label, else its name), or the package name for a plugin the
+ * admin no longer lists, which has nothing else to be called.
+ */
+function pluginLabel(name: string, plugins: KnownPlugins): string {
+  return (
+    pluginDisplayName(plugins?.find(plugin => plugin.name === name)) ?? name
+  );
+}
+
+/** Core first, then each plugin by the name shown, then the site's own. */
 function groupRank(group: OwnerGroup): [number, string] {
   if (group.key === "core") return [0, ""];
   if (group.key === "site") return [2, ""];
@@ -112,7 +146,7 @@ export function matchesQuery(
   record: EmailTemplateRecord,
   query: MessagesQuery
 ): boolean {
-  if (query.owner !== "all" && ownerGroupOf(record.owner).key !== query.owner) {
+  if (query.owner !== "all" && ownerKeyOf(record.owner) !== query.owner) {
     return false;
   }
   if (query.state === "off") {
@@ -141,10 +175,13 @@ export interface MessageGroup {
 }
 
 /** Emails grouped by owner, groups in owner order, rows by name. */
-export function groupByOwner(records: EmailTemplateRecord[]): MessageGroup[] {
+export function groupByOwner(
+  records: EmailTemplateRecord[],
+  plugins: KnownPlugins
+): MessageGroup[] {
   const groups = new Map<string, MessageGroup>();
   for (const record of records) {
-    const group = ownerGroupOf(record.owner);
+    const group = ownerGroupOf(record.owner, plugins);
     const entry = groups.get(group.key) ?? { group, rows: [] };
     entry.rows.push(record);
     groups.set(group.key, entry);

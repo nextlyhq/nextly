@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-seo",
-  "version": "0.0.2-alpha.74",
+  "version": "0.0.2-alpha.75",
   "description": "First-party SEO plugin for Nextly: adds an SEO meta field group to content collections",
   "license": "MIT",
   "type": "module",
@@ -35,17 +35,29 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
-    "@nextlyhq/admin": "0.0.2-alpha.74",
+    "@nextlyhq/admin": "0.0.2-alpha.75",
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.74",
+    "@nextlyhq/ui": "workspace:^",
+    "lucide-react": ">=0.400.0",
+    "nextly": "0.0.2-alpha.75",
     "react": "^19.3.0",
+    "react-hook-form": "^7.66.0",
     "sharp": "^0.35.5"
   },
   "peerDependenciesMeta": {
     "@nextlyhq/admin": {
       "optional": true
     },
+    "@nextlyhq/ui": {
+      "optional": true
+    },
+    "lucide-react": {
+      "optional": true
+    },
     "react": {
+      "optional": true
+    },
+    "react-hook-form": {
       "optional": true
     },
     "sharp": {
@@ -54,17 +66,23 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
+    "@nextlyhq/blocks-react": "workspace:*",
+    "@nextlyhq/plugin-page-builder": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@nextlyhq/ui": "workspace:*",
+    "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.20.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "jsdom": "^27.1.0",
+    "lucide-react": "^0.544.0",
     "nextly": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "react-hook-form": "^7.66.0",
     "sharp": "^0.35.5",
     "tsdown": "^0.23.1",
     "typescript": "7.0.2",

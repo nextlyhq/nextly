@@ -20,9 +20,11 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import { codePagesSlug } from "../code-pages/collection";
 import { isRecord, textOf } from "../plain-values";
 import type { AiCrawlerChoice } from "../settings/contract";
 import { fillPattern } from "../settings/patterns";
+import { typedPageLevel } from "../tab/typed";
 
 import type { Levels } from "./order";
 
@@ -47,6 +49,12 @@ export interface SiteRules {
   hiddenTypes?: readonly string[];
   /** What robots.txt asks AI crawlers to do, where the site has chosen. */
   aiCrawlers?: AiCrawlerChoice;
+  /** Whether IndexNow is told of changed pages: only once switched on. */
+  indexNow?: boolean;
+  /** Whether `/llms.txt` is served: only once switched on. */
+  llmsTxt?: boolean;
+  /** Whether each listed page has a plain-text copy: only once switched on. */
+  plainTextCopies?: boolean;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -70,7 +78,7 @@ function defined<T extends Record<string, unknown>>(values: T): Partial<T> {
 }
 
 /** The type a page belongs to, and its key in the SEO settings. */
-function typeOf(input: PageMetadataInput): {
+export function typeOf(input: PageMetadataInput): {
   type: PublicAddressType;
   key: string;
   document: Readonly<Record<string, unknown>>;
@@ -151,6 +159,11 @@ export async function addressOf(
   locale: string | undefined,
   served: string | undefined
 ): Promise<string | undefined> {
+  if (page.key === codePagesSlug(ctx)) {
+    // A page built in code has no entry and no type declaring its address:
+    // its address is the one its route serves it at, in its language.
+    return textOf(document.path);
+  }
   const address = await publicAddressOf(page.type, document, locale);
   if (address.status !== "resolved") return undefined;
   // An address another page holds is that page's: this one lost it in a
@@ -169,6 +182,15 @@ export async function addressOf(
   return `${origin}${laterListPage(path, served) ?? path}`;
 }
 
+/**
+ * A document's id as the address record keys its holder: its text, or empty
+ * where it has none a record could name.
+ */
+export function idOf(document: Readonly<Record<string, unknown>>): string {
+  const { id } = document;
+  return typeof id === "string" || typeof id === "number" ? String(id) : "";
+}
+
 /** Whether the record says a page other than this one holds `path`. */
 async function heldByAnother(
   ctx: PluginContext,
@@ -178,7 +200,7 @@ async function heldByAnother(
   locale: string | undefined
 ): Promise<boolean> {
   const holders = await addressHolders(ctx, path, locale);
-  const id = String(document.id ?? "");
+  const id = idOf(document);
   return (
     holders.length > 0 &&
     !holders.some(holder => holder.collection === key && holder.id === id)
@@ -205,21 +227,16 @@ function laterListPage(
     : undefined;
 }
 
-/** What a person typed in the page's `seo` group. */
+/**
+ * What a person typed in the page's `seo` group, read by the same function
+ * the SEO tab reads it with, so the tab's preview and the page's head take
+ * the group alike; only the share image, stored as an id, is looked up here.
+ */
 async function pageLevel(
   ctx: PluginContext,
   seo: Readonly<Record<string, unknown>>
 ): Promise<Levels["page"]> {
-  return defined({
-    title: textOf(seo.metaTitle),
-    description: textOf(seo.metaDescription),
-    socialTitle: textOf(seo.socialTitle),
-    socialDescription: textOf(seo.socialDescription),
-    image: await imageOf(ctx, seo.ogImage),
-    canonical: textOf(seo.canonical),
-    canonicalElsewhere: seo.canonicalElsewhere === true ? true : undefined,
-    hidden: seo.noindex === true ? true : undefined,
-  });
+  return typedPageLevel(seo, await imageOf(ctx, seo.ogImage));
 }
 
 /** A text value from the first of `names` the page has one in. */

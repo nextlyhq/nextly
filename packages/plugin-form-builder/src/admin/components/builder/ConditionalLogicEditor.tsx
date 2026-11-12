@@ -46,6 +46,12 @@ export interface ConditionalLogicEditorProps {
   allFields: AnyFormField[];
   /** Callback when conditional logic is updated */
   onUpdate: (updates: Partial<AnyFormField>) => void;
+  /**
+   * Why the field may not be given a condition, when it may not: turning
+   * conditions on is then refused, and the reason shown. One already on can
+   * still be turned off.
+   */
+  lockedReason?: string;
 }
 
 // ============================================================================
@@ -197,6 +203,7 @@ export function ConditionalLogicEditor({
   field,
   allFields,
   onUpdate,
+  lockedReason,
 }: ConditionalLogicEditorProps): JSX.Element {
   // Get current conditional logic or create default.
   // Wrapped in useMemo so dependent useCallbacks don't re-create on every render.
@@ -211,8 +218,12 @@ export function ConditionalLogicEditor({
     [field.conditionalLogic]
   );
 
-  // Get other fields that can be referenced (exclude current field)
-  const availableFields = allFields.filter(f => f.name !== field.name);
+  // Get other fields that can be referenced (exclude current field). A
+  // consent is left out too: every sent form has it agreed, so a condition on
+  // it could only ever answer one way.
+  const availableFields = allFields.filter(
+    f => f.name !== field.name && f.type !== "consent"
+  );
 
   // Update the entire conditional logic object
   const updateLogic = useCallback(
@@ -273,6 +284,12 @@ export function ConditionalLogicEditor({
           <Checkbox
             id="logic-enabled"
             checked={logic.enabled}
+            disabled={lockedReason !== undefined && !logic.enabled}
+            aria-describedby={
+              lockedReason !== undefined && !logic.enabled
+                ? "logic-enabled-locked"
+                : undefined
+            }
             onCheckedChange={handleToggleEnabled}
           />
           <FormLabelWithTooltip
@@ -281,6 +298,14 @@ export function ConditionalLogicEditor({
             description="Show or hide this field based on other field values."
           />
         </div>
+        {lockedReason !== undefined && !logic.enabled ? (
+          <p
+            id="logic-enabled-locked"
+            className="text-xs text-muted-foreground"
+          >
+            {lockedReason}
+          </p>
+        ) : null}
       </div>
 
       {logic.enabled && (

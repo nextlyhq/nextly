@@ -25,6 +25,7 @@ import type { JSX } from "react";
 
 import { Code, Plus } from "@admin/components/icons";
 import { Breadcrumbs } from "@admin/components/shared";
+import { ListOutline } from "@admin/components/shared/loading-frame/outlines";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { TargetSlot } from "@admin/components/shared/target-slot";
 import { usePlaceContributions } from "@admin/components/shared/target-slot/usePlaceContributions";
@@ -87,7 +88,6 @@ import {
   linkedStatusFor,
   type ChosenForCollection,
 } from "./EntryTableColumns";
-import { EntryTableSkeleton } from "./EntryTableSkeleton";
 import {
   chosenPluginFilters,
   listFiltersFor,
@@ -708,20 +708,10 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Loading State
   // ---------------------------------------------------------------------------
 
-  // Show skeleton while collection is loading
+  // The list's outline while the collection loads: the same outline the frame
+  // drew for this address, so nothing changes until the list itself arrives.
   if (collectionLoading) {
-    return (
-      <div className="flex flex-col gap-6">
-        <div className="flex items-center justify-between">
-          <div className="space-y-2">
-            <div className="h-8 w-48 animate-pulse rounded-md bg-muted" />
-            <div className="h-4 w-64 animate-pulse rounded-sm bg-muted" />
-          </div>
-          <div className="h-10 w-32 animate-pulse rounded-md bg-muted" />
-        </div>
-        <EntryTableSkeleton />
-      </div>
-    );
+    return <ListOutline framed={false} />;
   }
 
   // ---------------------------------------------------------------------------

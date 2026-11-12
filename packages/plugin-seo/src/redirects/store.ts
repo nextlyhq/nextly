@@ -503,6 +503,39 @@ export async function putRedirect(
   return { saved, chain: end.path, repointed };
 }
 
+/** The redirect from `source`, a From address as stored, in `locale`, if any. */
+export function redirectFrom(
+  ctx: PluginContext,
+  transaction: Transaction,
+  locale: string,
+  source: string
+): Promise<StoredRedirect | undefined> {
+  return reads(ctx, transaction).from(locale, source);
+}
+
+/** Remove a redirect, and let go of the address it held. */
+export async function removeRedirect(
+  ctx: PluginContext,
+  transaction: Transaction,
+  id: string
+): Promise<StoredRedirect> {
+  const read = reads(ctx, transaction);
+  const found = await read.byId(id);
+  if (found === undefined) {
+    throw NextlyError.notFound({ logContext: { reason: "redirect-gone", id } });
+  }
+  await ctx.publicAddresses.move(
+    [{ holder: { collection: read.slug, id }, holds: [] }],
+    transaction
+  );
+  await ctx.services.collections.deleteEntryInTransaction(
+    transaction,
+    read.slug,
+    id
+  );
+  return found;
+}
+
 /**
  * Remove the redirect holding a From address a published page now takes:
  * the page is meant to live there. Called by the address record inside the

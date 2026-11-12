@@ -28,6 +28,11 @@ export type { BuilderShellProps } from "./builder-shell";
  * is signed in: pass it as `store`. @experimental
  */
 export { userPreferenceStore } from "./shell-state";
+/**
+ * Opens a store under a key, for a host whose browser storage follows rules
+ * of its own: pass it to `userPreferenceStore`. @experimental
+ */
+export type { OpenPreferenceStore } from "./shell-state";
 
 /**
  * The compiled cascade behind the page, for chrome that names where a value

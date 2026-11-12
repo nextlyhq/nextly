@@ -124,6 +124,7 @@ describe("the design an entry is drawn with", () => {
     expect(await content.templates.readFor("posts", "p 1", "fr")).toEqual({
       id: "own-1",
       document: design("own"),
+      own: true,
     });
     expect(held.reads).toEqual([
       {

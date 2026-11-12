@@ -172,6 +172,33 @@ function boundedBy(
   };
 }
 
+/**
+ * How many rows of `collection`, by the slug it is registered under, match
+ * `where`, as `caller` may read them: the count a widget's `count` runs, with
+ * the same read arguments (`sharedReadArgs`), so the access decision and the
+ * field guards are the one path every dashboard read takes. For a reader that
+ * names a collection the server chose, not a widget source: a collection kept
+ * off the dashboard is counted all the same, since hiding one from the
+ * navigation says nothing about who may read it. Throws as the count does,
+ * for a collection the caller may not read included.
+ */
+export async function countAsCaller(
+  collection: string,
+  where: Record<string, unknown> | undefined,
+  caller: ReadCaller
+): Promise<number> {
+  const query: WidgetQuery = {
+    source: `collection:${collection}`,
+    op: "count",
+    ...(where === undefined ? {} : { where }),
+  };
+  const result = await requireNextly().count({
+    collection,
+    ...sharedReadArgs(query, caller),
+  });
+  return result.total;
+}
+
 async function runCount(
   collection: string,
   query: WidgetQuery,

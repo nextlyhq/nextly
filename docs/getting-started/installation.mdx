@@ -416,11 +416,14 @@ export async function register(): Promise<void> {
   // Nextly warns at start when it is off.
   await createRegister(config, {
     cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+    // The build's newest migration, which `withNextly` sets: a production
+    // start warns when the database is behind it.
+    buildSchemaVersion: process.env.NEXTLY_BUILD_SCHEMA_VERSION,
   })();
 }
 ```
 
-Next.js skips `register()` during `next build`, so this opens no database connection at build time. If the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
+Next.js skips `register()` during `next build`, so this opens no database connection at build time. `buildSchemaVersion` is what lets a production start compare the database's schema version with the build's (see [the schema version a production start checks](/docs/guides/production-migrations#the-schema-version-a-production-start-checks)); Next.js inlines it into this file, which is how it reaches Nextly on every host, Vercel and `output: "standalone"` included. If the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
 
 ### 5. Set Up Environment Variables
 

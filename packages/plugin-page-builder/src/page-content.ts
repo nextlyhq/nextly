@@ -61,6 +61,8 @@ export interface PageBuilderContentTemplate {
   readonly id: string;
   /** The template's block document. */
   readonly document: unknown;
+  /** Set where this is the entry's own design, not its collection's. */
+  readonly own?: true;
 }
 
 /**
@@ -126,7 +128,14 @@ const DESIGN_SELECT = {
 
 /** A templates row as the route draws an entry with it. */
 function drawnWith(row: Record<string, unknown>): PageBuilderContentTemplate {
-  return { id: String(row.id), document: row[TEMPLATE_CONTENT_FIELD] ?? null };
+  const drawn = {
+    id: String(row.id),
+    document: row[TEMPLATE_CONTENT_FIELD] ?? null,
+  };
+  const entry = row[TEMPLATE_ENTRY_FIELD];
+  return typeof entry === "string" && entry !== ""
+    ? { ...drawn, own: true }
+    : drawn;
 }
 
 /**

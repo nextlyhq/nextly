@@ -105,7 +105,7 @@ describe("WidgetCard", () => {
     expect(screen.queryByText("42")).not.toBeInTheDocument();
   });
 
-  it("marks the error with the danger status's solid colour, never the action colour", () => {
+  it("marks the error with the danger status's text colour, never the action colour", () => {
     render(
       <WidgetCard
         title="Published posts"
@@ -115,7 +115,7 @@ describe("WidgetCard", () => {
       </WidgetCard>
     );
     const mark = screen.getByTestId("widget-card-error-mark");
-    expect(mark).toHaveClass("text-danger-solid");
+    expect(mark).toHaveClass("text-danger-text");
     expect(mark).not.toHaveClass("text-destructive");
   });
 
@@ -244,18 +244,31 @@ describe("the header", () => {
     );
   });
 
-  it("fits a long title to one line and keeps all of it on hover and for assistive technology", () => {
+  it("fits a long title to the header's two lines, or to one above a subtitle, and keeps all of it on hover and for assistive technology", () => {
     const title =
       "Every post this team has written for the spring product launch";
-    render(
+    const { unmount } = render(
       <WidgetCard title={title}>
         <p>42</p>
       </WidgetCard>
     );
     const heading = screen.getByRole("heading", { name: title });
-    // Drawn on one line, shortened, beside room for a count the body may show after it.
-    expect(within(heading).getByText(title)).toHaveClass("truncate");
+    // No subtitle: the header's second line is free, so the title may wrap onto it and no
+    // further, rather than lose its last words beside the header's controls.
+    expect(within(heading).getByText(title)).toHaveClass("line-clamp-2");
+    expect(within(heading).getByText(title)).not.toHaveClass("truncate");
     expect(heading).toHaveAttribute("title", title);
+    unmount();
+
+    render(
+      <WidgetCard title={title} subtitle="Count">
+        <p>42</p>
+      </WidgetCard>
+    );
+    // With a subtitle beneath it, the title is shortened to its one line.
+    const named = screen.getByRole("heading", { name: `${title}` });
+    expect(within(named).getByText(title)).toHaveClass("truncate");
+    expect(named).toHaveAttribute("title", title);
   });
 
   it("keeps one height and the same controls in every state", () => {

@@ -31,6 +31,16 @@ vi.mock("../../../schema/services/created-table-shape", () => ({
   describeColumnsLeftOut: vi.fn(() => ""),
 }));
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../schema/schema-version")>()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../field-group-table-provisioning", () => ({
   registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
     bound.push(tableName);

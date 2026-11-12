@@ -40,6 +40,23 @@ function trustedSubmittedAt(context: HookContext): boolean {
   return context.req?.http === undefined && Boolean(context.data?.submittedAt);
 }
 
+/** The unique index one response per person rests on. */
+const RESPONSE_KEY_INDEX = {
+  fields: ["form", "responseKey"],
+  unique: true,
+};
+
+/** Whether two index declarations name the same columns and uniqueness. */
+function sameIndex(
+  index: { fields: readonly string[]; unique?: boolean },
+  other: { fields: readonly string[]; unique?: boolean }
+): boolean {
+  return (
+    index.fields.join("\u0000") === other.fields.join("\u0000") &&
+    (index.unique ?? false) === (other.unique ?? false)
+  );
+}
+
 /**
  * Generate the Form Submissions collection configuration.
  *
@@ -200,6 +217,37 @@ export function submissionsCollection(
         description: "ID of the admin who last edited the submitted data",
       },
     }),
+
+    // The submission's one-response key: a keyed digest of the email answer
+    // or network address its form's "one response per person" compares,
+    // never the value itself. Written by the plugin at the write seam, never
+    // taken from a caller, and empty when the form allows several responses
+    // or the submission is spam. Unique per form (see `indexes`), so two
+    // submissions with the same value cannot both be stored.
+    text({
+      name: "responseKey",
+      label: "One-response key",
+      admin: { hidden: true },
+    }),
+
+    // What the submission was asked: each field's label, type and option
+    // labels, and which fields its conditions hid, so its page reads as it
+    // was answered after the form changes. Written by the plugin at the write
+    // seam, never taken from a caller.
+    json({
+      name: "asked",
+      label: "Fields asked",
+      admin: { hidden: true },
+    }),
+
+    // Who sent it, as the admin names it (`submission-title`): its title in
+    // the breadcrumb and lists. Written by the plugin from the answers, never
+    // taken from a caller.
+    text({
+      name: "title",
+      label: "Sender",
+      admin: { hidden: true },
+    }),
   ];
 
   // Process additional fields from formSubmissionOverrides
@@ -240,7 +288,7 @@ export function submissionsCollection(
       isPlugin: true,
       group: "Forms",
       order: 51,
-      useAsTitle: "id",
+      useAsTitle: "title",
       description: "View and manage form submissions",
       // Submissions are created by visitors submitting forms — a hand-typed
       // "New Submission" would be fiction, so the admin never offers one.
@@ -248,10 +296,15 @@ export function submissionsCollection(
 
       components: {
         // The full submissions experience (per-form columns, status tabs,
-        // drawer detail, export) replaces the generic list.
+        // export) replaces the generic list.
         views: {
           List: {
             Component: "@nextlyhq/plugin-form-builder/admin#SubmissionsView",
+          },
+          // Each submission is a page of its own: its answers as asked, its
+          // activity, and its status, note and details beside them.
+          Edit: {
+            Component: "@nextlyhq/plugin-form-builder/admin#SubmissionPage",
           },
         },
       },
@@ -290,5 +343,17 @@ export function submissionsCollection(
 
     // Spread any additional overrides (excluding already used properties)
     ...overrides,
+
+    // One response per person, held by the database: a second submission
+    // with the same key on the same form is refused at its insert, even when
+    // two arrive at once. A submission with no key is not constrained. Kept
+    // beside any indexes the site adds, after the overrides, so customising
+    // the indexes cannot drop the one the rule depends on.
+    indexes: [
+      RESPONSE_KEY_INDEX,
+      ...(overrides.indexes ?? []).filter(
+        index => !sameIndex(index, RESPONSE_KEY_INDEX)
+      ),
+    ],
   };
 }

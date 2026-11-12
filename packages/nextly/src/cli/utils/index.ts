@@ -47,6 +47,9 @@ export {
 // Shared dialect-variant resolution contract for CLI commands
 export {
   discoverMigrationGroups,
+  // The folder as the runner reads it, synchronously: what `withNextly` loads
+  // to name the build's newest migration when an old Builder file is there.
+  readMigrationFolderSync,
   selectVariant,
   getSortedBaseNames,
   type MigrationVariant,

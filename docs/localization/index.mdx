@@ -294,6 +294,11 @@ languageAddresses: {
   serves the prefixes. Sending each domain to its language, and the default language's
   unprefixed addresses to the route, stays with your site, for example a rewrite in
   `next.config.ts` or a Proxy.
+- On a Page Builder route under a `[locale]` segment, a block's link to another entry is read in
+  the request's language and points at that entry's address in it: a German page's button links
+  to `/de/kontakt`, not the English `/contact`. A route mounted for one language with its own
+  `locale` keeps its links as it serves its pages. A route given its own `resolveEntryPath` is
+  handed the language as a third argument and answers the whole address itself.
 - `languageAddressOf(path, locale)`, from `nextly` or `@nextlyhq/plugin-sdk`, answers the address
   a path kept in a language is opened at: `{ status: "resolved", path, origin? }`, or
   `{ status: "unavailable" }` for a language the site does not have.
