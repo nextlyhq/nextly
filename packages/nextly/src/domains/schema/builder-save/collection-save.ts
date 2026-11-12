@@ -53,6 +53,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
+import { mainTableFields } from "../../i18n/per-language-storage";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -711,6 +712,12 @@ function resolutionNotice({ column, rows, resolution }: SettledRows): string {
  * the database cannot key (an unbounded MySQL TEXT): the generator leaves such
  * an index out, so the save would claim a uniqueness nothing enforces. The
  * Builder's own DDL refuses it with the same error.
+ *
+ * Only the fields whose columns are on the main table are judged here. A
+ * translated field kept per language has its column in the companion, where
+ * its uniqueness is a per-language index on an expression rather than on the
+ * column, so a MySQL TEXT there can carry it; whether the server can create
+ * that index is judged by `refuseUnindexableTranslatedUnique`.
  */
 function refuseUnenforceableUniques(
   deps: CollectionSaveDeps,
@@ -718,7 +725,9 @@ function refuseUnenforceableUniques(
   table: string
 ): void {
   const dialect = deps.adapter.getCapabilities().dialect;
-  for (const field of save.entity?.fields ?? []) {
+  const entity = save.entity;
+  if (entity === null) return;
+  for (const field of mainTableFields(entity, entity.fields)) {
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;
