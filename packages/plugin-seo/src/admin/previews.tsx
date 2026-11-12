@@ -12,6 +12,7 @@ import type { SeoTabContext } from "../tab/contract";
 import {
   absoluteAddress,
   cutAt,
+  fileNameOf,
   hostOf,
   resultsAddress,
   shareImageFit,
@@ -160,12 +161,6 @@ function SearchResult({
       </div>
     </div>
   );
-}
-
-/** The file name of an image's address, said where its picture can't be shown. */
-function fileNameOf(url: string): string {
-  const path = url.split(/[?#]/, 1)[0] ?? url;
-  return path.slice(path.lastIndexOf("/") + 1) || url;
 }
 
 /** The card a shared link shows. */
