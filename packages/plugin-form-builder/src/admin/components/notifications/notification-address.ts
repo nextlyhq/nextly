@@ -1,9 +1,15 @@
 /**
  * Which notification a form's Notifications page shows: none, the list; or
- * one, by its id in the address's `notification` query. A query rather than a
+ * one, by its id in the address's `section` query. A query rather than a
  * further path segment, because a form page is one segment of the form's
  * address, and the query gives each notification an address of its own that
  * survives a reload and can be shared.
+ *
+ * `section` is the key the admin gives a document view to name the part of
+ * the view it opens at, and its unsaved-work guard treats a change of it as a
+ * move within the document. Any other key would count as leaving the form, so
+ * opening another notification, or going back to the list, with edits not yet
+ * saved would ask to save or discard them.
  *
  * Read through the admin's own navigation: the admin announces each move with
  * a `locationchange` event (and the browser's Back with `popstate`), so the
@@ -14,8 +20,8 @@
 import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
 import { useSyncExternalStore } from "react";
 
-/** The query key naming the notification shown. */
-const NOTIFICATION_PARAM = "notification";
+/** The query key naming the notification shown: the view's own section. */
+const NOTIFICATION_PARAM = "section";
 
 function subscribe(onChange: () => void): () => void {
   window.addEventListener("locationchange", onChange);

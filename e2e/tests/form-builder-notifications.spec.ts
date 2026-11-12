@@ -68,7 +68,7 @@ test("opens a notification at its own address and saves an edit", async ({
   await expect(row).toContainText("Only when Joining is online");
 
   // Opened directly at its own address.
-  await gotoAdmin(page, `${base}?notification=team`);
+  await gotoAdmin(page, `${base}?section=team`);
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue(
     "Notify the events team"
   );
@@ -95,4 +95,24 @@ test("opens a notification at its own address and saves an edit", async ({
   await expect(
     page.getByRole("list", { name: "Team addresses" })
   ).toContainText("hr@example.com", { timeout: 30_000 });
+
+  // Moving between the list and a notification with an edit not yet saved
+  // stays on the form: nothing asks to save or discard, and the edit is kept.
+  await page
+    .getByRole("textbox", { name: "Name" })
+    .fill("Notify the whole events team");
+  await page.getByRole("link", { name: "All notifications" }).click();
+  await expect(page).toHaveURL(/\/notifications$/);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  const renamed = page
+    .getByRole("list", { name: "Notifications" })
+    .getByRole("listitem")
+    .filter({ hasText: "Notify the whole events team" });
+  await expect(renamed).toBeVisible();
+  await renamed.getByRole("link").first().click();
+  await expect(page).toHaveURL(/section=team/);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue(
+    "Notify the whole events team"
+  );
 });

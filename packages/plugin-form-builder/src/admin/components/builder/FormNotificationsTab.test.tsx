@@ -141,7 +141,7 @@ const lastChange = () =>
 
 /** Show one notification, as its address names it. */
 function openPage(id: string | null) {
-  const url = id === null ? "/" : `/?notification=${id}`;
+  const url = id === null ? "/" : `/?section=${id}`;
   window.history.pushState(null, "", url);
 }
 
@@ -212,9 +212,9 @@ describe("the list", () => {
     const user = userEvent.setup();
     render(<FormNotificationsTab defaults={null} />);
     const link = screen.getByRole("link", { name: "Notify your team" });
-    expect(link).toHaveAttribute("href", "/?notification=n1");
+    expect(link).toHaveAttribute("href", "/?section=n1");
     await user.click(link);
-    expect(window.location.search).toBe("?notification=n1");
+    expect(window.location.search).toBe("?section=n1");
     expect(await screen.findByRole("textbox", { name: "Name" })).toHaveValue(
       "Notify your team"
     );
@@ -237,7 +237,7 @@ describe("adding a notification", () => {
       templateSlug: FORM_SUBMISSION_TEMPLATE,
       attachFields: [],
     });
-    expect(window.location.search).toBe(`?notification=${created.id}`);
+    expect(window.location.search).toBe(`?section=${created.id}`);
   });
 
   it("sends a team preset to an address set on it afterwards", async () => {

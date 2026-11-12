@@ -2,7 +2,7 @@
 
 /**
  * A form's Notifications page: the list of its notifications, or one of them
- * on a page of its own when the address names it (`?notification=<id>`).
+ * on a page of its own when the address names it (`?section=<id>`).
  * Both read and write the form held by the editor, so moving between them
  * keeps unsaved work, and the form's Save commits it.
  *
