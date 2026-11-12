@@ -80,13 +80,12 @@ export interface ReleaseNoticeMessage {
  * transaction, so the job exists only if the notice does.
  */
 export async function enqueueReleaseNoticeEmail(
-  tx: Pick<TransactionContext, "getDrizzle">,
-  dialect: string,
+  tx: Pick<TransactionContext, "insert">,
   noticeId: string,
   now: Date
 ): Promise<void> {
   const input: ReleaseNoticeEmailJobInput = { noticeId };
-  await enqueueInTransaction(tx, dialect, {
+  await enqueueInTransaction(tx, {
     slug: RELEASE_NOTICE_EMAIL_JOB,
     input,
     runAt: null,
