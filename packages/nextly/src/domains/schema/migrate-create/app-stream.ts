@@ -48,7 +48,6 @@ import {
 } from "../pipeline/diff/index-util";
 import type {
   ContributedElements,
-  IndexSpec,
   NextlySchemaSnapshot,
   TableSpec,
 } from "../pipeline/diff/types";
@@ -814,32 +813,18 @@ function unexplainedColumns(input: {
     .map(column => column.name);
 }
 
-/** Index key counts and declared name map for 1-to-1 baseline index matching. */
-function declaredIndexCounts(
-  declared: readonly IndexSpec[],
-  columns: ReturnType<typeof textColumnsOf>
-): { remaining: Map<string, number>; byName: Map<string, string> } {
-  const remaining = new Map<string, number>();
-  const byName = new Map<string, string>();
-  for (const index of declared) {
-    const key = indexKey(index, columns);
-    remaining.set(key, (remaining.get(key) ?? 0) + 1);
-    byName.set(index.name, key);
-  }
-  return { remaining, byName };
-}
-
 /**
  * Live indexes on an owner's table that neither declaration nor contribution explains.
  *
- * Matched 1-to-1 against `bare.indexes` (exact name + `indexKey` first, then
- * remaining `indexKey` cardinality) so a duplicate-shape withdrawn app index
- * with another name cannot hide behind a single declared index. On core tables,
- * dialect bundles declare column uniques and partial indexes outside
- * `bare.indexes` under non-managed names (`*_key`, `*_unique`, etc.), whereas
- * every contributed index passes `resolveIndexName` (`isManagedIndexName`:
- * `idx_`/`uq_`), so unmanaged core indexes are skipped while withdrawn
- * index-only contributions are caught.
+ * Matches by exact index name and `indexKey` (ordered columns, uniqueness,
+ * predicate and expression): every plugin index derives a deterministic
+ * `idx_`/`uq_` name through `resolveIndexName` (as every contributed index
+ * does), so matching by name prevents both a duplicate-shape withdrawn app
+ * index and a withdrawn app index shadowing a pending owner declaration from
+ * passing as declared. On core tables, dialect bundles declare column uniques
+ * and partial indexes outside `bare.indexes` under non-managed names
+ * (`*_key`, `*_unique`, etc.), so unmanaged core indexes are skipped while
+ * withdrawn index-only contributions are caught.
  */
 function unexplainedIndexes(input: {
   bare: TableSpec;
@@ -852,34 +837,19 @@ function unexplainedIndexes(input: {
   }
   const isCore = input.core.has(input.bare.name);
   const contributed = new Set(input.elements.indexes);
-  const { remaining, byName } = declaredIndexCounts(
-    input.bare.indexes,
-    textColumnsOf(input.bare.columns)
-  );
+  const bareText = textColumnsOf(input.bare.columns);
   const liveText = textColumnsOf(input.live.columns);
-  const candidates = input.live.indexes
+  const declaredByName = new Map(
+    input.bare.indexes.map(index => [index.name, indexKey(index, bareText)])
+  );
+  return input.live.indexes
     .filter(
       index =>
         !contributed.has(index.name) &&
-        (!isCore || isManagedIndexName(index.name))
+        (!isCore || isManagedIndexName(index.name)) &&
+        declaredByName.get(index.name) !== indexKey(index, liveText)
     )
-    .map(index => ({ name: index.name, key: indexKey(index, liveText) }));
-  // Match exact declared-name + shape entries first so an owner's own index
-  // consumes its slot before a differently named duplicate-shape index is
-  // checked against the remaining cardinality.
-  const unmatched = candidates.filter(candidate => {
-    if (byName.get(candidate.name) !== candidate.key) return true;
-    remaining.set(candidate.key, (remaining.get(candidate.key) ?? 1) - 1);
-    return false;
-  });
-  return unmatched
-    .filter(candidate => {
-      const count = remaining.get(candidate.key) ?? 0;
-      if (count <= 0) return true;
-      remaining.set(candidate.key, count - 1);
-      return false;
-    })
-    .map(candidate => candidate.name);
+    .map(index => index.name);
 }
 
 /** Live checks on an owner's table that neither declaration nor contribution explains. */
