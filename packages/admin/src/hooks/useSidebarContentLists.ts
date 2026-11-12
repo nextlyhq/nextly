@@ -46,8 +46,8 @@ export function useSidebarCollectionList() {
   });
   const pins = useSidebarCollectionPins();
 
-  // The same filter and sort as the /admin/collections redirect, so the
-  // sidebar's first item and the landing target agree.
+  // The filter and sort the Content overview's tables read too, so the
+  // panel and the overview list the same collections in the same order.
   const items: ApiCollection[] = getSidebarCollectionsForLanding(
     query.data?.items ?? [],
     { branding, capabilities, pinnedCollections: pins.pinned }
@@ -137,7 +137,7 @@ export function useSidebarSingleList({
   const { capabilities } = useCurrentUserPermissions();
   const pins = useSidebarPins({ storageKey: PINNED_SINGLES_STORAGE_KEY });
 
-  // The same filter and sort as the /admin/singles redirect.
+  // The filter and sort the Content overview's Singles table reads too.
   const items = getSidebarSinglesForLanding(allSingles, {
     capabilities,
     pinnedSingles: pins.pinned,
