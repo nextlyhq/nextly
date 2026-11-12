@@ -83,11 +83,15 @@ export function judgedDeletions(args: {
       functionsDefinedBy(statements, args.dialect)
     )
   );
-  const perFile = runDeletions(
-    args.files,
-    args.dialect,
-    offlineDeletionFacts(args.previous, functions)
-  ).map(deletions => deletions.map(d => withReason(d, args.plan)));
+  const perFile = runDeletions(args.files, args.dialect, {
+    ...offlineDeletionFacts(args.previous, functions),
+    // The tables a removal of rows reaches through foreign keys (cascaded or set null) are not
+    // known offline: a collection's keys are not in the snapshot. Unknown rather than none, so
+    // such a removal is listed as reaching tables that could not be read, which only the
+    // consent without targets covers, and never named narrower than applying it will be.
+    cascadeFrom: () => undefined,
+    nulledBy: () => undefined,
+  }).map(deletions => deletions.map(d => withReason(d, args.plan)));
   const seen = new Set<string>();
   const all = perFile.flat().filter(deletion => {
     const key = deletionKey(deletion);

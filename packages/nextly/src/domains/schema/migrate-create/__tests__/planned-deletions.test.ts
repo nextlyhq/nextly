@@ -114,7 +114,7 @@ describe("judgedDeletions", () => {
     ]);
   });
 
-  it("names the rows a person's answer removes", () => {
+  it("names the rows a person's answer removes, and what it reaches as unknown, not as nothing", () => {
     const { all } = judge([['DELETE FROM "dc_posts" WHERE "title" IS NULL']], {
       resolutions: [
         {
@@ -124,15 +124,17 @@ describe("judgedDeletions", () => {
         },
       ],
     });
-    expect(all).toEqual([
-      {
-        kind: "rows",
-        table: "dc_posts",
-        reason: "rows with no title removed, so the column can be required",
-      },
+    expect(all[0]).toEqual({
+      kind: "rows",
+      table: "dc_posts",
+      reason: "rows with no title removed, so the column can be required",
+    });
+    // Foreign keys are not in the snapshot: what a removal reaches through them is unknown, and
+    // listed so, which only the consent without targets covers.
+    expect(all.slice(1)).toEqual([
+      expect.objectContaining({ kind: "unnamed" }),
     ]);
   });
-
   it("finds nothing in statements that keep every value", () => {
     const { all } = judge([
       [

@@ -390,7 +390,9 @@ const COUNT_BUDGET_MS = 5000;
  * needs no database, and the listing is asked about either way. Counting
  * stops once `budgetMs` has passed: no further count starts, and one still
  * running is not waited for (the database finishes it; no dialect cancels it
- * the same way), so the rest are listed without a count.
+ * the same way), so the rest are listed without a count. SQLite counts in
+ * the call itself, so one count there cannot be cut short: the budget is
+ * checked before each, and at most the one under way runs past it.
  */
 export async function countWhereReadable(
   deletions: readonly Deletion[],

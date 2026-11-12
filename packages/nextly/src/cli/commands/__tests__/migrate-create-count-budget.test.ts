@@ -12,6 +12,7 @@ const db = vi.hoisted(() => ({
   delays: [] as number[],
   asked: 0,
   disconnected: false,
+  dialect: "postgresql" as string,
 }));
 
 vi.mock("../../utils/adapter", async importOriginal => ({
@@ -22,6 +23,16 @@ vi.mock("../../utils/adapter", async importOriginal => ({
       db.disconnected = true;
     },
     getDrizzle: () => ({
+      // SQLite counts in the call itself: each blocks for its delay before returning.
+      all: () => {
+        const delay = db.delays[db.asked] ?? 0;
+        db.asked += 1;
+        const until = Date.now() + delay;
+        while (Date.now() < until) {
+          // Busy, as a synchronous scan is.
+        }
+        return [{ count: 7 }];
+      },
       execute: () => {
         const delay = db.delays[db.asked] ?? 0;
         db.asked += 1;
@@ -85,5 +96,27 @@ describe("countWhereReadable's budget", () => {
     ]);
     // Closed only once the count still running settles.
     expect(db.disconnected).toBe(false);
+  });
+});
+
+describe("countWhereReadable's budget on SQLite, which counts in the call", () => {
+  it("lets the count under way finish, and starts none after the budget", async () => {
+    db.delays = [300, 5, 5];
+    const counted = await countWhereReadable(
+      [table("a"), table("b"), table("c")],
+      "sqlite",
+      logger,
+      100
+    );
+    expect(counted).toEqual([
+      { ...table("a"), count: 7 },
+      table("b"),
+      table("c"),
+    ]);
+    expect(db.asked).toBe(1);
+    expect(said).toEqual([
+      "Counts stopped at their time limit; the rest are listed without one.",
+    ]);
+    expect(db.disconnected).toBe(true);
   });
 });
