@@ -58,40 +58,12 @@ function sameIndex(
 }
 
 /**
- * Generate the Form Submissions collection configuration.
- *
- * Creates a collection for storing form submissions with:
- * - Reference to the parent form
- * - Submitted data (JSON)
- * - Status tracking (new, read, archived)
- * - Metadata (IP, user agent, timestamp)
- * - Internal notes for admin use
- *
- * @param pluginConfig - Resolved plugin configuration
- * @returns CollectionConfig for the Submissions collection
- *
- * @example
- * ```typescript
- * const submissionsCol = submissionsCollection(resolvedConfig);
- * // Returns a collection with slug "form-submissions" (or custom slug from config)
- * ```
+ * The fields the plugin itself gives every submission, whatever a host adds
+ * through `formSubmissionOverrides.fields`. One list, read by the collection
+ * and by what tells the admin which fields are the host's own.
  */
-export function submissionsCollection(
-  pluginConfig: ResolvedFormBuilderConfig
-): ExtendedCollectionConfig {
-  const {
-    slug,
-    labels,
-    fields: additionalFields,
-    access: accessOverrides,
-    ...overrides
-  } = pluginConfig.formSubmissionOverrides;
-
-  // Get the forms collection slug for the relationship
-  const formSlug = pluginConfig.formOverrides.slug;
-
-  // Build the default fields array
-  const defaultFields: FieldConfig[] = [
+function builtInSubmissionFields(formSlug: string): FieldConfig[] {
+  return [
     // ============================================================
     // Form Relationship
     // ============================================================
@@ -249,6 +221,75 @@ export function submissionsCollection(
       admin: { hidden: true },
     }),
   ];
+}
+
+/**
+ * The fields a host added to the submissions collection: every named
+ * top-level field that is not one of the plugin's own. The submission page
+ * shows them, since it replaces the default editor that would have drawn
+ * them.
+ */
+export function submissionExtensionFields(
+  pluginConfig: ResolvedFormBuilderConfig
+): Array<{ name: string; label: string; type: string }> {
+  const builtIn = new Set(
+    builtInSubmissionFields(pluginConfig.formOverrides.slug).map(fieldName)
+  );
+  return submissionsCollection(pluginConfig)
+    .fields.map(field => ({
+      name: fieldName(field),
+      label: fieldLabel(field),
+      type: (field as { type: string }).type,
+    }))
+    .filter(field => field.name !== "" && !builtIn.has(field.name));
+}
+
+/** A field's name, or "" for a layout field that has none. */
+function fieldName(field: FieldConfig): string {
+  return "name" in field && typeof field.name === "string" ? field.name : "";
+}
+
+/** A field's label as the page shows it: its own, else its name. */
+function fieldLabel(field: FieldConfig): string {
+  const label = (field as { label?: unknown }).label;
+  return typeof label === "string" && label !== "" ? label : fieldName(field);
+}
+
+/**
+ * Generate the Form Submissions collection configuration.
+ *
+ * Creates a collection for storing form submissions with:
+ * - Reference to the parent form
+ * - Submitted data (JSON)
+ * - Status tracking (new, read, archived)
+ * - Metadata (IP, user agent, timestamp)
+ * - Internal notes for admin use
+ *
+ * @param pluginConfig - Resolved plugin configuration
+ * @returns CollectionConfig for the Submissions collection
+ *
+ * @example
+ * ```typescript
+ * const submissionsCol = submissionsCollection(resolvedConfig);
+ * // Returns a collection with slug "form-submissions" (or custom slug from config)
+ * ```
+ */
+export function submissionsCollection(
+  pluginConfig: ResolvedFormBuilderConfig
+): ExtendedCollectionConfig {
+  const {
+    slug,
+    labels,
+    fields: additionalFields,
+    access: accessOverrides,
+    ...overrides
+  } = pluginConfig.formSubmissionOverrides;
+
+  // Get the forms collection slug for the relationship
+  const formSlug = pluginConfig.formOverrides.slug;
+
+  // The fields the plugin itself gives every submission.
+  const defaultFields = builtInSubmissionFields(formSlug);
 
   // Process additional fields from formSubmissionOverrides
   // Note: Function-style overrides should be resolved in plugin.ts before reaching here

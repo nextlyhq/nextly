@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { submissionsCollection } from "../collections/submissions";
+import { select, text } from "nextly";
+
+import {
+  submissionExtensionFields,
+  submissionsCollection,
+} from "../collections/submissions";
 import { formBuilder } from "../plugin";
 
 /**
@@ -73,5 +78,33 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
         fields: ["form", "submittedAt", "status"],
       },
     });
+  });
+});
+
+describe("the fields a host adds to submissions", () => {
+  it("are the collection's fields that are not the plugin's own", () => {
+    const { config } = formBuilder({
+      formSubmissionOverrides: {
+        fields: [
+          select({
+            name: "priority",
+            label: "Priority",
+            options: [
+              { label: "Low", value: "low" },
+              { label: "High", value: "high" },
+            ],
+          }),
+          text({ name: "source" }),
+        ],
+      },
+    });
+    expect(submissionExtensionFields(config)).toEqual([
+      { name: "priority", label: "Priority", type: "select" },
+      { name: "source", label: "source", type: "text" },
+    ]);
+  });
+
+  it("are none on a plain install", () => {
+    expect(submissionExtensionFields(formBuilder().config)).toEqual([]);
   });
 });

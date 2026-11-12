@@ -20,7 +20,15 @@ interface BuilderConfigResponse {
   notifications?: NotificationDefaults;
   spamProtection?: SpamDefaults;
   redirectCollections?: string[];
+  submissionFields?: SubmissionExtensionField[];
   slugs?: { forms?: string; submissions?: string };
+}
+
+/** A field a host added to the submissions collection. */
+export interface SubmissionExtensionField {
+  name: string;
+  label: string;
+  type: string;
 }
 
 /**
@@ -56,6 +64,8 @@ export interface BuilderConfig {
   submissionsSlug: string | undefined;
   /** The forms collection's resolved slug, once known. */
   formsSlug: string | undefined;
+  /** The fields a host added to submissions; none until known. */
+  submissionFields: SubmissionExtensionField[];
 }
 
 const LOADING: BuilderConfig = {
@@ -67,6 +77,7 @@ const LOADING: BuilderConfig = {
   failed: false,
   submissionsSlug: undefined,
   formsSlug: undefined,
+  submissionFields: [],
 };
 
 /** The editor's configuration from the route's answer, `null` for a failure. */
@@ -90,6 +101,7 @@ function builderConfigFrom(
     failed: config === null,
     submissionsSlug: config?.slugs?.submissions,
     formsSlug: config?.slugs?.forms,
+    submissionFields: config?.submissionFields ?? [],
   };
 }
 

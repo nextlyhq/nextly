@@ -55,6 +55,7 @@ import { type JSX, type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { FormField } from "../types";
 import { type AskedSnapshot, askedFieldsOf } from "../utils/asked-fields";
+import { formatExportValue } from "../utils/export-formats";
 import { senderOf } from "../utils/submission-title";
 
 import { SUBMISSION_COUNT_KEY } from "./components/editor/useSubmissionCount";
@@ -82,7 +83,10 @@ import {
   SubmissionAnswers,
 } from "./components/submissions/SubmissionAnswers";
 import { readPermissions } from "./use-admin-permissions";
-import { useBuilderConfig } from "./use-builder-config";
+import {
+  type SubmissionExtensionField,
+  useBuilderConfig,
+} from "./use-builder-config";
 
 /** A submission as the entries API answers it. */
 export type SubmissionDocument = SubmissionRow;
@@ -474,8 +478,9 @@ function answersChanged(
   );
 }
 
-/** The key this page reports its unsaved answers under. */
+/** The keys this page reports its unsaved answers and note under. */
 const UNSAVED_ANSWERS_KEY = "forms.submission-answers";
+const UNSAVED_NOTE_KEY = "forms.submission-note";
 
 /**
  * Editing a submission's answers: the draft, the answers it is made from, and
@@ -665,14 +670,16 @@ function ActivityBox({
  * the stored note it last showed, so text typed while a save is on its way is
  * never wiped by that save's answer. "Saved" is said only of the text saved.
  */
-function useNoteDraft(submission: SubmissionDocument, save: Save) {
+function useNoteDraft(
+  submission: SubmissionDocument,
+  save: Save,
+  leaving: boolean
+) {
   const stored = submission.notes ?? "";
   const [note, setNote] = useState(stored);
   const [savedText, setSavedText] = useState<string | null>(null);
   const noteNow = useRef(note);
   noteNow.current = note;
-  const storedNow = useRef(stored);
-  storedNow.current = stored;
   // The stored note the textarea's text was last brought up to.
   const shown = useRef(stored);
   // The stored note once the page's own saves have landed, and how many are on their way.
@@ -689,9 +696,12 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
       setSavedText(null);
       return;
     }
-    if (noteNow.current === shown.current) setNote(stored);
+    // Text typed since the stored note last shown keeps its basis: a newer
+    // stored note, someone else's, must not become what the draft replaces.
+    const typed = noteNow.current !== shown.current;
+    if (!typed) setNote(stored);
     shown.current = stored;
-    if (pending.current === 0) expected.current = stored;
+    if (pending.current === 0 && !typed) expected.current = stored;
   }, [submission.id, stored]);
   const saveNote = () => {
     const text = noteNow.current;
@@ -703,19 +713,49 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
       .then(() => setSavedText(text))
       .catch(() => {
         // Not stored: once no other note save is on its way, the next one
-        // replaces the note as stored, so leaving the note retries it.
-        if (pending.current === 1) expected.current = storedNow.current;
+        // replaces what this one would have, so leaving the note retries it,
+        // and is refused again if someone else changed the note meanwhile.
+        if (pending.current === 1) expected.current = basis;
       })
       .finally(() => {
         pending.current -= 1;
       });
   };
+  // A note typed and not yet stored holds the page: leaving it asks first.
+  useReportUnsavedWork(
+    UNSAVED_NOTE_KEY,
+    !leaving && note !== stored && note !== savedText
+  );
   return {
     note,
     edit: (text: string) => setNote(text),
     saveNote,
     saved: savedText !== null && savedText === note,
   };
+}
+
+/**
+ * The fields a host added to submissions, with their values. Read-only: the
+ * page draws no editor for a field it does not know, so they are changed
+ * through the API, as the documentation says.
+ */
+function ExtensionDetails({
+  submission,
+  fields,
+}: {
+  submission: SubmissionDocument;
+  fields: readonly SubmissionExtensionField[];
+}): JSX.Element | null {
+  const values = submission as unknown as Record<string, unknown>;
+  return (
+    <>
+      {fields.map(field => (
+        <Detail key={field.name} label={field.label}>
+          {formatExportValue(values[field.name]) || "—"}
+        </Detail>
+      ))}
+    </>
+  );
 }
 
 /** The side panel: its status, the internal note, and its details. */
@@ -727,6 +767,8 @@ function SidePanel({
   formId,
   formName,
   formsSlug,
+  extensionFields,
+  leaving,
 }: {
   submission: SubmissionDocument;
   status: string;
@@ -735,8 +777,15 @@ function SidePanel({
   formId: string | undefined;
   formName: string;
   formsSlug: string;
+  extensionFields: readonly SubmissionExtensionField[];
+  /** The submission is deleted and the page is moving on: nothing is left to save. */
+  leaving: boolean;
 }): JSX.Element {
-  const { note, edit, saveNote, saved } = useNoteDraft(submission, save);
+  const { note, edit, saveNote, saved } = useNoteDraft(
+    submission,
+    save,
+    leaving
+  );
   return (
     <aside
       aria-label="Submission details"
@@ -835,6 +884,10 @@ function SidePanel({
             <Detail label="ID">
               <span className="font-mono">{submission.id.slice(0, 8)}</span>
             </Detail>
+            <ExtensionDetails
+              submission={submission}
+              fields={extensionFields}
+            />
           </dl>
         </section>
       </div>
@@ -1008,7 +1061,8 @@ function describe(
 function useSubmissionForm(submission: SubmissionDocument | undefined) {
   const formId = submission ? formIdOf(submission) : undefined;
   // The forms collection as this install names it; a host may rename it.
-  const formsSlug = useBuilderConfig().formsSlug ?? "forms";
+  const config = useBuilderConfig();
+  const formsSlug = config.formsSlug ?? "forms";
   const { data: form } = useQuery({
     enabled: formId !== undefined,
     queryKey: ["form-builder", "submission-form", formsSlug, formId],
@@ -1019,8 +1073,17 @@ function useSubmissionForm(submission: SubmissionDocument | undefined) {
       return body ? (body.item ?? body) : null;
     },
   });
-  return { formId, form, formsSlug };
+  return {
+    formId,
+    form,
+    formsSlug,
+    extensionFields: config.submissionFields,
+  };
 }
+
+/** What the page says when reading the submission again failed. */
+const REFRESH_FAILED_MESSAGE =
+  "This submission could not be read again, so it may have changed since. Your edits are kept.";
 
 /** What a change the server never received says; the page keeps the draft. */
 const UNSENT_MESSAGE =
@@ -1203,7 +1266,8 @@ export function SubmissionPage({
     id,
     initialData
   );
-  const { formId, form, formsSlug } = useSubmissionForm(submission);
+  const { formId, form, formsSlug, extensionFields } =
+    useSubmissionForm(submission);
   const held =
     documentLock?.readOnly === true || documentLock?.actionsDisabled === true;
   const { known, canUpdate, canDelete } = useSubmissionRights(slug, held);
@@ -1213,7 +1277,9 @@ export function SubmissionPage({
   const { go, confirmDelete, setConfirmDelete, deleteSubmission, leaving } =
     usePageMoves(slug, scope, place, remove);
 
-  if (readError || !submission) return <PageMessage error={readError} />;
+  // Only a submission never read replaces the page. A refresh that fails
+  // after it was read keeps the page, and every draft on it, and says so.
+  if (!submission) return <PageMessage error={readError} />;
 
   const { asked, sender, formName, when } = describe(submission, form);
   const status = submission.status;
@@ -1240,7 +1306,9 @@ export function SubmissionPage({
         <div className="flex min-h-full flex-col lg:flex-row">
           <div className="min-w-0 flex-1 space-y-5 px-4 py-6 sm:px-6 lg:px-8">
             <SubmissionHeader sender={sender} formName={formName} when={when} />
-            <ChangeError error={error} />
+            <ChangeError
+              error={error ?? (readError ? REFRESH_FAILED_MESSAGE : null)}
+            />
 
             <AnswersBox
               submission={submission}
@@ -1262,6 +1330,8 @@ export function SubmissionPage({
             formId={formId}
             formName={formName}
             formsSlug={formsSlug}
+            extensionFields={extensionFields}
+            leaving={leaving}
           />
         </div>
       </PageFrame>

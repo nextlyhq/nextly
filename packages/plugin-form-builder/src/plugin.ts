@@ -24,7 +24,10 @@ import type { CollectionConfig } from "nextly";
 
 import { formsCollection } from "./collections/forms";
 import { submissionSendsCollection } from "./collections/sends";
-import { submissionsCollection } from "./collections/submissions";
+import {
+  submissionExtensionFields,
+  submissionsCollection,
+} from "./collections/submissions";
 import { newSubmissionsWidget } from "./dashboard/widget";
 import {
   asFormDocument,
@@ -277,6 +280,7 @@ export function formBuilder(
 
   const formsCol = formsCollection(resolvedConfig);
   const submissionsCol = submissionsCollection(resolvedConfig);
+  const submissionFields = submissionExtensionFields(resolvedConfig);
   const sendsCol = submissionSendsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
@@ -534,6 +538,9 @@ export function formBuilder(
                 redirectCollections: Object.keys(
                   resolvedConfig.redirectRelationships
                 ),
+                // The fields a host added to submissions, which the
+                // submission page shows beside its own details.
+                submissionFields,
                 slugs: {
                   forms:
                     ctx.self.collections[resolvedConfig.formOverrides.slug] ??

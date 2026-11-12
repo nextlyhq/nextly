@@ -6,7 +6,11 @@
  * and older follow the list it was opened from, and staff edit answers with
  * the version they read.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   cleanup,
   render,
@@ -102,7 +106,15 @@ const DATA = {
 
 function wrap(node: React.ReactNode) {
   return render(
-    <QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>
+    // No retries: a read that fails says so at once rather than after the
+    // client's back-off.
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      {node}
+    </QueryClientProvider>
   );
 }
 
@@ -214,6 +226,13 @@ interface ServerOptions {
   hold?: () => Promise<void>;
   /** The connection fails for every save. */
   offline?: boolean;
+  /** Reading the submission fails. */
+  failReads?: boolean;
+  /** Fields a host added to submissions, and the submission's values for them. */
+  extension?: {
+    fields: Array<{ name: string; label: string; type: string }>;
+    values: Record<string, unknown>;
+  };
 }
 
 /** The list's answer to one of the page's place queries. */
@@ -248,6 +267,7 @@ function server(options: ServerOptions) {
       () =>
         answer(200, {
           slugs: { forms: formsSlug, submissions: "form-submissions" },
+          submissionFields: options.extension?.fields ?? [],
         }),
     ],
     [
@@ -262,16 +282,19 @@ function server(options: ServerOptions) {
     [
       "/form-submissions/entries/sub-2",
       () =>
-        answer(200, {
-          id: "sub-2",
-          form: "form-1",
-          data: store.data,
-          notes: store.notes,
-          asked: ASKED,
-          status,
-          submittedAt: "2026-11-10T14:15:00.000Z",
-          _rev: `rev-${rev}`,
-        }),
+        options.failReads
+          ? answer(500, {})
+          : answer(200, {
+              ...options.extension?.values,
+              id: "sub-2",
+              form: "form-1",
+              data: store.data,
+              notes: store.notes,
+              asked: ASKED,
+              status,
+              submittedAt: "2026-11-10T14:15:00.000Z",
+              _rev: `rev-${rev}`,
+            }),
     ],
     ["/form-submissions/entries?", url => listAnswer(url, options)],
     ["/media/", () => answer(404, {})],
@@ -737,6 +760,95 @@ describe("a submission's page, writing", () => {
       ])
     );
     expect(screen.queryByText(/Someone changed this submission/)).toBeNull();
+  });
+
+  it("keeps the note a draft was made from when someone else changes it", async () => {
+    const store = { data: DATA, notes: "Call back" as string | undefined };
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      store,
+    });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toHaveValue("Call back"));
+    await user.type(note, " on Monday");
+    // Someone else rewrites the note, and the page reads it again.
+    store.notes = "Their note";
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).endsWith("/entries/sub-2")
+        ).length
+      ).toBeGreaterThan(1)
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // The draft is kept, and still replaces the note it was made from.
+    expect(note).toHaveValue("Call back on Monday");
+    await user.tab();
+    expect(
+      await screen.findByText(/Someone changed this submission/)
+    ).toBeInTheDocument();
+    expect(patches(fetchMock)).toEqual([]);
+    expect(store.notes).toBe("Their note");
+  });
+
+  it("tells the leave guard while a note is not saved", async () => {
+    server({ status: "read", permissions: { isSuperAdmin: true } });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    expect(unsavedWork.get("forms.submission-note")).toBe(false);
+    await user.type(note, "Book a call");
+    expect(unsavedWork.get("forms.submission-note")).toBe(true);
+    await user.tab();
+    await waitFor(() =>
+      expect(unsavedWork.get("forms.submission-note")).toBe(false)
+    );
+  });
+
+  it("keeps the page and its drafts when reading it again fails", async () => {
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+    };
+    server(options);
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    await user.type(screen.getByRole("textbox", { name: "Full name" }), "!");
+    // The status saves; reading the submission again then fails.
+    options.failReads = true;
+    const details = screen.getByRole("complementary", {
+      name: "Submission details",
+    });
+    await user.click(within(details).getByRole("button", { name: "Archived" }));
+    expect(await screen.findByText(/could not be read again/)).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Full name" })).toHaveValue(
+      "Hina Rossi!"
+    );
+    expect(unsavedWork.get("forms.submission-answers")).toBe(true);
+  });
+
+  it("shows the fields a host added to submissions", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      extension: {
+        fields: [{ name: "priority", label: "Priority", type: "select" }],
+        values: { priority: "high" },
+      },
+    });
+    page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    expect(await within(details).findByText("Priority")).toBeInTheDocument();
+    expect(within(details).getByText("high")).toBeInTheDocument();
   });
 
   it("says when a change could not be sent", async () => {
