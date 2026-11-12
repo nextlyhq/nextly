@@ -13,6 +13,9 @@ import {
   type JSX,
 } from "react";
 
+import { onDeviceMemoryChange } from "@admin/lib/device-memory/device-memory";
+import { devicePreferenceStore } from "@admin/lib/device-memory/preference-store";
+
 /**
  * The admin's theme: light, dark, or the system's setting, saved per browser.
  *
@@ -145,37 +148,31 @@ function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   window.addEventListener("storage", listener);
   const stopFollowingSystem = followSystem(listener);
+  // Forgetting the person removes the saved theme in this tab too, where no
+  // `storage` event says so: heard here, the theme returns to the default at
+  // once rather than showing the last person's on the sign-in screen.
+  const stopFollowingMemory = onDeviceMemoryChange(listener);
   return () => {
     listeners.delete(listener);
     window.removeEventListener("storage", listener);
     stopFollowingSystem();
+    stopFollowingMemory();
   };
 }
 
 /**
- * Choices storage refused to keep (a private window, a full quota), by key.
- * They apply in this tab until the page reloads, ahead of whatever storage
- * still holds.
+ * The theme saved under `storageKey`, read through the device memory, which
+ * holds the key as one of the person's interface preferences, whatever its
+ * spelling: forgotten with them on sign-out and by the site's off switch.
+ * Where it keeps nothing (the site turned remembering off, or storage
+ * refused), the choice holds for this page until the person is forgotten.
  */
-const unsaved = new Map<string, string>();
-
 function readSaved(storageKey: string): string | null {
-  const kept = unsaved.get(storageKey);
-  if (kept !== undefined) return kept;
-  try {
-    return window.localStorage.getItem(storageKey);
-  } catch {
-    return null;
-  }
+  return devicePreferenceStore(storageKey).read();
 }
 
 function save(storageKey: string, theme: string): void {
-  try {
-    window.localStorage.setItem(storageKey, theme);
-    unsaved.delete(storageKey);
-  } catch {
-    unsaved.set(storageKey, theme);
-  }
+  devicePreferenceStore(storageKey).write(theme);
   for (const listener of listeners) listener();
 }
 

@@ -662,6 +662,27 @@ export type { AdminChromeLayer } from "@nextlyhq/admin";
 export { useFoldedPanel } from "@nextlyhq/admin";
 
 /**
+ * A store for one of the person's interface preferences, kept by the admin's
+ * own rules (@experimental): for a plugin that remembers a choice in the
+ * browser, such as an editor's panels or its recently opened pages.
+ *
+ * - Where the site turns remembering off (`NEXTLY_ADMIN_DEVICE_MEMORY=off`),
+ *   nothing is written to the browser's storage, and the choice holds for
+ *   the page alone.
+ * - Signing out forgets it, in every open tab, with everything else the
+ *   admin kept about the person.
+ * - `lifetime: "tab"` keeps it for the tab alone, in its session storage.
+ *
+ * `read`, `write` and `remove` never throw. Key it per person (with
+ * `useCurrentUserId`) where two people may share a browser.
+ */
+export { devicePreferenceStore } from "@nextlyhq/admin";
+export type {
+  DevicePreferenceOptions,
+  DevicePreferenceStore,
+} from "@nextlyhq/admin";
+
+/**
  * Draw a page's own content into the admin's one top bar (@experimental):
  * `name="start"` is the bar's left part (where a breadcrumb goes) and
  * `name="end"` its right part, for the page's own actions such as Save. The
