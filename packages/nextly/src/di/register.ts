@@ -1156,7 +1156,12 @@ async function registerServicesOnce(
       // tables for columns the setting kept per language.
       // At a development start, what the last one recorded of each entity's declaration, read once
       // before any per-entity work, so the reads below can skip what has not changed.
-      await readStartFingerprints(adapter, resolvedLogger, transformedConfig);
+      await readStartFingerprints(
+        adapter,
+        resolvedLogger,
+        transformedConfig,
+        bootExtensionSchema?.fingerprint ?? null
+      );
       await refuseMixedStorageInConfig(
         adapter,
         transformedConfig,
@@ -3919,7 +3924,9 @@ async function syncCodeFirstCollections(
   // Compared exactly, as the database compares a quoted table name.
   let existingTables: Promise<Set<string> | null> | undefined;
   const tableIsThere = async (tableName: string): Promise<boolean> => {
-    existingTables ??= adapter.listTables().then(
+    // In the schema the tables are configured to live in (PostgreSQL), which
+    // the listing would otherwise read as `public`.
+    existingTables ??= adapter.listTables(adapter.getConfiguredSchema?.()).then(
       names => new Set(names),
       () => null
     );

@@ -9,7 +9,7 @@
  * seeding gate. The same configuration through each must leave the same rows:
  * the same permissions, spelled the same, with the same provenance.
  */
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../../config";
 import { getService } from "../../../../di/service-access";
@@ -93,5 +93,48 @@ describeEachDialect("an entity's permissions, by either road", dialect => {
 
     expect(oneAtATime.length).toBeGreaterThan(0);
     expect(allAtOnce).toEqual(oneAtATime);
+  }, 240_000);
+
+  it("checks each resource against the registries on either road", async () => {
+    current = await createTestNextly({
+      dialect,
+      collections: COLLECTIONS,
+      singles: SINGLES,
+    });
+    const warn = vi.fn();
+    const logger = { warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+    const service = new PermissionService(
+      current.adapter as never,
+      logger as never
+    );
+    /** The resources a road's check warned about. */
+    const warnedAbout = () =>
+      warn.mock.calls
+        .map(([message]) => String(message))
+        .flatMap(message => message.match(/"([^"]+)"/)?.slice(1) ?? []);
+    const declaration = (resource: string) => ({
+      action: "read",
+      resource,
+      name: `Read ${resource}`,
+      slug: `read-${resource}`,
+    });
+
+    // One permission at a time.
+    for (const resource of ["parity-posts", "users", "parity-one"]) {
+      const { name, slug } = declaration(resource);
+      await service.ensurePermission("read", resource, name, slug);
+    }
+    const oneAtATime = warnedAbout();
+    warn.mockClear();
+
+    // Many at once: the same check, for a registered collection, a system
+    // resource and a resource no registry holds.
+    await service.ensurePermissions(
+      ["parity-site", "users", "parity-many"].map(declaration)
+    );
+    const allAtOnce = warnedAbout();
+
+    expect(oneAtATime).toEqual(["parity-one"]);
+    expect(allAtOnce).toEqual(["parity-many"]);
   }, 240_000);
 });

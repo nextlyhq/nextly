@@ -15,7 +15,8 @@
  *   no other.
  *
  * Entities are collections `p<n>x` and Singles `s<n>x`, so a statement names
- * one by its slug or its table (`dc_p<n>x`, `single_s<n>x`).
+ * one by its slug or its table (`dc_p<n>x`, `single_s<n>x`). The field group
+ * `g0x` is declared too, and judged by what a start records for it.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -63,6 +64,7 @@ import {
 import {
   defineCollection,
   defineConfig,
+  defineFieldGroup,
   defineSingle,
   text,
 } from "../../config";
@@ -79,7 +81,8 @@ import { _resetEnvCache } from "../../shared/lib/env";
 import { sanitizeConfig } from "../../shared/types/config";
 
 /**
- * `n` collections and a fifth as many Singles, each with one text field. The
+ * `n` collections, a fifth as many Singles and one field group (`g0x`), each
+ * with one text field. The
  * one entity a test changes gains a field (`how: "field"`, a change a start
  * finds the table behind on) or a new label (`how: "label"`, which leaves the
  * table as it is).
@@ -110,6 +113,7 @@ function entities(
     singles: Array.from({ length: Math.ceil(n / 5) }, (_, i) =>
       defineSingle({ slug: `s${i}x`, fields: fields(`s${i}x`) })
     ),
+    fieldGroups: [defineFieldGroup({ slug: "g0x", fields: fields("g0x") })],
   };
 }
 
@@ -189,6 +193,22 @@ describe.each(getConfiguredTestDialects())(
       await shutdownServices();
       if (started) await recordStart(adapterFor, entities(n));
       return adapterFor;
+    }
+
+    /** The fingerprint the last recording start left for `key` (`<kind>:<slug>`). */
+    async function recordedFingerprint(
+      adapterFor: () => Promise<DrizzleAdapter>,
+      key: string
+    ): Promise<string[]> {
+      const reader = await adapterFor();
+      try {
+        const rows = await reader.executeQuery<{ value: unknown }>(
+          `SELECT value FROM nextly_meta WHERE key = 'development_start:entity:${key}'`
+        );
+        return rows.map(row => String(row.value));
+      } finally {
+        await reader.disconnect();
+      }
     }
 
     /** Every statement one development start sends with `declared`. */
@@ -314,6 +334,25 @@ describe.each(getConfiguredTestDialects())(
       const seen = new Set(again.flatMap(call => [...named(call)]));
       expect([...seen]).toEqual(["p2x"]);
     }, 300_000);
+
+    it.each(["single:s0x", "fieldGroup:g0x"])(
+      "records nothing for %s while a start leaves its table behind",
+      async key => {
+        const adapterFor = await startedDatabase(5);
+        const before = await recordedFingerprint(adapterFor, key);
+        expect(before).toHaveLength(1);
+
+        // A start does not alter a table that exists, and with the
+        // configuration handed in rather than read from a file, nothing else
+        // in it does: the new field is missing from the table, so the start
+        // does not vouch for the entity, and the next one checks it again.
+        await recordStart(adapterFor, entities(5, key.split(":")[1]));
+        // Its old fingerprint kept or cleared, never the changed one recorded.
+        const after = await recordedFingerprint(adapterFor, key);
+        expect(after.filter(value => !before.includes(value))).toEqual([]);
+      },
+      300_000
+    );
 
     it("records a changed entity a start finds in line, and skips it at the next", async () => {
       const adapterFor = await startedDatabase(5);

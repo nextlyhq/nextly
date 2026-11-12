@@ -757,26 +757,51 @@ function relationTargets(
   return into;
 }
 
+/**
+ * What builds a table besides the declaration of the entity it stores: the
+ * extension schema compiled from the app's `db.schema` and its plugins (its
+ * own fingerprint), the storage primitive each plugin field type persists as,
+ * and the PostgreSQL schema the tables live in.
+ */
+interface TableBuildInputs {
+  extensionFingerprint: string | null;
+  configuredSchema: string | null;
+}
+
 async function startFingerprints(
   config: FingerprintedConfig,
-  dialect: string
+  dialect: string,
+  builds: TableBuildInputs
 ): Promise<StartFingerprints> {
-  const [{ getCoreVersion }, { resolveCollectionTableName }] =
-    await Promise.all([
-      import("../plugins/core-version"),
-      import("../domains/schema/utils/resolve-table-name"),
-    ]);
+  const [
+    { getCoreVersion },
+    { resolveCollectionTableName },
+    { allFieldTypes },
+  ] = await Promise.all([
+    import("../plugins/core-version"),
+    import("../domains/schema/utils/resolve-table-name"),
+    import("../domains/schema/field-types/field-type-registry"),
+  ]);
   const collectionTable = new Map(
     (config.collections ?? []).map(c => [
       c.slug,
       resolveCollectionTableName(c.slug, c.dbName),
     ])
   );
+  // Everything a table is built from that no one entity declares: a change
+  // to any of it changes what every declaration builds, so every entity is
+  // taken for changed. The extension schema can add columns and indexes to an
+  // entity's own table, and a plugin type's storage decides its column.
   const salt = await fingerprintOf([
     getCoreVersion(),
     dialect,
     config.perLanguageStorage === true,
     config.localization ?? null,
+    builds.extensionFingerprint,
+    allFieldTypes()
+      .map(fieldType => [fieldType.type, fieldType.storage])
+      .sort(([a], [b]) => String(a).localeCompare(String(b))),
+    builds.configuredSchema,
   ]);
   const entities: Record<string, string> = {};
   for (const [kind, list] of kindsOf(config)) {
@@ -931,12 +956,17 @@ async function startRows(
 export async function readStartFingerprints(
   adapter: DrizzleAdapter,
   logger: Logger,
-  config: FingerprintedConfig
+  config: FingerprintedConfig,
+  /** The fingerprint of the extension schema this boot compiled, if any. */
+  extensionFingerprint: string | null
 ): Promise<void> {
   globalForFingerprints.__nextly_startFingerprints = undefined;
   if (process.env.NODE_ENV !== "development") return;
   try {
-    const current = await startFingerprints(config, adapter.dialect);
+    const current = await startFingerprints(config, adapter.dialect, {
+      extensionFingerprint,
+      configuredSchema: adapter.getConfiguredSchema?.() ?? null,
+    });
     const declared = await declaredRows(config);
     // One read of this start's own rows, by their key prefix, whatever the
     // number of entities and whatever else `nextly_meta` holds.

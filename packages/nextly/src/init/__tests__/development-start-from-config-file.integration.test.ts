@@ -35,13 +35,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../cli/utils/config-loader", async importOriginal => {
   const actual =
     await importOriginal<typeof import("../../cli/utils/config-loader")>();
-  const [{ readFileSync }, path, config, { sanitizeConfig }] =
-    await Promise.all([
-      import("node:fs"),
-      import("node:path"),
-      import("../../config"),
-      import("../../shared/types/config"),
-    ]);
+  const [
+    { readFileSync },
+    path,
+    config,
+    { sanitizeConfig },
+    { col },
+    { definePlugin },
+  ] = await Promise.all([
+    import("node:fs"),
+    import("node:path"),
+    import("../../config"),
+    import("../../shared/types/config"),
+    import("../../domains/schema/extension/dsl"),
+    import("../../plugins/plugin-context"),
+  ]);
   const load = async () => {
     const file = path.join(process.cwd(), "nextly.config.json");
     const declared = JSON.parse(readFileSync(file, "utf8")) as {
@@ -50,7 +58,10 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => {
         label?: string;
         fields: Array<{ name: string }>;
       }>;
+      /** A column a plugin adds to `dc_p0x` through the extension schema. */
+      extendColumn?: string;
     };
+    const extendColumn = declared.extendColumn;
     return {
       config: sanitizeConfig(
         config.defineConfig({
@@ -63,6 +74,30 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => {
                 : {}),
             })
           ),
+          ...(extendColumn
+            ? {
+                plugins: [
+                  definePlugin({
+                    name: "@test/extender",
+                    version: "1.0.0",
+                    nextly: ">=0.0.0",
+                    contributes: {
+                      schema: {
+                        extend: [
+                          ({ schema }) => {
+                            schema.extendTable("dc_p0x", {
+                              columns: {
+                                [extendColumn]: col.text({ nullable: true }),
+                              },
+                            });
+                          },
+                        ],
+                      },
+                    },
+                  }),
+                ],
+              }
+            : {}),
         })
       ),
       configPath: file,
@@ -96,13 +131,17 @@ import { holdBootSeeding } from "../seed-permissions";
  * The configuration file of an app with `n` collections, each with one text
  * field; `relabelled` gains a label, a change that leaves its table as it is.
  */
-function configFile(n: number, relabelled?: string): string {
+function configFile(
+  n: number,
+  relabelled?: string,
+  extendColumn?: string
+): string {
   const collections = Array.from({ length: n }, (_, i) => ({
     slug: `p${i}x`,
     fields: [{ name: "title", type: "text" }],
     ...(`p${i}x` === relabelled ? { label: "Renamed" } : {}),
   }));
-  return `${JSON.stringify({ collections })}\n`;
+  return `${JSON.stringify({ collections, extendColumn })}\n`;
 }
 
 /** The entities a statement names, by slug or by table. */
@@ -259,6 +298,22 @@ describe.each(getConfiguredTestDialects())(
       await nextly.shutdown();
 
       const seen = new Set(recorder.calls.flatMap(call => [...named(call)]));
+      expect([...seen].sort()).toEqual(["p0x", "p1x", "p2x", "p3x", "p4x"]);
+    }, 300_000);
+
+    it("checks every entity again at a start whose only change is to the extension schema", async () => {
+      const adapterFor = await startedApp(5);
+      // A plugin now adds a column to one entity's table through the
+      // extension schema; no entity's declaration changes. What the tables
+      // are built from changed, so nothing the last start recorded holds.
+      writeFileSync(
+        join(process.cwd(), "nextly.config.json"),
+        configFile(5, undefined, "note")
+      );
+      clearConfigCache();
+      const calls = await recordStart(adapterFor);
+
+      const seen = new Set(calls.flatMap(call => [...named(call)]));
       expect([...seen].sort()).toEqual(["p0x", "p1x", "p2x", "p3x", "p4x"]);
     }, 300_000);
 

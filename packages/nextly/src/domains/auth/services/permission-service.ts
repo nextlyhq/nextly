@@ -188,46 +188,50 @@ export class PermissionService extends BaseService {
   }
 
   private async validateResource(resource: string): Promise<void> {
-    if (isSystemResource(resource)) {
-      return;
-    }
+    await this.validateResources([resource], { bySlug: true });
+  }
 
-    try {
-      if (this.tables?.dynamicCollections) {
-        const result = await this.db
-          .select({ slug: this.tables.dynamicCollections.slug })
-          .from(this.tables.dynamicCollections)
-          .where(eq(this.tables.dynamicCollections.slug, resource))
-          .limit(1);
-
-        if (result.length > 0) {
-          return;
-        }
-      }
-    } catch {
-      // Table may not exist yet (fresh DB). Silently continue.
-    }
-
-    try {
-      if (this.tables?.dynamicSingles) {
-        const result = await this.db
-          .select({ slug: this.tables.dynamicSingles.slug })
-          .from(this.tables.dynamicSingles)
-          .where(eq(this.tables.dynamicSingles.slug, resource))
-          .limit(1);
-
-        if (result.length > 0) {
-          return;
-        }
-      }
-    } catch {
-      // Table may not exist yet (fresh DB). Silently continue.
-    }
-
-    this.logger.warn(
-      `Permission resource "${resource}" is not a recognized system resource or existing collection. ` +
-        `This may be intentional (e.g., pre-seeding for a collection not yet created).`
+  /**
+   * Check each of `resources` against the registries, as a permission's
+   * resource is checked before it is ensured: a system resource, a registered
+   * collection or a registered Single is recognised, and any other is warned
+   * about, since it may be one pre-seeded for an entity not created yet. One
+   * read per registry, and only for what the one before did not find, however
+   * many resources are asked about: a single permission's resource is looked
+   * up by its slug (`bySlug`), and a batch's against every slug the registry
+   * holds, so its statement stays the same whatever the number of entities.
+   */
+  private async validateResources(
+    resources: Iterable<string>,
+    { bySlug }: { bySlug: boolean }
+  ): Promise<void> {
+    let unrecognised = [...new Set(resources)].filter(
+      resource => !isSystemResource(resource)
     );
+    for (const registry of [
+      this.tables?.dynamicCollections,
+      this.tables?.dynamicSingles,
+    ]) {
+      if (!registry || unrecognised.length === 0) continue;
+      try {
+        const slugs = this.db.select({ slug: registry.slug }).from(registry);
+        const found = new Set(
+          (bySlug
+            ? await slugs.where(inArray(registry.slug, unrecognised))
+            : await slugs
+          ).map(row => String(row.slug))
+        );
+        unrecognised = unrecognised.filter(resource => !found.has(resource));
+      } catch {
+        // Table may not exist yet (fresh DB). Silently continue.
+      }
+    }
+    for (const resource of unrecognised) {
+      this.logger.warn(
+        `Permission resource "${resource}" is not a recognized system resource or existing collection. ` +
+          `This may be intentional (e.g., pre-seeding for a collection not yet created).`
+      );
+    }
   }
 
   /**
@@ -595,9 +599,8 @@ export class PermissionService extends BaseService {
    * outcome is returned in order, a failure as its error rather than thrown,
    * so one refused row does not stop the rest.
    *
-   * The resource is not checked against the registries, as `ensurePermission`
-   * checks it: a caller ensuring many at once ensures the entities it has just
-   * read from them.
+   * Each resource is checked against the registries, as `ensurePermission`
+   * checks it, in one read per registry for all of them (`validateResources`).
    */
   // Reached through the seed service's `permissionService` property.
   // fallow-ignore-next-line unused-class-member
@@ -605,6 +608,10 @@ export class PermissionService extends BaseService {
     declared: readonly PermissionDeclaration[],
     rows?: readonly PermissionRow[]
   ): Promise<Array<{ id: string; created: boolean } | { error: unknown }>> {
+    await this.validateResources(
+      declared.map(({ resource }) => resource),
+      { bySlug: false }
+    );
     const byKey = new Map<string, PermissionRow>();
     for (const row of rows ?? (await this.permissionRows())) {
       byKey.set(permissionKey(String(row.action), String(row.resource)), row);
