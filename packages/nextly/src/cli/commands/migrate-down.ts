@@ -25,6 +25,11 @@ import {
   stepFileOf,
   type StepFile,
 } from "../../domains/i18n/migration/step-windows";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import {
+  runUnitInTries,
+  type BusyTableRun,
+} from "../../domains/schema/busy-table/run-unit";
 import {
   isPluginLedgerRow,
   ledgerFilename,
@@ -1197,6 +1202,10 @@ interface MigrateDownCommandOptions {
   dryRun?: boolean;
   forceUnlock?: boolean;
   plugin?: string;
+  /** One try's bound for a busy table, as typed (`--lock-timeout`). */
+  lockTimeout?: string;
+  /** Every try's bound together, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
 }
 
 interface ResolvedDownOptions extends MigrateDownCommandOptions {
@@ -1240,6 +1249,11 @@ export async function downDatabaseDeps(args: {
   migrationsDir?: string;
   /** What the run's declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
+  /**
+   * How a down section waits for a busy table; absent, it runs in one try with no bound of its
+   * own, as before.
+   */
+  busyTable?: Omit<BusyTableRun, "appliedBefore">;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1269,6 +1283,8 @@ export async function downDatabaseDeps(args: {
   const { adapter, dialect, plugin } = args;
   const db = adapter.getDrizzle();
   const repo = new SchemaEventsRepository(db, dialect);
+  // The down sections this run rolled back, in order.
+  const rolledBack: string[] = [];
   const {
     SchemaOwnersRepository: OwnersRepo,
     schemaOwnersTableExists,
@@ -1320,10 +1336,24 @@ export async function downDatabaseDeps(args: {
     },
     refuseRequiredColumns: (statements, source) =>
       refuseRequiredColumnsOverNulls(db, dialect, statements, source),
-    execDown: (statements, unit, after) =>
-      runMigrationStatements(adapter, statements, unit, handle =>
-        after(handle)
-      ),
+    execDown: async (statements, unit, after) => {
+      if (args.busyTable === undefined) {
+        return runMigrationStatements(adapter, statements, unit, handle =>
+          after(handle)
+        );
+      }
+      // A down section waits for a busy table in tries; a report names the sections this run
+      // rolled back before it.
+      const ran = await runUnitInTries(
+        adapter,
+        statements,
+        unit,
+        handle => after(handle),
+        { ...args.busyTable, appliedBefore: () => [...rolledBack] }
+      );
+      rolledBack.push(unit.source);
+      return ran;
+    },
     recordRolledBack: async (filename, handle) => {
       const bound = repo.boundTo(handle);
       if (!(await bound.isFileApplied(filename))) return false;
@@ -1429,6 +1459,16 @@ export async function runMigrateDown(
   const { logger } = context;
   logger.header("Migrate Down");
 
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  const bounds = busyTableBounds({
+    flags: {
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+    },
+    env: process.env,
+  });
+
   const opened = await openMigrationCommand(options, logger);
   // A dry run whose database is not there has said so, and ends here.
   if (opened === undefined) return;
@@ -1516,6 +1556,16 @@ export async function runMigrateDown(
         plugin: pluginModules(configResult.config.plugins, plugin),
         migrationsDir,
         declared,
+        // An app's down sections wait for a busy table in tries, each try's notice on standard
+        // error. A plugin's modules keep their own single try here.
+        ...(plugin === undefined
+          ? {
+              busyTable: {
+                bounds,
+                notify: (line: string) => process.stderr.write(`${line}\n`),
+              },
+            }
+          : {}),
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,

@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
+import { ownSessionId } from "../busy-table/ended-waiting";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import {
   assertSchemaLockHeld,
@@ -39,6 +40,24 @@ export interface MigrationTransaction {
    * through `db` (`restoreSessionDefaults`).
    */
   restoreSession(): Promise<void>;
+  /**
+   * The database's id for the connection the unit's statements run on (PostgreSQL's pid, MySQL's
+   * connection id), so a try for a busy table can be watched from another; undefined on SQLite.
+   */
+  session(): Promise<string | undefined>;
+}
+
+/**
+ * One try for a busy table, as the runner bounds it (`busy-table/run-unit`): the try's bound, and
+ * what the runner tells the tries about the try as it goes.
+ */
+export interface StatementTryBound {
+  /** How long one try may wait for locks, in milliseconds. */
+  readonly tryMs: number;
+  /** Told the id of the connection the unit's statements run on, once it is known. */
+  readonly onSession?: (session: string) => void;
+  /** Told each statement's index just before it is sent. */
+  readonly onStatement?: (index: number) => void;
 }
 
 /**
@@ -130,6 +149,19 @@ export async function executeTransaction<T>(
             dialect === "postgresql"
               ? restoreSessionDefaults(ctx)
               : Promise.resolve(),
+          session: async () => {
+            const query = ownSessionId(dialect);
+            if (query === undefined) return undefined;
+            const [row] =
+              await ctx.queryStatement<Record<string, unknown>>(query);
+            const id = row === undefined ? undefined : Object.values(row)[0];
+            // A pid or a connection id comes back as a number, or a string on some drivers.
+            return typeof id === "number" ||
+              typeof id === "string" ||
+              typeof id === "bigint"
+              ? String(id)
+              : undefined;
+          },
         }),
       // A migration runs with nobody there to read a warning, so on MySQL it
       // runs in strict mode whatever the server's own mode: a statement that
@@ -166,6 +198,8 @@ export async function executeTransaction<T>(
             // SQLite has no setting a statement can change that reroutes a
             // table name: ATTACH and DETACH are refused before anything runs.
             restoreSession: () => Promise.resolve(),
+            // SQLite names no connection: its busy timeout bounds the one write lock.
+            session: () => Promise.resolve(undefined),
           }),
         (count, pairs) =>
           `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
@@ -253,7 +287,57 @@ export async function runMigrationStatements(
   adapter: DrizzleAdapter,
   statements: readonly string[],
   unit: MigrationUnit,
-  after?: (db: unknown, statementsExecuted: number) => Promise<void>
+  after?: (db: unknown, statementsExecuted: number) => Promise<void>,
+  bound?: StatementTryBound
+): Promise<number> {
+  // On SQLite one try's bound is the busy timeout of the one connection, for every wait of the
+  // unit, set before it and put back after it whatever its outcome.
+  if (bound !== undefined && adapter.getCapabilities().dialect === "sqlite") {
+    const restore = await boundSqliteWait(adapter, bound.tryMs);
+    try {
+      return await runUnitStatements(adapter, statements, unit, after, bound);
+    } finally {
+      await restore();
+    }
+  }
+  return runUnitStatements(adapter, statements, unit, after, bound);
+}
+
+/**
+ * Sets SQLite's busy timeout to `tryMs` and returns what puts the connection's own back. Putting
+ * it back is best effort: the unit has already ended, and a failure here must not change how.
+ */
+async function boundSqliteWait(
+  adapter: DrizzleAdapter,
+  tryMs: number
+): Promise<() => Promise<void>> {
+  const [row] = await adapter.executeQuery<Record<string, unknown>>(
+    "PRAGMA busy_timeout"
+  );
+  const previous = Number(Object.values(row ?? {})[0] ?? 0);
+  await adapter.executeQuery(
+    `PRAGMA busy_timeout = ${String(Math.round(tryMs))}`
+  );
+  return () =>
+    adapter
+      .executeQuery(
+        `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
+      )
+      .then(
+        () => undefined,
+        () => undefined
+      );
+}
+
+/** `runMigrationStatements`'s unit, run once, bounded as one try where `bound` is given. */
+async function runUnitStatements(
+  adapter: DrizzleAdapter,
+  statements: readonly string[],
+  unit: MigrationUnit,
+  after:
+    | ((db: unknown, statementsExecuted: number) => Promise<void>)
+    | undefined,
+  bound: StatementTryBound | undefined
 ): Promise<number> {
   const dialect = adapter.getCapabilities().dialect;
   // A column made required after an earlier statement of the unit filled its rows is counted at
@@ -272,10 +356,20 @@ export async function runMigrationStatements(
       : markedForSchemaLock(statement, unit.source);
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
+      if (bound !== undefined && dialect === "postgresql") {
+        // Each lock the try waits for is bounded by the try's bound, as a backstop; the watch on
+        // the session the tries start from its id ends the try once its waits add up to it.
+        await tx.execute(
+          `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs))}ms'`
+        );
+        const session = await tx.session();
+        if (session !== undefined) bound.onSession?.(session);
+      }
       for (const [index, statement] of statements.entries()) {
         await checkpoint?.(tx.db, index);
         // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
         await assertSchemaLockHeld();
+        bound?.onStatement?.(index);
         await tx.execute(sent(statement));
       }
       if (after !== undefined) {
