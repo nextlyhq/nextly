@@ -19,6 +19,7 @@ const {
   setLabelMock,
   mutateMock,
   toastErrorMock,
+  toastSuccessMock,
   markSeenMock,
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
@@ -37,6 +38,7 @@ const {
   setLabelMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
+  toastSuccessMock: vi.fn(),
   // Resolves like the route; `clearAllMocks` keeps this between tests.
   markSeenMock: vi.fn(() =>
     Promise.resolve({ message: "Marked as seen.", item: {} })
@@ -61,7 +63,7 @@ vi.mock("@admin/components/ui", async () => {
   );
   return {
     ...actual,
-    toast: { success: vi.fn(), error: toastErrorMock },
+    toast: { success: toastSuccessMock, error: toastErrorMock },
   };
 });
 
@@ -76,6 +78,7 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
 
 import {
   DocumentHistoryContext,
+  type EditorRestoreSurface,
   type RestoreAffordance,
 } from "../document-history-context";
 import { VersionHistorySheet } from "../VersionHistorySheet";
@@ -179,12 +182,21 @@ function reachable(element: Element | null): boolean {
  * to exercise restoring asks the panel for it rather than clicking a control
  * this component no longer renders.
  */
-function renderPublishing(props: Record<string, unknown> = {}) {
+function renderPublishing(
+  props: Record<string, unknown> = {},
+  editor?: EditorRestoreSurface
+) {
   const setRestore = vi.fn();
   const setViewing = vi.fn();
   render(
     <DocumentHistoryContext.Provider
-      value={{ viewing: null, setViewing, restore: null, setRestore }}
+      value={{
+        viewing: null,
+        setViewing,
+        restore: null,
+        setRestore,
+        ...(editor ? { editor } : {}),
+      }}
     >
       <VersionHistorySheet
         open
@@ -203,6 +215,20 @@ function renderPublishing(props: Record<string, unknown> = {}) {
         }
       | undefined;
   return { setRestore, setViewing, published };
+}
+
+/** An editor a restore puts values into, holding "Now" in its title. */
+function fakeEditor() {
+  const undo = vi.fn();
+  const apply = vi.fn(() => ({ undo }));
+  const editor: EditorRestoreSurface = {
+    restore: { apply, restoredFromForSave: vi.fn(), saved: vi.fn() },
+    fields: [{ name: "title", type: "text", label: "Title" } as FieldConfig],
+    currentValues: () => ({ title: "Now" }),
+    dirtyFields: () => new Set<string>(),
+    canEdit: () => true,
+  };
+  return { editor, apply, undo };
 }
 
 describe("VersionHistorySheet", () => {
@@ -782,7 +808,10 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
-    const { published } = renderPublishing({ canRestore: true });
+    const { published } = renderPublishing(
+      { canRestore: true },
+      fakeEditor().editor
+    );
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
     // The control is in the title bar over the version; this panel supplies the
@@ -793,8 +822,7 @@ describe("VersionHistorySheet", () => {
     ).toBeNull();
   });
 
-  it("confirms before restoring rather than writing on the first request", async () => {
-    // Restore writes the live document, so triggering it must not do it.
+  it("offers no restore where no editor is there to take the values", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
@@ -804,72 +832,68 @@ describe("VersionHistorySheet", () => {
 
     const { published } = renderPublishing({ canRestore: true });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
     await waitFor(() => expect(published()).toBeDefined());
-
-    published()!.request();
-
-    expect(mutateMock).not.toHaveBeenCalled();
-    expect(await screen.findByText(/Restore version 3\?/)).toBeInTheDocument();
+    expect(published()?.canRestore).toBe(false);
   });
 
-  it("tells the editor when a restore was refused", async () => {
-    // Without a message the spinner simply stops, which reads as the click not
-    // having registered rather than as a refusal.
-    let onErrorHandler: ((e: Error) => void) | undefined;
-    restoreMock.mockImplementation((opts: { onError?: (e: Error) => void }) => {
-      onErrorHandler = opts.onError;
-      return { mutate: mutateMock, isPending: false };
-    });
-
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
-      })
-    );
-    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
-
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        canRestore
-      />
-    );
-
-    expect(onErrorHandler).toBeDefined();
-    onErrorHandler?.(new Error("nope"));
-
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
-  });
-
-  // Whether restore is offered before the version has finished loading is
-  // decided where the control is (`restoreDisabled`, in `useVersionActions`),
-  // and covered by the header's own suite.
-
-  it("warns from the live document's status, not the version's", async () => {
-    // The selected version's status describes the past; whether this change is
-    // publicly visible depends on the document as it stands now.
+  it("lists the fields before restoring, rather than restoring on the first request", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
       })
     );
     useVersionMock.mockReturnValue(
-      detailState({ data: { snapshot: {}, status: "draft" } })
+      detailState({ data: { snapshot: { title: "Then" } } })
     );
+    const { editor, apply } = fakeEditor();
 
-    const { published } = renderPublishing({
-      canRestore: true,
-      liveStatus: "published",
-    });
+    const { published } = renderPublishing({ canRestore: true }, editor);
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
     await waitFor(() => expect(published()).toBeDefined());
-    published()!.request();
 
+    act(() => published()!.request());
+
+    expect(apply).not.toHaveBeenCalled();
     expect(
-      await screen.findByText(/the document is published/)
+      await screen.findByText(/Restore from version 3/)
     ).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Title/ })).toBeChecked();
+  });
+
+  it("puts the chosen values into the editor, never writing, and offers Undo", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Then" } } })
+    );
+    const { editor, apply, undo } = fakeEditor();
+
+    const { published } = renderPublishing({ canRestore: true }, editor);
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    await waitFor(() => expect(published()).toBeDefined());
+    act(() => published()!.request());
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Restore 1 field/ })
+    );
+
+    expect(apply).toHaveBeenCalledWith({ title: "Then" }, 3);
+    // Nothing goes to the server: the person's save is the only write.
+    expect(mutateMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^1 field restored from /),
+      expect.objectContaining({
+        action: expect.objectContaining({ label: "Undo" }),
+      })
+    );
+    const options = toastSuccessMock.mock.calls.at(-1)?.[1] as {
+      action: { onClick: () => void };
+    };
+    options.action.onClick();
+    expect(undo).toHaveBeenCalled();
   });
 
   it("does not query while closed", () => {

@@ -4,7 +4,7 @@
  *
  * - A save. Every save that records a version of a document a workflow is attached to asks,
  *   in the save's own transaction, whether each approved part is still as approved: the digest of
- *   the part's content now (`approvalDigest`, the stage's exempt fields left out) against the
+ *   the part's content now (`stillApproved`, the stage's exempt fields left out) against the
  *   approval's. A part that differs loses its approval and moves to `onEdit.to`, the editor
  *   becoming the person accountable for that stage, and one `workflow-approval-withdrawn` event
  *   per stage the parts left names the editor as the save's own history event does. A save that
@@ -49,7 +49,7 @@ import {
 } from "../versions/versions-repository";
 import { statusEventsFor } from "../webhooks/status-events";
 
-import { approvalDigest } from "./approval-digest";
+import { stillApproved } from "./approval-digest";
 import { entersReview } from "./define-workflow";
 import { shownVersionOn } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
@@ -249,12 +249,12 @@ function asApproved(
 ): boolean {
   // A part with no recorded version has nothing left that the approval names.
   if (content === null) return false;
-  const digest = approvalDigest(
+  return stillApproved(
+    approval.digest,
     content.snapshot,
     entityOf(c.save.document),
     c.registered.workflow.onEdit.exemptFields
   );
-  return digest === approval.digest;
 }
 
 /**

@@ -366,6 +366,9 @@ export type {
   CellRendererDefinition,
   RowAction,
   BulkAction,
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
 } from "./components/ui/table/data-table";
 
 // The list surface around that table — search, filters, the columns menu, the
@@ -421,6 +424,15 @@ export type {
 } from "./components/shared/checklist";
 export { SettingsRowGroup } from "./components/features/settings/SettingsRowGroup";
 export type { SettingsRowGroupProps } from "./components/features/settings/SettingsRowGroup";
+
+// Where a flow of a few steps is, the stepper the email provider setup draws:
+// re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin's own flow.
+export { Stepper } from "./components/ui/stepper";
+export type {
+  StepperProps,
+  StepperStep,
+  StepState,
+} from "./components/ui/stepper";
 
 // A plugin's own admin UI reading a route that plugin contributed. The two
 // halves of a plugin — its HTTP routes and its admin components — had no way to

@@ -41,6 +41,7 @@ import type { EmailTemplateRecord } from "../../../schemas/email-templates/types
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
+import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scope";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
 import { rowLockServer } from "../../audit/audit-log-writer";
@@ -1697,6 +1698,19 @@ export class EmailService extends BaseService {
   }
 
   /** Store a queued email, and start its first attempt once it is durable. */
+  /**
+   * A message as it is queued: a template's copies taken now, so each
+   * attempt renders the template as saved when the email was queued.
+   */
+  private async sealed(message: QueuedMessage): Promise<QueuedMessage> {
+    return message.kind === "template"
+      ? {
+          ...message,
+          templateCopies: await this.queuedTemplateCopies(message.slug),
+        }
+      : message;
+  }
+
   private async enqueue(
     message: QueuedMessage,
     checks: QueueChecks,
@@ -1706,14 +1720,7 @@ export class EmailService extends BaseService {
     // Refused before anything is read: a lookup on the pool from inside an
     // open transaction can wait on that transaction's own connection.
     if (tx === undefined) assertNoOpenTransaction(this.adapter, operation);
-    const sealed: QueuedMessage =
-      message.kind === "template"
-        ? {
-            ...message,
-            templateCopies: await this.queuedTemplateCopies(message.slug),
-          }
-        : message;
-    const input = (person: PrincipalRef | null) => ({
+    const input = (sealed: QueuedMessage, person: PrincipalRef | null) => ({
       scope: this.keyScope,
       message: sealed,
       person,
@@ -1725,21 +1732,31 @@ export class EmailService extends BaseService {
     if (tx !== undefined) {
       const link = linkedTransaction(tx, operation);
       const stored = await link.run(async adapterTx => {
+        // The template is read on the transaction's own connection: read
+        // through the pool, it would wait for a connection that this
+        // transaction only gives back once it commits, and on a pool of one
+        // it would never get one. A copy is taken, so no lock is held.
+        const sealed = await runReadsInTransaction(
+          adapterTx,
+          () => this.sealed(message),
+          "none"
+        );
         const person = await this.assertQueueable(checks, adapterTx);
-        return storeQueuedEmail(adapterTx, input(person));
+        return storeQueuedEmail(adapterTx, input(sealed, person));
       });
       if (stored.state === "waiting") {
         link.afterCommit(() => this.firstAttempt(stored.jobId));
       }
       return { id: stored.id, state: stored.state };
     }
+    const sealed = await this.sealed(message);
     const person = await this.assertQueueable(checks);
     const stored = await runAdapterTransaction<
       StoredQueuedEmail,
       TransactionContext
     >(
       run => this.adapter.transaction(ctx => run(ctx)),
-      ctx => storeQueuedEmail(ctx, input(person))
+      ctx => storeQueuedEmail(ctx, input(sealed, person))
     );
     // Stored cancelled: its person was deleted first, and nothing is sent.
     if (stored.state === "cancelled") return stored;
