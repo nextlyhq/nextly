@@ -50,6 +50,7 @@ import {
 import { ADDRESSES_ROUTE_PATH, type SiteAddress } from "../code-pages/contract";
 import { IMPORT_PAGE_HREF } from "../overview/contract";
 import { receivedHrefFor } from "../received/contract";
+import { newRedirectHref } from "../redirects/contract";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
 
 import { CodePagePanel } from "./code-page-panel";
@@ -58,7 +59,6 @@ import type { PageEdits } from "./pages-edit";
 import { PagesEditor } from "./pages-editor";
 import {
   entryHref,
-  newRedirectHref,
   problemsByPage,
   shownPages,
   statusOf,
@@ -128,14 +128,14 @@ function usePages(filter: PagesFilter) {
   }, [addresses.fetching]);
   // No list yet, one that couldn't be read, or a site never checked whole:
   // every status is unknown, since nothing was examined.
-  const checked =
+  const examined =
     problems.list?.checkedAt === undefined ? undefined : problems.list;
   const byPage = useMemo(
     () =>
-      checked === undefined
+      examined === undefined
         ? undefined
-        : problemsByPage(checked.problems, checked.types),
-    [checked]
+        : problemsByPage(examined.problems, examined.checked),
+    [examined]
   );
   const shown = useMemo(
     () => shownPages(items ?? [], filter, item => statusOf(item, byPage)),
@@ -153,7 +153,7 @@ function usePages(filter: PagesFilter) {
     failure,
     loading: items === undefined && failure === null,
     problemsFailed:
-      checked === undefined && problems.failed !== null
+      examined === undefined && problems.failed !== null
         ? `The problem list couldn't be read, so each page's status is unknown. ${apiErrorMessage(problems.failed)}`
         : null,
     // Once a save has run, the list and the problems are read again.
