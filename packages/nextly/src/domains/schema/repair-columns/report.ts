@@ -160,6 +160,8 @@ const REASON_OWNER_CAN: Record<BlockingReasonKind, string> = {
   "stored-differently": OWNER_CAN.definition,
   "no-conversion": OWNER_CAN.definition,
   "late-write": OWNER_CAN.definition,
+  "cleared-under-not-null":
+    "give the named rows a value the new type holds, or make the field optional, then run the repair again",
 };
 
 function isBlockingKind(
@@ -388,6 +390,8 @@ const REASON_TEXT: Record<ConversionReasonKind, string> = {
   "no-conversion": "Nextly has no conversion from this type to that one",
   "late-write":
     "MySQL checks the rows and changes the column in separate transactions, so a value written meanwhile could be changed with no error",
+  "cleared-under-not-null":
+    "values that would be cleared, where the column does not allow a null, so a value would have to be invented",
 };
 
 function describeKey(key: RowKey): string {
