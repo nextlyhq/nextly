@@ -25,9 +25,11 @@ plugin owns the data, and delivery belongs to whatever is serving the pages. See
 npm install @nextlyhq/plugin-seo
 ```
 
-Its peer dependencies are `nextly` and `@nextlyhq/plugin-sdk`, and while Nextly is in
-alpha the manifest pins `nextly` at the **matching lockstep version**: every publishable
-package ships on one train, so install the plugin and the core at the same version.
+Its peer dependency is `nextly`, and while Nextly is in alpha the manifest pins it at the
+**matching lockstep version**: every publishable package ships on one train, so install the
+plugin and the core at the same version. `@nextlyhq/plugin-sdk`, which the plugin imports at
+run time, is installed with it as a dependency of its own, so a site never has to list it (and
+cannot leave it out of a production install by listing it among its `devDependencies`).
 
 The plugin also declares a compatibility range for the runtime check: `>=` its own
 version, so a core older than the plugin is refused at boot. Install the two at the same
@@ -77,8 +79,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 
 | Field                | Type     | Notes                                                                                                                                                           |
 | -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `metaTitle`          | text     | Capped at 60 characters, which is roughly where search engines truncate a title                                                                                 |
-| `metaDescription`    | textarea | Capped at 160 characters, for the same reason                                                                                                                   |
+| `metaTitle`          | text     | Any length. Past about 60 characters Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                |
+| `metaDescription`    | textarea | Any length. Past about 160 characters the same warning applies                                                                                                  |
 | `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                    |
 | `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                        |
 | `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                    |
@@ -105,6 +107,23 @@ All nine are optional. `canonical` and `noindex` ship by default rather than bei
 you to add, because a canonical URL and a search opt-out are baseline controls rather than
 advanced ones.
 
+**A long title is a warning, not a refusal.** Google has no maximum length for a title or a
+description: it shows as much as fits the width of the results and cuts the rest
+([title links](https://developers.google.com/search/docs/appearance/title-link),
+[snippets](https://developers.google.com/search/docs/appearance/snippet)). So the default fields
+save any length, and the SEO tab's count (`68 / 60`) and the problem list (`68 characters, Google
+shows about 60`) say how much is past what Google usually shows. A site that wants the lengths
+enforced passes `hardLengthLimits: true`, and a save of a title over 60 characters or a
+description over 160 is then refused:
+
+```ts
+seoPlugin({ collections: ["posts"], hardLengthLimits: true });
+```
+
+`hardLengthLimits` applies to the default fields; a site passing its own `fields` sets
+`maxLength` on them itself. Turning it on or off changes the two fields' settings, which, like any
+field change, reaches a deployed database through `nextly migrate:create` and `nextly migrate`.
+
 ### Custom fields
 
 Replace the whole set when a project needs a different shape:
@@ -119,7 +138,7 @@ export default defineConfig({
     seoPlugin({
       collections: ["posts"],
       fields: [
-        text({ name: "metaTitle", label: "Meta Title", maxLength: 60 }),
+        text({ name: "metaTitle", label: "Meta Title" }),
         text({ name: "focusKeyword", label: "Focus Keyword" }),
       ],
     }),
@@ -592,8 +611,12 @@ newest page updates as you type.
 - A pattern naming a variable the type has no field for is refused before it can be saved.
 - A pattern whose variables a page has no value for gives way to the next source in the order
   below, rather than leaving a gap in the title.
-- The site's name is never added right after a title that already ends with it: with the pattern
-  `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays `Pricing | Acme`.
+- The site's name is never added right after a title that already ends with it, where the pattern
+  ends with `{Site name}`: with `{Title} | {Site name}`, a title typed as `Pricing | Acme` stays
+  `Pricing | Acme`. A title that names the brand before its end, such as `Acme pricing`, still
+  gets it: `Acme pricing | Acme`.
+- Where the pattern goes on after `{Site name}`, the name is always filled in, since it is part of
+  a longer suffix: `{Title} | {Site name} Blog` gives `Why we chose Acme | Acme Blog`.
 
 **Reset to default** returns a type to the site's default pattern.
 
@@ -769,6 +792,13 @@ by making a share image, in the route's code where the route set the picture, or
 where the site's address is missing. `shareImageSizeProblem({ width, height })` answers the same
 for one picture.
 
+The picture's file type is checked too. X's cards take JPEG, PNG, WebP and GIF, and no network
+shows an SVG on a card, while AVIF and WebP are shown by fewer apps than JPEG and PNG, which every
+network shows. A share image whose address ends in `.svg`, `.avif` or `.webp` is named (`An SVG
+image, which networks don't show on a card`), and the same `twitter:image` is served as the
+`og:image`. Making a share image fixes it, since the copy is a JPEG; an image a route draws at an
+address with no file type, such as `/og?title=…`, is not checked.
+
 Making a share image is one action. The plugin's `POST /share-image` route
 (`/admin/api/plugins/@nextlyhq/plugin-seo/share-image` in a scaffolded project), sent
 `{ "media": "<media id>" }`, makes a copy of the picture at exactly 1200 × 630, cut around the
@@ -893,7 +923,10 @@ seoPlugin({
         { contactType: "customer support", email: "help@example.com" },
       ],
       foundingDate: "2020",
-      parentOrganization: { name: "Acme Holdings", url: "https://holdings.example.com" },
+      parentOrganization: {
+        name: "Acme Holdings",
+        url: "https://holdings.example.com",
+      },
       founders: [{ name: "Sara Khan", jobTitle: "Founder", url: "/about" }],
     },
     // A post that names no author is credited to the brand.
@@ -1104,10 +1137,12 @@ it is published in and at its address there, as its head would be served, for:
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
 - a title or description another page has too;
-- a title over 60 characters, or a description over 160;
+- a title over 60 characters, or a description over 160, named with its length as a warning (the
+  value is saved and served as it is);
 - a canonical typed for the page that names another address;
 - a link in its content to an address of a content type that no page holds;
-- no share image, or one networks crop or shrink;
+- no share image, one networks crop or shrink, or one in a format some networks don't show
+  (SVG, AVIF or WebP);
 - an image in its content (rich text, a media field or a Page Builder image block) with no alt
   text, unless it is marked decorative;
 - structured data missing a detail its type needs;
