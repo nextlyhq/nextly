@@ -20,9 +20,10 @@
  *   start and after it, which must be the same.
  *
  * The databases: one that has never been migrated, one migrated for an older
- * configuration (a collection missing, a translated collection missing, a
- * field missing), and one migrated for a newer configuration (a collection
- * this build does not declare), each with migrations at start off and on. A
+ * configuration (a collection missing, a field missing, and a translated
+ * collection whose translation table is missing), and one migrated for a newer
+ * configuration (a collection this build does not declare), each with
+ * migrations at start off and on. A
  * build against the empty one refuses, naming `nextly migrate`. The secret
  * case is also the instrument's control: on every dialect the recorder sees
  * the seal, so an empty list of writes elsewhere is not the recorder missing
@@ -100,8 +101,13 @@ const BUILD_COLLECTIONS = [
   collection("nbwc"),
   TRANSLATED,
 ];
-/** What an older configuration migrated: a field and two collections short. */
-const OLDER_COLLECTIONS = [collection("nbwa"), collection("nbwb")];
+/**
+ * What an older configuration migrated: a field and a collection short. Its
+ * translated collection loses its translation table once migrated
+ * (`dropTranslationTable`), so the build meets a registered translated entity
+ * whose translation table is missing, which a start creates.
+ */
+const OLDER_COLLECTIONS = [collection("nbwa"), collection("nbwb"), TRANSLATED];
 /** What a newer configuration migrated: one collection more. */
 const NEWER_COLLECTIONS = [...BUILD_COLLECTIONS, collection("nbwx")];
 
@@ -267,6 +273,16 @@ describe.each(getConfiguredTestDialects())(
       await shutdownServices();
     }
 
+    /** Drop the translated collection's translation table, as if never made. */
+    async function dropTranslationTable(): Promise<void> {
+      const adapter = await adapterFor();
+      try {
+        await adapter.executeQuery("DROP TABLE dc_nbwloc_locales");
+      } finally {
+        await adapter.disconnect();
+      }
+    }
+
     /** Enter the build phase, as `next build` sets it for the app it boots. */
     function enterBuildPhase(): void {
       vi.stubEnv("NODE_ENV", "production");
@@ -285,6 +301,9 @@ describe.each(getConfiguredTestDialects())(
           collections: BUILD_COLLECTIONS,
           plugins,
           localization: LOCALIZATION,
+          // A user field no migrated database records: a start records its
+          // definition and adds its column.
+          users: { fields: [text({ name: "nickname" })] },
           db: { runMigrationsOnBoot, migrationsDir },
         })
       ) as never;
@@ -357,12 +376,16 @@ describe.each(getConfiguredTestDialects())(
     it.each([
       ["behind", false],
       ["behind", true],
-      ["ahead", false],
-      ["ahead", true],
+      ["ahead of", false],
+      ["ahead of", true],
     ] as const)(
       "against a database %s the configuration, with migrations at start %s, writes nothing and changes no structure",
       async (state, runMigrationsOnBoot) => {
-        await migrateFor(MIGRATED_FOR[state]!, [PLUGIN]);
+        await migrateFor(
+          MIGRATED_FOR[state === "ahead of" ? "ahead" : state]!,
+          [PLUGIN]
+        );
+        if (state === "behind") await dropTranslationTable();
         const before = await structure();
 
         const { calls, refusal } = await buildStart(
@@ -400,6 +423,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("begun by a request, against a database behind the configuration, writes nothing and changes no structure", async () => {
       await migrateFor(OLDER_COLLECTIONS, [PLUGIN]);
+      await dropTranslationTable();
       const before = await structure();
       enterBuildPhase();
       const { recorder, stop } = await startRecording();
@@ -478,6 +502,65 @@ describe.each(getConfiguredTestDialects())(
         writes.filter(write => !/\bnextly_plugin_settings\b/.test(write))
       ).toEqual([]);
       expect(await settingsText()).not.toContain(plainValue);
+      expect(await structure()).toEqual(before);
+    }, 240_000);
+
+    it("with the secret rotated, seals the plugin's settings again and nothing else", async () => {
+      const name = "@test/nbw-rotated";
+      const storedValue = "stored-value-71c0d3e9a4";
+      // Sealed under the secret before the rotation, with a digest key the
+      // plugin made beside it: the key, like the deleted-people key and held
+      // messages, is sealed again by the first start after the build, never
+      // by the build, which no plugin needs it for.
+      let digested = false;
+      const plugin = (
+        atInit?: (ctx: {
+          settings: unknown;
+          security: {
+            digests: { digest(kind: string, value: string): Promise<string> };
+          };
+        }) => Promise<void>
+      ) =>
+        definePlugin({
+          name,
+          version: "1.0.0",
+          nextly: ">=0.0.0",
+          capabilities: { secrets: ["apiKey"] },
+          contributes: { settings: z.object({ apiKey: z.string() }) },
+          async init(ctx) {
+            await atInit?.(ctx as never);
+          },
+        });
+      await migrateFor(BUILD_COLLECTIONS, [
+        plugin(async ctx => {
+          await (
+            ctx.settings as { set(v: { apiKey: string }): Promise<void> }
+          ).set({ apiKey: storedValue });
+          await ctx.security.digests.digest("email", "ada@example.com");
+          digested = true;
+        }),
+      ]);
+      expect(digested).toBe(true);
+      const before = await structure();
+
+      const previous = process.env.NEXTLY_SECRET ?? "";
+      vi.stubEnv("NEXTLY_SECRET_PREVIOUS", previous);
+      vi.stubEnv(
+        "NEXTLY_SECRET",
+        "nextly-test-rotated-secret-at-least-32-chars"
+      );
+      const { calls, refusal } = await buildStart([plugin()], false);
+
+      expect(refusal).toBeUndefined();
+      const writes = writesIn(calls);
+      // The plugin's settings, sealed again before it starts, and nothing
+      // else: no digest key sealed again in `nextly_meta`.
+      expect(
+        writes.filter(write => /\bnextly_plugin_settings\b/.test(write))
+      ).not.toEqual([]);
+      expect(
+        writes.filter(write => !/\bnextly_plugin_settings\b/.test(write))
+      ).toEqual([]);
       expect(await structure()).toEqual(before);
     }, 240_000);
   }
