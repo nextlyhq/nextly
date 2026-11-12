@@ -13,6 +13,12 @@
  * - every delivery record of those sends is erased: the address digest and
  *   the key digest go, the row stays.
  *
+ * A send is found by its key digest, so a send whose key a person's deletion
+ * already cleared (`erasePrincipalDeliveries` clears it from every record of
+ * the send, keeping the other recipients' address digests) is no longer
+ * found by its key: those records are the other recipients', and go with
+ * their own erasure.
+ *
  * Only the plugin's own: a queued email is matched on the plugin's scope as
  * well as its id, and a key is digested with the plugin's scope, so another
  * caller's ids and keys name nothing here.
@@ -142,19 +148,27 @@ export async function forgetPluginSends(
     const db = tx.getDrizzle<
       QueuedErasureDb & RecipientErasureCapableDb & PrincipalDigestDb
     >();
-    // The digest key's lock before any queued email's: a person's deletion
-    // takes them in that order, and taking them the other way round here
-    // could leave each transaction holding the lock the other waits for.
-    const stored =
-      keys.length === 0
-        ? undefined
-        : await readPrincipalDigests(
-            db,
-            server,
-            principalDigestTablesOf(getDialectTables(dialect)),
-            "shared",
-            secrets
-          );
+    // Locks in the order the erasures take them: the digest key's (a person's
+    // deletion takes it first), then the delivery records, then the queued
+    // emails (an address's erasure writes its records before its queue
+    // rows). Taking any two the other way round could leave each transaction
+    // holding the lock the other waits for.
+    if (keys.length > 0) {
+      const stored = await readPrincipalDigests(
+        db,
+        server,
+        principalDigestTablesOf(getDialectTables(dialect)),
+        "shared",
+        secrets
+      );
+      await eraseKeyedDeliveries(
+        db,
+        tables.emailDeliveries,
+        keys.map(key =>
+          idempotencyKeyDigest(subject => stored.digest(subject), scope, key)
+        )
+      );
+    }
     await cancelQueuedEmailsAmong(
       db,
       {
@@ -164,14 +178,6 @@ export async function forgetPluginSends(
       },
       scope,
       queuedIds
-    );
-    if (stored === undefined) return;
-    await eraseKeyedDeliveries(
-      db,
-      tables.emailDeliveries,
-      keys.map(key =>
-        idempotencyKeyDigest(subject => stored.digest(subject), scope, key)
-      )
     );
   };
 

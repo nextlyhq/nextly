@@ -700,6 +700,11 @@ idempotency keys the sends carried:
 - every delivery record of those sends is erased: its address and key digests
   go, the row stays.
 
+A send is found by its key. When a person named on a send has already been
+deleted, their deletion cleared that key from every record of the send, so the
+records of the send's other recipients (a CC, say) are no longer found by it:
+they are those people's records, erased with their own deletion.
+
 Only your plugin's own emails and keys are touched. Pass `tx`, the handle a
 `ctx.db.transaction` callback or an in-transaction handler received, to commit
 it with your deletion; without one it runs in a transaction of its own and is
