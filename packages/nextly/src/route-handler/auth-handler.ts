@@ -14,7 +14,10 @@ import type { SanitizedNextlyConfig } from "../collections/config/define-config"
 import { isServicesRegistered, getService } from "../di";
 // Only the type: the registry itself is loaded by `initializeServicesOnce`,
 // the one place here that registers or shuts the services down.
-import type { NextlyServiceConfig } from "../di/register";
+import type {
+  NextlyServiceConfig,
+  RegisterServicesOptions,
+} from "../di/register";
 import {
   localizationKey,
   recordRegisteredLocalization,
@@ -25,6 +28,7 @@ import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "../init/build-service-config";
+import { isProductionStart } from "../init/production-start";
 import {
   awaitBootSeeding,
   holdBootSeeding,
@@ -552,7 +556,10 @@ async function initializeServicesOnce(): Promise<void> {
  * steps the request path runs for a registration of its own.
  */
 async function registerFromThisRequest(
-  registerServices: (config: NextlyServiceConfig) => Promise<void>,
+  registerServices: (
+    config: NextlyServiceConfig,
+    options: RegisterServicesOptions
+  ) => Promise<void>,
   nextlyConfig: SanitizedNextlyConfig | null
 ): Promise<void> {
   // Build service config from stored nextly.config.ts
@@ -560,7 +567,10 @@ async function registerFromThisRequest(
   // config need to be registered first via registerServices(), which calls
   // initializeMediaStorage() with the correct plugins. Calling getMediaStorage()
   // before that creates a singleton with zero plugins (local fallback only).
-  await registerServices(requestPathServiceConfig(nextlyConfig));
+  // A start, so in production it writes no bookkeeping (`isProductionStart`).
+  await registerServices(requestPathServiceConfig(nextlyConfig), {
+    start: true,
+  });
   // Services now match the block this config was registered from, so that
   // is the value a later request compares against.
   recordRegisteredLocalization(nextlyConfig);
@@ -585,7 +595,9 @@ async function registerFromThisRequest(
   // permission with no row and no super-admin grant on the one boot path
   // that never runs post-init tasks. The PRESET roles were the next thing to
   // be missing from it for the same reason, so the two are now one call.
-  await seedPermissionsAndRolePresets();
+  // A production start seeds nothing, as `getNextly`'s does not: the
+  // permissions, roles and grants are `nextly migrate`'s to write.
+  if (!isProductionStart()) await seedPermissionsAndRolePresets();
 
   // Sync user extension fields and ensure user_ext table exists
   // This mirrors the init.ts flow so route handler requests work
@@ -594,9 +606,9 @@ async function registerFromThisRequest(
     const userExtSchemaService = getService("userExtSchemaService");
     await userExtSchemaService.loadMergedFields();
 
-    // Loading them is a read; making their table is a write, which `next
-    // build` leaves to `nextly migrate` and the first start after it.
-    if (userExtSchemaService.hasMergedFields() && !isNextBuildPhase()) {
+    // Loaded only, in production: the columns are `nextly migrate`'s to add,
+    // as `provisionUserFieldsAtStart` leaves them on `getNextly`'s start.
+    if (userExtSchemaService.hasMergedFields() && !isProductionStart()) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter shape varies by driver
       const adapter = getService("adapter") as any;
       const drizzleDb = adapter.getDrizzle();

@@ -1,0 +1,496 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`whole graphs of a site's pages > keeps the shape of a blog post 1`] = `
+[
+  {
+    "@id": "https://nextlyhq.com/#organization",
+    "@type": "Organization",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://nextlyhq.com/nextly-logo-light.svg",
+    },
+    "name": "Nextly",
+    "sameAs": [
+      "https://github.com/nextlyhq/nextly",
+      "https://x.com/nextlyhq",
+    ],
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#website",
+    "@type": "WebSite",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "inLanguage": "en",
+    "name": "Nextly",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/blog/introducing-nextly#webpage",
+    "@type": "WebPage",
+    "breadcrumb": {
+      "@id": "https://nextlyhq.com/blog/introducing-nextly#breadcrumb",
+    },
+    "dateModified": "2026-10-23T12:00:00.000Z",
+    "datePublished": "2026-03-27T12:00:00.000Z",
+    "description": "Nextly is an open-source content platform for Next.js.",
+    "inLanguage": "en",
+    "isPartOf": {
+      "@id": "https://nextlyhq.com/#website",
+    },
+    "mainEntity": {
+      "@id": "https://nextlyhq.com/blog/introducing-nextly#blogPosting",
+    },
+    "name": "What is Nextly?",
+    "primaryImageOfPage": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "url": "https://nextlyhq.com/blog/introducing-nextly",
+  },
+  {
+    "@id": "https://nextlyhq.com/blog/introducing-nextly#breadcrumb",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "item": "https://nextlyhq.com/",
+        "name": "Home",
+        "position": 1,
+      },
+      {
+        "@type": "ListItem",
+        "item": "https://nextlyhq.com/blog",
+        "name": "Blog",
+        "position": 2,
+      },
+      {
+        "@type": "ListItem",
+        "name": "What is Nextly?",
+        "position": 3,
+      },
+    ],
+  },
+  {
+    "@id": "https://nextlyhq.com/blog/introducing-nextly#blogPosting",
+    "@type": "BlogPosting",
+    "articleSection": "Announcements",
+    "author": {
+      "@id": "https://nextlyhq.com/blog/author/nextly-team#person",
+      "@type": "Person",
+      "jobTitle": "Core Team",
+      "name": "Nextly Team",
+      "url": "https://nextlyhq.com/blog/author/nextly-team",
+    },
+    "dateModified": "2026-10-23T12:00:00.000Z",
+    "datePublished": "2026-03-27T12:00:00.000Z",
+    "description": "Nextly is an open-source content platform for Next.js.",
+    "headline": "What is Nextly?",
+    "image": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "inLanguage": "en",
+    "keywords": "Open Source, Next.js",
+    "mainEntityOfPage": {
+      "@id": "https://nextlyhq.com/blog/introducing-nextly#webpage",
+    },
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/blog/introducing-nextly",
+    "wordCount": 5,
+  },
+]
+`;
+
+exports[`whole graphs of a site's pages > keeps the shape of a list of posts 1`] = `
+[
+  {
+    "@id": "https://nextlyhq.com/#organization",
+    "@type": "Organization",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://nextlyhq.com/nextly-logo-light.svg",
+    },
+    "name": "Nextly",
+    "sameAs": [
+      "https://github.com/nextlyhq/nextly",
+      "https://x.com/nextlyhq",
+    ],
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#website",
+    "@type": "WebSite",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "inLanguage": "en",
+    "name": "Nextly",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/blog#webpage",
+    "@type": "CollectionPage",
+    "breadcrumb": {
+      "@id": "https://nextlyhq.com/blog#breadcrumb",
+    },
+    "description": "Writing from the people who build Nextly.",
+    "inLanguage": "en",
+    "isPartOf": {
+      "@id": "https://nextlyhq.com/#website",
+    },
+    "mainEntity": {
+      "@id": "https://nextlyhq.com/blog#itemlist",
+    },
+    "name": "Blog",
+    "primaryImageOfPage": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "url": "https://nextlyhq.com/blog",
+  },
+  {
+    "@id": "https://nextlyhq.com/blog#breadcrumb",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "item": "https://nextlyhq.com/",
+        "name": "Home",
+        "position": 1,
+      },
+      {
+        "@type": "ListItem",
+        "name": "Blog",
+        "position": 2,
+      },
+    ],
+  },
+  {
+    "@id": "https://nextlyhq.com/blog#itemlist",
+    "@type": "ItemList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "name": "What is Nextly?",
+        "position": 1,
+        "url": "https://nextlyhq.com/blog/introducing-nextly",
+      },
+      {
+        "@type": "ListItem",
+        "name": "Why Next.js",
+        "position": 2,
+        "url": "https://nextlyhq.com/blog/why-nextjs",
+      },
+    ],
+    "numberOfItems": 2,
+  },
+]
+`;
+
+exports[`whole graphs of a site's pages > keeps the shape of the About page 1`] = `
+[
+  {
+    "@id": "https://nextlyhq.com/#organization",
+    "@type": "Organization",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "founder": [
+      {
+        "@id": "https://nextlyhq.com/#founder",
+      },
+    ],
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://nextlyhq.com/nextly-logo-light.svg",
+    },
+    "name": "Nextly",
+    "sameAs": [
+      "https://github.com/nextlyhq/nextly",
+      "https://x.com/nextlyhq",
+    ],
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#website",
+    "@type": "WebSite",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "inLanguage": "en",
+    "name": "Nextly",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#webpage",
+    "@type": "AboutPage",
+    "about": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "breadcrumb": {
+      "@id": "https://nextlyhq.com/about#breadcrumb",
+    },
+    "description": "An open-source CMS built by a developer who wanted control.",
+    "inLanguage": "en",
+    "isPartOf": {
+      "@id": "https://nextlyhq.com/#website",
+    },
+    "mainEntity": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "name": "The story behind Nextly",
+    "primaryImageOfPage": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "url": "https://nextlyhq.com/about",
+  },
+  {
+    "@id": "https://nextlyhq.com/about#breadcrumb",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "item": "https://nextlyhq.com/",
+        "name": "Home",
+        "position": 1,
+      },
+      {
+        "@type": "ListItem",
+        "name": "The story behind Nextly",
+        "position": 2,
+      },
+    ],
+  },
+  {
+    "@id": "https://nextlyhq.com/#founder",
+    "@type": "Person",
+    "jobTitle": "Founder",
+    "name": "Sara Khan",
+    "sameAs": [
+      "https://github.com/sara-khan",
+    ],
+    "url": "https://nextlyhq.com/about",
+    "worksFor": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+  },
+]
+`;
+
+exports[`whole graphs of a site's pages > keeps the shape of the Contact page 1`] = `
+[
+  {
+    "@id": "https://nextlyhq.com/#organization",
+    "@type": "Organization",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://nextlyhq.com/nextly-logo-light.svg",
+    },
+    "name": "Nextly",
+    "sameAs": [
+      "https://github.com/nextlyhq/nextly",
+      "https://x.com/nextlyhq",
+    ],
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#website",
+    "@type": "WebSite",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "inLanguage": "en",
+    "name": "Nextly",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/contact#webpage",
+    "@type": "ContactPage",
+    "about": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "breadcrumb": {
+      "@id": "https://nextlyhq.com/contact#breadcrumb",
+    },
+    "description": "Questions, bug reports or feature requests? We're here.",
+    "inLanguage": "en",
+    "isPartOf": {
+      "@id": "https://nextlyhq.com/#website",
+    },
+    "name": "Get in Touch.",
+    "primaryImageOfPage": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "url": "https://nextlyhq.com/contact",
+  },
+  {
+    "@id": "https://nextlyhq.com/contact#breadcrumb",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "item": "https://nextlyhq.com/",
+        "name": "Home",
+        "position": 1,
+      },
+      {
+        "@type": "ListItem",
+        "name": "Get in Touch.",
+        "position": 2,
+      },
+    ],
+  },
+]
+`;
+
+exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] = `
+[
+  {
+    "@id": "https://nextlyhq.com/#organization",
+    "@type": "Organization",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://nextlyhq.com/nextly-logo-light.svg",
+    },
+    "name": "Nextly",
+    "sameAs": [
+      "https://github.com/nextlyhq/nextly",
+      "https://x.com/nextlyhq",
+    ],
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#website",
+    "@type": "WebSite",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "inLanguage": "en",
+    "name": "Nextly",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#webpage",
+    "@type": "WebPage",
+    "dateModified": "2026-11-11",
+    "description": "Nextly is an open-source CMS and Visual Page Builder for Next.js.",
+    "inLanguage": "en",
+    "isPartOf": {
+      "@id": "https://nextlyhq.com/#website",
+    },
+    "mainEntity": {
+      "@id": "https://nextlyhq.com/#softwareApplication",
+    },
+    "name": "Nextly | Open-source CMS and Visual Page Builder for Next.js",
+    "primaryImageOfPage": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#faq",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "An open-source content platform for Next.js.",
+        },
+        "name": "What is Nextly?",
+      },
+      {
+        "@type": "Question",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Nextly is MIT licensed.",
+        },
+        "name": "Is Nextly free?",
+      },
+    ],
+  },
+  {
+    "@id": "https://nextlyhq.com/#softwareApplication",
+    "@type": "SoftwareApplication",
+    "applicationCategory": "DeveloperApplication",
+    "description": "Nextly is an open-source CMS and Visual Page Builder for Next.js.",
+    "image": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "mainEntityOfPage": {
+      "@id": "https://nextlyhq.com/#webpage",
+    },
+    "name": "Nextly",
+    "offers": {
+      "@type": "Offer",
+      "price": 0,
+      "priceCurrency": "USD",
+      "url": "https://nextlyhq.com/",
+    },
+    "operatingSystem": "Cross-platform",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+]
+`;
