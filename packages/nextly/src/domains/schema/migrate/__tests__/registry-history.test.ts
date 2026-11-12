@@ -174,6 +174,34 @@ describe("typeChangedEntities", () => {
     expect([...changed.collection].sort()).toEqual(["links", "tags"]);
   });
 
+  // Every key that may change how a field is stored counts, not a list of
+  // the ones known today: a decimal number, a required column.
+  it("names an entity a field of which changes its storage another way", () => {
+    const changed = typeChangedEntities(
+      record({
+        prices: code([{ name: "amount", type: "number" }]),
+        notes: code([{ name: "body", type: "text" }]),
+      }),
+      record({
+        prices: code([{ name: "amount", type: "number", dbType: "decimal" }]),
+        notes: code([{ name: "body", type: "text", required: true }]),
+      })
+    );
+    expect([...changed.collection].sort()).toEqual(["notes", "prices"]);
+  });
+
+  it("names no entity whose field changed only its label or default", () => {
+    const changed = typeChangedEntities(
+      record({ posts: code([{ name: "title", type: "text" }]) }),
+      record({
+        posts: code([
+          { name: "title", type: "text", label: "Title", defaultValue: "x" },
+        ]),
+      })
+    );
+    expect(changed.collection.size).toBe(0);
+  });
+
   it("names no entity whose fields changed only a help text", () => {
     const changed = typeChangedEntities(
       record({ posts: code([{ name: "title", type: "text" }]) }),

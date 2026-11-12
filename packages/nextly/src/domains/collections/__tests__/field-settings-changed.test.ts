@@ -45,6 +45,22 @@ describe("fieldSettingsChanged", () => {
     ).toBe(true);
   });
 
+  // Singles and field groups compare no default otherwise.
+  it("sees a declared default change, and not a computed one", () => {
+    expect(
+      fieldSettingsChanged(
+        [{ name: "views", type: "number", defaultValue: 1 }],
+        [{ name: "views", type: "number", defaultValue: 0 }]
+      )
+    ).toBe(true);
+    expect(
+      fieldSettingsChanged(
+        [{ name: "views", type: "number", defaultValue: () => 1 }],
+        [{ name: "views", type: "number" }]
+      )
+    ).toBe(false);
+  });
+
   it("sees a nested field's setting change", () => {
     const group = (description: string) => [
       {

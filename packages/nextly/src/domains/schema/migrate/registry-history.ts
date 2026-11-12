@@ -155,18 +155,55 @@ function says(recorded: RecordedEntitySettings, setting: UnsaidSetting) {
 }
 
 /**
- * The settings changes that alter what a field stores in its column: its
- * type, whether it holds many values, and what it relates to. Matched on the
- * paths `settingsChangesFor` names, at any depth (`fields.points.type`,
- * `fields.cta.fields.count.hasMany`), and on a field list it could not
- * match field by field (`fields`), which may hide one.
+ * The keys of a field that change nothing about its column: what the admin
+ * shows and the editor offers. A change to any other key of a field (its
+ * type, `hasMany`, `relationTo`, `required`, `dbType`, `options`, `virtual`
+ * and whatever is added later) may change how it is stored, so it is taken
+ * for one: writing that row with its file costs nothing where it was not.
  */
-const COLUMN_CHANGE =
-  /^fields(\.[^ ]+\.(type|hasMany|relationTo)( \(cleared\))?)?$/;
+const SETTINGS_ONLY = new Set([
+  "admin",
+  "custom",
+  "label",
+  "labels",
+  "description",
+  "components",
+  "filterOptions",
+  "defaultValue",
+]);
 
 /**
- * The entities both records hold whose fields' column shapes differ between
- * them (`COLUMN_CHANGE`), read from the one diff of two records that
+ * Whether a change `settingsChangesFor` names (`fields.points.type`,
+ * `fields.cta.fields.count.admin.placeholder`, `fields.body.blocks.hero.fields.x.type`)
+ * may change a field's column. A field added, removed or reordered is not
+ * one: its row is written at the run's end like any other. A field list it
+ * could not match field by field (`fields`) may hide one.
+ */
+function changesColumn(change: string): boolean {
+  if (/ \((added|removed|order)\)$/.test(change)) return false;
+  const parts = change.replace(/ \(cleared\)$/, "").split(".");
+  if (parts[0] !== "fields") return false;
+  // `parts[at]` is a `fields` key, `parts[at + 1]` a field's name and
+  // `parts[at + 2]` the key of that field that changed.
+  let at = 0;
+  for (;;) {
+    const key = parts[at + 2];
+    if (parts[at + 1] === undefined || key === undefined) return true;
+    if (key === "fields") {
+      at += 2;
+      continue;
+    }
+    if (key === "blocks" && parts[at + 4] === "fields") {
+      at += 4;
+      continue;
+    }
+    return !SETTINGS_ONLY.has(key);
+  }
+}
+
+/**
+ * The entities both records hold whose fields' column shapes may differ
+ * between them (`changesColumn`), read from the one diff of two records that
  * `migrate:create` writes a migration for. A field only one of them holds is
  * not a type change: its row is written at the run's end like any other.
  */
@@ -188,7 +225,7 @@ export function typeChangedEntities(
     before
   );
   for (const change of changes) {
-    if (change.changes.some(path => COLUMN_CHANGE.test(path))) {
+    if (change.changes.some(changesColumn)) {
       changed[change.kind].add(change.slug);
     }
   }

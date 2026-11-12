@@ -297,8 +297,8 @@ export function withUnsaidKept<
 /**
  * Whether the settings of a declared field list differ from a stored one's
  * where the schema hash cannot see them: each field's admin options (help
- * text, placeholder, hidden and the rest), custom data, allowed components
- * and filter options, at any depth.
+ * text, placeholder, hidden and the rest), custom data, allowed components,
+ * filter options and declared defaults, at any depth.
  * They change no column, so the hash leaves them out, yet the row carries
  * them and the admin reads them from it.
  *
@@ -329,6 +329,7 @@ function fieldSettingsOf(fields: unknown): unknown[] {
       custom,
       components,
       filterOptions,
+      defaultValue,
       fields: nested,
       blocks,
     } = field as Record<string, unknown>;
@@ -340,6 +341,9 @@ function fieldSettingsOf(fields: unknown): unknown[] {
       // component field's allowed components, a relationship's filter.
       components: recordedSetting(components),
       filterOptions: recordedSetting(filterOptions),
+      // A declared default (a computed one is a function, left out): Singles
+      // and field groups have no other comparison of it.
+      defaultValue: recordedSetting(defaultValue),
       fields: fieldSettingsOf(nested),
       blocks: Array.isArray(blocks)
         ? blocks.map((block: unknown) => {
