@@ -31,8 +31,36 @@ export function approvalDigest(
   entity: SystemColumnEntity,
   exemptFields: readonly string[] = []
 ): string {
+  return digestLeavingOut(snapshot, keysLeftOut(entity), exemptFields);
+}
+
+/**
+ * Whether `snapshot` is still the content an approval with digest `stored` approved: its digest
+ * now, or the digest earlier releases gave an approval, which left out the framework's keys every
+ * comparison leaves out (`documentSystemKeys`) and no other framework column. An approval given
+ * before an upgrade is then kept through a save that changes none of its content, and is still
+ * withdrawn by one that does.
+ */
+export function stillApproved(
+  stored: string,
+  snapshot: unknown,
+  entity: SystemColumnEntity,
+  exemptFields: readonly string[] = []
+): boolean {
+  return (
+    stored === approvalDigest(snapshot, entity, exemptFields) ||
+    stored ===
+      digestLeavingOut(snapshot, documentSystemKeys(entity), exemptFields)
+  );
+}
+
+/** The digest of `snapshot` without the top-level keys `system` and `exemptFields` name. */
+function digestLeavingOut(
+  snapshot: unknown,
+  system: ReadonlySet<string>,
+  exemptFields: readonly string[]
+): string {
   const value = readSnapshot(snapshot);
-  const system = keysLeftOut(entity);
   const exempt = new Set(exemptFields);
   // Only the top level carries the framework's keys and the exempt fields, which are named by a
   // top-level field name; nested content is the editor's.

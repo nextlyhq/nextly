@@ -11,7 +11,9 @@
  * Each withdrawal is observed on the review state, the record of content events and the
  * history's pins, as a reader of each would see them.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -29,6 +31,8 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { VersionsRepository } from "../../versions/versions-repository";
+import { canonicalJson } from "../../../shared/lib/canonical-json";
+import { documentSystemKeys } from "../../versions/snapshot-system-keys";
 import { approvalDigest } from "../approval-digest";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -378,7 +382,14 @@ describe.each(getConfiguredTestDialects())(
         // English published first, then Spanish: the document's first-published time is written
         // to the millisecond in English's version and read back, on SQLite and MySQL, to the
         // second in Spanish's.
-        await save("posts", post, { status: "published" }, { locale: "en" });
+        // A first publish at a time with milliseconds, which SQLite and MySQL read back without them.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-11-12T10:00:00.123Z"));
+        try {
+          await save("posts", post, { status: "published" }, { locale: "en" });
+        } finally {
+          vi.useRealTimers();
+        }
         await save(
           "posts",
           post,
@@ -399,6 +410,59 @@ describe.each(getConfiguredTestDialects())(
 
         expect(await stateOf(app(), partOf("posts", post, "en"))).toEqual(
           english
+        );
+      });
+
+      it("keeps an approval given before an upgrade through a save that changes nothing, and withdraws it on a change", async () => {
+        await boot(dialect);
+        const post = await entry(app(), "posts");
+        await save("posts", post, { status: "published" }, { locale: "en" });
+        // A held edit after the publish, so the version approved reads the first-published time
+        // as every later one does.
+        await save("posts", post, { title: "Again" }, { locale: "en" });
+        const versionNo = await shownVersion(app(), "posts", post, "en");
+        // The digest an earlier release gave the approval: every top-level key but the ones it left
+        // out, the first-published time among those it kept.
+        const snapshot = (await snapshotOf(
+          app(),
+          "posts",
+          post,
+          versionNo
+        )) as Record<string, unknown>;
+        const kept = documentSystemKeys("collection");
+        const legacy = createHash("sha256")
+          .update(
+            canonicalJson(
+              Object.fromEntries(
+                Object.entries(snapshot).filter(
+                  ([key, held]) =>
+                    !kept.has(key) && held !== null && held !== undefined
+                )
+              )
+            ) ?? "",
+            "utf8"
+          )
+          .digest("hex");
+        expect(legacy).not.toBe(approvalDigest(snapshot, "collection"));
+        await seedState(app(), partOf("posts", post, "en"), "cleared", {
+          enteredBy: "alice",
+          definitionHash: HASH,
+          approval: {
+            versionNo,
+            digest: legacy,
+            by: "bob",
+            at: new Date("2026-11-02T10:00:00.000Z"),
+          },
+        });
+
+        await save("posts", post, { title: "Again" }, { locale: "en" });
+        expect(
+          (await stateOf(app(), partOf("posts", post, "en")))?.approval
+        ).toMatchObject({ digest: legacy });
+
+        await save("posts", post, { title: "Changed" }, { locale: "en" });
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
+          { approval: null }
         );
       });
 
