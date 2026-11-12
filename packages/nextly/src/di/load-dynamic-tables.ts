@@ -363,12 +363,47 @@ export interface LoadedBuilderEntity {
    * its values live (`storesPerLanguage`); false where the registry is too old to record it.
    */
   localized: boolean;
+  /**
+   * Who made the row: `ui` for the Schema Builder, `code`, or
+   * `plugin:<name>`. A plugin scope reaches only the Builder's rows, and a
+   * row an uninstalled plugin left behind still names that plugin.
+   */
+  source?: string;
 }
 
 export interface LoadedBuilderEntities {
   collections: LoadedBuilderEntity[];
   singles: LoadedBuilderEntity[];
   components: LoadedBuilderEntity[];
+}
+
+/**
+ * Every row of a registry table, with `localized` and `source` where the
+ * registry has them. Each is dropped only when the registry has no such
+ * column, so an older registry still yields its entities rather than none;
+ * any other failure is not a missing column and is thrown.
+ */
+async function readRegistryRows(
+  adapter: DrizzleAdapter,
+  table: string,
+  columns: string
+): Promise<DynamicTableRow[]> {
+  const tries = [", localized, source", ", localized", ", source", ""];
+  for (const [at, extra] of tries.entries()) {
+    try {
+      return await adapter.executeQuery<DynamicTableRow>(
+        `SELECT ${columns}${extra} FROM ${table}`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const missingColumn =
+        /localized|source|no such column|does not exist|unknown column/i.test(
+          msg
+        );
+      if (!missingColumn || at === tries.length - 1) throw err;
+    }
+  }
+  return [];
 }
 
 /**
@@ -389,26 +424,8 @@ export async function loadBuilderEntities(
     const columns = hasStatusColumn
       ? "slug, table_name, fields, status"
       : "slug, table_name, fields";
-    // `localized` is asked for first and dropped only when the registry has no such column, so an
-    // older registry still yields its entities rather than none.
-    const readRows = async (): Promise<DynamicTableRow[]> => {
-      try {
-        return await adapter.executeQuery<DynamicTableRow>(
-          `SELECT ${columns}, localized FROM ${table}`
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (
-          !/localized|no such column|does not exist|unknown column/i.test(msg)
-        )
-          throw err;
-        return adapter.executeQuery<DynamicTableRow>(
-          `SELECT ${columns} FROM ${table}`
-        );
-      }
-    };
     try {
-      const rows = await readRows();
+      const rows = await readRegistryRows(adapter, table, columns);
       const out: LoadedBuilderEntity[] = [];
       for (const row of rows) {
         try {
@@ -424,6 +441,7 @@ export async function loadBuilderEntities(
             // Same dialect-boolean coercion as loadDynamicTables.
             status: row.status === 1 || row.status === true,
             localized: row.localized === 1 || row.localized === true,
+            ...(typeof row.source === "string" ? { source: row.source } : {}),
           });
         } catch {
           // Skip a row whose fields JSON is malformed.

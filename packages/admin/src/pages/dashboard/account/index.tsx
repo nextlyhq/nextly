@@ -16,6 +16,7 @@ import {
   Button,
   FieldShell,
   Input,
+  PageHeader,
   Spinner,
 } from "@nextlyhq/ui";
 import type { ReactElement } from "react";
@@ -44,14 +45,14 @@ export default function AccountPage(): ReactElement {
 
   if (isLoading) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Spinner size="md" />
       </PageContainer>
     );
   }
   if (!user || error) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription>{t("nextly.account.loadFailed")}</AlertDescription>
         </Alert>
@@ -63,16 +64,11 @@ export default function AccountPage(): ReactElement {
   const placeContext = { userId: user.id };
 
   return (
-    <PageContainer width="form">
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold tracking-tight">
-          {t("nextly.account.title")}
-        </h1>
-        {/* Muted foreground, as the other pages' subtitles, for contrast. */}
-        <p className="text-sm font-normal text-muted-foreground mt-1">
-          {t("nextly.account.description")}
-        </p>
-      </div>
+    <PageContainer type="form">
+      <PageHeader
+        title={t("nextly.account.title")}
+        description={t("nextly.account.description")}
+      />
 
       {/* The page's own card is the `profile` built-in: plugins' blocks draw
           around it and their tabs beside it, in the order sent. */}

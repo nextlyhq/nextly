@@ -518,17 +518,27 @@ const TIMED_OUT: unique symbol = Symbol("timed out");
  * `work`'s answer, or {@link TIMED_OUT} once the deadline passes first: a read
  * that stalls cannot hold the request past its budget. The work itself is
  * only a read, so leaving it to finish unheard changes nothing.
+ *
+ * {@link TIMED_OUT} always means {@link pastDeadline} holds, which is what
+ * stops a later list asking again. A timer alone cannot promise that: Node
+ * measures it from the event loop's cached time, which lags the clock on a
+ * busy process, so it can fire before the clock reaches the deadline. One
+ * that does waits again for what is left.
  */
 async function beforeDeadline<T>(
   work: Promise<T>,
   deps: DryRunDeps
 ): Promise<T | typeof TIMED_OUT> {
-  if (deps.deadline === undefined) return work;
-  const left = deps.deadline.getTime() - Date.now();
-  if (left <= 0) return TIMED_OUT;
+  const { deadline } = deps;
+  if (deadline === undefined) return work;
+  if (pastDeadline(deps)) return TIMED_OUT;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<typeof TIMED_OUT>(resolve => {
-    timer = setTimeout(() => resolve(TIMED_OUT), left);
+    const wait = (): void => {
+      if (pastDeadline(deps)) resolve(TIMED_OUT);
+      else timer = setTimeout(wait, deadline.getTime() - Date.now());
+    };
+    wait();
   });
   try {
     return await Promise.race([work, expired]);

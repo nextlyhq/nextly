@@ -3,25 +3,11 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import {
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type JSX,
-  type ReactNode,
-} from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
-
+import { LOADING_FRAME_TIMES } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
@@ -29,16 +15,9 @@ import {
   registerComponents,
 } from "@admin/lib/plugins/component-registry";
 import type { AdminBranding } from "@admin/types/branding";
+import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
-import { useCardCollapsed } from "../frame/collapse";
-import { CardGrowContext } from "../frame/grow";
-import {
-  oneItemBodyPx,
-  requestedCardHeightPx,
-  useCardFitsContent,
-} from "../frame/fit";
-import { cardBodyHeightPx } from "../frame/measures";
-import { cardHeightPx, CONTENT_ROWS_GRID_CLASS } from "../sizes";
+import { cardSpanClass, GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -608,7 +587,7 @@ describe("WidgetGrid — sizing", () => {
     size: { default: { w, h } },
   });
 
-  it("gives every cell a full-width base span whatever its w", () => {
+  it("gives every cell a full-width base span but a quarter one, half the row on a phone", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([
       sized("w3", 3),
@@ -618,28 +597,38 @@ describe("WidgetGrid — sizing", () => {
       sized("w12", 12),
     ]);
     renderGrid();
-    for (const id of ["w3", "w4", "w6", "w8", "w12"]) {
+    // The phone's base span: half the row for a quarter card, which pairs with another there,
+    // and the whole row for every wider one.
+    for (const id of ["w4", "w6", "w8", "w12"]) {
       const cell = screen.getByTestId(`widget-cell-${id}`);
       expect(cell.className.split(" ")).toContain("col-span-12");
     }
+    const quarter = screen.getByTestId("widget-cell-w3").className.split(" ");
+    expect(quarter).toContain("col-span-6");
+    expect(quarter).not.toContain("col-span-12");
   });
 
-  it("spans a card's w columns and h rows, its columns by the DASHBOARD's width, not the window", () => {
+  it("spans a card's w columns by the DASHBOARD's width, not the window, and no rows: it is as tall as its content", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([sized("narrow", 3, 4), sized("wide", 8, 2)]);
     renderGrid();
     const narrow = screen.getByTestId("widget-cell-narrow");
     expect(narrow).toHaveClass(
-      "col-span-12",
-      "@min-[640px]/dashboard:col-span-6",
+      "col-span-6",
       "@min-[1024px]/dashboard:col-span-3"
     );
-    expect(narrow.style.gridRow).toBe("span 4 / span 4");
+    expect(narrow).not.toHaveClass("col-span-12");
+    // 🔴 No row span and nothing that clips: a card's height is its content's, not its `h`.
+    expect(narrow.style.gridRow).toBe("");
+    expect(narrow).toHaveClass("relative", "min-w-0");
+    expect(narrow).not.toHaveClass("overflow-hidden");
+    expect(narrow).not.toHaveClass("min-h-0");
+    expect(narrow).not.toHaveClass("contain-size");
     const wide = screen.getByTestId("widget-cell-wide");
     // Wider than six columns: the whole row in the middle band, so no 640 px class at all.
     expect(wide).toHaveClass("@min-[1024px]/dashboard:col-span-8");
     expect(wide.className).not.toMatch(/@min-\[640px\]/);
-    expect(wide.style.gridRow).toBe("span 2 / span 2");
+    expect(wide.style.gridRow).toBe("");
     // The container those classes answer to is the dashboard's own, so a
     // dashboard narrowed by a sidebar draws the band that fits it.
     expect(
@@ -649,292 +638,120 @@ describe("WidgetGrid — sizing", () => {
     ).toBe(screen.getByTestId("dashboard-container"));
   });
 
-  it("draws a card its body collapsed one row tall, its header the one line, and its own rows again once opened", async () => {
-    // A body that collapses itself to one line, as the setup card does, with a control to open it.
-    function Collapsible() {
-      const [collapsed, setCollapsed] = useState(true);
-      useCardCollapsed(collapsed);
-      return (
-        <button type="button" onClick={() => setCollapsed(open => !open)}>
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
-      );
-    }
-    registerComponents({ "@acme/admin#A": Collapsible });
-    mockBranding = brandingWith([{ ...sized("bar", 12, 3), title: "Bar" }]);
-    renderGrid();
-    const cell = screen.getByTestId("widget-cell-bar");
-    const card = within(cell).getByRole("region");
-    // Its body is drawn once its answer arrives, and collapses itself then.
-    await within(cell).findByRole("button", { name: "Expand" });
-    expect(cell.style.gridRow).toBe("span 1 / span 1");
-    expect(card).toHaveAttribute("data-collapsed");
-    // Its border, padding and one header-high line make exactly one row.
-    expect(card).toHaveClass("py-[15px]");
-    // The header is the one line, drawn, so the title names the card on screen and no control in
-    // it is hidden yet focusable; no footer takes room under the line.
-    expect(within(cell).getByTestId("widget-card-header")).not.toHaveClass(
-      "sr-only"
-    );
-    expect(card).toHaveAccessibleName(/Bar/);
-    expect(within(cell).queryByTestId("widget-card-footer")).toBeNull();
-
-    // The must-differ half: opened, the card spans its stored rows and draws its whole frame.
-    fireEvent.click(within(cell).getByRole("button", { name: "Expand" }));
-    expect(cell.style.gridRow).toBe("span 3 / span 3");
-    expect(card).not.toHaveAttribute("data-collapsed");
-    expect(card).not.toHaveClass("py-[15px]");
-    expect(within(cell).getByTestId("widget-card-footer")).toBeInTheDocument();
-  });
-
   /**
-   * A body whose content is `px` high (jsdom lays nothing out, so the element's box is set on it),
-   * that asks to be drawn at that height until "Fill" is pressed.
+   * A stored arrangement holding one placement of `acme/one`, twelve columns wide (its widget
+   * declares six) and `h` rows high as stored.
    */
-  function fittingBody(px: number) {
-    return function Fitting() {
-      const [fits, setFits] = useState(true);
-      const content = useRef<HTMLDivElement | null>(null);
-      const hold = (node: HTMLDivElement | null) => {
-        if (node !== null) {
-          node.getBoundingClientRect = () =>
-            ({
-              top: 0,
-              bottom: px,
-              left: 0,
-              right: 0,
-              width: 0,
-              height: px,
-            }) as DOMRect;
-        }
-        content.current = node;
-      };
-      useCardFitsContent(content, fits, null);
-      return (
-        <div ref={hold}>
-          <button type="button" onClick={() => setFits(false)}>
-            Fill
-          </button>
-        </div>
-      );
+  function storedLayout(h: number): DashboardLayoutResponse {
+    return {
+      placements: [
+        { id: "p-one", widgetId: "acme/one", w: 12, h, removed: false },
+      ],
+      widgets: { "acme/one": { allowsSeveral: false } },
+      available: [],
+      defaultPlacements: [],
+      version: 2,
+      source: "own",
+      arranged: true,
+      scope: "tok",
+      audience: "aud",
     };
   }
 
-  /** A widget declared `w` by `h`, drawn by the component `component` names. */
-  const fitted = (id: string, w: number, h: number, component: string) => ({
-    id,
-    title: id,
-    component,
-    size: { default: { w, h }, min: { w, h: 2 } },
+  /** The grid drawn from `layout`, read and fresh, with its query client. */
+  function renderStored(layout: DashboardLayoutResponse) {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          retryDelay: 0,
+          gcTime: 0,
+          staleTime: Infinity,
+        },
+      },
+    });
+    client.setQueryData(DASHBOARD_LAYOUT_KEY, layout);
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
+  }
+
+  it("draws its outline at the stored arrangement's widths while the widgets are on their way", () => {
+    // The arrangement answered, the workspace's declarations not yet: the
+    // outline stands in, and its cards take the stored cards' spans, so the
+    // cards land where it drew them. A removed card takes no place.
+    mockBranding = brandingWith([]);
+    mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
+    const layout = storedLayout(4);
+    layout.placements = [
+      { id: "a", widgetId: "acme/one", w: 3, h: 2, removed: false },
+      { id: "b", widgetId: "acme/one", w: 3, h: 2, removed: true },
+      { id: "c", widgetId: "acme/one", w: 8, h: 4, removed: false },
+    ];
+    // The outline is drawn once its 0.4 s have passed.
+    vi.useFakeTimers();
+    renderStored(layout);
+    act(() => {
+      vi.advanceTimersByTime(LOADING_FRAME_TIMES.outline);
+    });
+    vi.useRealTimers();
+    const outline = within(screen.getByTestId("widget-grid-loading"));
+    expect(
+      outline
+        .getAllByTestId("dashboard-card-outline")
+        .map(card => card.getAttribute("data-span"))
+    ).toEqual([cardSpanClass(3), cardSpanClass(8)]);
   });
 
-  /** The height a cell asks of its rows: its minimum, as the grid's content-sized rows read it. */
-  const requested = (cell: HTMLElement) => cell.style.minHeight;
-
-  it("asks for the taller content of two cards sharing a row in both, each stretched to the row, never past its stored height", async () => {
-    // 🔴 Fails on fixed rows with the shorter card drawn at the top of its own: there no cell
-    // asks for any height, and the shorter one is `self-start`, its bottom above its neighbour's.
-    registerComponents({
-      "@acme/admin#One": fittingBody(LIST_ROW_HEIGHT_PX.default),
-      "@acme/admin#Two": fittingBody(2 * LIST_ROW_HEIGHT_PX.default),
-      "@acme/admin#Tall": fittingBody(cardBodyHeightPx(4) + 200),
-    });
-    // At 1,200 px each is drawn at its own w, so the first two share their rows.
+  it("draws a layout stored with any h alike, keeping the stored h and setting no height from it", async () => {
+    // 🔴 Fails where a stored `h` still sizes the cell: a row span, or a height asked for, of two
+    // rows for one and of the widget's six-row maximum for the other.
+    registerComponents({ "@acme/admin#A": () => <div>answered</div> });
     mockBranding = brandingWith([
-      fitted("one", 8, 4, "@acme/admin#One"),
-      fitted("two", 4, 4, "@acme/admin#Two"),
-      fitted("tall", 12, 4, "@acme/admin#Tall"),
+      {
+        id: "acme/one",
+        title: "One",
+        component: "@acme/admin#A",
+        size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
+      },
     ]);
-    renderGrid();
-    const one = screen.getByTestId("widget-cell-one");
-    const two = screen.getByTestId("widget-cell-two");
-    const tall = screen.getByTestId("widget-cell-tall");
-    await within(one).findByRole("button", { name: "Fill" });
-    await within(two).findByRole("button", { name: "Fill" });
-    await within(tall).findByRole("button", { name: "Fill" });
-    // Each asks for the card that holds its content: the frame around the body, and the body.
-    const frame = cardHeightPx(4) - cardBodyHeightPx(4);
-    expect(requested(one)).toBe(`${frame + LIST_ROW_HEIGHT_PX.default}px`);
-    expect(requested(two)).toBe(`${frame + 2 * LIST_ROW_HEIGHT_PX.default}px`);
-    // The row takes the taller request; both are stretched to it, so their bottoms meet, and
-    // neither's content can make the row taller than it asked for.
-    for (const cell of [one, two]) {
-      expect(cell).toHaveClass("contain-size");
-      expect(cell).not.toHaveClass("self-start");
-      // Its rows stay, so every card is placed where customise mode places it.
-      expect(cell.style.gridRow).toBe("span 4 / span 4");
+    const drawn: { style: string | null; className: string }[] = [];
+    // Two rows, within the widget's bounds, and ten, past its maximum of six.
+    for (const h of [2, 10]) {
+      const { client, unmount } = renderStored(storedLayout(h));
+      const cell = screen.getByTestId("widget-cell-acme/one");
+      await within(cell).findByText("answered");
+      // The stored placement is the one drawn: full width at every band, not the declared half.
+      expect(cell).toHaveClass("col-span-12");
+      expect(cell.className).not.toMatch(/col-span-6/);
+      expect(cell.style.gridRow).toBe("");
+      expect(cell.style.height).toBe("");
+      expect(cell.style.minHeight).toBe("");
+      drawn.push({
+        style: cell.getAttribute("style"),
+        className: cell.className,
+      });
+      // Drawing reads the stored value and never rewrites it.
+      expect(
+        client.getQueryData<DashboardLayoutResponse>(DASHBOARD_LAYOUT_KEY)
+          ?.placements[0]?.h
+      ).toBe(h);
+      unmount();
     }
-    // A body taller than its stored rows is drawn at its stored height, no taller.
-    expect(requested(tall)).toBe(`${cardHeightPx(4)}px`);
-
-    // The must-differ half: a body that stops reporting asks for its stored height again.
-    fireEvent.click(within(one).getByRole("button", { name: "Fill" }));
-    expect(requested(one)).toBe(`${cardHeightPx(4)}px`);
+    expect(drawn[1]).toEqual(drawn[0]);
   });
 
-  it("holds its row at its stored height for a card whose body reports nothing", async () => {
-    // 🔴 Fails where a cell asks for no height on content-sized rows: an empty request lets the
-    // row shrink under a card that never said its content was shorter.
-    registerComponents({
-      "@acme/admin#Fit": fittingBody(LIST_ROW_HEIGHT_PX.default),
-      "@acme/admin#A": () => <div>a</div>,
-    });
-    mockBranding = brandingWith([
-      fitted("fit", 8, 4, "@acme/admin#Fit"),
-      { ...sized("beside", 4, 4), title: "beside" },
-    ]);
-    renderGrid();
-    const fit = screen.getByTestId("widget-cell-fit");
-    const beside = screen.getByTestId("widget-cell-beside");
-    await within(fit).findByRole("button", { name: "Fill" });
-    expect(requested(beside)).toBe(`${cardHeightPx(4)}px`);
-    expect(beside).toHaveClass("contain-size");
-    // The card beside it asks for less, and is stretched to the row the other holds.
-    expect(Number.parseFloat(requested(fit))).toBeLessThan(cardHeightPx(4));
-    expect(fit).not.toHaveClass("self-start");
-  });
-
-  it("asks for its content's height across the whole row, keeping the rows it spans", async () => {
-    // 🔴 Fails on the fewest rows that hold its content (three here), which changes the card's
-    // span, and so where every card after it is placed, and still leaves room under its content.
-    registerComponents({
-      "@acme/admin#Fit": fittingBody(LIST_ROW_HEIGHT_PX.default),
-    });
-    mockBranding = brandingWith([fitted("fit", 12, 4, "@acme/admin#Fit")]);
-    renderGrid();
-    const cell = screen.getByTestId("widget-cell-fit");
-    await within(cell).findByRole("button", { name: "Fill" });
-    expect(cell.style.gridRow).toBe("span 4 / span 4");
-    expect(requested(cell)).toBe(
-      `${cardHeightPx(4) - cardBodyHeightPx(4) + LIST_ROW_HEIGHT_PX.default}px`
-    );
-
-    fireEvent.click(within(cell).getByRole("button", { name: "Fill" }));
-    expect(cell.style.gridRow).toBe("span 4 / span 4");
-    expect(requested(cell)).toBe(`${cardHeightPx(4)}px`);
-  });
-
-  it("asks, while a content-sized card is loading, for the height its one-item answer takes, and for any other card's stored height", async () => {
-    // 🔴 Fails where the loading state reports nothing: each loading cell asks for its stored
-    // height, 336 px here, and the row shrinks by 170 px under the cards below once one item
-    // arrives.
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    // The answers never arrive, so every card stays loading.
-    vi.mocked(protectedApi.post).mockImplementation(
-      () => new Promise(() => {})
-    );
-    mockBranding = brandingWith([
-      { ...sized("core/needs-attention", 8, 4), title: "Needs your attention" },
-      { ...sized("core/upcoming-releases", 4, 4), title: "Upcoming releases" },
-      { ...sized("other", 12, 4), title: "Other" },
-    ]);
-    renderGrid();
-    const attention = screen.getByTestId("widget-cell-core/needs-attention");
-    const releases = screen.getByTestId("widget-cell-core/upcoming-releases");
-    const other = screen.getByTestId("widget-cell-other");
-    await within(attention).findByTestId("card-skeleton");
-    await within(other).findByTestId("card-skeleton");
-    // One list row, the height a one-item answer's row is drawn at, in the card that holds it.
-    const oneItem = `${requestedCardHeightPx(4, oneItemBodyPx("default"))}px`;
-    expect(oneItem).toBe(
-      `${cardHeightPx(4) - cardBodyHeightPx(4) + LIST_ROW_HEIGHT_PX.default}px`
-    );
-    expect(requested(attention)).toBe(oneItem);
-    expect(requested(releases)).toBe(oneItem);
-    // Any other card's loading state asks for its stored height, as before.
-    expect(requested(other)).toBe(`${cardHeightPx(4)}px`);
-  });
-
-  it("asks for each card's stored height where cards side by side span different rows, whatever their bodies report", async () => {
-    // 🔴 Fails where each cell fits alone: both ask for one list row's card, 166 px, which the
-    // grid spreads over three rows for one and four for the other, so the four-row card's rows
-    // can draw the three-row card past its stored 248 px, and the two end at different heights.
-    registerComponents({
-      "@acme/admin#One": fittingBody(LIST_ROW_HEIGHT_PX.default),
-      "@acme/admin#Two": fittingBody(LIST_ROW_HEIGHT_PX.default),
-    });
-    mockBranding = brandingWith([
-      fitted("three", 8, 3, "@acme/admin#One"),
-      fitted("four", 4, 4, "@acme/admin#Two"),
-    ]);
-    renderGrid();
-    const three = screen.getByTestId("widget-cell-three");
-    const four = screen.getByTestId("widget-cell-four");
-    await within(three).findByRole("button", { name: "Fill" });
-    await within(four).findByRole("button", { name: "Fill" });
-    // Both at their stored heights, which is how fixed rows draw them.
-    expect(requested(three)).toBe(`${cardHeightPx(3)}px`);
-    expect(requested(four)).toBe(`${cardHeightPx(4)}px`);
-    expect(three.style.gridRow).toBe("span 3 / span 3");
-    expect(four.style.gridRow).toBe("span 4 / span 4");
-  });
-
-  it("bands a card after a grown one by the rows the grown card is drawn across", async () => {
-    // 🔴 Fails where the cards are banded at their stored rows: there the third half-width card
-    // sits on a row of its own and fits, 166 px, though the grid draws it beside the grown first
-    // card, whose rows then size it as well.
-    function Growing() {
-      const grow = useContext(CardGrowContext);
-      return (
-        <button type="button" onClick={() => grow?.(cardBodyHeightPx(6))}>
-          Grow
-        </button>
-      );
-    }
-    registerComponents({
-      "@acme/admin#Grow": Growing,
-      "@acme/admin#Fit": fittingBody(LIST_ROW_HEIGHT_PX.default),
-    });
-    mockBranding = brandingWith([
-      fitted("first", 6, 4, "@acme/admin#Grow"),
-      fitted("second", 6, 4, "@acme/admin#Fit"),
-      fitted("third", 6, 4, "@acme/admin#Fit"),
-    ]);
-    renderGrid();
-    const first = screen.getByTestId("widget-cell-first");
-    const third = screen.getByTestId("widget-cell-third");
-    await within(third).findByRole("button", { name: "Fill" });
-    // Unchanged, the third card has a row of its own and asks for its content's height.
-    expect(requested(third)).toBe(
-      `${requestedCardHeightPx(4, LIST_ROW_HEIGHT_PX.default)}px`
-    );
-
-    fireEvent.click(within(first).getByRole("button", { name: "Grow" }));
-    expect(first.style.gridRow).toBe("span 6 / span 6");
-    // Six rows high, the first card leaves room beside it for the third, which shares its rows.
-    expect(requested(third)).toBe(`${cardHeightPx(4)}px`);
-  });
-
-  it("draws a loading content-sized card at its stored height, with its full skeleton, where its band of rows is uneven", async () => {
-    // 🔴 Fails where the loading state asks whatever its band: a three-row Needs your attention
-    // beside a four-row Upcoming releases would ask for one row's card, 166 px, in rows the
-    // grid cannot draw at it.
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    vi.mocked(protectedApi.post).mockImplementation(
-      () => new Promise(() => {})
-    );
-    mockBranding = brandingWith([
-      { ...sized("core/needs-attention", 8, 3), title: "Needs your attention" },
-      { ...sized("core/upcoming-releases", 4, 4), title: "Upcoming releases" },
-    ]);
-    renderGrid();
-    const attention = screen.getByTestId("widget-cell-core/needs-attention");
-    const releases = screen.getByTestId("widget-cell-core/upcoming-releases");
-    await within(attention).findByTestId("card-skeleton");
-    expect(requested(attention)).toBe(`${cardHeightPx(3)}px`);
-    expect(requested(releases)).toBe(`${cardHeightPx(4)}px`);
-  });
-
-  it("lays its cards on twelve columns in rows as tall as their cards at rest, in order, with the gaps a card's predicted width counts", () => {
+  it("lays its cards on twelve columns in rows as tall as their cards, in order, with the gaps a card's predicted width counts", () => {
     // A card is first asked for at a size predicted with these gaps. A gap in rem would
     // follow the page's root font size and draw cards at another width than predicted.
-    // 🔴 Fails on rows of 72 px at rest, where no card can be drawn shorter than its stored size.
+    // 🔴 Fails on rows of 72 px, where no card can be drawn at its content's height.
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([sized("one", 3)]);
     renderGrid();
     const grid = screen.getByLabelText("Dashboard widgets");
-    for (const cls of CONTENT_ROWS_GRID_CLASS.split(" "))
-      expect(grid).toHaveClass(cls);
+    for (const cls of GRID_CLASS.split(" ")) expect(grid).toHaveClass(cls);
+    expect(grid).toHaveClass("auto-rows-auto");
     expect(grid).not.toHaveClass("auto-rows-[72px]");
     expect(grid.className).not.toMatch(/dense/);
   });
@@ -1349,7 +1166,10 @@ describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", 
     // that supplied widgets.
     mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
     renderGrid();
-    expect(screen.getByTestId("widget-grid-loading")).toBeInTheDocument();
+    // The dashboard's outline stands in the grid's place: the screen's wait,
+    // drawn from 0.4 s by the frame's one outline, never an empty page.
+    const loading = screen.getByTestId("widget-grid-loading");
+    expect(loading).toContainElement(screen.getByTestId("screen-outline"));
   });
 
   it("says so when the workspace never answered", () => {

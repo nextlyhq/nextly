@@ -98,6 +98,7 @@ import {
   readerOf,
 } from "./hidden-changes";
 import { holderAnswer, readPerson, type HolderAnswer } from "./holders";
+import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import {
   documentTableOf,
   fieldGroupReadPassOf,
@@ -216,6 +217,8 @@ const WORKFLOW_STEP_ERROR_CODES = {
   commentRequired: "WORKFLOW_COMMENT_REQUIRED",
   commentTooLong: "WORKFLOW_COMMENT_TOO_LONG",
   nothingToApprove: "WORKFLOW_NOTHING_TO_APPROVE",
+  // A part with nothing unpublished: published content stays live, with no review to open.
+  nothingToReview: "WORKFLOW_NOTHING_TO_REVIEW",
   singlesNotSupported: "WORKFLOW_SINGLES_NOT_SUPPORTED",
 } as const;
 
@@ -669,6 +672,8 @@ interface StepContext {
   action: string;
   /** Whether the caller may take the step's action on a part, as decided before the transaction. */
   allowedOn: (part: string | null) => boolean;
+  /** Whether each named part is live, read before the transaction: where a part stands without review state. */
+  liveOn: ReadonlyMap<string | null, boolean>;
   /** Whether the step enters a stage that allows publishing, which approves what it moves. */
   approves: boolean;
   /**
@@ -700,14 +705,22 @@ type StepOutcome = { taken: TakeStepResult } | { hidden: HiddenRefusal };
 /** The changed fields an approval would cover that the reviewer cannot read, and what decides who could. */
 interface HiddenRefusal {
   fields: string[];
-  parts: Array<{ shown: unknown; changed: string[] }>;
+  parts: Array<{ part: string | null; shown: unknown; changed: string[] }>;
   excluded: string[];
 }
 
-/** A part as a step reads it on its transaction: its review state, and the stage that gives. */
-interface ReadPart {
+/**
+ * A part as a step reads it on its transaction: its review state, and the stage that gives (null
+ * for a part with nothing unpublished, which has none).
+ */
+interface PartRead {
   part: string | null;
   state: ReviewState | null;
+  stage: string | null;
+}
+
+/** A part a step can judge: one in a stage. */
+interface ReadPart extends PartRead {
   stage: string;
 }
 
@@ -783,6 +796,7 @@ async function prepareStep(
     table,
     action,
     allowedOn: await partsAllowed(input, parts, action, caller, slug),
+    liveOn: await livePartsOf(adapter, input.document, parts),
     approves: allowsPublish(workflow, step.to),
     approver: await approverOf(
       adapter,
@@ -837,17 +851,57 @@ async function lockDocument(
   });
 }
 
-/** Each named part's review state, read on the transaction; none reads as the first stage. */
+/**
+ * Each named part's review state, read on the transaction, and the stage it puts the part in; a
+ * part with none stands where its content puts it (`partStage`).
+ */
 async function readParts(
   tx: TransactionContext,
   c: StepContext
-): Promise<ReadPart[]> {
-  const parts: ReadPart[] = [];
+): Promise<PartRead[]> {
+  const pending = await pendingPartsOn(tx, c.input.document);
+  const parts: PartRead[] = [];
   for (const part of namedParts(c.input.parts, c.table.localized)) {
     const state = await readReviewState(tx, partOf(c.input.document, part));
-    parts.push({ part, state, stage: state?.stage ?? c.workflow.firstStage });
+    const content = {
+      live: c.liveOn.get(part) === true,
+      pending: pending(part),
+    };
+    parts.push({ part, state, stage: partStage(c.workflow, state, content) });
   }
   return parts;
+}
+
+/** The refusal of a step or an assignment on parts with nothing unpublished to review. */
+function nothingToReviewRefusal(
+  parts: readonly (string | null)[],
+  path: (index: number) => string
+): NextlyError {
+  return NextlyError.validation({
+    errors: parts.map((part, index) => ({
+      path: path(index),
+      code: WORKFLOW_STEP_ERROR_CODES.nothingToReview,
+      message: `${partName(part)} has nothing unpublished to review.`,
+    })),
+  });
+}
+
+/** Whether a part read is in a stage. */
+const staged = (entry: PartRead): entry is ReadPart => entry.stage !== null;
+
+/**
+ * The parts in a stage. A part named on its own with nothing unpublished refuses the step; `"all"`
+ * passes over such parts, as having nothing to move.
+ */
+function stagedParts(c: StepContext, parts: readonly PartRead[]): ReadPart[] {
+  const idle = parts.filter(entry => !staged(entry));
+  if (c.input.parts !== "all" && idle.length > 0) {
+    throw nothingToReviewRefusal(
+      idle.map(entry => entry.part),
+      () => "parts"
+    );
+  }
+  return parts.filter(staged);
 }
 
 /**
@@ -877,12 +931,20 @@ function namedPartsRefusal(
 
 /**
  * The parts the step moves and those it leaves. Named parts must all leave from a stage the step
- * leaves; `"all"` leaves the others, and is refused only when none can move.
+ * leaves; `"all"` leaves the others, and is refused only when none can move: as having nothing to
+ * review when no part has anything unpublished.
  */
 function splitParts(
   c: StepContext,
-  parts: readonly ReadPart[]
+  read: readonly PartRead[]
 ): { movable: ReadPart[]; left: LeftPart[] } {
+  const parts = stagedParts(c, read);
+  if (parts.length === 0) {
+    throw nothingToReviewRefusal(
+      read.map(entry => entry.part),
+      () => "parts"
+    );
+  }
   const movable = parts.filter(entry => c.step.from.includes(entry.stage));
   const left: LeftPart[] = parts
     .filter(entry => !c.step.from.includes(entry.stage))
@@ -1163,6 +1225,7 @@ async function hiddenInPart(
   );
   const hidden = await hiddenFrom(
     c.input.document,
+    entry.part,
     shown.snapshot,
     changed,
     approver.user,
@@ -1212,7 +1275,7 @@ async function hiddenFieldRefusal(
       entry,
       shown
     );
-    parts.push({ shown: shown.snapshot, changed });
+    parts.push({ part: entry.part, shown: shown.snapshot, changed });
     for (const name of hidden) fields.add(name);
   }
   if (fields.size === 0) return null;
@@ -1378,10 +1441,18 @@ interface AssignmentEntry {
   registered: RegisteredWorkflow;
 }
 
-/** One assignment as read on the transaction: its part's review state and stage. */
-interface AssignedPart extends AssignmentEntry {
+/**
+ * One assignment as read on the transaction: its part's review state and stage, null for a part
+ * with nothing unpublished.
+ */
+interface AssignedRead extends AssignmentEntry {
   index: number;
   state: ReviewState | null;
+  stage: string | null;
+}
+
+/** An assignment whose part is in a stage. */
+interface AssignedPart extends AssignedRead {
   stage: string;
 }
 
@@ -1393,6 +1464,8 @@ interface AssignContext {
   eligibility: ReadonlyMap<string, AssigneeRefusalCode | null>;
   /** Whether the caller may make each built-in write to each part, by {@link gatedKey}. */
   gated: ReadonlyMap<string, boolean>;
+  /** Whether each assignment's part is live, by its index, read before the transaction. */
+  live: readonly boolean[];
   dialect: SupportedDialect;
 }
 
@@ -1466,25 +1539,59 @@ async function assignerGates(
   return gated;
 }
 
-/** Each assignment's part read on the transaction; none reads as its workflow's first stage. */
+/**
+ * Each assignment's part read on the transaction, and the stage it puts the part in; a part with
+ * none stands where its content puts it (`partStage`). Each document's pending parts are read
+ * once, however many of its parts are assigned.
+ */
 async function readAssignedParts(
   tx: TransactionContext,
   c: AssignContext
-): Promise<AssignedPart[]> {
-  const parts: AssignedPart[] = [];
+): Promise<AssignedRead[]> {
+  const pendingOf = new Map<string, (part: string | null) => boolean>();
+  const parts: AssignedRead[] = [];
   for (const [index, entry] of c.entries.entries()) {
-    const state = await readReviewState(
-      tx,
-      partOf(entry.assignment.document, entry.assignment.part)
-    );
-    parts.push({
-      ...entry,
-      index,
-      state,
-      stage: state?.stage ?? entry.registered.workflow.firstStage,
-    });
+    const { document, part } = entry.assignment;
+    const key = JSON.stringify([
+      document.scopeKind,
+      document.scopeSlug,
+      document.entryId,
+    ]);
+    const pending = pendingOf.get(key) ?? (await pendingPartsOn(tx, document));
+    pendingOf.set(key, pending);
+    const state = await readReviewState(tx, partOf(document, part));
+    const content = { live: c.live[index] === true, pending: pending(part) };
+    const stage = partStage(entry.registered.workflow, state, content);
+    parts.push({ ...entry, index, state, stage });
   }
   return parts;
+}
+
+/** The assignments, each part in a stage; refused, naming each, where a part has nothing to review. */
+function assignableParts(parts: readonly AssignedRead[]): AssignedPart[] {
+  const idle = parts.filter(part => part.stage === null);
+  if (idle.length > 0) {
+    throw nothingToReviewRefusal(
+      idle.map(part => part.assignment.part),
+      index => `assignments[${idle[index]?.index ?? index}].part`
+    );
+  }
+  return parts.filter((part): part is AssignedPart => part.stage !== null);
+}
+
+/** Whether each assignment's part is live, by its index, read on the pool. */
+async function assignedLiveness(
+  adapter: DrizzleAdapter,
+  entries: readonly AssignmentEntry[]
+): Promise<boolean[]> {
+  const live: boolean[] = [];
+  for (const { assignment } of entries) {
+    const parts = await livePartsOf(adapter, assignment.document, [
+      assignment.part,
+    ]);
+    live.push(parts.get(assignment.part) === true);
+  }
+  return live;
 }
 
 /** The refusal of one assigner, where it may neither edit nor take the stage's primary step. */
@@ -1574,7 +1681,8 @@ async function writeAssignments(
       part.state,
       assignment.revision,
       {
-        stage: registered.workflow.firstStage,
+        // Where the part stands without review state: its first state starts it there.
+        stage: part.stage,
         enteredAt: now,
         definitionHash: registered.definitionHash,
       },
@@ -1625,7 +1733,7 @@ async function runAssignment(
   tx: TransactionContext,
   c: AssignContext
 ): Promise<AssignResult> {
-  const parts = await readAssignedParts(tx, c);
+  const parts = assignableParts(await readAssignedParts(tx, c));
   checkAssigners(c, parts);
   checkAssignees(c, parts);
   const assigned = await writeAssignments(tx, c, parts);
@@ -1662,6 +1770,7 @@ export async function assignWorkflowParts(
     caller,
     eligibility: await assigneeEligibility(adapter, entries),
     gated: await assignerGates(entries, input.caller),
+    live: await assignedLiveness(adapter, entries),
     dialect: adapter.getCapabilities().dialect,
   };
   ensureWorkflowContentEventKinds();

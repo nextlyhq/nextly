@@ -13,7 +13,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
-import type { Release, ReleaseListResponse } from "@admin/types/releases";
+import type { ReleaseListResponse } from "@admin/services/releaseApi";
+import type { Release } from "@admin/types/releases";
 
 const mocks = vi.hoisted(() => ({ fetchReleases: vi.fn() }));
 

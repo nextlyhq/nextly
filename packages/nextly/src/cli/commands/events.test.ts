@@ -170,7 +170,9 @@ describe("nextly events report", () => {
         subscriber: "@acme/email:receipt",
         status: "failed",
         attemptCount: 10,
-        lastError: "line one\nline two\u001b]0;title\u0007\u001b[2Jend",
+        // A newline, an OSC title, BEL, an ESC sequence, DEL and a C1 CSI.
+        lastError:
+          "line one\nline two\u001b]0;title\u0007\u001b[2Jend\u007f\u009b2Jdone",
       },
     ]);
     const { rows, context } = fakeContext();

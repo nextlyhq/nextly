@@ -50,7 +50,10 @@ import type { FieldGroupRegistryService } from "../services/field-groups/field-g
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
-import { assertValidFieldsPayload } from "./fields-payload";
+import {
+  assertBuilderFieldNames,
+  assertValidFieldsPayload,
+} from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
 import {
   requireRouteAllPermissions,
@@ -217,7 +220,11 @@ export const PATCH = withErrorHandler(
 
     if (body.fields !== undefined) {
       // Same rules as the ui-schema.json mirror (see api/fields-payload).
-      assertValidFieldsPayload(body.fields, { kind: "collection" });
+      // The names are judged under the lock below, against the row as stored then.
+      assertValidFieldsPayload(body.fields, {
+        kind: "collection",
+        stored: "under-lock",
+      });
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.
@@ -331,10 +338,19 @@ export const PATCH = withErrorHandler(
         issuesDdl: false,
       },
       async () => {
-        if (Object.keys(adminOverrides).length > 0) {
-          const existing = await registry.getCollection(slug);
+        const hasOverrides = Object.keys(adminOverrides).length > 0;
+        const existing =
+          hasOverrides || body.fields !== undefined
+            ? await registry.getCollection(slug)
+            : undefined;
+        if (body.fields !== undefined) {
+          // A field name the collection already holds keeps working whatever its case; one this
+          // save creates is the Builder's own.
+          assertBuilderFieldNames(body.fields, existing?.fields ?? []);
+        }
+        if (hasOverrides) {
           updateData.admin = {
-            ...(existing.admin || {}),
+            ...(existing?.admin || {}),
             ...adminOverrides,
           };
         }

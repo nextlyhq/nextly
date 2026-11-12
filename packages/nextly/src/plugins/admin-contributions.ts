@@ -394,6 +394,11 @@ interface AdminContributionBase {
    * slug; every collection's when absent.
    */
   collections?: string[];
+  /**
+   * On a Single's edit page, the Singles it is added to, by slug; every
+   * Single's when absent.
+   */
+  singles?: string[];
 }
 
 /**
@@ -424,6 +429,13 @@ export interface AdminTabContribution extends AdminContributionBase {
   kind: "tab";
   label: string;
   component: ComponentPath;
+  /**
+   * @experimental On an edit page, the document's top-level fields this tab
+   * edits. The page draws them in the tab instead of among its own content,
+   * and draws the tab only on a document that has every one of them. Their
+   * values stay in the document's form and are saved with it.
+   */
+  fields?: string[];
 }
 
 /**

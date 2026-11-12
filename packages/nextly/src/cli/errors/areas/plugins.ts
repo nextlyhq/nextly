@@ -153,6 +153,29 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_COMMAND_FROM_OLDER_RELEASE: {
+    cause:
+      "A plugin install or uninstall ran in production from a Nextly release older than the one that set the preset roles' grants, and changed nothing.",
+    from: [
+      {
+        // Refused before anything is written (`refuseFromAnOlderRelease`): an install sets every
+        // preset role's grants, which an older release than the recorded one leaves as they are.
+        code: "CONFLICT",
+        reason: "preset-grants-set-by-a-newer-release",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "An install sets every preset role's grants with the plugin's permissions, and a release older than the one that set them leaves them as they are, so neither command runs from it in production. Nothing was changed.",
+            next: asSentence(
+              rest.join(" ") ||
+                "Run the command from the release that set them, or a newer one."
+            ),
+          };
+        },
+      },
+    ],
+  },
   PLUGIN_HOOK_SERVICES_REGISTERED: {
     cause:
       "A plugin's install or uninstall hook was not run, because the process already had services registered.",
@@ -313,6 +336,30 @@ export const PLUGIN_CODES = defineCodes({
   PLUGIN_INSTALL_TARGET_UNCLEAR: {
     cause:
       "`nextly plugins install` was given both a plugin name and `--all`, or neither.",
+  },
+  PLUGIN_PACKAGE_NOT_INSTALLED: {
+    cause:
+      "`nextly plugins add` found no installed package by the name it was given.",
+  },
+  PLUGIN_DECLARATION_INVALID: {
+    cause:
+      "The `nextly.plugin` declaration in a package's package.json cannot be read, or names an export that makes no plugin.",
+  },
+  PLUGIN_REGISTRATION_UNKNOWN: {
+    cause:
+      "`nextly plugins add` cannot tell how to register a package: it declares nothing, and its entry exports no single plugin.",
+  },
+  PLUGIN_OPTION_MISSING: {
+    cause:
+      "A plugin asks for options at install, and `nextly plugins add` was given none for some of them with no one at the terminal to ask.",
+  },
+  PLUGIN_OPTION_INVALID: {
+    cause:
+      "An option given to `nextly plugins add` is malformed, is not one the plugin asks for, or was refused by the plugin.",
+  },
+  PLUGIN_CONFIG_NOT_EDITABLE: {
+    cause:
+      "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.",
   },
   PLUGIN_DISABLED: {
     cause:
@@ -862,5 +909,88 @@ export function installTargetUnclear(name: string | undefined): CliError {
         : `\`nextly plugins install\` was given both "${name}" and \`--all\`.`,
     why: "It installs one named plugin, or every configured plugin with `--all`, never both.",
     next: 'Name one plugin to install, or pass --all to install every configured plugin: "nextly plugins install <name>" or "nextly plugins install --all".',
+  });
+}
+
+// ── nextly plugins add ──────────────────────────────────────────────────────
+
+/**
+ * `text` ending as a sentence, as written: its first word is often a name
+ * (`siteUrl`, `nextly.config.ts`) that a capital would misspell, so the
+ * callers write the capital themselves where one belongs.
+ */
+const closed = (text: string): string => {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+};
+
+/** The package `nextly plugins add` was given is not in the project's `node_modules`. */
+export function pluginPackageNotInstalled(pkg: string): CliError {
+  return new CliError("PLUGIN_PACKAGE_NOT_INSTALLED", {
+    what: `No installed package is named "${pkg}".`,
+    why: "The package is read from the project's node_modules once it is installed, and it is not there. A folder or a git address is installed under the name in its own package.json.",
+    next: `Install it, or give the name it is installed under, then run \`nextly plugins add ${pkg} --skip-install\`.`,
+  });
+}
+
+/** A package's `nextly.plugin` declaration is malformed, or names something that makes no plugin. */
+export function pluginDeclarationInvalid(
+  pkg: string,
+  problem: string
+): CliError {
+  return new CliError("PLUGIN_DECLARATION_INVALID", {
+    what: `The \`nextly.plugin\` declaration of "${pkg}" cannot be used.`,
+    why: `${closed(problem)} The package's package.json declares how it is registered, and that is the plugin's to fix.`,
+    next: `Register it by hand as the package's README shows, then run \`nextly plugins install\` with the plugin's name; and tell the plugin's author.`,
+  });
+}
+
+/** A package with no declaration whose entry exports no single plugin definition. */
+export function pluginRegistrationUnknown(pkg: string, why: string): CliError {
+  return new CliError("PLUGIN_REGISTRATION_UNKNOWN", {
+    what: `Nextly cannot tell how to register "${pkg}".`,
+    why: `${closed(why)} A package that declares nothing is registered by the one plugin its entry exports.`,
+    next: `Add it to \`plugins\` in nextly.config.ts as the package's README shows, then run \`nextly plugins install\` with the plugin's name.`,
+  });
+}
+
+/** An option a plugin asks for at install, as its declaration describes it. */
+export interface PluginInstallOption {
+  name: string;
+  description: string;
+}
+
+/** Options a plugin asks for that were not given, with no one at the terminal to ask. */
+export function pluginOptionMissing(
+  pkg: string,
+  missing: readonly PluginInstallOption[]
+): CliError {
+  const flags = missing.map(option => `--option ${option.name}=<value>`);
+  return new CliError("PLUGIN_OPTION_MISSING", {
+    what: `"${pkg}" needs ${missing.map(option => option.name).join(", ")} to be installed.`,
+    why: `${missing.map(option => `${option.name}: ${closed(option.description)}`).join(" ")} The configuration was not changed.`,
+    next: `Run the command again with ${flags.join(" ")}, or in a terminal to be asked.`,
+  });
+}
+
+/** An option given to `nextly plugins add` that cannot be used. */
+export function pluginOptionInvalid(pkg: string, problem: string): CliError {
+  return new CliError("PLUGIN_OPTION_INVALID", {
+    what: `An option given for "${pkg}" cannot be used.`,
+    why: `${closed(problem)} The configuration was not changed.`,
+    next: "Run the command again with each option as `--option <name>=<value>`, named as the plugin asks.",
+  });
+}
+
+/** The config file cannot be edited safely; the lines to add by hand. */
+export function pluginConfigNotEditable(
+  reason: string,
+  lines: readonly string[],
+  pluginName: string
+): CliError {
+  return new CliError("PLUGIN_CONFIG_NOT_EDITABLE", {
+    what: "The plugin was not added to your configuration.",
+    why: `${closed(reason)} The file was left as it was.`,
+    next: `Add ${lines.map(line => `\`${line}\``).join(" and ")} to it, then run \`nextly plugins install ${pluginName}\`.`,
   });
 }

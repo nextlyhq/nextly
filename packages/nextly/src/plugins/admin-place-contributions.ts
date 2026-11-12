@@ -10,6 +10,8 @@
  * @module plugins/admin-place-contributions
  * @experimental
  */
+import { judgeConfiguredAddress } from "../shared/address-rule";
+
 import type {
   AdminContribution,
   AdminContributionAction,
@@ -17,6 +19,7 @@ import type {
 import { collectionsScopeProblem } from "./admin-filters";
 import {
   ADMIN_CONTRIBUTION_KINDS,
+  adminPlaceNamespaceOf,
   type AdminContributionKind,
   coreAdminPlaceBuiltIns,
   coreAdminPlaceNotReplaceable,
@@ -58,12 +61,13 @@ const BASE_KEYS = [
   "requiredPermission",
   "visibleWhen",
   "collections",
+  "singles",
 ];
 
 /** The keys of each kind's own. */
 const KIND_KEYS: Record<AdminContributionKind, readonly string[]> = {
   block: ["component"],
-  tab: ["label", "component"],
+  tab: ["label", "component", "fields"],
   sidebarSection: ["label", "component", "narrow"],
   column: ["label", "field", "component"],
   rowAction: ["label", "action"],
@@ -85,6 +89,15 @@ const ROW_KINDS = new Set<AdminContributionKind>(["rowAction", "bulkAction"]);
  * on rows, and a write is what the admin sends with its CSRF token.
  */
 const ROUTE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+/** The edit pages, whose tabs may edit the document's own fields. */
+const DOCUMENT_PLACES = new Set(["collection.edit", "single.edit"]);
+
+/** The fields an edit page draws itself, whatever tab is open. */
+const PAGE_DRAWN = new Set(["title", "slug"]);
+
+/** A top-level field's name. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** A field's name, or a dotted path into a group. */
 const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -214,6 +227,46 @@ function kindProblem(
   return isText(declared.component) ? undefined : "it names no component";
 }
 
+/**
+ * What makes a tab's `fields` unusable, or `undefined`: a non-empty list of
+ * top-level field names, on an edit page, the only place with a document whose
+ * fields a tab could take over.
+ */
+function tabFieldsProblem(fields: unknown, place: unknown): string | undefined {
+  if (typeof place !== "string" || !DOCUMENT_PLACES.has(place)) {
+    return `it names \`fields\` at "${String(place)}", which edits no document`;
+  }
+  if (!Array.isArray(fields) || fields.length === 0) {
+    return "its `fields` is not a list of the document's field names";
+  }
+  const named = (fields as unknown[]).find(
+    name => typeof name !== "string" || !FIELD_NAME.test(name)
+  );
+  if (named !== undefined) {
+    return `its \`fields\` names ${JSON.stringify(named)}, which is not a top-level field's name`;
+  }
+  const identity = (fields as string[]).find(name => PAGE_DRAWN.has(name));
+  return identity === undefined
+    ? undefined
+    : `its \`fields\` names "${identity}", which the edit page draws itself above its tabs`;
+}
+
+/** What makes `singles` unusable here, or `undefined`. */
+function singlesProblem(singles: unknown, place: string): string | undefined {
+  if (singles === undefined) return undefined;
+  if (place !== "single.edit") {
+    return `it names \`singles\` at "${place}", which is not a Single's page`;
+  }
+  if (!Array.isArray(singles)) {
+    return "its `singles` is not a list of Single slugs";
+  }
+  for (const slug of singles as unknown[]) {
+    const refusal = judgeConfiguredAddress("single", slug);
+    if (refusal) return `its \`singles\` names no Single: ${refusal.message}`;
+  }
+  return undefined;
+}
+
 /** What makes the placement and audience fields unusable, or `undefined`. */
 function placementProblem(
   declared: Record<string, unknown>,
@@ -256,6 +309,8 @@ function audienceProblem(
   kind: AdminContributionKind
 ): string | undefined {
   const place = declared.place as string;
+  const singles = singlesProblem(declared.singles, place);
+  if (singles) return singles;
   if (declared.collections !== undefined) {
     if (!COLLECTION_PLACES.has(place)) {
       return `it names \`collections\` at "${place}", which is not about a collection`;
@@ -299,6 +354,9 @@ function contributionProblem(
   if (typeof declared.place !== "string") return "it names no place";
   return (
     kindProblem(kind as AdminContributionKind, declared, plugin) ??
+    (declared.fields === undefined
+      ? undefined
+      : tabFieldsProblem(declared.fields, declared.place)) ??
     placementProblem(declared, kind as AdminContributionKind)
   );
 }
@@ -431,6 +489,45 @@ function orderedByPlace(
 }
 
 /**
+ * Whether `declared` adds to a place that belongs to a plugin `plugin` names
+ * in its `optionalDependsOn` and that is not running here: a plugin that
+ * enhances another when present adds nothing to its pages when it is absent
+ * or disabled, rather than stopping the app from starting.
+ *
+ * Only a place no running plugin declares is let go, and only in the
+ * namespace of such an absent plugin: a place a running plugin is missing (a
+ * misspelling), or one of a plugin the contributor does not name, is still
+ * refused by the place check as before.
+ */
+function toAbsentOptionalPlace(
+  plugin: PluginDefinition,
+  declared: unknown,
+  places: ReadonlyMap<string, DeclaredAdminPlace>,
+  running: ReadonlySet<string>
+): boolean {
+  const place = isRecord(declared) ? declared.place : undefined;
+  if (typeof place !== "string" || places.has(place)) return false;
+  const namespace = adminPlaceNamespaceOf(place);
+  return Object.keys(plugin.optionalDependsOn ?? {}).some(
+    owner => !running.has(owner) && pluginAdminSlug(owner) === namespace
+  );
+}
+
+/**
+ * The contributions `plugin` declares, less those to a place of an absent
+ * optional dependency (`toAbsentOptionalPlace`), which are not drawn.
+ */
+function drawnContributions(
+  plugin: PluginDefinition,
+  places: ReadonlyMap<string, DeclaredAdminPlace>,
+  running: ReadonlySet<string>
+): readonly unknown[] {
+  return declaredContributions(plugin).filter(
+    declared => !toAbsentOptionalPlace(plugin, declared, places, running)
+  );
+}
+
+/**
  * @experimental Every enabled plugin's admin contributions, and each place's
  * lists in order, refusing a contribution that is malformed, outside its
  * plugin's namespace, declared twice, at a place that does not exist or does
@@ -447,11 +544,16 @@ export function contributedAdminContributions(
   ordered: OrderedAdminContributions;
 } {
   const places = collectAdminPlaces(plugins);
+  const running = new Set(
+    plugins
+      .filter(plugin => plugin.enabled !== false)
+      .map(plugin => plugin.name)
+  );
   const contributions: ContributedAdminContribution[] = [];
   const owners = new Map<string, string>();
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
-    for (const declared of declaredContributions(plugin)) {
+    for (const declared of drawnContributions(plugin, places, running)) {
       const contribution = {
         ...checkedContribution(plugin, declared, places),
         plugin: plugin.name,

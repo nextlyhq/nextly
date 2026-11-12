@@ -31,6 +31,7 @@ const SRC = join(process.cwd(), "src");
 const SELF_MEASURING_ROUTES = [
   "pages/dashboard/entries/[slug]/[id]/index.tsx",
   "pages/dashboard/entries/[slug]/create.tsx",
+  "pages/dashboard/singles/[slug]/index.tsx",
 ] as const;
 
 /** A `PluginSlot` wrapper and whatever attributes it carries. */
@@ -80,12 +81,15 @@ describe("content routes read the shared measure", () => {
       // a route the test never read.
       expect(containers.length).toBeGreaterThan(0);
       for (const attrs of containers) {
-        // Two legal answers, and no third. `CONTENT_PAGE_MEASURE` is the page
-        // bounding the content; `full` is the content bounding itself. A raw
-        // `"form"` or `"wide"` here is a page deciding a width on its own,
-        // which is what drifts away from the frame beside it.
+        // Three legal answers, and no fourth. `CONTENT_PAGE_MEASURE` is the
+        // page bounding the content (a message in place of the editor);
+        // `type="editor"` is the Editor page, whose editor bounds its own field
+        // column; `full` is a full-width page within the gutter. A raw `"form"`
+        // or `"wide"` here is a page deciding a width on its own, which is what
+        // drifts away from the frame beside it.
         const legal =
           attrs.includes("width={CONTENT_PAGE_MEASURE}") ||
+          attrs.includes('type="editor"') ||
           attrs.includes('width="full"');
         expect(legal, `illegal width in ${route}: ${attrs.trim()}`).toBe(true);
       }
@@ -101,16 +105,34 @@ describe("content routes read the shared measure", () => {
     // Asserted per route rather than centrally: the skeleton and the frame are
     // in the same file but different branches, and nothing renders both, so
     // their agreement is not observable at either one.
+    // Each route's skeleton is the shared editor outline, handed the field
+    // column's measure; the outline is what draws the Editor page.
     for (const route of SELF_MEASURING_ROUTES) {
       const source = readFileSync(join(SRC, route), "utf8");
       const skeleton = source.slice(source.indexOf("PageSkeleton()"));
-      const first = [...skeleton.matchAll(CONTAINER_TAG)][0]?.[1] ?? "";
-      expect(first, `no container found in ${route}'s skeleton`).not.toBe("");
+      const call = skeleton.slice(0, skeleton.indexOf("/>"));
       expect(
-        first.includes('width="full"'),
-        `${route}: the skeleton bounds the page while its frame does not`
-      ).toBe(true);
+        call,
+        `${route}: the skeleton is not the editor outline`
+      ).toContain("<EditorOutline");
+      expect(
+        call,
+        `${route}: the skeleton's field column is not the editor's measure`
+      ).toContain("maxWidth: CONTENT_MEASURE_LENGTH");
     }
+    const outline = readFileSync(
+      join(SRC, "components/shared/loading-frame/outlines.tsx"),
+      "utf8"
+    );
+    const drawn = outline.slice(
+      outline.indexOf("export function EditorOutline")
+    );
+    const first = [...drawn.matchAll(CONTAINER_TAG)][0]?.[1] ?? "";
+    expect(first, "no container found in the editor outline").not.toBe("");
+    expect(
+      first.includes('type="editor"'),
+      "the editor outline is not drawn in the Editor page that replaces it"
+    ).toBe(true);
   });
 
   it("bounds the injection slots that the self-measuring frame renders", () => {
@@ -137,8 +159,8 @@ describe("content routes read the shared measure", () => {
 
   it("discriminates: a slot under the PAGE-measured frame stays unbounded", () => {
     // The control, and it has to be capable of the other answer. The custom
-    // edit view keeps the page measure, so its slot is bounded BY the page and
-    // must not carry a length of its own — if this ever comes back bounded,
+    // edit view's page sets no measure of its own and its slot carries none
+    // either: the view lays out its own width — if this ever comes back bounded,
     // either the frames were conflated or the scan stopped telling them apart,
     // and the assertion above is passing on the wrong region.
     const source = readFileSync(join(SRC, EDIT_ROUTE), "utf8");
@@ -161,6 +183,8 @@ describe("content routes read the shared measure", () => {
     // case every assertion above is passing on nothing.
     const containers = containersIn(SETTINGS_ROUTE);
     expect(containers.length).toBeGreaterThan(0);
-    expect(containers.some(a => a.includes('width="form"'))).toBe(true);
+    // Settings pages declare their page type, the literal that replaced a
+    // width there; the scan must still see it.
+    expect(containers.some(a => a.includes('type="form"'))).toBe(true);
   });
 });

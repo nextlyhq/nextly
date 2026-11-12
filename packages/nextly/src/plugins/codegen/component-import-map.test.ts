@@ -1,3 +1,4 @@
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,8 +52,12 @@ describe("buildComponentImportMap", () => {
     expect(code).toContain('import * as _p0 from "@acme/x/admin";');
     expect(code).toContain('import * as _p1 from "@acme/y/views";');
     expect(code).toContain(
-      'import { registerComponents } from "@nextlyhq/admin";'
+      'import { registerComponentMap } from "@nextlyhq/admin";'
     );
+    // Registered as the app's whole map, which tells the admin nothing more is
+    // on its way, not as one plugin's components.
+    expect(code).toContain("registerComponentMap(registered);");
+    expect(code).not.toContain("registerComponents(");
     // Each component registered by its full path → namespace member.
     expect(code).toContain('"@acme/x/admin#Reports": _p0.Reports,');
     expect(code).toContain('"@acme/x/admin#Settings": _p0.Settings,');
@@ -111,7 +116,7 @@ describe("buildComponentImportMap", () => {
     expect(code).toMatch(/"@acme\/x\/admin\/Default": _p\d+\.default,/);
   });
 
-  it("skips disabled plugins and returns a no-op module when empty", () => {
+  it("skips disabled plugins, and registers an empty map as the whole map", () => {
     expect(
       collectAdminComponentPaths(
         plugin({ pages: [{ path: "a", component: "@x#Y" }] }, false)
@@ -120,7 +125,9 @@ describe("buildComponentImportMap", () => {
 
     const code = buildComponentImportMap([]);
     expect(code).toContain("const registered = {\n};");
-    expect(code).not.toContain("registerComponents");
+    // Still called: an empty map tells the admin nothing more is on its way,
+    // as a full one does.
+    expect(code).toContain("registerComponentMap(registered);");
   });
 });
 
@@ -285,7 +292,7 @@ describe("buildImportMapArtifacts", () => {
     expect(map.path.replace(/\\/g, "/")).toMatch(
       /src\/types\/plugin-admin-imports\.generated\.ts$/
     );
-    expect(map.code).toContain("registerComponents");
+    expect(map.code).toContain("registerComponentMap");
     expect(list.path.replace(/\\/g, "/")).toMatch(
       /src\/types\/plugin-admin-components\.generated\.ts$/
     );
@@ -300,7 +307,8 @@ describe("buildImportMapArtifacts", () => {
     const p = plugin({ menu: [{ label: "X", to: "/x" }] }); // menu has no component
     for (const plugins of [[p], []]) {
       const [map, list] = buildImportMapArtifacts(plugins, "./types.ts");
-      expect(map.code).not.toContain("registerComponents");
+      expect(map.code).toContain("const registered = {\n};");
+      expect(map.code).toContain("registerComponentMap(registered);");
       expect(list.code).toContain(
         "export const registeredComponentPaths = [] as const;"
       );
@@ -450,7 +458,12 @@ describe("block editor entries", () => {
     );
     expect(code).toContain(`"${ENTRY}": _p0.editorBlocks`);
     // Definitions are not a component: the component registry never sees it.
-    expect(code).not.toContain("registerComponents(");
+    const registered = code.slice(
+      code.indexOf("const registered = {"),
+      code.indexOf("};", code.indexOf("const registered = {"))
+    );
+    expect(registered).toContain("const registered = {");
+    expect(registered).not.toContain(ENTRY);
   });
 
   it("lists no entry while the page builder is absent or disabled", () => {
@@ -520,7 +533,7 @@ describe("field-type and slot components", () => {
     // leave the control unloadable by an app that registers only the plugin.
     expect(
       buildImportMapArtifacts([p], "./src/types/nextly-types.ts")[0].code
-    ).toContain("registerComponents");
+    ).toContain("registerComponentMap");
   });
 
   it("loads the page builder's admin entry, and with it the editor's stylesheet, only where the plugin is configured", () => {
@@ -1259,6 +1272,92 @@ describe("the map's entries: each component with who declared it and what it is 
         widget: "acme/shared",
       },
     ]);
+  });
+});
+
+describe("a plugin collection's own views", () => {
+  // A collection replaces its edit or list screen by naming a component, and
+  // the admin resolves that name through the same registry a page uses. The
+  // map is the only importer of the module behind it once nothing loads
+  // modules by name at run time.
+  const forms = {
+    name: "@acme/forms",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      collections: [
+        {
+          slug: "forms",
+          fields: [],
+          admin: {
+            components: {
+              views: {
+                Edit: { Component: "@acme/forms/admin#FormEditor" },
+                List: { Component: "@acme/forms/admin#FormList" },
+              },
+            },
+          },
+        },
+      ],
+    },
+  } as unknown as PluginDefinition;
+
+  it("registers the edit and list views the collection names", () => {
+    const code = buildComponentImportMap([forms]);
+
+    expect(code).toContain('import * as _p0 from "@acme/forms/admin";');
+    expect(code).toContain('"@acme/forms/admin#FormEditor": _p0.FormEditor');
+    expect(code).toContain('"@acme/forms/admin#FormList": _p0.FormList');
+  });
+});
+
+describe("the site config's own collections' views", () => {
+  // A site collection replaces its edit screen by naming a component, as the
+  // collections guide shows, beside a plugin's; written relative to the
+  // config, or as a package's.
+  const siteCollections = [
+    {
+      slug: "orders",
+      fields: [],
+      admin: {
+        components: {
+          views: { Edit: { Component: "./views/orders#OrderEditor" } },
+          BeforeListTable: "@acme/cards/admin#OrderTotals",
+        },
+      },
+    },
+  ] as unknown as CollectionConfig[];
+
+  it("are listed as the site config's, beside the plugins'", () => {
+    expect(componentImportMapEntries([], undefined, siteCollections)).toEqual([
+      {
+        path: "./views/orders#OrderEditor",
+        owner: "the site config",
+        use: "collection view",
+        fromConfig: true,
+      },
+      {
+        path: "@acme/cards/admin#OrderTotals",
+        owner: "the site config",
+        use: "collection view",
+      },
+    ]);
+  });
+
+  it("are imported from the map's folder, a relative one through where the config file is", () => {
+    const map = buildComponentImportMap(
+      [],
+      "../../../nextly.config",
+      undefined,
+      siteCollections
+    );
+    expect(map).toContain('import * as _p0 from "../../../views/orders";');
+    expect(map).toContain('"./views/orders#OrderEditor": _p0.OrderEditor,');
+    expect(map).toContain('"@acme/cards/admin#OrderTotals": _p1.OrderTotals,');
+    // And listed, so the admin's check reads them as registered.
+    expect(buildComponentPathsModule([], undefined, siteCollections)).toContain(
+      "./views/orders#OrderEditor"
+    );
   });
 });
 

@@ -65,6 +65,10 @@ export interface DigestReader {
   link?: string;
   /** One line saying why it is waiting, carried onto its item as it is. */
   reason?: string;
+  /** The documentation saying how to fix it, carried onto its item as it is. */
+  help?: string;
+  /** One thing, not a count: its row says the label alone. */
+  single?: true;
   /** Who declared it, named in the log when it fails: core, or a plugin. */
   owner: string;
   /**
@@ -221,13 +225,14 @@ export async function runDigest(
 
 /**
  * What a reader's item is, whatever its count: the same on a failed item, so
- * a reader is told which item went unchecked and why it would matter. A link
- * or a reason the reader did not give is left out, not carried as undefined.
+ * a reader is told which item went unchecked and why it would matter. A link,
+ * a reason or a help page the reader did not give is left out, not carried as
+ * undefined.
  */
 function itemIdentity(
   reader: DigestReader
 ): Omit<AttentionDigestItem, "count" | "atLeast" | "failed"> {
-  const { id, kind, label, severity, link, reason } = reader;
+  const { id, kind, label, severity, link, reason, help, single } = reader;
   return {
     id,
     kind,
@@ -235,6 +240,8 @@ function itemIdentity(
     severity,
     ...(link === undefined ? {} : { link }),
     ...(reason === undefined ? {} : { reason }),
+    ...(help === undefined ? {} : { help }),
+    ...(single === undefined ? {} : { single }),
   };
 }
 

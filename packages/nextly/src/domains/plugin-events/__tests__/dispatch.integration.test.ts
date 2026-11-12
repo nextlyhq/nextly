@@ -404,7 +404,10 @@ describe.each(getConfiguredTestDialects())(
 
       // Pruned after 30 days, with its deliveries.
       expect(
-        await prunePluginEvents(first, new Date(abandonedAt.getTime() + 30 * DAY))
+        await prunePluginEvents(
+          first,
+          new Date(abandonedAt.getTime() + 30 * DAY)
+        )
       ).toMatchObject({ removed: 0 });
       expect(
         await prunePluginEvents(
@@ -519,7 +522,7 @@ describe.each(getConfiguredTestDialects())(
       // still reading: every delivery still stuck is listed all the same.
       let pages = 0;
       const reading = {
-        select: async <T,>(
+        select: async <T>(
           table: string,
           options: Parameters<DrizzleAdapter["select"]>[1]
         ): Promise<T[]> => {
@@ -737,7 +740,10 @@ describe.each(getConfiguredTestDialects())(
       expect(await deliveries()).toHaveLength(3);
 
       expect(
-        await prunePluginEvents(first, new Date(T0.getTime() + 30 * DAY + SECOND))
+        await prunePluginEvents(
+          first,
+          new Date(T0.getTime() + 30 * DAY + SECOND)
+        )
       ).toMatchObject({ removed: 1, started: true });
       const kept = await eventRows();
       expect(kept).toHaveLength(2);

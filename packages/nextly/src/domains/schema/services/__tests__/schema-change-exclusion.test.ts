@@ -28,6 +28,16 @@ const companionCalls: Record<string, unknown>[] = [];
 /** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
 const pluginOptionRefusal: { error: unknown } = { error: undefined };
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../schema-version", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../schema-version")>()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../../../../api/fields-payload", () => ({
   assertValidPluginFieldOptions: vi.fn(() => {
     if (pluginOptionRefusal.error !== undefined)
@@ -194,6 +204,8 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     deleteSingle: vi.fn(async () => {
       trace.push("registry:write");
     }),
+    // A delete asks what depends on the Single before it removes anything; nothing does here.
+    assertNothingDependsOn: vi.fn(async () => undefined),
   };
   const service = new SingleMetadataService(
     registry as unknown as SingleRegistryService,

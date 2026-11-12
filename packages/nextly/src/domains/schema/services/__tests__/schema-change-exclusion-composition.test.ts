@@ -16,6 +16,16 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 /** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
 const pluginOptionRefusal: { error: unknown } = { error: undefined };
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../schema-version", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../schema-version")>()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../../../../api/fields-payload", () => ({
   assertValidPluginFieldOptions: vi.fn(() => {
     if (pluginOptionRefusal.error !== undefined)
@@ -317,6 +327,8 @@ describe("a field-group create contends for the same row", () => {
     const registry = {
       // Answers "no field group owns that table" so the create reaches the DDL path.
       getAllComponents: vi.fn().mockResolvedValue([]),
+      // No field group stored, so the create's cycle check finds nothing to close a cycle with.
+      getAllFieldLists: vi.fn().mockResolvedValue([]),
       registerComponent: vi.fn(async (row: unknown) => row),
     };
     const service = new FieldGroupMetadataService(

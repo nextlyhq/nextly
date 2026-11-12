@@ -11,6 +11,14 @@ interface RouterState {
   route: RouteResult | null;
   outside: boolean;
   pathname: string;
+  /**
+   * When the browser arrived at `pathname`, in `Date.now()` milliseconds, or
+   * `null` before the first route is resolved. A screen's loading states time
+   * themselves from here, so a part mounted late in the same visit (the screen
+   * once the session is confirmed) continues the wait rather than starting it
+   * again. A change of query string alone keeps it.
+   */
+  routedAt: number | null;
 }
 
 export function useRouter(): {
@@ -18,11 +26,13 @@ export function useRouter(): {
   route: RouteResult | null;
   outside: boolean;
   pathname: string;
+  routedAt: number | null;
 } {
   const [routerState, setRouterState] = useState<RouterState>({
     route: null,
     outside: false,
     pathname: "",
+    routedAt: null,
   });
   const isHydrated = useHydration();
 
@@ -38,13 +48,28 @@ export function useRouter(): {
 
       // Handle non-admin paths
       if (!pathname.startsWith("/admin")) {
-        setRouterState({ route: null, outside: true, pathname });
+        setRouterState({
+          route: null,
+          outside: true,
+          pathname,
+          routedAt: null,
+        });
         return;
       }
 
       // Resolve admin routes (keep full path with /admin)
       const resolved = resolveRoute(pathname, window.location.search);
-      setRouterState({ route: resolved, outside: false, pathname });
+      // Read here, in the handler, so rendering stays free of the clock.
+      const now = Date.now();
+      setRouterState(previous => ({
+        route: resolved,
+        outside: false,
+        pathname,
+        routedAt:
+          previous.pathname === pathname && previous.routedAt !== null
+            ? previous.routedAt
+            : now,
+      }));
     };
 
     // Initial route resolution after hydration

@@ -15,7 +15,7 @@ can put new pages live and retire old ones in the same moment.
 |            |                                                                                                                                                                                           |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Built in   | No plugin required                                                                                                                                                                        |
-| Admin      | A **Releases** section with a calendar view, and an "Add to release" action on documents                                                                                                  |
+| Admin      | A **Releases** section with a list and a calendar, **Schedule…** on every document's Publish button, and what needs attention on the dashboard and in each person's bell                  |
 | Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant. Renaming and deleting each have a permission of their own |
 
 ## What it is not
@@ -25,6 +25,29 @@ can put new pages live and retire old ones in the same moment.
   review stages, transitions or assignees. If you need "editor submits, manager
   approves, then it goes live", that is not what a release does.
 </Callout>
+
+## In the admin
+
+- **The Releases page** lists every release in one of four tabs, each with its count:
+  **Upcoming** (the next to go live first), **Needs attention** (stopped first, then
+  overdue), **Drafts** and **Done**. Search covers the title and description, and **Hide
+  single documents** leaves out releases made for one document. Times are shown in the
+  reader's own time zone, with the scheduled zone beside them where it differs. **Calendar**
+  shows the same releases by the day they run, in a zone you choose.
+- **While a release is stopped or overdue**, a strip at the top of the Releases page names
+  the first few, each with its state and linked to its page, says how many there are, and
+  links to the Needs attention tab. The dashboard's **Needs your attention** card counts
+  them too, and names each under its row.
+- **A release's page** lists its documents by title, grouped by collection, each with
+  whether it is ready. **Add documents** picks several at once, from any collection or
+  Single, to go live or come down. When the documents going live link to others that won't
+  be live, it offers to add those too. **Schedule…** and **Publish now…** check the
+  documents first, and the page keeps the release's history.
+- **From a document**, **Schedule…** on the editor's Publish button schedules it in one
+  step: **On its own, at a time**, **With an existing release**, or **In a new release**.
+  The document's releases are listed on it, and which one wins when two move it.
+- **Each person's bell** has a **For you** list: the owner of a release that stops or runs
+  late is told there, and nobody sees anyone else's notices ([Notices](/docs/notices)).
 
 ## The shape of a release
 
@@ -78,8 +101,7 @@ The database holds a single-document release to one document, so the rule holds 
 requests add documents to it at once. Adding a second document is refused with a conflict that says to
 put several documents in an ordinary release instead. A single-document release can't be
 scheduled before its document is added. Releases made before kinds existed read as
-`release`; `nextly migrate` adds the column without rewriting them. The `kind` option is
-experimental.
+`release`; `nextly migrate` adds the column without rewriting them.
 
 Taking the document out of a single-document release that has not run (a draft, a scheduled
 or a stopped one) cancels the release, since without its document there is nothing to run.
@@ -92,7 +114,7 @@ separate act, with its own permission. A release's `can.removeMember` says wheth
 may do this, so it is `false` for someone who may create releases but not publish them. Out of
 a published single-document release, the document can't be taken at all. Out of a cancelled
 one, which still holds its document, taking it out is answered as done and changes nothing, so
-a removal retried after its answer was lost succeeds again. This is experimental.
+a removal retried after its answer was lost succeeds again.
 
 The answer says which of the two happened. `releases.removeMember` resolves to
 `{ releaseCancelled }`, true when the release was cancelled instead of the document removed,
@@ -100,11 +122,6 @@ and `DELETE /api/releases/:id/members/:memberId` returns the same `releaseCancel
 with the message "The release is cancelled, and its only document stays in it."
 
 ## Adding several documents, and scheduling a document, in one step
-
-<Callout type="info">
-  Both are **experimental**: their names and answers may change before releases
-  are finished.
-</Callout>
 
 Each of these does several things, and does all of them or none. It is one database
 transaction: if any part is refused, or any write fails, the last one included, nothing is
@@ -206,11 +223,6 @@ new members, as for adding several.
 
 ## Publish now
 
-<Callout type="info">
-  Publish now is **experimental**: its name and answer may change before
-  releases are finished.
-</Callout>
-
 Publish now runs a draft or scheduled release straight away. It makes the same checks as
 scheduling, so a release that would stop part-way is refused before any document is written.
 Then it moves the release to the current time, unless its time has already come, and starts
@@ -245,11 +257,6 @@ it again. Publish now refuses it until then, so the fix is checked before anythi
 
 ## Renaming and deleting a release
 
-<Callout type="info">
-  Renaming and deleting are **experimental**: their names and answers may change
-  before releases are finished.
-</Callout>
-
 A release's title and description can be changed in any state, by anyone holding
 `update-content-releases`. A draft, or a release cancelled before it was ever scheduled, can be
 deleted, documents and all, by anyone holding `delete-content-releases`.
@@ -270,11 +277,11 @@ Only a release that never ran can be deleted: a draft, or a cancelled release wh
 [history](#a-releases-history) shows it never began publishing. Each refusal answers
 `409 Conflict`, with the reason in the error's `data.reason`:
 
-| `reason`        | The release                                       | What to do                           |
-| --------------- | ------------------------------------------------- | ------------------------------------ |
-| `committed`     | Is scheduled or stopped                           | Cancel it first; one that never began publishing can then be deleted |
-| `published`     | Has been published                                | Nothing: it is kept for good         |
-| `was-scheduled` | Was cancelled after it may have begun publishing  | Nothing: it is kept as a record      |
+| `reason`        | The release                                      | What to do                                                           |
+| --------------- | ------------------------------------------------ | -------------------------------------------------------------------- |
+| `committed`     | Is scheduled or stopped                          | Cancel it first; one that never began publishing can then be deleted |
+| `published`     | Has been published                               | Nothing: it is kept for good                                         |
+| `was-scheduled` | Was cancelled after it may have begun publishing | Nothing: it is kept as a record                                      |
 
 A cancelled release that was scheduled can be deleted when its history shows no run: no
 `release-started` and no `release-published` event. One scheduled and cancelled before its
@@ -317,21 +324,21 @@ Each release operation records an event in the record of content events, with th
 subject, in the same transaction as the change: a change never stands without its event. The
 release page reads its history from this record; the activity log stays the site-wide audit feed.
 
-| Event                             | Recorded when                                                  |
-| --------------------------------- | -------------------------------------------------------------- |
-| `release-created`                 | The release is created                                         |
-| `release-document-added`          | A document is added, with its collection or Single and action  |
-| `release-document-removed`        | A document is taken out                                        |
-| `release-document-action-changed` | A document is switched between going live and coming down      |
-| `release-scheduled`               | A release is given a time (`at`, `timezone`)                   |
-| `release-rescheduled`             | A scheduled or stopped release is given another time (`from`)  |
-| `release-publish-now`             | Publish now is asked for, whether or not the release was due   |
-| `release-started`                 | The run writes its first document                              |
-| `release-published`               | The run finishes and the release is published                  |
-| `release-stopped`                 | The release stops on a problem, at its moment or before it     |
-| `release-cancelled`               | The release is cancelled                                       |
-| `release-renamed`                 | The title changes (`from`, `to`)                               |
-| `release-description-changed`     | The description changes                                        |
+| Event                             | Recorded when                                                                           |
+| --------------------------------- | --------------------------------------------------------------------------------------- |
+| `release-created`                 | The release is created                                                                  |
+| `release-document-added`          | A document is added, with its collection or Single and action                           |
+| `release-document-removed`        | A document is taken out                                                                 |
+| `release-document-action-changed` | A document is switched between going live and coming down                               |
+| `release-scheduled`               | A release is given a time (`at`, `timezone`)                                            |
+| `release-rescheduled`             | A scheduled or stopped release is given another time (`from`)                           |
+| `release-publish-now`             | Publish now is asked for, whether or not the release was due                            |
+| `release-started`                 | The run writes its first document                                                       |
+| `release-published`               | The run finishes and the release is published                                           |
+| `release-stopped`                 | The release stops on a problem, at its moment or before it                              |
+| `release-cancelled`               | The release is cancelled                                                                |
+| `release-renamed`                 | The title changes (`from`, `to`)                                                        |
+| `release-description-changed`     | The description changes                                                                 |
 | `release-deleted`                 | The release is deleted; its history is kept for the activity log's window, then removed |
 
 Each event names who acted: the person, an API key by its own id and name (never the person who
@@ -347,11 +354,6 @@ an event about a document they may not read is left out. Page with the `before` 
 empty, while more remains. It stays readable after the release is deleted, for the same window.
 
 ## Listing releases
-
-<Callout type="info">
-  Tabs, search, the day filter and paging are **experimental**: their names and
-  shapes may change before the releases list is finished.
-</Callout>
 
 The list is paged on the server, so its total and every page cover every release on the
 site, however many there are. It is read in one of four tabs, and each release is in exactly
@@ -435,12 +437,12 @@ leave the page and the total one apart for that one response. The next request r
 To count a tab without reading its releases, ask for one row and read `meta.total`:
 `GET /api/releases?tab=attention&limit=1`.
 
-Each release on the REST list carries `memberCounts` (experimental): how many documents it holds,
+Each release on the REST list carries `memberCounts`: how many documents it holds,
 how many it puts live (`goLive`) and how many it takes down (`comeDown`). They are read for the
 whole page at once. From the Direct API, ask `nextly.releases.memberCounts({ releaseIds })`, which
 answers every id with its counts, zeros for a release holding none.
 
-Each release on the REST list also carries `owner` (experimental): whoever created it, as an id and a name and nothing else, read for the whole page at once. It names people as version history names a version's author, so anyone who may read the release sees it. An owner who can no longer be named, because the account was deleted, is `null` while `createdBy` still holds the id.
+Each release on the REST list also carries `owner`: whoever created it, as an id and a name and nothing else, read for the whole page at once. It names people as version history names a version's author, so anyone who may read the release sees it. An owner who can no longer be named, because the account was deleted, is `null` while `createdBy` still holds the id.
 
 ### From the Direct API
 
@@ -502,11 +504,6 @@ come back in the order they were added. Asking for the documents, the readiness 
 does not exist answers `404`, not an empty list.
 
 ## The calendar
-
-<Callout type="info">
-  The calendar read is **experimental**: its name and shape may change before
-  the releases list is finished.
-</Callout>
 
 A calendar read covers a window of days, at most six weeks, in a time zone you name. The
 zone decides which day each release falls on: a release at 23:30 in New York is on the next
@@ -669,11 +666,6 @@ alone is given, and nothing fails.
 
 > **Needs the release after 0.0.2-alpha.67.**
 
-<Callout type="info">
-  Readiness, its problem codes and the action switch are **experimental**: their
-  names and shapes may change before releases are finished.
-</Callout>
-
 Every document in a release is checked while the release is being prepared, not only when it
 runs. The checks ask what the release's run would ask at its time: the run writes each document
 as the person who added it, through the ordinary publish, so the checks judge that person and
@@ -725,7 +717,7 @@ export async function hardProblems(nextly: Nextly, releaseId: string) {
 }
 ```
 
-To read the problems of a page of releases at once (experimental), name up to 50 of them:
+To read the problems of a page of releases at once, name up to 50 of them:
 
 |            |                                                                     |
 | ---------- | ------------------------------------------------------------------- |
@@ -849,7 +841,7 @@ same `409` and the release is left as it was.
 
 ### Linked documents that will not be live
 
-> **Needs the release after 0.0.2-alpha.68.** Experimental, like the rest of readiness.
+> **Needs the release after 0.0.2-alpha.68.**
 
 A document going live may link to other documents through its relationship and upload
 fields: an author, a category, related posts, an attachment. When one of those will not be live
@@ -921,8 +913,8 @@ live itself.
 #### Offering the links when a document is added
 
 Adding a document to a release answers with the same links, so a client can offer to add them
-in the same step. The member comes back as before, with `unpublishedLinks` beside its fields
-(experimental): over REST in the response's `item`, and from the Direct API on the returned
+in the same step. The member comes back as before, with `unpublishedLinks` beside its fields:
+over REST in the response's `item`, and from the Direct API on the returned
 member.
 
 ```json

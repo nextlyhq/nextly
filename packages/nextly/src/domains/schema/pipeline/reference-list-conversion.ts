@@ -20,7 +20,9 @@
  * On PostgreSQL it is one statement, so the column converts whole or not at all. On MySQL it is
  * three (widen, wrap each bare value in a list, retype), and MySQL commits each DDL statement as it
  * runs. Each step can run again over its own result, so a run stopped part-way finishes on the next
- * one; and a column left as `text` holding JSON lists is already read correctly.
+ * one; and a column left as `text` holding JSON lists is already read correctly. On SQLite the
+ * column is text either way, so a relation switched between one entry and many has only its values
+ * rewritten, by one statement that can also run again over its own result.
  *
  * @module domains/schema/pipeline/reference-list-conversion
  */
@@ -113,6 +115,21 @@ export function mysqlReferenceListRewrite(
 }
 
 /**
+ * MySQL's list conversion, once the column is JSON: any value that is not a list becomes a one-item
+ * list, as the rewrite makes it. The rewrite and the retype commit separately, so a value written
+ * between them (a single id as a JSON scalar, which strict mode accepts) would otherwise stay a
+ * scalar in a column that keeps a list. Changes no list.
+ */
+export function mysqlReferenceListNormalise(
+  tableName: string,
+  columnName: string
+): string {
+  const table = quoteIdent(tableName, "mysql");
+  const c = quoteIdent(columnName, "mysql");
+  return `UPDATE ${table} SET ${c} = JSON_ARRAY(${c}) WHERE ${c} IS NOT NULL AND JSON_TYPE(${c}) <> 'ARRAY'`;
+}
+
+/**
  * The statements that convert `op`'s column, in order: forward into the list column for a
  * `referenceList` conversion, back to the scalar type for its `referenceScalar` DOWN.
  *
@@ -124,6 +141,9 @@ export function referenceConversionStatements(
   op: ChangeColumnTypeOp,
   dialect: SupportedDialect
 ): string[] {
+  if (op.conversion === "requireEmpty") {
+    return requireEmptyStatements(op.tableName, op.columnName, dialect);
+  }
   if (op.conversion === "referenceScalar") {
     return referenceScalarStatements(op, dialect);
   }
@@ -140,7 +160,7 @@ export function referenceConversionStatements(
     const c = quoteIdent(op.columnName, dialect);
     // MODIFY restates the whole definition, so the column's nullability travels with each retype.
     // The column carries no default: a relationship column is never given one.
-    const nullability = op.nullable === false ? "NOT NULL" : "NULL";
+    const nullability = liveNullability(op);
     return [
       // Wide enough for a list: a JSON list of one uuid is already longer than varchar(36).
       `ALTER TABLE ${table} MODIFY COLUMN ${c} text ${nullability}`,
@@ -148,11 +168,158 @@ export function referenceConversionStatements(
       `ALTER TABLE ${table} MODIFY COLUMN ${c} ${op.toType} ${nullability}`,
     ];
   }
-  // SQLite stores a JSON list as text, the type such a column already has, so the diff never plans
-  // a type change for it; reaching here means a caller built the operation by hand.
-  throw NextlyError.internal({
+  if (dialect === "sqlite") {
+    return [sqliteReferenceListRewrite(op.tableName, op.columnName)];
+  }
+  throw unsupportedDialect(op);
+}
+
+/**
+ * SQLite's list conversion: the column is text before and after, so only the values change. A JSON
+ * list stays as it is and anything else becomes a one-item list, which makes the statement safe to
+ * run again over its own result. Nested so `json_type` only reads a value `json_valid` accepted. A
+ * JSON string (an id the serializer quoted) is wrapped without its quotes; any other value is
+ * wrapped as the text it is, so an id that reads as a number stays a string, as PostgreSQL keeps it.
+ */
+function sqliteReferenceListRewrite(
+  tableName: string,
+  columnName: string
+): string {
+  const table = quoteIdent(tableName, "sqlite");
+  const c = quoteIdent(columnName, "sqlite");
+  return (
+    `UPDATE ${table} SET ${c} = CASE ` +
+    `WHEN trim(${c}) = '' THEN json_array() ` +
+    `WHEN json_valid(${c}) THEN CASE WHEN json_type(${c}) = 'array' THEN ${c} ` +
+    `WHEN json_type(${c}) = 'text' THEN json_array(json(${c})) ELSE json_array(${c}) END ` +
+    `ELSE json_array(${c}) END ` +
+    `WHERE ${c} IS NOT NULL`
+  );
+}
+
+/**
+ * SQLite's way back to one reference: a one-item list becomes its id, an empty list no reference,
+ * and a JSON string (an id the serializer quoted) the id without its quotes, as PostgreSQL and MySQL
+ * unquote it. Only lists of at most one id are rewritten, so a longer list is never cut down to its
+ * first id; an apply refuses before anything runs while a row holds one. What the statement leaves
+ * is neither a JSON list nor a JSON string, so it is safe to run again.
+ */
+function sqliteReferenceScalarRewrite(
+  tableName: string,
+  columnName: string
+): string {
+  const table = quoteIdent(tableName, "sqlite");
+  const c = quoteIdent(columnName, "sqlite");
+  return (
+    `UPDATE ${table} SET ${c} = CASE ` +
+    `WHEN json_type(${c}) = 'text' THEN json_extract(${c}, '$') ` +
+    `WHEN json_array_length(${c}) = 0 THEN NULL ` +
+    `ELSE json_extract(${c}, '$[0]') END ` +
+    // A CASE rather than AND: SQLite does not promise to skip `json_type` when `json_valid` is
+    // false, and `json_type` raises on text that is not JSON, such as a bare id.
+    `WHERE ${c} IS NOT NULL AND CASE WHEN json_valid(${c}) ` +
+    `THEN json_type(${c}) = 'text' OR (json_type(${c}) = 'array' AND json_array_length(${c}) <= 1) ` +
+    `ELSE 0 END`
+  );
+}
+
+/**
+ * Whether a stored relation value is empty, given the column's quoted identifier: an empty string,
+ * an empty list or JSON null, as text on every dialect. NULL is not matched, being no value
+ * already. The one definition of "empty" for the target guard and for clearing what it accepts.
+ */
+function emptyValueCondition(c: string, dialect: SupportedDialect): string {
+  const empties = `('', '[]', 'null')`;
+  if (dialect === "postgresql") return `btrim(${c}::text) IN ${empties}`;
+  if (dialect === "mysql") return `TRIM(CAST(${c} AS CHAR)) IN ${empties}`;
+  return `trim(${c}) IN ${empties}`;
+}
+
+/**
+ * The one step that makes every empty stored value NULL, the no-value every relation shape reads
+ * the same way. A switch whose rewrite does not reach them would otherwise leave them in the old
+ * shape under the new one: on SQLite the column is text on both sides, and a plain retype keeps
+ * `[]` as text. Safe to run again. On a column that refuses NULL it fails before any DDL, so the
+ * switch changes nothing rather than keeping a value the new shape misreads.
+ */
+function clearEmptyValuesStatement(
+  tableName: string,
+  columnName: string,
+  dialect: SupportedDialect
+): string {
+  const c = quoteIdent(columnName, dialect);
+  return (
+    `UPDATE ${quoteIdent(tableName, dialect)} SET ${c} = NULL ` +
+    `WHERE ${c} IS NOT NULL AND ${emptyValueCondition(c, dialect)}`
+  );
+}
+
+/**
+ * The guard a relation's switch to or from naming several collections runs before any DDL: it
+ * fails, naming the column, while a row holds a value. A value is anything but NULL, an empty
+ * string, an empty list or JSON null. Once it passes, every such empty is made NULL, since no
+ * rewrite follows a switch between these shapes to put it in the new one.
+ *
+ * Each dialect raises in the one way it has outside a stored routine: PostgreSQL from a `DO` block;
+ * MySQL by adding a CHECK no row holding a value satisfies, then dropping it; SQLite from a
+ * temporary trigger on a temporary table, fired by one insert. Each statement can run again.
+ */
+function requireEmptyStatements(
+  tableName: string,
+  columnName: string,
+  dialect: SupportedDialect
+): string[] {
+  const table = quoteIdent(tableName, dialect);
+  const c = quoteIdent(columnName, dialect);
+  const message =
+    `Column ${tableName}.${columnName} cannot change between one target collection and several ` +
+    `while a row holds a value. Clear it on every row first, or keep its targets as they are.`;
+  const literal = `'${message.replace(/'/g, "''")}'`;
+  const clear = clearEmptyValuesStatement(tableName, columnName, dialect);
+  if (dialect === "postgresql") {
+    return [
+      `DO $nextly$ BEGIN IF EXISTS (SELECT 1 FROM ${table} WHERE ${c} IS NOT NULL ` +
+        `AND NOT ${emptyValueCondition(c, dialect)}) THEN RAISE EXCEPTION ${literal}; ` +
+        `END IF; END $nextly$`,
+      clear,
+    ];
+  }
+  if (dialect === "mysql") {
+    const guard = quoteIdent(
+      `chk_no_value_${tableName}_${columnName}`.slice(0, 64),
+      dialect
+    );
+    return [
+      `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR ${emptyValueCondition(c, dialect)})`,
+      `ALTER TABLE ${table} DROP CHECK ${guard}`,
+      clear,
+    ];
+  }
+  if (dialect === "sqlite") {
+    return [
+      ...sqliteGuardStatements(
+        tableName,
+        `${c} IS NOT NULL AND NOT ${emptyValueCondition(c, dialect)}`,
+        message
+      ),
+      clear,
+    ];
+  }
+  throw unsupportedDialect({
+    type: "change_column_type",
+    tableName,
+    columnName,
+    fromType: "",
+    toType: "",
+    conversion: "requireEmpty",
+  });
+}
+
+/** A conversion asked of a dialect this module has no statements for. */
+function unsupportedDialect(op: ChangeColumnTypeOp): NextlyError {
+  return NextlyError.internal({
     logContext: {
-      reason: "a reference-list conversion has no SQLite form",
+      reason: "a reference-list conversion has no form on this dialect",
       table: op.tableName,
       column: op.columnName,
     },
@@ -174,6 +341,8 @@ function referenceScalarStatements(
   dialect: SupportedDialect
 ): string[] {
   if (dialect === "postgresql") {
+    // No clearing step: the expression already reads an empty list and JSON null as NULL, and a
+    // `jsonb` column cannot hold an empty string.
     return [
       `ALTER TABLE ${quoteIdent(op.tableName, dialect)} ` +
         `ALTER COLUMN ${quoteIdent(op.columnName, dialect)} ` +
@@ -188,10 +357,12 @@ function referenceScalarStatements(
       `chk_one_ref_${op.tableName}_${op.columnName}`.slice(0, 64),
       dialect
     );
-    const nullability = op.nullable === false ? "NOT NULL" : "NULL";
+    const nullability = liveNullability(op);
     return [
       `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR JSON_LENGTH(${c}) <= 1)`,
       `ALTER TABLE ${table} DROP CHECK ${guard}`,
+      // JSON null would be unquoted below into the text `null`, which reads as an id.
+      clearEmptyValuesStatement(op.tableName, op.columnName, dialect),
       `ALTER TABLE ${table} MODIFY COLUMN ${c} text ${nullability}`,
       `UPDATE ${table} SET ${c} = CASE ` +
         `WHEN JSON_TYPE(${c}) <> 'ARRAY' THEN JSON_UNQUOTE(${c}) ` +
@@ -201,11 +372,57 @@ function referenceScalarStatements(
       `ALTER TABLE ${table} MODIFY COLUMN ${c} ${op.toType} ${nullability}`,
     ];
   }
-  throw NextlyError.internal({
-    logContext: {
-      reason: "a reference-list conversion has no SQLite form",
-      table: op.tableName,
-      column: op.columnName,
-    },
-  });
+  if (dialect === "sqlite") {
+    // SQLite has no statement that fails on a value, so a guard refuses a longer list before the
+    // rewrite, as the other dialects' statements do: a generated migration runs no count first.
+    const c = quoteIdent(op.columnName, dialect);
+    return [
+      ...sqliteGuardStatements(
+        op.tableName,
+        `CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) > 1 ELSE 0 END`,
+        `Column ${op.tableName}.${op.columnName} cannot change to one related entry while a row ` +
+          `holds more than one. Remove the extra entries first, or keep it holding many.`
+      ),
+      // An empty string and JSON null pass the rewrite below unchanged and would read as an id.
+      clearEmptyValuesStatement(op.tableName, op.columnName, dialect),
+      sqliteReferenceScalarRewrite(op.tableName, op.columnName),
+    ];
+  }
+  throw unsupportedDialect(op);
+}
+
+/**
+ * The nullability MySQL's MODIFY restates during a conversion: the column's live one. The
+ * conversion runs before the apply's pre-cleanup, which fills or removes the rows a column becoming
+ * NOT NULL would refuse, so restating NOT NULL here would refuse them first; the separate
+ * nullability change tightens the column afterwards.
+ */
+function liveNullability(op: ChangeColumnTypeOp): "NULL" | "NOT NULL" {
+  return (op.fromNullable ?? op.nullable) === false ? "NOT NULL" : "NULL";
+}
+
+/**
+ * SQLite's guard: a statement that raises `message` while a row of `tableName` meets `condition`,
+ * and changes nothing either way. SQLite raises only from a trigger, so a temporary trigger on a
+ * temporary table is fired by one insert, then both are dropped. Each statement can run again.
+ */
+function sqliteGuardStatements(
+  tableName: string,
+  condition: string,
+  message: string
+): string[] {
+  const table = quoteIdent(tableName, "sqlite");
+  const probe = '"nextly_relation_guard"';
+  const trigger = '"nextly_relation_guard_check"';
+  const literal = `'${message.replace(/'/g, "''")}'`;
+  return [
+    `CREATE TEMP TABLE IF NOT EXISTS ${probe} ("x" integer)`,
+    `DROP TRIGGER IF EXISTS temp.${trigger}`,
+    `CREATE TEMP TRIGGER ${trigger} BEFORE INSERT ON ${probe} ` +
+      `WHEN EXISTS (SELECT 1 FROM main.${table} WHERE ${condition}) ` +
+      `BEGIN SELECT RAISE(ABORT, ${literal}); END`,
+    `INSERT INTO ${probe} VALUES (1)`,
+    `DROP TRIGGER temp.${trigger}`,
+    `DROP TABLE temp.${probe}`,
+  ];
 }

@@ -22,12 +22,13 @@ import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
-import {
-  WORKFLOW_PERMISSION_GROUP,
-  workflowPermissionActions,
-} from "../../workflows/permissions";
 
-import { entityPermissionSpelling } from "./entity-permission-spelling";
+import {
+  builtInEntityPermissions,
+  COLLECTION_SEEDED_ACTIONS,
+  SINGLE_SEEDED_ACTIONS,
+  workflowEntityPermissions,
+} from "./entity-permission-spelling";
 import { PermissionService } from "./permission-service";
 import { RolePermissionService } from "./role-permission-service";
 
@@ -45,6 +46,80 @@ export interface SeedResult {
   total: number;
   /** IDs of newly created permissions (for super_admin assignment) */
   newPermissionIds: string[];
+}
+
+/**
+ * The owners a declaration of permissions speaks for, for
+ * `markOrphanedPermissions`: by name (`app` for the app's own, a plugin by its
+ * name), and each owner of a permission whose slug `heldSlugs` names.
+ */
+export interface OrphanMarkScope {
+  owners: ReadonlySet<string>;
+  heldSlugs?: ReadonlySet<string>;
+  /**
+   * Permissions another owner declares, whose rows the pass leaves as they are,
+   * neither marked nor cleared, whatever owner key they are stored under. The
+   * app's own are stored under `app`, which a plugin may also be named, so an
+   * owner key alone cannot tell the plugin's rows from the app's.
+   */
+  kept?: readonly { action: string; resource: string }[];
+}
+
+/** A permission row as the orphan pass reads it, and as a rollback's undo of its marks is judged. */
+export interface OrphanPassRow {
+  id: string;
+  slug: string;
+  action: string;
+  resource: string;
+  owner: string | null;
+  orphanedAt: Date | null;
+}
+
+/** A permission's identity as the orphan pass compares it: action and resource, in any case. */
+function orphanPassKey(p: { action: string; resource: string }): string {
+  return `${String(p.action).toLowerCase()}|${String(p.resource).toLowerCase()}`;
+}
+
+/**
+ * The owners a pass speaks for: those `scope` names, and each owner of a
+ * permission the point before held, read from the same rows the pass walks.
+ */
+function ownersSpokenFor(
+  rows: readonly OrphanPassRow[],
+  scope: OrphanMarkScope
+): Set<string> {
+  const spokenFor = new Set(scope.owners);
+  for (const row of rows) {
+    if (row.owner && scope.heldSlugs?.has(String(row.slug))) {
+      spokenFor.add(row.owner);
+    }
+  }
+  return spokenFor;
+}
+
+/**
+ * The orphan mark the pass gives `row`: true to mark it, false to clear it, or
+ * undefined to leave it as it is. A row with no owner is core's or an
+ * entity's, and one another owner declares (`kept`) is not the pass's. A mark
+ * is set only for an owner the declaration speaks for; one it does not speak
+ * for may have added the permission outside it. A permission it declares is
+ * live whoever is recorded as its owner, so its mark is cleared.
+ */
+function orphanMarkFor(
+  row: OrphanPassRow,
+  judged: {
+    declared: ReadonlySet<string>;
+    kept: ReadonlySet<string>;
+    spokenFor: ReadonlySet<string>;
+  }
+): boolean | undefined {
+  if (!row.owner) return undefined;
+  const key = orphanPassKey(row);
+  if (judged.kept.has(key)) return undefined;
+  const isDeclared = judged.declared.has(key);
+  if (isDeclared === (row.orphanedAt === null)) return undefined;
+  if (!isDeclared && !judged.spokenFor.has(row.owner)) return undefined;
+  return !isDeclared;
 }
 
 /**
@@ -439,29 +514,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
  * ```
  */
 /**
- * The actions the built-in seeder creates for every collection and every single.
- *
- * Stated once because two things read them: the seeding loops below, and the check that decides
- * whether a plugin may claim a permission. A second copy is how the reservation drifted from what
- * is actually seeded in the first place.
- */
-const COLLECTION_SEEDED_ACTIONS = [
-  "create",
-  "read",
-  "update",
-  "delete",
-  "publish",
-  "unpublish",
-] as const;
-
-const SINGLE_SEEDED_ACTIONS = [
-  "read",
-  "update",
-  "publish",
-  "unpublish",
-] as const;
-
-/**
  * Does this permission still answer for anything?
  *
  * Two ways to be rubbish, and they need different evidence.
@@ -700,16 +752,13 @@ export class PermissionSeedService extends BaseService {
     collectionSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const actions = COLLECTION_SEEDED_ACTIONS;
 
-    for (const action of actions) {
-      // Spelled by the one function a rename also spells them with, so a
-      // renamed entity's permissions read as if it had been created so.
-      const { name, slug, description } = entityPermissionSpelling(
-        action,
-        collectionSlug
-      );
-
+    // The permissions every collection gets, as a migration snapshot records them, each spelled by
+    // the one function a rename also spells them with.
+    for (const { action, name, slug, description } of builtInEntityPermissions(
+      "collection",
+      collectionSlug
+    )) {
       result.total++;
       try {
         const ensureResult = await this.permissionService.ensurePermission(
@@ -753,16 +802,13 @@ export class PermissionSeedService extends BaseService {
     singleSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const actions = SINGLE_SEEDED_ACTIONS;
 
-    for (const action of actions) {
-      // Spelled by the one function a rename also spells them with, so a
-      // renamed entity's permissions read as if it had been created so.
-      const { name, slug, description } = entityPermissionSpelling(
-        action,
-        singleSlug
-      );
-
+    // The permissions every Single gets, as a migration snapshot records them, each spelled by the
+    // one function a rename also spells them with.
+    for (const { action, name, slug, description } of builtInEntityPermissions(
+      "single",
+      singleSlug
+    )) {
       result.total++;
       try {
         const ensureResult = await this.permissionService.ensurePermission(
@@ -811,7 +857,14 @@ export class PermissionSeedService extends BaseService {
     if (!attached) return;
     // Held as the class itself, so the call below is read as the service's own member.
     const permissions: PermissionService = this.permissionService;
-    for (const action of workflowPermissionActions(attached.workflow)) {
+    // The workflow's permissions as a migration snapshot records them (`workflowEntityPermissions`).
+    for (const {
+      action,
+      name,
+      slug,
+      description,
+      group,
+    } of workflowEntityPermissions(entitySlug, attached.workflow)) {
       result.total++;
       try {
         // A row already there keeps its owner and group: an app's, a plugin's, or an admin's own
@@ -822,10 +875,6 @@ export class PermissionSeedService extends BaseService {
           result.skipped++;
           continue;
         }
-        const { name, slug, description } = entityPermissionSpelling(
-          action,
-          entitySlug
-        );
         // Stored under the workflow group, which is how the presets tell it is a workflow's.
         const ensured = await permissions.ensurePermission(
           action,
@@ -833,7 +882,7 @@ export class PermissionSeedService extends BaseService {
           name,
           slug,
           description,
-          { group: WORKFLOW_PERMISSION_GROUP }
+          { group: group ?? undefined }
         );
         if (ensured.created) {
           result.created++;
@@ -1048,29 +1097,6 @@ export class PermissionSeedService extends BaseService {
   }
 
   /**
-   * Mark permissions whose declaring package has stopped declaring them, and
-   * unmark any that are declared again.
-   *
-   * `ensurePermission` writes `owner` only for a permission that is declared,
-   * so once a declaration goes the attribution freezes at whatever was last
-   * true. That was cosmetic until presets began reading `owner` to decide
-   * whether a permission is a plugin's; a stale attribution now silently
-   * changes what a preset grants.
-   *
-   * Marked, not deleted, and grants are left alone. Absence from config is not
-   * an uninstall: a plugin can be disabled and still declare its permissions,
-   * a config can be edited by mistake, and there is no uninstall event to tell
-   * the difference. Deleting on that evidence would revoke access as a side
-   * effect of a config change. `cleanupOrphanedPermissions` retires them later,
-   * on purpose.
-   *
-   * Only permissions with an `owner` are considered: a collection's CRUD seeds
-   * have no declaring package, and their lifecycle follows the collection.
-   *
-   * @param declared - Every custom permission currently declared, from every
-   *   plugin, including disabled ones.
-   */
-  /**
    * Retire the caches, when a pass actually wrote something.
    *
    * Four passes here end with the same question, and asking it four times is
@@ -1110,64 +1136,65 @@ export class PermissionSeedService extends BaseService {
     }
   }
 
+  /**
+   * Mark orphaned each live permission an owner `scope` speaks for no longer
+   * declares, and clear the mark of each marked one `declared` names again.
+   *
+   * `nextly migrate` calls this as each recorded migration applies, with the
+   * permissions its snapshot declares and the owners it speaks for
+   * (`domains/schema/migrate/permission-orphans.ts`). No start calls it: a
+   * permission leaves through a recorded change, never through the
+   * configuration a build happens to start with.
+   *
+   * Marked, not deleted, and grants are left alone (`logOrphanMarkChange`
+   * says so, naming them). `cleanupOrphanedPermissions` retires a marked
+   * permission later, on purpose.
+   *
+   * Only permissions with an `owner` are considered: core's own and an
+   * entity's built-in ones have none, and their lifecycle follows the release
+   * and the entity. A permission whose owner `scope` does not speak for keeps
+   * its state, as one a plugin's install added that no snapshot has recorded
+   * yet does.
+   *
+   * @param declared - Every permission the declaration names, whoever owns it.
+   * @param scope - The owners it speaks for: by name, and each owner of a
+   *   permission whose slug `heldSlugs` names (the point before it, where that
+   *   is a list of live permissions rather than a declaration by owner).
+   */
   async markOrphanedPermissions(
-    declared: CollectedPermission[]
+    declared: readonly { action: string; resource: string }[],
+    scope: OrphanMarkScope
   ): Promise<SeedResult> {
-    return inPermissionSweep(() => this.markOrphanedPermissionsRows(declared));
+    return inPermissionSweep(() =>
+      this.markOrphanedPermissionsRows(declared, scope)
+    );
   }
 
   private async markOrphanedPermissionsRows(
-    declared: CollectedPermission[]
+    declared: readonly { action: string; resource: string }[],
+    scope: OrphanMarkScope
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const { permissions } = this.tables;
 
-    const declaredKeys = new Set(
-      declared.map(p => `${p.action.toLowerCase()}|${p.resource.toLowerCase()}`)
-    );
+    const declaredKeys = new Set(declared.map(orphanPassKey));
+    // Another owner's declarations: their rows are not this pass's to change.
+    const keptKeys = new Set((scope.kept ?? []).map(orphanPassKey));
 
     try {
-      const rows = (await this.db
-        .select({
-          id: permissions.id,
-          action: permissions.action,
-          resource: permissions.resource,
-          owner: permissions.owner,
-          orphanedAt: permissions.orphanedAt,
-        })
-        .from(permissions)) as Array<{
-        id: string;
-        action: string;
-        resource: string;
-        owner: string | null;
-        orphanedAt: Date | null;
-      }>;
+      const rows = await this.orphanPassRows();
 
+      const judged = {
+        declared: declaredKeys,
+        kept: keptKeys,
+        spokenFor: ownersSpokenFor(rows, scope),
+      };
       for (const row of rows) {
-        if (!row.owner) continue;
-
-        const key = `${String(row.action).toLowerCase()}|${String(
-          row.resource
-        ).toLowerCase()}`;
-        const isDeclared = declaredKeys.has(key);
-        const isMarked = row.orphanedAt !== null;
-
-        if (isDeclared === !isMarked) continue;
+        const orphaned = orphanMarkFor(row, judged);
+        if (orphaned === undefined || row.owner === null) continue;
 
         result.total++;
-        await writingPermissions(permissions, table =>
-          this.db
-            .update(table)
-            .set({ orphanedAt: isDeclared ? null : new Date() })
-            .where(eq(table.id, String(row.id)))
-        );
+        await this.writeOrphanMark(row, orphaned);
         result.created++;
-
-        this.logger.info?.(
-          isDeclared
-            ? `Permission "${row.action}-${row.resource}" is declared again by ${row.owner}.`
-            : `Permission "${row.action}-${row.resource}" is no longer declared by ${row.owner}; marked as orphaned. Grants are unchanged.`
-        );
       }
     } catch (error) {
       this.logger.warn(
@@ -1179,6 +1206,81 @@ export class PermissionSeedService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * Set or clear the orphan marks `decide` names, by permission id, and leave
+   * every other permission as it is: what a rollback to the registry record's
+   * point does with the marks the rolled-back migrations set or made needed.
+   * `decide` is handed every permission as the orphan pass reads it, so the
+   * judgement is made on the rows the writes then change. A mark already as
+   * decided is not written again.
+   *
+   * Unlike the orphan pass, a permission with no owner (an entity's built-in
+   * one) can be marked here: the rollback that removes an entity's registry
+   * row orphans its permissions with it. Every grant is kept, and each mark
+   * set or cleared is logged with the grants the permission keeps
+   * (`logOrphanMarkChange`). A write that fails throws, so the caller's
+   * transaction does not commit with some marks written and others not.
+   *
+   * @returns How many marks were set or cleared.
+   */
+  async rewriteOrphanMarks(
+    decide: (rows: readonly OrphanPassRow[]) => ReadonlyMap<string, boolean>
+  ): Promise<number> {
+    return inPermissionSweep(async () => {
+      const rows = await this.orphanPassRows();
+      const marks = decide(rows);
+      let written = 0;
+      for (const row of rows) {
+        const orphaned = marks.get(String(row.id));
+        if (orphaned === undefined || orphaned === (row.orphanedAt !== null)) {
+          continue;
+        }
+        await this.writeOrphanMark(row, orphaned);
+        written += 1;
+      }
+      return written;
+    });
+  }
+
+  /** Every permission, as the orphan pass and a rollback's undo of its marks read it. */
+  private async orphanPassRows(): Promise<OrphanPassRow[]> {
+    const { permissions } = this.tables;
+    return (await this.db
+      .select({
+        id: permissions.id,
+        slug: permissions.slug,
+        action: permissions.action,
+        resource: permissions.resource,
+        owner: permissions.owner,
+        orphanedAt: permissions.orphanedAt,
+      })
+      .from(permissions)) as OrphanPassRow[];
+  }
+
+  /**
+   * Write one permission's orphan mark, set or cleared, and log it with the
+   * grants the permission has once the mark is written, which a mark leaves
+   * as they were.
+   */
+  private async writeOrphanMark(
+    row: OrphanPassRow,
+    orphaned: boolean
+  ): Promise<void> {
+    await writingPermissions(this.tables.permissions, table =>
+      this.db
+        .update(table)
+        .set({ orphanedAt: orphaned ? new Date() : null })
+        .where(eq(table.id, String(row.id)))
+    );
+    await this.permissionService.logOrphanMarkChange({
+      id: String(row.id),
+      action: row.action,
+      resource: row.resource,
+      owner: row.owner,
+      orphaned,
+    });
   }
 
   /**

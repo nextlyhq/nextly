@@ -102,13 +102,11 @@ test("the save confirmation is primary without a deletion and destructive with o
   // No deletion: a translated field made shared moves its other languages'
   // values to the archive, which the preview flags as needing care but which
   // deletes nothing.
-  // Exact: the field row's own button names its actions too ("… Edit headline …").
-  await page
-    .getByRole("button", { name: "Edit headline", exact: true })
-    .click();
+  // Selecting the field's row in the outline opens its settings.
+  await page.getByTestId("field-row-headline").click();
   await page.getByRole("tab", { name: "Advanced" }).click();
   await page.getByRole("switch", { name: "Localized" }).click();
-  await page.getByRole("button", { name: "Apply" }).click();
+  // No Apply: the settings panel keeps each change as it is made.
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await testInfo.attach("save without a deletion", {
@@ -120,7 +118,7 @@ test("the save confirmation is primary without a deletion and destructive with o
   await expect(page.getByRole("alertdialog")).toBeHidden();
 
   // A deletion: removing a field that holds a value deletes that value.
-  await page.getByRole("button", { name: "Edit summary", exact: true }).click();
+  await page.getByTestId("field-row-summary").click();
   await page.getByRole("button", { name: /delete field/i }).click();
   const deleteConfirm = page.getByRole("alertdialog");
   await expect(deleteConfirm).toBeVisible();

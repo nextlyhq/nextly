@@ -128,6 +128,37 @@ describe("collectPluginInfo", () => {
     ).toBeUndefined();
   });
 
+  it("reports a determineUser plugin as a login finisher", () => {
+    // The consent makes a determineUser hook login-capable: once the app
+    // lists the plugin it can finish logins, so the operator's summary must
+    // say so whatever spelling the manifest used.
+    const hookOnly = {
+      name: "@acme/members",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: { auth: { hooks: { determineUser: () => null } } },
+    } as unknown as PluginDefinition;
+    const declared = fbPlugin({ capabilities: { auth: { login: true } } });
+    const infos = collectPluginInfo(cfg(), [basePlugin(), hookOnly, declared], {
+      coreVersion: "1.0.0",
+      consent: {
+        rawSql: [],
+        login: ["@acme/members", "@nextlyhq/plugin-form-builder"],
+      },
+    });
+    expect(
+      findPluginInfo(infos, "@acme/members")!.manifest.completesLogins
+    ).toBe(true);
+    expect(
+      findPluginInfo(infos, "@nextlyhq/plugin-form-builder")!.manifest
+        .completesLogins
+    ).toBe(true);
+    // The control: a plugin declaring neither spelling reports no.
+    expect(findPluginInfo(infos, "@acme/base")!.manifest.completesLogins).toBe(
+      false
+    );
+  });
+
   it("lists the kinds of signed-in person each plugin registers", () => {
     const accounts = {
       name: "@acme/accounts",

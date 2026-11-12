@@ -69,6 +69,15 @@ export interface MigrationSnapshot {
 export type IsAppliedFn = (ledgerFilename: string) => Promise<boolean>;
 
 /**
+ * The ledger's name for the migration a snapshot file belongs to: its
+ * group's `.sql` name (`<base>.snapshot.json` is `<base>.sql`). The one
+ * pairing every reader of `meta/` asks the ledger by.
+ */
+export function ledgerNameOfSnapshot(snapshotFile: string): string {
+  return `${snapshotFile.replace(/\.snapshot\.json$/, "")}.sql`;
+}
+
+/**
  * One snapshot file, with whether the migration it belongs to has run.
  *
  * The flag travels WITH the snapshot rather than filtering the list, because
@@ -132,7 +141,7 @@ export async function loadSnapshots(
      */
     let applied = true;
     if (isApplied) {
-      const ledgerFilename = `${file.replace(/\.snapshot\.json$/, "")}.sql`;
+      const ledgerFilename = ledgerNameOfSnapshot(file);
       applied = await isApplied(ledgerFilename);
     }
 

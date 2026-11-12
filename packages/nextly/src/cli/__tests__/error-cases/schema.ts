@@ -86,4 +86,20 @@ export const SCHEMA_CASES = {
         command: "nextly migrate",
       },
     }),
+  // As a Schema Builder save throws it: the text `nextly migrate` prints for the same state.
+  NEXTLY_MIGRATION_HISTORY_REFUSED: () =>
+    new NextlyError({
+      code: "NEXTLY_MIGRATION_HISTORY_REFUSED",
+      publicMessage:
+        "Applied migration 20261106_120000_000_posts_create.sql was changed after it ran. Restore it as it was applied, or record the change with `nextly migrate:resolve --applied 20261106_120000_000_posts_create.sql`.",
+      logContext: { refusedBy: "MIGRATION_TAMPERED" },
+    }),
+  // As a Schema Builder save throws it for a converted column nobody confirmed.
+  NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED: () =>
+    new NextlyError({
+      code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
+      publicMessage:
+        "This save also converts body from text to varchar(255), from an earlier Nextly version. Review the save and confirm the conversion to write it.",
+      logContext: { columns: ["body"] },
+    }),
 } satisfies ErrorCases;

@@ -109,7 +109,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Group by was reset: secret is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     // The stale value is not saved back: the card follows its default.
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("by");
@@ -127,7 +127,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Fields was reset: salary is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     // 🔴 The field the reader may not see is not saved back for the card to ask for.
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(JSON.stringify(saved(onSave))).not.toContain("salary");
@@ -277,7 +277,7 @@ describe("the settings sheet with content settings", () => {
       .map(option => option.textContent);
     expect(offered).toEqual(["Posts", "Pages"]);
     await userEvent.click(screen.getByRole("option", { name: "Pages" }));
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Group by named a field of Posts; with Pages chosen it goes back to its
     // default rather than naming a field of the other collection.
@@ -310,7 +310,7 @@ describe("the settings sheet with content settings", () => {
       screen.getByRole("textbox", { name: "Condition value" }),
       "Hello"
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     const where = saved(onSave).where as Record<
       string,
@@ -332,7 +332,7 @@ describe("the settings sheet with content settings", () => {
       screen.queryByRole("combobox", { name: "Condition field" })
     ).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Clear filter" }));
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "posts" });
   });
@@ -358,7 +358,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Group by was reset: secret is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).not.toHaveProperty("by");
   });
@@ -368,12 +368,12 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
     await userEvent.click(screen.getByRole("option", { name: "Pages" }));
     // Every section's own Reset, Data's holding the Collection.
-    for (const section of ["Data", "Display"]) {
+    for (const section of ["Content", "Display"]) {
       await userEvent.click(
         screen.getByRole("button", { name: `Reset ${section} to defaults` })
       );
     }
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
   });
@@ -383,7 +383,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Clear selection" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Only Group by went; the other preference stayed.
     expect(saved(onSave)).toEqual({ collection: "posts", items: 9 });
@@ -414,7 +414,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Collection was reset: gone is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({});
   });
@@ -436,7 +436,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(screen.getByRole("option", { name: "Posts" }));
     await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
     await userEvent.click(screen.getByRole("option", { name: "Default" }));
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Back at the default, so nothing is stored.
     expect(saved(onSave)).toEqual({});
@@ -456,31 +456,31 @@ describe("the settings sheet with content settings", () => {
     // field Pages does not have. Started afresh, it has no value to take.
     const value = screen.queryByLabelText("Condition value");
     if (value !== null) await userEvent.type(value, "2026-01-01");
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
   });
 
   it("resets every setting to its default but keeps the card's collection", async () => {
     const onSave = open({ collection: "posts", by: "title", items: 9 });
-    for (const section of ["Data", "Display"]) {
+    for (const section of ["Content", "Display"]) {
       await userEvent.click(
         screen.getByRole("button", { name: `Reset ${section} to defaults` })
       );
     }
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).toEqual({ collection: "posts" });
   });
 
-  it("resets one section alone: Data's Reset leaves what Display holds", async () => {
+  it("resets one section alone: Content's Reset leaves what Display holds", async () => {
     const onSave = open({ collection: "posts", by: "title", items: 9 });
     await userEvent.click(
-      screen.getByRole("button", { name: "Reset Data to defaults" })
+      screen.getByRole("button", { name: "Reset Content to defaults" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
-    // Group by, in Data, went back to its default; Number of items, in Display, stayed.
+    // Group by, in Content, went back to its default; Number of items, in Display, stayed.
     expect(saved(onSave)).toEqual({ collection: "posts", items: 9 });
   });
 });
@@ -490,18 +490,66 @@ describe("the settings sheet with a note", () => {
     { name: "text", type: "textarea", label: "Note", maxLength: 5 },
   ];
 
-  it("refuses a note over its bound on Done, saying how long it may be", async () => {
+  it("refuses a note over its bound on Save, saying how long it may be", async () => {
     const onSave = open({ text: "hello!" }, note);
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("At most 5 characters.")).toBeTruthy();
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("says what Markdown the note takes, its examples drawn as code, under the text", () => {
+    open({ text: "" }, [
+      {
+        ...note[0],
+        admin: {
+          description:
+            "Supports Markdown: `**bold**`, `_italic_`, `- lists` and `[links](https://…)`. Only you see this note.",
+        },
+      } as AnyWidgetSetting,
+    ]);
+    const text = screen.getByRole("textbox", { name: "Note" });
+    expect(text).toHaveAccessibleDescription(
+      expect.stringContaining(
+        "Supports Markdown: **bold**, _italic_, - lists and [links](https://…)."
+      )
+    );
+    const examples = [...document.querySelectorAll("code")].map(
+      code => code.textContent
+    );
+    expect(examples).toEqual([
+      "**bold**",
+      "_italic_",
+      "- lists",
+      "[links](https://…)",
+    ]);
+  });
+
+  it("counts the characters left as the reader writes, in characters, and past the bound", async () => {
+    open({ text: "" }, note);
+    const text = screen.getByRole("textbox", { name: "Note" });
+    expect(text).toHaveAccessibleDescription(
+      expect.stringContaining("5 characters left")
+    );
+    // Two emoji are four UTF-16 units and two characters, as the server counts them.
+    await userEvent.type(text, "😀😀");
+    expect(text).toHaveAccessibleDescription(
+      expect.stringContaining("3 characters left")
+    );
+    await userEvent.type(text, "abcd");
+    expect(text).toHaveAccessibleDescription(
+      expect.stringContaining("1 character over the limit")
+    );
+    // Past the bound, in the danger status's text colour, not a destructive action's.
+    expect(screen.getByTestId("setting-left-text")).toHaveClass(
+      "text-danger-text"
+    );
   });
 
   it("keeps a note of five characters that take ten UTF-16 units", async () => {
     // 🔴 The must-differ case: a bound counted by `length`, or by the
     // textarea's native attribute, refuses this.
     const onSave = open({ text: "😀😀😀😀😀" }, note);
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toMatchObject({ text: "😀😀😀😀😀" });
   });
@@ -559,7 +607,7 @@ describe("the settings sheet drawn from a widget's settings", () => {
     // 🔴 Twenty rows past a bound of ten: opened at the stored value, the
     // sheet showed a number the card was not using and Done wrote it back.
     const onSave = open({ collection: "posts", items: 20 }, every);
-    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).not.toHaveProperty("items");
   });
