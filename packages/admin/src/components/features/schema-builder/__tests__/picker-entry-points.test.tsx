@@ -51,7 +51,12 @@ function renderList(
     select: vi.fn(),
     addAt: onAddAt,
     fields,
-    judgeMove: vi.fn(),
+    // Nothing here moves: every move is refused, so the menu offers none.
+    judgeMove: vi.fn(() => ({
+      allowed: false as const,
+      reason: "not-found" as const,
+      message: "",
+    })),
     moveDestinations: vi.fn(() => []),
     commitMove: vi.fn(),
     duplicate: vi.fn(),

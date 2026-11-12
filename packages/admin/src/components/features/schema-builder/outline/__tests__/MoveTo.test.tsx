@@ -60,12 +60,8 @@ async function openMoveTo(
 function places(dialog: HTMLElement): Map<string, HTMLInputElement> {
   return new Map(
     within(dialog)
-      .getAllByRole("radio")
-      .map(radio => [
-        radio.getAttribute("aria-label") ??
-          (radio.labels?.[0]?.textContent ?? ""),
-        radio as HTMLInputElement,
-      ])
+      .getAllByRole<HTMLInputElement>("radio")
+      .map(radio => [radio.labels?.[0]?.textContent ?? "", radio])
   );
 }
 
