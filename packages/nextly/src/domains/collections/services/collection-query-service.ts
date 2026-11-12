@@ -30,7 +30,10 @@ import {
 } from "drizzle-orm";
 
 import { transformRichTextFields } from "@nextly/lib/field-transform";
-import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { readsAsVisitor } from "../../../auth/access/resolve-actor";
@@ -1117,6 +1120,37 @@ function cappedListTotal(
   const { count, atLeast } = result.data;
   if (!atLeast && count <= countUpTo) return { total: count, capped: false };
   return { total: atLeast ? count + 1 : count, capped: true };
+}
+
+/**
+ * What a read's caller asked of the response pipeline: who is reading, how far
+ * that reader is trusted, and how the result is shaped. A listing and a read by
+ * id hand `finalizeReadRows` the same facts, so they are named once here.
+ */
+function readCallerOf(params: {
+  user?: UserContext;
+  fieldAccessUser?: UserContext;
+  overrideAccess?: boolean;
+  enforceFieldAccess?: boolean;
+  trusted?: TrustBound;
+  authenticatedScope?: AuthenticatedScope;
+  select?: Record<string, boolean>;
+  richTextFormat?: RichTextOutputFormat;
+  richTextStyles?: RichTextStyles;
+  locale?: string;
+}) {
+  return {
+    user: params.user,
+    fieldAccessUser: params.fieldAccessUser,
+    overrideAccess: params.overrideAccess,
+    enforceFieldAccess: params.enforceFieldAccess,
+    trusted: params.trusted,
+    authenticatedScope: params.authenticatedScope,
+    select: params.select,
+    richTextFormat: params.richTextFormat,
+    richTextStyles: params.richTextStyles,
+    locale: params.locale,
+  };
 }
 
 export class CollectionQueryService extends BaseService {
@@ -2788,6 +2822,7 @@ export class CollectionQueryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
     select?: Record<string, boolean>;
     richTextFormat?: RichTextOutputFormat;
+    richTextStyles?: RichTextStyles;
     locale?: string;
     /**
      * The read carries a grant for this collection, so none of its own
@@ -3044,7 +3079,12 @@ export class CollectionQueryService extends BaseService {
         typeof transformRichTextFields
       >[1];
       finalData = finalData.map(row =>
-        transformRichTextFields(row, fieldConfig, params.richTextFormat)
+        transformRichTextFields(
+          row,
+          fieldConfig,
+          params.richTextFormat,
+          params.richTextStyles
+        )
       );
     }
 
@@ -3328,6 +3368,12 @@ export class CollectionQueryService extends BaseService {
      * @default "json"
      */
     richTextFormat?: RichTextOutputFormat;
+    /**
+     * How rich text HTML is styled: Nextly's inline look (`"default"`), or
+     * classes only, for a site's own CSS (`"none"`). Ignored for JSON.
+     * @default "default"
+     */
+    richTextStyles?: RichTextStyles;
     /**
      * Sort order for results.
      * Prefix with `-` for descending.
@@ -4100,15 +4146,7 @@ export class CollectionQueryService extends BaseService {
         // learn one thing about the request on the way in and another on
         // the way out.
         requestFacts,
-        user: params.user,
-        fieldAccessUser: params.fieldAccessUser,
-        overrideAccess: params.overrideAccess,
-        enforceFieldAccess: params.enforceFieldAccess,
-        trusted: params.trusted,
-        authenticatedScope: params.authenticatedScope,
-        select: params.select,
-        richTextFormat: params.richTextFormat,
-        locale: params.locale,
+        ...readCallerOf(params),
       });
 
       // Build paginated response with all metadata
@@ -4981,6 +5019,12 @@ export class CollectionQueryService extends BaseService {
      * @default "json"
      */
     richTextFormat?: RichTextOutputFormat;
+    /**
+     * How rich text HTML is styled: Nextly's inline look (`"default"`), or
+     * classes only, for a site's own CSS (`"none"`). Ignored for JSON.
+     * @default "default"
+     */
+    richTextStyles?: RichTextStyles;
     /** When true, bypass all access control checks */
     overrideAccess?: boolean;
     /**
@@ -5782,15 +5826,7 @@ export class CollectionQueryService extends BaseService {
         // learn one thing about the request on the way in and another on
         // the way out.
         requestFacts,
-        user: params.user,
-        fieldAccessUser: params.fieldAccessUser,
-        overrideAccess: params.overrideAccess,
-        enforceFieldAccess: params.enforceFieldAccess,
-        trusted: params.trusted,
-        authenticatedScope: params.authenticatedScope,
-        select: params.select,
-        richTextFormat: params.richTextFormat,
-        locale: params.locale,
+        ...readCallerOf(params),
       });
 
       // Signal that the returned document is the pending working draft, not the
