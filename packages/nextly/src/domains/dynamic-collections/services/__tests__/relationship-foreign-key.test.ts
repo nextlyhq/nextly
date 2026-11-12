@@ -153,3 +153,88 @@ describe("a relationship's target table", () => {
     );
   });
 });
+
+/**
+ * Which relationships carry a key is one rule, read by the CREATE, by a column an edit adds, by the
+ * indexes a create is predicted to install and by the key the push pipeline expects. A relationship
+ * stored as JSON holds no single id a key could check, so none of them may give it one; and a
+ * relationship whose target has no known table gets none rather than a guessed one.
+ */
+describe("which relationships carry a key", () => {
+  const multiValue = {
+    name: "authors",
+    type: "relationship",
+    hasMany: true,
+    options: { target: "authors", relationType: "manyToOne" },
+  } as unknown as FieldDefinition;
+  const relationToList = {
+    name: "subject",
+    type: "relationship",
+    relationTo: ["authors", "posts"],
+  } as unknown as FieldDefinition;
+  const relationToOnly = {
+    name: "writer",
+    type: "relationship",
+    relationTo: "authors",
+  } as unknown as FieldDefinition;
+
+  /** Every place a key is described, created or predicted, for one field on `dc_notes`. */
+  function keysFor(
+    field: FieldDefinition,
+    service = builder("postgresql")
+  ): string[] {
+    const described = service.relationshipForeignKey("dc_notes", field);
+    const created = service.generateMigrationSQL("dc_notes", [field]);
+    const added = service.generateAlterTableMigration("dc_notes", [], [field]);
+    const planned = service.plannedAttachments("dc_notes", [field]);
+    return [
+      ...(described ? [`described ${described.referencesTable}`] : []),
+      ...(/FOREIGN KEY/.test(created) ? ["created"] : []),
+      ...(/FOREIGN KEY/.test(added) ? ["added"] : []),
+      ...(planned.foreignKeysByColumn.size > 0 ? ["planned"] : []),
+    ];
+  }
+
+  it("gives a multi-value relationship no key anywhere", () => {
+    expect(keysFor(multiValue)).toEqual([]);
+  });
+
+  it("gives a relationship to several collections no key anywhere", () => {
+    expect(keysFor(relationToList)).toEqual([]);
+  });
+
+  it("gives a relationTo target with no known table no key anywhere", () => {
+    expect(keysFor(relationToOnly)).toEqual([]);
+  });
+
+  it("keys a single-value relationship everywhere, to the same table", () => {
+    expect(keysFor(relationship("author"))).toEqual([
+      "described dc_authors",
+      "created",
+      "added",
+      "planned",
+    ]);
+  });
+
+  it("keys a target to the table the registry names, when the caller has one", () => {
+    // A code-first collection with a `dbName`: its rows are not in `dc_authors`.
+    const service = new DynamicCollectionSchemaService(
+      undefined,
+      "postgresql",
+      slug => (slug === "authors" ? "writers" : null)
+    );
+    expect(keysFor(relationToOnly, service)).toEqual([
+      "described writers",
+      "created",
+      "added",
+      "planned",
+    ]);
+    expect(
+      service.generateAlterTableMigration(
+        "dc_notes",
+        [],
+        [relationship("author")]
+      )
+    ).toContain(`REFERENCES "writers"`);
+  });
+});

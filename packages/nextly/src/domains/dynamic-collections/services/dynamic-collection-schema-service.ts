@@ -68,6 +68,11 @@ import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
+import {
+  relationshipKeyTarget,
+  relationshipTargetSlug,
+  type TableForSlug,
+} from "../../schema/services/relationship-key-target";
 import { backfillDefaultForType } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
@@ -244,14 +249,28 @@ const STRUCTURED_JSON_TYPES: ReadonlySet<string> = new Set([
 export class DynamicCollectionSchemaService {
   private validationService: DynamicCollectionValidationService;
   private dialect: SupportedDialect;
+  /**
+   * The registry's table for a relationship's target, when the caller has
+   * one. Without it a relationship naming its target by `relationTo` is
+   * given no key, and one naming it by `options.target` keeps its `dc_`
+   * table: see `relationshipKeyTarget`.
+   */
+  private readonly tableFor?: TableForSlug;
 
   constructor(
     validationService?: DynamicCollectionValidationService,
-    dialect?: SupportedDialect
+    dialect?: SupportedDialect,
+    tableFor?: TableForSlug
   ) {
     this.validationService =
       validationService || new DynamicCollectionValidationService();
     this.dialect = dialect || env.DB_DIALECT || "postgresql";
+    this.tableFor = tableFor;
+  }
+
+  /** The target this relationship's column is keyed to, or null: `relationshipKeyTarget`. */
+  private keyTarget(field: FieldDefinition) {
+    return relationshipKeyTarget(field, this.tableFor);
   }
 
   /**
@@ -746,22 +765,14 @@ export class DynamicCollectionSchemaService {
     field: FieldDefinition,
     refuse = true
   ): ForeignKeySpec | null {
-    if (field.type !== "relationship" || !field.options?.target) return null;
-    // Many-to-one when unstated, as the Builder creates it.
-    const relationType = field.options.relationType || "manyToOne";
-    if (
-      relationType !== "oneToOne" &&
-      relationType !== "manyToOne" &&
-      relationType !== "oneToMany"
-    ) {
-      return null;
-    }
+    // Which relationships carry a key, and the table it points at, are one shared answer.
+    const target = this.keyTarget(field);
+    if (target === null) return null;
     const column = toSnakeCase(field.name);
     return {
       name: this.relationshipKeyName(tableName, column),
       columns: [column],
-      // The table the target was created under: a hyphen in its address is an underscore in the table.
-      referencesTable: getTableName(field.options.target),
+      referencesTable: target.table,
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
@@ -1678,9 +1689,11 @@ ${allColumnDefs.join(",\n")}
         // For PostgreSQL/MySQL, we can add them
         if (this.dialect !== "sqlite") {
           // Add foreign key for non-manyToMany relations
-          if (field.type === "relationship" && field.options?.target) {
-            // The table the target was created under: a hyphen in its address is an underscore in the table.
-            const targetTable = getTableName(field.options.target);
+          // Keyed exactly as the CREATE keys it: a relationship stored as JSON, or one whose
+          // target has no table to point at, is added without a key.
+          const keyTarget = this.keyTarget(field);
+          if (keyTarget !== null) {
+            const targetTable = keyTarget.table;
             const onDelete = this.relationOnDelete(field);
             const onUpdate = this.relationOnUpdate(field);
             statements.push(
@@ -2186,11 +2199,11 @@ ${allColumnDefs.join(",\n")}
     newField: FieldDefinition,
     liveForeignKeys?: ReadonlyMap<string, readonly string[]>
   ): ReferentialActionChange {
-    if (newField.type !== "relationship") return NO_REFERENTIAL_ACTION_CHANGE;
-    const target = newField.options?.target;
-    if (!target || usesJunctionTable(newField)) {
-      return NO_REFERENTIAL_ACTION_CHANGE;
-    }
+    // Only a relationship that carries a key has actions to change: one stored as JSON, or one
+    // whose target has no table, never had a constraint for these statements to replace.
+    const keyTarget = this.keyTarget(newField);
+    if (keyTarget === null) return NO_REFERENTIAL_ACTION_CHANGE;
+    const target = keyTarget.slug;
 
     // The PREVIOUS definition is read without being judged, and the new one is
     // judged. A combination the old creation path accepted — a required
@@ -2256,8 +2269,7 @@ ${allColumnDefs.join(",\n")}
       tableName,
       constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
-      // The table the target was created under: a hyphen in its address is an underscore in the table.
-      referencesTable: getTableName(target),
+      referencesTable: keyTarget.table,
       referencesColumn: "id",
       fromOnDelete: from.onDelete,
       fromOnUpdate: from.onUpdate,
@@ -2614,10 +2626,15 @@ ${allColumnDefs.join(",\n")}
   /**
    * Whether two relationship definitions point at the same target under the
    * same relation kind — the only relations a rename preserves.
+   * The target is read as reads take it (`relationTo` before `options.target`),
+   * so two relationships naming different collections only by `relationTo` are
+   * not mistaken for one; a `relationTo` list is compared whole.
    */
   private sameRelationTarget(a: FieldDefinition, b: FieldDefinition): boolean {
     return (
-      a.options?.target === b.options?.target &&
+      relationshipTargetSlug(a) === relationshipTargetSlug(b) &&
+      JSON.stringify(Array.isArray(a.relationTo) ? a.relationTo : null) ===
+        JSON.stringify(Array.isArray(b.relationTo) ? b.relationTo : null) &&
       a.options?.relationType === b.options?.relationType
     );
   }
@@ -2685,7 +2702,9 @@ ${allColumnDefs.join(",\n")}
         indexColumns.set(uniqueName, [column]);
         uniqueColumns.set(column, uniqueName);
       }
-      if (field.type === "relationship" && field.options?.target) {
+      // Predicted by the same rule the CREATE keys by, so a relationship it gives no key is
+      // never predicted one.
+      if (this.keyTarget(field) !== null) {
         foreignKeysByColumn.set(column, [
           this.relationshipKeyName(tableName, column),
         ]);
