@@ -267,17 +267,50 @@ async function servedAddressOf(
 }
 
 /**
+ * Whether the caller may read the entry `id` of `slug` itself: a person let
+ * read only some of a collection's entries opens the tab, so what is kept
+ * for one entry is answered only where its own read lets them see it.
+ */
+async function mayReadEntry(
+  ctx: PluginRouteContext,
+  slug: string,
+  id: string
+): Promise<boolean> {
+  if (ctx.user === null) return false;
+  const { data } = await ctx.services.collections.listEntries(
+    slug,
+    {
+      where: { id: { equals: id } },
+      pagination: { limit: 1, page: 1 },
+      depth: 0,
+    },
+    {
+      as: "user",
+      user: ctx.user,
+      ...(ctx.authenticatedScope === undefined
+        ? {}
+        : { authenticatedScope: ctx.authenticatedScope }),
+    }
+  );
+  return data.length > 0;
+}
+
+/**
  * What the page's route last supplied in code, in `locale` (the site's
  * default language where none): nothing for an entry not yet saved, which
- * no route has answered.
+ * no route has answered, or one the caller may not read.
  */
 async function codeLevelOf(
-  ctx: PluginContext,
+  ctx: PluginRouteContext,
   body: ResolveBody,
   locale: string | undefined
 ): Promise<PageMetadataInput["code"]> {
   const id = body.id ?? undefined;
-  if (body.kind === "collection" && id === undefined) return {};
+  if (body.kind === "collection") {
+    if (id === undefined || !(await mayReadEntry(ctx, body.slug, id))) {
+      return {};
+    }
+  }
   const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
   return routeValuesOf(ctx, {
     type: body.kind === "single" ? singleKey(body.slug) : body.slug,

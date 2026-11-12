@@ -48,6 +48,13 @@ import { noSocialCardRules } from "../../social/card";
 import { rulesFromOptions } from "../../structured-data/rules";
 import type { SeoTabContext } from "../../tab/contract";
 
+/** A component kept per language, which a Single not kept per language can't hold in a draft. */
+const BADGE = defineFieldGroup({
+  slug: "badge",
+  localized: true,
+  fields: [text({ name: "heading", localized: true })],
+});
+
 /** Rext's `meta-data` component, as its site declares it. */
 const META_DATA = defineFieldGroup({
   slug: "meta-data",
@@ -102,15 +109,25 @@ async function ok<T>(response: Promise<Response>): Promise<T> {
   return (await answered.json()) as T;
 }
 
-async function boot(dialect: TestDialect) {
+/**
+ * The site: posts, notes only some of which anyone may read, and a Home page
+ * Single. With `drafts`, it is in two languages and has two Singles keeping
+ * working drafts as declared: one plain, and one holding a component kept
+ * per language, which core keeps from holding drafts.
+ */
+async function boot(dialect: TestDialect, options: { drafts?: boolean } = {}) {
   const seen: { ctx?: PluginContext } = {};
+  const drafted = options.drafts === true ? ["about", "promo"] : [];
   const plugin = seoPlugin({
-    collections: ["posts"],
-    singles: ["home"],
+    collections: ["posts", "notes"],
+    singles: ["home", ...drafted],
     sitemap: false,
   });
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    ...(options.drafts === true
+      ? { localization: { locales: ["en", "de"], defaultLocale: "en" } }
+      : {}),
     // Every permission the plugins declare, manage-seo among them.
     seedPublic: true,
     plugins: [
@@ -122,8 +139,16 @@ async function boot(dialect: TestDialect) {
         },
       },
     ],
-    fieldGroups: [META_DATA],
+    fieldGroups: options.drafts === true ? [META_DATA, BADGE] : [META_DATA],
     collections: [
+      defineCollection({
+        slug: "notes",
+        labels: { singular: "Note", plural: "Notes" },
+        // Anyone reads the open notes, and no one the others.
+        access: { read: () => ({ team: { equals: "open" } }) },
+        fields: [text({ name: "title" }), text({ name: "team" })],
+        publicAddress: "/notes/{id}",
+      }),
       defineCollection({
         slug: "posts",
         labels: { singular: "Post", plural: "Posts" },
@@ -154,6 +179,27 @@ async function boot(dialect: TestDialect) {
         ],
         publicAddress: "/",
       }),
+      ...(options.drafts === true
+        ? [
+            defineSingle({
+              slug: "about",
+              label: { singular: "About" },
+              status: true,
+              versions: { drafts: true },
+              fields: [text({ name: "title" })],
+            }),
+            defineSingle({
+              slug: "promo",
+              label: { singular: "Promo" },
+              status: true,
+              versions: { drafts: true },
+              fields: [
+                text({ name: "title" }),
+                fieldGroup({ name: "badge", component: "badge" }),
+              ],
+            }),
+          ]
+        : []),
     ],
   });
   current = t;
@@ -210,7 +256,14 @@ async function boot(dialect: TestDialect) {
     });
     return key;
   }
-  const content = ["read-posts", "update-posts", "read-home", "update-home"];
+  const content = [
+    "read-posts",
+    "update-posts",
+    "read-home",
+    "update-home",
+    "read-notes",
+    ...drafted.flatMap(slug => [`read-${slug}`, `update-${slug}`]),
+  ];
   // The page-metadata provider the plugin contributes, as core asks it.
   const services = plugin.contributes?.services as Record<
     string,
@@ -293,6 +346,20 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(saved.saved).toBe(1);
       expect((await home(t)).seo).toMatchObject({ metaTitle: "Rext AI, home" });
+      // The save answers the Single's new version, which the next save names.
+      const next = row === undefined ? undefined : saved.revs[row.id];
+      expect(next).toEqual(expect.any(String));
+      expect(next).not.toBe(row?.rev);
+      await ok(
+        call(editor, "POST", "/bulk/save", {
+          type: HOME,
+          changes: [{ id: row?.id, rev: next, description: "Our home page." }],
+        })
+      );
+      expect((await home(t)).seo).toMatchObject({
+        metaTitle: "Rext AI, home",
+        metaDescription: "Our home page.",
+      });
 
       // The version read before that save is out of date now.
       const stale = await call(editor, "POST", "/bulk/save", {
@@ -301,6 +368,26 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(stale.status).toBe(409);
       expect((await home(t)).seo).toMatchObject({ metaTitle: "Rext AI, home" });
+    });
+
+    it("keeps a Single read-only only where it keeps working drafts, as its own write decides", async () => {
+      const { t, editor } = await boot(dialect, { drafts: true });
+      for (const slug of ["about", "promo"]) {
+        await t.nextly.updateSingle({
+          slug,
+          data: { _overwrite: true, title: slug, status: "published" },
+        });
+      }
+      const { types } = await ok<BulkTypesBody>(
+        call(editor, "GET", "/bulk/types")
+      );
+      const drafts = Object.fromEntries(
+        types.map(type => [type.slug, type.drafts])
+      );
+      expect(drafts["single:about"]).toBe(true);
+      // Its component is kept per language and the Single is not, so core
+      // writes its live document and the table may change it.
+      expect(drafts["single:promo"]).toBe(false);
     });
 
     it("finds a Single's field group, and dry-runs and applies it beside a collection's", async () => {
@@ -486,6 +573,37 @@ describe.each(getConfiguredTestDialects())(
         title: "Plans and pricing",
         description: "Every plan, side by side.",
       });
+      // What is kept for a note is answered only to someone who may read it.
+      const notes: Record<string, unknown>[] = [];
+      for (const team of ["open", "closed"]) {
+        const made = await t.nextly.create({
+          collection: "notes",
+          data: { title: `A ${team} note`, team },
+        });
+        const note = made.item as Record<string, unknown>;
+        notes.push(note);
+        await answer({
+          source: { kind: "entry", collection: "notes", entry: note },
+          code: { title: `The ${team} note, from code` },
+          derived: {},
+        });
+      }
+      const noteCode = async (note: Record<string, unknown>) =>
+        (
+          await ok<SeoTabContext>(
+            call(editor, "POST", "/resolve", {
+              kind: "collection",
+              slug: "notes",
+              id: String(note.id),
+              document: { title: note.title, team: note.team },
+            })
+          )
+        ).levels.code;
+      expect(await noteCode(notes[0] ?? {})).toEqual({
+        title: "The open note, from code",
+      });
+      expect(await noteCode(notes[1] ?? {})).toEqual({});
+
       const singleTab = await ok<SeoTabContext>(
         call(editor, "POST", "/resolve", {
           kind: "single",

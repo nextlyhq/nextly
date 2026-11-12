@@ -13,6 +13,7 @@
 import {
   collectionDraftSplit,
   getCachedNextly,
+  resolvedCollectionDraftSplit,
   NextlyError,
   type PluginContext,
   type PluginRouteContext,
@@ -67,20 +68,36 @@ export function singleDeclaration(
 
 /**
  * Whether a change to the published Single is held as a working draft:
- * core's own answer, asked of the Single as code declares it. A Single the
- * code does not declare is answered as keeping none.
+ * core's own answer, asked of the Single as code declares it, in two steps.
+ * `collectionDraftSplit` reads the declaration as written (`versions: true`
+ * included) and says whether drafts are on; where they are, the resolved
+ * question is asked again as a Single, with whether its document is
+ * localized, so a localized component on a Single that is not refuses the
+ * split as the Single's own write does.
+ *
+ * A Single the code does not declare, made in the Schema Builder, is
+ * answered as keeping drafts: nothing a plugin can read says whether it
+ * does, and answering otherwise would write over a draft it holds. Its SEO
+ * is changed in its own editor.
  */
 export async function singleKeepsDrafts(
   ctx: PluginContext,
   slug: string
 ): Promise<boolean> {
   const declaration = singleDeclaration(ctx, slug);
-  if (declaration === undefined) return false;
-  const split = await collectionDraftSplit({
+  if (declaration === undefined) return true;
+  const declared = declaration as Parameters<typeof collectionDraftSplit>[0];
+  const asCollection = await collectionDraftSplit({ ...declared, slug });
+  if (!asCollection.eligible) return false;
+  const asSingle = await resolvedCollectionDraftSplit({
+    ...(declared.status === undefined ? {} : { status: declared.status }),
+    versions: { drafts: { enabled: true } },
+    fields: declared.fields,
     slug,
-    ...(declaration as Parameters<typeof collectionDraftSplit>[0]),
+    localized: declaration.localized === true,
+    entityKind: "single",
   });
-  return split.eligible;
+  return asSingle.eligible;
 }
 
 /**
@@ -137,7 +154,9 @@ export async function writeSingleSeo(
     },
     ...(locale === undefined ? {} : { locale }),
   });
-  const next = isRecord(saved) ? saved._rev : undefined;
+  // The write answers `{ message, item }`, the saved document in `item`.
+  const item = isRecord(saved) ? saved.item : undefined;
+  const next = isRecord(item) ? item._rev : undefined;
   return typeof next === "string" ? next : undefined;
 }
 
