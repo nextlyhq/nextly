@@ -145,7 +145,10 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
-import { publishedInLanguageCondition } from "../../i18n/read-in-language";
+import {
+  narrowToRowFields,
+  publishedInLanguageCondition,
+} from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -1196,6 +1199,9 @@ export class SingleQueryService extends BaseService {
       applyFieldReadAccess(fieldAccess, sourceRedactions)
     );
     await fieldGroupPass?.(doc, fieldGroupCaller);
+    // The side keys say only what the document says: a withheld field's
+    // source language is withheld with it.
+    narrowToRowFields(doc);
   }
 
   // ============================================================

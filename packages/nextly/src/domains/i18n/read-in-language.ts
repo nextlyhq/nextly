@@ -14,7 +14,10 @@
  */
 import type { SQL } from "drizzle-orm";
 
-import { buildTranslationStatusCondition } from "./companion-join";
+import {
+  buildTranslationStatusCondition,
+  SOURCE_LOCALES_KEY,
+} from "./companion-join";
 import { EVERY_TRANSLATION } from "./locale-selector";
 import type { CompanionSchema } from "./runtime/companion-io";
 
@@ -90,6 +93,67 @@ export async function readInFirstPublishedLanguage<T extends ReadAnswer>(
 
 /** The key a read's every-language values are attached under (`translations: "all"`). */
 export const ALL_LOCALES_KEY = "_allLocales";
+
+/** Whether `value` is a plain object of named values. */
+function isValues(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Every language's values (`{ field: { en, es } }`) passed through `strip` one
+ * language at a time, as one row of that language's values: the strip a row's
+ * own fields go through, so each language's value is withheld as the row's is.
+ * A field `strip` drops in a language is absent from that language.
+ */
+function stripEachLanguage(
+  every: Record<string, unknown>,
+  strip: (values: Record<string, unknown>) => Record<string, unknown>
+): Record<string, Record<string, unknown>> {
+  const codes = new Set<string>();
+  for (const value of Object.values(every)) {
+    if (isValues(value)) for (const code of Object.keys(value)) codes.add(code);
+  }
+  const stripped: Record<string, Record<string, unknown>> = Object.fromEntries(
+    Object.keys(every).map(name => [name, {}])
+  );
+  for (const code of codes) {
+    const inLanguage = Object.fromEntries(
+      Object.entries(every).map(([name, value]) => [
+        name,
+        isValues(value) ? value[code] : undefined,
+      ])
+    );
+    for (const [name, value] of Object.entries(strip(inLanguage))) {
+      if (name in stripped) stripped[name][code] = value;
+    }
+  }
+  return stripped;
+}
+
+/**
+ * Leave a row's side keys saying only what the row says. `_allLocales` and
+ * `_sources` speak of the row's own translatable fields in other languages,
+ * so a field the row's read withheld (a field read rule, a hidden-field
+ * strip, a selection) is left out of both, and every language's values go
+ * through `strip`, the strip the row's own values went through. Called once
+ * a read has shaped the row; a side key the read did not attach stays absent.
+ */
+export function narrowToRowFields(
+  row: Record<string, unknown>,
+  strip?: (values: Record<string, unknown>) => Record<string, unknown>
+): void {
+  const every = row[ALL_LOCALES_KEY];
+  if (strip && isValues(every)) {
+    row[ALL_LOCALES_KEY] = stripEachLanguage(every, strip);
+  }
+  for (const key of [ALL_LOCALES_KEY, SOURCE_LOCALES_KEY]) {
+    const side = row[key];
+    if (!isValues(side)) continue;
+    row[key] = Object.fromEntries(
+      Object.entries(side).filter(([name]) => name in row)
+    );
+  }
+}
 
 /**
  * A read asked in `locale=all`, as the read it stands for: the default

@@ -176,6 +176,7 @@ import {
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   ALL_LOCALES_KEY,
+  narrowToRowFields,
   publishedInLanguageCondition,
 } from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
@@ -3078,6 +3079,15 @@ export class CollectionQueryService extends BaseService {
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
     for (const row of finalData) stripServerOnlyColumns(row, tableName);
+
+    // Every language's values beside a row say only what the row says: the
+    // fields it kept, each language's value redacted as the row's was.
+    for (const row of finalData) {
+      narrowToRowFields(row, values => {
+        this.redactServerOnlyFields([values], fields, tableName, inline);
+        return values;
+      });
+    }
 
     // The version, after everything a hook or a selection can do to a row,
     // so neither can drop or forge it.

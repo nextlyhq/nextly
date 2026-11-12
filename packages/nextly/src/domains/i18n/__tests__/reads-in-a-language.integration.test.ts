@@ -44,6 +44,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title" }),
           text({ name: "body" }),
           text({ name: "slug", unique: true }),
+          // Translated, and withheld from every reader by its read rule.
+          text({ name: "note", access: { read: () => false } }),
         ],
       }),
     ],
@@ -355,11 +357,18 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
         sourceLocales: true,
       })) as Record<string, unknown>;
-      expect(read._sources).toEqual({ title: "es", body: "en", slug: "es" });
+      // A trusted read may read `note`, which no language holds.
+      expect(read._sources).toEqual({
+        title: "es",
+        body: "en",
+        slug: "es",
+        note: null,
+      });
 
       // Not asked for, a read carries no sources.
       expect((await readAs(t, id, "es"))._sources).toBeUndefined();
 
+      // A visitor, whom `note`'s read rule refuses, is told nothing of it.
       const rest = await restRead(id, "?locale=es&source-locales=1");
       expect(rest.status, JSON.stringify(rest.json)).toBe(200);
       expect(rest.json._sources).toEqual({
@@ -464,6 +473,41 @@ describe.each(getConfiguredTestDialects())(
       expect(rest.json._allLocales).toMatchObject({
         title: { en: "A in English", es: null },
       });
+    }, 90_000);
+
+    // Every language's values are the row's own fields in other languages, so
+    // they say only what the reader may read of the row: a field its read
+    // rule withholds is absent beside the row as it is from it.
+    it("says beside a read only the fields the reader may read", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInEnglish(t, {
+        title: "Harbour",
+        slug: "a",
+        note: "kept from readers",
+      });
+      await publishIn(t, id, "es", {
+        title: "Puerto",
+        slug: "a-es",
+        note: "oculta",
+      });
+      const one = await restGet(
+        ["collections", DOCS, "entries", id],
+        "?locale=all"
+      );
+      const listed = await restGet(
+        ["collections", DOCS, "entries"],
+        "?locale=all"
+      );
+      expect(one.status, JSON.stringify(one.json)).toBe(200);
+      expect(listed.status, JSON.stringify(listed.json)).toBe(200);
+      const [first] = listed.json.items as Record<string, unknown>[];
+      for (const read of [one.json, first]) {
+        expect(read).not.toHaveProperty("note");
+        const every = read._allLocales as Record<string, unknown>;
+        // Present, so its missing field is the rule's doing.
+        expect(every.title).toMatchObject({ en: "Harbour", es: "Puerto" });
+        expect(every).not.toHaveProperty("note");
+      }
     }, 90_000);
 
     // Under the alias a read of every language searches in the default
