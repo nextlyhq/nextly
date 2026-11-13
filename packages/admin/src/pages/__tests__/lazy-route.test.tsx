@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { lazyRoute, type RouteModule } from "../lazy-route";
+import { RouteLoadingOutline } from "../route-loading-outline";
 
 const Page = () => <div data-testid="page">the page</div>;
 
@@ -34,6 +35,42 @@ describe("lazyRoute", () => {
 
     expect(screen.getByTestId("route-loading")).toBeTruthy();
     expect(screen.queryByTestId("page")).toBeNull();
+  });
+
+  it("draws the screen's outline the page around it gives while the chunk is in flight", () => {
+    // A signed-in screen's outline, as the frame drew it: kept, rather than
+    // swapped for a loading state of the route's own and back.
+    const loader = vi.fn((): Promise<RouteModule> => new Promise(() => {}));
+    const Route = lazyRoute(loader);
+    renderInShell(
+      <RouteLoadingOutline.Provider
+        value={<div data-testid="screen-outline-stand-in" />}
+      >
+        <Route />
+      </RouteLoadingOutline.Provider>
+    );
+
+    expect(screen.getByTestId("screen-outline-stand-in")).toBeTruthy();
+    expect(screen.queryByTestId("route-loading")).toBeNull();
+  });
+
+  it("still says it is loading, politely, while it draws the screen's outline", () => {
+    // The outline is hidden from assistive technology, so the wait is said
+    // beside it, at once, as the route's own loading state says it.
+    const loader = vi.fn((): Promise<RouteModule> => new Promise(() => {}));
+    const Route = lazyRoute(loader);
+    renderInShell(
+      <RouteLoadingOutline.Provider
+        value={<div aria-hidden="true" data-testid="screen-outline-stand-in" />}
+      >
+        <Route />
+      </RouteLoadingOutline.Provider>
+    );
+
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Loading");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(screen.getByTestId("screen-outline-stand-in")).toBeTruthy();
   });
 
   it("renders the page once the chunk arrives", async () => {

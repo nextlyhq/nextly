@@ -517,10 +517,14 @@ export function FieldCards({
       variant={fields.length === 0 ? "default" : "outline"}
       size="sm"
       disabled={!canAdd}
+      // One label throughout, so the button keeps its width when the field
+      // types land; while they load it is held back and says why.
+      aria-busy={pickerConfig === null || undefined}
+      title={pickerConfig === null ? "Loading field types…" : undefined}
       onClick={() => setAddAt("end")}
     >
       <Lucide.Plus className="h-4 w-4" aria-hidden="true" />
-      {pickerConfig === null ? "Loading field types…" : "Add field"}
+      Add field
     </Button>
   );
 
