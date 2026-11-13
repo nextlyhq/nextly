@@ -589,6 +589,46 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("records a translation's own status with its rewrite", async () => {
+      const t = await boot(dialect, true);
+      const id = await create(t, LOCALIZED, {
+        title: "EN",
+        layout: "wide",
+        status: "published",
+      });
+      // German exists as a draft translation of a published entry.
+      await save(t, LOCALIZED, id, { title: "DE", status: "draft" }, "de");
+      await t.nextly.rewriteField({
+        collection: LOCALIZED,
+        id,
+        field: "title",
+        locale: "de",
+        expectedVersion: (await read(t, LOCALIZED, id, { locale: "de" }))
+          ._rev as string,
+        set: { value: "DE neu" },
+        reason: REASON,
+      });
+      const { items } = await t.nextly.versions.list({
+        collection: LOCALIZED,
+        id,
+        locale: "de",
+      } as never);
+      const newest = items[0] as { versionNo: number; status?: string };
+      // POPULATION CONTROL: the newest German version is the rewrite's.
+      const version = await t.nextly.versions.get({
+        collection: LOCALIZED,
+        id,
+        versionNo: newest.versionNo,
+      } as never);
+      const snapshot = (
+        typeof version.snapshot === "string"
+          ? JSON.parse(version.snapshot)
+          : version.snapshot
+      ) as Record<string, unknown>;
+      expect(snapshot.title).toBe("DE neu");
+      expect(newest.status).toBe("draft");
+    });
+
     it("refuses a language the site does not configure", async () => {
       const t = await boot(dialect, true);
       const id = await withDrafts(t);

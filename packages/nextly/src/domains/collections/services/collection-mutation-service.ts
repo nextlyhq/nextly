@@ -1953,6 +1953,14 @@ interface RewriteInTx {
   localized: boolean;
   /** The language a translated field is rewritten in; `undefined` for a shared one. */
   translatedIn: string | null | undefined;
+  /**
+   * The translations table a translated field's language keeps its own
+   * status in, or null where it keeps none (or the field is shared).
+   */
+  languageStatusTable: {
+    table: Parameters<typeof readCompanionLocaleStatus>[1];
+    companionTableName: string;
+  } | null;
   check: VersionCheck;
   staleWrite: StaleWriteHolder;
   grants: () => Promise<CallerGrants>;
@@ -6492,11 +6500,24 @@ export class CollectionMutationService extends BaseService {
         request.field,
         f => isFieldGroupField(f) || manyToManyFields.includes(f)
       );
-      const localized =
-        (collection as { localized?: boolean }).localized === true;
+      // The translations' readiness, read before the transaction, which only
+      // consults it: unread, a language's values would be skipped.
+      await this.warmLocalizedReadiness(params.collectionName);
+      // Translated or shared as the field is stored: a field kept in the
+      // translations table is a language's, whatever the collection's own
+      // flag says (per-language storage keeps some there regardless).
+      const companion = await this.fileManager.loadCompanionSchema(
+        params.collectionName
+      );
+      const localized = companion !== null && companion !== undefined;
       const translated =
-        localized &&
-        resolveLocalizedFieldNames([...fields], true).includes(field.name);
+        companion?.localizedFields.some(f => f.name === field.name) === true;
+      // Whether a language keeps a status of its own to read, asked on the
+      // pool before the transaction, as the update gates it.
+      const languageStatus =
+        translated &&
+        companion?.hasStatus === true &&
+        !(await this.companionLacksStatus(params.collectionName));
       const locale = this.rewriteLocale(request, translated);
       // A translated field's language is judged on its own counter, so the
       // version must be a read of that language: a read of another language
@@ -6522,6 +6543,13 @@ export class CollectionMutationService extends BaseService {
           field: field.name,
           localized,
           translatedIn: translated ? (locale ?? null) : undefined,
+          languageStatusTable:
+            languageStatus && companion
+              ? {
+                  table: companion.table,
+                  companionTableName: companion.companionTableName,
+                }
+              : null,
           check,
           staleWrite,
           grants,
@@ -6934,12 +6962,30 @@ export class CollectionMutationService extends BaseService {
       ),
       translatedIn ?? undefined
     );
-    const documentParts = { parentRow, ...relations };
+    // A translated rewrite records that language as it stands, its own
+    // status included: a draft translation is never recorded as published.
+    const recorded = { ...parentRow };
+    if (translatedIn !== null && args.languageStatusTable) {
+      const inLanguage = await readCompanionLocaleStatus(
+        tx.getDrizzle() as Parameters<typeof readCompanionLocaleStatus>[0],
+        args.languageStatusTable.table,
+        params.entryId,
+        translatedIn,
+        cachedCompanionReadiness(
+          this.adapter,
+          args.languageStatusTable.companionTableName
+        )
+      );
+      if (inLanguage !== null && inLanguage !== undefined) {
+        recorded.status = inLanguage;
+      }
+    }
+    const documentParts = { parentRow: recorded, ...relations };
     const parts = { documentParts, document: assembleDocument(documentParts) };
     const versionNo = await this.captureTxVersion(tx, {
       collectionName: params.collectionName,
       entryId: params.entryId,
-      contentStatus: (parentRow as { status?: unknown }).status,
+      contentStatus: (recorded as { status?: unknown }).status,
       createdBy: params.user?.id ?? null,
       versionsConfig,
       documentParts: parts.documentParts,
