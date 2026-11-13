@@ -9,7 +9,11 @@ import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useLoadedPasswordHasher } from "../../../di/password-digester";
-import type { PasswordHasher } from "../../password/policy";
+import {
+  resetPasswordPolicy,
+  setMinPasswordLength,
+  type PasswordHasher,
+} from "../../password/policy";
 
 import { claimFirstSetup } from "../../setup-token/setup-gate";
 import {
@@ -405,8 +409,38 @@ describe("setup in production", () => {
       requiresInitialUser: true,
       requiresSetupToken: true,
       allowRegistration: false,
+      // Core's rule: 8 characters, and bcrypt's 72 bytes.
+      passwordRule: { minLength: 8, maxBytes: 72 },
     });
     expect(JSON.stringify(body)).not.toContain(token);
+  });
+
+  it("tells the admin's forms the rule of the app's hasher and minimum", async () => {
+    const { deps } = await productionInstall();
+    const rule = async () => {
+      const res = await handleSetupStatus(
+        new Request(`${ORIGIN}/admin/api/auth/setup-status`),
+        { ...deps, allowRegistration: false }
+      );
+      return ((await res.json()) as { passwordRule: unknown }).passwordRule;
+    };
+    const hasher = (reach: number | "unbounded"): PasswordHasher => ({
+      name: "own",
+      reach,
+      hash: password => Promise.resolve(`own$${password}`),
+      verify: (password, stored) =>
+        Promise.resolve(stored === `own$${password}`),
+    });
+    try {
+      setMinPasswordLength(12);
+      useLoadedPasswordHasher(hasher("unbounded"));
+      // A hasher that reads a password whole sets no byte limit.
+      expect(await rule()).toEqual({ minLength: 12, maxBytes: null });
+      useLoadedPasswordHasher(hasher(32));
+      expect(await rule()).toEqual({ minLength: 12, maxBytes: 32 });
+    } finally {
+      resetPasswordPolicy();
+    }
   });
 });
 
