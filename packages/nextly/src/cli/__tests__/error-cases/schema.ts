@@ -3,6 +3,7 @@
  *
  * @module cli/__tests__/error-cases/schema
  */
+import { occupiedRefusal } from "../../../domains/schema/services/leftover-storage";
 import {
   assertAdapterPostgresSchema,
   refuseMovedInstallation,
@@ -39,6 +40,12 @@ export const SCHEMA_CASES = {
     thrownBy(() => assertAdapterPostgresSchema("public", "tenant_a")),
   POSTGRES_SCHEMA_INVALID: () =>
     thrownBy(() => validatePostgresSchema("Tenant-A")),
+  // The refusal a Single's create throws when its leftover table holds rows.
+  CREATE_STORAGE_TAKEN: () =>
+    occupiedRefusal(
+      { kind: "single", slug: "home", tableName: "single_home" },
+      [{ table: "single_home", rows: 3 }]
+    ),
   // As `loadUiSchema` in `domains/schema/ui-schema/loader.ts` throws it for a file it cannot read.
   UI_SCHEMA_UNREADABLE: () =>
     new NextlyError({
