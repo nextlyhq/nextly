@@ -56,13 +56,22 @@ import {
   PAGER_FRAME,
 } from "@admin/components/shared/pagination/pager-layout";
 import {
+  FIXED_LAYOUT_TABLE,
+  fixedColumnLayout,
   ROW_ACTIONS_COLUMN,
   ROW_ACTIONS_TRIGGER,
+  SELECTION_COLUMN,
 } from "@admin/components/ui/table/data-table/row-actions";
+import {
+  LIST_TOOLBAR_CONTROLS,
+  LIST_TOOLBAR_ROW,
+  LIST_TOOLBAR_SEARCH,
+} from "@admin/components/ui/table/list-view/toolbar-layout";
 import { MEDIA_GRID_CLASSES } from "@admin/constants/media";
 import { cn } from "@admin/lib/utils";
 
 import { LOADING_FRAME_TIMES, useDelayedReveal } from "./delayed-reveal";
+import { FIRST_GUESS_ROWS, outlineRowsFor } from "./list-rows";
 import { useReportScreenWait } from "./screen-wait";
 
 /**
@@ -106,6 +115,11 @@ function OutlineBar({
  * The wait of one screen (or one part of a screen): reported to the frame while
  * mounted, and drawn as `children` from 0.4 s. Hidden from assistive technology,
  * since the frame's status line is what speaks for a long wait.
+ *
+ * Before 0.4 s the outline is laid out but not drawn, so it holds the place its
+ * parts will take from the first paint: a part of a screen that answers late
+ * (a list's rows) keeps what sits under it where it will stay, rather than
+ * drawing it up into the empty place and pushing it back down.
  */
 export function ScreenOutline({
   children,
@@ -121,9 +135,9 @@ export function ScreenOutline({
       data-testid="screen-outline"
       data-outline-shown={shown ? "" : undefined}
       aria-hidden="true"
-      className={className}
+      className={cn(className, !shown && "invisible")}
     >
-      {shown ? children : null}
+      {children}
     </div>
   );
 }
@@ -247,78 +261,126 @@ function PagerOutline(): JSX.Element {
 }
 
 /**
- * A table with its real head where its columns are known, and five outline
- * rows: a title, then shorter, softer values in the other columns. Each row
- * ends in the row actions' column as the table draws it, whose trigger is the
- * row's tallest part, so an outline row is as tall as a real one; and the
- * table's pager follows the rows, inside the table's card, as the table's own
- * does. How many rows the list will have is not known; five stand in for them.
+ * A table with its real head where its columns are known, and outline rows: a
+ * title, then shorter, softer values in the other columns. Each row ends in
+ * the row actions' column as the table draws it, whose trigger is the row's
+ * tallest part, so an outline row is as tall as a real one; and the table's
+ * pager follows the rows, inside the table's card, as the table's own does.
+ * As many rows as the list drew when this person last opened it
+ * (`outlineRowsFor`), so the pager and whatever sits under the table stay
+ * where they will be.
  */
 export function TableOutline({
   headers,
   rowActions = true,
+  rows = FIRST_GUESS_ROWS,
+  selection = false,
+  columnWidths,
 }: {
   /** The column heads, when the columns are known. */
   headers?: readonly ReactNode[];
   /** Whether the table's rows end in their actions, as every list's do. */
   rowActions?: boolean;
+  /** How many outline rows to draw. */
+  rows?: number;
+  /** Whether the table's rows start with a selection box, as a selectable list's do. */
+  selection?: boolean;
+  /**
+   * Each column's width, where the table lays its columns out by them
+   * (`fixedColumnLayout`): the outline then stands its columns where the
+   * table's stand.
+   */
+  columnWidths?: readonly (number | undefined)[];
 }): JSX.Element {
   const columns: readonly ReactNode[] = headers ?? [null, null, null];
+  const fixed = columnWidths !== undefined && fixedColumnLayout(columnWidths);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-card">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {columns.map((header, index) => (
-              <TableHead
-                key={index}
-                className={cn("py-3", NARROW_HIDDEN(index))}
-              >
-                {header ?? (
-                  <OutlineBar
-                    soft
-                    className={cn("h-3", index === 0 ? "w-16" : "w-12")}
-                  />
-                )}
-              </TableHead>
-            ))}
-            {rowActions ? <TableHead className={ROW_ACTIONS_COLUMN} /> : null}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {ROW_TITLE_WIDTHS.map((width, row) => (
-            <TableRow key={row} className="border-b border-border">
-              {columns.map((_, index) => (
-                <TableCell key={index} className={NARROW_HIDDEN(index)}>
-                  {index === 0 ? (
-                    <CellLine className="h-3 max-w-full" style={{ width }} />
-                  ) : (
-                    <CellLine
+      {/* The head and the rows, named as the table names its own, so a test
+          can hold the two to one box. */}
+      <div data-frame-part="list-rows">
+        <Table className={cn(fixed && FIXED_LAYOUT_TABLE)}>
+          <TableHeader>
+            <TableRow>
+              {selection ? <TableHead className={SELECTION_COLUMN} /> : null}
+              {columns.map((header, index) => (
+                <TableHead
+                  key={index}
+                  className={cn("py-3", NARROW_HIDDEN(index))}
+                  style={fixed ? { width: columnWidths?.[index] } : undefined}
+                >
+                  {header ?? (
+                    <OutlineBar
                       soft
-                      className={cn("h-3", index === 1 ? "w-16" : "w-11")}
+                      className={cn("h-3", index === 0 ? "w-16" : "w-12")}
                     />
                   )}
-                </TableCell>
+                </TableHead>
               ))}
-              {rowActions ? (
-                <TableCell className={ROW_ACTIONS_COLUMN}>
-                  {/* The trigger's own box, empty and unseen: the row's
+              {rowActions ? <TableHead className={ROW_ACTIONS_COLUMN} /> : null}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: rows }, (_, row) => (
+              <TableRow key={row} className="border-b border-border">
+                {selection ? <TableCell className={SELECTION_COLUMN} /> : null}
+                {columns.map((_, index) => (
+                  <TableCell key={index} className={NARROW_HIDDEN(index)}>
+                    {index === 0 ? (
+                      <CellLine
+                        className="h-3 max-w-full"
+                        style={{
+                          width:
+                            ROW_TITLE_WIDTHS[row % ROW_TITLE_WIDTHS.length],
+                        }}
+                      />
+                    ) : (
+                      <CellLine
+                        soft
+                        className={cn("h-3", index === 1 ? "w-16" : "w-11")}
+                      />
+                    )}
+                  </TableCell>
+                ))}
+                {rowActions ? (
+                  <TableCell className={ROW_ACTIONS_COLUMN}>
+                    {/* The trigger's own box, empty and unseen: the row's
                       height is the real trigger's. Set at the line's top, as
                       an empty box on the text's baseline would add the
                       line's descent below it. */}
-                  <span
-                    className={cn(
-                      buttonVariants(ROW_ACTIONS_TRIGGER),
-                      "invisible align-top"
-                    )}
-                  />
-                </TableCell>
-              ) : null}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+                    <span
+                      className={cn(
+                        buttonVariants(ROW_ACTIONS_TRIGGER),
+                        "invisible align-top"
+                      )}
+                    />
+                  </TableCell>
+                ) : null}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
       <PagerOutline />
+    </div>
+  );
+}
+
+/**
+ * A list's toolbar: its search, then Filter and Columns, laid out by the
+ * toolbar's own classes (`list-view/toolbar-layout`), so at every width it
+ * stands as tall as the toolbar that replaces it.
+ */
+export function ListToolbarOutline(): JSX.Element {
+  return (
+    <div className={LIST_TOOLBAR_ROW}>
+      <div className={LIST_TOOLBAR_SEARCH}>
+        <ControlOutline className="w-full" />
+      </div>
+      <div className={LIST_TOOLBAR_CONTROLS}>
+        <ControlOutline className="w-[106px]" />
+        <ControlOutline className="w-[130px]" />
+      </div>
     </div>
   );
 }
@@ -329,29 +391,43 @@ export function ListOutline({
   headers,
   actions = [72, 112],
   framed = true,
+  list,
+  selection,
+  columnWidths,
+  subtitle = false,
 }: {
   title?: string;
   headers?: readonly ReactNode[];
   actions?: readonly number[];
   /** `false` where the screen draws the outline inside its own container. */
   framed?: boolean;
+  /** The list's name (its `registryKey`), for how many rows it last drew. */
+  list?: string;
+  /** Whether the list's rows start with a selection box. */
+  selection?: boolean;
+  /** Each column's width, where the list lays its columns out by them. */
+  columnWidths?: readonly (number | undefined)[];
+  /** Whether the list's head has a subtitle line under its title. */
+  subtitle?: boolean;
 }): JSX.Element {
   return (
     <ScreenOutline>
       <PageFrame framed={framed}>
         <div className="flex flex-col gap-8">
-          <PageHeadOutline title={title} actions={actions} />
-          {/* The list's toolbar (its search, then Filter and Columns) above
-              the table, at the list's own spacing. */}
+          <PageHeadOutline
+            title={title}
+            actions={actions}
+            subtitle={subtitle}
+          />
+          {/* The list's toolbar above the table, at the list's own spacing. */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <ControlOutline className="w-full max-w-[384px]" />
-              <div className="flex gap-2 max-sm:hidden">
-                <ControlOutline className="w-[106px]" />
-                <ControlOutline className="w-[130px]" />
-              </div>
-            </div>
-            <TableOutline headers={headers} />
+            <ListToolbarOutline />
+            <TableOutline
+              headers={headers}
+              rows={outlineRowsFor(list)}
+              selection={selection}
+              columnWidths={columnWidths}
+            />
           </div>
         </div>
       </PageFrame>

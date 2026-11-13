@@ -1,19 +1,23 @@
 "use client";
 
 import type { TableParams } from "@nextlyhq/ui";
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-  Badge,
-  Skeleton,
-} from "@nextlyhq/ui";
+import { Avatar, AvatarFallback, AvatarImage, Badge } from "@nextlyhq/ui";
 import { Edit, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
+import {
+  USERS_CUSTOM_COLUMN_WIDTH,
+  USERS_LIST,
+  USERS_LIST_COLUMNS,
+} from "@admin/components/features/users/users-list-layout";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
+import { outlineRowsFor } from "@admin/components/shared/loading-frame/list-rows";
+import {
+  ScreenOutline,
+  TableOutline,
+} from "@admin/components/shared/loading-frame/outlines";
 import { toast } from "@admin/components/ui";
 import type {
   DataTableSelection,
@@ -266,6 +270,7 @@ export default function UserTable(): JSX.Element {
       cols.push({
         name: fieldName,
         header: fieldDef.label,
+        width: USERS_CUSTOM_COLUMN_WIDTH,
         hideOnMobile: true,
         cell: ({ row }) => renderCustomFieldCell(row[fieldName], fieldDef),
       });
@@ -276,8 +281,7 @@ export default function UserTable(): JSX.Element {
   const allColumns = useMemo((): NextlyColumn<UserApiResponse>[] => {
     return [
       {
-        name: "name",
-        header: "NAME",
+        ...USERS_LIST_COLUMNS.name,
         cell: ({ row }) => {
           const initial = row.name.split(" ")[0].charAt(0).toUpperCase();
           return (
@@ -303,8 +307,7 @@ export default function UserTable(): JSX.Element {
         },
       },
       {
-        name: "id",
-        header: "ID",
+        ...USERS_LIST_COLUMNS.id,
         hideOnMobile: true,
         cell: ({ value }) => {
           const id = typeof value === "string" ? value : "";
@@ -319,8 +322,7 @@ export default function UserTable(): JSX.Element {
         },
       },
       {
-        name: "roles",
-        header: "ROLE",
+        ...USERS_LIST_COLUMNS.roles,
         cell: ({ row }) => (
           <div className="flex flex-wrap gap-2 text-left">
             {row.roles.length > 0 ? (
@@ -346,8 +348,7 @@ export default function UserTable(): JSX.Element {
       },
       ...customColumns,
       {
-        name: "createdAt",
-        header: "CREATED",
+        ...USERS_LIST_COLUMNS.createdAt,
         hideOnMobile: true,
         cell: ({ value }) => (
           <span className="text-sm">
@@ -425,21 +426,34 @@ export default function UserTable(): JSX.Element {
             />
           ) : undefined
         }
-        // While the list is still loading there is nothing to toggle, so the
-        // control is withheld and its footprint held by a skeleton rather
-        // than by a menu that would open onto an empty list.
-        columnsControl={showLoadingSkeleton ? undefined : columnsControl}
-        toolbarActions={
-          showLoadingSkeleton ? <Skeleton className="h-9 w-25" /> : undefined
-        }
+        // Offered while the rows load too: the columns are known before the
+        // rows are, and the control drawn at once is the one that stays, so
+        // the toolbar does not change size when the rows land.
+        columnsControl={columnsControl}
         columns={columns}
+        // The list's own outline while its rows load, at the table's own
+        // columns and as many rows as it last drew.
+        skeleton={
+          <ScreenOutline>
+            <TableOutline
+              selection
+              headers={columns
+                .filter(column => !column.hidden)
+                .map(column => column.header)}
+              columnWidths={columns
+                .filter(column => !column.hidden)
+                .map(column => column.width)}
+              rows={outlineRowsFor(USERS_LIST)}
+            />
+          </ScreenOutline>
+        }
         rows={filteredData}
         loading={showLoadingSkeleton}
         rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
         primaryColumn="name"
         selection={selection}
         rowActions={rowActions}
-        registryKey="users"
+        registryKey={USERS_LIST}
         ariaLabel="Users table"
         pagination={
           data && data.meta.totalPages > 0

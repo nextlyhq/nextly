@@ -51,10 +51,10 @@ export function adminStartupPaths(): string[] {
  * The paths the startup request names for the page at `pathname`: `common`,
  * what every screen needs first, then the reads the page declares, where it
  * is a plugin page that declares any, at most `max` in all. `screensJson` is
- * the plugin pages' startup reads as the admin layout writes them into the
- * page (`adminStartupScreensJson`): each page's address and the paths it
- * reads. An address no page declares reads for, or a page without them,
- * gets `common` alone.
+ * what the admin layout writes into the page (`adminStartupScreensJson`),
+ * whose `reads` are each plugin page's address and the paths it reads. An
+ * address no page declares reads for, or a page without them, gets `common`
+ * alone.
  *
  * The page is named from the admin's own segment on (`/admin/...`), so a
  * prefix in front of it changes nothing, and without a trailing slash.
@@ -76,6 +76,9 @@ export function startupPathsForPage(
   } catch {
     screens = null;
   }
+  if (typeof screens !== "object" || screens === null) return paths;
+  // The pages' reads, beside what else the page says of its screens.
+  screens = (screens as { reads?: unknown }).reads;
   if (typeof screens !== "object" || screens === null) return paths;
   let address = pathname;
   try {

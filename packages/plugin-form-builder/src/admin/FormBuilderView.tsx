@@ -16,10 +16,7 @@ import type {
   DocumentLockGates,
   FieldPickerChoice,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  useFoldedPanel,
-  useReportUnsavedWork,
-} from "@nextlyhq/plugin-sdk/admin";
+import { useReportUnsavedWork } from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -459,14 +456,11 @@ function FormEditor({
   });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  // The form editor needs the width: the Forms panel starts folded on it, and
-  // the bar's toggle brings it back. The admin remembers the reader's choice.
-  useFoldedPanel("forms.builder");
   // Leaving the form with unsaved changes asks first; moving between its tabs
   // stays on the form and does not.
   useReportUnsavedWork(UNSAVED_WORK_KEY, isDirty);
 
-  const submissionCount = useSubmissionCount(
+  const { count: submissionCount, failed: countFailed } = useSubmissionCount(
     isCreating || !canReadSubmissions ? undefined : entryId,
     config.submissionsSlug
   );
@@ -529,7 +523,10 @@ function FormEditor({
         changeCount={changeCount}
         saving={isSaving}
         onUndo={undo}
-        {...(saved && submissionCount !== undefined
+        // Drawn while the count is on its way, and while the permissions are,
+        // holding its place, so the bar does not re-flow when they land; not
+        // where it cannot be read, by permission or by a failed read.
+        {...(saved && (access.known ? canReadSubmissions : true) && !countFailed
           ? {
               submissions: {
                 count: submissionCount,
