@@ -8,7 +8,7 @@
       "login": {
         "requests": 4,
         "rounds": 2,
-        "statements": 4,
+        "statements": 5,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
@@ -99,7 +99,7 @@
       "login": {
         "requests": 4,
         "rounds": 2,
-        "statements": 4,
+        "statements": 5,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
@@ -190,7 +190,7 @@
       "login": {
         "requests": 4,
         "rounds": 2,
-        "statements": 4,
+        "statements": 5,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
