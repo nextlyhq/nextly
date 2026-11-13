@@ -143,10 +143,15 @@ async function holdAdminRequestsFor(page: Page, holdMs: number) {
   });
 }
 
-/** Opens `path` in light mode, without waiting for anything to answer. */
-async function openHeld(page: Page, path: string): Promise<void> {
-  await page.addInitScript(() =>
-    window.localStorage.setItem("nextly-theme", "light")
+/** Opens `path` in `theme` (light unless said), without waiting for anything to answer. */
+async function openHeld(
+  page: Page,
+  path: string,
+  theme: "light" | "dark" = "light"
+): Promise<void> {
+  await page.addInitScript(
+    chosen => window.localStorage.setItem("nextly-theme", chosen),
+    theme
   );
   await page.goto(`${ADMIN}${path}`, { waitUntil: "commit" });
 }
@@ -566,8 +571,17 @@ async function expectStillLoad(
   {
     revisit = false,
     parts = true,
+    holding,
+    theme = "light",
   }: {
     revisit?: boolean;
+    /** The theme the screen is opened in. */
+    theme?: "light" | "dark";
+    /**
+     * The parts held still, by their shift sources' names, where not every
+     * part can be: all of them when absent.
+     */
+    holding?: RegExp;
     /**
      * Whether the outline's named parts are held to the screen's. Not where a
      * plugin draws a block above them, which the outline cannot know of
@@ -584,14 +598,14 @@ async function expectStillLoad(
   let outlined: Record<string, PartBox> = {};
   if (mode === "held") {
     const held = await holdAdminRequests(page);
-    await openHeld(page, path);
+    await openHeld(page, path, theme);
     await expect(page.locator(SELECTORS.outline).first()).toBeVisible();
     before = await shellBoxes(page);
     outlined = await frameParts(page, "outline");
     releasedAt = await page.evaluate(() => performance.now());
     held.release();
   } else {
-    await openHeld(page, path);
+    await openHeld(page, path, theme);
   }
   await screenArrived(page);
   await expect(page.locator('[data-shell-answers="pending"]')).toHaveCount(0, {
@@ -612,7 +626,11 @@ async function expectStillLoad(
     description: `${mode} ${path}: ${total.toFixed(4)}`,
   });
   // Nothing moves: not a part of the screen, not the frame around it.
-  expect(shifts, JSON.stringify(shifts)).toEqual([]);
+  const held =
+    holding === undefined
+      ? shifts
+      : shifts.filter(shift => shift.sources.some(src => holding.test(src)));
+  expect(held, JSON.stringify(shifts)).toEqual([]);
 
   if (!parts) return;
   const loaded = await frameParts(page, "screen");
@@ -705,6 +723,13 @@ async function visitOnce(page: Page, path: string): Promise<void> {
   await page.goto("about:blank");
 }
 
+/**
+ * The new site's dashboard's first two rows: the setup card and Needs
+ * attention, then Continue where you left off and the content table.
+ */
+const FIRST_DASHBOARD_ROWS =
+  /widget-cell-core\/(setup|needs-attention|continue|content-table)\)/;
+
 test.describe("each screen's outline, held to the screen it stands for", () => {
   /** Entries the tests made, deleted after each, so no list counts them. */
   const made: string[] = [];
@@ -775,6 +800,86 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
           await expectStillLoad(page, "/users", mode, { revisit: true });
         });
       }
+
+      test.describe("the dashboard", () => {
+        // A further account per width: the dashboard's reads are many, and
+        // the screens above spend their own accounts' budgets.
+        ownSeat(31 + index);
+
+        for (const mode of ["held", "unheld"] as const) {
+          test(`moves none of the dashboard's first rows on a first visit, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // A first visit: the setup card loads as its checklist, so its
+            // row stands as tall as the row it becomes and the row under it
+            // stays. A card's loading state elsewhere is a guess until the
+            // card has been drawn here once (the revisit below).
+            await expectStillLoad(page, "", mode, {
+              holding: FIRST_DASHBOARD_ROWS,
+            });
+          });
+
+          test(`moves no part of the dashboard on a revisit, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // The first visit keeps each card's drawn height on the device,
+            // and the next, in a fresh tab, draws each card at it.
+            await visitOnce(page, "");
+            await expectStillLoad(page, "", mode, { revisit: true });
+          });
+
+          test(`moves no part of the dashboard on a revisit in the dark theme, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // The same loading states, drawn on the dark theme's surfaces.
+            await visitOnce(page, "");
+            await expectStillLoad(page, "", mode, {
+              revisit: true,
+              theme: "dark",
+            });
+            // The control: the admin was drawn dark.
+            await expect(page.locator(".nextly-admin").first()).toHaveClass(
+              /(^|\s)dark(\s|$)/
+            );
+          });
+
+          test(`moves no part of the dashboard on a revisit after anyone's access changed, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            await visitOnce(page, "");
+            // A role made anywhere in the install moves the access version
+            // every person's answers are labelled with; a card's drawn
+            // height is this person's alone, and is drawn at all the same.
+            const list = await page.request.get(
+              "/admin/api/permissions?page=1&limit=1000"
+            );
+            const { items } = (await list.json()) as {
+              items: { id: string; slug: string }[];
+            };
+            const readPosts = items.find(each => each.slug === "read-posts");
+            expect(readPosts).toBeDefined();
+            const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+            const role = await page.request.post("/admin/api/roles", {
+              data: {
+                name: `Frame role ${stamp}`,
+                slug: `frame-role-${stamp}`,
+                permissionIds: [readPosts?.id],
+              },
+            });
+            expect(role.status(), await role.text()).toBe(201);
+            const { item } = (await role.json()) as { item: { id: string } };
+            try {
+              await expectStillLoad(page, "", mode, { revisit: true });
+            } finally {
+              await page.request.delete(`/admin/api/roles/${item.id}`);
+            }
+          });
+        }
+      });
 
       test.describe("a list's own outline", () => {
         // A further account per width, as the history's above.
