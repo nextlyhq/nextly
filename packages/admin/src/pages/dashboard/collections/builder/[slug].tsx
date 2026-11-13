@@ -158,6 +158,7 @@ export default function CollectionBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    pending,
     savedFieldIds,
     pinFields,
     pinSettings,
@@ -333,6 +334,7 @@ export default function CollectionBuilderEditPage({
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
+    previewedWith: { localized },
   });
 
   // ----------------------------------------------------------------
@@ -369,6 +371,7 @@ export default function CollectionBuilderEditPage({
       locked={isLocked}
       configPath={collection?.configPath}
       unsavedCount={unsavedCount}
+      pending={pending}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -386,7 +389,7 @@ export default function CollectionBuilderEditPage({
           context="collection"
         />
       }
-      isSaving={isSaving || confirmation.isApplying}
+      isSaving={isSaving || confirmation.isBusy}
       savingLabel="Saving collection changes…"
     >
       <BuilderSchemaChangeDialogs

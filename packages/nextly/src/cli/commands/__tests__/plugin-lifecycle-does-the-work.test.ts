@@ -17,6 +17,7 @@ import { describe, expect, it, vi, beforeAll } from "vitest";
 
 import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
+  previewPluginInstall,
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
@@ -144,13 +145,11 @@ function depsWithout(
     // Nothing the plugin added to another owner's table is left, unless a
     // test says so.
     liveElements: vi.fn(async () => new Map()),
-    // Both plugins these tests configure, recorded installed.
+    // The dependency recorded installed, and `@acme/fx` not yet: an install
+    // of it is a first install, which runs `onInstall` and records the event.
+    // A test of a repeat install records `@acme/fx` itself.
     readLifecycle: vi.fn(
-      async () =>
-        new Map([
-          ["@acme/fx", { state: "installed" as const }],
-          ["@acme/core", { state: "installed" as const }],
-        ])
+      async () => new Map([["@acme/core", { state: "installed" as const }]])
     ),
     recordLifecycle: vi.fn(async () => {}),
     // No pending module deletes data, unless a test says so.
@@ -844,6 +843,185 @@ describe("what install reports", () => {
     expect(success).toHaveBeenCalledWith(
       "@acme/fx installed (1 table(s) recorded)."
     );
+  });
+});
+
+describe("plugins install of a plugin already recorded installed", () => {
+  // What the ledger says once an earlier install finished.
+  const alreadyInstalled = () =>
+    vi.fn(
+      async () =>
+        new Map<string, PluginLifecycleRecord>([
+          ["@acme/fx", { state: "installed" }],
+          ["@acme/core", { state: "installed" }],
+        ])
+    );
+
+  it("applies its pending modules, writes its access with no event, and runs no onInstall", async () => {
+    const order: string[] = [];
+    const recordLifecycle = vi.fn(
+      async (
+        _plugin: LifecyclePlugin,
+        record: PluginLifecycleRecord,
+        options?: { recordEvent?: boolean }
+      ) => {
+        order.push(`record:${record.state}:${String(options?.recordEvent)}`);
+      }
+    );
+    const runLifecycleHook = vi.fn(async () => {
+      order.push("onInstall");
+    });
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        readLifecycle: alreadyInstalled(),
+        applyMigrations: vi.fn(async () => {
+          order.push("migrations");
+        }),
+        recordLifecycle,
+        runLifecycleHook,
+      })
+    );
+
+    // The modules first, so access a new module's table needs is written
+    // after it exists; then the access, without the event.
+    expect(order).toEqual(["migrations", "record:installed:false"]);
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+  });
+
+  it("says the plugin was already installed rather than reporting an install", async () => {
+    const success = vi.fn();
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        readLifecycle: alreadyInstalled(),
+        logger: { ...logger, success } as never,
+      })
+    );
+    expect(success).toHaveBeenCalledWith(
+      expect.stringContaining("@acme/fx is already installed")
+    );
+  });
+
+  it("reads the record under the lock, so an uninstall finished before it was taken runs the full install", async () => {
+    // Installed when the command starts; uninstalled by the time it holds the
+    // lock. The record read under the lock is the one that decides.
+    let locked = false;
+    const runLifecycleHook = vi.fn(async () => {});
+    const recordLifecycle = vi.fn(async () => {});
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        underMigrateLock: async <T>(work: () => Promise<T>) => {
+          locked = true;
+          return work();
+        },
+        readLifecycle: vi.fn(
+          async () =>
+            new Map<string, PluginLifecycleRecord>([
+              [
+                "@acme/fx",
+                locked ? { state: "uninstalled" } : { state: "installed" },
+              ],
+              ["@acme/core", { state: "installed" }],
+            ])
+        ),
+        runLifecycleHook,
+        recordLifecycle,
+      })
+    );
+    expect(runLifecycleHook).toHaveBeenCalledWith(plugin, "onInstall", {
+      keepData: false,
+    });
+    expect(recordLifecycle).toHaveBeenCalledWith(plugin, {
+      state: "installed",
+    });
+  });
+
+  it.each([
+    ["finished uninstalling", { state: "uninstalled" as const }],
+    ["never installed", undefined],
+  ])(
+    "runs onInstall and records the event for a plugin %s",
+    async (_case, record) => {
+      const runLifecycleHook = vi.fn(async () => {});
+      const recordLifecycle = vi.fn(async () => {});
+      await runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          readLifecycle: vi.fn(
+            async () =>
+              new Map<string, PluginLifecycleRecord>([
+                ...(record ? [["@acme/fx", record] as const] : []),
+                ["@acme/core", { state: "installed" }],
+              ])
+          ),
+          runLifecycleHook,
+          recordLifecycle,
+        })
+      );
+      expect(runLifecycleHook).toHaveBeenCalledTimes(1);
+      // No options: the event is written.
+      expect(recordLifecycle).toHaveBeenCalledWith(plugin, {
+        state: "installed",
+      });
+    }
+  );
+
+  it("settles the consent of a pending module that deletes data before writing any access", async () => {
+    const recordLifecycle = vi.fn(async () => {});
+    const applyMigrations = vi.fn(async () => {});
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          readLifecycle: alreadyInstalled(),
+          interactive: false,
+          installDeletions: vi.fn(async () => [
+            {
+              label: "plugin:@acme/fx/0003_prune",
+              text: "DELETE FROM fx__notes",
+              deletions: [{ kind: "rows" as const, table: "fx__notes" }],
+            },
+          ]),
+          applyMigrations,
+          recordLifecycle,
+        })
+      )
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringMatching(
+        /plugin:@acme\/fx\/0003_prune[\s\S]*fx__notes/
+      ),
+    });
+    expect(applyMigrations).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("plans only its pending modules in a dry run, saying no event is recorded and onInstall does not run", async () => {
+    const plan = await previewPluginInstall(
+      "@acme/fx",
+      deps({
+        readLifecycle: alreadyInstalled(),
+        installDeletions: vi.fn(async () => [
+          { label: "plugin:@acme/fx/0003_more", text: "", deletions: [] },
+        ]),
+      })
+    );
+    expect(plan.changes).toEqual([
+      { action: "run", target: "plugin module plugin:@acme/fx/0003_more" },
+    ]);
+    expect(plan.notes).toEqual([
+      expect.stringContaining("records no new lifecycle event"),
+    ]);
+  });
+
+  it("plans the lifecycle record in a dry run of a first install", async () => {
+    // The control for the plan above.
+    const plan = await previewPluginInstall("@acme/fx", deps());
+    expect(plan.changes).toContainEqual({
+      action: "record",
+      target: "@acme/fx as installed",
+    });
   });
 });
 

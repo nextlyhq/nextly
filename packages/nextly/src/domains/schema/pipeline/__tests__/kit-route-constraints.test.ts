@@ -46,21 +46,154 @@ const rekey: Operation[] = [
 ];
 
 describe("kitRouteConstraintStatements", () => {
-  it.each(["postgresql", "mysql"] as const)(
-    "drops before the kit and adds after it on %s",
-    dialect => {
-      const { before, after } = kitRouteConstraintStatements(
-        rekey,
-        [items, shelves],
-        dialect
-      );
-      expect(before).toHaveLength(1);
-      expect(before[0]).toMatch(/DROP (CONSTRAINT|CHECK)/);
-      expect(after).toHaveLength(2);
-      expect(after[0]).toContain("CHECK (status IN ('a', 'b'))");
-      expect(after[1]).toContain("FOREIGN KEY");
-    }
-  );
+  it("drops before the kit and adds after it on postgresql", () => {
+    const { before, after } = kitRouteConstraintStatements(
+      rekey,
+      [items, shelves],
+      "postgresql"
+    );
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatch(/DROP CONSTRAINT/);
+    expect(after).toHaveLength(2);
+    expect(after[0]).toContain("CHECK (status IN ('a', 'b'))");
+    expect(after[1]).toContain("FOREIGN KEY");
+  });
+
+  it("replaces a check atomically in one ALTER TABLE after the kit on mysql", () => {
+    const { before, after } = kitRouteConstraintStatements(
+      rekey,
+      [items, shelves],
+      "mysql"
+    );
+    expect(before).toEqual([]);
+    expect(after).toEqual([
+      "ALTER TABLE `cx__items` DROP CHECK `ck_cx__items_status_enum`, ADD CONSTRAINT `ck_cx__items_status_enum` CHECK (status IN ('a', 'b'))",
+      expect.stringContaining("FOREIGN KEY"),
+    ]);
+  });
+
+  it("replaces a renamed enum check atomically on mysql when the column is unchanged", () => {
+    const renamed: Operation[] = [
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_old", sql: "`status` IN ('a', 'b')" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_new", sql: "`status` IN ('a')" },
+      },
+    ];
+    expect(kitRouteConstraintStatements(renamed, [items], "mysql")).toEqual({
+      before: [],
+      after: [
+        "ALTER TABLE `cx__items` DROP CHECK `ck_old`, ADD CONSTRAINT `ck_new` CHECK (`status` IN ('a'))",
+      ],
+      liftRestores: [],
+    });
+  });
+
+  it("replaces checks that exchange names in one ALTER TABLE on mysql, every drop first", () => {
+    // Column x's check takes the name y's held and the other way round: each
+    // add is valid only once BOTH old checks are gone, which no per-pair
+    // statement reaches — MySQL refuses the first with a duplicate name.
+    const swapped: Operation[] = [
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_a", sql: "`x` IN ('p', 'q')" },
+      },
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_b", sql: "`y` IN ('p', 'q')" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_b", sql: "`x` IN ('p', 'q', 'r')" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_a", sql: "`y` IN ('p', 'q', 'r')" },
+      },
+    ];
+    expect(kitRouteConstraintStatements(swapped, [items], "mysql")).toEqual({
+      before: [],
+      after: [
+        "ALTER TABLE `cx__items` DROP CHECK `ck_a`, DROP CHECK `ck_b`, ADD CONSTRAINT `ck_b` CHECK (`x` IN ('p', 'q', 'r')), ADD CONSTRAINT `ck_a` CHECK (`y` IN ('p', 'q', 'r'))",
+      ],
+      liftRestores: [],
+    });
+  });
+
+  it("keeps drop_check before the kit on mysql when the constrained column is altered", () => {
+    const withTypeChange: Operation[] = [
+      ...rekey,
+      {
+        type: "change_column_type",
+        tableName: "cx__items",
+        columnName: "status",
+        fromType: "varchar(64)",
+        toType: "text",
+      },
+    ];
+    const { before, after } = kitRouteConstraintStatements(
+      withTypeChange,
+      [items, shelves],
+      "mysql"
+    );
+    expect(before).toEqual([
+      "ALTER TABLE `cx__items` DROP CHECK `ck_cx__items_status_enum`",
+    ]);
+    expect(after[0]).toContain("ADD CONSTRAINT `ck_cx__items_status_enum`");
+  });
+
+  it("replaces a non-enum check atomically on mysql by name unless a column on the table changes", () => {
+    const plain: Operation[] = [
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_qty", sql: "quantity >= 0" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_qty", sql: "quantity >= 10" },
+      },
+    ];
+    expect(kitRouteConstraintStatements(plain, [items], "mysql")).toEqual({
+      before: [],
+      after: [
+        "ALTER TABLE `cx__items` DROP CHECK `ck_qty`, ADD CONSTRAINT `ck_qty` CHECK (quantity >= 10)",
+      ],
+      liftRestores: [],
+    });
+
+    const withRenamedColumn = kitRouteConstraintStatements(
+      [
+        ...plain,
+        {
+          type: "rename_column",
+          tableName: "cx__items",
+          fromColumn: "qty",
+          toColumn: "quantity",
+          fromType: "integer",
+          toType: "integer",
+        },
+      ],
+      [items],
+      "mysql"
+    );
+    expect(withRenamedColumn.before).toEqual([
+      "ALTER TABLE `cx__items` DROP CHECK `ck_qty`",
+    ]);
+    expect(withRenamedColumn.after).toEqual([
+      "ALTER TABLE `cx__items` ADD CONSTRAINT `ck_qty` CHECK (quantity >= 10)",
+    ]);
+  });
 
   it("adds a kit-created table's constraints on PostgreSQL only", () => {
     const created: Operation[] = [{ type: "add_table", table: items }];
@@ -218,4 +351,37 @@ describe("kitRouteConstraintStatements", () => {
       ).toEqual({ before: [], after: [], liftRestores: [] });
     });
   });
+});
+
+describe("a key moved to another target, on the kit route", () => {
+  const moved: ForeignKeySpec = {
+    ...shelfKey,
+    name: "fk_cx__items_shelf_id_to_cx__racks",
+    referencesTable: "cx__racks",
+  };
+  const ops: Operation[] = [
+    { type: "add_foreign_key", tableName: "cx__items", foreignKey: moved },
+    {
+      type: "drop_foreign_key",
+      tableName: "cx__items",
+      foreignKey: shelfKey,
+      afterReplacement: true,
+    },
+  ];
+
+  it.each(["mysql", "postgresql"] as const)(
+    "adds the new key before dropping the old one, both after the kit (%s)",
+    dialect => {
+      const { before, after } = kitRouteConstraintStatements(
+        ops,
+        [items, shelves],
+        dialect
+      );
+      expect(before).toEqual([]);
+      expect(after).toHaveLength(2);
+      expect(after[0]).toContain("fk_cx__items_shelf_id_to_cx__racks");
+      expect(after[1]).toMatch(/DROP (FOREIGN KEY|CONSTRAINT)/);
+      expect(after[1]).toContain("fk_cx__items_shelf_id");
+    }
+  );
 });

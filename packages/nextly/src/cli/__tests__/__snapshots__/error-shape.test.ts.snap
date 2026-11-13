@@ -1632,6 +1632,13 @@ exports[`each code, as a command ends with it > POSTGRES_SCHEMA_MISMATCH 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-mismatch  (POSTGRES_SCHEMA_MISMATCH)"
 `;
 
+exports[`each code, as a command ends with it > POSTGRES_SCHEMA_MOVED 1`] = `
+"✗ db.postgres.schema is "tenant_a", but this database's Nextly installation is in "public".
+  Why:  Starting would create a second, empty installation in "tenant_a" and serve it instead of the existing one.
+  Next: To keep using the existing installation, remove db.postgres.schema. To start a separate installation in "tenant_a" on purpose, set NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1 for its first start.
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-moved  (POSTGRES_SCHEMA_MOVED)"
+`;
+
 exports[`each code, as a command ends with it > POSTGRES_SCHEMA_UNSUPPORTED 1`] = `
 "✗ db.postgres.schema is "tenant_a", but a PostgreSQL schema other than "public" is not supported yet.
   Why:  Nextly can only create and migrate its tables in "public".
@@ -1806,6 +1813,14 @@ exports[`each code, as a command ends with it > SYNC_CONFIRMATION_REQUIRED 1`] =
   Why:  No terminal is attached to ask (or \`--non-interactive\` was given, or \`CI\` is set), and \`--yes\` was not given.
   Next: Run \`nextly db:sync --promote posts --yes\` to answer it yes.
   Docs: https://nextlyhq.com/docs/cli/errors/sync-confirmation-required  (SYNC_CONFIRMATION_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > TABLE_BUSY 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` stopped: table busy, nothing changed.
+  Why:  It waited for table "dc_posts" through 7 tries over 90 s, held by session 4242 (user app, from 10.0.0.5, application "worker", transaction open 3 min).
+        Applied before it in this run: \`20261019_090000_add_tags.sql\`.
+  Next: Run it again once the holder ends, end the holding session, or raise \`--lock-timeout\` / \`--lock-timeout-total\` (or \`NEXTLY_LOCK_TIMEOUT\` / \`NEXTLY_LOCK_TIMEOUT_TOTAL\`).
+  Docs: https://nextlyhq.com/docs/cli/errors/table-busy  (TABLE_BUSY)"
 `;
 
 exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
