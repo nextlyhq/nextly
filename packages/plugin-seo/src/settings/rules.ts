@@ -12,6 +12,7 @@
 import {
   getCachedNextly,
   languageAddressOf,
+  NextlyError,
   type PageMetadataImage,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
@@ -36,6 +37,7 @@ import {
   storedRobotsRulesOf,
   type StoredRobotsRules,
 } from "./robots-rules-stored";
+import { seoSettingsSingle } from "./single";
 import {
   hiddenTypesProblem,
   patternsProblem,
@@ -282,21 +284,97 @@ function settingsSingleFor(ctx: Pick<PluginContext, "self">): string {
 }
 
 /**
+ * The field of the Single `slug` a read failed on because the site's
+ * database has no column for it yet, as core names it; none for any other
+ * failure, another entity's included.
+ */
+function unmigratedField(error: unknown, slug: string): string | undefined {
+  if (!NextlyError.isCode(error, "ENTITY_NOT_MIGRATED")) return undefined;
+  const data: unknown = error.publicData;
+  return isRecord(data) &&
+    data.reason === "column" &&
+    data.kind === "single" &&
+    data.slug === slug
+    ? textOf(data.field)
+    : undefined;
+}
+
+/** The fields already said to be waiting for a migration, said once each. */
+const toldUnmigrated = new Set<string>();
+
+/**
+ * Every field the settings Single declares, as a `select` naming all but
+ * `left`: a Single read reads only the columns its `select` names, so a field
+ * the database has no column for yet is not asked for.
+ */
+function selectingAllBut(left: ReadonlySet<string>): Record<string, true> {
+  return Object.fromEntries(
+    seoSettingsSingle()
+      .fields.flatMap(field =>
+        "name" in field && typeof field.name === "string" ? [field.name] : []
+      )
+      .filter(name => !left.has(name))
+      .map(name => [name, true])
+  );
+}
+
+/**
  * The stored SEO settings in `locale`, as the system: the published values,
  * since they decide what the live site serves. Empty before anyone saves.
+ *
+ * A site that upgraded and has not yet run its migrations has no column for
+ * a setting a newer release added. Each such field is read as unset, which is
+ * its default, and the rest are read as stored, so every page keeps its SEO
+ * until the migration runs; the log says which field waits. Any other failure
+ * is thrown.
  */
 async function readSeoSettingsDocument(
-  ctx: Pick<PluginContext, "self">,
+  ctx: Pick<PluginContext, "self" | "logger">,
   locale?: string
+): Promise<SeoSettingsDocument> {
+  const slug = settingsSingleFor(ctx);
+  const left = new Set<string>();
+  // Bounded by the Single's fields: each retry leaves one more out, and a
+  // field named twice is thrown.
+  for (;;) {
+    try {
+      return await readSettingsOnce(slug, locale, left);
+    } catch (error) {
+      const field = unmigratedField(error, slug);
+      if (field === undefined || left.has(field)) throw error;
+      left.add(field);
+      sayUnmigrated(ctx, field);
+    }
+  }
+}
+
+/** One read of the settings, asking for every field but those `left` names. */
+async function readSettingsOnce(
+  slug: string,
+  locale: string | undefined,
+  left: ReadonlySet<string>
 ): Promise<SeoSettingsDocument> {
   const nextly = await getCachedNextly();
   const document: unknown = await nextly.findSingle({
-    slug: settingsSingleFor(ctx),
+    slug,
     overrideAccess: true,
     depth: 0,
     ...(locale === undefined ? {} : { locale }),
+    ...(left.size === 0 ? {} : { select: selectingAllBut(left) }),
   });
   return isRecord(document) ? document : {};
+}
+
+/** Says in the log, once per field for the process, that a setting waits. */
+function sayUnmigrated(
+  ctx: Pick<PluginContext, "logger">,
+  field: string
+): void {
+  if (toldUnmigrated.has(field)) return;
+  toldUnmigrated.add(field);
+  ctx.logger.warn(
+    `The SEO setting "${field}" is read as unset until the database is migrated for it. Run \`nextly migrate\`.`
+  );
 }
 
 /**

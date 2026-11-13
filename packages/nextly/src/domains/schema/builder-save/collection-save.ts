@@ -97,6 +97,7 @@ import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
+import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import {
   classifyFieldKind,
@@ -1560,9 +1561,15 @@ function tablesChangedBy(
   dialect: SupportedDialect
 ): string[] | undefined {
   const tables = new Set<string>();
-  for (const statement of splitSqlStatements(file.sql, dialect, {
+  const statements = splitSqlStatements(file.sql, dialect, {
     transaction: file.transaction,
-  })) {
+  });
+  // A MySQL nullability change or rename is written as a prepared run built
+  // from the live column; read as the one ALTER TABLE it amounts to, so its
+  // table is named. Any other PREPARE stays unread.
+  for (const statement of dialect === "mysql"
+    ? plainMysqlEquivalents(statements)
+    : statements) {
     const first = /^\s*([A-Za-z]+)/.exec(statement)?.[1]?.toUpperCase();
     if (first !== undefined && TABLELESS_STATEMENTS.has(first)) continue;
     const changed = tablesChangedIn(statement, dialect);
