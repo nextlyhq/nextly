@@ -328,7 +328,8 @@ function OwnSeoDialog({
   return (
     <Dialog open onOpenChange={open => (open ? undefined : close())}>
       <DialogContent>
-        <DialogHeader>
+        {/* Room for the close button, so a long title wraps before it. */}
+        <DialogHeader className="pr-6">
           <DialogTitle>{`Import the ${type.label}' own "seo" field`}</DialogTitle>
           <DialogDescription>
             {`${type.label} already have a field called "seo". ${where} Then import from that field here: its values move across, and the plugin's SEO group takes the seo name.`}
