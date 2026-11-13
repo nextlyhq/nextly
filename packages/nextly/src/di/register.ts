@@ -4091,17 +4091,30 @@ export async function registerConfigTablesInResolver(
   overrides?: { differed: boolean }
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
-  const { getTableColumns } = await import("drizzle-orm");
-  /** A table's column names as the database knows them, sorted. */
+  const { entityKind, getTableColumns } = await import("drizzle-orm");
+  /**
+   * A table's columns as it reads and writes them, sorted: each column's
+   * Drizzle class, which holds its decoder and encoder (`SQLiteBoolean` and
+   * `SQLiteInteger` are both `integer`), its SQL type, and every setting it
+   * was built with, the name, nullability and mode among them. A function
+   * setting (a mapper, a default) is rebuilt with each column, so it is
+   * described by its source.
+   */
   const columnsOf = (table: unknown): string =>
     Object.values(
       getTableColumns(table as Parameters<typeof getTableColumns>[0])
     )
-      .map(column => column.name)
+      .map(column =>
+        JSON.stringify([
+          Reflect.get(column.constructor, entityKind) as unknown,
+          column.getSQLType(),
+          describeSetting(column, entityKind),
+        ])
+      )
       .sort()
-      .join(",");
+      .join("\n");
   // Every registration below goes through here, so a replacement of a
-  // registry-backed table with other columns is seen.
+  // registry-backed table with columns that differ in any of that is seen.
   const observed: Pick<SchemaRegistry, "registerDynamicSchema"> = {
     registerDynamicSchema: (tableName, table) => {
       if (overrides !== undefined && registry.hasTable(tableName)) {
@@ -4186,6 +4199,42 @@ export async function registerConfigTablesInResolver(
       );
     }
   }
+}
+
+/**
+ * A column setting as comparable data: functions by their source, objects by
+ * their Drizzle kind and their own settings in key order. The column's table,
+ * and its `config` (the settings it was built from, which it holds again on
+ * itself), are left out, and a value met again on the way is not followed.
+ */
+function describeSetting(
+  value: unknown,
+  kind: symbol,
+  seen: Set<object> = new Set()
+): unknown {
+  if (typeof value === "function") return `fn:${String(value)}`;
+  if (typeof value === "bigint") return `bigint:${value}`;
+  if (typeof value !== "object" || value === null) return value;
+  if (seen.has(value)) return "[seen]";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map(item => describeSetting(item, kind, seen));
+  }
+  if (value instanceof Date) return `date:${value.toISOString()}`;
+  const ownKind: unknown =
+    typeof value.constructor === "function"
+      ? Reflect.get(value.constructor, kind)
+      : undefined;
+  return [
+    typeof ownKind === "string" ? ownKind : null,
+    Object.keys(value)
+      .filter(key => key !== "table" && key !== "config")
+      .sort()
+      .map(key => [
+        key,
+        describeSetting((value as Record<string, unknown>)[key], kind, seen),
+      ]),
+  ];
 }
 
 function logStorageConfiguration(

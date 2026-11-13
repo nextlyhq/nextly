@@ -15,7 +15,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { recordStatements } from "../../../__tests__/helpers/record-statements";
-import { defineCollection, defineSingle, text } from "../../../config";
+import {
+  checkbox,
+  defineCollection,
+  defineSingle,
+  number,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -475,6 +481,78 @@ describe.each(getConfiguredTestDialects())(
         same
       );
       expect(same.differed).toBe(false);
+    });
+
+    it("records no start whose configuration kept a column's name but changed what it holds", async () => {
+      // An older build where a field was a number and is now a checkbox: the
+      // column keeps its name, but the older definition reads it with another
+      // decoder (on SQLite a number where the registry reads a boolean).
+      const t = (current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "first",
+            fields: [checkbox({ name: "flag" })],
+          }),
+        ],
+      }));
+      await t.nextly.find({ collection: "first" });
+      const silentLogger = { debug: () => {}, warn: () => {} };
+
+      /** A start whose configuration holds `flag` as the given field. */
+      async function startWith(
+        flag: ReturnType<typeof checkbox> | ReturnType<typeof number>
+      ): Promise<{ differed: boolean; loads: string[] }> {
+        let differed = false;
+        let loads: string[] = [];
+        await asIfJustStarted(async () => {
+          const before = await versionBeforeLoading(t.adapter);
+          const completeness = { complete: true };
+          const registry = await initializeSchemaRegistry(
+            t.adapter,
+            await createSchemaRegistry(t.adapter),
+            undefined,
+            { collections: [], singles: [] },
+            { createMissingCompanions: false, completeness }
+          );
+          const overrides = { differed: false };
+          await registerConfigTablesInResolver(
+            registry!,
+            {
+              collections: [
+                defineCollection({ slug: "first", fields: [flag] }),
+              ],
+            } as never,
+            t.adapter,
+            silentLogger,
+            overrides
+          );
+          expect(completeness.complete).toBe(true);
+          differed = overrides.differed;
+          // The start's own rule.
+          definitionsLoaded(
+            t.adapter,
+            before,
+            registry !== undefined &&
+              completeness.complete &&
+              !overrides.differed
+          );
+          await pause(SCHEMA_VERSION_READ_INTERVAL_MS + 100);
+          loads = await loadsOnNextCall(t);
+        });
+        return { differed, loads };
+      }
+
+      const changed = await startWith(number({ name: "flag" }));
+      expect(changed.differed).toBe(true);
+      expect(changed.loads.length).toBeGreaterThan(0);
+
+      // POPULATION CONTROL: the configuration the registry was built from
+      // differs in nothing, so the start is recorded and the first follow
+      // loads nothing again.
+      const identical = await startWith(checkbox({ name: "flag" }));
+      expect(identical.differed).toBe(false);
+      expect(identical.loads).toEqual([]);
     });
 
     it("moves the stored version when a registry row is deleted, and only then", async () => {
