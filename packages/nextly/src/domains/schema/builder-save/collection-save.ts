@@ -50,9 +50,9 @@ import type {
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
+import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
