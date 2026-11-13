@@ -608,9 +608,13 @@ export function EntryForm({
   // named "seo") render inline like every other field.
   // Less any field a plugin's switch keeps off this collection, which is
   // then drawn nowhere and never decides the takeover layout.
+  const declaredFields = useMemo(
+    () => getCollectionFields(collection),
+    [collection]
+  );
   const allFields = useWithoutWithheldFields(
     { collection: collectionSlug },
-    getCollectionFields(collection)
+    declaredFields
   ) as ReturnType<typeof getCollectionFields>;
   const slugField = allFields.find(f => f.name === "slug");
   const titleField = allFields.find(f => f.name === "title");
@@ -695,11 +699,14 @@ export function EntryForm({
     ...(editingLanguage ? { language: editingLanguage } : {}),
     ...(editingLocale ? { locale: editingLocale } : {}),
   });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
     versionFor,
-    editorRestore
+    editorRestore,
+    declaredFields
   );
   const {
     viewingVersion,

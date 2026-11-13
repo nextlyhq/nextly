@@ -1057,11 +1057,14 @@ export function SingleForm({
     ...(editingLanguage ? { language: editingLanguage } : {}),
     ...(editingLocale ? { locale: editingLocale } : {}),
   });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
     versionFor,
-    editorRestore
+    editorRestore,
+    schema.fields as FieldConfig[]
   );
   const {
     viewingVersion,
