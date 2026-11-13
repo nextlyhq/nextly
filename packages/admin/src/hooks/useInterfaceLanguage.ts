@@ -12,7 +12,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { useT } from "@admin/lib/i18n/I18nProvider";
 

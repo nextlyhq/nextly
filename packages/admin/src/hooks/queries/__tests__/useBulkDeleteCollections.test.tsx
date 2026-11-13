@@ -32,7 +32,7 @@ vi.mock("@admin/services/schemaFileApi", () => ({
   schemaFileApi: { deleteCollection: mirrorSpy },
 }));
 
-vi.mock("@admin/components/ui", () => ({
+vi.mock("@admin/components/ui/toaster", () => ({
   toast: {
     success: vi.fn(),
     warning: warningSpy,
