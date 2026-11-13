@@ -145,6 +145,9 @@ export default function SingleBuilderEditPage({
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
   const localized = settings?.i18n === true;
+  // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
+  // refuses a field taking one of the lifecycle's names in the save that turns it on.
+  const drafts = settings?.status === true;
 
   // The schema landed. The apply carries fields only, so a save that also
   // changed the settings would otherwise clear the dirty badge while the
@@ -274,7 +277,7 @@ export default function SingleBuilderEditPage({
     confirmation,
     getValidatedFields,
     preview: fields =>
-      singleApi.previewSchemaChanges(entitySlug, fields, localized),
+      singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
     apply: (fields, version, resolutions, renames) =>
       singleApi.applySchemaChanges(
         entitySlug,
@@ -282,7 +285,8 @@ export default function SingleBuilderEditPage({
         version,
         resolutions,
         renames,
-        localized
+        localized,
+        drafts
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,

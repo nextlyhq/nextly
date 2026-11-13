@@ -24,6 +24,7 @@ import {
   assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -780,8 +781,9 @@ const COLLECTIONS_METHODS: Record<
       assertValidFieldsPayload(fields, {
         kind: "collection",
         stored: collection.fields ?? [],
-        // The lifecycle as stored: this save carries fields only.
-        lifecycleEnabled: collection.status === true,
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          collection.status === true || readRequestedLifecycle(body) === true,
       });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
@@ -941,6 +943,9 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
       assertValidFieldsPayload(fields, {
         kind: "collection",
         stored: "under-lock",
@@ -982,10 +987,12 @@ const COLLECTIONS_METHODS: Record<
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
-          // A new field may not take a name the stored lifecycle declares itself.
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
           assertBuilderFieldNames(fields, collection.fields ?? [], {
             surface: "collection",
-            lifecycleEnabled: collection.status === true,
+            lifecycleEnabled:
+              collection.status === true || requestedLifecycle === true,
           });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this

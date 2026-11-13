@@ -138,14 +138,23 @@ describeEachDialect(
     }
 
     /** The collection Builder's save: the apply its Save button sends. */
-    async function applyToPosts(fields: Field[]) {
+    /**
+     * The collection Builder's save: the apply its Save button sends, with the pending
+     * Draft/Published toggle when `status` is given, as the Builder sends it.
+     */
+    async function applyToPosts(fields: Field[], status?: boolean) {
       const { version } = await registered("dynamic_collections", "posts");
       return answerOf(() =>
         dispatchCollections(
           {} as ServiceContainer,
           "applySchemaChanges",
           { collectionName: "posts" },
-          { fields, confirmed: true, schemaVersion: version }
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: version,
+            ...(status === undefined ? {} : { status }),
+          }
         )
       );
     }
@@ -207,13 +216,80 @@ describeEachDialect(
       });
     }
 
+    // The Builder saves its settings after the fields, so a save turning drafts on sends the
+    // pending toggle with them, and the field is refused under it before anything runs.
+    it("refuses a collection field named status in the save that turns drafts on, and writes nothing", async () => {
+      await posts(false);
+      const columnsBefore = await columnsOf("dc_posts");
+
+      const answer = await applyToPosts(
+        [...BODY, { name: "status", type: "text" }],
+        true
+      );
+
+      expect(answer).toEqual(ownedByLifecycle("status"));
+      expect((await registered("dynamic_collections", "posts")).names).toEqual([
+        "body",
+      ]);
+      expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    });
+
+    it("refuses a Single field named status in the save that turns drafts on, and writes nothing", async () => {
+      expect(
+        await answerOf(() =>
+          dispatchSingles(
+            "createSingle",
+            {},
+            { slug: "home", label: "Home", fields: BODY, status: false }
+          )
+        )
+      ).toBe("accepted");
+      const columnsBefore = await columnsOf("single_home");
+      const { version } = await registered("dynamic_singles", "home");
+
+      const answer = await answerOf(() =>
+        dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "home" },
+          {
+            fields: [...BODY, { name: "status", type: "text" }],
+            confirmed: true,
+            schemaVersion: version,
+            status: true,
+          }
+        )
+      );
+
+      expect(answer).toEqual(ownedByLifecycle("status"));
+      expect((await registered("dynamic_singles", "home")).names).toEqual([
+        "body",
+      ]);
+      expect(await columnsOf("single_home")).toEqual(columnsBefore);
+    });
+
+    // Turning drafts off lands after the fields, so the lifecycle's columns still stand while they
+    // apply: the field is refused in that save too.
+    it("refuses a collection field named status in the save that turns drafts off, and writes nothing", async () => {
+      await posts(true);
+      const columnsBefore = await columnsOf("dc_posts");
+
+      const answer = await applyToPosts(
+        [...BODY, { name: "status", type: "text" }],
+        false
+      );
+
+      expect(answer).toEqual(ownedByLifecycle("status"));
+      expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    });
+
     // The control: with drafts off there is no lifecycle column, so the same name is an ordinary
     // field, and the refusal above is the lifecycle's and not the name's.
     it("keeps a collection field named status while drafts are off, with its value", async () => {
       await posts(false);
 
+      // The pending toggle off as well, as the Builder sends it for a collection without drafts.
       expect(
-        await applyToPosts([...BODY, { name: "status", type: "text" }])
+        await applyToPosts([...BODY, { name: "status", type: "text" }], false)
       ).toBe("accepted");
       expect((await registered("dynamic_collections", "posts")).names).toEqual([
         "body",

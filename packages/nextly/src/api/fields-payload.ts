@@ -146,6 +146,34 @@ export function assertValidFieldsPayload(
   }
 }
 
+/**
+ * The Draft/Published lifecycle a schema save asks it be judged under, read from the request's
+ * `status`: the Builder sends its pending toggle with the fields, because it saves its settings
+ * only once the fields have applied. Undefined when the request says nothing. A value that is not a
+ * boolean is refused.
+ *
+ * A save is judged with the lifecycle on when either the stored entity or the request has it on
+ * (`stored || requested`): the lifecycle's columns stand until the settings save that turns it off
+ * lands, after the fields, so a field taking one of their names would meet them either way.
+ */
+export function readRequestedLifecycle(body: unknown): boolean | undefined {
+  const value = (body as { status?: unknown } | null | undefined)?.status;
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "status",
+          code: "invalid_type",
+          message: "`status` must be a boolean when provided.",
+        },
+      ],
+      logContext: { reason: "status-not-boolean", received: typeof value },
+    });
+  }
+  return value;
+}
+
 /** The name rule's surface for a payload's entity kind; absent stays absent. */
 function surfaceOf(
   kind: "collection" | "single" | "component" | undefined

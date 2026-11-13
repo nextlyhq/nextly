@@ -23,6 +23,7 @@ import {
   assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -1179,8 +1180,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       assertValidFieldsPayload(fields, {
         kind: "single",
         stored: single.fields ?? [],
-        // The lifecycle as stored: this save carries fields only.
-        lifecycleEnabled: single.status === true,
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          single.status === true || readRequestedLifecycle(body) === true,
       });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
@@ -1277,6 +1279,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
       assertValidFieldsPayload(fields, { stored: "under-lock" });
 
       // Everything above reads the request alone, so it is decided before the lock is taken: a
@@ -1303,10 +1308,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           refuseChangeDefinedInCode(single, "Single", slug);
           // A field name the Single already holds keeps working whatever its case; one this save
           // creates is the Builder's own. Judged against the row as stored now.
-          // A new field may not take a name the stored lifecycle declares itself.
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
           assertBuilderFieldNames(fields, single.fields ?? [], {
             surface: "single",
-            lifecycleEnabled: single.status === true,
+            lifecycleEnabled:
+              single.status === true || requestedLifecycle === true,
           });
           // A pair of sibling fields this save would create is refused before any statement or archive
           // write; one the entity already holds keeps working. Asked here because this road reaches its
