@@ -52,25 +52,32 @@ export function constructsAdded(
   const earlier = new Map(before.map(table => [table.name, table]));
   return target.map(table => {
     const was = earlier.get(table.name);
-    const hadCheck = new Set((was?.checks ?? []).map(check => check.name));
-    const hadIndex = new Set((was?.indexes ?? []).map(index => index.name));
     const own = Object.hasOwn(foreign, table.name)
       ? foreign[table.name]
       : undefined;
-    const ownCheck = own === undefined ? undefined : new Set(own.checks);
-    const ownIndex = own === undefined ? undefined : new Set(own.indexes);
     return {
       name: table.name,
-      checks: (table.checks ?? []).filter(
-        check =>
-          !hadCheck.has(check.name) && (ownCheck?.has(check.name) ?? true)
-      ),
-      indexes: (table.indexes ?? []).filter(
-        index =>
-          !hadIndex.has(index.name) && (ownIndex?.has(index.name) ?? true)
-      ),
+      checks: newAndOwn(table.checks, was?.checks, own?.checks),
+      indexes: newAndOwn(table.indexes, was?.indexes, own?.indexes),
     };
   });
+}
+
+/**
+ * The named elements of `now` that `was` lacked, and, where `own` names the
+ * stream's elements on another owner's table, only those among them.
+ */
+function newAndOwn<T extends { name: string }>(
+  now: readonly T[] | undefined,
+  was: readonly T[] | undefined,
+  own: readonly string[] | undefined
+): T[] {
+  const had = new Set((was ?? []).map(element => element.name));
+  const mine = own === undefined ? undefined : new Set(own);
+  return (now ?? []).filter(
+    element =>
+      !had.has(element.name) && (mine === undefined || mine.has(element.name))
+  );
 }
 
 type Token = string | QuotedToken;

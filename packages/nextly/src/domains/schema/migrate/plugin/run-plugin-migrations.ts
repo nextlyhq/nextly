@@ -63,6 +63,7 @@ import {
   pluginModuleStatements,
   qualifiedFilename,
   type PluginMigration,
+  type PluginMigrationSnapshot,
 } from "./plugin-migration";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import {
@@ -440,11 +441,13 @@ function constructsAddedByModule(
   dialect: SupportedDialect
 ): AddedConstructs[] {
   const migration = ordered[at];
+  const tables = (side?: Record<SupportedDialect, PluginMigrationSnapshot>) =>
+    side?.[dialect]?.tables ?? [];
   const own = constructsAdded(
-    migration.before[dialect]?.tables ?? [],
-    migration.snapshot[dialect]?.tables ?? []
+    tables(migration.before),
+    tables(migration.snapshot)
   );
-  const contributed = migration.contributed?.[dialect]?.tables ?? [];
+  const contributed = tables(migration.contributed);
   if (contributed.length === 0) return own;
   const recorded = recordedContributions(ordered.slice(0, at + 1), dialect);
   const foreign = Object.fromEntries(
@@ -453,7 +456,7 @@ function constructsAddedByModule(
   return [
     ...own,
     ...constructsAdded(
-      migration.contributedBefore?.[dialect]?.tables ?? [],
+      tables(migration.contributedBefore),
       contributed,
       foreign
     ),
