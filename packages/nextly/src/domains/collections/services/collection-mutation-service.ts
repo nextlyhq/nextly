@@ -6098,7 +6098,13 @@ export class CollectionMutationService extends BaseService {
               kind: "draftDiscarded",
               actor: actorForWrite(params.actor, params.user),
               personName: params.user?.name ?? null,
-              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+              // The history names the part thrown away: a language's pending
+              // change by its language, the shared part's by `shared`.
+              ...(params.shared === true
+                ? { parts: { shared: true } }
+                : draftLocale
+                  ? { parts: { locales: [draftLocale] } }
+                  : {}),
             }
           );
           // The discarded part has nothing unpublished left to review: its

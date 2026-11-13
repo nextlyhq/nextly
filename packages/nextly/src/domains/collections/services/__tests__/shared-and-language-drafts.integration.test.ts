@@ -649,6 +649,25 @@ describe.each(getConfiguredTestDialects())(
         "es 2"
       );
       expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      // The history names the shared part as the one thrown away, not a language.
+      const [discarded] = await handle!.adapter.select<{ id: string }>(
+        "nextly_content_events",
+        {
+          where: {
+            and: [
+              { column: "subjectId", op: "=", value: id },
+              { column: "kind", op: "=", value: "draft-discarded" },
+            ],
+          },
+        }
+      );
+      const parts = await handle!.adapter.select<{ part: string }>(
+        "nextly_content_event_parts",
+        {
+          where: { and: [{ column: "eventId", op: "=", value: discarded.id }] },
+        }
+      );
+      expect(parts.map(row => row.part)).toEqual(["~shared"]);
     }, 90_000);
 
     // While the entry is live, a shared edit is pending until the shared part is published,
