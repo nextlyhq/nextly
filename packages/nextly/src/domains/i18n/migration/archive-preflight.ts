@@ -55,6 +55,8 @@ import { copyLiveness } from "./generate-down";
 import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
 import {
   lossesOnMove,
+  mergeLosses,
+  nonConstantSqliteDefaults,
   refusalsForMovesLosingDefinition,
 } from "./move-keeps-definition";
 import {
@@ -992,20 +994,31 @@ export async function refuseTranslationMovesLosingDefinition(args: {
   const dialect = args.adapter.getCapabilities().dialect;
   const turningOn = args.isLocalized;
   // The translated fields on the side where translation holds: their columns are the ones moved.
-  const moved = (turningOn ? args.newFields : args.oldFields).flatMap(f => {
+  const specs = (turningOn ? args.newFields : args.oldFields).flatMap(f => {
     if (!isFieldLocalized(f, true)) return [];
     const column = fieldToLocalizedColumnSpec(f, dialect, args.builtBy);
-    return column ? [{ field: f.name, column: column.name }] : [];
+    return column ? [{ field: f.name, column }] : [];
   });
+  const moved = specs.map(m => ({ field: m.field, column: m.column.name }));
   const companion = `${args.tableName}_locales`;
   const [from, to] = turningOn
     ? [args.tableName, companion]
     : [companion, args.tableName];
-  const losses = await lossesOnMove(args.adapter.getDrizzle(), dialect, {
-    moved,
-    from,
-    to,
-  });
+  const losses = mergeLosses(
+    await lossesOnMove(args.adapter.getDrizzle(), dialect, {
+      moved,
+      from,
+      to,
+    }),
+    // Turning translation off on SQLite restores each column with ADD COLUMN, which takes back
+    // only a constant default.
+    !turningOn && dialect === "sqlite"
+      ? nonConstantSqliteDefaults(
+          await liveCompanionColumns(args.adapter, args.tableName),
+          specs
+        )
+      : []
+  );
   if (losses.length === 0) return;
   const refusals = refusalsForMovesLosingDefinition({
     losses,

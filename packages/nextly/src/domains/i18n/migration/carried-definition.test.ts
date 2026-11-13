@@ -79,6 +79,36 @@ describe("carriedDefinition", () => {
       column("decimal", { precision: 10, scale: 2 }),
       undefined,
     ],
+    // A MySQL integer the type rules cannot read is carried: its values may lie past the signed range.
+    [
+      "an unsigned integer is carried over the field's signed one",
+      "mysql",
+      source("int unsigned"),
+      column("integer"),
+      "int unsigned",
+    ],
+    [
+      "an unsigned big integer is carried too",
+      "mysql",
+      source("bigint unsigned"),
+      column("integer"),
+      "bigint unsigned",
+    ],
+    // Pairs Nextly itself writes under two spellings keep the field's type, as every companion has it.
+    [
+      "a boolean spelled bool keeps the field's",
+      "postgresql",
+      source("bool"),
+      column("boolean"),
+      undefined,
+    ],
+    [
+      "a date's timestamp keeps the field's",
+      "postgresql",
+      source("timestamp"),
+      column("timestamp"),
+      undefined,
+    ],
   ])("%s (%s)", (_name, dialect, from, to, type) => {
     expect(carriedDefinition(from, to, dialect)?.type).toBe(type);
   });

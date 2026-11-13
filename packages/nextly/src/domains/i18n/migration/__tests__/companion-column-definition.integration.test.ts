@@ -21,6 +21,8 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import type { ColumnSpec } from "../../../schema/pipeline/diff/types";
+import { deriveCompanionSpec } from "../derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../generate-up";
 import {
   buildCompanionReconcileStatements,
   type CompanionFieldLike,
@@ -513,5 +515,51 @@ describeEachDialect(
         "heading"
       );
     });
+
+    // SQLite adds a column only with a constant default, so turning translation off cannot restore
+    // one like CURRENT_TIMESTAMP; it is refused before anything changes. Other dialects take it.
+    it.skipIf(dialect !== "sqlite")(
+      "refuses turning translation off on SQLite where the companion column has a default it cannot restore",
+      async () => {
+        await create("cdef_posts", true, [translated(HEADING)]);
+        // The companion as a database may have it, its column given a non-constant default,
+        // created the way the companion transition creates it.
+        const spec = deriveCompanionSpec({
+          slug: "cdef_posts",
+          dbName: "dc_cdef_posts",
+          fields: [translated(HEADING) as unknown as CompanionFieldLike],
+          dialect,
+          builtBy: "collection",
+          defaultLocale: "en",
+          collectionLocalized: true,
+          status: false,
+        });
+        if (!spec) throw new Error("the collection has no companion spec");
+        await query(`DROP TABLE ${q("dc_cdef_posts_locales")}`);
+        await query(
+          buildCompanionCreateOnlySql({
+            ...spec,
+            columns: spec.columns.map(c =>
+              c.name === "heading"
+                ? { ...c, carried: { default: "CURRENT_TIMESTAMP" } }
+                : c
+            ),
+          })
+        );
+
+        const refusal = await saveInDialog("cdef_posts", [HEADING], false);
+
+        expect(errorsOf(refusal)).toEqual([
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            message: expect.stringMatching(/own default/),
+          }),
+        ]);
+        expect(
+          (await columnsOf("dc_cdef_posts_locales")).map(c => c.name)
+        ).toContain("heading");
+      }
+    );
   }
 );

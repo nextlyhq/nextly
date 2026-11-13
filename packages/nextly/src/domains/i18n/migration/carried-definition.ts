@@ -33,8 +33,9 @@ export function carriedDefinition(
   const own = ddlType(column, dialect);
   const sourceType = renderedType(source);
   const wider =
-    copiesEveryValue(own, sourceType, dialect) &&
-    !copiesEveryValue(sourceType, own, dialect);
+    (copiesEveryValue(own, sourceType, dialect) &&
+      !copiesEveryValue(sourceType, own, dialect)) ||
+    mysqlIntegerVariant(sourceType, own, dialect);
   const carried: CarriedDefinition = {
     ...(wider ? { type: sourceType } : {}),
     ...(source.default === undefined ? {} : { default: source.default }),
@@ -42,6 +43,27 @@ export function carriedDefinition(
   return carried.type === undefined && carried.default === undefined
     ? undefined
     : carried;
+}
+
+/**
+ * A MySQL integer the type rules cannot read, `UNSIGNED` or `ZEROFILL`, under a field whose own type
+ * does not say the same: its values may lie past the signed type's range, so it is carried as it is.
+ */
+function mysqlIntegerVariant(
+  sourceType: string,
+  own: string,
+  dialect: SupportedDialect
+): boolean {
+  if (dialect !== "mysql") return false;
+  const variant = (type: string) =>
+    (type.toLowerCase().match(/\b(?:unsigned|zerofill)\b/g) ?? [])
+      .sort()
+      .join(" ");
+  return (
+    /int\b/i.test(sourceType) &&
+    variant(sourceType) !== "" &&
+    variant(sourceType) !== variant(own)
+  );
 }
 
 /** The type and default a receiving column is created with: what it carries, else the field's own. */

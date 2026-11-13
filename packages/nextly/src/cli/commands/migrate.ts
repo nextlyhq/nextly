@@ -2906,7 +2906,8 @@ async function judgeFileDeletions(
   // A file turning translation on or off whose move would lose a column's comment, character set
   // or collation is refused here too, before any statement (`refuseMigrationFilesLosingDefinition`).
   await refuseMigrationFilesLosingDefinition(
-    listed.flatMap(({ file }) => (plan.runs.has(file) ? [file] : [])),
+    // The files the step leaves the run after the modules, as the rename refusal above judges.
+    appFilesInStep(listed, appStepAfter(deps.step, modules.length)),
     deps.db,
     deps.dialect
   );
@@ -2969,11 +2970,20 @@ function appFileUnits(
   step: number | undefined,
   dialect: SupportedDialect
 ): RunUnit[] {
+  return appFilesInStep(listed, step).map(file => fileUnit(file, dialect));
+}
+
+/**
+ * The app files a run applies within `step` (`appStepAfter`), in order: none when the plugins'
+ * modules took the whole step. One window for every judgement of the run's app files.
+ */
+function appFilesInStep(
+  listed: readonly { file: ParsedMigration; applied: boolean }[],
+  step: number | undefined
+): ParsedMigration[] {
   if (step === 0) return [];
   const plan = fileRunPlan(listed, step);
-  return listed.flatMap(({ file }) =>
-    plan.runs.has(file) ? [fileUnit(file, dialect)] : []
-  );
+  return listed.flatMap(({ file }) => (plan.runs.has(file) ? [file] : []));
 }
 
 /** An app migration file as a unit of the run: its UP section. */

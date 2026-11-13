@@ -15,6 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   type ColumnExtras,
   readColumnExtras,
@@ -29,6 +30,7 @@ import {
   type TranslationSurface,
 } from "./field-leaves-translation-rules";
 import type { LocalizationMigrationIntent } from "./migration-intent";
+import type { LocalizedColumnSpec } from "./types";
 
 /** A part of a column's definition a move into a new column can lose. */
 export type CarriedProperty =
@@ -142,32 +144,25 @@ export async function refuseMigrationFilesLosingDefinition(
 ): Promise<void> {
   const refusals: LeavingTranslationRefusal[] = [];
   const refused: string[] = [];
+  // Judged in the run's order: a companion an earlier file of the run creates is not in the
+  // database yet when a later one turning translation off is judged.
+  const createdInRun = new Set<string>();
   for (const file of files) {
     const intent = file.localization;
     if (intent?.kind !== "enable" && intent?.kind !== "disable") continue;
-    const { spec } = intent;
-    const turningOn = intent.kind === "enable";
-    const onMain = spec.columnsOnMain && new Set(spec.columnsOnMain);
-    const moved = spec.columns
-      .filter(c => !turningOn || onMain === undefined || onMain.has(c.name))
-      .map(c => ({ field: c.name, column: c.name }));
-    const [from, to] = turningOn
-      ? [spec.mainTable, spec.companionTable]
-      : [spec.companionTable, spec.mainTable];
-    const losses = mergeLosses(
-      await lossesOnMove(db, dialect, { moved, from, to }),
-      turningOn ? [] : await uncarriedOnDisable(db, dialect, spec)
+    const companionCreatedEarlier = createdInRun.has(
+      intent.spec.companionTable
     );
-    if (losses.length === 0) continue;
+    if (intent.kind === "enable") createdInRun.add(intent.spec.companionTable);
+    const found = await fileRefusals(
+      intent,
+      db,
+      dialect,
+      companionCreatedEarlier
+    );
+    if (found.length === 0) continue;
     refused.push(file.name);
-    refusals.push(
-      ...refusalsForMovesLosingDefinition({
-        losses,
-        table: from,
-        translation: turningOn ? "on" : "off",
-        surface: "code",
-      })
-    );
+    refusals.push(...found);
   }
   if (refusals.length === 0) return;
   throw NextlyError.validation({
@@ -181,16 +176,24 @@ export async function refuseMigrationFilesLosingDefinition(
  * wider than the field's own, and its default (`carriedDefinition`). The file re-adds each main
  * column from the field alone, since its header records the companion's columns by kind, while
  * the live companion column may carry either, from a move that turned translation on or from a
- * change by hand.
+ * change by hand. A companion an earlier file of the same run creates (`createdEarlier`) is not
+ * there yet; it receives the main columns that file moves, so those are what it would carry.
  */
 async function uncarriedOnDisable(
   db: unknown,
   dialect: SupportedDialect,
-  spec: LocalizationMigrationIntent["spec"]
+  spec: LocalizationMigrationIntent["spec"],
+  createdEarlier: boolean
 ): Promise<ColumnMoveLoss[]> {
-  const live = (
-    await introspectLiveSnapshot(db, dialect, [spec.companionTable])
-  ).tables.find(t => t.name === spec.companionTable);
+  const tables = (
+    await introspectLiveSnapshot(db, dialect, [
+      spec.companionTable,
+      spec.mainTable,
+    ])
+  ).tables;
+  const live =
+    tables.find(t => t.name === spec.companionTable) ??
+    (createdEarlier ? tables.find(t => t.name === spec.mainTable) : undefined);
   if (live === undefined) return [];
   return spec.columns.flatMap(column => {
     const carried = carriedDefinition(
@@ -209,7 +212,7 @@ async function uncarriedOnDisable(
 }
 
 /** `a` and `b` as one loss per column, each column's lost parts together. */
-function mergeLosses(
+export function mergeLosses(
   a: readonly ColumnMoveLoss[],
   b: readonly ColumnMoveLoss[]
 ): ColumnMoveLoss[] {
@@ -222,4 +225,63 @@ function mergeLosses(
     );
   }
   return [...byColumn.values()];
+}
+
+/**
+ * The companion columns whose carried default a column turning translation off on SQLite cannot
+ * take back: SQLite adds a column only with a constant default, and refuses `CURRENT_TIME`,
+ * `CURRENT_DATE`, `CURRENT_TIMESTAMP` or an expression in parentheses. No column Nextly creates has
+ * one; a companion column given one by hand, or from a main column that had one, does.
+ */
+export function nonConstantSqliteDefaults(
+  live: readonly ColumnSpec[],
+  moved: readonly { field: string; column: LocalizedColumnSpec }[]
+): ColumnMoveLoss[] {
+  return moved.flatMap(({ field, column }) => {
+    const value = carriedDefinition(
+      live.find(c => c.name === column.name),
+      column,
+      "sqlite"
+    )?.default?.trim();
+    const nonConstant =
+      value !== undefined &&
+      (value.startsWith("(") || /^current_(time|date|timestamp)$/i.test(value));
+    return nonConstant
+      ? [{ field, column: column.name, lost: ["default"] }]
+      : [];
+  });
+}
+
+/**
+ * The refusals one file turning translation on or off earns: what its move would lose of each
+ * column it moves (`lossesOnMove`), and for one turning it off, what it would not restore
+ * (`uncarriedOnDisable`).
+ */
+async function fileRefusals(
+  intent: LocalizationMigrationIntent,
+  db: unknown,
+  dialect: SupportedDialect,
+  companionCreatedEarlier: boolean
+): Promise<LeavingTranslationRefusal[]> {
+  const { spec } = intent;
+  const turningOn = intent.kind === "enable";
+  const onMain = spec.columnsOnMain && new Set(spec.columnsOnMain);
+  const moved = spec.columns
+    .filter(c => !turningOn || onMain === undefined || onMain.has(c.name))
+    .map(c => ({ field: c.name, column: c.name }));
+  const [from, to] = turningOn
+    ? [spec.mainTable, spec.companionTable]
+    : [spec.companionTable, spec.mainTable];
+  const losses = mergeLosses(
+    await lossesOnMove(db, dialect, { moved, from, to }),
+    turningOn
+      ? []
+      : await uncarriedOnDisable(db, dialect, spec, companionCreatedEarlier)
+  );
+  return refusalsForMovesLosingDefinition({
+    losses,
+    table: from,
+    translation: turningOn ? "on" : "off",
+    surface: "code",
+  });
 }

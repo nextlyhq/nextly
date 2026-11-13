@@ -216,5 +216,84 @@ describe.each(getConfiguredTestDialects())(
       },
       120_000
     );
+
+    // SQLite cannot give an existing column a default without rebuilding its table.
+    it.skipIf(dialect === "sqlite")(
+      "judges a file turning translation off after one in the same run turning it on, by the column that one moves",
+      async () => {
+        current = await createTestNextly({ dialect });
+        const adapter = current.adapter as unknown as DrizzleAdapter;
+        const query = (statement: string) => adapter.executeQuery(statement);
+        dir = await mkdtemp(join(tmpdir(), "nextly-definition-loss-"));
+        const migrationsDir = dir;
+        const generate = (
+          entity: MinimalConfigEntity,
+          name: string,
+          at: string
+        ) =>
+          generateMigration({
+            name,
+            dialect,
+            migrationsDir,
+            defaultLocale: "en",
+            collections: [entity],
+            singles: [],
+            components: [],
+            nonInteractive: true,
+            now: new Date(at),
+          });
+        const sqlFiles = async () =>
+          (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
+        const migrate = (step?: number) =>
+          migrateCore({
+            ...(step === undefined ? {} : { step }),
+            extensionSchema: undefined,
+            dialect,
+            db: adapter.getDrizzle(),
+            adapter: adapter as never,
+            migrationsDir,
+            logger: createLogger({ quiet: true }),
+            lockMode: "fail-fast",
+            consent: resolveDataLossConsent({
+              flag: "dc_mkd_docs_locales",
+              env: {},
+            }),
+            interactive: false,
+          } as never);
+
+        await generate(docs(false), "one", "2026-11-13T10:00:00.000Z");
+        const first = (await sqlFiles()).length;
+        await generate(docs(true), "two", "2026-11-13T11:00:00.000Z");
+        await generate(docs(false), "three", "2026-11-13T12:00:00.000Z");
+        expect(
+          (await sqlFiles()).filter(f =>
+            /(enable|disable)_localization_mkd_docs/.test(f)
+          )
+        ).toHaveLength(2);
+
+        await migrate(first);
+        // The main column, with a default its snapshot does not know: the file turning
+        // translation on carries it into the companion, and the one turning it off would not
+        // restore it.
+        await query(
+          dialect === "mysql"
+            ? `ALTER TABLE ${q("dc_mkd_docs")} MODIFY COLUMN ${q("heading")} VARCHAR(255) NULL DEFAULT 'none'`
+            : `ALTER TABLE ${q("dc_mkd_docs")} ALTER COLUMN ${q("heading")} SET DEFAULT 'none'`
+        );
+
+        const refused = await migrate().then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(refused).toBeInstanceOf(Error);
+        expect(
+          JSON.stringify(
+            (refused as { publicData?: unknown }).publicData ?? refused
+          )
+        ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/);
+      },
+      120_000
+    );
   }
 );
