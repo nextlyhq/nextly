@@ -584,6 +584,18 @@ export { typesExtendedBy } from "nextly";
 export type { ExtendedType } from "nextly";
 
 /**
+ * A plugin's switch for the fields its `extend` added: a service named
+ * `EXTENSION_SWITCH_SERVICE` whose `switchedOff(field)` says on which types
+ * the field is off now. There the admin draws the field nowhere and offers
+ * none of the plugin's `extendedWith` contributions; the column and every
+ * stored value stay, and switching it on brings them back.
+ *
+ * @experimental
+ */
+export { EXTENSION_SWITCH_SERVICE } from "nextly";
+export type { ExtensionSwitch } from "nextly";
+
+/**
  * Where an entry is served, as the site declares it. `publicAddressOf` answers
  * one entry's public address, from the address its type declares in code
  * (`publicAddress`) or, for a type made in the Schema Builder, from the

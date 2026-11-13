@@ -31,6 +31,7 @@ import {
 import type { AdminContributionKind } from "./admin-places";
 import type { OrderedEntry } from "./contribution-order";
 import { typesExtendedBy } from "./extended-types";
+import type { SwitchedOffExtensions } from "./extension-switch";
 import type { PluginDefinition } from "./plugin-context";
 import { resolveRoutePermission } from "./routes/route-permission";
 import { rowPredicateFields } from "./row-predicate";
@@ -187,18 +188,20 @@ function namedAsServed(
 /**
  * The served shape narrowed to the types the plugin's own fields were added
  * to, where it asks (`extendedWith`): the Singles on a Single's page, the
- * collections elsewhere. Nothing when it reached none of that kind, or when
- * no plugin owns it, so it is offered nowhere.
+ * collections elsewhere, less the types where the plugin's switch has one
+ * of them off (`extension-switch`). Nothing when it reached none of that
+ * kind, or when no plugin owns it, so it is offered nowhere.
  */
 function narrowedToExtended(
   contribution: ContributedAdminContribution,
   owner: PluginDefinition | undefined,
-  served: { delivered: DeliveredShape; declared: string[] | undefined }
+  served: { delivered: DeliveredShape; declared: string[] | undefined },
+  off: SwitchedOffExtensions
 ): { delivered: DeliveredShape; declared: string[] | undefined } | undefined {
   const { extendedWith } = contribution;
   if (extendedWith === undefined) return served;
   if (owner === undefined) return undefined;
-  const reached = typesWithEvery(owner.name, extendedWith);
+  const reached = typesWithEvery(owner.name, extendedWith, off);
   if (contribution.place === "single.edit") {
     const singles = within(served.delivered.singles, reached.singles);
     return singles.length === 0
@@ -211,11 +214,19 @@ function narrowedToExtended(
     : { ...served, declared: collections };
 }
 
+/** What every contribution of one answer is delivered with. */
+interface DeliveryContext {
+  /** Who contributes each collection, for the slugs the admin serves. */
+  contributors: ReadonlyMap<string, PluginDefinition>;
+  /** What each plugin's extension switch has off now. */
+  off: SwitchedOffExtensions;
+}
+
 /** The contribution as this reader receives it, or `undefined` when it is left out. */
 async function deliveredFor(
   contribution: ContributedAdminContribution,
   owner: PluginDefinition | undefined,
-  contributors: ReadonlyMap<string, PluginDefinition>,
+  context: DeliveryContext,
   audience: ContributionAudience
 ): Promise<DeliveredAdminContribution | undefined> {
   const asked = permissionsAsked(contribution, owner);
@@ -225,7 +236,8 @@ async function deliveredFor(
   const narrowed = narrowedToExtended(
     contribution,
     owner,
-    namedAsServed(contribution, owner, contributors)
+    namedAsServed(contribution, owner, context.contributors),
+    context.off
   );
   if (narrowed === undefined) return undefined;
   const { delivered, declared } = narrowed;
@@ -252,14 +264,19 @@ async function deliveredFor(
 
 /**
  * The collections and Singles where `plugin`'s `extend` added every one of
- * `fields`, as the latest start resolved them.
+ * `fields`, as the latest start resolved them, and its switch has none of
+ * them off.
  */
 function typesWithEvery(
   plugin: string,
-  fields: readonly string[]
+  fields: readonly string[],
+  off: SwitchedOffExtensions
 ): { collections: string[]; singles: string[] } {
+  const switchedOff = off.get(plugin);
   const [first, ...rest] = fields.map(field =>
-    typesExtendedBy(plugin, field).map(type => `${type.kind}:${type.slug}`)
+    typesExtendedBy(plugin, field)
+      .map(type => `${type.kind}:${type.slug}`)
+      .filter(key => switchedOff?.get(field)?.has(key) !== true)
   );
   const keys = (first ?? []).filter(key =>
     rest.every(other => other.includes(key))
@@ -351,7 +368,7 @@ async function deliveredList(
   entries: readonly OrderedEntry[],
   byId: ReadonlyMap<string, ContributedAdminContribution>,
   plugins: ReadonlyMap<string, PluginDefinition>,
-  contributors: ReadonlyMap<string, PluginDefinition>,
+  context: DeliveryContext,
   audience: ContributionAudience
 ): Promise<DeliveredAdminEntry[]> {
   const delivered = await Promise.all(
@@ -361,7 +378,7 @@ async function deliveredList(
       const sent = await deliveredFor(
         contribution,
         plugins.get(contribution.plugin),
-        contributors,
+        context,
         audience
       );
       if (sent) return sent;
@@ -376,17 +393,23 @@ async function deliveredList(
 /**
  * @experimental Every place's contributions as this reader receives them:
  * every place but the login page's for a signed-in reader (`"workspace"`),
- * the login page's alone for the public metadata (`"login"`).
+ * the login page's alone for the public metadata (`"login"`). `off` is what
+ * each plugin's extension switch has off now (`switchedOffExtensions`), read
+ * once for the whole answer; nothing is off where it is not given.
  */
 export async function contributionsForReader(
   plugins: readonly PluginDefinition[],
   audience: ContributionAudience,
-  scope: "workspace" | "login"
+  scope: "workspace" | "login",
+  off: SwitchedOffExtensions = new Map()
 ): Promise<AdminContributionsMeta> {
   const { contributions, ordered } = contributedAdminContributions(plugins);
   const byId = new Map(contributions.map(c => [c.id, c]));
   const byName = new Map(plugins.map(p => [p.name, p]));
-  const contributors = collectionContributors(plugins);
+  const context: DeliveryContext = {
+    contributors: collectionContributors(plugins),
+    off,
+  };
   const meta: AdminContributionsMeta = {};
   for (const [place, kinds] of ordered) {
     if ((place === "login") !== (scope === "login")) continue;
@@ -397,7 +420,7 @@ export async function contributionsForReader(
         entries,
         byId,
         byName,
-        contributors,
+        context,
         audience
       );
       // A list of built-in parts alone says nothing the page does not.

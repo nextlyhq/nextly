@@ -31,6 +31,7 @@ import {
   type DeclaredAdminPlace,
 } from "./admin-places-registry";
 import { orderContributions, type OrderedEntry } from "./contribution-order";
+import { extensionFieldsOf } from "./extension-switch";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
@@ -334,14 +335,7 @@ function extendedWithProblem(
   ) {
     return "its `extendedWith` is not a list of top-level field names";
   }
-  const added = new Set(
-    (plugin.contributes?.extend ?? []).flatMap(clause =>
-      clause.fields.flatMap(field => {
-        const name = (field as { name?: unknown }).name;
-        return typeof name === "string" ? [name] : [];
-      })
-    )
-  );
+  const added = new Set(extensionFieldsOf([plugin])[plugin.name] ?? []);
   const stray = (extendedWith as string[]).find(name => !added.has(name));
   return stray === undefined
     ? undefined

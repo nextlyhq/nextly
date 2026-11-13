@@ -377,6 +377,13 @@ export interface AdminBranding {
   contributions?: AdminContributionsMeta;
 
   /**
+   * The fields a plugin's extension switch keeps off each type's pages, by
+   * `collection:<slug>` or `single:<slug>`: added by the plugin there and
+   * switched off now. Drawn nowhere; their stored values stay.
+   */
+  withheldFields?: Record<string, string[]>;
+
+  /**
    * Public client configuration, readable before a session exists.
    *
    * Deliberately NOT merged into `plugins`: a plugin declaring a public config

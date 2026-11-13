@@ -186,6 +186,11 @@ import {
   listFiltersForReader,
   type ContributionAudience,
 } from "./plugins/admin-contributions-offer";
+import {
+  extensionFieldsOf,
+  switchedOffExtensions,
+  withheldFieldsOf,
+} from "./plugins/extension-switch";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import {
   contributionAudienceFor,
@@ -2212,13 +2217,26 @@ async function buildAdminMeta(
   }
   // Every place's contributions, in order, less what this reader may not
   // see; the login page's go to the public half alone.
+  // What each plugin's extension switch has off now, read once: its
+  // contributions that follow those fields are withheld there, and the
+  // fields themselves are drawn nowhere on those types' pages.
+  const switchedOff = await switchedOffExtensions(
+    config?.plugins ?? [],
+    extensionFieldsOf(config?.plugins ?? []),
+    consoleLogger
+  );
   const contributions = await contributionsForReader(
     config?.plugins ?? [],
     offerTo,
-    "workspace"
+    "workspace",
+    switchedOff
   );
   if (Object.keys(contributions).length > 0) {
     workspace.contributions = contributions;
+  }
+  const withheldFields = withheldFieldsOf(switchedOff);
+  if (Object.keys(withheldFields).length > 0) {
+    workspace.withheldFields = withheldFields;
   }
   const loginContributions = await contributionsForReader(
     config?.plugins ?? [],

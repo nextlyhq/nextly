@@ -1,0 +1,83 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  EXTENSION_SWITCH_SERVICE,
+  switchedOffExtensions,
+  withheldFieldsOf,
+} from "./extension-switch";
+import { publishConfiguredExtensions } from "./extended-types";
+import type { PluginDefinition } from "./plugin-context";
+import {
+  clearPluginServices,
+  registerPluginService,
+} from "./services/plugin-services-registry";
+
+const plugin = (name: string): PluginDefinition => ({
+  name,
+  version: "1.0.0",
+  nextly: "*",
+});
+
+afterEach(() => {
+  clearPluginServices();
+  publishConfiguredExtensions(new Map());
+});
+
+describe("switchedOffExtensions", () => {
+  it("asks each plugin's switch which types its field is off on", async () => {
+    registerPluginService("@acme/notes", EXTENSION_SWITCH_SERVICE, () => ({
+      switchedOff: (field: string) =>
+        field === "notes" ? [{ kind: "collection", slug: "logs" }] : [],
+    }));
+    const off = await switchedOffExtensions([plugin("@acme/notes")], {
+      "@acme/notes": ["notes", "other"],
+    });
+    expect(off.get("@acme/notes")?.get("notes")).toEqual(
+      new Set(["collection:logs"])
+    );
+    expect(off.get("@acme/notes")?.get("other")).toEqual(new Set());
+  });
+
+  it("switches nothing off for a plugin with no switch", async () => {
+    const off = await switchedOffExtensions([plugin("@acme/plain")], {
+      "@acme/plain": ["notes"],
+    });
+    expect(off.get("@acme/plain")).toBeUndefined();
+  });
+
+  it("switches nothing off when a switch fails, and says so", async () => {
+    const warn = vi.fn();
+    registerPluginService("@acme/notes", EXTENSION_SWITCH_SERVICE, () => ({
+      switchedOff: () => Promise.reject(new Error("settings unreadable")),
+    }));
+    const off = await switchedOffExtensions(
+      [plugin("@acme/notes")],
+      { "@acme/notes": ["notes"] },
+      { warn }
+    );
+    expect(off.get("@acme/notes")).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe("withheldFieldsOf", () => {
+  it("names, per type, the fields a plugin added there and switched off", async () => {
+    publishConfiguredExtensions(
+      new Map([
+        ["collection:logs", new Map([["notes", "@acme/notes"]])],
+        ["collection:posts", new Map([["notes", "@acme/notes"]])],
+      ])
+    );
+    registerPluginService("@acme/notes", EXTENSION_SWITCH_SERVICE, () => ({
+      switchedOff: () => [
+        { kind: "collection", slug: "logs" },
+        // Never given the field, so there is nothing to withhold.
+        { kind: "collection", slug: "users" },
+      ],
+    }));
+    const off = await switchedOffExtensions([plugin("@acme/notes")], {
+      "@acme/notes": ["notes"],
+    });
+    expect(withheldFieldsOf(off)).toEqual({ "collection:logs": ["notes"] });
+  });
+});

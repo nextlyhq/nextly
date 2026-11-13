@@ -168,6 +168,31 @@ defineCollection({ slug: "pages", siteContent: true, fields: [/* … */] });
 The plugin's other collections, such as form submissions or internal records, stay out of
 every scope.
 
+### Switching your fields off on a type (`@experimental`)
+
+A plugin can let a person switch its fields off for one type without a schema change, from its
+own settings. Contribute a service named `EXTENSION_SWITCH_SERVICE` that answers, for a field
+your `extend` adds, the types it is off on now:
+
+```ts
+import { EXTENSION_SWITCH_SERVICE, type ExtensionSwitch } from "@nextlyhq/plugin-sdk";
+
+contributes: {
+  services: {
+    [EXTENSION_SWITCH_SERVICE]: (ctx): ExtensionSwitch => ({
+      switchedOff: async field =>
+        field === "seo" ? await typesSwitchedOffInMySettings(ctx) : [],
+    }),
+  },
+},
+```
+
+The admin asks it each time it loads its workspace. On a type that is off, the field is drawn
+nowhere on the type's pages, and your contributions that carry `extendedWith` naming it are not
+offered there. The column and every stored value stay, and the API still reads and writes them;
+switch the type on again and everything is back. What the field means while it is off, in your
+plugin's own outputs, is yours to decide. A switch that fails switches nothing off and is logged.
+
 ## Change entities you don't own
 
 `contributes.transforms` (`@experimental`) changes an entity another plugin or the app
