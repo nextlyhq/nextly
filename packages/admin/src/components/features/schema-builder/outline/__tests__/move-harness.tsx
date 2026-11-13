@@ -15,6 +15,7 @@ import {
   type MoveContext,
 } from "@admin/lib/builder/move-rule";
 import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
+import type { BlockCatalog } from "@admin/lib/builder/outline/block-rows";
 import {
   buildOutline,
   flattenOutline,
@@ -35,12 +36,15 @@ export function MoveHarness({
   initial,
   context,
   fieldGroups = new Map(),
+  blockCatalogs,
   probe,
 }: {
   initial: BuilderField[];
   /** The rule's context, less what the harness reads from the outline. */
   context: MoveContext;
   fieldGroups?: ReadonlyMap<string, LoadedFieldGroup>;
+  /** The blocks each blocks field accepts, so its block and prop rows are drawn. */
+  blockCatalogs?: ReadonlyMap<string, BlockCatalog>;
   probe: MoveHarnessProbe;
 }): JSX.Element {
   const [fields, setFields] = useState(initial);
@@ -50,8 +54,9 @@ export function MoveHarness({
       buildOutline(fields, {
         entityReadOnly: context.entityReadOnly,
         fieldGroups,
+        blockCatalogs,
       }),
-    [fields, context.entityReadOnly, fieldGroups]
+    [fields, context.entityReadOnly, fieldGroups, blockCatalogs]
   );
   const byId = useMemo(
     () => new Map(flattenOutline(nodes).map(node => [node.id, node])),

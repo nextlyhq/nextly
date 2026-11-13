@@ -58,14 +58,16 @@ function ownRow(rows: OutlineRows, node: OutlineNode): OutlineNode | null {
 
 /**
  * For a field group's own row, the entity's field using the group, which the
- * move rule judges a move of that row as; undefined for any other row.
+ * move rule judges a move of that row as; undefined for any other row, a
+ * registered block's or prop's among them, which no field group holds.
  */
 export function fieldGroupFieldHolding(
   byId: ReadonlyMap<string, OutlineNode>,
   rowId: string
 ): OutlineNode["field"] | undefined {
   const row = byId.get(rowId);
-  const own = row ? ownRow({ nodes: [], byId }, row) : null;
+  if (row?.readOnly?.kind !== "field-group") return undefined;
+  const own = ownRow({ nodes: [], byId }, row);
   return own && own !== row ? own.field : undefined;
 }
 

@@ -12,6 +12,11 @@ import type { MoveContext } from "@admin/lib/builder/move-rule";
 
 import type { BuilderField } from "../../types";
 
+import {
+  nestedFixtureBlockCatalogs,
+  nestedFixtureFieldGroups,
+  nestedFixtureFields,
+} from "../../__fixtures__/nested-fixture";
 import { MoveHarness, newProbe, plain } from "./move-harness";
 
 /** The rule's whole answer: what the keys do once values are kept across containers. */
@@ -126,6 +131,19 @@ describe("moving a field by key", () => {
     expect(document.activeElement).toBe(row("title"));
   });
 
+  it("says a refusal again when the same key is pressed again", async () => {
+    const { user } = setup(WHOLE);
+    row("title").focus();
+    const region = () =>
+      document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+    await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    const first = region();
+    await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    // The same sentence, changed, so a screen reader says it again.
+    expect(region()).not.toBe(first);
+    expect(region().trim()).toBe(first.trim());
+  });
+
   it("refuses a change of container today, saying so, and still reorders", async () => {
     const { probe, user } = setup(TODAY);
     row("body").focus();
@@ -149,5 +167,32 @@ describe("moving a field by key", () => {
     expect(document.getElementById(describedBy ?? "")?.textContent).toMatch(
       /Alt\+Up and Alt\+Down move the field; Alt\+Left moves it out of its\s+container, Alt\+Right into the container above it/
     );
+  });
+
+  it("says a registered block's row does not move, and moves nothing", async () => {
+    const probe = newProbe();
+    render(
+      <MoveHarness
+        initial={nestedFixtureFields()}
+        context={WHOLE}
+        fieldGroups={nestedFixtureFieldGroups()}
+        blockCatalogs={nestedFixtureBlockCatalogs()}
+        probe={probe}
+      />
+    );
+    const user = userEvent.setup();
+    const blockRow = document.querySelector<HTMLElement>(
+      '[role="treeitem"][data-path^="body/"]'
+    );
+    expect(blockRow).not.toBeNull();
+    blockRow?.focus();
+    await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+    const region =
+      document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+    expect(region).toMatch(
+      /is declared in code, not a field of this entity, so it does not move\.$/
+    );
+    expect(region).not.toContain("field group");
+    expect(probe.commits).toBe(0);
   });
 });

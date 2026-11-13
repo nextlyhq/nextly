@@ -76,6 +76,14 @@ export function useOutlineActions(
   const [moveToFor, setMoveToFor] = useState<string | null>(null);
   const refocus = useRef<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  // A live region says nothing when its text does not change, so the same
+  // sentence twice in a row (the same key pressed again where it cannot go)
+  // alternates a trailing no-break space, and is said each time.
+  const announce = useCallback(
+    (text: string) =>
+      setAnnouncement(previous => (previous === text ? `${text}\u00a0` : text)),
+    []
+  );
 
   const byId = useMemo(
     () => new Map(flattenOutline(nodes).map(node => [node.id, node])),
@@ -134,9 +142,9 @@ export function useOutlineActions(
       const verdict = call().judgeMove(id, target);
       if (verdict.allowed) {
         call().commitMove(verdict.fields);
-        setAnnouncement(movedSentence(before, verdict.fields, id, step));
+        announce(movedSentence(before, verdict.fields, id, step));
       } else {
-        setAnnouncement(`${verdict.message} Nothing moved.`);
+        announce(`${verdict.message} Nothing moved.`);
       }
       refocus.current = id;
       return verdict;
@@ -195,8 +203,16 @@ export function useOutlineActions(
         const target = isPendingDelete(node)
           ? null
           : stepTarget(rows(), id, step);
+        // A registered block, or one of its props, is declared in code: it is
+        // read here, not a field, so it never moves.
+        if (node.meta) {
+          announce(
+            `${spokenName(node)} is declared in code, not a field of this entity, so it does not move.`
+          );
+          return;
+        }
         if (!target) {
-          setAnnouncement(nowhereSentence(node, step));
+          announce(nowhereSentence(node, step));
           return;
         }
         carryOut(
@@ -225,7 +241,7 @@ export function useOutlineActions(
           carryOut(activeId, target);
           return;
         }
-        setAnnouncement(
+        announce(
           overId === activeId
             ? `${spokenName(node)} was dropped where it was. Nothing moved.`
             : `${spokenName(node)} cannot go where a deleted field was until the delete is saved or undone. Nothing moved.`
@@ -242,7 +258,7 @@ export function useOutlineActions(
           const inside = flattenOutline(node.children).filter(
             row => row.own && !row.meta
           ).length;
-          setAnnouncement(
+          announce(
             `Deleted ${spokenName(node)}${
               inside
                 ? ` and ${inside} ${inside === 1 ? "field" : "fields"} inside`
@@ -254,7 +270,7 @@ export function useOutlineActions(
       setHidden: (id, hidden) => call().setHidden(id, hidden),
       openFieldGroup: slug => call().openFieldGroup(slug),
     };
-  }, [focusRow, siblingsOf]);
+  }, [focusRow, siblingsOf, announce]);
 
   return {
     actions,

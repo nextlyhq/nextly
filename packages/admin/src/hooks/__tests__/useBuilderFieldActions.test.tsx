@@ -226,6 +226,45 @@ describe("getValidatedFields", () => {
     expect(result.current.getValidatedFields()).toBeNull();
     expect(toastError).toHaveBeenCalledWith("All fields must have a name");
   });
+
+  it("refuses a saved field taken to another storage level by naming the layout group it moved into", () => {
+    // Saved at the top level, moved into a nameless group (its level kept),
+    // and that group then given a name: the field now stands inside it.
+    const saved = [
+      field("body"),
+      field("", { id: "field_layout", type: "group", fields: [] }),
+    ];
+    const builder = makeBuilder([
+      field("box", {
+        id: "field_layout",
+        type: "group",
+        fields: [field("body")],
+      }),
+    ]);
+    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+
+    expect(result.current.getValidatedFields(saved)).toBeNull();
+    expect(toastError).toHaveBeenCalledWith(
+      "body would move into or out of a group or repeating rows, which is not available yet: a save would not keep the values. Undo that change first."
+    );
+  });
+
+  it("lets a saved field stay inside a nameless group, on its level", () => {
+    const saved = [
+      field("body"),
+      field("", { id: "field_layout", type: "group", fields: [] }),
+    ];
+    const builder = makeBuilder([
+      field("", {
+        id: "field_layout",
+        type: "group",
+        fields: [field("body")],
+      }),
+    ]);
+    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+
+    expect(result.current.getValidatedFields(saved)).not.toBeNull();
+  });
 });
 
 // A duplicated container is a field of its own all the way down. The Builder
