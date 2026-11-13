@@ -36,12 +36,15 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { CollectionTables } from "../../dynamic-collections/services/collection-tables";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import {
+  fieldProducesColumn,
   relationshipStoresJson,
   toSnakeCase,
 } from "../services/field-column-descriptor";
+import { relationshipTargetSlug } from "../services/relationship-key-target";
 
 import type {
   ForeignKeySpec,
@@ -98,20 +101,17 @@ export function withBuilderForeignKeys(
     })
   );
 
-  // Kept: every key the live table holds whose columns the table keeps. A key
-  // over a column this push drops goes with the column, and so does one over a
-  // relationship now holding a list: its column becomes JSON, which no key to
-  // one row can hold, so the key is dropped (ahead of the conversion).
-  const listColumns = new Set(
-    fields
-      .filter(field => relationshipStoresJson(field))
-      .map(field => lower(toSnakeCase(field.name)))
-  );
-  const kept = (live?.foreignKeys ?? []).filter(
-    fk =>
-      fk.columns.every(column => columns.has(lower(column))) &&
-      !fk.columns.some(column => listColumns.has(lower(column)))
-  );
+  // Refused before anything else is planned: a relationship whose column holds a key, pointed at
+  // another collection or made to hold a list by this save (`refuseKeyedRelationshipChanges`).
+  if (recordedFields !== undefined) {
+    refuseKeyedRelationshipChanges(fields, recordedFields, live);
+  }
+
+  const kept = keptKeys(spec, fields, live, {
+    builder,
+    recordedFields,
+    targetTables,
+  });
   const keyed = new Set(kept.flatMap(fk => fk.columns.map(lower)));
 
   // Created: the key of each relationship whose column this push adds.
@@ -149,6 +149,185 @@ export function withBuilderForeignKeys(
   }
 
   return { ...spec, foreignKeys: [...kept, ...created] };
+}
+
+/**
+ * The keys the live table holds that the desired table keeps: every one whose columns the table
+ * keeps. A key over a column this push drops goes with the column, and so does one over a
+ * relationship now holding a list: its column becomes JSON, which no key to one row can hold, so
+ * the key is dropped (ahead of the conversion). A kept key takes the actions the save gives its
+ * relationship (`withActionsTheSaveChanged`).
+ */
+function keptKeys(
+  spec: TableSpec,
+  fields: readonly FieldDefinition[],
+  live: TableSpec | undefined,
+  context: {
+    builder: DynamicCollectionSchemaService;
+    recordedFields: readonly FieldDefinition[] | undefined;
+    targetTables: CollectionTables | undefined;
+  }
+): ForeignKeySpec[] {
+  const lower = (name: string) => name.toLowerCase();
+  const columns = new Set(spec.columns.map(column => lower(column.name)));
+  const listColumns = new Set(
+    fields
+      .filter(field => relationshipStoresJson(field))
+      .map(field => lower(toSnakeCase(field.name)))
+  );
+  const { builder, recordedFields, targetTables } = context;
+  return (live?.foreignKeys ?? [])
+    .filter(
+      fk =>
+        fk.columns.every(column => columns.has(lower(column))) &&
+        !fk.columns.some(column => listColumns.has(lower(column)))
+    )
+    .map(fk =>
+      recordedFields === undefined
+        ? fk
+        : withActionsTheSaveChanged(
+            fk,
+            spec.name,
+            fields,
+            recordedFields,
+            builder,
+            targetTables
+          )
+    );
+}
+
+/**
+ * `fk` with the delete and update actions its relationship now declares, where this save changed
+ * them from what the registry records, as the save's migration file changes them; the key keeps
+ * its name and target. A relationship whose actions the save leaves as they were keeps its key
+ * exactly as the table holds it, whatever its field would describe today.
+ */
+function withActionsTheSaveChanged(
+  fk: ForeignKeySpec,
+  table: string,
+  fields: readonly FieldDefinition[],
+  recordedFields: readonly FieldDefinition[],
+  builder: DynamicCollectionSchemaService,
+  targetTables: CollectionTables | undefined
+): ForeignKeySpec {
+  if (fk.columns.length !== 1) return fk;
+  const column = fk.columns[0].toLowerCase();
+  const field = fields.find(f => toSnakeCase(f.name).toLowerCase() === column);
+  const before = recordedFields.find(f => f.name === field?.name);
+  if (field === undefined || before === undefined) return fk;
+  const now = builder.relationshipForeignKey(table, field, false, targetTables);
+  const was = builder.relationshipForeignKey(
+    table,
+    before,
+    false,
+    targetTables
+  );
+  if (
+    now === null ||
+    was === null ||
+    (now.onDelete === was.onDelete && now.onUpdate === was.onUpdate)
+  ) {
+    return fk;
+  }
+  // Judged, as a key this save creates is: what the save asks for has to be possible.
+  const judged = builder.relationshipForeignKey(
+    table,
+    field,
+    true,
+    targetTables
+  );
+  return judged === null
+    ? fk
+    : { ...fk, onDelete: judged.onDelete, onUpdate: judged.onUpdate };
+}
+
+/** A field's name as an author reads it: its label where it has one. */
+function fieldTitle(field: FieldDefinition): string {
+  return typeof field.label === "string" && field.label.trim() !== ""
+    ? field.label
+    : field.name;
+}
+
+/**
+ * Refuses a save that would leave a relationship's key checking the wrong collection.
+ *
+ * A relationship whose live column holds a foreign key has every value checked against its
+ * target's table. Pointing it at another collection would keep that key checking the old target,
+ * so every value of the new one would be refused. That is refused here, naming the field, before
+ * any statement is planned, and the key stays as it is. Making it hold several entries is not:
+ * that switch converts each value into a one-item list and takes the key with the conversion
+ * (`keysDroppedBeforeConversions`), since no key can check a list. Judged against the fields the
+ * registry records before this save, so only what the save changes is judged, and a relationship
+ * whose column holds no key changes freely, as it always has.
+ */
+function refuseKeyedRelationshipChanges(
+  fields: readonly FieldDefinition[],
+  recordedFields: readonly FieldDefinition[],
+  live: TableSpec | undefined
+): void {
+  const keyedColumns = new Set(
+    (live?.foreignKeys ?? []).flatMap(fk =>
+      fk.columns.length === 1 ? [fk.columns[0].toLowerCase()] : []
+    )
+  );
+  if (keyedColumns.size === 0) return;
+  const recordedByName = new Map(recordedFields.map(f => [f.name, f]));
+  for (const field of fields) {
+    const before = recordedByName.get(field.name);
+    if (before === undefined) continue;
+    if (!isKeyedRelationshipPair(field, before, keyedColumns)) continue;
+    if (relationshipStoresJson(field)) continue;
+    if (relationshipTargetSlug(field) === relationshipTargetSlug(before)) {
+      continue;
+    }
+    throw targetChangeRefusal(field, before);
+  }
+}
+
+/**
+ * Whether `field` and its recorded definition `before` are both relationships with a column of
+ * their own, and that column holds a key in the live table.
+ */
+function isKeyedRelationshipPair(
+  field: FieldDefinition,
+  before: FieldDefinition,
+  keyedColumns: ReadonlySet<string>
+): boolean {
+  return (
+    field.type === "relationship" &&
+    before.type === "relationship" &&
+    fieldProducesColumn(field) &&
+    fieldProducesColumn(before) &&
+    keyedColumns.has(toSnakeCase(field.name).toLowerCase())
+  );
+}
+
+/** The refusal of pointing a keyed relationship at another collection, naming both. */
+function targetChangeRefusal(
+  field: FieldDefinition,
+  before: FieldDefinition
+): NextlyError {
+  const target = relationshipTargetSlug(before) ?? "its collection";
+  const next = relationshipTargetSlug(field);
+  const named = next === null ? "another collection" : `"${next}"`;
+  return keyedRelationshipRefusal(
+    field,
+    "KEYED_RELATIONSHIP_CANNOT_CHANGE_TARGET",
+    `"${fieldTitle(field)}" can't be pointed at ${named}: the database checks every value it ` +
+      `holds against "${target}". Add a new relationship field for ${named} instead, then ` +
+      `remove this one.`
+  );
+}
+
+function keyedRelationshipRefusal(
+  field: FieldDefinition,
+  code: string,
+  message: string
+): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: `fields.${field.name}`, code, message }],
+    logContext: { field: field.name, reason: code },
+  });
 }
 
 /**

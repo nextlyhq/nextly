@@ -1148,3 +1148,214 @@ for (const server of SERVERS) {
     }
   );
 }
+
+/**
+ * A relationship as the admin's Schema Builder writes it: its target named by `relationTo`
+ * alone, with no relation type stated. Optional, so a deleted author empties it.
+ */
+const adminAuthorField = (
+  pair: Pair,
+  relationTo: unknown = pair.authorsSlug
+) => ({
+  name: "leadAuthor",
+  type: "relationship",
+  relationTo,
+});
+
+const adminPostFields = (pair: Pair, relationTo?: unknown) => [
+  { name: "title", type: "text" },
+  { name: "score", type: "text" },
+  adminAuthorField(pair, relationTo),
+];
+
+const adminKeyTo = (pair: Pair) => ({
+  columns: ["lead_author"],
+  referencesTable: pair.authors,
+  onDelete: "set null",
+});
+
+/** One database for the admin-shape cases: a target, a statement runner, and a reset. */
+interface AdminHarness {
+  target: () => Target;
+  run: (statement: string) => Promise<unknown>;
+  quote: (name: string) => string;
+}
+
+function adminShapeCases(pair: Pair, harness: AdminHarness) {
+  /** The authors, and the posts without their author, as the Builder's DDL creates them. */
+  async function createTables(postFields: unknown[]) {
+    const { dialect } = harness.target();
+    for (const statement of [
+      ...builderStatements(dialect, pair.authors, authorFields("text")),
+      ...builderStatements(dialect, pair.posts, postFields),
+    ]) {
+      await harness.run(statement);
+    }
+  }
+
+  it("keys a relationship the admin adds to an existing collection", async () => {
+    await createTables(adminPostFields(pair).slice(0, 2));
+    const result = await save(
+      harness.target(),
+      desiredFor(pair, authorFields("text"), adminPostFields(pair))
+    );
+    expect(result.error).toBeUndefined();
+    expect(await postKeys(harness.target(), pair)).toEqual([adminKeyTo(pair)]);
+    // Enforced: a post naming no author is refused.
+    await expect(
+      harness.run(
+        `INSERT INTO ${harness.quote(pair.posts)} (id, title, slug, score, lead_author) VALUES ('p9', 'Q', 'q', '1', 'nobody')`
+      )
+    ).rejects.toThrow();
+    // And the next diff expects exactly that key.
+    const preview = await previewDesiredSchema({
+      desired: desiredFor(pair, authorFields("text"), adminPostFields(pair)),
+      db: harness.target().db,
+      dialect: harness.target().dialect,
+    });
+    expect(
+      preview.operations.filter(op => op.type.endsWith("foreign_key"))
+    ).toEqual([]);
+  });
+
+  it("keys a relationship the admin creates its collection with", async () => {
+    await createTables([]);
+    await harness.run(`DROP TABLE ${harness.quote(pair.posts)}`);
+    const result = await save(
+      harness.target(),
+      desiredFor(pair, authorFields("text"), adminPostFields(pair))
+    );
+    expect(result.error).toBeUndefined();
+    expect(await postKeys(harness.target(), pair)).toEqual([adminKeyTo(pair)]);
+  });
+
+  it.each([
+    {
+      what: "a Single, which the registry does not hold",
+      relationTo: "site_settings",
+    },
+    { what: "a slug that names nothing", relationTo: "nothing_at_all" },
+    { what: "several collections", relationTo: ["a", "b"] },
+  ])("keys none to $what, and the apply succeeds", async ({ relationTo }) => {
+    await createTables(adminPostFields(pair).slice(0, 2));
+    const result = await save(
+      harness.target(),
+      desiredFor(pair, authorFields("text"), adminPostFields(pair, relationTo))
+    );
+    expect(result.error).toBeUndefined();
+    expect(await postKeys(harness.target(), pair)).toEqual([]);
+  });
+
+  it("plans nothing for a relationship recorded before it was keyed, on an unrelated save", async () => {
+    // As an earlier release left it: the column, and no key.
+    await createTables(adminPostFields(pair).slice(0, 2));
+    await harness.run(authorColumnWithoutKey(harness.target().dialect, pair));
+    const desired = desiredFor(pair, authorFields("text"), [
+      ...adminPostFields(pair),
+      { name: "subtitle", type: "text" },
+    ]);
+    const recorded = {
+      ...desired,
+      collections: {
+        ...desired.collections,
+        posts: {
+          ...desired.collections.posts,
+          recordedFields: adminPostFields(pair) as never,
+        },
+      },
+    };
+    const result = await save(harness.target(), recorded);
+    expect(result.error).toBeUndefined();
+    expect(await postKeys(harness.target(), pair)).toEqual([]);
+    expect(await postColumns(harness.target(), pair)).toContain("subtitle");
+  });
+
+  it("refuses pointing a keyed relationship at another collection, keeping its key", async () => {
+    await createTables(adminPostFields(pair).slice(0, 2));
+    expect(
+      (
+        await save(
+          harness.target(),
+          desiredFor(pair, authorFields("text"), adminPostFields(pair))
+        )
+      ).error
+    ).toBeUndefined();
+    const desired = desiredFor(
+      pair,
+      authorFields("text"),
+      adminPostFields(pair, `${pair.authorsSlug}_posts`)
+    );
+    const result = await save(harness.target(), {
+      ...desired,
+      collections: {
+        ...desired.collections,
+        posts: {
+          ...desired.collections.posts,
+          recordedFields: adminPostFields(pair) as never,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain('"leadAuthor"');
+    expect(await postKeys(harness.target(), pair)).toEqual([adminKeyTo(pair)]);
+  });
+}
+
+describe("the admin's relationships get their keys (sqlite)", () => {
+  const pair = pairNamed("adm");
+  let sqlite: Database.Database;
+  let target: Target;
+  beforeEach(async () => {
+    clearCachedSnapshot();
+    sqlite = new Database(":memory:");
+    sqlite.pragma("foreign_keys = ON");
+    target = { db: drizzleSqlite({ client: sqlite }), dialect: "sqlite" };
+    await freshPushSchema("sqlite", target.db, getDialectTables("sqlite"));
+  });
+  afterEach(() => {
+    clearCachedSnapshot();
+    sqlite.close();
+  });
+  adminShapeCases(pair, {
+    target: () => target,
+    // Async, so a statement the database refuses is a rejection, as on the servers.
+    run: async statement => {
+      sqlite.exec(statement);
+    },
+    quote: name => `"${name}"`,
+  });
+});
+
+for (const server of SERVERS) {
+  const context = makeTestContext(server.dialect);
+  describe.skipIf(!context.url)(
+    `the admin's relationships get their keys (${server.dialect})`,
+    () => {
+      const pair = pairNamed(`${context.prefix}_adm`);
+      const quote = (name: string) =>
+        server.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      let connection: ReturnType<(typeof server)["open"]>;
+      const dropTables = async () => {
+        await connection.run(`DROP TABLE IF EXISTS ${quote(pair.posts)}`);
+        await connection.run(`DROP TABLE IF EXISTS ${quote(pair.authors)}`);
+      };
+      beforeAll(() => {
+        connection = server.open(context.url ?? "");
+      });
+      beforeEach(async () => {
+        clearCachedSnapshot();
+        await dropTables();
+      });
+      afterAll(async () => {
+        await dropTables();
+        await connection.close();
+        clearCachedSnapshot();
+      });
+      adminShapeCases(pair, {
+        target: () => connection.target,
+        run: statement => connection.run(statement),
+        quote,
+      });
+    }
+  );
+}

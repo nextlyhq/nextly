@@ -529,6 +529,20 @@ PostgreSQL enum type.
 entity tables, on the extendable core tables, and — for the app, or for a
 plugin naming the owner in `dependsOn` — on another owner's tables.
 
+Two more dependencies are asked of a plugin, and the app is never asked for
+either: its schema runs after every plugin's.
+
+- **A collection, Single or field group another plugin declared** takes a
+  plugin's column or index only when the plugin names that owner in
+  `dependsOn` (or `optionalDependsOn`). The app's own entities need none.
+- **An index over a column a third owner contributed** needs that contributor
+  in `dependsOn` too. The column only exists while its contributor is
+  installed, and arrives in the contributor's migrations, so the dependency is
+  what runs those first and keeps the contributor from being uninstalled from
+  under the index.
+
+Either one missing stops the app at startup, naming both plugins.
+
 A column added this way is **hidden from the entry API**: it is on the table,
 so migrations and SQLite rebuilds keep it, and it is stripped from every REST
 response, Direct API read, version snapshot and webhook payload, while a value
@@ -580,6 +594,63 @@ app's `ctx.db` otherwise cannot reach. A plugin that contributed to a
 dependency's table reads that table through the ordinary `ctx.db` methods, and
 writes its own column there through `ctx.db.contributed`: the ordinary methods
 write through the dependency's definition, which does not declare it.
+
+## Keys, checks and relations on a table you do not own
+
+`extendTable` also takes `foreignKeys`, `checks` and `relations`, in the same
+shape `defineTable` takes them, on a plugin's or the app's own table: the
+app on any plugin's table, and a plugin on the tables of a plugin it names in
+`dependsOn`. A collection's, Single's, field group's or core table takes a
+hidden column and an index, never a key, check or relation.
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
+
+export default definePlugin({
+  name: "@acme/ratings",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.75",
+  dependsOn: { "@acme/shop": "^1.0.0" },
+  contributes: {
+    schema: {
+      tables: [defineTable("scales", { id: col.id() })],
+      extend: [
+        ({ schema }) =>
+          schema.extendTable("shop__products", {
+            columns: { scaleId: col.varchar(36, { nullable: true }) },
+            foreignKeys: [
+              {
+                columns: ["scaleId"],
+                references: { table: "ratings__scales", columns: ["id"] },
+                onDelete: "set null",
+              },
+            ],
+            checks: [{ name: "price_positive", sql: "price >= 0" }],
+            relations: [
+              {
+                name: "scale",
+                kind: "one",
+                targetTable: "ratings__scales",
+                fromColumn: "scale_id",
+              },
+            ],
+          }),
+      ],
+    },
+  },
+});
+```
+
+Each key and check is the contributor's element. It ships in the
+contributor's migrations, the table's owner never reads it as drift when its
+own modules run, and uninstalling the contributor without keeping its data
+removes it and leaves the owner's table and rows. A key may stand on a column
+added in the same call. A plugin's key or relation may point at its own
+tables, a core table, or the tables of a plugin it depends on, but not at an
+app table, whose schema runs after every plugin's. As with an index, a key or
+relation on a column a third plugin contributed needs that plugin in
+`dependsOn` too.
 
 ## What is not supported
 

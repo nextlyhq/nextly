@@ -131,6 +131,16 @@ export function toDbError(
     kind = "unique-violation";
   }
 
+  // SQLite enforces a key's RESTRICT action like a trigger, so a delete it refuses reports
+  // SQLITE_CONSTRAINT_TRIGGER, not SQLITE_CONSTRAINT_FOREIGNKEY; its message still names the key.
+  if (
+    dialect === "sqlite" &&
+    kind === "constraint" &&
+    message.toLowerCase().includes("foreign key constraint failed")
+  ) {
+    kind = "fk-violation";
+  }
+
   // Fallbacks based on common Node errors when code is not a DB symbol
   if (kind === "internal" && code) {
     const c = code.toUpperCase();
