@@ -205,7 +205,24 @@ export function diffSnapshots(
   }
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];
-  for (const op of dropIndexOps) {
+  // A replaced key whose old target this diff drops is dropped first after all: kept until its
+  // replacement is added, it would block the drop of the table it points at.
+  const droppedNames = new Set(droppedTables.map(table => table.name));
+  const ordered = dropIndexOps.map(op =>
+    op.type === "drop_foreign_key" &&
+    op.afterReplacement === true &&
+    droppedNames.has(op.foreignKey.referencesTable)
+      ? {
+          type: op.type,
+          tableName: op.tableName,
+          foreignKey: op.foreignKey,
+          ...(op.beforeConversion === true
+            ? { beforeConversion: true as const }
+            : {}),
+        }
+      : op
+  );
+  for (const op of ordered) {
     const coversBlockedColumn =
       op.type === "drop_index" &&
       op.index.columns.some(column =>

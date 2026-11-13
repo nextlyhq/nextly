@@ -73,7 +73,7 @@ const HOLDS_A_VALUE: RowCondition = {
  * The table and column a desired table's column is found under in the database now: both refusals
  * count rows before any of the apply's renames has run.
  */
-function liveNames(
+export function liveNames(
   renames: ApplyRenames,
   table: string,
   column: string

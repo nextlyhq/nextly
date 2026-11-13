@@ -18,7 +18,8 @@ import { NextlyError } from "../../../errors";
 
 import { querySqlRows } from "./classifier/count-helpers";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
-import { rowsHold, subjectOf } from "./several-references-refusal";
+import { liveTableName, renamesOf } from "./live-uniques";
+import { liveNames, rowsHold, subjectOf } from "./several-references-refusal";
 import type { DesiredSchema } from "./types";
 
 /**
@@ -36,6 +37,7 @@ export async function refuseKeysRowsWouldBreak(args: {
   operations: readonly Operation[];
 }): Promise<void> {
   const lower = (name: string) => name.toLowerCase();
+  const renames = renamesOf(args.operations);
   const liveColumns = new Map(
     args.live.tables.map(table => [
       lower(table.name),
@@ -48,20 +50,30 @@ export async function refuseKeysRowsWouldBreak(args: {
     const { columns, referencesTable, referencesColumns } = op.foreignKey;
     // One column holding one id, already on the table: a new table or column has no rows to check.
     if (columns.length !== 1 || referencesColumns.length !== 1) continue;
-    const column = columns[0];
-    if (liveColumns.get(lower(op.tableName))?.has(lower(column)) !== true) {
+    // Read where they stand before this apply: a table or column it renames under its old name.
+    const source = liveNames(renames, op.tableName, columns[0]);
+    if (
+      liveColumns.get(lower(source.table))?.has(lower(source.column)) !== true
+    ) {
       continue;
     }
+    const target = liveTableName(referencesTable, renames);
+    // A target this apply creates holds no rows yet, so every value the column holds breaks it.
+    const targetIsLive = liveColumns.has(lower(target));
     const [row] = await querySqlRows<{ n: number | string }>(
       args.db,
       args.dialect,
-      sql`SELECT COUNT(*) AS n FROM ${sql.identifier(op.tableName)} AS r
-          WHERE r.${sql.identifier(column)} IS NOT NULL
-            AND NOT EXISTS (
-              SELECT 1 FROM ${sql.identifier(referencesTable)} AS t
-              WHERE t.${sql.identifier(referencesColumns[0])} = r.${sql.identifier(column)}
-            )`
+      targetIsLive
+        ? sql`SELECT COUNT(*) AS n FROM ${sql.identifier(source.table)} AS r
+              WHERE r.${sql.identifier(source.column)} IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM ${sql.identifier(target)} AS t
+                  WHERE t.${sql.identifier(referencesColumns[0])} = r.${sql.identifier(source.column)}
+                )`
+        : sql`SELECT COUNT(*) AS n FROM ${sql.identifier(source.table)} AS r
+              WHERE r.${sql.identifier(source.column)} IS NOT NULL`
     );
+    const column = columns[0];
     const rows = Number(row?.n ?? 0);
     if (rows === 0) continue;
     const { label, field } = subjectOf(args.desired, op.tableName, column);

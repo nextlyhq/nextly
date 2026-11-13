@@ -129,12 +129,28 @@ export function movedForeignKeyName(
   tableName: string,
   column: string,
   currentName: string,
-  targetTable: string
+  targetTable: string,
+  // Names the table's other keys hold or will hold: another column's usual name can spell the
+  // same as this one's moved name (`owner` and `owner_to_dc_editors`), so a taken one is skipped.
+  taken: ReadonlySet<string> = new Set()
 ): string {
   const usual = foreignKeyNameForColumns(tableName, [column]);
-  return currentName.toLowerCase() === usual.toLowerCase()
-    ? foreignKeyNameForColumns(tableName, [column, "to", targetTable])
-    : usual;
+  const held = new Set([...taken].map(name => name.toLowerCase()));
+  const free = (name: string) => !held.has(name.toLowerCase());
+  if (currentName.toLowerCase() !== usual.toLowerCase() && free(usual)) {
+    return usual;
+  }
+  const moved = foreignKeyNameForColumns(tableName, [
+    column,
+    "to",
+    targetTable,
+  ]);
+  // The first of `moved`, `moved_2`, `moved_3`, ... that no other key holds.
+  const candidate = (attempt: number) =>
+    attempt === 1 ? moved : boundedIdentifier(`${moved}_${attempt}`);
+  let attempt = 1;
+  while (!free(candidate(attempt))) attempt++;
+  return candidate(attempt);
 }
 
 /**

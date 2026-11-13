@@ -1471,9 +1471,20 @@ export class PushSchemaPipeline {
           );
           // Likewise the declared checks and foreign keys, which the kit's
           // runtime tables do not carry on PostgreSQL and MySQL either.
+          // And a key this apply drops itself once its replacement is added (`afterReplacement`):
+          // the kit, reading it live and undeclared, would drop it ahead of that replacement.
           const keptConstraints = stripKitDropsOfDeclaredConstraints(
             stripped.kept,
-            desiredSnapshot
+            {
+              tables: [
+                ...desiredSnapshot.tables,
+                ...resolvedOps.flatMap(op =>
+                  op.type === "drop_foreign_key" && op.afterReplacement === true
+                    ? [{ name: op.tableName, foreignKeys: [op.foreignKey] }]
+                    : []
+                ),
+              ],
+            }
           );
           // And the live UNIQUE constraints no spec describes, which only
           // this apply's own drop_index removes (a Builder one-to-one's).

@@ -2277,7 +2277,13 @@ export class DynamicCollectionService extends BaseService {
                   tableName,
                   key.columns[0] ?? "",
                   held.name,
-                  key.referencesTable
+                  key.referencesTable,
+                  // Every other key's name, held or described, which the moved one must not take.
+                  new Set(
+                    [...live, ...described]
+                      .filter(other => lower(other.columns[0] ?? "") !== column)
+                      .map(other => other.name)
+                  )
                 ),
               }
             : {

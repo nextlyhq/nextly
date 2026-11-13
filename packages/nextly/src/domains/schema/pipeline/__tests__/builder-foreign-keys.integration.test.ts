@@ -1352,6 +1352,70 @@ function adminShapeCases(pair: Pair, harness: AdminHarness) {
     expect(await postKeys(harness.target(), pair)).toEqual([adminKeyTo(pair)]);
   });
 
+  /**
+   * The posts keyed, by a relationship this save adds over a column already there, to a collection
+   * this same save creates (`fresh`), whose table does not exist yet.
+   */
+  function keyedToANewCollection(fresh: string): DesiredSchema {
+    const base = desiredFor(pair, authorFields("text"), [
+      { name: "title", type: "text" },
+      { name: "score", type: "text" },
+      adminAuthorField(pair, fresh),
+    ]);
+    return {
+      ...base,
+      collections: {
+        ...base.collections,
+        fresh: {
+          slug: fresh,
+          tableName: `dc_${fresh}`,
+          fields: [{ name: "name", type: "text" }] as never,
+          builderOwned: true,
+        },
+        posts: {
+          ...base.collections.posts,
+          recordedFields: adminPostFields(pair).slice(0, 2) as never,
+        },
+      },
+    };
+  }
+
+  it("keys a column holding no values to a collection the same save creates", async () => {
+    const fresh = `${pair.authorsSlug}_fresh`;
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+    await createTables(adminPostFields(pair).slice(0, 2));
+    await harness.run(authorColumnWithoutKey(harness.target().dialect, pair));
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.posts)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("score")}) VALUES ('p1', 'P', 'p', '1')`
+    );
+
+    const result = await save(harness.target(), keyedToANewCollection(fresh));
+
+    expect(result.error).toBeUndefined();
+    expect(
+      (await postKeys(harness.target(), pair)).map(k => k.referencesTable)
+    ).toEqual([`dc_${fresh}`]);
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(pair.posts)}`);
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+  });
+
+  it("refuses keying a column holding values to a collection the same save creates", async () => {
+    const fresh = `${pair.authorsSlug}_fresh`;
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+    await createTables(adminPostFields(pair).slice(0, 2));
+    await harness.run(authorColumnWithoutKey(harness.target().dialect, pair));
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.posts)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("score")}, ${harness.quote("lead_author")}) VALUES ('p1', 'P', 'p', '1', 'someone')`
+    );
+
+    const result = await save(harness.target(), keyedToANewCollection(fresh));
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain("leadAuthor");
+    expect(await postKeys(harness.target(), pair)).toEqual([]);
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+  });
+
   it.runIf(harness.dialect === "mysql")(
     "leaves the column keyed when the old key's drop fails after the new one is added",
     async () => {

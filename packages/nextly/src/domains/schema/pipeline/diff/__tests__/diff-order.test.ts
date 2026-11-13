@@ -250,3 +250,41 @@ describe("diffSnapshots — a key moved to another target", () => {
     ]);
   });
 });
+
+describe("diffSnapshots — a key moved off a table this diff drops", () => {
+  it("drops the old key first, so the table it points at can go", () => {
+    const authors = table("authors");
+    const editors = table("editors");
+    const posts: TableSpec = {
+      ...table("posts", ["authors"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "varchar(36)", nullable: true },
+      ],
+      foreignKeys: [key("posts", "author", "authors")],
+    };
+    const moved: TableSpec = {
+      ...posts,
+      foreignKeys: [
+        {
+          ...key("posts", "author", "editors"),
+          name: "fk_posts_author_to_editors",
+        },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [authors, editors, posts] },
+      { tables: [editors, moved] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    const dropOld = at(
+      op =>
+        op.type === "drop_foreign_key" &&
+        op.foreignKey.name === "fk_posts_author"
+    );
+    expect(dropOld).toBeGreaterThan(-1);
+    expect(dropOld).toBeLessThan(
+      at(op => op.type === "drop_table" && op.tableName === "authors")
+    );
+  });
+});

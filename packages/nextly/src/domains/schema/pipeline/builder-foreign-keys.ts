@@ -316,7 +316,8 @@ function keyedRelationshipMoves(
         table,
         column,
         liveKey.name,
-        moved.referencesTable
+        moved.referencesTable,
+        otherKeyNames(table, column, fields, live, builder, targetTables)
       ),
     });
   }
@@ -339,6 +340,36 @@ function isKeyedRelationshipPair(
     fieldProducesColumn(before) &&
     keyedColumns.has(toSnakeCase(field.name).toLowerCase())
   );
+}
+
+/**
+ * The names the table's keys on columns other than `column` hold, live or as their relationships
+ * describe them, which a moved key's name must not take.
+ */
+function otherKeyNames(
+  table: string,
+  column: string,
+  fields: readonly FieldDefinition[],
+  live: TableSpec | undefined,
+  builder: DynamicCollectionSchemaService,
+  targetTables: CollectionTables | undefined
+): Set<string> {
+  const other = (columns: readonly string[]) =>
+    !columns.some(c => c.toLowerCase() === column);
+  return new Set([
+    ...(live?.foreignKeys ?? [])
+      .filter(fk => other(fk.columns))
+      .map(fk => fk.name),
+    ...fields.flatMap(field => {
+      const key = builder.relationshipForeignKey(
+        table,
+        field,
+        false,
+        targetTables
+      );
+      return key !== null && other(key.columns) ? [key.name] : [];
+    }),
+  ]);
 }
 
 /** The refusal of pointing a keyed relationship at a target with no table a key can check. */
