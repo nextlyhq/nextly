@@ -35,7 +35,7 @@ import {
   ROW_ACTIONS_TRIGGER,
 } from "@admin/components/ui/table/data-table/row-actions";
 
-import { EditorOutline, TableOutline } from "../outlines";
+import { EditorOutline, ScreenOutline, TableOutline } from "../outlines";
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ plugins: [] }),
@@ -121,5 +121,20 @@ describe("the table outline", () => {
     expect(
       table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+});
+
+describe("an outline not yet due", () => {
+  it("is laid out but not drawn, so it holds its parts' place from the first paint", () => {
+    render(
+      <ScreenOutline>
+        <TableOutline />
+      </ScreenOutline>
+    );
+    const outline = screen.getByTestId("screen-outline");
+    // Before 0.4 s: its parts are there, taking their room, and unseen.
+    expect(outline.hasAttribute("data-outline-shown")).toBe(false);
+    expect(classesOf(outline)).toContain("invisible");
+    expect(outline.querySelectorAll("tbody tr").length).toBeGreaterThan(0);
   });
 });
