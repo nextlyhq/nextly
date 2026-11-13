@@ -167,3 +167,34 @@ describe("checkVerification", () => {
     expect(transport.asked).toHaveLength(0);
   });
 });
+
+describe("a site with more production addresses than one check reads", () => {
+  it("lists the addresses it did not read as not read, so none is called found", async () => {
+    const addresses = Array.from(
+      { length: 6 },
+      (_, index) => `https://site${index}.example.com`
+    );
+    const pages = Object.fromEntries(
+      addresses.map(address => [
+        `${address}/`,
+        {
+          status: 200,
+          body: HOME('<meta name="msvalidate.01" content="8A2F">'),
+        },
+      ])
+    );
+    const resolveAll: Resolve = () =>
+      Promise.resolve([{ address: "93.184.216.34", family: 4 as const }]);
+    const body = await checkVerification(ctx, {
+      ...setup(addresses, { "msvalidate.01": "8A2F" }, serving(pages)),
+      fetch: { resolve: resolveAll, transport: serving(pages) },
+    });
+    expect(body.homePages.map(page => page.address)).toEqual(addresses);
+    expect(body.homePages[5]).toEqual({
+      address: "https://site5.example.com",
+      read: false,
+      message: "Not checked: one check reads the first 5 addresses.",
+    });
+    expect(body.tags[0]?.foundAt).toHaveLength(5);
+  });
+});

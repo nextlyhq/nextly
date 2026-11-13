@@ -99,9 +99,18 @@ export async function checkVerification(
       .slice(0, MAX_HOME_PAGES)
       .map(origin => readHomePage(origin, origins, setup))
   );
+  // Addresses past the bound are listed as not read, so a code is never
+  // called found where its home page was never looked at.
+  const unread: CheckedHomePage[] = origins
+    .slice(MAX_HOME_PAGES)
+    .map(address => ({
+      address,
+      read: false,
+      message: `Not checked: one check reads the first ${MAX_HOME_PAGES} addresses.`,
+    }));
   return {
     checkedAt,
-    homePages: read.map(each => each.page),
+    homePages: [...read.map(each => each.page), ...unread],
     tags: saved.map(([name, code]) => ({
       name: name.toLowerCase(),
       foundAt: read

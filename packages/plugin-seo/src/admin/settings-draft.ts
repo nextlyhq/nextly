@@ -503,7 +503,34 @@ export function rebasedDraft(
       before.socialProfiles,
       after.socialProfiles
     ),
+    verificationCodes: rebasedVerification(
+      draft.verificationCodes,
+      before.verificationCodes,
+      after.verificationCodes
+    ),
   };
+}
+
+/**
+ * The verification codes moved service by service, and the other services'
+ * tags row by row, so an edit to one service's code keeps another person's
+ * edit to another's.
+ */
+function rebasedVerification(
+  draft: VerificationDraft,
+  before: VerificationDraft,
+  after: VerificationDraft
+): VerificationDraft {
+  const next: VerificationDraft = {
+    ...after,
+    others: rebasedSet(draft.others, before.others, after.others),
+  };
+  for (const service of VERIFICATION_SERVICES) {
+    if (draft[service.key] !== before[service.key]) {
+      next[service.key] = draft[service.key];
+    }
+  }
+  return next;
 }
 
 /** The values moved as a whole map or list rather than as one value. */
@@ -513,6 +540,7 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "hiddenTypes",
   "productionAddresses",
   "socialProfiles",
+  "verificationCodes",
 ]);
 
 /** The draft's own values, other than the per-type ones, edited since `before`. */
