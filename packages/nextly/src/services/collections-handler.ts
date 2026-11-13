@@ -712,7 +712,9 @@ export class CollectionsHandler {
           | undefined,
         fields: originalFields,
         slug: data.slug as string | undefined,
-        localized: data.localized as boolean | undefined,
+        // An explicit answer from the stored record, where no `localized`
+        // means untranslated; absent is kept for older plugin callers.
+        localized: data.localized === true,
       });
       Object.assign(data, draftSplitResponseFields(draftSplit));
     }

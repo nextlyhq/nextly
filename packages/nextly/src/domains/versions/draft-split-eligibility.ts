@@ -253,10 +253,11 @@ export interface SchemaEligibilityCollection {
   slug?: string;
   /**
    * Whether the document itself is localized, so a schema read reports the
-   * `localized-component` rule its writes apply. Required, as the write's own
-   * input is: an absent value would be read as not localized.
+   * `localized-component` rule its writes apply. Optional on this published
+   * input: absent, a collection is judged as it was before the rule covered
+   * collections (the rule is not asked), and a Single as it always was.
    */
-  localized: boolean | undefined;
+  localized?: boolean;
   /** The entity's kind, collection or Single, for the caller's own record. */
   entityKind?: "collection" | "single";
 }
@@ -290,6 +291,18 @@ function reportUnresolvableComponent(
 }
 
 /**
+ * Whether the schema-read input's document is localized, for the rule that
+ * reads it. `localized` is optional on that published input: a caller that
+ * leaves it out about a collection is judged as before the rule covered
+ * collections, so a plugin built against the earlier input keeps its answer;
+ * a Single without it is judged as untranslated, as it always was.
+ */
+function documentLocalizedOf(collection: SchemaEligibilityCollection): boolean {
+  if (collection.localized !== undefined) return collection.localized;
+  return collection.entityKind !== "single";
+}
+
+/**
  * Resolve a schema-read response's draft-split state (the admin editor's
  * `draftsEnabled` flag, and why it is off), from the same predicate the
  * mutation service gates on.
@@ -320,7 +333,7 @@ export async function schemaDraftSplit(
     fields: collection.fields,
     componentSchemas,
     entityKind: collection.entityKind,
-    documentLocalized: collection.localized === true,
+    documentLocalized: documentLocalizedOf(collection),
   });
   if (
     result.reason === "unresolvable-component" &&
@@ -396,7 +409,9 @@ export async function collectionDraftSplit(
     versions: resolveVersionsConfig(collection.versions, collection.status),
     fields: collection.fields,
     slug: collection.slug,
-    localized: collection.localized,
+    // The authored config is authoritative: no `localized` there means the
+    // collection is untranslated, so the rule gets an explicit answer.
+    localized: collection.localized === true,
   });
 }
 

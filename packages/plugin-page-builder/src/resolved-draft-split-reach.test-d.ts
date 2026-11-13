@@ -23,14 +23,14 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 /**
- * What the dynamic registry stores: `versions` already resolved, and whether
- * the collection itself is translated, which the drafts rule reads.
+ * What the dynamic registry stores: `versions` already resolved. It names no
+ * `localized`, the shape a plugin built against the earlier input passes, so
+ * `registryRecordIsAccepted` below is also the check that this shape compiles.
  */
 type RegistryRecord = {
   status: true;
   versions: { drafts: { enabled: true } };
   fields: [];
-  localized: false;
 };
 
 /** What an author writes in config. Neither form is the other. */
