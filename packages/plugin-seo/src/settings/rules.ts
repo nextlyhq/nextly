@@ -24,6 +24,7 @@ import type { StructuredDataTypeRule } from "../structured-data/rules";
 
 import {
   AI_CRAWLER_CHOICES,
+  largeImagePreviewsOn,
   SEO_PLUGIN_NAME,
   SEO_SETTINGS_SLUG,
   SETUP_STEPS,
@@ -94,6 +95,11 @@ export interface SeoRules {
    * value edited past the screen. Said once in the log by what serves them.
    */
   robotsRulesRefused?: string;
+  /**
+   * Whether every listed page asks for large image previews: on until the
+   * site switches it off, so it is set only as `false`.
+   */
+  largeImagePreviews?: false;
 }
 
 /** One of the brand's official accounts. */
@@ -214,6 +220,10 @@ async function rulesOf(
     ...withDefined(
       "plainTextCopies",
       document.plainTextCopies === true ? true : undefined
+    ),
+    ...withDefined<"largeImagePreviews", false>(
+      "largeImagePreviews",
+      largeImagePreviewsOn(document.largeImagePreviews) ? undefined : false
     ),
     patterns: patternsOf(document),
     ...ownRobotsRulesOf(document),

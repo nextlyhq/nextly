@@ -166,6 +166,25 @@ function textProblems(facts: PageFacts): Problem[] {
 }
 
 /**
+ * A published page whose date to drop from search has passed: it is served
+ * hidden now, which a person who set the date long ago may not expect.
+ */
+function dropDateProblem(facts: PageFacts): Problem[] {
+  const after = facts.answer.display?.unavailableAfter;
+  if (after?.passed !== true) return [];
+  return [
+    {
+      kind: "dropDatePassed",
+      subject: facts.subject,
+      // The moment as stored, in UTC, the zone the SEO tab sets it in.
+      what: `Dropped from search after ${after.value.slice(0, 16).replace("T", " ")} UTC`,
+      action: "Remove the date",
+      fix: { place: "page", tab: "seo", field: "unavailableAfter" },
+    },
+  ];
+}
+
+/**
  * A canonical a person typed that names an address other than the page's
  * own, which tells search engines to list that one instead. One the person
  * confirmed, saying the page first appeared elsewhere, is meant: no problem.
@@ -383,7 +402,11 @@ function brokenLinkProblems(facts: PageFacts): Problem[] {
  */
 export function pageProblems(facts: PageFacts): Problem[] {
   if (!facts.answer.robots.value.index) {
-    return [...brokenLinkProblems(facts), ...imageAltProblems(facts)];
+    return [
+      ...dropDateProblem(facts),
+      ...brokenLinkProblems(facts),
+      ...imageAltProblems(facts),
+    ];
   }
   return [
     ...robotsBlockedProblem(facts),

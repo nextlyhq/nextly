@@ -145,13 +145,45 @@ export interface PageMetadataInput {
   readonly structuredDataHints?: PageStructuredDataHints;
 }
 
+/**
+ * @experimental How large a picture from the page search engines may show:
+ * Google's `max-image-preview` values.
+ */
+export type PageImagePreview = "none" | "standard" | "large";
+
+/**
+ * @experimental Whether search engines may list the page and follow its
+ * links, and how they may show it. Each optional value is one of Google's
+ * robots directives
+ * (https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag),
+ * served only where the answer states it.
+ */
+export interface PageRobots {
+  index: boolean;
+  follow: boolean;
+  /** `max-image-preview`: the largest picture shown from the page. */
+  maxImagePreview?: PageImagePreview;
+  /** `max-snippet`: the most characters of text shown, `-1` for no limit. */
+  maxSnippet?: number;
+  /** `nosnippet`: no text from the page shown under its link. */
+  nosnippet?: boolean;
+  /** `noimageindex`: the page's pictures left out of image search. */
+  noimageindex?: boolean;
+  /** `unavailable_after`: the date and time, as ISO 8601, the page leaves results. */
+  unavailableAfter?: string;
+  /** `noarchive`: no stored copy kept. */
+  noarchive?: boolean;
+  /** `nocache`: the same request, as some search engines spell it. */
+  nocache?: boolean;
+}
+
 /** @experimental The page's answer: the values its head is built from. */
 export interface PageMetadataAnswer {
   title?: string;
   description?: string;
   /** Absolute, or root-relative and resolved against `metadataBase`. */
   canonical?: string;
-  robots?: { index: boolean; follow: boolean };
+  robots?: PageRobots;
   social?: {
     title?: string;
     description?: string;

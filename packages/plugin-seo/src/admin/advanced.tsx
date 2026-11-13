@@ -1,6 +1,7 @@
 /**
  * The SEO panel's Advanced section: hiding the page from search, its official
- * address, a different title when shared, and the share image. Closed until
+ * address, a different title when shared, the share image, the structured
+ * data type, and how search results may show the page. Closed until
  * a person opens it; a count beside its name says how many of the page's
  * problems are inside.
  *
@@ -18,7 +19,7 @@ import {
   Textarea,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Check, ChevronRight, Lock, TriangleAlert } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
 import {
@@ -30,6 +31,7 @@ import type { SeoTabContext } from "../tab/contract";
 import { absoluteAddress } from "../tab/display";
 import { thingsToFix } from "../tab/problems";
 
+import { DISPLAY_FIELDS, DisplayRows } from "./display-rows";
 import {
   Chip,
   cx,
@@ -38,7 +40,7 @@ import {
   type SourceNames,
   SourceRow,
 } from "./parts";
-import { Row, RowButton } from "./rows";
+import { keyOf, Row, RowButton, useOutsideChange } from "./rows";
 import { ShareImageRow } from "./share-image-row";
 import {
   isTyped,
@@ -199,6 +201,11 @@ function advancedRows(props: AdvancedProps): AdvancedRow[] {
       summary: "structured data",
       Row: StructuredDataRow,
     },
+    has(...DISPLAY_FIELDS) && {
+      key: "display",
+      summary: "how search results show it",
+      Row: DisplayRows,
+    },
   ];
   return rows.filter((row): row is AdvancedRow => row !== false);
 }
@@ -347,33 +354,6 @@ function StructuredDataRow({
     </Row>
   );
 }
-
-/**
- * Calls `reset` when the stored values (`stored`, as one key) change by
- * anything but the row's own writes, such as the document being read again
- * or switched to another language, so the row shows what the document holds.
- * Returns the function the row tells the key its own write leaves.
- */
-function useOutsideChange(
-  stored: string,
-  reset: () => void
-): (written: string) => void {
-  const expected = useRef(stored);
-  const latestReset = useRef(reset);
-  latestReset.current = reset;
-  useEffect(() => {
-    if (stored === expected.current) return;
-    expected.current = stored;
-    latestReset.current();
-  }, [stored]);
-  return written => {
-    expected.current = written;
-  };
-}
-
-/** Stored values as one key, an absent value read as none. */
-const keyOf = (...stored: unknown[]): string =>
-  JSON.stringify(stored.map(value => value ?? null));
 
 /** Whether the stored address was confirmed to be on another site. */
 function confirmedElsewhere(values: SeoPanelValues): boolean {

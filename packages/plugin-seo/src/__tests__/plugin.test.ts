@@ -80,6 +80,13 @@ describe("seoPlugin", () => {
       "canonicalElsewhere",
       "noindex",
       "structuredDataType",
+      "maxImagePreview",
+      "maxSnippet",
+      "nosnippet",
+      "noimageindex",
+      "unavailableAfter",
+      "noarchive",
+      "nocache",
     ]);
   });
 
@@ -362,6 +369,13 @@ describe("seoPlugin", () => {
       "canonicalElsewhere",
       "noindex",
       "structuredDataType",
+      "maxImagePreview",
+      "maxSnippet",
+      "nosnippet",
+      "noimageindex",
+      "unavailableAfter",
+      "noarchive",
+      "nocache",
     ]);
   });
 });

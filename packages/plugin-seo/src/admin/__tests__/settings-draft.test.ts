@@ -92,6 +92,7 @@ describe("the form's values, from the stored settings", () => {
         baidu: "",
         others: [],
       },
+      largeImagePreviews: true,
     });
   });
 
@@ -125,7 +126,36 @@ describe("the form's values, from the stored settings", () => {
         baidu: "",
         others: [],
       },
+      largeImagePreviews: true,
     });
+  });
+});
+
+describe("large image previews, on unless the site turned them off", () => {
+  const empty = { id: "s1", updatedAt: "", _rev: "1" };
+
+  it.each([
+    ["never saved", {}],
+    ["stored empty", { largeImagePreviews: null }],
+    ["stored on", { largeImagePreviews: true }],
+  ])("reads as on when %s, and saves nothing while on", (_, value) => {
+    const settings = { ...empty, ...value };
+    expect(draftOf(settings).largeImagePreviews).toBe(true);
+    expect(changesOf(settings, draftOf(settings))).toBeNull();
+  });
+
+  it("reads as off once turned off, and saves turning it back on", () => {
+    const off = { ...empty, largeImagePreviews: false };
+    expect(draftOf(off).largeImagePreviews).toBe(false);
+    expect(
+      changesOf(off, { ...draftOf(off), largeImagePreviews: true })
+    ).toEqual({ largeImagePreviews: true, _rev: "1" });
+  });
+
+  it("saves turning it off", () => {
+    expect(
+      changesOf(empty, { ...draftOf(empty), largeImagePreviews: false })
+    ).toEqual({ largeImagePreviews: false, _rev: "1" });
   });
 });
 

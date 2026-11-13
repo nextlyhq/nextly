@@ -357,6 +357,29 @@ describe("the tabs", () => {
     );
   });
 
+  it("asks for large image previews by default, and saves turning them off", async () => {
+    serving({ _rev: "1", setupStep: 3 });
+    window.history.replaceState(null, "", `${SETTINGS}?tab=crawlers`);
+    render(<SeoSettingsPage />);
+    const large = screen.getByRole("switch", { name: "Large image previews" });
+    expect(large.getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen.getByText(
+        "Lets Google show a big picture from your pages in results and in Discover."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "On by default. Google asks for pictures at least 1200 px wide for this."
+      )
+    ).toBeTruthy();
+
+    fireEvent.click(large);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect(sent).toEqual([{ largeImagePreviews: false, _rev: "1" }]);
+  });
+
   it("opens the tab the address names, and moves the address with each tab", () => {
     serving({ _rev: "1", setupStep: 3 });
     window.history.replaceState(null, "", `${SETTINGS}?tab=brand`);

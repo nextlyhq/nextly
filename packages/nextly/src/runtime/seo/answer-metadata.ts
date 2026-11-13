@@ -13,6 +13,7 @@ import type { Metadata } from "next";
 import type {
   PageMetadataAnswer,
   PageMetadataImage,
+  PageRobots,
 } from "./page-metadata-contract";
 
 type OpenGraph = NonNullable<Metadata["openGraph"]>;
@@ -110,6 +111,30 @@ function twitterOf(answer: PageMetadataAnswer): Twitter | undefined {
   return Object.keys(twitter).length > 0 ? twitter : undefined;
 }
 
+/** A switch as the head carries it: written only while on. */
+const onOnly = (on: boolean | undefined): true | undefined =>
+  on === true ? true : undefined;
+
+/**
+ * The answer's robots as Next.js's `robots` object spells them: whether the
+ * page is listed and its links followed, then each of Google's display
+ * controls the answer states, under Google's own name. A control the answer
+ * leaves out is left out of the head.
+ */
+function robotsOf(robots: PageRobots): Metadata["robots"] {
+  return defined({
+    index: robots.index,
+    follow: robots.follow,
+    "max-image-preview": robots.maxImagePreview,
+    "max-snippet": robots.maxSnippet,
+    nosnippet: onOnly(robots.nosnippet),
+    noimageindex: onOnly(robots.noimageindex),
+    unavailable_after: robots.unavailableAfter,
+    noarchive: onOnly(robots.noarchive),
+    nocache: onOnly(robots.nocache),
+  });
+}
+
 /**
  * Next.js `Metadata` for a page's answer: every value in its place in the head,
  * and nothing the answer does not state.
@@ -122,10 +147,7 @@ export function metadataFromAnswer(answer: PageMetadataAnswer): Metadata {
     title: answer.title,
     description: answer.description,
     alternates: alternatesOf(answer),
-    robots:
-      answer.robots === undefined
-        ? undefined
-        : { index: answer.robots.index, follow: answer.robots.follow },
+    robots: answer.robots === undefined ? undefined : robotsOf(answer.robots),
     openGraph: openGraphOf(answer),
     twitter: twitterOf(answer),
     verification: verificationOf(answer),

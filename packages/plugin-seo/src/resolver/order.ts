@@ -10,6 +10,11 @@
  * 5. A value taken from the page's own content.
  * 6. The site's defaults.
  *
+ * How results may show the page (its image preview size, the text under its
+ * link and the rest of Google's display controls) is the page's own choice,
+ * else the site's default, which asks for large image previews. A page whose
+ * date to leave search has passed is hidden as its own choice.
+ *
  * Visibility has one level above them all: a content type hidden whole keeps
  * every page in it hidden, whatever the page's own setting. Below a person's
  * choice, a route's code may hide its page, never show one: core serves the
@@ -31,6 +36,12 @@
 import type { PageMetadataImage } from "@nextlyhq/plugin-sdk";
 
 import { typedCanonical } from "../canonical";
+
+import {
+  searchDisplay,
+  type SearchDisplay,
+  type TypedDisplay,
+} from "./display";
 
 /** A level of the order, as a value's source names it. */
 export type SeoLevel =
@@ -82,6 +93,8 @@ export interface Levels {
     /** The person said the page first appeared on another site. */
     canonicalElsewhere?: boolean;
     hidden?: boolean;
+    /** How the person chose results may show the page. */
+    display?: TypedDisplay;
   };
   /** What the route's code supplied, and whether it hides the page. */
   code: SeoValues & { hidden?: boolean };
@@ -98,6 +111,8 @@ export interface Levels {
     image?: PageMetadataImage;
     /** Where the site itself is served, which a typed canonical must be on. */
     productionAddresses?: readonly string[];
+    /** Whether pages ask for large image previews: on unless `false`. */
+    largeImagePreviews?: boolean;
   };
   /** The page's own public address in its language, where it has one. */
   address?: string;
@@ -114,6 +129,8 @@ export interface SeoAnswer {
   image?: Sourced<PageMetadataImage>;
   canonical?: Sourced<string>;
   robots: Sourced<{ index: boolean; follow: boolean }>;
+  /** How results may show the page, where it is listed. */
+  display?: SearchDisplay;
 }
 
 /** Text with something in it: blank text is no value. */
@@ -194,8 +211,35 @@ function socialValue(
   );
 }
 
-/** The order applied to every value of one page. */
-export function resolveOrder(levels: Levels): SeoAnswer {
+/**
+ * Whether the page is listed, and what decided it. A hidden type comes
+ * first: its pages stay hidden, whatever each says, and return to their own
+ * setting once the type is shown again. A person's choice comes next, a
+ * passed date to leave search (`datePassed`) among it, then the route's
+ * code, which may hide its page and never list one: a page is listed only
+ * where nothing hides it.
+ */
+function visibilityOf(
+  levels: Levels,
+  datePassed: boolean
+): Sourced<{ index: boolean; follow: boolean }> {
+  const hidden = { index: false, follow: true };
+  if (levels.typeHidden === true) return { value: hidden, from: "type" };
+  if (levels.page.hidden === true || datePassed) {
+    return { value: hidden, from: "page" };
+  }
+  if (levels.code.hidden === true) return { value: hidden, from: "code" };
+  return { value: { index: true, follow: true }, from: "site" };
+}
+
+/**
+ * The order applied to every value of one page, at `now`: the moment a
+ * page's date to leave search is judged against.
+ */
+export function resolveOrder(
+  levels: Levels,
+  now: number = Date.now()
+): SeoAnswer {
   const title = textValue(levels, "title");
   const description = textValue(levels, "description");
   const socialTitle = socialValue(levels, "socialTitle", title);
@@ -231,18 +275,15 @@ export function resolveOrder(levels: Levels): SeoAnswer {
     },
     { value: text(levels.address), from: "address" },
   ]);
-  // A hidden type comes first: its pages stay hidden, whatever each says,
-  // and return to their own setting once the type is shown again. A person's
-  // choice comes next, then the route's code, which may hide its page and
-  // never list one: a page is listed only where nothing hides it.
-  const robots: Sourced<{ index: boolean; follow: boolean }> =
-    levels.typeHidden === true
-      ? { value: { index: false, follow: true }, from: "type" }
-      : levels.page.hidden === true
-        ? { value: { index: false, follow: true }, from: "page" }
-        : levels.code.hidden === true
-          ? { value: { index: false, follow: true }, from: "code" }
-          : { value: { index: true, follow: true }, from: "site" };
+  const display = searchDisplay(
+    levels.page.display ?? {},
+    levels.site.largeImagePreviews,
+    now
+  );
+  const robots = visibilityOf(
+    levels,
+    display.unavailableAfter?.passed === true
+  );
   return {
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
@@ -251,5 +292,6 @@ export function resolveOrder(levels: Levels): SeoAnswer {
     ...(image === undefined ? {} : { image }),
     ...(canonical === undefined ? {} : { canonical }),
     robots,
+    display,
   };
 }

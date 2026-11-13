@@ -38,18 +38,22 @@ export { definePlugin } from "nextly";
  * `PageStructuredDataHints` (with `PageListItem` and `PageQuestion`) is what
  * a route says about its page for its structured data, handed in as
  * `input.structuredDataHints`; experimental with the rest of the contract,
- * and intended to become stable with it. Type-only, so importing it pulls
- * no runtime into the plugin.
+ * and intended to become stable with it. `PageRobots` (with
+ * `PageImagePreview`) is the answer's `robots`: whether the page is listed,
+ * and Google's controls over how it is shown; experimental with the
+ * contract too. Type-only, so importing it pulls no runtime into the plugin.
  */
 export type {
   PageMetadataAnswer,
   PageMetadataImage,
+  PageImagePreview,
   PageMetadataInput,
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
   PageListItem,
   PageQuestion,
+  PageRobots,
   PageStructuredDataHints,
 } from "nextly/runtime";
 
