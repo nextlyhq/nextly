@@ -11,13 +11,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder";
 
 let submit: ((values: BuilderSettingsValues) => void) | undefined;
+/** What the page last told the dialog about a create on its way. */
+let creatingShown: boolean | undefined;
+/** Whether the create mutation is on its way. */
+let createPending = false;
 vi.mock(
   "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
   () => ({
     NewEntityDialog: (props: {
       onCreate: (values: BuilderSettingsValues) => void;
+      creating?: boolean;
     }) => {
       submit = props.onCreate;
+      creatingShown = props.creating;
       return null;
     },
   })
@@ -25,7 +31,7 @@ vi.mock(
 
 const mockCreate = vi.fn();
 vi.mock("@admin/hooks/queries", () => ({
-  useCreateSingle: () => ({ mutate: mockCreate, isPending: false }),
+  useCreateSingle: () => ({ mutate: mockCreate, isPending: createPending }),
 }));
 
 const mockWriteSingle = vi.fn();
@@ -114,5 +120,15 @@ describe("Single create page", () => {
     );
 
     expect(toast.error).toHaveBeenCalledWith(reason);
+  });
+
+  it("tells the dialog while a create is on its way, so Create waits for it", () => {
+    createPending = true;
+    try {
+      render(<SingleBuilderPage />);
+      expect(creatingShown).toBe(true);
+    } finally {
+      createPending = false;
+    }
   });
 });

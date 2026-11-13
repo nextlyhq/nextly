@@ -29,6 +29,13 @@ export type AddressCheckState =
 /** How long typing must pause before the address is asked about. */
 const CHECK_DELAY_MS = 250;
 
+/**
+ * How long an ask may go unanswered before the address is left to the create,
+ * which checks it again; a request that never settles would otherwise hold
+ * Create unavailable.
+ */
+const CHECK_TIMEOUT_MS = 8000;
+
 const NO_PENDING_CREATES: readonly PendingAddress[] = [];
 
 const CHECK_KIND: Record<BuilderKind, AddressCheckKind> = {
@@ -78,11 +85,25 @@ export function useAddressCheck(
   } | null>(null);
   // The latest ask; an answer to any earlier one is dropped.
   const latest = useRef(0);
+  // Whenever what is asked about changes, the answer on show goes with it, so
+  // returning to an address answered before reads as checking until it is
+  // answered again, not as that earlier answer.
+  const [shownFor, setShownFor] = useState(key);
+  if (shownFor !== key) {
+    setShownFor(key);
+    setAnswered(null);
+  }
 
   useEffect(() => {
     const ask = ++latest.current;
     const asked = `${kind}\n${address}\n${pending}`;
+    let limit: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
+      limit = setTimeout(() => {
+        if (ask === latest.current) {
+          setAnswered({ key: asked, state: UNCHECKED });
+        }
+      }, CHECK_TIMEOUT_MS);
       addressCheckApi
         .check(
           CHECK_KIND[kind],
@@ -90,17 +111,22 @@ export function useAddressCheck(
           JSON.parse(pending) as PendingAddress[]
         )
         .then(answer => {
+          clearTimeout(limit);
           if (ask === latest.current) {
             setAnswered({ key: asked, state: stateOf(kind, answer) });
           }
         })
         .catch(() => {
+          clearTimeout(limit);
           if (ask === latest.current) {
             setAnswered({ key: asked, state: UNCHECKED });
           }
         });
     }, CHECK_DELAY_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(limit);
+    };
   }, [kind, address, pending]);
 
   return answered?.key === key ? answered.state : { status: "checking" };

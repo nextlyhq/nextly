@@ -42,7 +42,10 @@ const PAGE_BUILDER = {
   hint: "Lay the page out from blocks.",
 };
 
-function renderDialog(config: BuilderConfig = COLLECTION_BUILDER_CONFIG) {
+function renderDialog(
+  config: BuilderConfig = COLLECTION_BUILDER_CONFIG,
+  { creating = false }: { creating?: boolean } = {}
+) {
   const onCreate = vi.fn();
   render(
     <NewEntityDialog
@@ -50,6 +53,7 @@ function renderDialog(config: BuilderConfig = COLLECTION_BUILDER_CONFIG) {
       config={config}
       onCancel={vi.fn()}
       onCreate={onCreate}
+      creating={creating}
     />
   );
   return { onCreate, user: userEvent.setup() };
@@ -210,6 +214,8 @@ describe("NewEntityDialog", () => {
         pluralName: "Products",
         slug: "product",
         icon: "Package",
+        // Drafts and publishing start on for a kind that has them.
+        status: true,
       })
     );
   });
@@ -217,7 +223,10 @@ describe("NewEntityDialog", () => {
   it("further options", async () => {
     const { user } = renderDialog();
     const options = screen.getByRole("button", { name: /More options/ });
-    expect(options).toHaveAccessibleName("More options, none on");
+    // The switches on by default are named as on, as they are drawn.
+    expect(options).toHaveAccessibleName(
+      "More options, on: drafts and publishing, cache revalidation, webhook recording"
+    );
     expect(
       screen.queryByRole("switch", { name: "Version history" })
     ).toBeNull();
@@ -225,10 +234,11 @@ describe("NewEntityDialog", () => {
     await user.click(options);
     await user.click(screen.getByRole("switch", { name: "Version history" }));
     await user.click(screen.getByRole("switch", { name: "Status" }));
+    await user.click(screen.getByRole("switch", { name: "Webhook recording" }));
     expect(
       screen.getByRole("button", { name: /More options/ })
     ).toHaveAccessibleName(
-      "More options, on: drafts and publishing, version history"
+      "More options, on: version history, cache revalidation"
     );
   });
 
@@ -247,11 +257,93 @@ describe("NewEntityDialog", () => {
     const { user } = renderDialog(FIELD_GROUP_BUILDER_CONFIG);
     expect(screen.queryByLabelText("Plural name")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Icon:/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: /More options/ }));
+    const options = screen.getByRole("button", { name: /More options/ });
+    expect(options).toHaveAccessibleName("More options, none on");
+    await user.click(options);
     expect(screen.queryByRole("switch", { name: "Status" })).toBeNull();
     await user.type(nameInput(), "Hero banner");
     await waitFor(() =>
       expect(check).toHaveBeenLastCalledWith("fieldGroup", "hero_banner")
+    );
+  });
+
+  it("checks the address as Create sends it, without surrounding spaces", async () => {
+    const { onCreate, user } = renderDialog();
+    await user.type(nameInput(), "Thing");
+    await user.clear(addressInput());
+    await user.type(addressInput(), " posts ");
+    await waitFor(() =>
+      expect(check).toHaveBeenLastCalledWith("collection", "posts")
+    );
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    await user.click(createButton());
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "posts" })
+    );
+  });
+
+  it("keeps Create unavailable for a blank address, even when the check cannot be asked", async () => {
+    check.mockRejectedValue(new Error("network down"));
+    const { user } = renderDialog();
+    await user.type(nameInput(), "Thing");
+    await user.clear(addressInput());
+    await user.type(addressInput(), "   ");
+    expect(createButton()).toBeDisabled();
+    expect(createButton()).toHaveAccessibleDescription("Add an API address.");
+  });
+
+  it("creates with the description trimmed, and none for a blank one", async () => {
+    const { onCreate, user } = renderDialog();
+    await user.type(nameInput(), "Product");
+    await user.click(screen.getByRole("button", { name: /More options/ }));
+    await user.type(screen.getByLabelText("Description"), "  Shop items  ");
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    await user.click(createButton());
+    expect(onCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ description: "Shop items" })
+    );
+
+    await user.clear(screen.getByLabelText("Description"));
+    await user.type(screen.getByLabelText("Description"), "   ");
+    await user.click(createButton());
+    expect(onCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ description: "" })
+    );
+  });
+
+  it("starts a Single with drafts and publishing on", async () => {
+    const single = renderDialog(SINGLE_BUILDER_CONFIG);
+    await single.user.type(nameInput(), "Home");
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    await single.user.click(createButton());
+    expect(single.onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ status: true })
+    );
+  });
+
+  it("offers Create once while a create is on its way", async () => {
+    const { onCreate, user } = renderDialog(COLLECTION_BUILDER_CONFIG, {
+      creating: true,
+    });
+    await user.type(nameInput(), "Product");
+    await waitFor(() => expect(check).toHaveBeenCalled());
+    const button = screen.getByRole("button", { name: "Creating…" });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it("says Name and Plural name are required", () => {
+    renderDialog();
+    expect(nameInput()).toBeRequired();
+    expect(screen.getByLabelText("Plural name")).toBeRequired();
+  });
+
+  it("scrolls within the viewport when its options are open", () => {
+    renderDialog();
+    expect(screen.getByRole("dialog")).toHaveClass(
+      "max-h-[90vh]",
+      "overflow-y-auto"
     );
   });
 });

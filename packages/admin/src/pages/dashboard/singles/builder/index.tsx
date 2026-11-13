@@ -130,6 +130,7 @@ export default function SingleBuilderPage(): React.ReactElement | null {
         config={SINGLE_BUILDER_CONFIG}
         onCancel={() => setOpen(false)}
         onCreate={handleSubmit}
+        creating={isPending}
       />
     </PageContainer>
   );

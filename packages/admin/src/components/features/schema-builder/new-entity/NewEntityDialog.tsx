@@ -33,13 +33,21 @@ import {
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
 
-import { BUILDER_KIND_NOUN, type BuilderConfig } from "../builder-config";
+import {
+  type AdvancedField,
+  BUILDER_KIND_NOUN,
+  type BuilderConfig,
+} from "../builder-config";
 import { AdvancedTab } from "../builder-settings-modal/AdvancedTab";
 import {
   ICON_PICKER_ICONS,
   IconPicker,
 } from "../builder-settings-modal/IconPicker";
-import type { BuilderSettingsValues } from "../BuilderSettingsModal";
+import {
+  createDefaults,
+  normalizedSettings,
+  type BuilderSettingsValues,
+} from "../BuilderSettingsModal";
 
 import { EntryKindQuestion } from "./EntryKindQuestion";
 import { useAddressCheck, type AddressCheckState } from "./useAddressCheck";
@@ -49,22 +57,27 @@ type Props = {
   config: BuilderConfig;
   onCancel: () => void;
   onCreate: (values: BuilderSettingsValues) => void;
+  /**
+   * A create is on its way: Create waits for it, so a second click sends no
+   * second entity.
+   */
+  creating?: boolean;
 };
 
-/** The options the fold names when they are on, in the words it uses. */
-const OPTION_WORDS: ReadonlyArray<[keyof BuilderSettingsValues, string]> = [
-  ["status", "drafts and publishing"],
-  ["versions", "version history"],
-  ["i18n", "translation"],
+/**
+ * The options the fold names when they are on, in the words it uses, each with
+ * what its switch shows while it holds no value: cache revalidation and webhook
+ * recording are drawn on until turned off, so they are named on too.
+ */
+const OPTION_WORDS: ReadonlyArray<
+  [AdvancedField & keyof BuilderSettingsValues, string, boolean]
+> = [
+  ["status", "drafts and publishing", false],
+  ["versions", "version history", false],
+  ["i18n", "translation", false],
+  ["revalidate", "cache revalidation", true],
+  ["webhooks", "webhook recording", true],
 ];
-
-const EMPTY_VALUES: BuilderSettingsValues = {
-  singularName: "",
-  pluralName: "",
-  slug: "",
-  icon: "",
-  description: "",
-};
 
 /** Why Create is not offered yet, or `null` when it is. */
 function createBlockedBy(
@@ -76,16 +89,24 @@ function createBlockedBy(
   if (hasPlural && (values.pluralName ?? "").trim() === "") {
     return "Add a plural name.";
   }
+  // Judged here, whatever the check says: when it cannot be asked, a blank
+  // address would otherwise reach the create, which derives one from the name.
+  if (values.slug.trim() === "") return "Add an API address.";
   if (check.status === "checking") return "Checking the address…";
   if (check.status === "refused") return "Choose another address.";
   return null;
 }
 
-/** The fold's accessible name: which of its options are on. */
-function optionsName(values: BuilderSettingsValues): string {
-  const on = OPTION_WORDS.filter(([key]) => values[key] === true).map(
-    ([, words]) => words
-  );
+/** The fold's accessible name: which of the options it holds are on. */
+function optionsName(
+  config: BuilderConfig,
+  values: BuilderSettingsValues
+): string {
+  const on = OPTION_WORDS.filter(
+    ([key, , onWhenUnset]) =>
+      config.advancedFields.includes(key) &&
+      (values[key] ?? onWhenUnset) === true
+  ).map(([, words]) => words);
   return on.length === 0
     ? "More options, none on"
     : `More options, on: ${on.join(", ")}`;
@@ -100,10 +121,15 @@ export function NewEntityDialog({
   config,
   onCancel,
   onCreate,
+  creating = false,
 }: Props): JSX.Element {
   const kind = config.kind;
   const ids = useId();
-  const [values, setValues] = useState<BuilderSettingsValues>(EMPTY_VALUES);
+  // The settings modal's create defaults, so drafts and publishing start on
+  // for a kind that has them, as they did there.
+  const [values, setValues] = useState<BuilderSettingsValues>(() =>
+    createDefaults(config)
+  );
   // Until the person picks an icon, the name suggests one.
   const [pickedIcon, setPickedIcon] = useState<string | null>(null);
 
@@ -118,7 +144,8 @@ export function NewEntityDialog({
   const hasIcon = kind !== "field-group";
   const icon = pickedIcon ?? suggestIcon(values.singularName);
 
-  const check = useAddressCheck(kind, values.slug);
+  // The address as Create sends it, so the check judges what the create gets.
+  const check = useAddressCheck(kind, values.slug.trim());
   // Nothing typed yet is not a refusal to show.
   const typed = values.singularName !== "" || values.slug !== "";
   const blockedBy = createBlockedBy(values, hasPlural, check);
@@ -129,19 +156,25 @@ export function NewEntityDialog({
   ) => setValues(current => ({ ...current, [key]: value }));
 
   const create = () => {
-    if (blockedBy !== null) return;
-    onCreate({
-      ...values,
-      singularName: values.singularName.trim(),
-      pluralName: hasPlural ? values.pluralName?.trim() : undefined,
-      slug: values.slug.trim(),
-      icon: hasIcon ? icon : "",
-    });
+    if (blockedBy !== null || creating) return;
+    // Trimmed by the settings modal's own rule (the description), and the
+    // names and address as the check judged them.
+    onCreate(
+      normalizedSettings({
+        ...values,
+        singularName: values.singularName.trim(),
+        pluralName: hasPlural ? values.pluralName?.trim() : undefined,
+        slug: values.slug.trim(),
+        icon: hasIcon ? icon : "",
+      })
+    );
   };
 
   return (
     <Dialog open={open} onOpenChange={next => !next && onCancel()}>
-      <DialogContent className="sm:max-w-lg">
+      {/* Capped to the viewport and scrolled inside, so Create stays reachable
+          on a short screen with the options open. */}
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New {BUILDER_KIND_NOUN[kind]}</DialogTitle>
           <DialogDescription>
@@ -176,6 +209,7 @@ export function NewEntityDialog({
               <Label htmlFor={`${ids}-plural`}>Plural name</Label>
               <Input
                 id={`${ids}-plural`}
+                required
                 value={values.pluralName ?? ""}
                 onChange={e => set("pluralName", e.target.value)}
               />
@@ -200,6 +234,7 @@ export function NewEntityDialog({
         <CreateFooter
           ids={ids}
           blockedBy={blockedBy}
+          creating={creating}
           onCancel={onCancel}
           onCreate={create}
         />
@@ -257,6 +292,7 @@ function NameRow({
         <Label htmlFor={`${ids}-name`}>Name</Label>
         <Input
           id={`${ids}-name`}
+          required
           value={name}
           onChange={e => onName(e.target.value)}
         />
@@ -322,7 +358,7 @@ function MoreOptions({
         variant="ghost"
         size="sm"
         aria-expanded={open}
-        aria-label={optionsName(values)}
+        aria-label={optionsName(config, values)}
         onClick={() => setOpen(current => !current)}
       >
         More options
@@ -358,11 +394,13 @@ function MoreOptions({
 function CreateFooter({
   ids,
   blockedBy,
+  creating,
   onCancel,
   onCreate,
 }: {
   ids: string;
   blockedBy: string | null;
+  creating: boolean;
   onCancel: () => void;
   onCreate: () => void;
 }): JSX.Element {
@@ -381,13 +419,13 @@ function CreateFooter({
       </Button>
       <Button
         type="button"
-        disabled={blockedBy !== null}
+        disabled={blockedBy !== null || creating}
         aria-describedby={
           blockedBy !== null ? `${ids}-create-blocked` : undefined
         }
         onClick={onCreate}
       >
-        Create
+        {creating ? "Creating…" : "Create"}
       </Button>
     </DialogFooter>
   );

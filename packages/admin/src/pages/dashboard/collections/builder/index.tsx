@@ -139,6 +139,7 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         config={COLLECTION_BUILDER_CONFIG}
         onCancel={() => setOpen(false)}
         onCreate={handleSubmit}
+        creating={isPending}
       />
     </PageContainer>
   );

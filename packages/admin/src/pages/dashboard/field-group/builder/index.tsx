@@ -112,6 +112,7 @@ export default function FieldGroupBuilderPage(): React.ReactElement | null {
         config={FIELD_GROUP_BUILDER_CONFIG}
         onCancel={() => setOpen(false)}
         onCreate={handleSubmit}
+        creating={isPending}
       />
     </PageContainer>
   );

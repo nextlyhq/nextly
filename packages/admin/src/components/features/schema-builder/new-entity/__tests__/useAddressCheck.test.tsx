@@ -142,4 +142,65 @@ describe("useAddressCheck", () => {
       message: "This address could not be checked. Create checks it again.",
     });
   });
+
+  it("is checking again on returning to an address, until its new answer arrives", async () => {
+    check.mockImplementation(async (_kind: string, address: string) =>
+      answer(address)
+    );
+    const { result, rerender } = setup("collection", "posts");
+    await settle();
+    expect(result.current).toEqual({ status: "free" });
+
+    let answerB: (value: AddressCheckAnswer) => void = () => {};
+    check.mockImplementationOnce(
+      () =>
+        new Promise<AddressCheckAnswer>(resolve => {
+          answerB = resolve;
+        })
+    );
+    rerender({ address: "articles" });
+    await settle();
+    let answerA: (value: AddressCheckAnswer) => void = () => {};
+    check.mockImplementationOnce(
+      () =>
+        new Promise<AddressCheckAnswer>(resolve => {
+          answerA = resolve;
+        })
+    );
+    rerender({ address: "posts" });
+    // The earlier "free" for "posts" says nothing about it now.
+    expect(result.current.status).toBe("checking");
+    await settle();
+    expect(result.current.status).toBe("checking");
+    await act(async () => {
+      answerB(answer("articles"));
+    });
+    expect(result.current.status).toBe("checking");
+    await act(async () => {
+      answerA(
+        answer("posts", {
+          code: "DUPLICATE",
+          message: "Resource already exists.",
+        })
+      );
+    });
+    expect(result.current).toEqual({
+      status: "refused",
+      message: "A collection or Single already uses this address.",
+    });
+  });
+
+  it("leaves the address to the create when the check does not answer in time", async () => {
+    check.mockImplementation(() => new Promise<AddressCheckAnswer>(() => {}));
+    const { result } = setup("collection", "posts");
+    await settle();
+    expect(result.current.status).toBe("checking");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(result.current).toEqual({
+      status: "unknown",
+      message: "This address could not be checked. Create checks it again.",
+    });
+  });
 });
