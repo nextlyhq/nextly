@@ -240,9 +240,7 @@ describeEachDialect(
           spec.columns.find(c => c.name === OWN_FIELD[table])?.nullable,
           `${table}.${OWN_FIELD[table]} is optional after the push`
         ).toBe(true);
-        expect(names.length).toBe(
-          before.get(table)!.columns.length + 1
-        );
+        expect(names.length).toBe(before.get(table)!.columns.length + 1);
         // And the contribution is still there, index included.
         expect(names).toContain("search_key");
         expect(contributedIndex(spec), `${table}'s index`).toBeDefined();
