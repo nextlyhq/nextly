@@ -651,6 +651,29 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
     }, 90_000);
 
+    // While the entry is live, a shared edit is pending until the shared part is published,
+    // whichever language it is saved from: a save in a language not yet live joins the shared
+    // draft rather than writing the shared value live beside it.
+    it("keeps a shared edit saved in a language not yet live pending with the shared draft", async () => {
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: TRANSLATED, overrideAccess: true, locale: "en" },
+        { title: "en title", body: "en body", views: 10, status: "published" }
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = (created.data as { id: string }).id;
+      await save(entries, TRANSLATED, id, "en", { views: 40 });
+      expect((await drafts(id)).shared?.views).toBe(40);
+
+      await save(entries, TRANSLATED, id, "es", {
+        title: "es title",
+        views: 50,
+      });
+
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      expect((await drafts(id)).shared?.views).toBe(50);
+    }, 90_000);
+
     // A shared-only draft goes live in every language, so a publish of every
     // language asks each language's publish rule about it, Spanish included.
     it("asks every language's publish rule about a shared-only draft a publish of every language puts live", async () => {
