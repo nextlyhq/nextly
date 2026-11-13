@@ -46,7 +46,12 @@ const baseCtx = () =>
 function match(handler: PluginRoute["handler"]): RouteMatch {
   return {
     pluginName: "@a/x",
-    route: { method: "GET", path: "/r", handler } as PluginRoute,
+    route: {
+      siteWide: false,
+      method: "GET",
+      path: "/r",
+      handler,
+    } as PluginRoute,
     baseCtx: baseCtx(),
     params: {},
   };

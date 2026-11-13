@@ -42,6 +42,7 @@ const e2ePlugin = definePlugin({
         handler: () => Response.json({ ok: true }),
       },
       {
+        siteWide: false,
         method: "GET",
         path: "/whoami",
         handler: (_req, ctx) => Response.json({ id: ctx.user?.id ?? null }),

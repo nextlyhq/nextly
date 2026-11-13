@@ -98,12 +98,14 @@ export function listAcceptedBlocks(
 /** The route the plugin contributes. */
 export function blocksListRoute(reads: BlocksListReads = REGISTRY_READS): {
   method: "POST";
+  siteWide: false;
   path: string;
   handler: (req: Request) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: BLOCKS_LIST_ROUTE_PATH,
+    siteWide: false, // Acts on no site content; signing in is enough.
     handler: async req => {
       // Typed as the contract, so the schema cannot drift from what the
       // listing is documented to be asked.

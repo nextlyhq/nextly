@@ -175,6 +175,7 @@ const composer = definePlugin({
   contributes: {
     routes: [
       {
+        siteWide: false,
         method: "POST",
         path: "/page",
         handler: async (req, ctx: PluginRouteContext) =>

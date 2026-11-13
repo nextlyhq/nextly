@@ -845,9 +845,10 @@ function keep(at: Deciding, place: ImportTarget): void {
 }
 
 /**
- * Whether `value` never reached the page: its route's code sets that place
- * itself, to something else, so the stored value was never what the page
- * showed, and importing it would change the page. Such a value is left out
+ * Whether the page's code overrides `value`: its route's code sets that
+ * place itself, to something else, so the stored value is not what the page
+ * shows now, and importing it would change the page. What the page showed
+ * before is unknown (a site's own code may have read the old field). Such a value is left out
  * unless the import includes them; one that agrees with the code is not
  * marked, since importing it changes nothing.
  */
@@ -861,7 +862,7 @@ function neverServed(
   return fromCode !== undefined && !same(fromCode, value);
 }
 
-/** Whether `value` is left out as never served, recorded on the page. */
+/** Whether `value` is left out as one the page's code overrides, recorded on the page. */
 function leftAsNeverServed(
   at: Deciding,
   place: (typeof TEXT_PLACES)[number],
@@ -900,7 +901,7 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   if (current !== undefined) {
     // Typed already: kept as typed, whether or not the source holds the
     // same value. Never reported as the same as automatic, which it is not,
-    // nor as never served: a typed value wins over the route's code, so it
+    // nor as overridden by the code: a typed value wins over the route's code, so it
     // is what the page shows.
     keep(at, place);
     return;
@@ -1335,7 +1336,7 @@ async function writableOf(
 }
 
 /** Why a record or a version is passed over, in the report's words. */
-const SKIPPED = {
+export const SKIPPED = {
   unmatched: "Not on this site.",
   ambiguous: "Matches more than one page here.",
   repeated: "Named more than once; the first is used.",
@@ -1347,8 +1348,9 @@ const SKIPPED = {
   draftInLanguage:
     "A draft in a language other than the default can't take imported values yet. Import again once the draft is published or discarded.",
   empty: "The source holds no value for this page.",
+  // What the plugin knows now: it can't know what the page showed before.
   neverServed:
-    "Never served: the page's own code sets these values, so they never reached it.",
+    "The page's code sets its own value now, so importing this one would change what the page shows. Include it if the page showed it before and should again.",
 } as const;
 
 /**

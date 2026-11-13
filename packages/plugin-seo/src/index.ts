@@ -10,6 +10,11 @@ export { defaultSeoFields } from "./fields";
 // for its address on Pages reaches its head, and
 // its structured data from the same answer.
 export { seoMetadata, seoStructuredData } from "./code-pages/metadata";
+export {
+  seoStaticParams,
+  type SeoStaticParamsOptions,
+  type StaticParams,
+} from "./code-pages/static-params";
 export type { RouteMetadata, SeoMetadataOptions } from "./code-pages/metadata";
 export {
   buildSitemapUrls,

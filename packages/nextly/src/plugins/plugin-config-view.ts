@@ -75,6 +75,24 @@ function pick(
   return picked;
 }
 
+/**
+ * The `auth` block without the app's password hasher. The hasher is the code
+ * that decides every sign-in, so no plugin may hold it: one could replace its
+ * `verify` and make any password sign in. It is withheld from every plugin
+ * view, as the top-level `passwordHasher` is, and a setup transformer can
+ * neither read nor replace it.
+ */
+function withoutPasswordHasher(view: Record<string, unknown>): void {
+  const auth = view.auth;
+  if (auth && typeof auth === "object" && "passwordHasher" in auth) {
+    const { passwordHasher: _withheld, ...rest } = auth as Record<
+      string,
+      unknown
+    >;
+    view.auth = rest;
+  }
+}
+
 /** `config`'s own values under every key except `keys`, in a new object. */
 function omit(
   config: object,
@@ -90,7 +108,9 @@ function omit(
  * `config`, without its live handles. The caller copies them.
  */
 export function setupConfigKeysOf(config: object): Record<string, unknown> {
-  return pick(config, SETUP_CONFIG_KEYS);
+  const picked = pick(config, SETUP_CONFIG_KEYS);
+  withoutPasswordHasher(picked);
+  return picked;
 }
 
 /**
@@ -103,9 +123,19 @@ export function withWithheldConfig<C extends object>(
   app: C,
   transformed: object
 ): C {
+  const returned = pick(transformed, SETUP_CONFIG_KEYS);
+  // The app's own hasher, whatever the transformers returned: they were never
+  // handed it, and one they add is not taken.
+  withoutPasswordHasher(returned);
+  const appHasher = (app as { auth?: { passwordHasher?: unknown } }).auth
+    ?.passwordHasher;
+  if (appHasher !== undefined) {
+    const auth = (returned.auth ?? {}) as Record<string, unknown>;
+    returned.auth = { ...auth, passwordHasher: appHasher };
+  }
   return {
     ...omit(app, SETUP_CONFIG_KEYS),
-    ...pick(transformed, SETUP_CONFIG_KEYS),
+    ...returned,
   } as C;
 }
 
@@ -186,6 +216,7 @@ function pluginSummary(plugin: PluginDefinition): PluginSummary {
  */
 export function pluginConfigView(config: NextlyServiceConfig): PluginConfig {
   const view = pick(config, PLUGIN_CONFIG_KEYS);
+  withoutPasswordHasher(view);
   if (config.plugins !== undefined) {
     view.plugins = config.plugins.map(pluginSummary);
   }

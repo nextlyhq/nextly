@@ -456,7 +456,7 @@ Every password write ends the account's sessions: an administrator setting it (`
 
 ## Password management
 
-Passwords are hashed with bcryptjs (12 salt rounds). The `AuthService` and password handlers cover the full lifecycle:
+Passwords are hashed with bcryptjs (12 salt rounds) unless your app brings its own hasher ([below](#your-own-password-hasher)). The `AuthService` and password handlers cover the full lifecycle:
 
 - `registerUser()` -- creates a new user with strength-validated password.
 - `verifyCredentials()` -- validates email + password for login.
@@ -466,6 +466,38 @@ Passwords are hashed with bcryptjs (12 salt rounds). The `AuthService` and passw
 - `generateEmailVerificationToken()` / `verifyEmail()` -- email verification flow.
 
 Raw tokens are returned to the user once (in the email link); only the hashes are stored.
+
+### Your own password hasher
+
+To store passwords with another scheme, for example argon2 for accounts brought over from another system, set `auth.passwordHasher` in your config. It is then the one scheme for every account password: creating an account, an administrator setting one, a person changing theirs, a reset link, an invite, the first password, and every sign-in.
+
+```ts
+// nextly.config.ts
+import { hash, verify } from "@node-rs/argon2";
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  auth: {
+    passwordHasher: {
+      name: "argon2id",
+      hash: password => hash(password),
+      verify: (password, stored) => verify(stored, password),
+      // What the hasher reads whole: argon2 reads the whole password.
+      reach: "unbounded",
+      // Recognise your own hashes, so a stored value that is neither yours nor
+      // core's bcrypt is never compared.
+      isHash: stored => stored.startsWith("$argon2"),
+    },
+  },
+});
+```
+
+Set it in the config rather than passing `passwordHasher` to `getNextly`: Nextly starts once per process, and a request to the route handler can start it before your code calls `getNextly`. Every way it starts reads the config, and so does `nextly users:create-admin`, which hashes the administrator it creates with your hasher. Two different hashers, one in each place, are refused at startup.
+
+- `reach` (or `validate`) is required: it tells the password rules how much of a password your hasher reads, so a longer one is refused rather than cut short. The admin's password forms check the same limit before they submit, or none where your hasher reads a password whole.
+- `isHash` is optional. Without it, any stored value that is not core's bcrypt goes to your `verify`. If your hasher writes bcrypt itself (a peppered bcrypt, say), declare `isHash` so its values can be told from core's older ones: without it, every bcrypt value counts as yours, and an older one signs in only if your `verify` accepts it.
+- Accounts that already have a bcrypt password keep signing in. The first sign-in that proves the password stores it again with your hasher, provided your hasher reads the whole password and the password is no longer than the 72 bytes bcrypt compares; otherwise it stays bcrypt. Only the hash changes: existing sessions stay signed in, and the time the password was set is kept.
+- Password fields in your collections are content, not sign-in credentials, and keep using core's bcrypt (`verifyPassword` from `nextly/auth` checks them).
 
 ## Auth configuration
 

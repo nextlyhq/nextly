@@ -16,6 +16,7 @@ import type {
 
 import { textOf } from "../plain-values";
 
+import { isNextBuild } from "./building";
 import { codePagesSlug } from "./collection";
 import type { CodeRoute } from "./routes";
 import {
@@ -41,9 +42,6 @@ export function keepCodeRoutes(read: () => CodeRoute[]): void {
   shared.__nextly_seoCodeRoutes = read;
 }
 
-/** Whether this is `next build` rendering the site's own pages. */
-const building = () => process.env.NEXT_PHASE === "phase-production-build";
-
 /**
  * Whether a call for `path` may be recorded: during the build, which renders
  * only the site's own addresses, or for an address the site already knows
@@ -51,7 +49,7 @@ const building = () => process.env.NEXT_PHASE === "phase-production-build";
  * address a visitor asks for would add one.
  */
 function mayRecord(path: string, row: CodePageRow | undefined): boolean {
-  if (building() || row !== undefined) return true;
+  if (isNextBuild() || row !== undefined) return true;
   const read = shared.__nextly_seoCodeRoutes;
   return read !== undefined && read().some(route => route.path === path);
 }
