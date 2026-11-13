@@ -355,6 +355,68 @@ describe.each(DIALECTS)(
     );
 
     it.runIf(dialect === "mysql")(
+      "adds a row written after a schema statement's implicit commit once, though the try after it waited",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        const filename = writeFile("20261113_000001_after_commit", [
+          `CREATE TABLE ${FIRST} (id integer)`,
+          `INSERT INTO ${OTHER} (id) VALUES (1)`,
+          `INSERT INTO ${BUSY} (id) VALUES (2)`,
+        ]);
+        await lockTheTableForWriting();
+        const freeing = sleep(3_500).then(() => free());
+
+        const applied = await migrate({ tryMs: 1_000, totalMs: 20_000 });
+        await freeing;
+
+        // MySQL committed at the CREATE; the row after it rolled back with the try that waited,
+        // and was added again once, not kept and added a second time.
+        expect(applied).toBe(1);
+        expect(await idsOf(OTHER)).toEqual([1]);
+        expect(await idsOf(BUSY)).toEqual([2]);
+        expect(await appliedRows(filename)).toBe(1);
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "says a transaction MySQL rolled back whole was undone where a no-retry row change waited",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        await adapter.executeQuery(
+          `CREATE TRIGGER ${PREFIX}_keep BEFORE INSERT ON ${BUSY} FOR EACH ROW SET NEW.id = NEW.id`
+        );
+        writeFile("20261113_000001_triggered", [
+          `INSERT INTO ${OTHER} (id) VALUES (1)`,
+          `INSERT INTO ${BUSY} (id) VALUES (2)`,
+        ]);
+        await lockTheTableForWriting();
+
+        const stopped = await migrate({ tryMs: 1_000, totalMs: 20_000 }).catch(
+          (error: unknown) => error
+        );
+
+        expect(stopped).toMatchObject({
+          code: "NEXTLY_TABLE_BUSY",
+          logContext: {
+            stop: {
+              tries: 1,
+              outcome: {
+                kind: "no-retry",
+                statementNumber: 2,
+                reason: "trigger",
+                restUndone: true,
+              },
+            },
+          },
+        });
+        expect(await idsOf(OTHER)).toEqual([]);
+        expect(String((stopped as Error).message)).toContain(
+          "was undone whole"
+        );
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
       "bounds a row change waiting on a row another session holds, not InnoDB's own 50 seconds",
       async () => {
         await adapter.executeQuery(`INSERT INTO ${BUSY} (id) VALUES (5)`);

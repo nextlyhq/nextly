@@ -30,6 +30,7 @@ import {
   markedForSchemaLock,
 } from "../pipeline/schema-lock";
 
+import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import { leadingWords } from "./split-sql";
 import {
@@ -94,6 +95,12 @@ export interface StatementTryBound {
    * a cancel meant for the statement that waited can never end the next one.
    */
   readonly beforeStatement?: () => Promise<void>;
+  /**
+   * Told each statement's index as it is sent, after its checkpoint: a try that ends between
+   * `onStatement` and this waited in the checkpoint, and the statement itself never reached the
+   * database.
+   */
+  readonly onSend?: (index: number) => void;
   /**
    * A statement whose failure this accepts is passed over, and the unit goes on to the next, as
    * a runner that tolerates a statement already applied does; it counts as run. Honoured only
@@ -575,6 +582,7 @@ async function runUnitStatements(
           await checkpoint?.(tx.db, index);
           // A cancel the checkpoint's wait drew is settled before the statement is sent.
           await bound?.beforeStatement?.();
+          bound?.onSend?.(index);
           await executeTolerated(
             tx,
             sent(statement),
@@ -582,6 +590,11 @@ async function runUnitStatements(
             dialect,
             bound
           );
+          // MySQL committed the transaction at this statement and left the session in autocommit:
+          // the transaction opens again, so the statements after it roll back together.
+          if (dialect === "mysql" && commitsOnMysql(statement)) {
+            await tx.execute("START TRANSACTION");
+          }
         }
         bound?.onStatement?.(statements.length);
         await bound?.settle?.();
@@ -632,6 +645,7 @@ async function runUnitStatements(
       await checkpoint?.(checkpointDb, index);
       // A cancel the checkpoint's wait drew is settled before the statement is sent.
       await bound?.beforeStatement?.();
+      bound?.onSend?.(index);
       if (sqliteDeadline !== undefined) {
         // A whole number of milliseconds, never caller input.
         const left = Math.max(

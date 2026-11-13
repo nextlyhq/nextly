@@ -24,6 +24,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { commitsOnMysql } from "../migrate/mysql-implicit-commit";
 import { leadingWords } from "../migrate/split-sql";
 
 import {
@@ -254,49 +255,24 @@ function keepingOf(unit: MigrationUnit, dialect: SupportedDialect): TryKeeping {
 }
 
 /**
- * Whether MySQL commits the open transaction implicitly before and after `statement`: a CREATE,
- * ALTER, DROP or RENAME of a table or an index (the column, key and check changes are an
- * ALTER TABLE's). A temporary table's CREATE and DROP do not commit. A statement that commits but
- * is not read as one here (a view's CREATE, a TRUNCATE) is one no later try may send again
- * (`judgeStatement` reads it as unread), so the run stops rather than send it twice.
- */
-function commitsOnMysql(statement: string): boolean {
-  const [first, second, third] = leadingWords(statement, "mysql", 3);
-  const objects = MYSQL_COMMITTING[first ?? ""];
-  if (objects === undefined) return false;
-  // `CREATE UNIQUE|FULLTEXT|SPATIAL INDEX`: the object is the third word.
-  const object =
-    first === "CREATE" && INDEX_KINDS.has(second ?? "") ? third : second;
-  return objects.has(object ?? "");
-}
-
-/** The objects whose creation, change, drop or rename commits MySQL's transaction, by verb. */
-const MYSQL_COMMITTING: Readonly<Record<string, ReadonlySet<string>>> = {
-  CREATE: new Set(["TABLE", "INDEX"]),
-  ALTER: new Set(["TABLE", "INDEX"]),
-  DROP: new Set(["TABLE", "INDEX"]),
-  RENAME: new Set(["TABLE"]),
-};
-
-/** The kinds of index MySQL writes before `INDEX`. */
-const INDEX_KINDS = new Set(["UNIQUE", "FULLTEXT", "SPATIAL"]);
-
-/**
- * The index of the first statement an ended try did not keep, from the try's first (`from`) and
- * the index it was told last (`waiting`: the statement that waited, or the statements' count
- * where the wait came after the last).
+ * The index of the first statement an ended try did not keep, from the try's first (`from`), the
+ * index it was told last (`waiting`: the statement that waited, or the statements' count where the
+ * wait came after the last) and whether that statement was sent (`sent`): a wait in its
+ * checkpoint, before it, is not one on it.
  */
 function keptUntil(
   keeping: TryKeeping,
   statements: readonly string[],
   from: number,
-  waiting: number
+  waiting: number,
+  sent: boolean
 ): number {
   if (keeping === "rolled-back") return from;
   if (keeping === "each-statement") return waiting;
-  // MySQL: a schema statement that waited had the transaction before it committed first.
+  // MySQL: a schema statement that waited had the transaction before it committed first. One that
+  // was never sent committed nothing: the transaction before it rolled back with the try.
   const waited = statements[waiting];
-  if (waited !== undefined && commitsOnMysql(waited)) return waiting;
+  if (sent && waited !== undefined && commitsOnMysql(waited)) return waiting;
   for (let index = waiting - 1; index >= from; index--) {
     const statement = statements[index];
     if (statement !== undefined && commitsOnMysql(statement)) return index + 1;
@@ -401,6 +377,8 @@ export async function runUnitInTries(
       // The index last told: a statement about to be sent, or the count once all have run; -1
       // while none has been told.
       let reached = -1;
+      // The index last sent to the database: behind `reached` while its checkpoint runs.
+      let sentIndex = -1;
       // Made before the unit's transaction or session opens, so the watch's asks on another
       // connection never run inside that flow; it starts once the session is known.
       // What holds the table, read by the watch just before it ends the try, while the session
@@ -434,6 +412,9 @@ export async function runUnitInTries(
               await watchdog.stop();
             },
             beforeStatement: () => watchdog.idle(),
+            onSend: index => {
+              sentIndex = index;
+            },
             ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
           }
         );
@@ -459,7 +440,13 @@ export async function runUnitInTries(
         const waiting = toldNone ? started : reached;
         const kept = toldNone
           ? started
-          : keptUntil(keeping, statements, started, waiting);
+          : keptUntil(
+              keeping,
+              statements,
+              started,
+              waiting,
+              sentIndex === waiting
+            );
         from = kept;
         // What the next try sends again from the statements this one ran: from its start where
         // the transaction kept nothing, from the open transaction's first on MySQL, the waiting
@@ -483,8 +470,11 @@ export async function runUnitInTries(
             holder: holder ?? (await readHolders(adapter, dialect, session)),
           },
           ...(lasting === undefined ? {} : { lasting }),
-          // Only a transaction that kept nothing undid the rest of the change.
-          undone: keeping === "rolled-back",
+          // Only a transaction that kept nothing undid the rest of the change: on MySQL, one that
+          // had no schema statement commit any of the unit before the wait, in this try or before.
+          undone:
+            keeping === "rolled-back" ||
+            (keeping === "open-transaction" && kept === 0),
           committed: positionsBetween(started, kept),
         };
       }
