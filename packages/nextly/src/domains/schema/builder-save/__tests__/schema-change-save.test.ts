@@ -72,4 +72,24 @@ describe("a field change's answers", () => {
       ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
     }
   });
+
+  it("take a drop's confirmation of a column no field declares, which writes nothing", () => {
+    // A table made before its saves wrote migrations can hold a column the
+    // registry no longer names; the Builder's prompt confirms its drop.
+    const { save } = change({
+      eventResolutions: [
+        { kind: "confirm_drop", eventId: "destructive_drop:dc_people.extra" },
+      ],
+    });
+
+    expect(save.resolutions ?? []).toEqual([]);
+  });
+
+  it("refuse a drop's confirmation naming another table, or a malformed event", () => {
+    for (const eventId of ["destructive_drop:dc_pages.extra", "not-an-event"]) {
+      expect(() =>
+        change({ eventResolutions: [{ kind: "confirm_drop", eventId }] })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
+    }
+  });
 });
