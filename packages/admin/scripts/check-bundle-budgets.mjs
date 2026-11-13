@@ -7,11 +7,13 @@
  * - The shipped total — every browser-loaded chunk the package emits — stays
  *   at most 3,560 KB minified.
  * - The shell every route shares (the first screen's set) stays at most
- *   197 KB gzipped.
+ *   173 KB gzipped.
  * - Each route's own code — what its direct visit adds to the shell — stays
  *   at most its pinned size plus 10% (at least 2 KB). The pins live in
  *   `route-budgets.json`, measured when they were last set; a route with no
  *   pin fails, so a new route is measured and pinned when it is added.
+ * - No module `KEPT_OUT_OF_SHELL` names reaches the shell, read from the
+ *   record of each chunk's modules the build writes beside them.
  *
  * Holding the shell and each route's own code apart, rather than each direct
  * visit whole, keeps the spec's bound (shell plus route within its measured
@@ -26,8 +28,8 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { distStaleness, formatKB, measureBundle } from "./bundle-report.mjs";
@@ -48,11 +50,12 @@ export const BUDGETS = {
   // and email setup screens, editors loaded on demand, and no unused code left
   // to remove, so the limit sits just above that measurement.
   totalMinifiedKB: 3740,
-  // The shared shell, measured at 178.8 KB gzipped on 2026-11-13 once the
-  // root entry exported only what an application mounts (it was 331 KB),
-  // plus the 10% a route's own code may grow above its pin. Held close to the
-  // measurement so the room the split made is not spent without a decision.
-  shellGzipKB: 197,
+  // The shared shell, measured at 156.4 KB gzipped on 2026-11-13 once the
+  // root entry exported only what an application mounts (it was 331 KB) and
+  // the shell stopped importing the form library and the barrels that
+  // brought it, plus the 10% a route's own code may grow above its pin. Held
+  // close to the measurement so the room is not spent without a decision.
+  shellGzipKB: 173,
   // Spec R-3: each route's own code may grow this share above its pin...
   routeHeadroom: 0.1,
   // ...or this many KB, whichever is more, so a route that adds almost
@@ -249,6 +252,147 @@ export function budgetBreaches(report, pins, budgets = BUDGETS) {
 }
 
 /**
+ * What must never reach the shell, by the start of a module's recorded name:
+ * a package's files (`react-hook-form/`), or this package's own source
+ * (`src/...`). Each belongs to the routes that use it; in the shell, every
+ * admin screen would download it before drawing.
+ */
+export const KEPT_OUT_OF_SHELL = [
+  // The form library and what builds on it: the shell draws no form.
+  "react-hook-form/",
+  // Drag-and-drop and file dropping: the field editors and the media library.
+  "@dnd-kit/",
+  "react-dropzone/",
+  "file-selector/",
+  // The admin's own route parts.
+  "src/components/features/media-library/MediaPickerDialog",
+  "src/components/field-ui/",
+  "src/components/ui/table/data-table/",
+];
+
+/**
+ * Modules under a `KEPT_OUT_OF_SHELL` start that the shell may hold, each
+ * written to import nothing so the first frame can read it alone.
+ */
+export const SHELL_MAY_HOLD = [
+  // How a table row's actions are drawn, which the loading outlines share.
+  "src/components/ui/table/data-table/row-actions.ts",
+];
+
+/** The category `bundle-report.mjs` gives a chunk the shell holds. */
+export const SHELL_CATEGORY = "first-screen";
+
+/** The record of each chunk's modules the build writes beside them. */
+const BUNDLE_MODULES_FILE = "bundle-modules.json";
+
+/** The source module the shell is entered through, as the record names it. */
+const SHELL_ENTRY_MODULE = "src/index.ts";
+
+/** The record of `distDir`'s build, or null when it holds none. */
+export function readBundleModules(distDir) {
+  const file = join(distDir, BUNDLE_MODULES_FILE);
+  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+}
+
+/**
+ * The static imports from the shell's entry module to the first of `targets`,
+ * through modules the shell holds, or null when none leads there (a module
+ * placed in a shell chunk beside one it is not imported with).
+ */
+function importChain(imports, from, targets, inShell) {
+  const cameFrom = new Map([[from, null]]);
+  const queue = [from];
+  while (queue.length > 0) {
+    const module = queue.shift();
+    if (targets.has(module)) {
+      const chain = [];
+      for (let at = module; at !== null; at = cameFrom.get(at)) {
+        chain.unshift(at);
+      }
+      return chain;
+    }
+    for (const next of imports[module] ?? []) {
+      if (!cameFrom.has(next) && inShell.has(next)) {
+        cameFrom.set(next, module);
+        queue.push(next);
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * A breach for each module the shell holds that `keptOut` names, with the
+ * import chain that brought it there. Read from the record the build writes
+ * beside the chunks: the chunks alone say how big the shell is, not what is
+ * in it. A missing record, or one naming other chunks than the report
+ * measured, is a breach too, since nothing could then be said of the shell.
+ */
+export function shellModuleBreaches(
+  report,
+  record,
+  keptOut = KEPT_OUT_OF_SHELL,
+  mayHold = SHELL_MAY_HOLD
+) {
+  const unread = budget => [
+    {
+      kind: "shell-module",
+      name: "the shell's modules",
+      measured: "nothing: the build's record of them",
+      budget,
+    },
+  ];
+  if (record === null) {
+    return unread(
+      `${BUNDLE_MODULES_FILE} beside the chunks, written by the build: rebuild (pnpm --filter @nextlyhq/admin build)`
+    );
+  }
+  const shellChunks = report.chunks
+    .filter(chunk => chunk.category === SHELL_CATEGORY)
+    .map(chunk => chunk.file);
+  if (shellChunks.some(file => !Object.hasOwn(record.chunks, file))) {
+    return unread(
+      `a record of the chunks measured, which ${BUNDLE_MODULES_FILE} is not: it is from another build, so rebuild`
+    );
+  }
+
+  // Each module the shell holds, with the first shell chunk holding it.
+  const inShell = new Map();
+  for (const file of shellChunks) {
+    for (const module of record.chunks[file]) {
+      if (!inShell.has(module)) inShell.set(module, file);
+    }
+  }
+
+  const breaches = [];
+  for (const start of keptOut) {
+    const found = [...inShell.keys()].filter(
+      module => module.startsWith(start) && !mayHold.includes(module)
+    );
+    if (found.length === 0) continue;
+    const chain = importChain(
+      record.imports,
+      SHELL_ENTRY_MODULE,
+      new Set(found),
+      inShell
+    );
+    const first = chain === null ? found[0] : chain.at(-1);
+    breaches.push({
+      kind: "shell-module",
+      name: start,
+      measured:
+        `${found.length} module(s) in the shell, ${first} in ${inShell.get(first)}, ` +
+        (chain === null
+          ? "placed there beside a module the shell imports"
+          : `imported ${chain.join(" -> ")}`),
+      budget:
+        "none in the shell: it belongs to the routes that use it, so import what the shell needs from a module that does not bring it",
+    });
+  }
+  return breaches;
+}
+
+/**
  * Render the breaches the way the gate prints them: one line per breach,
  * measured size and budget together.
  */
@@ -276,7 +420,10 @@ async function main() {
     return;
   }
 
-  const breaches = budgetBreaches(report, readPins());
+  const breaches = [
+    ...budgetBreaches(report, readPins()),
+    ...shellModuleBreaches(report, readBundleModules(report.distDir)),
+  ];
 
   console.log(
     `Shipped total: ${formatKB(report.totals.browser.minifiedBytes)} KB minified ` +

@@ -15,7 +15,7 @@ const { successSpy, warningSpy, infoSpy } = vi.hoisted(() => ({
   infoSpy: vi.fn(),
 }));
 
-vi.mock("@admin/components/ui", () => ({
+vi.mock("@admin/components/ui/toaster", () => ({
   toast: {
     success: successSpy,
     warning: warningSpy,
