@@ -119,12 +119,12 @@ async function publishedInEnglish(
   t: TestNextly,
   data: Record<string, unknown>
 ): Promise<string> {
-  const created = (await t.nextly.create({
+  const created = await t.nextly.create({
     collection: DOCS,
     locale: "en",
     data: { ...data, status: "published" },
-  })) as { item: { id: string } };
-  return created.item.id;
+  });
+  return String(created.item.id);
 }
 
 /** Writes and publishes `data` in `locale`. */
@@ -206,12 +206,12 @@ describe.each(getConfiguredTestDialects())(
       expect(read.body).toBe("B body");
       expect(read.slug ?? null).toBeNull();
 
-      const found = (await t.nextly.find({
+      const found = await t.nextly.find({
         collection: DOCS,
         locale: "es",
         status: "published",
         where: { slug: { equals: "hola" } },
-      })) as { items: { id: string; slug?: unknown }[] };
+      });
       expect(found.items.map(item => item.id)).toEqual([translated]);
       expect(found.items[0]?.slug).toBe("hola");
     }, 90_000);
@@ -237,11 +237,11 @@ describe.each(getConfiguredTestDialects())(
       expect((await readAs(t, englishOnly, "en")).title).toBe("B in English");
       expect((await readAs(t, both, "es")).title).toBe("A en español");
 
-      const listed = (await t.nextly.find({
+      const listed = await t.nextly.find({
         collection: DOCS,
         locale: "es",
         status: "published",
-      })) as { items: { id: string }[]; meta: { total?: number } };
+      });
       expect(listed.items.map(item => item.id)).toEqual([both]);
     }, 90_000);
 
@@ -631,12 +631,12 @@ describe.each(getConfiguredTestDialects())(
     // left encoded would reach the reader as a string.
     it("decodes each language's structured values beside a read", async () => {
       const t = await boot(dialect);
-      const created = (await t.nextly.create({
+      const created = await t.nextly.create({
         collection: DATA,
         locale: "en",
         data: { title: "One", meta: { n: 1 }, status: "published" },
-      })) as { item: { id: string } };
-      const id = created.item.id;
+      });
+      const id = String(created.item.id);
       await t.nextly.update({
         collection: DATA,
         id,
