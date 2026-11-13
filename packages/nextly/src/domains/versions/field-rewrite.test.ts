@@ -79,6 +79,7 @@ describe("assertRewritableField", () => {
     { name: "blocks", type: "json" },
     { name: "code", type: "text", unique: true },
     { name: "computed", type: "text", virtual: true },
+    { name: "derived", type: "group", options: { virtual: true } },
     { name: "secret", type: "password" },
     { name: "seo", type: "component" },
     {
@@ -107,6 +108,7 @@ describe("assertRewritableField", () => {
     ["an unknown field", "nope"],
     ["a unique field", "code"],
     ["a virtual field", "computed"],
+    ["a field virtual by its options", "derived"],
     ["a password", "secret"],
     ["a field group", "seo"],
     ["a many-to-many relationship", "tags"],

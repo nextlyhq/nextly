@@ -7439,7 +7439,19 @@ export class CollectionMutationService extends BaseService {
   ): Promise<void> {
     const { field } = args;
     const { ref, slot } = draft;
-    const patched = { ...slot.snapshot, [field]: draft.value };
+    // Repeater rows keep their ids against what this draft held, as the live
+    // write's rows do against the live copy: a row without one gets a fresh
+    // id, and history matches rows by them.
+    const shaped: Record<string, unknown> = {
+      [field]: structuredClone(draft.value),
+    };
+    assignRepeaterRowIds(
+      shaped,
+      { [field]: slot.snapshot[field] },
+      args.fields,
+      await this.passwordReach(args.fields, tx.getDrizzle())
+    );
+    const patched = { ...slot.snapshot, [field]: shaped[field] };
     const storeWorkingDraft = (repo: VersionsRepository) =>
       repo.upsertWorkingDraft({
         ref,
@@ -7456,7 +7468,7 @@ export class CollectionMutationService extends BaseService {
         draft.liveAfter,
         await findPartDrafts(new VersionsRepository(tx), ref, slot.locale)
       );
-      snapshot = { ...whole, [field]: draft.value };
+      snapshot = { ...whole, [field]: shaped[field] };
       replaces = { ...whole, [field]: slot.snapshot[field] };
     }
     await storeDraftSave(tx, this.versionCapture, {

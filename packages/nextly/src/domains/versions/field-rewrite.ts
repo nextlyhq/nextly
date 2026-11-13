@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 
+import { isVirtualField } from "../../collections/fields/virtual";
 import { NextlyError } from "../../errors";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
 
@@ -213,7 +214,7 @@ export function assertRewritableField<F extends RewritableFieldShape>(
   }
   const field = fields.find(f => f.name === name);
   if (!field) refuseField(name, "the collection has no field of that name.");
-  if (field.virtual === true) {
+  if (isVirtualField(field)) {
     refuseField(name, "it is virtual, so nothing stores it.");
   }
   if (field.type === "password") {

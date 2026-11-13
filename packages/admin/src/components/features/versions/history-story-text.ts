@@ -183,12 +183,14 @@ function rewriteSentence(event: DocumentEvent): string {
     ? payload.copies.filter((copy): copy is string => typeof copy === "string")
     : [];
   const drafts = copies.filter(copy => copy.startsWith("draft")).length;
-  const where =
-    drafts === 0
+  const draftWords = drafts === 1 ? "its draft" : `${drafts} drafts`;
+  // A rewrite that left the live copy as it was says so: it changed nothing
+  // a visitor sees.
+  const where = !copies.includes("live")
+    ? `in ${draftWords} only`
+    : drafts === 0
       ? "on the live copy"
-      : drafts === 1
-        ? "on the live copy and its draft"
-        : `on the live copy and ${drafts} drafts`;
+      : `on the live copy and ${draftWords}`;
   const via =
     typeof payload.plugin === "string" && payload.plugin !== ""
       ? ` via ${payload.plugin}`

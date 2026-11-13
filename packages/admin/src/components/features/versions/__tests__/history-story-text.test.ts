@@ -81,6 +81,9 @@ describe("eventSentence", () => {
         plugin: "page-builder",
       })
     ).toBe("Rewrote layout on the live copy and 2 drafts via page-builder");
+    expect(rewrite({ field: "layout", copies: ["draft"] })).toBe(
+      "Rewrote layout in its draft only"
+    );
   });
 
   it("names a plugin acting on its own behalf as the rewrite's actor", () => {

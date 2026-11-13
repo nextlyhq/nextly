@@ -11,7 +11,7 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
-import { defineCollection, password, text } from "../../../config";
+import { defineCollection, password, repeater, text } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
 import {
   definePlugin,
@@ -74,6 +74,7 @@ async function boot(
         fields: [
           text({ name: "title" }),
           text({ name: "layout", maxLength: 12 }),
+          repeater({ name: "rows", fields: [text({ name: "label" })] }),
         ],
       }),
       defineCollection({
@@ -314,6 +315,30 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
     expect((await read(t, PAGES, id, { draft: true })).layout).toBe("narrow");
     // The version still moved, so a save from the older read is refused.
     expect(live._rev).not.toBe(before._rev);
+  });
+
+  it("gives a draft's new repeater rows their ids, as a save does", async () => {
+    const t = await boot(dialect);
+    const id = await create(t, PAGES, { layout: "wide", status: "published" });
+    await save(t, PAGES, id, { rows: [{ label: "old" }] });
+    await t.nextly.rewriteField({
+      collection: PAGES,
+      id,
+      field: "rows",
+      expectedVersion: (await read(t, PAGES, id))._rev as string,
+      set: {
+        from: (current, copy) =>
+          copy.form === "draft" ? [{ label: "a" }, { label: "b" }] : current,
+      },
+      reason: REASON,
+    });
+    const rows = (await read(t, PAGES, id, { draft: true })).rows as Array<{
+      id?: unknown;
+      label?: unknown;
+    }>;
+    expect(rows.map(r => r.label)).toEqual(["a", "b"]);
+    for (const row of rows) expect(typeof row.id).toBe("string");
+    expect(new Set(rows.map(r => r.id)).size).toBe(2);
   });
 
   it("changes the live copy of a collection that keeps no drafts", async () => {
