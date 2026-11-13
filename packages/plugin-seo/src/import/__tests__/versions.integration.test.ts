@@ -113,7 +113,7 @@ function apply(
 /** A site, its content types each holding the old group. */
 async function boot(
   dialect: TestDialect,
-  options: { languages: boolean; domains?: boolean }
+  options: { languages: boolean; domains?: boolean; titleUnread?: boolean }
 ): Promise<{ t: TestNextly; key: string }> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
@@ -146,7 +146,23 @@ async function boot(
               singles: ["home"],
               sitemap: false,
             }
-          : { collections: ["notes"], singles: ["about"], sitemap: false }
+          : {
+              collections: ["notes"],
+              singles: ["about"],
+              sitemap: false,
+              // A title the importer may write but never read, where asked.
+              ...(options.titleUnread === true
+                ? {
+                    fields: [
+                      text({
+                        name: "metaTitle",
+                        access: { read: () => false },
+                      }),
+                      textarea({ name: "metaDescription" }),
+                    ],
+                  }
+                : {}),
+            }
       ),
     ],
     collections: options.languages
@@ -455,6 +471,32 @@ describe.each(getConfiguredTestDialects())(
         metaTitle: "Plans and prices",
         metaDescription: "Typed in the draft",
       });
+    });
+
+    it("imports into a draft a title the importer may write but not read", async () => {
+      const { t, key } = await boot(dialect, {
+        languages: false,
+        titleUnread: true,
+      });
+      const pricing = await create(t, "notes", {
+        title: "Pricing",
+        slug: "pricing",
+        status: "published",
+        meta: { seoTitle: "Plans and prices" },
+      });
+      await save(t, "notes", pricing, { title: "Pricing (new)" });
+
+      const run = await dryRun(key);
+      expect(rowOf(run, "Pricing (new)", "draft")).toMatchObject({
+        outcome: "set",
+        set: ["title"],
+      });
+      const applied = await apply(key, run.plan);
+      expect(applied.status, await applied.clone().text()).toBe(200);
+      // Read as the site, which may read it.
+      expect(
+        typedTitle(await version(t, "notes", pricing, { draft: true }))
+      ).toBe("Plans and prices");
     });
 
     it("leaves a published Single to its waiting draft, which gets the values and stays a draft", async () => {
