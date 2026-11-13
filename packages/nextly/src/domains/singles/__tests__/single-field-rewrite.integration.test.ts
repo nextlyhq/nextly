@@ -378,8 +378,9 @@ describe.each(getConfiguredTestDialects())(
         set: { value: "narrow" },
         reason: REASON,
       });
-      // POPULATION CONTROL: the validator did read, inside the rewrite.
-      expect(probeReads).toHaveLength(1);
+      // POPULATION CONTROL: the validator did read, inside the rewrite, once
+      // for each copy it judged: the live copy and the pending draft.
+      expect(probeReads).toHaveLength(2);
       // Every escape, accepted or not: on PostgreSQL and MySQL a read on the
       // pool runs outside the rewrite's transaction. SQLite reports none.
       const escapes = takeTransactionEscapes();
