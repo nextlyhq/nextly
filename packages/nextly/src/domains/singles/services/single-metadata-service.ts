@@ -677,6 +677,14 @@ export class SingleMetadataService {
     const adapter = this.adapter;
     const remove = async (): Promise<void> => {
       if (tableName && adapter) {
+        // Its many-to-many junction tables first: each holds a key into the Single's table, and
+        // the delete is not done while any stands, so its migration is never recorded applied
+        // with them left.
+        await this.dropJunctionTables(
+          tableName,
+          current?.fields ?? [],
+          adapter
+        );
         await this.dropSingleStorage(slug, tableName, adapter);
       }
 
@@ -720,6 +728,28 @@ export class SingleMetadataService {
       },
       remove
     );
+  }
+
+  /** Drop the junction tables of a Single's many-to-many fields, each where it stands. */
+  private async dropJunctionTables(
+    tableName: string,
+    fields: readonly unknown[],
+    adapter: DrizzleAdapter
+  ): Promise<void> {
+    // Loaded on demand, as this service loads the column descriptor elsewhere.
+    const { junctionTablesOf } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+    const junctions = junctionTablesOf(
+      tableName,
+      fields as Parameters<typeof junctionTablesOf>[1]
+    );
+    for (const junction of junctions) {
+      await adapter.dropTable(junction, {
+        ifExists: true,
+        cascade: adapter.getCapabilities().dialect === "postgresql",
+      });
+    }
   }
 
   /**

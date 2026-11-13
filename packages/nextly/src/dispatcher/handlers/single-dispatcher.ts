@@ -1508,9 +1508,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 eventResolutions ?? [],
                 legacyBundle,
               ],
-            })
+            }),
+            dialect
           );
-          // Notes once the push has landed, so a failure after it keeps the files that record it.
+          // Notes once the push may have changed the database, so a failure after it keeps the
+          // files that record it.
           const push = landing.push;
           // The push excludes companion tables, so single_<slug>_locales is brought in step right
           // after it: created on the first translatable field, then ADD/DROPped as the field set

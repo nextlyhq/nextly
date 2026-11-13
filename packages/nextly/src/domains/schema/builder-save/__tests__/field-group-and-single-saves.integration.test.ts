@@ -197,7 +197,7 @@ describe.each(getConfiguredTestDialects())(
   "a Builder save of a field group or a Single (%s)",
   dialect => {
     async function boot(
-      options: { translated?: boolean } = {}
+      options: { translated?: boolean; development?: boolean } = {}
     ): Promise<TestNextly> {
       const t = await createTestNextly({
         dialect,
@@ -208,7 +208,7 @@ describe.each(getConfiguredTestDialects())(
       });
       instance = t;
       // As the Builder runs: each save is applied, and recorded, here.
-      vi.stubEnv("NODE_ENV", "development");
+      if (options.development !== false) vi.stubEnv("NODE_ENV", "development");
       return t;
     }
 
@@ -622,6 +622,75 @@ describe.each(getConfiguredTestDialects())(
       // table does.
       const applied = await appliedFiles(t);
       for (const file of updates) expect(applied).toContain(file);
+    });
+
+    it("withdraws a field group edit's files outside development when its change fails", async () => {
+      const t = await boot({ translated: true, development: false });
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      const before = migrationFiles(t);
+
+      companionFails.component = true;
+      await expect(
+        dispatchComponents(
+          "updateComponent",
+          { slug: "meta" },
+          { localized: true }
+        )
+      ).rejects.toBeDefined();
+
+      // Nothing of the refused change stays for a deploy to apply.
+      expect(migrationFiles(t)).toEqual(before);
+    });
+
+    it("drops a Single's junction tables with it before its delete is recorded", async () => {
+      const t = await boot();
+      await t.getService("collectionService").createCollection(
+        {
+          name: "articles",
+          label: "Article",
+          fields: [{ name: "body", type: "text" }],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "picks",
+          label: "Picks",
+          fields: [
+            {
+              name: "featured",
+              type: "relationship",
+              options: { relationType: "manyToMany", target: "articles" },
+            },
+          ],
+        }
+      );
+      const tables = () =>
+        (
+          t.adapter as unknown as { listTables(): Promise<string[]> }
+        ).listTables();
+      const isJunction = (name: string) =>
+        name.includes("single_picks") && name.includes("featured");
+      expect((await tables()).some(isJunction)).toBe(true);
+
+      await dispatchSingles("deleteSingle", { slug: "picks" }, undefined);
+
+      expect((await tables()).some(isJunction)).toBe(false);
+      const deleted = migrationFiles(t).find(f =>
+        /_picks_delete\.sql$/.test(f)
+      );
+      expect(deleted).toBeDefined();
+      expect(await appliedFiles(t)).toContain(deleted);
     });
 
     it("records a field group made before its saves wrote migrations, once it is saved", async () => {

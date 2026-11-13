@@ -78,7 +78,8 @@ export async function checkEntitySaveHistory(
 
 /**
  * `save` written and `apply` run: by the writer in development, which then
- * records the files applied; after the writer elsewhere. Without a writer,
+ * records the files applied; once they are written elsewhere. A failure of
+ * `apply` withdraws them in both. Without a writer,
  * `apply` alone runs. The history was checked first
  * (`checkEntitySaveHistory`).
  *
@@ -95,18 +96,17 @@ export async function writeEntitySave(
     await apply();
     return;
   }
-  if (deps.applies) {
-    await writeCollectionSave(deps, save, {
-      historyChecked: true,
-      // Only a part-way failure is the writer's to know; anything else
-      // `apply` answers is the caller's.
-      appliedBy: async () =>
-        (await apply()) === "partly-applied" ? "partly-applied" : undefined,
-    });
-    return;
-  }
-  await writeCollectionSave(deps, save, { historyChecked: true });
-  await apply();
+  // Only a part-way failure is the writer's to know; anything else `apply`
+  // answers is the caller's.
+  const run = async () =>
+    (await apply()) === "partly-applied" ? "partly-applied" : undefined;
+  await writeCollectionSave(deps, save, {
+    historyChecked: true,
+    // In development the writer runs it and records the files applied;
+    // elsewhere it runs once they are written. Either way a failure that
+    // changed nothing withdraws them.
+    ...(deps.applies ? { appliedBy: run } : { appliedAfter: run }),
+  });
 }
 
 /**

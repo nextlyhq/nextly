@@ -132,12 +132,15 @@ export async function writeBuilderSchemaChange(
 }
 
 /**
- * A schema dialog's push that notes once one of its pushes has landed, for
- * `writeBuilderSchemaChange` to tell a failure before the main table changed
- * from one after it.
+ * A schema dialog's push that notes once one of its pushes may have changed
+ * the database, for `writeBuilderSchemaChange` to tell a failure before the
+ * main table changed from one after it: a push that succeeded, and on MySQL
+ * any push at all, since MySQL commits each schema statement as it runs, so
+ * a push refused part way may have left some of them applied.
  */
 export function landingPush(
-  push: (desired: DesiredSchema) => Promise<PipelineResult>
+  push: (desired: DesiredSchema) => Promise<PipelineResult>,
+  dialect: "postgresql" | "mysql" | "sqlite"
 ): {
   push: (desired: DesiredSchema) => Promise<PipelineResult>;
   landed: () => boolean;
@@ -145,9 +148,14 @@ export function landingPush(
   let landed = false;
   return {
     push: async desired => {
-      const result = await push(desired);
-      if (result.success) landed = true;
-      return result;
+      try {
+        const result = await push(desired);
+        if (result.success || dialect === "mysql") landed = true;
+        return result;
+      } catch (error) {
+        if (dialect === "mysql") landed = true;
+        throw error;
+      }
     },
     landed: () => landed,
   };
