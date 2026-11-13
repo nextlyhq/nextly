@@ -15,7 +15,11 @@ import type { CollectionEntryService } from "../../../../services/collections/co
 import type { CollectionMetadataService } from "../collection-metadata-service";
 import { CollectionService } from "../collection-service";
 
-function serviceAnswering(answer: { statusCode: number; message: string }) {
+function serviceAnswering(answer: {
+  statusCode: number;
+  code?: string;
+  message: string;
+}) {
   const logger = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -48,6 +52,21 @@ describe("a failed entry create", () => {
     expect(NextlyError.isCode(failure, "DUPLICATE")).toBe(true);
     expect(logger.warn).not.toHaveBeenCalled();
     expect(logger.debug).toHaveBeenCalledWith(
+      "Entry creation failed",
+      expect.objectContaining({ statusCode: 409 })
+    );
+  });
+
+  it("still warns of another refusal that answers 409, such as a hook's conflict", async () => {
+    const { service, logger } = serviceAnswering({
+      statusCode: 409,
+      code: "CONFLICT",
+      message: "This page is locked.",
+    });
+    await expect(
+      service.createEntry("posts", { title: "Hello" }, {})
+    ).rejects.toThrow();
+    expect(logger.warn).toHaveBeenCalledWith(
       "Entry creation failed",
       expect.objectContaining({ statusCode: 409 })
     );

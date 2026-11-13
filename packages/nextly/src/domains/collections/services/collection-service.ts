@@ -736,8 +736,9 @@ export class CollectionService extends BaseService {
     if (!result.success) {
       // A duplicate is thrown to the caller, which receives it and decides:
       // several writers making one row at once (parallel build workers) is
-      // no fault, so only other failures are warned of here.
-      const log = result.statusCode === 409 ? "debug" : "warn";
+      // no fault, so only other failures are warned of here. Told by its
+      // code, since other refusals (a hook's conflict) answer 409 too.
+      const log = result.code === "DUPLICATE" ? "debug" : "warn";
       this.logger[log]("Entry creation failed", {
         collectionName,
         message: result.message,

@@ -60,17 +60,23 @@ describe("seoStaticParams", () => {
   });
 
   it("passes the parent's params on, and fills the address with them", async () => {
+    writeFileSync(
+      join(appDir, ".next/server/app-paths-manifest.json"),
+      JSON.stringify({
+        "/(site)/[lang]/docs/[topic]/page": "app/[lang]/docs/[topic]/page.js",
+      })
+    );
+    // A nested route's generator answers its own part alone; the parent's
+    // part comes from the params Next.js hands it.
     const generate = seoStaticParams(
-      "/docs/[...slug]",
-      ({ params }: { params: { lang: string } }) => [
-        { slug: [params.lang, "intro"] },
-      ],
+      "/[lang]/docs/[topic]",
+      (_: { params: { lang: string } }) => [{ topic: "intro" }],
       { appDir }
     );
     expect(await generate({ params: { lang: "en" } })).toEqual([
-      { slug: ["en", "intro"] },
+      { topic: "intro" },
     ]);
-    expect(paths()).toContain("dynamic /docs/en/intro");
+    expect(paths()).toEqual(["dynamic /en/docs/intro"]);
   });
 
   it("fills an optional catch-all, with and without its values", async () => {

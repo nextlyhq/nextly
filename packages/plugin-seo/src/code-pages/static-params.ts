@@ -159,9 +159,11 @@ export function declaredAddresses(dir: string): Prerendered[] {
  * variable parts as Next.js names them, route groups left out:
  * `"/blog/[topic]"`, `"/docs/[...slug]"`.
  *
- * Wrap the `generateStaticParams` of a route that calls `seoMetadata`: a
- * page it declares is listed during the build as one whose route does,
- * before it has rendered and recorded itself. It returns exactly what
+ * Wrap the `generateStaticParams` of a route that calls `seoMetadata` and
+ * whose pages search engines may list: a page it declares is listed during
+ * the build as one whose route does, before it has rendered and recorded
+ * what its own metadata says. A route that hides its pages has nothing to
+ * add to a sitemap, so leave it unwrapped. It returns exactly what
  * `generate` returns, the same array, and records nothing outside the build. A write that fails warns once and changes
  * nothing the route gets.
  *
