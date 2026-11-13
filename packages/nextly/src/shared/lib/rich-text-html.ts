@@ -106,25 +106,97 @@ interface LexicalSerializedNode {
 // Element Format (Alignment) mapping
 // ============================================================
 
-// Lexical uses both numeric and string formats for alignment
-const ELEMENT_FORMAT_TO_STYLE: Record<number, string> = {
-  1: "text-align:left",
-  2: "text-align:center",
-  3: "text-align:right",
-  4: "text-align:justify",
-  5: "text-align:start",
-  6: "text-align:end",
+type Alignment = "left" | "center" | "right" | "justify" | "start" | "end";
+
+// Lexical stores alignment as a number in older documents and as a keyword in
+// newer ones; both resolve to the keyword, which is both the `text-align`
+// value and the class's suffix.
+const NUMERIC_ALIGNMENT: Record<number, Alignment> = {
+  1: "left",
+  2: "center",
+  3: "right",
+  4: "justify",
+  5: "start",
+  6: "end",
 };
 
-// String-based format mapping (used by newer Lexical versions)
-const STRING_FORMAT_TO_STYLE: Record<string, string> = {
-  left: "text-align:left",
-  center: "text-align:center",
-  right: "text-align:right",
-  justify: "text-align:justify",
-  start: "text-align:start",
-  end: "text-align:end",
-};
+const ALIGNMENTS: ReadonlySet<string> = new Set<Alignment>([
+  "left",
+  "center",
+  "right",
+  "justify",
+  "start",
+  "end",
+]);
+
+/** The alignment a block node was given, in either of Lexical's spellings. */
+function alignmentOf(node: LexicalSerializedNode): Alignment | undefined {
+  if (typeof node.format === "string" && node.format !== "") {
+    return ALIGNMENTS.has(node.format) ? node.format : undefined;
+  }
+  if (typeof node.format === "number" && node.format > 0) {
+    return NUMERIC_ALIGNMENT[node.format];
+  }
+  return undefined;
+}
+
+// ============================================================
+// Output styles
+// ============================================================
+
+/**
+ * How the HTML is styled.
+ *
+ * - `"default"` carries Nextly's own look as inline styles, so the HTML reads
+ *   well dropped into a page whose CSS resets every element.
+ * - `"none"` carries no style Nextly adds. Every element has a class in the
+ *   `nextly-rich-text-` namespace, alignment is a class too, and the site's
+ *   own stylesheet decides the look, which an inline style would outrank.
+ *
+ * Styles an author chose in the editor (a text colour, a button's colours) are
+ * the author's content, so both keep them.
+ */
+export type RichTextStyles = "default" | "none";
+
+export interface RichTextHtmlOptions {
+  /** @default "default" */
+  styles?: RichTextStyles;
+}
+
+/** What every serializer is handed: whether Nextly's look is left out. */
+interface RenderContext {
+  readonly classOnly: boolean;
+}
+
+/** The class naming an element, in the namespace every class here shares. */
+const named = (name: string): string => `nextly-rich-text-${name}`;
+
+/** ` style="…"` carrying Nextly's look, or nothing where the site styles it. */
+function lookStyle(ctx: RenderContext, css: string): string {
+  return ctx.classOnly ? "" : ` style="${css}"`;
+}
+
+/**
+ * The ` class="…"` attribute: the classes both outputs carry, then in
+ * class-only output the ones naming each element and its variant, or in the
+ * default output the older classes outside the namespace it has always
+ * carried. Nothing is added to the default output, which stays as it was, and
+ * class-only output carries only namespaced classes.
+ */
+function classAttr(
+  ctx: RenderContext,
+  always: readonly string[],
+  classOnly: readonly string[] = [],
+  defaultOnly: readonly string[] = []
+): string {
+  const names = [...always, ...(ctx.classOnly ? classOnly : defaultOnly)];
+  return names.length > 0 ? ` class="${names.join(" ")}"` : "";
+}
+
+/** The class an alignment is spelled as in class-only output. */
+function alignClass(alignment: Alignment | undefined): string[] {
+  return alignment ? [named(`align-${alignment}`)] : [];
+}
 
 // ============================================================
 // HTML Escaping
@@ -176,7 +248,22 @@ function isUrlSafe(url: string): boolean {
 // Node Serializers
 // ============================================================
 
-function applyTextFormat(content: string, format: number): string {
+/** A text format's wrapper: its class in class-only output, else its look. */
+function formatWrapper(
+  ctx: RenderContext,
+  tag: string,
+  name: string,
+  look: string,
+  content: string
+): string {
+  return `<${tag}${classAttr(ctx, [], [named(name)])}${lookStyle(ctx, look)}>${content}</${tag}>`;
+}
+
+function applyTextFormat(
+  content: string,
+  format: number,
+  ctx: RenderContext
+): string {
   // Takes content that is ALREADY escaped, because the style span now sits
   // inside these wrappers and has to be built before they are applied.
   let result = content;
@@ -187,22 +274,46 @@ function applyTextFormat(content: string, format: number): string {
     result = `<code class="nextly-rich-text-code">${result}</code>`;
   }
   if (format & TEXT_FORMAT.SUBSCRIPT) {
-    result = `<sub style="font-size:0.75em;vertical-align:sub">${result}</sub>`;
+    result = formatWrapper(
+      ctx,
+      "sub",
+      "subscript",
+      "font-size:0.75em;vertical-align:sub",
+      result
+    );
   }
   if (format & TEXT_FORMAT.SUPERSCRIPT) {
-    result = `<sup style="font-size:0.75em;vertical-align:super">${result}</sup>`;
+    result = formatWrapper(
+      ctx,
+      "sup",
+      "superscript",
+      "font-size:0.75em;vertical-align:super",
+      result
+    );
   }
   if (format & TEXT_FORMAT.STRIKETHROUGH) {
-    result = `<s style="text-decoration:line-through">${result}</s>`;
+    result = formatWrapper(
+      ctx,
+      "s",
+      "strikethrough",
+      "text-decoration:line-through",
+      result
+    );
   }
   if (format & TEXT_FORMAT.UNDERLINE) {
-    result = `<u style="text-decoration:underline">${result}</u>`;
+    result = formatWrapper(
+      ctx,
+      "u",
+      "underline",
+      "text-decoration:underline",
+      result
+    );
   }
   if (format & TEXT_FORMAT.ITALIC) {
-    result = `<em style="font-style:italic">${result}</em>`;
+    result = formatWrapper(ctx, "em", "italic", "font-style:italic", result);
   }
   if (format & TEXT_FORMAT.BOLD) {
-    result = `<strong style="font-weight:700">${result}</strong>`;
+    result = formatWrapper(ctx, "strong", "bold", "font-weight:700", result);
   }
   if (format & TEXT_FORMAT.HIGHLIGHT) {
     // Class, not an inline style, for the same reason as the code format
@@ -216,7 +327,10 @@ function applyTextFormat(content: string, format: number): string {
   return result;
 }
 
-function serializeTextNode(node: LexicalSerializedNode): string {
+function serializeTextNode(
+  node: LexicalSerializedNode,
+  ctx: RenderContext
+): string {
   const text = node.text || "";
   const format = node.format || 0;
 
@@ -241,7 +355,8 @@ function serializeTextNode(node: LexicalSerializedNode): string {
   // decoration propagates rather than being replaced.
   return applyTextFormat(
     inner,
-    format & ~formatsDrawnByStyle(node.style, format)
+    format & ~formatsDrawnByStyle(node.style, format),
+    ctx
   );
 }
 
@@ -249,153 +364,127 @@ function serializeLineBreakNode(): string {
   return "<br>";
 }
 
+type SerializeChildren = (children: LexicalSerializedNode[]) => string;
+
 function serializeParagraphNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
+  const alignment = alignmentOf(node);
 
-  // Add class and inline styles to ensure proper rendering in Tailwind environments
-  const className = ' class="nextly-rich-text-paragraph"';
+  // Nextly's look: a bottom margin, so paragraphs stay apart in a page whose
+  // CSS resets them, and the alignment as `text-align`.
+  const look = alignment
+    ? `margin:0 0 1rem 0;text-align:${alignment}`
+    : "margin:0 0 1rem 0";
 
-  // Build style with margin and alignment
-  const baseStyles = "margin:0 0 1rem 0";
-
-  // Get alignment style - check both string format (new) and numeric format (old)
-  let alignmentStyle: string | undefined;
-
-  if (typeof node.format === "string" && node.format !== "") {
-    // String-based format (e.g., "center", "right")
-    alignmentStyle = STRING_FORMAT_TO_STYLE[node.format];
-  } else if (typeof node.format === "number" && node.format > 0) {
-    // Numeric format (legacy)
-    alignmentStyle = ELEMENT_FORMAT_TO_STYLE[node.format];
-  }
-
-  const style = alignmentStyle
-    ? ` style="${baseStyles};${alignmentStyle}"`
-    : ` style="${baseStyles}"`;
-
-  return `<p${className}${style}>${content}</p>`;
+  return `<p${classAttr(ctx, [named("paragraph")], alignClass(alignment))}${lookStyle(ctx, look)}>${content}</p>`;
 }
+
+// Nextly's look for each heading level, for a page whose CSS resets them.
+const HEADING_LOOK: Record<string, string> = {
+  h1: "font-size:2.25rem;font-weight:700;line-height:2.5rem;margin:1.5rem 0 1rem 0",
+  h2: "font-size:1.875rem;font-weight:700;line-height:2.25rem;margin:1.25rem 0 0.875rem 0",
+  h3: "font-size:1.5rem;font-weight:700;line-height:2rem;margin:1.25rem 0 0.875rem 0",
+  h4: "font-size:1.25rem;font-weight:600;line-height:1.75rem;margin:1rem 0 0.75rem 0",
+  h5: "font-size:1.125rem;font-weight:600;line-height:1.75rem;margin:1rem 0 0.75rem 0",
+  h6: "font-size:1rem;font-weight:600;line-height:1.5rem;margin:0.875rem 0 0.625rem 0",
+};
 
 function serializeHeadingNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
   const tag = node.tag || "h1";
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
+  const alignment = alignmentOf(node);
 
-  // Define styles for each heading level to work in Tailwind-reset environments
-  const headingStyles: Record<string, string> = {
-    h1: "font-size:2.25rem;font-weight:700;line-height:2.5rem;margin:1.5rem 0 1rem 0",
-    h2: "font-size:1.875rem;font-weight:700;line-height:2.25rem;margin:1.25rem 0 0.875rem 0",
-    h3: "font-size:1.5rem;font-weight:700;line-height:2rem;margin:1.25rem 0 0.875rem 0",
-    h4: "font-size:1.25rem;font-weight:600;line-height:1.75rem;margin:1rem 0 0.75rem 0",
-    h5: "font-size:1.125rem;font-weight:600;line-height:1.75rem;margin:1rem 0 0.75rem 0",
-    h6: "font-size:1rem;font-weight:600;line-height:1.5rem;margin:0.875rem 0 0.625rem 0",
-  };
+  const base = HEADING_LOOK[tag] || HEADING_LOOK.h1;
+  const look = alignment ? `${base};text-align:${alignment}` : base;
 
-  const baseStyle = headingStyles[tag] || headingStyles.h1;
-  const className = ` class="nextly-rich-text-${tag}"`;
-
-  // Get alignment style - check both string format (new) and numeric format (old)
-  let alignmentStyle: string | undefined;
-
-  if (typeof node.format === "string" && node.format !== "") {
-    // String-based format (e.g., "center", "right")
-    alignmentStyle = STRING_FORMAT_TO_STYLE[node.format];
-  } else if (typeof node.format === "number" && node.format > 0) {
-    // Numeric format (legacy)
-    alignmentStyle = ELEMENT_FORMAT_TO_STYLE[node.format];
-  }
-
-  // Merge alignment with base heading styles
-  const style = alignmentStyle
-    ? ` style="${baseStyle};${alignmentStyle}"`
-    : ` style="${baseStyle}"`;
-
-  return `<${tag}${className}${style}>${content}</${tag}>`;
+  return `<${tag}${classAttr(ctx, [named(tag)], alignClass(alignment))}${lookStyle(ctx, look)}>${content}</${tag}>`;
 }
 
 function serializeQuoteNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
+  const look =
+    "margin:1.5rem 0;padding:1rem 1.5rem;border-left:4px solid #e5e7eb;background-color:#f9fafb;font-style:italic;color:#4b5563";
 
-  // Add styles for blockquote to work in Tailwind-reset environments
-  const className = ' class="nextly-rich-text-blockquote"';
-  const style =
-    ' style="margin:1.5rem 0;padding:1rem 1.5rem;border-left:4px solid #e5e7eb;background-color:#f9fafb;font-style:italic;color:#4b5563"';
-
-  return `<blockquote${className}${style}>${content}</blockquote>`;
+  return `<blockquote${classAttr(ctx, [named("blockquote")])}${lookStyle(ctx, look)}>${content}</blockquote>`;
 }
 
 function serializeListNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
   const listType = node.listType || "bullet";
   const tag = listType === "number" ? "ol" : "ul";
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
 
   const startAttr =
     tag === "ol" && node.start && node.start !== 1
       ? ` start="${node.start}"`
       : "";
 
-  const className = ` class="nextly-rich-text-list nextly-rich-text-${tag}"`;
+  // A checklist is a `ul` like a bullet list; class-only output names it, so
+  // a site can drop the bullets its own list styles would draw.
+  const look =
+    listType === "check"
+      ? "list-style:none;padding-left:0;margin:1rem 0"
+      : `${tag === "ol" ? "list-style:decimal" : "list-style:disc"};margin:1rem 0;padding-left:2rem`;
+  const classes = classAttr(
+    ctx,
+    [named("list"), named(tag)],
+    listType === "check" ? [named("checklist")] : []
+  );
 
-  let style = "";
-  if (listType === "check") {
-    style = ` style="list-style:none;padding-left:0;margin:1rem 0"`;
-  } else {
-    // Add proper list styling for Tailwind-reset environments
-    const listStyle = tag === "ol" ? "list-style:decimal" : "list-style:disc";
-    style = ` style="${listStyle};margin:1rem 0;padding-left:2rem"`;
-  }
-
-  return `<${tag}${startAttr}${className}${style}>${content}</${tag}>`;
+  return `<${tag}${startAttr}${classes}${lookStyle(ctx, look)}>${content}</${tag}>`;
 }
 
 function serializeListItemNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
 
-  const className = ' class="nextly-rich-text-list-item"';
-
-  // Handle checklist items
-  if (node.checked === true) {
-    return `<li${className} style="list-style:none;text-decoration:line-through;opacity:0.7;margin-bottom:0.5rem"><input type="checkbox" checked disabled style="margin-right:0.5em">${content}</li>`;
+  // A checklist item: its state as a class in class-only output, and a
+  // disabled box the reader sees but cannot tick.
+  if (node.checked === true || node.checked === false) {
+    const checked = node.checked;
+    const look = checked
+      ? "list-style:none;text-decoration:line-through;opacity:0.7;margin-bottom:0.5rem"
+      : "list-style:none;margin-bottom:0.5rem";
+    const classes = classAttr(
+      ctx,
+      [named("list-item")],
+      [named(checked ? "list-item--checked" : "list-item--unchecked")]
+    );
+    const box = `<input${classAttr(ctx, [], [named("checkbox")])} type="checkbox"${checked ? " checked" : ""} disabled${lookStyle(ctx, "margin-right:0.5em")}>`;
+    return `<li${classes}${lookStyle(ctx, look)}>${box}${content}</li>`;
   }
-  if (node.checked === false) {
-    return `<li${className} style="list-style:none;margin-bottom:0.5rem"><input type="checkbox" disabled style="margin-right:0.5em">${content}</li>`;
-  }
 
-  // Regular list item with margin
-  return `<li${className} style="margin-bottom:0.5rem">${content}</li>`;
+  return `<li${classAttr(ctx, [named("list-item")])}${lookStyle(ctx, "margin-bottom:0.5rem")}>${content}</li>`;
 }
 
 function serializeLinkNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
   const rawUrl = node.url || "#";
   const url = isUrlSafe(rawUrl) ? rawUrl : "#";
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
 
-  const className = ' class="nextly-rich-text-link"';
-  let attrs = `href="${escapeUrl(url)}" style="color:#3b82f6;text-decoration:underline"`;
-
+  let attrs = `href="${escapeUrl(url)}"${lookStyle(ctx, "color:#3b82f6;text-decoration:underline")}`;
   if (node.target) {
     attrs += ` target="${escapeHtml(node.target)}"`;
   }
@@ -406,7 +495,8 @@ function serializeLinkNode(
     attrs += ` title="${escapeHtml(node.title)}"`;
   }
 
-  return `<a ${className} ${attrs}>${content}</a>`;
+  // Two spaces after `<a`, as the default output has always been spelled.
+  return `<a ${classAttr(ctx, [named("link")])} ${attrs}>${content}</a>`;
 }
 
 function serializeCodeNode(
@@ -447,32 +537,54 @@ function serializeCodeHighlightNode(node: LexicalSerializedNode): string {
   return `<span class="${className}">${text}</span>`;
 }
 
-function serializeHorizontalRuleNode(): string {
-  return '<hr class="nextly-rich-text-hr" style="border:0;border-top:2px solid #e5e7eb;margin:2rem 0">';
+function serializeHorizontalRuleNode(ctx: RenderContext): string {
+  return `<hr${classAttr(ctx, [named("hr")])}${lookStyle(ctx, "border:0;border-top:2px solid #e5e7eb;margin:2rem 0")}>`;
 }
 
-function serializeImageNode(node: LexicalSerializedNode): string {
+/** A `figure` around media, with its caption when the author wrote one. */
+function figure(
+  ctx: RenderContext,
+  inner: string,
+  caption: string | undefined,
+  looks: { figure?: string; caption?: string } = {}
+): string {
+  const figcaption = caption
+    ? `<figcaption${classAttr(ctx, [], [named("caption")])}${looks.caption ? lookStyle(ctx, looks.caption) : ""}>${escapeHtml(caption)}</figcaption>`
+    : "";
+  return `<figure${classAttr(ctx, [], [named("figure")])}${looks.figure ? lookStyle(ctx, looks.figure) : ""}>${inner}${figcaption}</figure>`;
+}
+
+function serializeImageNode(
+  node: LexicalSerializedNode,
+  ctx: RenderContext
+): string {
   const src = node.src || "";
   if (!isUrlSafe(src)) return "";
 
   const alt = node.altText || "";
-  const caption = node.caption;
 
-  let imgAttrs = `src="${escapeUrl(src)}" alt="${escapeHtml(alt)}" style="width:100%;height:auto;border-radius:0.375rem"`;
+  let imgAttrs = `src="${escapeUrl(src)}" alt="${escapeHtml(alt)}"${lookStyle(ctx, "width:100%;height:auto;border-radius:0.375rem")}`;
   if (node.width) imgAttrs += ` width="${node.width}"`;
   if (node.height) imgAttrs += ` height="${node.height}"`;
 
-  if (caption) {
-    return `<figure style="margin:1rem 0"><img ${imgAttrs}><figcaption style="margin-top:0.5rem;text-align:center;font-size:0.875rem;color:#666">${escapeHtml(caption)}</figcaption></figure>`;
-  }
-
-  return `<figure style="margin:1rem 0"><img ${imgAttrs}></figure>`;
+  return figure(
+    ctx,
+    `<img${classAttr(ctx, [], [named("image")])} ${imgAttrs}>`,
+    node.caption,
+    {
+      figure: "margin:1rem 0",
+      caption:
+        "margin-top:0.5rem;text-align:center;font-size:0.875rem;color:#666",
+    }
+  );
 }
 
-function serializeVideoNode(node: LexicalSerializedNode): string {
+function serializeVideoNode(
+  node: LexicalSerializedNode,
+  ctx: RenderContext
+): string {
   const provider = node.provider || "unknown";
   const videoId = node.videoId || "";
-  const caption = node.caption;
 
   let embedUrl = "";
   if (provider === "youtube") {
@@ -483,22 +595,59 @@ function serializeVideoNode(node: LexicalSerializedNode): string {
 
   if (!embedUrl) return "";
 
-  let html = `<div class="video-embed" style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden">`;
-  html += `<iframe src="${embedUrl}" style="position:absolute;top:0;left:0;width:100%;height:100%" frameborder="0" allowfullscreen loading="lazy"></iframe>`;
+  // Nextly's look holds the frame at 16:9; in class-only output the site's
+  // stylesheet sizes `.nextly-rich-text-video` itself.
+  let html = `<div${classAttr(ctx, [], [named("video")], ["video-embed"])}${lookStyle(ctx, "position:relative;padding-bottom:56.25%;height:0;overflow:hidden")}>`;
+  html += `<iframe${classAttr(ctx, [], [named("video-frame")])} src="${embedUrl}"${lookStyle(ctx, "position:absolute;top:0;left:0;width:100%;height:100%")} frameborder="0" allowfullscreen loading="lazy"></iframe>`;
   html += `</div>`;
 
-  if (caption) {
-    html = `<figure>${html}<figcaption>${escapeHtml(caption)}</figcaption></figure>`;
-  }
+  return node.caption ? figure(ctx, html, node.caption) : html;
+}
 
-  return html;
+/** A button's colours as its author chose them, each refused unless safe CSS. */
+interface ButtonColors {
+  background: string | null;
+  text: string | null;
+}
+
+function authoredButtonColors(
+  bgColor?: string,
+  textColor?: string
+): ButtonColors {
+  // Validated against CSS injection: the value lands inside a style attribute.
+  return {
+    background: bgColor ? sanitizeCssColor(bgColor) : null,
+    text: textColor ? sanitizeCssColor(textColor) : null,
+  };
+}
+
+/**
+ * The colour declarations a button carries. The author's colours always; in
+ * Nextly's look, a filled button with none chosen falls back to black on
+ * white, which class-only output leaves to the site.
+ */
+function buttonColorDeclarations(
+  variant: string,
+  colors: ButtonColors,
+  withFallbacks: boolean
+): string[] {
+  if (variant === "outline") {
+    return colors.text
+      ? [`color:${colors.text}`, `border-color:${colors.text}`]
+      : [];
+  }
+  const background = colors.background || (withFallbacks ? "#000" : null);
+  const text = colors.text || (withFallbacks ? "#fff" : null);
+  return [
+    ...(background ? [`background-color:${background}`] : []),
+    ...(text ? [`color:${text}`] : []),
+  ];
 }
 
 function getButtonInlineStyle(
   variant: string,
   size: string,
-  bgColor?: string,
-  textColor?: string
+  colors: ButtonColors
 ): string {
   const styles: string[] = [
     "display:inline-flex",
@@ -520,213 +669,222 @@ function getButtonInlineStyle(
     styles.push("padding:0.5rem 1rem", "font-size:0.875rem");
   }
 
-  // Validate color values against CSS injection
-  const safeBg = bgColor ? sanitizeCssColor(bgColor) : null;
-  const safeText = textColor ? sanitizeCssColor(textColor) : null;
-
-  // Variant styles
+  // Variant styles: an outline, or filled (also the legacy "primary" and
+  // "secondary").
   if (variant === "outline") {
     styles.push("background:transparent", "border:1px solid");
-    if (safeText) {
-      styles.push(`color:${safeText}`, `border-color:${safeText}`);
-    }
   } else {
-    // filled (also handles legacy "primary"/"secondary")
     styles.push("border:none");
-    styles.push(`background-color:${safeBg || "#000"}`);
-    styles.push(`color:${safeText || "#fff"}`);
   }
+  styles.push(...buttonColorDeclarations(variant, colors, true));
 
   return styles.join(";");
 }
 
-function serializeButtonLinkNode(node: LexicalSerializedNode): string {
-  const rawUrl = node.url || "#";
-  const url = isUrlSafe(rawUrl) ? rawUrl : "#";
-  const text = (node.text as string) || "";
-  const target = node.target;
-  const variant = node.variant || "filled";
-  const size = node.size || "md";
-  const bgColor = node.bgColor;
-  const textColor = node.textColor;
-  const alignment = node.alignment || "center";
-
-  // Map alignment to CSS text-align values
-  const textAlign =
-    alignment === "left" ? "left" : alignment === "right" ? "right" : "center";
-
-  const style = getButtonInlineStyle(variant, size, bgColor, textColor);
-  let attrs = `href="${escapeUrl(url)}" style="${style}"`;
-  if (target) {
-    attrs += ` target="${escapeHtml(target)}" rel="noopener noreferrer"`;
-  }
-
-  return `<div style="text-align:${textAlign};margin:1rem 0"><a ${attrs}>${escapeHtml(text)}</a></div>`;
+interface ButtonSpec {
+  url?: string;
+  text?: string;
+  target?: string;
+  variant?: string;
+  size?: string;
+  bgColor?: string;
+  textColor?: string;
 }
 
-function serializeButtonGroupNode(node: LexicalSerializedNode): string {
+/**
+ * One button's anchor, for a lone button and for each in a group. Class-only
+ * output names its variant and size, and keeps only the colours its author
+ * chose.
+ */
+function serializeButtonAnchor(ctx: RenderContext, button: ButtonSpec): string {
+  const rawUrl = button.url || "#";
+  const url = isUrlSafe(rawUrl) ? rawUrl : "#";
+  const variant = button.variant || "filled";
+  const size = button.size || "md";
+  const colors = authoredButtonColors(button.bgColor, button.textColor);
+
+  let style: string;
+  if (ctx.classOnly) {
+    const authored = buttonColorDeclarations(variant, colors, false);
+    style = authored.length > 0 ? ` style="${authored.join(";")}"` : "";
+  } else {
+    style = ` style="${getButtonInlineStyle(variant, size, colors)}"`;
+  }
+
+  const classes = classAttr(
+    ctx,
+    [],
+    [
+      named("button"),
+      named(`button--${variant === "outline" ? "outline" : "filled"}`),
+      named(`button--${size === "sm" || size === "lg" ? size : "md"}`),
+    ]
+  );
+
+  let attrs = `href="${escapeUrl(url)}"${style}`;
+  if (button.target) {
+    attrs += ` target="${escapeHtml(button.target)}" rel="noopener noreferrer"`;
+  }
+
+  return `<a${classes} ${attrs}>${escapeHtml(button.text || "")}</a>`;
+}
+
+/** A button's alignment, which only left, right and centre can be. */
+function buttonAlignment(alignment: string | undefined): Alignment {
+  return alignment === "left"
+    ? "left"
+    : alignment === "right"
+      ? "right"
+      : "center";
+}
+
+function serializeButtonLinkNode(
+  node: LexicalSerializedNode,
+  ctx: RenderContext
+): string {
+  const textAlign = buttonAlignment(node.alignment);
+  const anchor = serializeButtonAnchor(ctx, {
+    url: node.url,
+    text: node.text,
+    target: node.target,
+    variant: node.variant,
+    size: node.size,
+    bgColor: node.bgColor,
+    textColor: node.textColor,
+  });
+
+  return `<div${classAttr(ctx, [], [named("button-link"), ...alignClass(textAlign)])}${lookStyle(ctx, `text-align:${textAlign};margin:1rem 0`)}>${anchor}</div>`;
+}
+
+function serializeButtonGroupNode(
+  node: LexicalSerializedNode,
+  ctx: RenderContext
+): string {
   const buttons = node.buttons || [];
   if (buttons.length === 0) return "";
 
-  const alignment = node.alignment || "center";
-
-  // Map alignment to CSS values
-  const textAlign =
-    alignment === "left" ? "left" : alignment === "right" ? "right" : "center";
+  const textAlign = buttonAlignment(node.alignment);
   const justifyContent =
-    alignment === "left"
+    textAlign === "left"
       ? "flex-start"
-      : alignment === "right"
+      : textAlign === "right"
         ? "flex-end"
         : "center";
 
-  let html = `<div style="text-align:${textAlign};margin:1rem 0;display:flex;justify-content:${justifyContent};gap:0.75rem;flex-wrap:wrap">`;
-
+  let html = `<div${classAttr(ctx, [], [named("button-group"), ...alignClass(textAlign)])}${lookStyle(ctx, `text-align:${textAlign};margin:1rem 0;display:flex;justify-content:${justifyContent};gap:0.75rem;flex-wrap:wrap`)}>`;
   for (const button of buttons) {
-    const rawUrl = button.url || "#";
-    const url = isUrlSafe(rawUrl) ? rawUrl : "#";
-    const text = button.text || "";
-    const variant = button.variant || "filled";
-    const size = button.size || "md";
-    const style = getButtonInlineStyle(
-      variant,
-      size,
-      button.bgColor,
-      button.textColor
-    );
-
-    let attrs = `href="${escapeUrl(url)}" style="${style}"`;
-    if (button.target) {
-      attrs += ` target="${escapeHtml(button.target)}" rel="noopener noreferrer"`;
-    }
-
-    html += `<a ${attrs}>${escapeHtml(text)}</a>`;
+    html += serializeButtonAnchor(ctx, button);
   }
-
   html += `</div>`;
   return html;
 }
 
-function serializeGalleryNode(node: LexicalSerializedNode): string {
+function serializeGalleryNode(
+  node: LexicalSerializedNode,
+  ctx: RenderContext
+): string {
   const rawImages = node.images || [];
   const safeImages = rawImages.filter(image => isUrlSafe(image.src));
   if (safeImages.length === 0) return "";
 
   const columns = node.columns || 3;
-  const caption = node.caption;
 
-  let html = `<div class="gallery gallery--cols-${columns}" style="display:grid;grid-template-columns:repeat(${columns},1fr);gap:0.5rem">`;
+  let html = `<div${classAttr(ctx, [], [named("gallery"), named(`gallery--cols-${columns}`)], ["gallery", `gallery--cols-${columns}`])}${lookStyle(ctx, `display:grid;grid-template-columns:repeat(${columns},1fr);gap:0.5rem`)}>`;
 
   for (const image of safeImages) {
     let imgAttrs = `src="${escapeUrl(image.src)}" alt="${escapeHtml(image.alt)}"`;
     if (image.width) imgAttrs += ` width="${image.width}"`;
     if (image.height) imgAttrs += ` height="${image.height}"`;
-    imgAttrs += ` style="width:100%;height:auto;object-fit:cover;border-radius:0.375rem"`;
-    html += `<img ${imgAttrs}>`;
+    imgAttrs += lookStyle(
+      ctx,
+      "width:100%;height:auto;object-fit:cover;border-radius:0.375rem"
+    );
+    html += `<img${classAttr(ctx, [], [named("gallery-image")])} ${imgAttrs}>`;
   }
 
   html += `</div>`;
 
-  if (caption) {
-    html = `<figure>${html}<figcaption>${escapeHtml(caption)}</figcaption></figure>`;
-  }
-
-  return html;
+  return node.caption ? figure(ctx, html, node.caption) : html;
 }
 
 function serializeCollapsibleContainerNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
   const openAttr = node.open ? " open" : "";
-  const content = serializeChildren(children);
-  return `<details${openAttr}>${content}</details>`;
+  const content = serializeChildren(node.children || []);
+  return `<details${classAttr(ctx, [], [named("collapsible")])}${openAttr}>${content}</details>`;
 }
 
 function serializeCollapsibleTitleNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
-  return `<summary>${content}</summary>`;
+  const content = serializeChildren(node.children || []);
+  return `<summary${classAttr(ctx, [], [named("collapsible-title")])}>${content}</summary>`;
 }
 
 function serializeCollapsibleContentNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
-  return `<div class="collapsible-content">${content}</div>`;
+  const content = serializeChildren(node.children || []);
+  return `<div${classAttr(ctx, [], [named("collapsible-content")], ["collapsible-content"])}>${content}</div>`;
 }
 
 function serializeTableNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
+  const look =
+    "border-collapse:collapse;border:1px solid #d1d5db;width:100%;margin:1rem 0";
 
-  // Inline styles for table: borders, spacing, collapse
-  const tableStyles = [
-    "border-collapse:collapse",
-    "border:1px solid #d1d5db",
-    "width:100%",
-    "margin:1rem 0",
-  ].join(";");
-
-  return `<table class="nextly-rich-text-table" style="${tableStyles}">${content}</table>`;
+  return `<table${classAttr(ctx, [named("table")])}${lookStyle(ctx, look)}>${content}</table>`;
 }
 
 function serializeTableRowNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
 
-  // Inline styles for table row
-  const rowStyles = "border-bottom:1px solid #d1d5db";
-
-  return `<tr class="nextly-rich-text-table-row" style="${rowStyles}">${content}</tr>`;
+  return `<tr${classAttr(ctx, [named("table-row")])}${lookStyle(ctx, "border-bottom:1px solid #d1d5db")}>${content}</tr>`;
 }
 
 function serializeTableCellNode(
   node: LexicalSerializedNode,
-  serializeChildren: (children: LexicalSerializedNode[]) => string
+  ctx: RenderContext,
+  serializeChildren: SerializeChildren
 ): string {
-  const children = node.children || [];
-  const content = serializeChildren(children);
+  const content = serializeChildren(node.children || []);
   const headerState = node.headerState as number | undefined;
-  const tag = headerState && headerState > 0 ? "th" : "td";
+  const isHeader = headerState !== undefined && headerState > 0;
+  const tag = isHeader ? "th" : "td";
 
-  // Inline styles for table cells: borders, padding, alignment
-  const cellStyles = [
-    "border:1px solid #d1d5db",
-    "padding:0.5rem 0.75rem",
-    "text-align:left",
-  ];
+  // Borders, padding and left alignment, and a header cell's weight and fill.
+  const look = isHeader
+    ? "border:1px solid #d1d5db;padding:0.5rem 0.75rem;text-align:left;font-weight:600;background-color:#f9fafb"
+    : "border:1px solid #d1d5db;padding:0.5rem 0.75rem;text-align:left";
 
-  // Add header-specific styles
-  if (headerState && headerState > 0) {
-    cellStyles.push("font-weight:600");
-    cellStyles.push("background-color:#f9fafb");
-  }
-
-  const styleAttr = cellStyles.join(";");
-
-  return `<${tag} class="nextly-rich-text-table-cell" style="${styleAttr}">${content}</${tag}>`;
+  return `<${tag}${classAttr(ctx, [named("table-cell")], isHeader ? [named("table-header-cell")] : [])}${lookStyle(ctx, look)}>${content}</${tag}>`;
 }
 
 // ============================================================
 // Main Serializer
 // ============================================================
 
-function serializeNode(node: LexicalSerializedNode): string {
+function serializeNode(
+  node: LexicalSerializedNode,
+  ctx: RenderContext
+): string {
   const serializeChildren = (children: LexicalSerializedNode[]): string => {
-    return children.map(child => serializeNode(child)).join("");
+    return children.map(child => serializeNode(child, ctx)).join("");
   };
 
   switch (node.type) {
@@ -734,29 +892,29 @@ function serializeNode(node: LexicalSerializedNode): string {
       return serializeChildren(node.children || []);
 
     case "text":
-      return serializeTextNode(node);
+      return serializeTextNode(node, ctx);
 
     case "linebreak":
       return serializeLineBreakNode();
 
     case "paragraph":
-      return serializeParagraphNode(node, serializeChildren);
+      return serializeParagraphNode(node, ctx, serializeChildren);
 
     case "heading":
-      return serializeHeadingNode(node, serializeChildren);
+      return serializeHeadingNode(node, ctx, serializeChildren);
 
     case "quote":
-      return serializeQuoteNode(node, serializeChildren);
+      return serializeQuoteNode(node, ctx, serializeChildren);
 
     case "list":
-      return serializeListNode(node, serializeChildren);
+      return serializeListNode(node, ctx, serializeChildren);
 
     case "listitem":
-      return serializeListItemNode(node, serializeChildren);
+      return serializeListItemNode(node, ctx, serializeChildren);
 
     case "link":
     case "autolink":
-      return serializeLinkNode(node, serializeChildren);
+      return serializeLinkNode(node, ctx, serializeChildren);
 
     case "code":
       return serializeCodeNode(node, serializeChildren);
@@ -765,40 +923,40 @@ function serializeNode(node: LexicalSerializedNode): string {
       return serializeCodeHighlightNode(node);
 
     case "horizontalrule":
-      return serializeHorizontalRuleNode();
+      return serializeHorizontalRuleNode(ctx);
 
     case "image":
-      return serializeImageNode(node);
+      return serializeImageNode(node, ctx);
 
     case "video":
-      return serializeVideoNode(node);
+      return serializeVideoNode(node, ctx);
 
     case "button-link":
-      return serializeButtonLinkNode(node);
+      return serializeButtonLinkNode(node, ctx);
 
     case "button-group":
-      return serializeButtonGroupNode(node);
+      return serializeButtonGroupNode(node, ctx);
 
     case "gallery":
-      return serializeGalleryNode(node);
+      return serializeGalleryNode(node, ctx);
 
     case "collapsible-container":
-      return serializeCollapsibleContainerNode(node, serializeChildren);
+      return serializeCollapsibleContainerNode(node, ctx, serializeChildren);
 
     case "collapsible-title":
-      return serializeCollapsibleTitleNode(node, serializeChildren);
+      return serializeCollapsibleTitleNode(node, ctx, serializeChildren);
 
     case "collapsible-content":
-      return serializeCollapsibleContentNode(node, serializeChildren);
+      return serializeCollapsibleContentNode(node, ctx, serializeChildren);
 
     case "table":
-      return serializeTableNode(node, serializeChildren);
+      return serializeTableNode(node, ctx, serializeChildren);
 
     case "tablerow":
-      return serializeTableRowNode(node, serializeChildren);
+      return serializeTableRowNode(node, ctx, serializeChildren);
 
     case "tablecell":
-      return serializeTableCellNode(node, serializeChildren);
+      return serializeTableCellNode(node, ctx, serializeChildren);
 
     default:
       // For unknown nodes, try to serialize children if they exist
@@ -817,15 +975,24 @@ function serializeNode(node: LexicalSerializedNode): string {
 // Public API
 // ============================================================
 
+/**
+ * Rich text as HTML.
+ *
+ * @param value - the stored Lexical document
+ * @param options - `styles: "none"` for HTML a site styles with its own CSS:
+ *   classes only, and no style Nextly adds (`RichTextStyles`)
+ * @returns the HTML, or `null` for a value with no document to read
+ */
 export function convertRichTextToHtml(
-  value: RichTextValue | null | undefined
+  value: RichTextValue | null | undefined,
+  options: RichTextHtmlOptions = {}
 ): string | null {
   if (!value || !value.root) {
     return null;
   }
 
   try {
-    return serializeNode(value.root);
+    return serializeNode(value.root, { classOnly: options.styles === "none" });
   } catch (error) {
     consoleLogger.error(
       "[RichTextHtmlConverter] Failed to convert rich text to HTML",
@@ -835,9 +1002,14 @@ export function convertRichTextToHtml(
   }
 }
 
+/**
+ * Rich text in the format a read asked for. The style option applies only
+ * where HTML is returned (`"html"` and `"both"`); JSON is the stored document.
+ */
 export function formatRichTextOutput(
   value: RichTextValue | null | undefined,
-  format: RichTextOutputFormat = "json"
+  format: RichTextOutputFormat = "json",
+  options: RichTextHtmlOptions = {}
 ): RichTextValue | string | RichTextBothFormat | null {
   if (!value || !value.root) {
     return null;
@@ -848,12 +1020,12 @@ export function formatRichTextOutput(
       return value;
 
     case "html":
-      return convertRichTextToHtml(value);
+      return convertRichTextToHtml(value, options);
 
     case "both":
       return {
         json: value,
-        html: convertRichTextToHtml(value) || "",
+        html: convertRichTextToHtml(value, options) || "",
       };
 
     default:

@@ -316,7 +316,9 @@ describe("DualSidebar's rail under the keyboard", () => {
       permissionsLoading: false,
       contentLoading: false,
     };
-    render(<DualSidebar />);
+    // On a phone an entry with a panel is a button that opens it, and one
+    // without (the Dashboard) a link, so both kinds are drawn.
+    render(<DualSidebar isMobile />);
     const entries = Array.from(
       document.querySelectorAll<HTMLElement>("aside nav [aria-label]")
     );

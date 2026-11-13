@@ -12,11 +12,13 @@
 import {
   act,
   cleanup,
-  render,
+  render as renderBare,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import {
   afterEach,
@@ -68,6 +70,12 @@ vi.mock("../../context/FormBuilderContext", async importOriginal => {
     useFormBuilder: () => ({
       notifications,
       fields,
+      formData: {
+        id: "form-1",
+        name: "Sign-up",
+        slug: "sign-up",
+        status: "published",
+      },
       addNotification,
       duplicateNotification,
       updateNotification,
@@ -78,6 +86,16 @@ vi.mock("../../context/FormBuilderContext", async importOriginal => {
 });
 
 const { FormNotificationsTab } = await import("./FormNotificationsTab");
+
+/** Render inside a fresh query client, as the admin provides one. */
+function render(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderBare(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+  );
+}
 
 function aNotification(over: Partial<FormNotification> = {}): FormNotification {
   return {
@@ -181,7 +199,7 @@ describe("the list", () => {
     const list = screen.getByRole("list", { name: "Notifications" });
     const [team, visitor] = within(list).getAllByRole("listitem");
 
-    expect(team).toHaveTextContent("Only when Joining is online");
+    expect(team).toHaveTextContent("Only when Joining is Online");
     expect(team).toHaveTextContent("events@example.com, access@example.com");
     expect(
       await within(team!).findByText("Message: Form submission")

@@ -115,7 +115,8 @@ export async function findSingle<
       data = transformRichTextFields(
         result.data,
         single.fields,
-        config.richTextFormat
+        config.richTextFormat,
+        config.richTextStyles
       ) as RowFromSingleSlug<TSlug>;
     }
   }

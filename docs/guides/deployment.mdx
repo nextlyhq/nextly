@@ -56,7 +56,7 @@ A scaffolded Nextly project ships this `build` script in `package.json`:
 }
 ```
 
-The `nextly migrate` step runs against the database referenced by `DATABASE_URL` during the Vercel build, so pending migrations are applied as part of every deploy. Keep it before the deploy serves: a production start writes no registry rows, permissions or role grants, so a new collection, field or permission reaches the database only through `nextly migrate` (see [What a production start writes](/docs/guides/production-migrations#what-a-production-start-writes)). Migrations are forward-only -- to undo, write a new corrective migration. See [Production migrations](/docs/guides/production-migrations) for the deeper trade-offs (build-time vs. CI-step migrations) and recovery patterns.
+The `nextly migrate` step runs against the database referenced by `DATABASE_URL` during the Vercel build, so pending migrations are applied as part of every deploy. Keep it before the deploy serves: a production start writes no registry rows, permissions or role grants and creates or changes no table, so a new collection, field or permission reaches the database only through `nextly migrate` (see [What a production start writes](/docs/guides/production-migrations#what-a-production-start-writes) and [A production start changes no table](/docs/guides/production-migrations#a-production-start-changes-no-table)). A first deploy against an empty database needs it too: a production start there creates nothing and refuses with `NEXTLY_DATABASE_NOT_SET_UP`, naming `nextly migrate`. Migrations are forward-only -- to undo, write a new corrective migration. See [Production migrations](/docs/guides/production-migrations) for the deeper trade-offs (build-time vs. CI-step migrations) and recovery patterns.
 
 If you'd rather run migrations in a separate CI job before the Vercel deploy promotes (recommended once you have multiple developers / preview deploys), wire it into a GitHub Actions workflow as described in the migrations guide and remove `nextly migrate` from `build`.
 
@@ -148,7 +148,7 @@ To rate-limit sign-in per client and record real client addresses, let Nextly re
 
 ### Migrations on deploy
 
-For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. A production start does not bring the registry, the permissions or the role grants up to date itself: until `nextly migrate` runs, a declared field the database lacks answers `ENTITY_NOT_MIGRATED`.
+For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. A production start does not bring the registry, the permissions, the role grants or the tables up to date itself: until `nextly migrate` runs, a declared field the database lacks answers `ENTITY_NOT_MIGRATED`, and against an empty database the start refuses, naming `nextly migrate`. A changed `dbName` needs a migration of its own (see [A changed `dbName`](/docs/guides/production-migrations#a-changed-dbname)), and a site whose tables its starts made before this release takes a baseline before upgrading (see [Upgrading a site whose starts made its tables](/docs/guides/production-migrations#upgrading-a-site-whose-starts-made-its-tables)).
 
 Do not move production back to a Nextly release from before the one where starts stopped writing this bookkeeping: such a release seeds the permissions and the preset role grants at every production start, from its own configuration, and nothing turns that off. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
 
@@ -254,7 +254,7 @@ Before going live, verify:
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
 - [ ] The first administrator exists: created at `/admin/setup` with the setup token, or with `nextly users:create-admin`.
-- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished), by a `nextly migrate` that runs before each deploy serves: a production start writes no registry rows, permissions or role grants itself.
+- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished), by a `nextly migrate` that runs before each deploy serves: a production start writes no registry rows, permissions or role grants itself, and creates or changes no table.
 - [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
 - [ ] `security.trustProxy` is `true` on Vercel or behind a proxy every request passes through, with `TRUSTED_PROXY_IPS` listing any hops in front of it (see [Client addresses and the auth rate limit](#client-addresses-and-the-auth-rate-limit)).
 - [ ] Database backups are configured (your hosting provider's snapshots, point-in-time recovery, etc.).

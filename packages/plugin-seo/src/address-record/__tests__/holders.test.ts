@@ -2,63 +2,40 @@
  * Who holds an address, as the record says: in the language a route read the
  * page in, or the site's default language where the route named none.
  */
-import { createHash } from "node:crypto";
-
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { addressHolders } from "../participant";
 
-/** An address or range row as the record stores it. */
+import { keepRecord, type DoubleRow } from "./record-double";
+
+vi.mock("../store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("./record-double")).recordDouble,
+}));
+
+/** An address or range row as the record holds it. */
 function row(
   locale: string,
   path: string,
   holderId: string,
   kind: "address" | "range" = "address"
-) {
-  return {
-    id: `${locale}${path}`,
-    claimKey: createHash("sha256")
-      .update(`${kind}:${locale}|${path}`, "utf8")
-      .digest("hex"),
-    kind,
-    locale,
-    path,
-    holderCollection: "pages",
-    holderId,
-  };
+): DoubleRow {
+  return { kind, locale, path, holderCollection: "pages", holderId };
 }
-
-type Where = {
-  claimKey?: { equals?: string; in?: string[] };
-  and?: [{ kind: { equals: string } }, { path: { equals: string } }];
-};
 
 /**
  * A context on a site whose addresses read with no language named are held
  * in `defaultLanguage`, whose record holds `rows`.
  */
-function context(rows: ReturnType<typeof row>[], defaultLanguage: string) {
-  return {
+function context(rows: DoubleRow[], defaultLanguage: string) {
+  const ctx = {
     self: { collections: {} },
     config: {},
     publicAddresses: { defaultLanguage: async () => defaultLanguage },
-    services: {
-      ownCollections: {
-        listEntries: async (_slug: string, query: { where: Where }) => {
-          const { where } = query;
-          const data = rows.filter(entry =>
-            where.claimKey !== undefined
-              ? entry.claimKey === where.claimKey.equals ||
-                (where.claimKey.in ?? []).includes(entry.claimKey)
-              : entry.kind === where.and?.[0].kind.equals &&
-                entry.path === where.and?.[1].path.equals
-          );
-          return { data };
-        },
-      },
-    },
   } as unknown as PluginContext;
+  keepRecord(ctx, rows);
+  return ctx;
 }
 
 describe("addressHolders", () => {

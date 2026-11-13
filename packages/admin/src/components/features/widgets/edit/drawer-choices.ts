@@ -8,7 +8,7 @@
 
 import type { AnyWidgetSetting, WidgetSetting } from "nextly/config";
 
-import type { SegmentedOption } from "./SegmentedChoice";
+import type { SegmentedOption } from "@admin/components/ui/segmented-choice";
 
 /** A list card's "Number of entries": a number setting keyed `limit`. */
 export type EntriesSetting = Extract<WidgetSetting, { type: "number" }>;

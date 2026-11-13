@@ -8,6 +8,8 @@
  * @module init/post-init-tasks
  */
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
+
 import {
   repairSqliteTimestamps,
   TIMESTAMP_REPAIR_META_KEY,
@@ -71,16 +73,22 @@ export async function provisionUserFieldsAtStart(): Promise<void> {
  * Failures are caught and logged — they should never prevent Nextly from starting.
  */
 export async function runPostInitTasks(): Promise<void> {
+  // `next build` writes nothing, so the reconciliation and the repair below,
+  // which write, wait for the first start after it. The warnings after them
+  // only read, and run as at any start.
+  const building = isNextBuildPhase();
   // Reconcile email templates with their owners: core's built-ins, each
   // running plugin's contributions, and what the site's code sets. Owned
   // templates follow their owner until the site overrides them, and an edit
   // made before ownership existed is kept as an override. Idempotent.
+  // The ownership is this process's own, so the build configures it too; only
+  // the reconciliation writes.
   try {
     const emailTemplateService = getService("emailTemplateService");
     emailTemplateService.configureOwnership(
       ownershipFromConfig(getService("config"))
     );
-    await emailTemplateService.ensureBuiltInTemplates();
+    if (!building) await emailTemplateService.ensureBuiltInTemplates();
   } catch {
     // Silently skip — email services may not be registered,
     // or the email_templates table may not exist yet (migrations not run)
@@ -93,7 +101,7 @@ export async function runPostInitTasks(): Promise<void> {
   // database sorts wrongly while looking fine.
   try {
     const adapter = getService("adapter");
-    if (adapter.dialect === "sqlite") {
+    if (adapter.dialect === "sqlite" && !building) {
       const meta = getService("metaService");
       const done = await meta.get<string>(TIMESTAMP_REPAIR_META_KEY);
       if (!done) {

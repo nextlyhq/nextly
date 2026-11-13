@@ -35,6 +35,7 @@ import {
   type ReviewState,
   type ReviewStatesDb,
 } from "./review-state-repository";
+import { recordStageChanged } from "./stage-changed";
 import type { Workflow } from "./types";
 import { enteredReviewSlot, pinPart } from "./workflow-pins";
 
@@ -357,11 +358,75 @@ interface MoveStrandedInput extends StrandedEntity {
   comment: string;
 }
 
-/** One document a move of stranded parts moved. */
-interface MovedStranded {
+/** One document a move of stranded parts moved, or a dry run of it would move. */
+export interface MovedStranded {
   document: ReviewDocument;
   parts: (string | null)[];
   from: string[];
+}
+
+/** One document's stranded parts, with the workflow they are stranded under. */
+interface DocumentToMove {
+  registered: RegisteredWorkflow;
+  states: StrandedReviewState[];
+}
+
+/**
+ * What a move names, judged before anything is read on its transaction: the workflows whose parts
+ * it may move, the comment, and the person it is recorded as. Refused as the move refuses.
+ */
+async function judgeMoveInput(
+  adapter: DrizzleAdapter,
+  input: MoveStrandedInput
+): Promise<{ workflows: RegisteredWorkflow[]; mover: Mover }> {
+  const workflows = workflowsFor(
+    input.workflows ?? registeredWorkflows(),
+    input
+  );
+  checkMoveComment(input.comment);
+  const mover = await moverByEmail(adapter, input.as);
+  return { workflows, mover };
+}
+
+/**
+ * The documents a move to `to` takes, read on `db`, each with its stranded parts, after `to` is
+ * judged a stage of every workflow whose parts move. Each workflow's stranded parts are read
+ * before anything is written, so one with nothing stranded has no say in the stage. Only reads,
+ * so the move hands it its transaction and a dry run the adapter itself.
+ */
+async function documentsToMove(
+  db: ReviewStatesDb,
+  workflows: readonly RegisteredWorkflow[],
+  to: string
+): Promise<DocumentToMove[]> {
+  const strandedOf: Array<{
+    registered: RegisteredWorkflow;
+    stranded: StrandedReviewState[];
+  }> = [];
+  for (const registered of workflows) {
+    const stranded = await readStranded(db, [registered]);
+    if (stranded.length > 0) strandedOf.push({ registered, stranded });
+  }
+  checkTarget(
+    strandedOf.map(each => each.registered),
+    to
+  );
+  return strandedOf.flatMap(({ registered, stranded }) =>
+    byDocument(stranded).map(states => ({ registered, states }))
+  );
+}
+
+/** One document's stranded parts as a move reports them: the document, its parts and their stages. */
+function movedOf(states: readonly StrandedReviewState[]): MovedStranded {
+  return {
+    document: {
+      scopeKind: states[0].scopeKind,
+      scopeSlug: states[0].scopeSlug,
+      entryId: states[0].entryId,
+    },
+    parts: states.map(state => state.part),
+    from: [...new Set(states.map(state => state.stage))].sort(),
+  };
 }
 
 /**
@@ -379,43 +444,43 @@ export async function moveStrandedReviewStates(
   adapter: DrizzleAdapter,
   input: MoveStrandedInput
 ): Promise<MovedStranded[]> {
-  const workflows = workflowsFor(
-    input.workflows ?? registeredWorkflows(),
-    input
-  );
-  checkMoveComment(input.comment);
-  const mover = await moverByEmail(adapter, input.as);
+  const { workflows, mover } = await judgeMoveInput(adapter, input);
   ensureReviewStateEventKinds();
 
   return adapter.transaction(async tx => {
-    // Each workflow's stranded parts, read before anything is written: the stage is judged only
-    // by the workflows whose parts it moves, so one with nothing stranded has no say in it.
-    const strandedOf: Array<{
-      registered: RegisteredWorkflow;
-      stranded: StrandedReviewState[];
-    }> = [];
-    for (const registered of workflows) {
-      const stranded = await readStranded(tx, [registered]);
-      if (stranded.length > 0) strandedOf.push({ registered, stranded });
-    }
-    checkTarget(
-      strandedOf.map(each => each.registered),
-      input.to
-    );
     const moved: MovedStranded[] = [];
-    for (const { registered, stranded } of strandedOf) {
-      for (const states of byDocument(stranded)) {
-        moved.push(
-          await moveDocument(tx, registered, states, {
-            to: input.to,
-            mover,
-            comment: input.comment,
-          })
-        );
-      }
+    for (const { registered, states } of await documentsToMove(
+      tx,
+      workflows,
+      input.to
+    )) {
+      moved.push(
+        await moveDocument(tx, registered, states, {
+          to: input.to,
+          mover,
+          comment: input.comment,
+        })
+      );
     }
     return moved;
   });
+}
+
+/**
+ * The documents `moveStrandedReviewStates` would move for `input`, judged and refused exactly as it
+ * judges and refuses, writing nothing. Read straight on the adapter, outside any transaction: a
+ * dry run takes no lock, and a transaction would take SQLite's write lock (`BEGIN IMMEDIATE`).
+ *
+ * @experimental
+ */
+export async function planMoveStrandedReviewStates(
+  adapter: DrizzleAdapter,
+  input: MoveStrandedInput
+): Promise<MovedStranded[]> {
+  const { workflows } = await judgeMoveInput(adapter, input);
+  return (await documentsToMove(adapter, workflows, input.to)).map(each =>
+    movedOf(each.states)
+  );
 }
 
 /** Review states grouped by their document, each group in its parts' order. */
@@ -434,7 +499,7 @@ function byDocument<T extends ReviewState>(states: readonly T[]): T[][] {
 
 /**
  * Moves one document's stranded parts to `move.to` on `tx`, under the document's lock, and
- * records the move as one event.
+ * records the move as one event, with an outbox event per part moved.
  */
 async function moveDocument(
   tx: TransactionContext,
@@ -443,11 +508,9 @@ async function moveDocument(
   move: { to: string; mover: Mover; comment: string }
 ): Promise<MovedStranded> {
   const { workflow, definitionHash } = registered;
-  const document: ReviewDocument = {
-    scopeKind: states[0].scopeKind,
-    scopeSlug: states[0].scopeSlug,
-    entryId: states[0].entryId,
-  };
+  // What the move reports, and what a dry run of it lists, from one reading of the parts.
+  const moved = movedOf(states);
+  const { document, parts, from } = moved;
   // The document's lock first, the order a save takes it in before it writes review state.
   await lockDocument(tx, document);
   const now = new Date();
@@ -470,9 +533,17 @@ async function moveDocument(
     if (entersReview(workflow, workflow.firstStage, move.to)) {
       await pinEnteredReview(tx, document, state.part);
     }
+    await recordStageChanged(tx, {
+      document,
+      part: state.part,
+      from: state.stage,
+      to: move.to,
+      cause: "recovery",
+      approvalWithdrawn: state.approval !== null,
+      definitionHash,
+      actor: { type: "user", id: move.mover.id },
+    });
   }
-  const parts = states.map(state => state.part);
-  const from = [...new Set(states.map(state => state.stage))].sort();
   await recordContentEvent(tx, {
     subject: {
       kind: document.scopeKind,
@@ -488,7 +559,7 @@ async function moveDocument(
     payload: { from },
     definitionHash,
   });
-  return { document, parts, from };
+  return moved;
 }
 
 /**

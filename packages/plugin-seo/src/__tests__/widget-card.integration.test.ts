@@ -28,7 +28,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../address-record/catch-up";
 import { seoPlugin } from "../plugin";
-import { KIND_TEXT, type Problem } from "../problems/contract";
+import {
+  KIND_TEXT,
+  problemsToFix,
+  severityCounts,
+  type Problem,
+} from "../problems/contract";
 import { PROBLEMS_SLUG } from "../problems/store";
 
 const ORIGIN = "http://localhost";
@@ -241,10 +246,11 @@ describe.each(getConfiguredTestDialects())(
         Object.fromEntries(buckets.map(bucket => [bucket.value, bucket.count]))
       ).toEqual(byKind(list));
 
-      // The Needs attention line counts the whole list.
-      expect(await linesFor(both.cookie)).toEqual({
-        "seo/problems": list.length,
-      });
+      // The Needs attention line counts the list's errors and warnings, as
+      // the menu's badge does, and not its notices, of which it has some.
+      const toFix = problemsToFix(severityCounts(list));
+      expect(toFix).toBeLessThan(list.length);
+      expect(await linesFor(both.cookie)).toEqual({ "seo/problems": toFix });
     });
 
     it("counts for a reader of one collection only what the list shows them", async () => {
@@ -264,7 +270,7 @@ describe.each(getConfiguredTestDialects())(
       expect(list.some(p => p.subject.type === PAGES)).toBe(true);
       expect(list.some(p => p.subject.type === POSTS)).toBe(false);
       expect(await linesFor(pagesOnly.cookie)).toEqual({
-        "seo/problems": list.length,
+        "seo/problems": problemsToFix(severityCounts(list)),
       });
     });
   }
