@@ -93,6 +93,10 @@
       "types": "./dist/shared/lib/deprecation-notice.d.mts",
       "import": "./dist/shared/lib/deprecation-notice.mjs"
     },
+    "./admin-root-exports": {
+      "types": "./dist/plugins/codegen/admin-root-exports.d.mts",
+      "import": "./dist/plugins/codegen/admin-root-exports.mjs"
+    },
     "./attention-keys": {
       "types": "./dist/domains/widgets/attention-keys.d.mts",
       "import": "./dist/domains/widgets/attention-keys.mjs"

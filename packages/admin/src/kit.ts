@@ -1,0 +1,1034 @@
+/**
+ * `@nextlyhq/admin/kit`: everything the admin offers to code outside it,
+ * beyond what an application mounts.
+ *
+ * INTERNAL, and unstable as a path. It exists for `@nextlyhq/plugin-sdk/admin`,
+ * which re-exports it to plugins and is the one surface plugin authors import
+ * (see `packages/plugin-sdk/STABILITY.md`). Nothing else should import it: its
+ * exports change in any release, under the SDK's stability tags.
+ *
+ * It is a second entry, apart from the root (`./index.ts`), because the root is
+ * the admin's first load: a component exported there is downloaded before any
+ * screen draws. Exported from here, the media library, the field-UI kit, the
+ * document surfaces, the data table, the widget kit and the plugin-page parts
+ * load with the plugin pages that use them. It also re-exports everything the
+ * root does, so the SDK reaches the whole surface through one path; the shared
+ * modules are one instance, in chunks both entries import.
+ *
+ * @module kit
+ */
+export { RootLayout } from "./layout/RootLayout";
+export type { RootLayoutProps } from "./layout/RootLayout";
+export { QueryProvider } from "./context/providers/QueryProvider";
+export {
+  ThemePaintScript,
+  ThemeProvider,
+  useTheme,
+} from "./context/providers/ThemeProvider";
+export type {
+  ThemeProviderProps,
+  UseThemeProps,
+} from "./context/providers/ThemeProvider";
+export {
+  BrandingProvider,
+  useBranding,
+} from "./context/providers/BrandingProvider";
+
+export type { AdminBranding } from "./types/branding";
+// The root's types that no other line here exports, so the kit stays the
+// whole surface the root is part of.
+export type { ResolvedTheme } from "./context/providers/ThemeProvider";
+export type { BrandingProviderProps } from "./context/providers/BrandingProvider";
+export type {
+  PluginClientConfigMeta,
+  PluginMetadata,
+  ResolvedBrandingColors,
+} from "./types/branding";
+export type {
+  ErrorBoundaryProps,
+  ErrorBoundaryState,
+} from "./components/shared/error-boundary";
+export type { UserApiResponse } from "./types/user";
+export type { ApiCollection, Role } from "./types/entities";
+export type { Collection } from "./types/collection";
+export type { MediaLibraryView } from "./types/media";
+
+// TanStack Query types
+export type {
+  QueryClient,
+  QueryClientConfig,
+  DefaultOptions,
+  UseQueryOptions,
+  UseMutationOptions,
+  UseQueryResult,
+  UseMutationResult,
+  QueryKey,
+  QueryFunction,
+  MutationFunction,
+  QueryClientConfigType,
+} from "./types/query";
+
+// TanStack Query hooks (queries and mutations)
+export {
+  // User hooks
+  useCreateUser,
+  useDeleteUser,
+  useUpdateUser,
+  useUser,
+  useUsers,
+  // Bulk user hooks
+  useBulkUpdateUsers,
+  useBulkDeleteUsers,
+  useBulkAssignRole,
+  // Role hooks
+  useCreateRole,
+  useDeleteRole,
+  useRole,
+  useRoles,
+  useUpdateRole,
+  // Bulk role hooks
+  useBulkDeleteRoles,
+  useBulkUpdateRoles,
+  // Permission hooks
+  useDeletePermission,
+  usePermission,
+  usePermissions,
+  useUpdatePermission,
+  // Collection hooks
+  useCollection,
+  useCollections,
+  useCreateCollection,
+  useDeleteCollection,
+  useUpdateCollection,
+  // Bulk collection hooks
+  useBulkDeleteCollections,
+  useBulkUpdateCollections,
+  // Single-document hooks. A plugin that owns a Single needs the same read and
+  // write the admin's own Single form uses; a second client for one document
+  // would be a second answer to how it caches and when it invalidates.
+  useSingleDocument,
+  useUpdateSingleDocument,
+} from "./hooks/queries";
+export type { SingleDocument } from "./hooks/queries";
+// What a failed request raises, and the two guards that read it. Exported
+// together because the type alone does not let a caller reach the payload: a
+// rejection arrives as `Error` from `onError` and `unknown` from `catch`, and
+// `ApiError.data` is `Record<string, unknown>`, so the reasons stay behind a
+// cast at both steps. `isApiError` narrows the first and `validationIssues`
+// answers the second, each by CHECKING rather than asserting — which matters
+// because a transport failure rejects with a native error that is neither.
+export {
+  apiErrorMessage,
+  isApiError,
+  validationIssues,
+  type ApiError,
+  type ValidationIssue,
+} from "./lib/api/parseApiError";
+
+// Reporting a write that committed while something after it did not. A
+// post-commit hook cannot un-save the row, so the server answers success and
+// carries the failure alongside — and the three shapes that answer needs
+// (success, advisory, partial failure) are easy to collapse into one. Published
+// so a plugin's own writes report them the way the admin's do rather than
+// inventing a fourth phrasing.
+export {
+  toastMutationResult,
+  type HookWarning,
+  type MutationResult,
+} from "./lib/mutation-warnings";
+
+// Media hooks
+export {
+  useMedia,
+  useMediaItem,
+  useMediaResolver,
+  // The library's images searched by name, for a picker outside a dialog.
+  useMediaSearcher,
+  useUploadMedia,
+  useUpdateMedia,
+  useDeleteMedia,
+  // Bulk media hooks
+  useBulkDeleteMedia,
+  useBulkUpdateMedia,
+} from "./hooks/queries/useMedia";
+
+// Dashboard hooks
+export { useDashboardStats } from "./hooks/queries/useDashboardStats";
+export { useRecentActivity } from "./hooks/queries/useRecentActivity";
+
+// Custom hooks
+export { useDebouncedValue } from "./hooks/useDebouncedValue";
+// The signed-in user's id, for a surface that keeps something per user.
+export { useCurrentUserId } from "./hooks/useCurrentUserId";
+// Permission gating (D36) — client-side UX checks for admin + plugin UI.
+export { useCan } from "./hooks/useCan";
+/**
+ * Which document a field is rendered inside.
+ *
+ * Exported for the plugin surface: a contributed field that has to address the
+ * document — to record against it, to query it, to link to it — cannot derive
+ * that from the props a field receives, which name a value and nothing else.
+ */
+export {
+  useDocumentIdentity,
+  type DocumentIdentity,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * What a plugin's sign-in challenge view receives, and what `resolve` answers.
+ * Exported for the plugin surface, so a view is typed against the contract
+ * the host renders it with.
+ */
+export type {
+  ChallengeResolveResult,
+  ChallengeViewProps,
+} from "./components/features/auth-login/auth-ui-extras";
+/**
+ * Which language the surrounding document is being edited in. Separate from the
+ * identity for the same reason the status is: a document is the same document
+ * in every language, so a consumer reading only the identity should not
+ * re-render when the language changes.
+ */
+export {
+  useDocumentLocale,
+  type DocumentLocale,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * A field's address in its document, with a repeater's row named by its saved
+ * id rather than its position. Exported for the plugin surface: a field that
+ * links to a view of itself names itself by this, so the link opens the same
+ * row however the rows are reordered.
+ */
+export {
+  useFieldAddress,
+  type FieldAddress,
+} from "./components/features/entries/EntryForm/useFieldAddress";
+/**
+ * How the surrounding document stands, for a field that covers the editor's own
+ * chrome. Separate from the identity deliberately: which document this is does
+ * not change with the language, and how it stands does.
+ */
+export {
+  useDocumentStatus,
+  hasPendingWorkingDraft,
+  type DocumentStatus,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * The surrounding document's full-page preview, for a field that shows the
+ * page and offers to open it as the editor's own Preview action does. Null
+ * wherever that action is absent.
+ */
+export {
+  useDocumentPreview,
+  type DocumentPreview,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * The fields an active takeover hid, for the surface that took the body over.
+ *
+ * A takeover collapses the form body to the takeover field alone, so the rest
+ * of the entry is removed from the page rather than merely covered. Whatever
+ * took the body over is the only surface left that can still show them.
+ */
+export { useEntryFieldsPanel } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * The rich-text editor's nodes and theme, for a surface that must edit this
+ * site's rich text with the SAME node registry the field editor uses.
+ *
+ * A loader rather than the classes themselves: they carry Lexical and PrismJS,
+ * which belong behind a dynamic import — see the module for the measurement.
+ */
+export {
+  loadRichTextEditorKit,
+  type RichTextEditorKit,
+} from "./lib/rich-text/load-editor-kit";
+/**
+ * ONE rich-text editor, moved between the elements an author edits in place.
+ *
+ * A loader for the same reason the kit is one, and a controller rather than the
+ * editor itself: a consumer handed Lexical would have to import it to use it,
+ * and a second declarer of Lexical is what the bundling here exists to prevent.
+ */
+export {
+  loadInlineRichTextEditor,
+  type InlineRichTextEditor,
+  type InlineRichTextSession,
+  type InlineRichTextAttachment,
+  type InlineRichTextRefusal,
+} from "./lib/rich-text/inline-editor";
+/**
+ * A field telling the form it holds work the form's values do not contain.
+ *
+ * Exported for the plugin surface: a contributed field with its own editing
+ * state is invisible to the dirty flag everything else is derived from.
+ */
+export { useReportUnsavedWork } from "./components/features/entries/EntryForm/UnsavedWorkContext";
+/**
+ * The document's actions, for a surface drawn inside its editor: the actions
+ * the header draws and running one with a true answer, the one save state,
+ * committing work a surface holds before a save, and counting a write the
+ * document depends on. Exported for the plugin surface: a document view
+ * replaces the form body and its header with it.
+ */
+export {
+  useDocumentActions,
+  useBeforeDocumentAction,
+  useTrackedWrite,
+  type DocumentActions,
+} from "./components/features/entries/EntryForm/useDocumentActionHooks";
+export type {
+  BeforeDocumentAction,
+  DocumentActionOutcome,
+  DocumentSaveState,
+  StoreReadiness,
+} from "./components/features/entries/EntryForm/useDocumentActionBindings";
+export type {
+  ActionGroup,
+  ActionPlacement,
+  DocumentAction,
+} from "./components/features/entries/EntryForm/document-actions";
+export type { SubmitRefusal } from "./components/features/entries/EntryForm/submit-outcome";
+/**
+ * The header's save state and leading action, drawn for a document view that
+ * replaces the header. Exported for the plugin surface, so the view shows the
+ * header's own controls rather than a copy of them.
+ */
+export {
+  DocumentSaveIndicator,
+  DocumentPrimaryAction,
+} from "./components/features/entries/EntryForm/DocumentSurfaceControls";
+/**
+ * How a document view restores its own field from a recovery point, as an edit
+ * it can undo. Exported for the plugin surface.
+ */
+export {
+  useDocumentRestore,
+  type DocumentRestoreHandler,
+} from "./components/features/entries/EntryForm/DocumentRestoreContext";
+export {
+  pillStateFromForm,
+  PILL_LABEL,
+  type PillState,
+} from "./components/features/entries/EntryForm/panels/DocumentPanel";
+/**
+ * Put a contributed surface's live state somewhere a crash cannot take it.
+ *
+ * Exported for the plugin surface alongside the identity above: a field holding
+ * its own editing state has work at risk that the form cannot see, because that
+ * state does not reach the form until the surface commits it.
+ */
+export {
+  useDocumentCheckpoint,
+  type UseDocumentCheckpointOptions,
+  type UseDocumentCheckpointResult,
+  type AutosaveStatus,
+} from "./hooks/useDocumentCheckpoint";
+export { Can } from "./components/guards/Can";
+export type { CanProps } from "./components/guards/Can";
+export { useRowSelection } from "./hooks/useRowSelection";
+export type {
+  UseRowSelectionOptions,
+  UseRowSelectionReturn,
+} from "./types/hooks/row-selection";
+export { useBulkMutation } from "./hooks/useBulkMutation";
+export type {
+  BulkMutationResult,
+  BulkMutationOptions,
+  BulkMutationItemResult,
+  UseBulkMutationReturn,
+  UseBulkMutationConfig,
+} from "./types/hooks/bulk-mutation";
+
+// Entity types
+export type { UpdateUserPayload } from "./types/user";
+
+// Toast notifications
+export { Toaster } from "./components/ui/toaster";
+export { toast } from "./components/ui/toaster";
+export type { ExternalToast, ToastT } from "sonner";
+
+// Error Handling Components
+export { ErrorBoundary } from "./components/shared/error-boundary";
+export { QueryErrorBoundary } from "./components/shared/query-error-boundary";
+export type { QueryErrorBoundaryProps } from "./components/shared/query-error-boundary";
+export { PluginComponentBoundary } from "./components/shared/plugin-component-boundary";
+export { PluginSlot } from "./components/shared/plugin-slot";
+
+// Plugin admin component registration (D19) — author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`.
+export {
+  registerComponent,
+  registerComponents,
+  registerKnownPlugin,
+  type ComponentPath,
+  type CustomEditViewProps,
+  type DocumentActionReplacementProps,
+  type DocumentChangeResult,
+  type DocumentPanelSectionProps,
+  type DocumentTabProps,
+  type SidebarSectionProps,
+  type DocumentViewProps,
+} from "./lib/plugins/component-registry";
+// The app's generated component map registers through this, not a plugin:
+// it is not part of the plugin SDK's surface.
+export { registerComponentMap } from "./lib/plugins/component-registry";
+export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
+// Navigation a plugin may perform: a page of this admin, judged before it moves.
+export { navigateWithinAdmin } from "./lib/navigation";
+
+// Unified DataTable + plugin registries — author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`. Plugins can render the shared table and add cell
+// renderers, columns, column transforms, and row/bulk actions to any admin list.
+export {
+  DataTable,
+  DataTableView,
+  registerCellRenderer,
+  registerColumns,
+  transformColumns,
+  registerRowAction,
+  registerBulkAction,
+} from "./components/ui/table/data-table";
+export type {
+  DataTableProps,
+  DataTableViewProps,
+  DataTableSelection,
+  DataTableTarget,
+  DataTableContext,
+  ColumnProvider,
+  ColumnTransform,
+  NextlyColumn,
+  NextlyFieldType,
+  NextlyFieldSchema,
+  CellContext,
+  CellRenderer,
+  CellRendererDefinition,
+  RowAction,
+  BulkAction,
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
+} from "./components/ui/table/data-table";
+
+// The list surface around that table — search, filters, the columns menu, the
+// empty state and the slots above and below — and the hooks that remember a
+// reader's column choice. Re-exported by `@nextlyhq/plugin-sdk/admin` so a
+// plugin's list page is the admin's own list, not a copy of its look.
+export {
+  ListView,
+  ListToolbar,
+  ListColumnsMenu,
+  ListEmptyState,
+  useListColumns,
+  useTableColumns,
+} from "./components/ui/table/list-view";
+export type {
+  ListViewProps,
+  ListToolbarProps,
+  ListColumnsControl,
+  ListEmpty,
+  ListSearch,
+  ListSlots,
+  UseListColumnsOptions,
+  UseTableColumnsOptions,
+  UseTableColumnsResult,
+} from "./components/ui/table/list-view";
+
+// The trail a page draws in the top bar, the segmented control, the checklist
+// with progress and the grouped settings row: the admin's own building blocks,
+// re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin's pages.
+export { Breadcrumbs } from "./components/shared/breadcrumbs";
+export type {
+  BreadcrumbItem,
+  BreadcrumbsProps,
+} from "./components/shared/breadcrumbs";
+export { SegmentedChoice } from "./components/ui/segmented-choice";
+export type {
+  SegmentedChoiceProps,
+  SegmentedChoiceSize,
+  SegmentedOption,
+} from "./components/ui/segmented-choice";
+export {
+  Checklist,
+  ChecklistItem,
+  ChecklistMark,
+  ChecklistProgress,
+} from "./components/shared/checklist";
+export type {
+  ChecklistProps,
+  ChecklistItemProps,
+  ChecklistMarkProps,
+  ChecklistProgressProps,
+  ChecklistStatus,
+  ChecklistDoneStyle,
+} from "./components/shared/checklist";
+export { SettingsRowGroup } from "./components/features/settings/SettingsRowGroup";
+export type { SettingsRowGroupProps } from "./components/features/settings/SettingsRowGroup";
+
+// Where a flow of a few steps is, the stepper the email provider setup draws:
+// re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin's own flow.
+export { Stepper } from "./components/ui/stepper";
+export type {
+  StepperProps,
+  StepperStep,
+  StepState,
+} from "./components/ui/stepper";
+
+// The drop area a file is dragged onto or chosen from, as the Media library
+// draws it: re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin screen
+// that reads a file itself, such as an import.
+export { FileDropArea } from "./components/ui/file-drop-area";
+export type { FileDropAreaProps } from "./components/ui/file-drop-area";
+
+// A plugin's own admin UI reading a route that plugin contributed. The two
+// halves of a plugin — its HTTP routes and its admin components — had no way to
+// reach each other: the SDK exported no route client, so an author's choice was
+// to hand-roll auth and error parsing or to read something else instead.
+// Through `protectedApi` and TanStack Query, so the session, its refresh and
+// the typed error envelope are the ones the rest of the admin uses.
+export {
+  readPluginRoute,
+  usePluginRoute,
+} from "@admin/hooks/queries/usePluginRoute";
+export type {
+  PluginRouteRead,
+  PluginRouteRequest,
+} from "@admin/hooks/queries/usePluginRoute";
+// The WRITE half of the same seam. A plugin could read its own route and not
+// write to it, so a feature that saves something had to hand-roll the session
+// and the error envelope after all.
+export {
+  usePluginRouteMutation,
+  writePluginRoute,
+} from "@admin/hooks/queries/usePluginRouteMutation";
+export type {
+  PluginRouteMethod,
+  PluginRouteWrite,
+  PluginRouteWriter,
+  PluginRouteInvalidation,
+} from "@admin/hooks/queries/usePluginRouteMutation";
+
+// Field-UI kit — controlled, form-library-agnostic field-building components
+// (type picker, options editor, default-value input, condition row) rendered
+// from the shared `nextly/field-catalog`. Author surface re-exported by
+// `@nextlyhq/plugin-sdk/admin`, same as the DataTable above.
+export {
+  FieldTypePicker,
+  FieldDefaultValueInput,
+  FieldOptionsEditor,
+  withOptionIds,
+  usePluginFieldTypeEntries,
+  // Reads a plugin's own PUBLIC config from admin metadata; see
+  // `usePluginClientConfig`.
+  usePluginClientConfig,
+} from "./components/field-ui";
+
+// The translator a plugin's component reads its own strings with, from the
+// catalogs it declared in `contributes.translations`. Re-exported by
+// `@nextlyhq/plugin-sdk/admin`.
+export { usePluginTranslate } from "./lib/i18n/I18nProvider";
+
+// The shared settings panel that adds and edits a field, configured per
+// surface. Re-exported by `@nextlyhq/plugin-sdk/admin` as experimental.
+export { FieldSettingsPanel } from "./components/field-ui";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsConditionsProps,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "./components/field-ui";
+
+export {
+  FieldPicker,
+  describeFieldTypes,
+  ConditionRow,
+  operatorsForType,
+  operatorTakesValue,
+  ValidationNumberField,
+  ValidationRulesEditor,
+  drawsAnyValidationRule,
+  EDITABLE_VALIDATION_RULES,
+} from "./components/field-ui";
+export type {
+  FieldPickerProps,
+  FieldPickerConfig,
+  FieldPickerChoice,
+  FieldGroupOption,
+  FieldTypeDescription,
+  FieldTypePickerProps,
+  FieldDefaultValueInputProps,
+  FieldDefaultOption,
+  FieldOption,
+  FieldOptionsEditorProps,
+  ConditionOperatorName,
+  ConditionRange,
+  ConditionRowProps,
+  ConditionSource,
+  ConditionSourceOption,
+  ConditionValue,
+  ValidationNumberFieldProps,
+  ValidationRulesEditorProps,
+  ValidationRuleValues,
+} from "./components/field-ui";
+
+// Error Fallback Components
+export {
+  PageErrorFallback,
+  SectionErrorFallback,
+  InlineErrorFallback,
+} from "./components/shared/error-fallbacks";
+export type {
+  PageErrorFallbackProps,
+  SectionErrorFallbackProps,
+  InlineErrorFallbackProps,
+} from "./components/shared/error-fallbacks";
+
+// UI Components
+export {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@nextlyhq/ui";
+export type {
+  AccordionContentProps,
+  AccordionItemProps,
+  AccordionProps,
+  AccordionTriggerProps,
+} from "@nextlyhq/ui";
+export {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  alertVariants,
+} from "@nextlyhq/ui";
+export type {
+  AlertDescriptionProps,
+  AlertProps,
+  AlertTitleProps,
+} from "@nextlyhq/ui";
+export {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+  avatarVariants,
+} from "@nextlyhq/ui";
+export type {
+  AvatarFallbackProps,
+  AvatarImageProps,
+  AvatarProps,
+} from "@nextlyhq/ui";
+export { Badge, badgeVariants } from "@nextlyhq/ui";
+export type { BadgeProps } from "@nextlyhq/ui";
+export { Button, buttonVariants } from "@nextlyhq/ui";
+export {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  cardVariants,
+} from "@nextlyhq/ui";
+export { Stack, Grid, Stat } from "@nextlyhq/ui";
+export type { StackProps, GridProps, StatProps } from "@nextlyhq/ui";
+
+/**
+ * Form scaffolding, forwarded so `plugin-sdk/admin` can reach it.
+ *
+ * These are the pieces a settings form cannot be assembled without: a label, a
+ * field's row and description, a titled group, and the single action bar. They
+ * were reachable from `@nextlyhq/ui` but not from here, so a plugin author
+ * composing a form ran out of parts and fell through to a stylesheet of their
+ * own — which is the one place the design linter does not run.
+ *
+ * `FieldShell`, `FormSection` and `FormActions` carry `@experimental` in `ui`
+ * and keep it here: forwarding a component does not settle its API.
+ */
+export { Label } from "@nextlyhq/ui";
+/** @experimental */
+export { FieldShell, FormSection, FormActions } from "@nextlyhq/ui";
+/** @experimental */
+export type {
+  FieldLayout,
+  FieldShellProps,
+  FieldShellRenderProps,
+  FieldWidth,
+  FormSectionProps,
+  FormActionsProps,
+} from "@nextlyhq/ui";
+/**
+ * Immersive surfaces ask for admin chrome to be hidden while they are mounted.
+ * Exported for `plugin-sdk/admin`, which is the only admin surface a plugin (and
+ * `@nextlyhq/builder`) may import.
+ */
+export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
+export { useFoldedPanel } from "./components/layout/PanelFold";
+/**
+ * A store for one of the person's interface preferences that follows the
+ * device memory's rules: nothing written while the site turns remembering
+ * off, forgotten with the person on sign-out. Exported for
+ * `plugin-sdk/admin`, so an editor a plugin mounts keeps its choices by them.
+ */
+export { devicePreferenceStore } from "./lib/device-memory/preference-store";
+export type {
+  DevicePreferenceOptions,
+  DevicePreferenceStore,
+} from "./lib/device-memory/preference-store";
+export { TopBarPlace } from "./components/layout/header/TopBarPlaces";
+export type {
+  TopBarPlaceName,
+  TopBarPlaceProps,
+} from "./components/layout/header/TopBarPlaces";
+/**
+ * A page's frame by its type and its header, forwarded so `plugin-sdk/admin`
+ * can reach them: a plugin's page is drawn from the pieces core's pages are.
+ * Both carry `@experimental` in `ui` and keep it here.
+ */
+/** @experimental */
+export { PageFrame, PageHeader, PageTab, PageTabs } from "@nextlyhq/ui";
+/** @experimental */
+export type {
+  PageFrameProps,
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+  PageType,
+} from "@nextlyhq/ui";
+/**
+ * An admin place's renderer and its tab strip, for `plugin-sdk/admin`: a
+ * plugin's own page draws the contributions sent to a place it declared with
+ * the parts core's pages use.
+ */
+// A document's live values, for a plugin's component inside the editor.
+export {
+  useDocumentField,
+  useDocumentValues,
+  type DocumentField,
+} from "./components/features/entries/EntryForm/document-values";
+export { PlaceTabs, TargetSlot } from "./components/shared/target-slot";
+export type {
+  PlaceContributionProps,
+  PlaceProps,
+  PlaceTabBadge,
+  PlaceTabProps,
+  PlaceTabsProps,
+  TargetSlotProps,
+} from "./components/shared/target-slot";
+export type { AdminChromeLayer } from "./components/layout/lib/chrome-suppression";
+export type {
+  CardActionProps,
+  CardContentProps,
+  CardDescriptionProps,
+  CardFooterProps,
+  CardHeaderProps,
+  CardProps,
+  CardTitleProps,
+} from "@nextlyhq/ui";
+export { Checkbox } from "@nextlyhq/ui";
+export { BulkActionBar } from "./components/shared/bulk-action-bar";
+export { BulkDeleteDialog } from "./components/shared/bulk-action-dialogs";
+export type {
+  BulkActionBarProps,
+  BulkDeleteDialogProps,
+} from "./types/ui/bulk-operations";
+export {
+  Command,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+  CommandShortcut,
+} from "@nextlyhq/ui";
+export type {
+  CommandDialogProps,
+  CommandEmptyProps,
+  CommandGroupProps,
+  CommandInputProps,
+  CommandItemProps,
+  CommandListProps,
+  CommandProps,
+  CommandSeparatorProps,
+  CommandShortcutProps,
+} from "@nextlyhq/ui";
+export { CommandPalette } from "./components/shared/command-palette";
+export { ActionCommands } from "./components/shared/command-palette/ActionCommands";
+export { UserSearchResults } from "./components/shared/command-palette/UserSearchResults";
+export type {
+  CommandConfig,
+  NavigationCommand,
+  ActionCommand,
+  CommandPaletteProps,
+  UserSearchResultsProps,
+} from "./types/ui/command-palette";
+export {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  DialogTrigger,
+  dialogContentVariants,
+} from "@nextlyhq/ui";
+export type {
+  DialogContentProps,
+  DialogDescriptionProps,
+  DialogFooterProps,
+  DialogHeaderProps,
+  DialogOverlayProps,
+  DialogTitleProps,
+} from "@nextlyhq/ui";
+export { Input, inputVariants } from "@nextlyhq/ui";
+export type { InputProps } from "@nextlyhq/ui";
+export { FormLabelWithTooltip } from "./components/ui/form-label-with-tooltip";
+export type { FormLabelWithTooltipProps } from "./components/ui/form-label-with-tooltip";
+export { Textarea } from "@nextlyhq/ui";
+export { RadioGroup, RadioGroupItem } from "@nextlyhq/ui";
+export {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectScrollDownButton,
+  SelectScrollUpButton,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+  selectTriggerVariants,
+} from "@nextlyhq/ui";
+export type { SelectTriggerProps } from "@nextlyhq/ui";
+export { Skeleton } from "@nextlyhq/ui";
+export type { SkeletonProps } from "@nextlyhq/ui";
+export { Spinner, spinnerVariants } from "@nextlyhq/ui";
+export type { SpinnerProps } from "@nextlyhq/ui";
+export { Progress, progressVariants } from "@nextlyhq/ui";
+export type { ProgressProps } from "@nextlyhq/ui";
+export {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuPortal,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@nextlyhq/ui";
+export type {
+  DropdownMenuCheckboxItemProps,
+  DropdownMenuContentProps,
+  DropdownMenuItemProps,
+  DropdownMenuLabelProps,
+  DropdownMenuRadioItemProps,
+  DropdownMenuSeparatorProps,
+  DropdownMenuShortcutProps,
+  DropdownMenuSubContentProps,
+  DropdownMenuSubTriggerProps,
+} from "@nextlyhq/ui";
+export { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
+export { Switch } from "@nextlyhq/ui";
+export type {
+  TabsContentProps,
+  TabsListProps,
+  TabsProps,
+  TabsTriggerProps,
+} from "@nextlyhq/ui";
+export {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@nextlyhq/ui";
+export {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetOverlay,
+  SheetPortal,
+  SheetTitle,
+  SheetTrigger,
+} from "@nextlyhq/ui";
+export type {
+  SheetCloseProps,
+  SheetContentProps,
+  SheetDescriptionProps,
+  SheetFooterProps,
+  SheetHeaderProps,
+  SheetOverlayProps,
+  SheetProps,
+  SheetTitleProps,
+  SheetTriggerProps,
+} from "@nextlyhq/ui";
+
+// Layout Components
+export { PageContainer } from "./components/layout/page-container";
+export type {
+  PageContainerProps,
+  PageContainerRef,
+} from "./types/layout/page-container";
+
+// Table Components
+export { SearchBar } from "./components/shared/search-bar";
+export type { SearchBarProps } from "./components/shared/search-bar/types";
+export { Pagination } from "./components/shared/pagination";
+export type { PaginationProps } from "./components/shared/pagination/types";
+
+// Media Library Components
+export { MediaLibrary } from "./components/features/media-library";
+export { MediaLibrarySkeleton } from "./components/features/media-library/MediaLibrarySkeleton";
+export { MediaUploadDropzone } from "./components/features/media-library/MediaUploadDropzone";
+export { MediaGrid } from "./components/features/media-library/MediaGrid";
+export { MediaCard } from "./components/features/media-library/MediaCard";
+export { MediaPickerDialog } from "./components/features/media-library/MediaPickerDialog";
+export { MediaEditDialog } from "./components/features/media-library/MediaEditDialog";
+
+// Media Library Component Types
+export type { MediaLibraryProps } from "./components/features/media-library";
+export type { MediaLibrarySkeletonProps } from "./components/features/media-library/MediaLibrarySkeleton";
+export type { MediaUploadDropzoneProps } from "./types/ui/media-upload-dropzone";
+export type { MediaGridProps } from "./types/ui/media-grid";
+export type { MediaCardProps } from "./types/ui/media-card";
+export type { MediaPickerDialogProps } from "./types/ui/media-picker-dialog";
+export type { MediaEditDialogProps } from "./components/features/media-library/MediaEditDialog";
+
+// Media Library Data Types
+export type {
+  Media,
+  MediaFolder,
+  MediaParams,
+  MediaListResponse,
+  UploadProgress,
+  FileWithPreview,
+  MediaUpdateInput,
+  MediaType,
+  MediaTypeFilter,
+} from "./types/media";
+
+// Media Library Helper Functions
+export {
+  getMediaType,
+  formatFileSize,
+  getMediaTypeBadgeVariant,
+} from "./lib/media-utils";
+
+// Media Library Constants
+export {
+  MEDIA_GRID_CLASSES,
+  DEFAULT_MEDIA_SKELETON_COUNT,
+} from "./constants/media";
+
+// Dashboard Components
+export { StatsCard } from "./components/features/dashboard/StatsCard";
+export { WelcomeHeader } from "./components/features/dashboard/WelcomeHeader";
+export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGrid";
+export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
+export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
+export {
+  StatsGridSkeleton,
+  ActivitySkeleton,
+  RecentEntriesSkeleton,
+  ContentStatusSkeleton,
+  CollectionQuickLinksSkeleton,
+  ProjectStatsSkeleton,
+  DashboardPageSkeleton,
+} from "./components/features/dashboard/DashboardSkeleton";
+
+// Dashboard Types
+export type {
+  ContentStats,
+  ContentStatus,
+  CollectionCount,
+  DashboardStats,
+  StatsCardProps,
+} from "./types/dashboard/stats";
+export type {
+  Activity,
+  ActivityType,
+  ActivityCategory,
+  ActivityUser,
+  RecentActivityResponse,
+} from "./types/dashboard/activity";
+export type {
+  RecentEntry,
+  RecentEntriesResponse,
+} from "./types/dashboard/recent-entries";
+export type { ProjectStatItem } from "./types/dashboard/project-stats";
+
+// The widget kit: the parts core's own dashboard cards are drawn from, for a
+// widget's own component. Plugins reach them only through
+// `@nextlyhq/plugin-sdk/admin`, so the admin stays the host's single copy and
+// a card part reads the tier of the card it is drawn in.
+// @experimental while the dashboard widget SDK settles.
+export {
+  type CardEmptyContent,
+  type SkeletonShape,
+} from "./components/features/widgets/frame/states";
+export {
+  FrameState,
+  type CardState,
+  type SkeletonHint,
+} from "./components/features/widgets/frame/card-state";
+// The parts of a card's body, under the names a plugin uses: `Widget.*`. The formatters and the
+// colour accessor are the SDK root's, from `@nextlyhq/ui`'s server-safe entries.
+export {
+  Widget,
+  type WidgetBarChartGroup,
+  type WidgetBarChartProps,
+  type WidgetChartUnit,
+  type WidgetFigureProps,
+  type WidgetKit,
+  type WidgetListProps,
+  type WidgetListTotal,
+  type WidgetRowAction,
+  type WidgetSeries,
+  type WidgetSeriesChartProps,
+  type WidgetSeriesInterval,
+  type WidgetSeriesPoint,
+  type WidgetTableColumn,
+  type WidgetTableProps,
+} from "./components/features/widgets/kit";
+export type { WidgetRenderSize } from "nextly/widget-result";
+// A row's time as core's list cards word it ("5m ago", then the date in the
+// admin's timezone and date format), and the clock those cards re-render on,
+// so a widget's own list words and moves its times as theirs do.
+export { formatRelativeTime as formatWidgetTime } from "./lib/dashboard";
+export { useNowTick as useWidgetClock } from "./hooks/useNowTick";
+// A field's key as the admin's screens word it ("membersOnly" is "Members
+// Only"), for a plugin naming a field it holds only by its key, so the plugin
+// and the admin name it alike.
+export { humanizeFieldName } from "./lib/field-label";
+// Asks the dashboard's cards and header summary again, for a widget whose own
+// write changes what they answer.
+export { useRefreshDashboard } from "./hooks/queries/useRefreshDashboard";
+
+// Constants
+export {
+  MOBILE_DRAWER_WIDTH,
+  MOBILE_DRAWER_WIDTH_REM,
+  SIDEBAR_BREAKPOINT,
+  SIDEBAR_WIDTH_COLLAPSED,
+  SIDEBAR_WIDTH_COLLAPSED_REM,
+  SIDEBAR_WIDTH_EXPANDED,
+  SIDEBAR_WIDTH_EXPANDED_REM,
+  USER_PANEL_WIDTH,
+} from "./constants/sidebar";
