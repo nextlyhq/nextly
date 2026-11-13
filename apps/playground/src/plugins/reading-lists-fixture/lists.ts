@@ -7,7 +7,7 @@
  * with the rows it counts. The plugin's install hook calls the same recount
  * for every post, so one function owns the number.
  */
-import { and, eq } from "@nextlyhq/plugin-sdk/db";
+import { and, eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import type {
   InferRow,
   PluginDatabase,
@@ -130,6 +130,32 @@ export function clearCounts(db: PluginDatabase): Promise<void> {
     const counts = tx.contributed(POSTS_TABLE, postColumns);
     for (const postId of new Set(items.map(item => item.postId))) {
       await counts.set(postId, { savedCount: 0 });
+    }
+  });
+}
+
+/**
+ * Remove every list a person owns, with its items, and recount the posts they
+ * held. Safe to run again: a second run finds no lists and changes nothing,
+ * which an event handler needs, since an event can arrive twice.
+ */
+export function deleteListsOf(
+  db: PluginDatabase,
+  ownerId: string
+): Promise<void> {
+  return db.transaction(async tx => {
+    const owned = await tx
+      .select(lists)
+      .where(eq(tx.table(lists).ownerId, ownerId))
+      .all();
+    if (owned.length === 0) return;
+    const listIds = owned.map(list => list.id);
+    const inLists = inArray(tx.table(listItems).listId, listIds);
+    const items = await tx.select(listItems).where(inLists).all();
+    await tx.delete(listItems).where(inLists);
+    await tx.delete(lists).where(inArray(tx.table(lists).id, listIds));
+    for (const postId of new Set(items.map(item => item.postId))) {
+      await recountPost(tx, postId);
     }
   });
 }

@@ -2,7 +2,7 @@
  * A fixture plugin that exercises the schema a plugin can declare, written the
  * way a plugin author writes one: tables of its own with the migration modules
  * that carry them to production, a foreign key and a relation between them, a
- * key to a core table, a hidden column on a collection it does not own, and
+ * hidden column on a collection it does not own, an event handler, and
  * install and uninstall hooks. Everything comes from `@nextlyhq/plugin-sdk`,
  * never `nextly`.
  *
@@ -23,9 +23,13 @@
  *
  * which writes the next module to `./migrations` beside this file.
  */
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  UserEvents,
+  type UserDeletedPayload,
+} from "@nextlyhq/plugin-sdk";
 
-import { clearCounts, recountAll } from "./lists";
+import { clearCounts, deleteListsOf, recountAll } from "./lists";
 import { migrations } from "./migrations";
 import { lists, listItems, PREFIX, POSTS_TABLE, postColumns } from "./schema";
 
@@ -63,6 +67,13 @@ export const readingListsFixturePlugin = definePlugin({
         },
       ],
     },
+  },
+  init(ctx) {
+    // A person's lists go with them. Core emits this once the deletion has
+    // committed, and the handler is safe to run twice.
+    ctx.events.on<UserDeletedPayload>(UserEvents.Deleted, event =>
+      deleteListsOf(ctx.db, event.payload.userId)
+    );
   },
   // Runs once per install, after the plugin's migrations, never at boot. A
   // reinstall after `nextly plugins uninstall --keep-data` finds the kept

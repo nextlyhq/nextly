@@ -21,6 +21,7 @@
  */
 import { execFile } from "node:child_process";
 import {
+  cpSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -141,7 +142,16 @@ async function makeDatabase(
       ? process.env.TEST_POSTGRES_URL!
       : process.env.TEST_MYSQL_URL!;
   const base = new URL(server).pathname.slice(1) || "nextly_test";
-  const name = `${base}_reading_lists`.slice(0, 63);
+  // The base is cut, never the suffix, so the scratch name always differs from
+  // the server's own database (63 is PostgreSQL's limit, under MySQL's 64);
+  // and the check below holds that before anything is dropped.
+  const suffix = "_reading_lists";
+  const name = `${base.slice(0, 63 - suffix.length)}${suffix}`;
+  if (name === base) {
+    throw new Error(
+      `The scratch database would be the server's own (${base}); refusing to drop it.`
+    );
+  }
   const url = withDatabase(server, name);
 
   if (dialect === "postgresql") {
@@ -287,6 +297,54 @@ function codeOf(failure: unknown): string | undefined {
   if (NextlyError.is(failure)) return failure.code;
   return failure instanceof Error ? failure.message : JSON.stringify(failure);
 }
+
+/**
+ * The committed migration module carries exactly the schema the plugin
+ * declares, as the generator judges it: given the module and the declaration,
+ * it finds nothing to write. Run on a copy of the plugin's folder, so a drift
+ * it finds is written there and never into the source tree. The generator
+ * reads no database, so once, on the run without a server.
+ */
+describe.runIf(dialects().includes("sqlite"))(
+  "the reading-lists fixture's migration module",
+  () => {
+    it("leaves the generator nothing to generate", async () => {
+      const scratch = mkdtempSync(join(tmpdir(), "reading-lists-drift-"));
+      try {
+        const copy = join(scratch, "reading-lists-fixture");
+        cpSync(here, copy, {
+          recursive: true,
+          filter: source => !source.includes("node_modules"),
+        });
+        symlinkSync(
+          join(playground, "node_modules"),
+          join(scratch, "node_modules")
+        );
+        const shipped = readdirSync(join(copy, "migrations")).sort();
+        const outcome = await run(
+          join(playground, "node_modules/.bin/nextly"),
+          [
+            "migrate:create",
+            "--plugin",
+            "./reading-lists-fixture/plugin.ts",
+            "--name",
+            "drift_check",
+            "--non-interactive",
+          ],
+          { cwd: scratch, timeout: 120_000 }
+        );
+        expect(outcome.stdout).toContain("No schema changes detected");
+        expect(
+          readdirSync(join(copy, "migrations"))
+            .filter(file => file !== "node_modules")
+            .sort()
+        ).toEqual(shipped);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    });
+  }
+);
 
 describe.each(dialects())("the reading-lists fixture on %s", dialect => {
   let scratch: string;
@@ -475,6 +533,21 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
       expect(await savedCount(ctx.db, postId)).toBe(0);
       expect((await readList(ctx.db, list.id))?.items).toEqual([]);
       await savePost(ctx.db, list.id, postId);
+      expect(await savedCount(ctx.db, postId)).toBe(1);
+
+      // Deleting a person takes their lists with them, and the posts those
+      // held are recounted.
+      const leaver = await t.nextly.users.create({
+        email: "leaver@example.com",
+        password: "Password123!",
+        data: { name: "Leaver", isActive: true },
+      });
+      const leaversList = await createList(ctx.db, leaver.item.id, "Gone");
+      await savePost(ctx.db, leaversList.id, postId);
+      expect(await savedCount(ctx.db, postId)).toBe(2);
+      await t.nextly.users.delete({ id: leaver.item.id });
+      await t.events.settle();
+      expect(await readList(ctx.db, leaversList.id)).toBeNull();
       expect(await savedCount(ctx.db, postId)).toBe(1);
     });
     expect(codeOf(failure)).toBeUndefined();

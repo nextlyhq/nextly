@@ -26,9 +26,12 @@ const own = (name: string): string => `${PREFIX}__${name}`;
 export const POSTS_TABLE = "dc_posts";
 
 /**
- * A person's reading list. Its owner is a core user, held by a foreign key that
- * removes the list with its owner; `items` is the reverse of `list_items`'
- * `listId`, so a list reads with its items in one query.
+ * A person's reading list. `ownerId` names a core user. It takes no foreign
+ * key: a cascade from `users` would delete the items under the plugin, with no
+ * chance to recount the posts they held, so the plugin removes a person's
+ * lists itself when `user.deleted` arrives (see `plugin.ts`). `items` is the
+ * reverse of `list_items`' `listId`, so a list reads with its items in one
+ * query.
  */
 export const lists = defineTable(
   "lists",
@@ -40,13 +43,6 @@ export const lists = defineTable(
   },
   {
     indexes: [{ columns: ["ownerId"] }],
-    foreignKeys: [
-      {
-        columns: ["ownerId"],
-        references: { table: "users", columns: ["id"] },
-        onDelete: "cascade",
-      },
-    ],
     relations: [
       {
         name: "items",

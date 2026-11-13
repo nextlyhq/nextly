@@ -5,6 +5,6 @@
  */
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
-import migration0 from "./20261113_125047_707_create_reading_lists";
+import migration0 from "./20261113_135905_264_create_reading_lists";
 
 export const migrations: PluginMigration[] = [migration0];
