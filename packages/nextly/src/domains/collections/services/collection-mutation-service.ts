@@ -6767,24 +6767,11 @@ export class CollectionMutationService extends BaseService {
       ? await this.captureRewrittenLive(tx, args, liveAfter.main, translatedIn)
       : null;
 
-    // Each draft whose value moved, saved as a save of it is, each still a
-    // draft.
-    const draftsKept = draftsKeptByPart();
-    const maxPerDoc = (
-      args.collection as { versions?: ResolvedVersionsConfig | null }
-    ).versions?.maxPerDoc;
-    for (const { slot, value } of drafts) {
-      await this.saveRewrittenDraft(tx, args, {
-        ref,
-        slot,
-        value,
-        liveAfter: liveAfter.document,
-        draftsKept,
-        maxPerDoc,
-      });
-    }
     // Every language draft holding the field is judged against the live
-    // value the rewrite moved, whether its own value moved or not.
+    // value the rewrite moved, whether its own value moved or not. Pinned
+    // before the drafts are saved, so their retention keeps the version the
+    // bases now name.
+    const draftsKept = draftsKeptByPart();
     if (liveChanges && args.localized && !draftsKept && translatedIn === null) {
       await this.moveRewrittenDraftBases(
         tx,
@@ -6794,6 +6781,32 @@ export class CollectionMutationService extends BaseService {
         liveAfter
       );
     }
+
+    // Each draft whose value moved, saved as a save of it is, each still a
+    // draft.
+    const maxPerDoc = (
+      args.collection as { versions?: ResolvedVersionsConfig | null }
+    ).versions?.maxPerDoc;
+    const saved: { versionNo: number | null; locale: string | null }[] = [];
+    for (const { slot, value } of drafts) {
+      const versionNo = await this.saveRewrittenDraft(tx, args, {
+        ref,
+        slot,
+        value,
+        liveAfter: liveAfter.document,
+        draftsKept,
+        maxPerDoc,
+      });
+      saved.push({ versionNo, locale: slot.locale });
+    }
+    // An approval no longer holds over content the rewrite changed: each
+    // changed copy withdraws it as a save of that copy does.
+    await this.withdrawRewrittenApprovals(tx, args, [
+      ...(captured
+        ? [{ versionNo: captured.versionNo, locale: translatedIn, live: true }]
+        : []),
+      ...saved.map(save => ({ ...save, live: false })),
+    ]);
 
     const copies: FieldRewriteCopy[] = [
       ...(liveChanges ? [decided.liveCopy] : []),
@@ -7448,7 +7461,7 @@ export class CollectionMutationService extends BaseService {
       draftsKept: boolean;
       maxPerDoc: number | false | undefined;
     }
-  ): Promise<void> {
+  ): Promise<number | null> {
     const { field } = args;
     const { ref, slot } = draft;
     // Repeater rows keep their ids against what this draft held, as the live
@@ -7483,7 +7496,7 @@ export class CollectionMutationService extends BaseService {
       snapshot = { ...whole, [field]: shaped[field] };
       replaces = { ...whole, [field]: slot.snapshot[field] };
     }
-    await storeDraftSave(tx, this.versionCapture, {
+    const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
       ref,
       locale: slot.locale,
       // Keyed as a held save keys its version: where the document has no
@@ -7502,6 +7515,57 @@ export class CollectionMutationService extends BaseService {
       maxPerDoc: draft.maxPerDoc,
       storeWorkingDraft,
     });
+    return versionNo;
+  }
+
+  /**
+   * Withdraw the workflow approvals the rewrite's changes no longer match,
+   * as each save of a changed copy withdraws them: the live copy's version,
+   * with the translated fields written in place where a language's were,
+   * and each draft's.
+   */
+  private async withdrawRewrittenApprovals(
+    tx: TransactionContext,
+    args: {
+      params: RewriteParams;
+      collection: unknown;
+      fields: FieldDefinition[];
+      actor: RequestActor;
+    },
+    saves: readonly {
+      versionNo: number | null;
+      locale: string | null;
+      live: boolean;
+    }[]
+  ): Promise<void> {
+    const { params } = args;
+    for (const save of saves) {
+      try {
+        await withdrawApprovalsOnSave(
+          tx,
+          { adapter: this.adapter },
+          {
+            document: {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: params.entryId,
+            },
+            versionNo: save.versionNo,
+            locale: save.locale,
+            actor: args.actor,
+            personName: params.user?.name ?? null,
+            inPlaceTranslated:
+              save.live && save.locale !== null
+                ? this.translatedFieldsOf(args.collection, args.fields)
+                : null,
+          }
+        );
+      } catch (err) {
+        // As every save's: the rewrite must not stand over an approval it
+        // could not withdraw.
+        throw markWriteIntegrityFailure(err);
+      }
+    }
   }
 
   /**
