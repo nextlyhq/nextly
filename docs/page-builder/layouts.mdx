@@ -227,13 +227,15 @@ reason in the message.
 
 A move runs as repeated calls with `"move": true`. The first starts it; each answer's
 `item.move` says where it stands, and while `state` is `moving` the next call sends back
-its `token` and `after`:
+its `token` and `after`, and `refused`, the ids of every page an earlier answer named as not
+moved, so a page whose published version alone names the Layout still keeps it from being
+removed:
 
 ```http
 POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
 Content-Type: application/json
 
-{ "action": "delete", "move": true, "token": "…", "after": "…" }
+{ "action": "delete", "move": true, "token": "…", "after": "…", "refused": ["…"] }
 ```
 
 Each call moves up to 25 pages and reports how many it `moved` and how many are `left`.

@@ -557,8 +557,10 @@ describe("moving the pages to the site default first", () => {
   });
 
   it("names a page it could not move, with why, and offers to try again", async () => {
-    moveAnswers(forty(), async body =>
-      body.token === undefined
+    const sent: Body[] = [];
+    moveAnswers(forty(), async body => {
+      sent.push(body);
+      return body.token === undefined
         ? {
             ...moving(25, "q20"),
             refused: [
@@ -575,8 +577,8 @@ describe("moving the pages to the site default first", () => {
             pages: [{ id: "p1", title: "Pricing", reason: null }],
             unreadable: 0,
             complete: true,
-          }
-    );
+          };
+    });
     openDialog();
     fireEvent.click(
       await screen.findByRole("button", { name: "Move 40 pages, then delete" })
@@ -600,6 +602,13 @@ describe("moving the pages to the site default first", () => {
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    // The next tick carried the page the first could not move, so the server
+    // keeps it in the way even where its failure left no other trace.
+    expect(sent[1]).toMatchObject({
+      token: expect.any(String),
+      refused: ["p1"],
+    });
+    expect(sent[0]).not.toHaveProperty("refused");
   });
 
   it("still leaves for the list when the tick in flight as the dialog closed deleted the Layout", async () => {

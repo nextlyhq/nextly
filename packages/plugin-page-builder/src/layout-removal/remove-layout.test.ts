@@ -1535,16 +1535,25 @@ describe("Move pages, then remove", () => {
    */
   async function run(
     d: MoveDeps,
-    action: "delete" | "unpublish" = "delete"
+    action: "delete" | "unpublish" = "delete",
+    /** Whether each tick carries the pages earlier ones refused, as the dialog does. */
+    carry = true
   ): Promise<MoveProgress[]> {
     const ticks: MoveProgress[] = [];
+    const refused = new Set<string>();
     let next: Partial<MoveRequest> = { action };
     for (let i = 0; i < 50; i += 1) {
       const move = (await tick(d, next)).item.move;
       if (move === undefined) throw new Error("a tick answered no move");
       ticks.push(move);
       if (move.state !== "moving") return ticks;
-      next = { action, token: move.token, after: move.after };
+      for (const page of move.refused) refused.add(page.id);
+      next = {
+        action,
+        token: move.token,
+        after: move.after,
+        ...(carry && refused.size > 0 ? { refused: [...refused] } : {}),
+      };
     }
     throw new Error("the move never finished");
   }
@@ -1657,6 +1666,62 @@ describe("Move pages, then remove", () => {
     expect(s.pages.filter(page => page.layout !== null)).toEqual([]);
     expect(ticks.at(-1)).not.toHaveProperty("liveLeft");
     expect(s.layouts.has("landing")).toBe(false);
+  });
+
+  it("keeps the Layout while a page whose live copy alone names it could not be moved", async () => {
+    const s = movingSite(0);
+    s.pages.push({
+      id: "live",
+      title: "Live",
+      status: "published",
+      layout: "landing",
+    });
+    s.savedSinceRead = new Map([["live", 10]]);
+    const d = deps(s);
+
+    const ticks = await run(d);
+
+    expect(ticks.at(-1)).toEqual({
+      state: "refused",
+      moved: 0,
+      pages: [{ id: "live", title: "Live", reason: PAGE_KEPT_CHANGING }],
+      unreadable: 0,
+      complete: true,
+    });
+    expect(s.layouts.has("landing")).toBe(true);
+  });
+
+  it("keeps the Layout for a live copy an earlier tick could not move, as the ticks carry it", async () => {
+    const livePages = (s: Site) => {
+      for (let i = 0; i < PAGES_PER_TICK + 5; i += 1) {
+        s.pages.push({
+          id: `l${String(i).padStart(3, "0")}`,
+          title: `Live ${String(i)}`,
+          status: "published",
+          layout: "landing",
+        });
+      }
+      // Saved on every read, in the first tick.
+      s.savedSinceRead = new Map([["l000", 100]]);
+    };
+    const carried = movingSite(0);
+    livePages(carried);
+    const dropped = movingSite(0);
+    livePages(dropped);
+
+    const withCarry = await run(deps(carried));
+    const withoutCarry = await run(deps(dropped), "delete", false);
+
+    // Two ticks: the first refused l000, the second moved the rest, and the
+    // page it carried kept the Layout.
+    expect(withCarry.at(-1)).toMatchObject({
+      state: "refused",
+      pages: [{ id: "l000", title: "Live 0", reason: null }],
+    });
+    expect(carried.layouts.has("landing")).toBe(true);
+    // CONTROL: the server holds no record of an earlier tick's refusal, so
+    // without the carried page the move finishes.
+    expect(withoutCarry.at(-1)).toMatchObject({ state: "done" });
   });
 
   it("keeps a copy that names another Layout", async () => {

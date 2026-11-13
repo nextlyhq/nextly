@@ -128,6 +128,14 @@ export interface MoveRequest {
   readonly after?: string;
   /** Stop the move now, keeping the Layout and every page already moved. */
   readonly stop?: boolean;
+  /**
+   * The pages earlier ticks of this move could not move, as their answers
+   * named them. A page whose live copy alone names the Layout leaves no other
+   * trace of a failed move, so this is how the tick that would finish knows
+   * it still stands in the way. Used only to stop the removal, never to
+   * write: a caller that leaves a page out keeps nothing from being checked.
+   */
+  readonly refused?: readonly string[];
 }
 
 /** A page a move could not move, as the person may see it. */
@@ -417,6 +425,8 @@ interface TickPlan {
   readonly all: readonly PageReference[];
   /** Those after the cursor: the ones this tick tries. */
   readonly ahead: readonly PageReference[];
+  /** Those earlier ticks of this move could not move. */
+  readonly refusedBefore: ReadonlySet<string>;
 }
 
 /**
@@ -425,24 +435,25 @@ interface TickPlan {
  * - every page after the cursor this tick did not reach, live copies included,
  *   since a live copy the person may publish is moved, and the removal waits
  *   until each has been tried;
- * - every page naming the Layout off a live copy that no tick has settled.
+ * - every page this tick could not move, wherever it names the Layout;
+ * - every page an earlier tick could not move, and this tick did not try;
+ * - every page naming the Layout off a live copy that this tick did not try.
  *
  * A page this tick tried and did not refuse is settled, whatever it came to:
  * moved, already moved, or one whose live copy the person may not publish,
  * which is left to draw the site default. A live copy an earlier tick tried
- * and left is settled the same way.
+ * and left that way is settled the same way.
  */
 function stillInTheWay(plan: TickPlan, run: TickRun): PageReference[] {
   const tried = new Set(run.tried.map(ref => ref.id));
   const untried = new Set(
     plan.ahead.filter(ref => !tried.has(ref.id)).map(ref => ref.id)
   );
-  return plan.all.filter(
-    ref =>
-      untried.has(ref.id) ||
-      (namesItOffTheLiveRow(ref) &&
-        (!tried.has(ref.id) || run.refused.has(ref.id)))
-  );
+  return plan.all.filter(ref => {
+    if (run.refused.has(ref.id) || untried.has(ref.id)) return true;
+    if (tried.has(ref.id)) return false;
+    return plan.refusedBefore.has(ref.id) || namesItOffTheLiveRow(ref);
+  });
 }
 
 /** One tick of a held move, by the steps in the module docblock. */
@@ -471,6 +482,7 @@ async function tick(
   const plan: TickPlan = {
     all,
     ahead: all.filter(ref => after === undefined || ref.id > after),
+    refusedBefore: new Set(request.refused ?? []),
   };
   const run = await moveSome(
     deps,

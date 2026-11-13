@@ -63,6 +63,9 @@ const RemoveBody = z.union([
     // A page id, as the previous tick answered it.
     after: z.string().min(1).max(255).optional(),
     stop: z.literal(true).optional(),
+    // The pages earlier ticks named as not moved, as their answers gave them;
+    // no more than one scan reads.
+    refused: z.array(z.string().min(1).max(255)).max(2000).optional(),
   }),
 ]);
 
@@ -140,6 +143,7 @@ async function handle(
           ...(body.token === undefined ? {} : { token: body.token }),
           ...(body.after === undefined ? {} : { after: body.after }),
           ...(body.stop === undefined ? {} : { stop: body.stop }),
+          ...(body.refused === undefined ? {} : { refused: body.refused }),
         })
       : await removeLayout(deps, {
           layoutId,

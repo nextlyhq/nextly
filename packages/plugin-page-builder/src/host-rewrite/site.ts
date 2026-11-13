@@ -1053,8 +1053,8 @@ export type SiteFieldRewrite<TOpts> = (
  * rewrite, and `set.from` only looks the answer up, by the value itself. The
  * copies the walk read are judged first. A copy it did not read (a draft in
  * another language) aborts the rewrite with nothing written; it is judged
- * outside, and the rewrite is made again from the same version, a bounded
- * number of times.
+ * outside, and the rewrite is made again from the same version, until every
+ * copy has been judged.
  */
 export function siteCopiesWriter<TOpts>(
   site: CopiesSite<TOpts>
@@ -1069,14 +1069,18 @@ export function siteCopiesWriter<TOpts>(
     }
     const judged = new JudgedCopies(write);
     for (const seed of write.seeds) await judged.judge(seed.value, seed.form);
-    for (let round = 0; round < COPIES_ROUNDS; round += 1) {
+    for (let round = 1; ; round += 1) {
       const outcome = await rewriteOnce(site, write, field, judged);
       if (outcome.kind !== "unjudged") return outcome;
+      // Each round that stops judges one copy more, and a copy judged once
+      // is answered from then on, so the rewrite converges on a document
+      // with any number of drafts. A save in between moves the version, and
+      // the rewrite answers STALE_VERSION instead. The ceiling only guards
+      // against a copy whose value is never answered, which would be a
+      // defect here rather than a document still changing.
+      if (round >= MAX_COPIES_ROUNDS) return { kind: "changed" };
       await judged.judge(outcome.value, outcome.form);
     }
-    // A document holding more copies than the rounds allow keeps changing as
-    // far as this write can tell: read again, or left as changed.
-    return { kind: "changed" };
   };
 }
 
@@ -1093,8 +1097,11 @@ export interface CopiesSite<TOpts> {
   }) => Promise<void>;
 }
 
-/** How many times a copies write is made again for a copy it had not judged. */
-const COPIES_ROUNDS = 4;
+/**
+ * The most rewrites one copies write makes: far more copies than one
+ * document holds (one draft per language, and the live copy).
+ */
+const MAX_COPIES_ROUNDS = 64;
 
 /** Why a rewrite was abandoned before anything was written. */
 class CopyAbort extends Error {}

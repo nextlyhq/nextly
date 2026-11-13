@@ -605,6 +605,35 @@ describe("the copies writer", () => {
     expect(askedInside).toEqual([]);
   });
 
+  it("converges on a document with many drafts it did not read, with no edit between", async () => {
+    // Six languages' drafts, none of them read by the walk.
+    const copies: Record<string, unknown> = { live: { copy: true } };
+    for (const locale of ["es", "fr", "de", "it", "pt", "nl"]) {
+      copies[locale] = { copy: true, locale };
+    }
+    const { asked, rewriteField } = rewriteOver(copies);
+
+    const result = await siteCopiesWriter({
+      rewriteField,
+      as: async () => undefined,
+      reason: "r",
+    })({
+      host,
+      rev: "7",
+      liveForm: "published",
+      step,
+      seeds: [{ value: { copy: true }, form: "published" }],
+    });
+
+    expect(result).toEqual({ kind: "written" });
+    // One rewrite stopped for each draft it met unjudged, then one wrote all.
+    expect(asked).toHaveLength(7);
+    expect(Object.values(copies)).toEqual(
+      Object.values(copies).map(() => expect.objectContaining({ copy: false }))
+    );
+    expect(askedInside).toEqual([]);
+  });
+
   it("answers a copy the step refuses, and brings nothing in line", async () => {
     const copies = { live: { copy: true }, draft: { refuse: true } };
     const { rewriteField } = rewriteOver(copies);

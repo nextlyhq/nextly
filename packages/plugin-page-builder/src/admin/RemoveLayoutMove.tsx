@@ -96,6 +96,8 @@ interface TickBody {
   readonly token?: string;
   readonly after?: string;
   readonly stop?: true;
+  /** The pages this move's earlier ticks could not move, sent back with each. */
+  readonly refused?: readonly string[];
 }
 
 /** One tick of the move, through the route. */
@@ -559,6 +561,9 @@ export function MovePagesDialog({
   const stopAsked = useRef(false);
   // The running move's token and action, so closing can stop it.
   const running = useRef<{ token: string; action: MoveAction } | null>(null);
+  // The pages this move's ticks could not move, sent with every next tick so
+  // the server keeps a page in the way whose failure left no other trace.
+  const refusedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     open.current = true;
@@ -572,6 +577,7 @@ export function MovePagesDialog({
 
   const start = (action: MoveAction): void => {
     stopAsked.current = false;
+    refusedIds.current = new Set();
     setPhase({ kind: "moving", action });
     void runTicks(action);
   };
@@ -615,7 +621,14 @@ export function MovePagesDialog({
     running.current = { token: move.token, action };
     noteRefusals(move.refused);
     if (!stopAsked.current) {
-      return { action, move: true, token: move.token, after: move.after };
+      const refused = [...refusedIds.current];
+      return {
+        action,
+        move: true,
+        token: move.token,
+        after: move.after,
+        ...(refused.length === 0 ? {} : { refused }),
+      };
     }
     running.current = null;
     await callTick(entryId, {
@@ -630,6 +643,7 @@ export function MovePagesDialog({
 
   const noteRefusals = (refused: readonly UnmovedPage[]): void => {
     if (refused.length === 0) return;
+    for (const page of refused) refusedIds.current.add(page.id);
     setReasons(known => {
       const next = new Map(known);
       for (const page of refused) {
