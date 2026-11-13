@@ -11,7 +11,7 @@
  */
 import { randomBytes } from "node:crypto";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createAdapter } from "../../database/factory";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
@@ -56,6 +56,7 @@ const logger = {
 let cleanup: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const step of cleanup.reverse()) await step();
   cleanup = [];
 });
@@ -152,6 +153,32 @@ describe.each(getConfiguredTestDialects())(
             ? ["add_index"]
             : ["add_foreign_key"]
       );
+    });
+
+    // The bound a busy table is waited for within is read before anything changes: one out of
+    // range refuses the pass, no table created, rather than a warning once tables are made.
+    it("refuses an invalid NEXTLY_LOCK_TIMEOUT before it creates a table", async () => {
+      const adapter = await connect(dialect);
+      cleanup.push(() => adapter.disconnect());
+      const name = `@t${randomBytes(4).toString("hex")}/notes`;
+      const v1 = await compiled(dialect, plugin(name, 1));
+      const [table] = v1.specs.map(spec => spec.name);
+      cleanup.push(async () => {
+        await adapter.executeQuery(`DROP TABLE IF EXISTS ${table}`);
+      });
+      vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "0");
+
+      const refused = await prepareExtensionTablesBeforeInit({
+        adapter,
+        logger,
+        extensionSchema: v1,
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({ code: "INVALID_INPUT" });
+      expect(await adapter.tableExists(table)).toBe(false);
     });
   }
 );
