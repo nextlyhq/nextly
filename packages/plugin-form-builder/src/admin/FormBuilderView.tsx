@@ -523,10 +523,7 @@ function FormEditor({
         changeCount={changeCount}
         saving={isSaving}
         onUndo={undo}
-        // Drawn while the count is on its way, and while the permissions are,
-        // holding its place, so the bar does not re-flow when they land; not
-        // where it cannot be read, by permission or by a failed read.
-        {...(saved && (access.known ? canReadSubmissions : true) && !countFailed
+        {...(saved && offersSubmissionsLink(access, countFailed)
           ? {
               submissions: {
                 count: submissionCount,
@@ -745,6 +742,19 @@ function DeleteFormDialog({
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+/**
+ * Whether a saved form's bar draws its submissions link: while the count is
+ * on its way, and while the permissions are, holding its place, so the bar
+ * does not re-flow when they land; not where it cannot be read, by permission
+ * or by a failed read.
+ */
+function offersSubmissionsLink(
+  access: { known: boolean; canReadSubmissions: boolean },
+  countFailed: boolean
+): boolean {
+  return (!access.known || access.canReadSubmissions) && !countFailed;
 }
 
 /**

@@ -337,6 +337,7 @@ import {
   draftsBehindLive,
   fieldRewriteEvent,
   moveRewrittenDraftBases,
+  refuseRewriteKeptByFieldRules,
   rewrittenCopies,
   saveRewrittenDraft,
   type RewriteCopiesDecided,
@@ -391,7 +392,6 @@ import {
   readableFieldNames,
   recordSharedBase,
   releaseSharedBase,
-  sameSharedValue,
   sharedValuesConflict,
   snapshotRecord,
   takenLiveValues,
@@ -6715,12 +6715,15 @@ export class CollectionMutationService extends BaseService {
 
     if (liveChanges) {
       // The live copy: its row, or its language's row for a translated
-      // field, with the entry's counter moved once.
+      // field. The entry's own counter moves once with its shared values and
+      // with any draft; a translated value alone moves only its language's,
+      // so a read of another language stays current.
       await this.writeRewrittenLiveValue(tx, args, {
         value: decided.liveValue,
         stored: decided.liveBefore.main,
         translatedIn,
         at: new Date(),
+        movesMain: translatedIn === null || drafts.length > 0,
       });
       // The rewritten row may not move the entry out of a filter that
       // judged the rewrite: refused, the whole rewrite rolls back.
@@ -6934,8 +6937,8 @@ export class CollectionMutationService extends BaseService {
       translatedIn,
       liveValue: liveBefore.value,
       workingDrafts: await new VersionsRepository(tx).findAllWorkingDrafts(ref),
-      allowed: (copy, value) =>
-        this.assertRewrittenValueAllowed(tx, args, copy, value),
+      allowed: (copy, value, current) =>
+        this.assertRewrittenValueAllowed(tx, args, copy, { value, current }),
     });
     return { ...decided, liveBefore };
   }
@@ -7189,36 +7192,41 @@ export class CollectionMutationService extends BaseService {
       grants: () => Promise<CallerGrants>;
     },
     copy: FieldRewriteCopy,
-    value: unknown
+    judged: { value: unknown; current: unknown }
   ): Promise<void> {
     const { params, fields, field } = args;
-    const written = this.rewritePayloadValue(args, value);
+    const written = this.rewritePayloadValue(args, judged.value);
     if (!params.overrideAccess) {
-      // Judged on a copy: the rule pass removes a field the person may not
-      // set, and may change one, and either refuses the rewrite.
-      const probe: Record<string, unknown> = {
-        [field]: structuredClone(written),
-      };
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: probe,
-        operation: "update",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: false,
-        id: params.entryId,
-        grants: args.grants,
+      // Judged on a copy as an update of it is, against the value it
+      // replaces, in the form the write takes both: a replaced group or
+      // repeater that leaves out a value the person may not change would
+      // otherwise delete it.
+      const { grants } = args;
+      await refuseRewriteKeptByFieldRules({
+        field,
+        written,
+        current: this.restoredPayloadValue(args, judged.current),
+        copy,
+        rules: {
+          fields: addressableFields(fields) as unknown as FieldConfig[],
+          source: this.fieldGroupDataService,
+          access: { ...this.fieldGroupAccess(params), grants },
+          executor: tx.getDrizzle(),
+          ownRules: document =>
+            applyFieldWriteAccess({
+              kind: "collection",
+              slug: params.collectionName,
+              data: document,
+              operation: "update",
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+              overrideAccess: false,
+              id: params.entryId,
+              grants,
+            }),
+        },
+        logContext: { collection: params.collectionName },
       });
-      if (!(field in probe) || !sameSharedValue(probe[field], written)) {
-        throw NextlyError.forbidden({
-          logContext: {
-            reason: "field-rewrite-field-rule",
-            collection: params.collectionName,
-            field,
-          },
-        });
-      }
     }
     // Judged by the language rules an update in that language is: a
     // translated field another language may leave blank is not required
@@ -7258,6 +7266,33 @@ export class CollectionMutationService extends BaseService {
     },
     value: unknown
   ): unknown {
+    const payload = this.rewriteRestorePayload(args, value);
+    if (!Object.hasOwn(payload, args.field)) {
+      throw NextlyError.invalidInput({
+        message: `The field "${args.field}" can't be rewritten: its value can't be written back as given.`,
+      });
+    }
+    return payload[args.field];
+  }
+
+  /**
+   * A copy's current value in the form {@link rewritePayloadValue} gives its
+   * new one, for the two to be compared; as it is where a payload holds none
+   * of it (an empty value).
+   */
+  private restoredPayloadValue(
+    args: Parameters<CollectionMutationService["rewritePayloadValue"]>[0],
+    value: unknown
+  ): unknown {
+    const payload = this.rewriteRestorePayload(args, value);
+    return Object.hasOwn(payload, args.field) ? payload[args.field] : value;
+  }
+
+  /** `value` for the rewritten field, restored to a payload as a promoted draft's values are. */
+  private rewriteRestorePayload(
+    args: Parameters<CollectionMutationService["rewritePayloadValue"]>[0],
+    value: unknown
+  ): Record<string, unknown> {
     const { payload } = buildRestorePayload(
       { [args.field]: value },
       args.fields as unknown as FieldConfig[],
@@ -7270,18 +7305,14 @@ export class CollectionMutationService extends BaseService {
         documentLocalized: args.localized,
       })
     );
-    if (!Object.hasOwn(payload, args.field)) {
-      throw NextlyError.invalidInput({
-        message: `The field "${args.field}" can't be rewritten: its value can't be written back as given.`,
-      });
-    }
-    return payload[args.field];
+    return payload;
   }
 
   /**
    * Write a copy's new value to the live copy: the entry's row, or its
    * language's row for a translated field, shaped as an update shapes it,
-   * with the entry's counter moved once in the same statement.
+   * with the counters it moves (`movesMain`, and the language row's with its
+   * upsert) moved once in the same statements.
    */
   private async writeRewrittenLiveValue(
     tx: TransactionContext,
@@ -7301,6 +7332,8 @@ export class CollectionMutationService extends BaseService {
       stored: Record<string, unknown>;
       translatedIn: string | null;
       at: Date;
+      /** Whether the entry's own counter moves, beside its language's. */
+      movesMain: boolean;
     }
   ): Promise<void> {
     const { params, fields, field, tableName } = args;
@@ -7335,7 +7368,9 @@ export class CollectionMutationService extends BaseService {
       columns[toSnakeCase(key)] = value;
     }
     columns.updated_at = write.at;
-    Object.assign(columns, revisionBumpColumns(args.actor, write.at));
+    if (write.movesMain) {
+      Object.assign(columns, revisionBumpColumns(args.actor, write.at));
+    }
     const given = args.check.kind === "judge" ? args.check.given : undefined;
     await this.writeRowAndTranslation(tx, {
       tableName,

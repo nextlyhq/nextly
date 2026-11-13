@@ -344,7 +344,9 @@ recorded exactly as an entry's are below.
   an author's draft are each transformed from what they hold. Return `null` to clear the field.
 - **Languages.** A shared field is rewritten in every language's draft. A translated field is
   rewritten in one language, `locale` (the default language when omitted), on its live copy and that
-  language's draft.
+  language's draft. Its `expectedVersion` must be a read of that language. Where only that
+  language's live value changes, only that language's version moves, so a read of another language
+  stays current. A shared field or any draft changed moves the document's own version.
 - **History.** The entry's history gets one `field-rewritten` event naming the field, each copy
   changed and your `reason`. A rewrite made as the system names your plugin. One made with
   `as: "user"` names the person, with your plugin beside them. It is never recorded as an
@@ -359,7 +361,9 @@ recorded exactly as an entry's are below.
   many-to-many relationship); a password, or a group or repeater holding one or holding a field group; a virtual field; and a value the field's own checks refuse,
   on any copy. Made with `as: "user"`, it needs the person's permission to update the entry and,
   where the collection has a publish lifecycle, to publish it, plus every field rule of their own
-  update.
+  update. The rules judge each new value against the value it replaces: a group or repeater that
+  leaves out or changes a value the person may not change is refused with `FORBIDDEN`, naming that
+  field in `errors[].path` (such as `card.locked`), rather than deleting it.
 
 A bulk job rewrites entries one at a time, each in its own transaction, and retries an entry that
 moved under it from a fresh read.
