@@ -53,6 +53,9 @@ import { withBusyTableTries, type TryResult } from "./tries";
 import type { HolderReport } from "./types";
 import { prepareTryWatchdog, type PreparedTryWatchdog } from "./watchdog";
 
+/** The table a unit's ledger write records it in. */
+const LEDGER_TABLE = "nextly_schema_events";
+
 /** What a run hands every unit it runs in tries. */
 export interface BusyTableRun {
   readonly bounds: BusyTableBounds;
@@ -152,20 +155,55 @@ export async function hasDdlEventTriggers(
   adapter: Pick<DrizzleAdapter, "queryStatement">,
   dialect: SupportedDialect
 ): Promise<boolean> {
-  if (dialect !== "postgresql") return false;
+  return (await ddlEventTriggerTags(adapter, dialect)) !== "none";
+}
+
+/**
+ * The command tags PostgreSQL's DDL event triggers fire on (`hasDdlEventTriggers` reads which
+ * count): `"none"` where there is no such trigger, `"all"` where one fires on every command (no
+ * `WHEN TAG IN`), else the tags they are limited to, upper-cased. A read that fails answers
+ * `"all"`, failing closed.
+ */
+export async function ddlEventTriggerTags(
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
+  dialect: SupportedDialect
+): Promise<"none" | "all" | ReadonlySet<string>> {
+  if (dialect !== "postgresql") return "none";
   try {
-    const rows = await adapter.queryStatement<{ found: unknown }>(
-      sql`SELECT 1 AS found FROM pg_event_trigger e
+    const rows = await adapter.queryStatement<{ tags: unknown }>(
+      sql`SELECT e.evttags AS tags FROM pg_event_trigger e
         WHERE e.evtenabled <> 'D'
           AND e.evtevent IN ('ddl_command_start', 'ddl_command_end', 'sql_drop', 'table_rewrite')
           AND NOT EXISTS (SELECT 1 FROM pg_depend d
-            WHERE d.classid = 'pg_event_trigger'::regclass AND d.objid = e.oid AND d.deptype = 'e')
-        LIMIT 1`
+            WHERE d.classid = 'pg_event_trigger'::regclass AND d.objid = e.oid AND d.deptype = 'e')`
     );
-    return rows.length > 0;
+    return tagsOf(rows);
   } catch {
-    return true;
+    return "all";
   }
+}
+
+/** The tags of the event triggers read, as `ddlEventTriggerTags` answers. */
+function tagsOf(
+  rows: readonly { tags: unknown }[]
+): "none" | "all" | ReadonlySet<string> {
+  if (rows.length === 0) return "none";
+  const tags = new Set<string>();
+  for (const row of rows) {
+    if (!Array.isArray(row.tags)) return "all";
+    for (const tag of row.tags) tags.add(String(tag).toUpperCase());
+  }
+  return tags;
+}
+
+/** What a judgement reads of the event triggers (`JudgeContext`), from their tags. */
+export function eventTriggerContext(
+  tags: "none" | "all" | ReadonlySet<string>
+): JudgeContext {
+  if (tags === "none") return { ddlEventTriggers: false };
+  return tags === "all"
+    ? { ddlEventTriggers: true }
+    : { ddlEventTriggers: true, ddlEventTriggerTags: tags };
 }
 
 /** What a unit's judgements read of the database: its triggers and its DDL event triggers. */
@@ -196,9 +234,7 @@ async function readUnitCatalog(
     statements.some(statement => setsSearchPath(statement, dialect));
   return {
     triggers: await triggerTables(adapter, dialect, { everySchema }),
-    context: {
-      ddlEventTriggers: await hasDdlEventTriggers(adapter, dialect),
-    },
+    context: eventTriggerContext(await ddlEventTriggerTags(adapter, dialect)),
   };
 }
 
@@ -517,11 +553,17 @@ export async function runUnitInTries(
         const lasting = toldNone
           ? sessionStateBefore(statements, kept, dialect)
           : firstNoRetryBetween(statements, kept, sentUntil, dialect, catalog);
-        const waited = statements[Math.min(waiting, statements.length - 1)];
+        // A wait after the last statement is the ledger write's, on the ledger's own table.
+        const waited = statements[waiting];
         return {
           kind: "ended",
           ended: {
-            table: waited === undefined ? null : targetTable(waited, dialect),
+            table:
+              waited === undefined
+                ? waiting >= statements.length && !toldNone
+                  ? LEDGER_TABLE
+                  : null
+                : targetTable(waited, dialect),
             holder: holder ?? (await readHolders(adapter, dialect, session)),
           },
           ...(lasting === undefined ? {} : { lasting }),

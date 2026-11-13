@@ -301,13 +301,21 @@ function inTypePosition(
   at: number
 ): boolean {
   if (tokens[0] !== "CREATE" && tokens[0] !== "ALTER") return false;
-  const before = tokens[at - 1];
-  if (before === "TYPE") return true;
-  const named =
-    (typeof before === "string" && WORD.test(before)) ||
-    (typeof before === "object" && before?.kind === "name");
-  const definer = tokens[at - 2];
-  return named && typeof definer === "string" && COLUMN_DEFINERS.has(definer);
+  if (tokens[at - 1] === "TYPE") return true;
+  return isName(tokens[at - 1]) && isWordIn(tokens[at - 2], COLUMN_DEFINERS);
+}
+
+/** Whether `token` names something: a bare word or a quoted name. */
+function isName(token: StatementToken | undefined): boolean {
+  return typeof token === "string" ? WORD.test(token) : token?.kind === "name";
+}
+
+/** Whether `token` is a bare word of `words`. */
+function isWordIn(
+  token: StatementToken | undefined,
+  words: ReadonlySet<string>
+): boolean {
+  return typeof token === "string" && words.has(token);
 }
 
 /** Words that open an index's column list, directly (`PRIMARY KEY (`) or before its name. */
@@ -322,29 +330,39 @@ function inIndexColumnList(
   tokens: readonly StatementToken[],
   at: number
 ): boolean {
+  const open = enclosingOpen(tokens, at);
+  return open !== undefined && opensIndexList(tokens, open);
+}
+
+/** The position of the parenthesis around the token at `at`; undefined at the top level. */
+function enclosingOpen(
+  tokens: readonly StatementToken[],
+  at: number
+): number | undefined {
   let depth = 0;
   for (let open = at - 1; open >= 0; open--) {
-    const token = tokens[open];
-    if (token === ")") depth++;
-    if (token !== "(") continue;
-    if (depth > 0) {
-      depth--;
-      continue;
-    }
-    const before = tokens[open - 1];
-    if (typeof before === "string" && INDEX_LIST_OPENERS.has(before)) {
-      return true;
-    }
-    // Back past the name and its schema qualifier (`ON shop.posts (`).
-    let keywordAt = open - 2;
-    while (tokens[keywordAt] === ".") keywordAt -= 2;
-    const keyword = tokens[keywordAt];
-    return (
-      keyword === "ON" ||
-      (typeof keyword === "string" && INDEX_LIST_OPENERS.has(keyword))
-    );
+    if (tokens[open] === ")") depth++;
+    if (tokens[open] !== "(") continue;
+    if (depth === 0) return open;
+    depth--;
   }
-  return false;
+  return undefined;
+}
+
+/**
+ * Whether the parenthesis at `open` opens an index's column list: it follows `KEY`, `INDEX` or
+ * `UNIQUE`, or a name (schema-qualified or not) that follows one of them or `ON`.
+ */
+function opensIndexList(
+  tokens: readonly StatementToken[],
+  open: number
+): boolean {
+  if (isWordIn(tokens[open - 1], INDEX_LIST_OPENERS)) return true;
+  // Back past the name and its schema qualifier (`ON shop.posts (`).
+  let keywordAt = open - 2;
+  while (tokens[keywordAt] === ".") keywordAt -= 2;
+  const keyword = tokens[keywordAt];
+  return keyword === "ON" || isWordIn(keyword, INDEX_LIST_OPENERS);
 }
 
 /** Whether the parentheses opening at `open` hold nothing but digits. */
@@ -673,6 +691,12 @@ export interface JudgeContext {
    * follow renames and settings, so an event trigger does not stop the run on them. 0 by default.
    */
   readonly ddlEventTriggersFrom?: number;
+  /**
+   * The command tags the event triggers are limited to (`WHEN TAG IN (…)`), where every one of
+   * them is; undefined where one fires on every command. A schema statement whose tag is not here
+   * fires none, and may run again.
+   */
+  readonly ddlEventTriggerTags?: ReadonlySet<string>;
 }
 
 /** The first words of the statements a PostgreSQL DDL event trigger fires on. */
@@ -709,7 +733,12 @@ export function firstNoRetry(
   for (const [index, statement] of statements.entries()) {
     const judgement =
       eventTriggers && index >= (context.ddlEventTriggersFrom ?? 0)
-        ? firesEventTrigger(statement, dialect, hasTrigger)
+        ? firesEventTrigger(
+            statement,
+            dialect,
+            hasTrigger,
+            context.ddlEventTriggerTags
+          )
         : judgeStatement(statement, dialect, hasTrigger);
     if (judgement.kind === "no-retry") {
       // Named for what was not known, so the report does not claim the table has a trigger.
@@ -734,16 +763,52 @@ export function firstNoRetry(
   return undefined;
 }
 
-/** `judgeStatement`, with a schema statement it would let run again stopped by an event trigger. */
+/**
+ * `judgeStatement`, with a schema statement it would let run again stopped by an event trigger:
+ * one that fires on every command, or on this statement's tag (`tags`).
+ */
 function firesEventTrigger(
   statement: string,
   dialect: SupportedDialect,
-  hasTrigger: (table: string) => boolean
+  hasTrigger: (table: string) => boolean,
+  tags: ReadonlySet<string> | undefined
 ): StatementJudgement {
   const judgement = judgeStatement(statement, dialect, hasTrigger);
   if (judgement.kind === "no-retry") return judgement;
-  const [first] = statementTokens(statement, dialect);
-  return typeof first === "string" && DDL_FIRST_WORDS.has(first)
-    ? noRetry("event-trigger")
-    : judgement;
+  const tokens = statementTokens(statement, dialect);
+  if (!isWordIn(tokens[0], DDL_FIRST_WORDS)) return judgement;
+  const tag = commandTag(tokens);
+  // A tag this reading cannot name counts as one the trigger fires on, failing closed.
+  return tags !== undefined && tag !== undefined && !tags.has(tag)
+    ? judgement
+    : noRetry("event-trigger");
+}
+
+/** Words between a schema statement's verb and its object, which its command tag leaves out. */
+const TAG_SKIPPED = new Set([
+  "UNIQUE",
+  "TEMP",
+  "TEMPORARY",
+  "UNLOGGED",
+  "GLOBAL",
+  "LOCAL",
+  "OR",
+  "REPLACE",
+]);
+
+/**
+ * PostgreSQL's command tag of a schema statement, as an event trigger's `WHEN TAG IN` names it:
+ * its verb and its object (`CREATE UNIQUE INDEX CONCURRENTLY` is `CREATE INDEX`); undefined where
+ * the object is not a plain word.
+ */
+function commandTag(tokens: readonly StatementToken[]): string | undefined {
+  let at = 1;
+  while (isWordIn(tokens[at], TAG_SKIPPED)) at++;
+  const verb = tokens[0];
+  const object = tokens[at];
+  return typeof verb === "string" &&
+    typeof object === "string" &&
+    WORD.test(object)
+    ? `${verb} ${object}`
+    : undefined;
 }

@@ -35,10 +35,15 @@ import {
   firstNoRetry,
   judgeStatement,
   targetTable,
+  type JudgeContext,
   type StatementJudgement,
 } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
-import { hasDdlEventTriggers, triggerTables } from "./run-unit";
+import {
+  ddlEventTriggerTags,
+  eventTriggerContext,
+  triggerTables,
+} from "./run-unit";
 import {
   boundSessionTry,
   boundSqliteWait,
@@ -81,7 +86,7 @@ async function judgedForResend(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   statement: string,
-  ddlEventTriggers: boolean
+  eventTriggers: JudgeContext
 ): Promise<StatementJudgement> {
   let asksTriggers = false;
   const judgement = judgeStatement(statement, dialect, () => {
@@ -96,8 +101,8 @@ async function judgedForResend(
     ? await triggerTables(adapter, dialect)
     : new Set<string>();
   return (
-    firstNoRetry([statement], dialect, triggers, { ddlEventTriggers })
-      ?.judgement ?? judgeStatement(statement, dialect, () => false)
+    firstNoRetry([statement], dialect, triggers, eventTriggers)?.judgement ??
+    judgeStatement(statement, dialect, () => false)
   );
 }
 
@@ -118,7 +123,9 @@ export async function runStatementsInTries(
   if (statements.length === 0) return applied;
   // Read once, before the list's session holds a connection of the pool, so the read never waits
   // behind it; the statements here are Nextly's own, which make no event trigger.
-  const ddlEventTriggers = await hasDdlEventTriggers(adapter, dialect);
+  const eventTriggers = eventTriggerContext(
+    await ddlEventTriggerTags(adapter, dialect)
+  );
   const nameOf =
     run.name ??
     ((index: number) =>
@@ -174,7 +181,7 @@ export async function runStatementsInTries(
             adapter,
             dialect,
             statement,
-            ddlEventTriggers
+            eventTriggers
           );
           return {
             kind: "ended",

@@ -278,8 +278,11 @@ export function prepareTryWatchdog(
     idle: () => cancelling,
     moveTo(statement) {
       current = statement;
-      // A sighting of the earlier statement waiting is not this one's: the time until the next
-      // sighting may be work between the two, which no lock wait took.
+      // The earlier statement, last seen waiting, waited until it ended now: that time counts. A
+      // sighting of it is not this one's, so the next sighting starts counting afresh.
+      if (lastSeenWaitingAt !== undefined) {
+        waitedMs += performance.now() - lastSeenWaitingAt;
+      }
       lastSeenWaitingAt = undefined;
     },
     waited: () => waitedMs,

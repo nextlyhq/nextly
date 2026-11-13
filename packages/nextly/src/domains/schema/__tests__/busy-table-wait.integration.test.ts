@@ -881,10 +881,16 @@ describe.each(DIALECTS)(
           expect(elapsed).toBeLessThan(4_000);
           // One try of 1 s: the statement waited about 0.8 s of it, so the ledger write has what
           // is left, not a fresh second of its own and the backstop's half second on top.
-          const { elapsedMs } = (
-            stopped as { logContext: { stop: { elapsedMs: number } } }
+          const { elapsedMs, ended } = (
+            stopped as {
+              logContext: {
+                stop: { elapsedMs: number; ended: { table: string | null } };
+              };
+            }
           ).logContext.stop;
           expect(elapsedMs).toBeLessThan(1_900);
+          // The table waited for is the ledger's, not the file's last statement's.
+          expect(ended.table).toBe("nextly_schema_events");
         } finally {
           await freeing;
           freeLedger();
@@ -898,14 +904,19 @@ describe.each(DIALECTS)(
      * returns what drops it again.
      */
     async function ddlEventTrigger(
-      extensionOwned: boolean
+      extensionOwned: boolean,
+      tags?: readonly string[]
     ): Promise<() => Promise<void>> {
       const name = `${PREFIX}_ddl_watch`;
       await adapter.executeQuery(
         `CREATE FUNCTION ${name}() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$`
       );
+      const when =
+        tags === undefined
+          ? ""
+          : ` WHEN TAG IN (${tags.map(tag => `'${tag}'`).join(", ")})`;
       await adapter.executeQuery(
-        `CREATE EVENT TRIGGER ${name} ON ddl_command_start EXECUTE FUNCTION ${name}()`
+        `CREATE EVENT TRIGGER ${name} ON ddl_command_start${when} EXECUTE FUNCTION ${name}()`
       );
       if (extensionOwned) {
         await adapter.executeQuery(
@@ -953,6 +964,35 @@ describe.each(DIALECTS)(
             },
           });
           expect(notices).toHaveLength(0);
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await drop();
+        }
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "keeps trying where the only DDL event trigger fires on other commands than the change's",
+      async () => {
+        const drop = await ddlEventTrigger(false, ["DROP TABLE"]);
+        try {
+          writeFile("20261113_000001_add_late", [
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: { tries: 2, outcome: { kind: "nothing-changed" } },
+            },
+          });
         } finally {
           free();
           await holding.catch(() => {});

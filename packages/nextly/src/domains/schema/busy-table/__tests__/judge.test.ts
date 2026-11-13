@@ -358,6 +358,35 @@ describe("firstNoRetry", () => {
     ).toBeUndefined();
   });
 
+  it("stops only at the schema statements a tag-limited event trigger fires on", () => {
+    const context = {
+      ddlEventTriggers: true,
+      ddlEventTriggerTags: new Set(["DROP TABLE"]),
+    };
+    expect(
+      firstNoRetry(
+        [
+          "CREATE TABLE posts (id integer)",
+          "CREATE UNIQUE INDEX i ON posts (id)",
+        ],
+        "postgresql",
+        triggers,
+        context
+      )
+    ).toBeUndefined();
+    expect(
+      firstNoRetry(
+        ["CREATE TABLE posts (id integer)", "DROP TABLE IF EXISTS old_posts"],
+        "postgresql",
+        triggers,
+        context
+      )
+    ).toEqual({
+      statementNumber: 2,
+      judgement: { kind: "no-retry", reason: "event-trigger" },
+    });
+  });
+
   it("lets a row change run again where only a DDL event trigger exists", () => {
     expect(
       firstNoRetry(
