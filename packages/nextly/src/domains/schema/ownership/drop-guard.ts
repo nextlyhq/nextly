@@ -6308,13 +6308,34 @@ export async function pluginMigratedTableSet(
       SCHEMA_OWNERS_TABLE,
     ]);
     if (registry.length === 0) return undefined;
-    const rows = await new SchemaOwnersRepository(db, dialect).read();
-    return new Set(
-      rows
-        .filter(row => row.migratedBy.startsWith("plugin:"))
-        .map(row => row.tableName.toLowerCase())
+    return pluginMigratedTablesOf(
+      await new SchemaOwnersRepository(db, dialect).read()
     );
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The tables whose own owner row names a plugin's migration stream,
+ * lower-cased.
+ *
+ * Table-level rows only. An element row says who added a column, index, key
+ * or check to a table, not who carries the table: read as a table claim, a
+ * plugin's column on the app's table made every drop of that table count as a
+ * plugin table's, the drop inside a SQLite rebuild of it included, which then
+ * left the rebuild's twin with nowhere to be renamed to.
+ */
+export function pluginMigratedTablesOf(
+  rows: readonly OwnerRecord[]
+): Set<string> {
+  return new Set(
+    rows
+      .filter(
+        row =>
+          (row.elementKind ?? "table") === "table" &&
+          row.migratedBy.startsWith("plugin:")
+      )
+      .map(row => row.tableName.toLowerCase())
+  );
 }
