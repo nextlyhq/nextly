@@ -112,6 +112,16 @@ describe("extensionFieldsOf", () => {
                     { name: "notes", type: "text" },
                     // Required: a page that drew it nowhere could not be saved.
                     { name: "code", type: "text", required: true },
+                    // A group holding a required field: hiding the group
+                    // would leave that field unreachable.
+                    {
+                      name: "address",
+                      type: "group",
+                      fields: [
+                        { name: "street", type: "text" },
+                        { name: "city", type: "text", required: true },
+                      ],
+                    } as never,
                     // Required too, spelled the way validation spells it.
                     {
                       name: "sku",

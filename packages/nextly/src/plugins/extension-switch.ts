@@ -107,6 +107,18 @@ export async function switchedOffExtensions(
 }
 
 /**
+ * Whether `field` is required, or holds a required field at any depth (a
+ * group's or repeater's own fields), in either spelling the entry validator
+ * reads: a page that drew it nowhere could not then be saved.
+ */
+function holdsRequired(field: unknown): boolean {
+  if (typeof field !== "object" || field === null) return false;
+  if (isRequired(field as ValidatableField)) return true;
+  const { fields } = field as { fields?: unknown };
+  return Array.isArray(fields) && fields.some(holdsRequired);
+}
+
+/**
  * Every field each plugin's `extend` adds, by plugin, or with
  * `"switchable"` only those its switch may turn off: never a required one,
  * since a page that drew it nowhere could not be saved, so a required field
@@ -121,8 +133,7 @@ export function extensionFieldsOf(
     const names = (plugin.contributes?.extend ?? []).flatMap(clause =>
       clause.fields.flatMap(field => {
         const { name } = field as { name?: unknown };
-        // Required in either spelling, as the entry validator reads it.
-        const kept = which === "all" || !isRequired(field);
+        const kept = which === "all" || !holdsRequired(field);
         return typeof name === "string" && kept ? [name] : [];
       })
     );
