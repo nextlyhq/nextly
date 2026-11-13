@@ -741,16 +741,21 @@ jobs:
       # misleadingly, is the opposite of what this job was just changed to do.
       # `Test` is deliberately not among them - see the note on that step.
       # The packages first, then the playground's production build on a database
-      # prepared the way the generated build script prepares one: `next build`
-      # prerenders pages that start Nextly (`<SiteCode>` in the root layout), and
-      # a production start refuses a plugin no `nextly plugins install` has
-      # recorded on that database. The database is the step's own, named here,
-      # so the build does not depend on an `.env` some earlier step left behind.
+      # prepared as a deploy prepares one: `next build` prerenders pages that
+      # start Nextly (`<SiteCode>` in the root layout) and read its tables, and
+      # neither the build nor a production start creates a table. A generated
+      # app's build applies the migration its scaffold wrote; the playground
+      # keeps no migration files, its schema being its development start's, so
+      # `provision-empty.ts` boots it outside production to create the tables
+      # before `nextly migrate` and the plugin installs a production start
+      # requires. The database is the step's own, named here, so the build does
+      # not depend on an `.env` some earlier step left behind.
       - name: Build
         id: build
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           pnpm turbo build --filter='./packages/*'
+          pnpm --filter playground exec tsx scripts/provision-empty.ts
           pnpm --filter playground exec nextly migrate
           pnpm --filter playground exec nextly plugins install --all
           pnpm turbo build --filter='./apps/*'
@@ -2574,14 +2579,17 @@ jobs:
         if: steps.decide.outputs.inert != 'true'
         run: pnpm turbo build --filter='./packages/*'
 
-      # Empty of content, not of schema: a production start refuses a plugin no
-      # `nextly plugins install` has recorded, and `<SiteCode>` in the root
-      # layout starts Nextly while `next build` prerenders `/_not-found`.
+      # Empty of content, not of schema: the build creates no table, a production
+      # start refuses a plugin no `nextly plugins install` has recorded, and
+      # `<SiteCode>` in the root layout starts Nextly while `next build`
+      # prerenders `/_not-found`. The tables come from `provision-empty.ts`, as
+      # in the Build step above.
       - name: Build on an empty database
         if: steps.decide.outputs.inert != 'true'
         env:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-empty.db
         run: |
+          pnpm --filter playground exec tsx scripts/provision-empty.ts
           pnpm --filter playground exec nextly migrate
           pnpm --filter playground exec nextly plugins install --all
           pnpm --filter playground exec next build
@@ -2595,6 +2603,7 @@ jobs:
         env:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-debug.db
         run: |
+          pnpm --filter playground exec tsx scripts/provision-empty.ts
           pnpm --filter playground exec nextly migrate
           pnpm --filter playground exec nextly plugins install --all
           pnpm --filter playground exec next build --debug-prerender
