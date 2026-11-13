@@ -100,6 +100,7 @@ function dryRun(include: boolean): DryRunBody {
     held: 7,
     lines: [],
     pages: include ? 2 : 1,
+    versions: include ? 2 : 1,
     same: 0,
     kept: 0,
     neverServed: include ? 0 : 1,
@@ -304,6 +305,86 @@ describe("importing this site's own field group", () => {
     expect(
       screen.getByRole("button", { name: "Import 2 values" })
     ).toBeTruthy();
+  });
+
+  it("gives each language and draft of a page its own row, each value with its own result", async () => {
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      sent.push({
+        path: request.path,
+        body: (request.body ?? {}) as Record<string, unknown>,
+      });
+      const versioned = (more: Partial<ImportReportEntry>): ImportReportEntry =>
+        entry({
+          id: "pricing",
+          values: { title: "Plans", description: "Costs" },
+          ...more,
+        });
+      return {
+        ...dryRun(false),
+        pages: 1,
+        versions: 3,
+        documents: [
+          versioned({
+            label: "Pricing",
+            locale: "en",
+            language: "English",
+            version: "published",
+            set: ["title", "description"],
+          }),
+          versioned({
+            label: "Pricing (new)",
+            locale: "en",
+            language: "English",
+            version: "draft",
+            set: ["title"],
+            kept: ["description"],
+          }),
+          versioned({
+            label: "Preise",
+            locale: "de",
+            language: "Deutsch",
+            version: "published",
+            same: ["title"],
+            set: ["description"],
+          }),
+        ],
+      };
+    });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+
+    expect(
+      within(table()).getByRole("columnheader", { name: "Version" })
+    ).toBeTruthy();
+    const rows = within(table()).getAllByRole("row").slice(1);
+    expect(rows.map(row => row.textContent)).toEqual([
+      expect.stringMatching(
+        /^Pricing.*English · published.*Will set.*Will set/
+      ),
+      expect.stringMatching(/English · draft.*Will set.*Kept/),
+      expect.stringMatching(/Deutsch · published.*Same as automatic.*Will set/),
+    ]);
+    // Named once on screen, and on each row for a screen reader.
+    expect(within(table()).getAllByText("Pricing")).toHaveLength(1);
+    expect(
+      within(rows[1] as HTMLElement).getByText("Pricing (new)").className
+    ).toBe("sr-only");
+  });
+
+  it("shows no version column where each page has one version", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    expect(
+      within(table()).queryByRole("columnheader", { name: "Version" })
+    ).toBeNull();
   });
 
   it("says how to import a type's own seo field, which the plugin can't rename in code", () => {

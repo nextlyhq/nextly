@@ -233,8 +233,11 @@ async function automaticOf(
   };
 }
 
-/** Each stored entry of a read as one page. */
-async function pagesOf(
+/**
+ * Each stored entry of a read as one page: the import reads a page's
+ * versions itself (`import/versions`) and makes each one a page here.
+ */
+export async function pagesOf(
   ctx: PluginContext,
   slug: string,
   entries: readonly unknown[],

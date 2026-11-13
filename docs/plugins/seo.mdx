@@ -1425,9 +1425,9 @@ is added to is a type of its own, with its one page.
 A content type's changes are saved in one step, or, where any is refused, none of them. Where a
 page was saved by someone else after it was read, its type's step saves nothing, and the screen
 names the pages not saved. A page whose SEO you may not change is shown read-only (see [Who may
-change SEO](#who-may-change-seo)). Edit mode and the import work in the site's default language;
-a type that keeps working drafts is shown read-only, and its pages' SEO is changed in each page's
-editor, where its draft is. A Single's page is saved on its own, at the version Edit mode read. A
+change SEO](#who-may-change-seo)). Edit mode works in the site's default language; a type that
+keeps working drafts is shown read-only there, and its pages' SEO is changed in each page's
+editor, where its draft is. The import reaches every language and every draft (see below). A Single's page is saved on its own, at the version Edit mode read. A
 Single made in the Schema Builder rather than declared in code is shown read-only, since whether
 it keeps working drafts can't be read from the plugin; change its SEO in its own editor.
 
@@ -1464,23 +1464,44 @@ it keeps working drafts can't be read from the plugin; change its SEO in its own
    pages, how many are the same as the page's automatic value (left empty, so the automatic value
    keeps working), how many a person already typed in the SEO tab (kept as they are), and how many
    are skipped as never served, then each page's title and description with what happens to each.
-   **Import** applies exactly that, in one step: every page and redirect, or, if anything fails
-   part-way, nothing, and the screen says **Nothing was imported** with **Try again**. Once it is
-   applied, the screen says how many values were imported on how many pages, and offers the
-   report, one row per page, to download.
+   A page in several languages, or with a draft beside its published version, gets one row per
+   version (**English · published**, **English · draft**, **Deutsch · published**), each value
+   with its own result. **Import** applies exactly that, in one step: every version and redirect,
+   or, if anything fails part-way, nothing, and the screen says **Nothing was imported** with
+   **Try again**. Once it is applied, the screen says how many values were imported on how many
+   pages, and offers the report, one row per version, to download.
 
-Pages in a file are matched by their address, or by their slug where the file names no address. A
-share image is matched to the media library by its file name.
+Pages in a file are matched by their address, in the language that address is served in, or by
+their slug, in the default language, where the file names no address. A share image is matched to
+the media library by its file name.
+
+### Languages and drafts
+
+One import covers every version of a page a value applies to:
+
+- **Every language.** A translated type's pages, and a translated Single, are read in each of
+  the site's languages, each language's own values only (nothing filled in from another
+  language), and each language's SEO is set from them.
+- **Published and draft.** A page of a type that keeps working drafts is imported into what is
+  published and into the draft waiting beside it, each on its own: a value an editor typed in
+  the draft is kept there, while the published page gets the imported one. The draft stays a
+  draft, and a published page with no draft gets no new one. A page never published is imported
+  into as it is.
+
+A value is only ever written into an empty place, in every version. Every version of a
+collection's page in the default language is written in the import's one step. A Single's page
+and a page in another language cannot be part of it, so each is written first and put back as it
+was when anything after it fails. Where such a published version has a draft waiting, writing it
+would publish the draft with it, so its row says **With the draft**: the draft gets the value and
+takes it live when it is published.
 
 The import is one engine, whichever way it is started: it reads each page as the person
 importing and reports, for every page and every record it passes over, what it would set, what
 is already the same as the page's automatic value, what a person already typed (which it keeps),
 and why it skips one. Run again after an import, it sets nothing, since every place it filled is
-filled. A Single's page cannot be part of the one step, so it is written first and put back as it
-was when anything after it fails. Where a page changed after the dry run, the import is refused
+filled. Where a page changed after the dry run, the import is refused
 and asks for another dry run. Importing needs `manage-seo`, and a page whose SEO you may not
-change is left out and named. It works in the site's default language, and leaves out the pages
-of a type that keeps working drafts, whose SEO is changed in each page's editor.
+change is left out and named.
 
 ## Who may change SEO
 

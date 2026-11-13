@@ -100,7 +100,10 @@ export type ImportSource =
 /** What a dry run and an apply are sent. */
 export interface ImportRequest {
   source: ImportSource;
-  /** The language the values are imported into, where the site has several. */
+  /**
+   * The language a file is read in, where the site has several: the default
+   * one. The import itself reaches every language a page is translated into.
+   */
   locale?: string;
   /** Whether values a page's own code overrides are imported anyway. */
   includeNeverServed?: boolean;
@@ -164,17 +167,31 @@ export interface DryRunLine {
 }
 
 /**
- * What an import does to one page, or to a record it passes over: sets
- * values (`set`), finds every value the same as the page's automatic one
- * (`same`), keeps values a person already typed (`kept`), or skips it, with
- * why (`skipped`).
+ * Which version of a page a row is about: what is published, or a draft,
+ * the working draft waiting beside a published page or a page never
+ * published.
+ */
+export type VersionForm = "published" | "draft";
+
+/**
+ * What an import does to one version of a page, or to a record it passes
+ * over: sets values (`set`), finds every value the same as the page's
+ * automatic one (`same`), keeps values a person already typed (`kept`), or
+ * skips it, with why (`skipped`). A page in several languages, or with a
+ * draft beside its published version, has one entry for each.
  */
 export interface ImportReportEntry {
   /** The page's content type key and id; none for a record matching no page. */
   type?: string;
   id?: string;
-  /** The page's name, or the record's as the source names it. */
+  /** The page's name in this version, or the record's as the source names it. */
   label: string;
+  /** The language of this version, where its type is translated. */
+  locale?: string;
+  /** That language's name. */
+  language?: string;
+  /** Which version of the page this is; none for a record matching no page. */
+  version?: VersionForm;
   outcome: "set" | "same" | "kept" | "skipped";
   /** The places it sets. */
   set: ImportTarget[];
@@ -187,6 +204,18 @@ export interface ImportReportEntry {
    * that value: left out unless the import includes them.
    */
   neverServed: ImportTarget[];
+  /**
+   * The places a published version would get that its waiting draft gets
+   * instead, to take live when it is published: writing the published
+   * version now would publish the draft with it.
+   */
+  withDraft?: ImportTarget[];
+  /**
+   * The places the version would get that are left as they are while a
+   * draft waits beside it, or in it, which can't take them: the import is
+   * run again once the draft is published or discarded.
+   */
+  waiting?: ImportTarget[];
   /** The title and description the source holds for it, as imported. */
   values: Partial<Record<"title" | "description", string>>;
   /** Why it is skipped. */
@@ -204,6 +233,8 @@ export interface DryRunBody {
   lines: DryRunLine[];
   /** How many pages would change. */
   pages: number;
+  /** How many versions of them would change: each language, and each draft. */
+  versions: number;
   /** Values the same as the automatic one, left (or made) automatic. */
   same: number;
   /** Values a person already typed here, which the import keeps. */

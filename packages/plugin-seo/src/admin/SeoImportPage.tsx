@@ -82,12 +82,15 @@ import {
   type ImportTool,
 } from "./import-files";
 import {
+  firstOfPage,
   neverServedWords,
   reportCsv,
   reportedPages,
   resultOf,
   RESULT_WORDS,
+  showsVersions,
   valueCounts,
+  versionWords,
 } from "./import-report";
 import { AdminLink, PAGES_STEP, SeoTrail } from "./section";
 
@@ -781,16 +784,47 @@ function Counts({ run }: { run: DryRunBody }): JSX.Element {
   );
 }
 
-/** The last step: the dry run's counts and each page's result. */
+/** A row's key: its page and its version. */
+function rowKey(row: ImportReportEntry): string {
+  return `${row.type ?? ""}|${row.id ?? row.label}|${row.locale ?? ""}|${row.version ?? ""}`;
+}
+
+/**
+ * The last step: the dry run's counts and each page's result, one row per
+ * version where a page is in several languages or has a draft, its name on
+ * the first of them.
+ */
 function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
+  const rows = reportedPages(run);
+  const versions = showsVersions(rows);
+  const named = new Set(
+    rows.filter((_row, at) => firstOfPage(rows, at)).map(rowKey)
+  );
   const columns: NextlyColumn<ImportReportEntry>[] = [
     {
       name: "page",
       header: "Page",
-      cell: ({ row }) => (
-        <span className="font-medium text-foreground">{row.label}</span>
-      ),
+      cell: ({ row }) =>
+        named.has(rowKey(row)) ? (
+          <span className="font-medium text-foreground">{row.label}</span>
+        ) : (
+          // The page is named on its first row; read aloud on each.
+          <span className="sr-only">{row.label}</span>
+        ),
     },
+    ...(versions
+      ? [
+          {
+            name: "version",
+            header: "Version",
+            cell: ({ row }: { row: ImportReportEntry }) => (
+              <span className="whitespace-nowrap text-foreground">
+                {versionWords(row)}
+              </span>
+            ),
+          },
+        ]
+      : []),
     {
       name: "title",
       header: "Title on Google",
@@ -807,8 +841,8 @@ function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
       <Counts run={run} />
       <DataTableView<ImportReportEntry>
         columns={columns}
-        rows={reportedPages(run)}
-        getRowId={row => `${row.type ?? ""}|${row.id ?? row.label}`}
+        rows={rows}
+        getRowId={rowKey}
         emptyMessage="The source holds no title or description for a page here."
       />
       {run.warnings.length === 0 ? null : (

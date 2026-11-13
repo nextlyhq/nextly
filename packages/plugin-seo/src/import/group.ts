@@ -380,9 +380,25 @@ function groupWarnings(
   return warnings;
 }
 
+/**
+ * The page a record read from `page` goes to: a version's values are its
+ * own, so the record goes to that version where it was read from one.
+ */
+function matchOf(page: ReadPage & { key?: string }): {
+  type: string;
+  id: string;
+  version?: string;
+} {
+  return {
+    type: page.type,
+    id: page.id,
+    ...(page.key === undefined ? {} : { version: page.key }),
+  };
+}
+
 /** Each page's values in `field`, placed as `map` says. */
 export function readGroup(
-  pages: readonly ReadPage[],
+  pages: readonly (ReadPage & { key?: string })[],
   field: string,
   map: Readonly<Record<string, ImportTarget>>
 ): ParsedSource {
@@ -407,7 +423,7 @@ export function readGroup(
     }
     records.push({
       label: page.label,
-      match: { page: { type: page.type, id: page.id } },
+      match: { page: matchOf(page) },
       values,
     });
   }

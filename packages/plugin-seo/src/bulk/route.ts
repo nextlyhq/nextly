@@ -95,8 +95,9 @@ export function asCaller(ctx: PluginRouteContext): ServiceOpts {
 /**
  * The language a request names, where it is the site's default, or a
  * refusal: a write on a transaction is made in the default language, so
- * the table and the import read and write in it alone, rather than read one
- * language and write another.
+ * the table reads and writes in it alone, rather than read one language and
+ * write another; an import reads its source in it, and reaches every
+ * language itself (`import/versions`).
  */
 export async function defaultLanguageOnly(
   ctx: PluginContext,
@@ -108,7 +109,7 @@ export async function defaultLanguageOnly(
   if (locale === (await ctx.publicAddresses.defaultLanguage())) return locale;
   throw NextlyError.invalidInput({
     message:
-      "Bulk edit and imports work in the site's default language. Edit other languages' SEO on each page.",
+      "Bulk edit works in the site's default language. Edit other languages' SEO on each page.",
     logContext: { reason: "seo-bulk-not-default-language", locale },
   });
 }
@@ -133,7 +134,16 @@ export async function writablePages(
   ctx: PluginRouteContext,
   type: string,
   ids: readonly string[],
-  options: { locale?: string | undefined; pagePermissions: boolean }
+  options: {
+    locale?: string | undefined;
+    pagePermissions: boolean;
+    /**
+     * Whether the caller writes each version of a page itself, its working
+     * draft included, as the import does: a type keeping drafts is then
+     * asked like any other.
+     */
+    versions?: boolean;
+  }
 ): Promise<Set<string>> {
   const writable = new Set<string>();
   const caller = ctx.caller;
@@ -145,7 +155,9 @@ export async function writablePages(
   // A published page of a type keeping working drafts holds its pending
   // edits in a draft these reads do not see, so its SEO is changed in its
   // own editor, where the draft is, and is read-only here.
-  if (await keepsDrafts(ctx, type)) return writable;
+  if (options.versions !== true && (await keepsDrafts(ctx, type))) {
+    return writable;
+  }
   const identity = await caller.identity();
   const language =
     options.locale === undefined ? {} : { locale: options.locale };
@@ -327,7 +339,7 @@ function storedForm(value: unknown): string {
 }
 
 /** Refuse where a value sent into the group is not what was stored. */
-function refuseDroppedValues(
+export function refuseDroppedValues(
   saved: unknown,
   values: Readonly<Record<string, unknown>>,
   id: string
@@ -366,7 +378,7 @@ export function refusalAbout(error: unknown, label: string): unknown {
  * a value inside the group the person may not read is written back as it
  * was rather than dropped. The person's own rules still judge the write.
  */
-export function asStored(locale: string | undefined): ServiceOpts {
+function asStored(locale: string | undefined): ServiceOpts {
   return { as: "system", ...(locale === undefined ? {} : { locale }) };
 }
 
@@ -408,7 +420,7 @@ async function storedPages(
  * version its page was read at, which refuses it where the page has changed
  * since.
  */
-export async function readStored(
+async function readStored(
   ctx: PluginContext,
   type: string,
   ids: readonly string[],

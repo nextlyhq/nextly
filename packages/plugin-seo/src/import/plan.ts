@@ -1,22 +1,26 @@
 /**
  * An import worked out and, once confirmed, applied.
  *
- * Working it out reads the source, matches each of its records to a page
- * here, and decides each page's new `seo` values, changing nothing: that is
- * the dry run. A value is written only into an empty place: a value a person
- * already typed here is kept, and one the same as what the page would show
- * automatically is left automatic, so a later change to a pattern still
- * reaches it. The plugin's own group, as an earlier version of the plugin
- * stored it, is the one case that rewrites typed values, and only those the
- * same as the automatic one, which become automatic.
+ * Working it out reads every version of each page (`import/versions`): each
+ * language its type is translated into, what is published there and the
+ * working draft waiting beside it. It matches each of the source's records
+ * to versions here, and decides each version's new `seo` values on its own,
+ * changing nothing: that is the dry run. A value is written only into an
+ * empty place: a value a person already typed here, in that version, is
+ * kept, and one the same as what the version would show automatically is
+ * left automatic, so a later change to a pattern still reaches it. The
+ * plugin's own group, as an earlier version of the plugin stored it, is the
+ * one case that rewrites typed values, and only those the same as the
+ * automatic one, which become automatic.
  *
  * Applying works the import out again and refuses unless it is exactly the
- * one the dry run showed (`plan`, a digest of every change and each page's
- * version), then writes every page and adds every redirect in one
- * transaction: in full, or, where anything is refused part-way, not at all.
- * A Single cannot join that transaction, so each Single's page is written
- * first, as a step of its own, and put back as it was where any later step
- * is refused.
+ * one the dry run showed (`plan`, a digest of every change and each
+ * version's revision), then writes every version of a collection's page in
+ * the default language, and adds every redirect, in one transaction: in
+ * full, or, where anything is refused part-way, not at all. A Single's page
+ * and a page in another language cannot join that transaction, so each is
+ * written first, as a step of its own, and put back as it was where any
+ * later step is refused.
  *
  * The engine holds no request and draws nothing: `planImport(engine, args)`
  * and `applyImport(plan)` take the site's context and who the import is made
@@ -31,32 +35,31 @@
 import { createHash } from "node:crypto";
 
 import {
+  getCachedNextly,
   NextlyError,
   type ParticipantTransaction,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { readEveryPage, typeNamesOf, type ReadPage } from "../bulk/pages";
 import {
-  keepsDrafts,
-  readEveryPage,
-  typeNamesOf,
-  type ReadPage,
-} from "../bulk/pages";
-import {
-  asStored,
-  readStored,
   refusalAbout,
+  refuseDroppedValues,
   refuseIfNotStored,
-  saveSingleSeo,
   seoWith,
 } from "../bulk/route";
-import { restoreSingleSeo, singleDeclaration } from "../bulk/singles";
+import {
+  SINGLE_AS_STORED,
+  singleDeclaration,
+  writeSingleSeo,
+  type SingleAccess,
+} from "../bulk/singles";
 import { productionAddressesOf, typedCanonical } from "../canonical";
 import { writeConnections } from "../connections/store";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import { pageTypeOf } from "../problems/page-types";
-import { keptFrom, originBeside } from "../redirects/served";
+import { keptFrom, originBeside, servedOf } from "../redirects/served";
 import { putRedirect } from "../redirects/store";
 import { resolveOrder } from "../resolver/order";
 import type { SiteRules } from "../resolver/page-levels";
@@ -72,6 +75,7 @@ import type {
   ImportReportEntry,
   ImportSource,
   ImportTarget,
+  VersionForm,
 } from "./contract";
 import { declaresOtherGroups, groupsOf, OWN_FIELDS, readGroup } from "./group";
 import { readFile } from "./read-file";
@@ -87,6 +91,13 @@ import {
   type ParsedSource,
   type TemplateValues,
 } from "./records";
+import {
+  everyVersion,
+  pageKey,
+  type LeftOut,
+  type ReadVersion,
+  type VersionWrite,
+} from "./versions";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -129,15 +140,28 @@ const TEXT_PLACES = [
   "canonical",
 ] as const;
 
-/** One page's change. */
+/** One version of a page, and its change. */
 export interface PlannedPage {
   type: string;
   id: string;
   label: string;
   rev?: string;
+  /** The version's own key: its page, its language and its form. */
+  key: string;
+  /** The language it is in, where its type is translated. */
+  locale?: string;
+  /** That language's name. */
+  language?: string;
+  form: VersionForm;
+  /** How its write reaches it (`import/versions`). */
+  write: VersionWrite;
+  /** Whether it is written on the import's one transaction. */
+  inTransaction: boolean;
+  /** Why the import leaves it as it is, where it must (`import/versions`). */
+  leftOut?: LeftOut;
   /** The values written into its `seo` group. */
   writes: Record<string, unknown>;
-  /** Its `seo` group as stored, which the writes go over. */
+  /** Its `seo` group as stored, read as the site, which the writes go over. */
   seo: Record<string, unknown>;
   /** The places it changes. */
   places: ImportTarget[];
@@ -195,7 +219,11 @@ export interface PlanImportArgs {
    * source's own `map`, else where each field's name says it goes.
    */
   mapping?: Readonly<Record<string, ImportTarget>>;
-  /** The language the values are imported into: the site's default one. */
+  /**
+   * The language a file is read in, and redirects are kept in where their
+   * address names none: the site's default one. The values themselves go
+   * into every language each page is translated into (`import/versions`).
+   */
   locale?: string;
   /**
    * Whether values a page's own code overrides, which never reached it, are
@@ -209,10 +237,10 @@ export interface PlanImportArgs {
 export interface ImportPlan {
   /** What a dry run shows, its per-page report and its digest included. */
   body: DryRunBody;
-  /** The pages it changes, each with its writes. */
+  /** The versions it changes, each with its writes. */
   pages: PlannedPage[];
   redirects: PlannedRedirect[];
-  /** The language it writes in. */
+  /** The default language: a file is read in it, and redirects kept in it. */
   locale: string;
   /** What it was worked out with, which its apply writes with. */
   engine: ImportEngine;
@@ -417,36 +445,80 @@ function refusedAsInput(read: () => ParsedSource): ParsedSource {
   }
 }
 
-/** The pages each record could be, by address and by slug. */
-function matcher(pages: readonly ReadPage[]) {
-  const byKey = new Map<string, ReadPage>();
-  const byPath = new Map<string, ReadPage[]>();
-  const bySlug = new Map<string, ReadPage[]>();
-  for (const page of pages) {
-    byKey.set(`${page.type}|${page.id}`, page);
-    // Read as a file's address is, decoded and without a trailing slash,
-    // so `/blog/caf%C3%A9` here meets `/blog/café/` there.
-    const path = pathOfAddress(page.path);
-    if (path !== undefined) {
-      byPath.set(path, [...(byPath.get(path) ?? []), page]);
-    }
-    if (page.slug !== undefined) {
-      bySlug.set(page.slug, [...(bySlug.get(page.slug) ?? []), page]);
+/** What a record was matched to: a page's versions, more than one page, or none. */
+type Found = ReadVersion[] | "ambiguous" | undefined;
+
+/** A page in one language: every form of it there is one place for a record. */
+const placeOf = (version: ReadVersion) =>
+  `${version.type}|${version.id}|${version.locale ?? ""}`;
+
+/**
+ * The address a version is served at, as a file's address is read: decoded
+ * and without a trailing slash, in its own language (a translated page's
+ * address carries its language's prefix or domain).
+ */
+async function servedPath(version: ReadVersion): Promise<string | undefined> {
+  if (version.path === undefined) return undefined;
+  if (version.locale === undefined) return pathOfAddress(version.path);
+  return pathOfAddress(await servedOf(version.path, version.locale));
+}
+
+/** Adds `place` to the places found at `at`. */
+function index(map: Map<string, Set<string>>, at: string, place: string): void {
+  map.set(at, new Set([...(map.get(at) ?? []), place]));
+}
+
+/**
+ * The versions each record could be: the one version a field group was read
+ * from, or every form of the page in the language its address is served in,
+ * or, by slug, in the default language.
+ */
+async function matcher(
+  versions: readonly ReadVersion[],
+  defaultLocale: string | undefined
+): Promise<(record: ImportedRecord) => Found> {
+  const byKey = new Map<string, ReadVersion>();
+  const places = new Map<string, ReadVersion[]>();
+  const byPath = new Map<string, Set<string>>();
+  const bySlug = new Map<string, Set<string>>();
+  for (const version of versions) {
+    byKey.set(version.key, version);
+    const place = placeOf(version);
+    places.set(place, [...(places.get(place) ?? []), version]);
+    const path = await servedPath(version);
+    if (path !== undefined) index(byPath, path, place);
+    const inDefault =
+      version.locale === undefined || version.locale === defaultLocale;
+    if (version.slug !== undefined && inDefault) {
+      index(bySlug, version.slug, place);
     }
   }
-  return (record: ImportedRecord): ReadPage | "ambiguous" | undefined => {
+  const one = (found: ReadonlySet<string> | undefined): Found => {
+    if (found === undefined || found.size === 0) return undefined;
+    if (found.size > 1) return "ambiguous";
+    const [only] = found;
+    return only === undefined ? undefined : places.get(only);
+  };
+  return record => {
     const { match } = record;
     if (match.page !== undefined) {
-      return byKey.get(`${match.page.type}|${match.page.id}`);
+      const { type, id, version } = match.page;
+      if (version !== undefined) {
+        const found = byKey.get(version);
+        return found === undefined ? undefined : [found];
+      }
+      const list = versions.filter(
+        each =>
+          each.type === type &&
+          each.id === id &&
+          (each.locale === undefined || each.locale === defaultLocale)
+      );
+      return list.length === 0 ? undefined : list;
     }
     const atPath =
-      match.path === undefined ? [] : (byPath.get(match.path) ?? []);
-    if (atPath.length === 1) return atPath[0];
-    if (atPath.length > 1) return "ambiguous";
-    const withSlug =
-      match.slug === undefined ? [] : (bySlug.get(match.slug) ?? []);
-    if (withSlug.length === 1) return withSlug[0];
-    return withSlug.length > 1 ? "ambiguous" : undefined;
+      match.path === undefined ? undefined : byPath.get(match.path);
+    if (atPath !== undefined) return one(atPath);
+    return one(match.slug === undefined ? undefined : bySlug.get(match.slug));
   };
 }
 
@@ -546,7 +618,10 @@ function ownAddress(
   return onSite && trim(url.pathname) === trim(page.path);
 }
 
-/** The digest an apply is held to: every change, and each page's version. */
+/**
+ * The digest an apply is held to: every change, each version it goes into
+ * and how, and the revision each was read at.
+ */
 function planDigest(
   locale: string | undefined,
   pages: readonly PlannedPage[],
@@ -557,8 +632,8 @@ function planDigest(
   for (const page of pages) {
     hash.update(
       JSON.stringify([
-        page.type,
-        page.id,
+        page.key,
+        page.write,
         page.rev ?? null,
         page.seo,
         page.writes,
@@ -979,11 +1054,35 @@ function redirectOf(
   };
 }
 
-/** Match each record to its page and decide its changes. */
+/** A version and what was decided for it, as the plan keeps it. */
+function plannedOf(version: ReadVersion, decision: Decision): PlannedPage {
+  return {
+    type: version.type,
+    id: version.id,
+    label: version.label,
+    ...(version.rev === undefined ? {} : { rev: version.rev }),
+    key: version.key,
+    ...(version.locale === undefined ? {} : { locale: version.locale }),
+    ...(version.language === undefined ? {} : { language: version.language }),
+    form: version.form,
+    write: version.write,
+    inTransaction: version.inTransaction,
+    ...(version.leftOut === undefined ? {} : { leftOut: version.leftOut }),
+    writes: decision.writes,
+    seo: version.stored,
+    places: decision.places,
+    same: decision.same,
+    kept: decision.kept,
+    neverServed: decision.neverServed,
+    values: decision.values,
+  };
+}
+
+/** Match each record to its versions and decide each one's changes. */
 function matchRecords(
   records: readonly ImportedRecord[],
-  find: ReturnType<typeof matcher>,
-  decideFor: (record: ImportedRecord, page: ReadPage) => Decision
+  find: (record: ImportedRecord) => Found,
+  decideFor: (record: ImportedRecord, version: ReadVersion) => Decision
 ): Matched {
   const skipped: Skipped = {
     unmatched: [],
@@ -994,34 +1093,27 @@ function matchRecords(
   const planned = new Map<string, PlannedPage>();
   const redirects: AskedRedirect[] = [];
   for (const record of records) {
-    const page = find(record);
+    const found = find(record);
     // A redirect from the record's own address is tried by the redirect
     // rules, which refuse one from an address a published page holds; the
     // record's values still go to the page it matched, wherever that is now.
     const redirect = redirectOf(record, skipped);
     if (redirect !== undefined) redirects.push(redirect);
-    if (page === undefined) {
+    if (found === undefined) {
       if (record.match.page === undefined && redirect === undefined) {
         skipped.unmatched.push(record.label);
       }
-    } else if (page === "ambiguous") skipped.ambiguous.push(record.label);
-    else if (planned.has(`${page.type}|${page.id}`)) {
+    } else if (found === "ambiguous") skipped.ambiguous.push(record.label);
+    else if (found.some(version => planned.has(version.key))) {
       skipped.repeated.push(record.label);
     } else {
-      const decision = decideFor(record, page);
-      planned.set(`${page.type}|${page.id}`, {
-        type: page.type,
-        id: page.id,
-        label: page.label,
-        ...(page.rev === undefined ? {} : { rev: page.rev }),
-        writes: decision.writes,
-        seo: page.seo,
-        places: decision.places,
-        same: decision.same,
-        kept: decision.kept,
-        neverServed: decision.neverServed,
-        values: decision.values,
-      });
+      // Each version keeps values of its own, so each is decided on its own.
+      for (const version of found) {
+        planned.set(
+          version.key,
+          plannedOf(version, decideFor(record, version))
+        );
+      }
     }
   }
   return { planned: [...planned.values()], redirects, skipped };
@@ -1077,6 +1169,11 @@ function warningsOf(skipped: Skipped, tally: Tally): string[] {
   return lines.filter(([n]) => n > 0).map(([n, say]) => say(n));
 }
 
+/** How many pages `versions` are of, each counted once whatever its versions. */
+function pagesIn(versions: readonly PlannedPage[]): number {
+  return new Set(versions.map(pageKey)).size;
+}
+
 /** Each place the import fills, from where, and on how many pages. */
 function linesOf(
   changing: readonly PlannedPage[],
@@ -1086,70 +1183,78 @@ function linesOf(
     .map(target => ({
       target: target as ImportTarget,
       from: from[target] ?? [],
-      pages: changing.filter(page => page.places.includes(target)).length,
+      pages: pagesIn(changing.filter(page => page.places.includes(target))),
     }))
     .filter(line => line.pages > 0 || line.from.length > 0);
 }
 
 /**
- * The pages of `changing` the caller may change the SEO of, and the names of
- * those they may not, which the import leaves out.
+ * The versions of `changing` the caller may change the SEO of, and those
+ * they may not, which the import leaves out: asked of each type in each
+ * language, since a rule may answer one language and not another.
  */
 async function writableOf(
   engine: ImportEngine,
-  changing: readonly PlannedPage[],
-  locale: string | undefined
-): Promise<{
-  writable: PlannedPage[];
-  refused: PlannedPage[];
-  drafted: PlannedPage[];
-}> {
+  changing: readonly PlannedPage[]
+): Promise<{ writable: PlannedPage[]; refused: PlannedPage[] }> {
+  const where = (page: PlannedPage) => `${page.type}|${page.locale ?? ""}`;
   const allowed = new Set<string>();
-  const drafting = new Set<string>();
-  for (const type of new Set(changing.map(page => page.type))) {
-    if (await keepsDrafts(engine.ctx, type)) drafting.add(type);
+  const asked = new Map<string, PlannedPage[]>();
+  for (const page of changing) {
+    asked.set(where(page), [...(asked.get(where(page)) ?? []), page]);
   }
-  for (const type of new Set(changing.map(page => page.type))) {
-    const ids = changing
-      .filter(page => page.type === type)
-      .map(page => page.id);
-    for (const id of await engine.actor.writable(type, ids, locale)) {
-      allowed.add(`${type}|${id}`);
+  for (const [at, pages] of asked) {
+    const [first] = pages;
+    if (first === undefined) continue;
+    const ids = [...new Set(pages.map(page => page.id))];
+    for (const id of await engine.actor.writable(
+      first.type,
+      ids,
+      first.locale
+    )) {
+      allowed.add(`${at}|${id}`);
     }
   }
-  const may = (page: PlannedPage) => allowed.has(`${page.type}|${page.id}`);
-  const left = changing.filter(page => !may(page));
+  const may = (page: PlannedPage) => allowed.has(`${where(page)}|${page.id}`);
   return {
     writable: changing.filter(may),
-    refused: left.filter(page => !drafting.has(page.type)),
-    drafted: left.filter(page => drafting.has(page.type)),
+    refused: changing.filter(page => !may(page)),
   };
 }
 
-/** Why a record or a page is passed over, in the report's words. */
+/** Why a record or a version is passed over, in the report's words. */
 const SKIPPED = {
   unmatched: "Not on this site.",
   ambiguous: "Matches more than one page here.",
   repeated: "Named more than once; the first is used.",
   refused: "You may not change this page's SEO.",
-  drafted: "Its type keeps drafts: change its SEO in its own editor.",
+  withDraft:
+    "Its draft gets these values, and takes them live when it's published: writing this version now would publish the draft.",
+  untilDraftDone:
+    "A draft waits beside it, and writing this version now would publish the draft. Import again once the draft is published or discarded.",
+  draftInLanguage:
+    "A draft in a language other than the default can't take imported values yet. Import again once the draft is published or discarded.",
   empty: "The source holds no value for this page.",
   neverServed:
     "Never served: the page's own code sets these values, so they never reached it.",
 } as const;
 
 /**
- * What the import does to each page it read, and each record it passed
+ * What the import does to each version it read, and each record it passed
  * over: what it sets, what is the same as automatic, what a person already
- * typed and keeps, and why one is skipped.
+ * typed and keeps, what goes live with a draft, and why one is skipped.
  */
 function reportOf(
   planned: readonly PlannedPage[],
   skipped: Skipped,
-  left: { refused: readonly PlannedPage[]; drafted: readonly PlannedPage[] }
+  left: { refused: readonly PlannedPage[]; waiting: readonly PlannedPage[] }
 ): ImportReportEntry[] {
   const refused = new Set(left.refused);
-  const drafted = new Set(left.drafted);
+  const waiting = new Set(left.waiting);
+  const leftAs = (page: PlannedPage) =>
+    page.leftOut === "withDraft"
+      ? { withDraft: [...page.places] }
+      : { waiting: [...page.places] };
   const entry = (
     page: PlannedPage,
     outcome: ImportReportEntry["outcome"],
@@ -1158,17 +1263,31 @@ function reportOf(
     type: page.type,
     id: page.id,
     label: page.label,
+    ...(page.locale === undefined ? {} : { locale: page.locale }),
+    ...(page.language === undefined ? {} : { language: page.language }),
+    version: page.form,
     outcome,
     set: outcome === "set" ? [...page.places] : [],
     same: [...page.same],
     kept: [...page.kept],
     neverServed: [...page.neverServed],
+    ...(waiting.has(page) ? leftAs(page) : {}),
     values: { ...page.values },
     ...(reason === undefined ? {} : { reason }),
   });
-  const pages = planned.map(page => {
+  // A page's versions side by side, in the order its first one was read.
+  const first = new Map<string, number>();
+  for (const [at, page] of planned.entries()) {
+    if (!first.has(pageKey(page))) first.set(pageKey(page), at);
+  }
+  const byPage = [...planned].sort(
+    (a, b) => (first.get(pageKey(a)) ?? 0) - (first.get(pageKey(b)) ?? 0)
+  );
+  const pages = byPage.map(page => {
     if (refused.has(page)) return entry(page, "skipped", SKIPPED.refused);
-    if (drafted.has(page)) return entry(page, "skipped", SKIPPED.drafted);
+    if (waiting.has(page) && page.leftOut !== undefined) {
+      return entry(page, "skipped", SKIPPED[page.leftOut]);
+    }
     if (page.places.length > 0) return entry(page, "set");
     if (page.kept.length > 0) return entry(page, "kept");
     if (page.same.length > 0) return entry(page, "same");
@@ -1205,35 +1324,17 @@ function filledValue(value: unknown): boolean {
 }
 
 /**
- * Each page's `seo` fields that hold a value its reader was not shown: read
- * as stored, and compared with the reader's own read, so where a field rule
- * hides a value, the place is known to be filled without the value itself
- * being read into the dry run.
+ * A version's `seo` fields that hold a value its reader was not shown: its
+ * group as the site stores it, beside the reader's own read, so where a
+ * field rule hides a value, the place is known to be filled without the
+ * value itself being read into the dry run.
  */
-async function unreadableFields(
-  ctx: PluginContext,
-  pages: readonly ReadPage[],
-  locale: string | undefined
-): Promise<Map<string, Set<string>>> {
-  const found = new Map<string, Set<string>>();
-  for (const type of new Set(pages.map(page => page.type))) {
-    const ofType = pages.filter(page => page.type === type);
-    const stored = await readStored(
-      ctx,
-      type,
-      ofType.map(page => page.id),
-      asStored(locale)
-    );
-    for (const page of ofType) {
-      const group = stored.get(page.id)?.[SEO_GROUP];
-      if (!isRecord(group)) continue;
-      const hidden = Object.keys(group).filter(
-        name => filledValue(group[name]) && !(name in page.seo)
-      );
-      if (hidden.length > 0) found.set(`${type}|${page.id}`, new Set(hidden));
-    }
-  }
-  return found;
+function unreadableOf(version: ReadVersion): Set<string> {
+  return new Set(
+    Object.keys(version.stored).filter(
+      name => filledValue(version.stored[name]) && !(name in version.seo)
+    )
+  );
 }
 
 /** The origin a path from the root is read on where the site names none. */
@@ -1312,10 +1413,41 @@ async function mappingOf(
   );
 }
 
+/** What the person should know about versions the import leaves out. */
+function leftOutWarnings(
+  notYours: readonly PlannedPage[],
+  waiting: readonly PlannedPage[]
+): string[] {
+  const warnings: string[] = [];
+  if (notYours.length > 0) {
+    const n = pagesIn(notYours);
+    warnings.push(
+      `${count(n, "page")} would change, but you may not change ${either(n, "its", "their")} SEO, so ${either(n, "it is", "they are")} left out: ${someOf([...new Set(notYours.map(page => page.label))])}.`
+    );
+  }
+  const labels = (pages: readonly PlannedPage[]) =>
+    someOf([...new Set(pages.map(page => page.label))]);
+  const withDraft = waiting.filter(page => page.leftOut === "withDraft");
+  if (withDraft.length > 0) {
+    const n = pagesIn(withDraft);
+    warnings.push(
+      `${count(n, "page")} ${either(n, "has a draft", "have drafts")} waiting beside what is published. The ${either(n, "draft gets", "drafts get")} the values, which go live when ${either(n, "it is", "they are")} published: ${labels(withDraft)}.`
+    );
+  }
+  const later = waiting.filter(page => page.leftOut !== "withDraft");
+  if (later.length > 0) {
+    const n = pagesIn(later);
+    warnings.push(
+      `${count(n, "page")} ${either(n, "has a draft", "have drafts")} waiting in a language other than the default, so ${either(n, "its", "their")} values there are left as they are: ${labels(later)}. Import again once the ${either(n, "draft is", "drafts are")} published or discarded.`
+    );
+  }
+  return warnings;
+}
+
 /**
  * The import `args` asks for, worked out and changing nothing: what each
- * page would be set to, what each is left as and why, and the redirects it
- * adds. `applyImport` writes exactly this.
+ * version of each page would be set to, what each is left as and why, and
+ * the redirects it adds. `applyImport` writes exactly this.
  */
 export async function planImport(
   engine: ImportEngine,
@@ -1330,12 +1462,14 @@ export async function planImport(
     await readableTypes(engine, args.types),
     source
   );
-  const pages = await everyPage(engine, types, locale, rules);
+  // Every language of every page, published and waiting as a draft.
+  const versions = await everyVersion(ctx, actor, types, language =>
+    setup.readRules(ctx, language)
+  );
   const defaultLanguage =
     locale ?? (await ctx.publicAddresses.defaultLanguage());
-  const mapping = await mappingOf(ctx, args, types, pages);
-  const parsed = parsedSource(source, mapping, pages, defaultLanguage);
-  const unreadable = await unreadableFields(ctx, pages, locale);
+  const mapping = await mappingOf(ctx, args, types, versions);
+  const parsed = parsedSource(source, mapping, versions, defaultLanguage);
   const own = source.kind === "group" && source.field === SEO_GROUP;
   const templates = templatesOf(rules);
   const origins = productionAddressesOf(rules.productionAddresses);
@@ -1356,29 +1490,26 @@ export async function planImport(
   };
   const matched = matchRecords(
     parsed.records,
-    matcher(pages),
-    (record, page) =>
+    await matcher(versions, ctx.config.localization?.defaultLocale),
+    (record, version) =>
       own
-        ? tidyOwn(page, tally)
+        ? tidyOwn(version, tally)
         : decide(
             record,
-            page,
+            version,
             templates,
             images,
             tally,
             origins,
-            unreadable.get(`${page.type}|${page.id}`) ?? new Set(),
+            unreadableOf(version),
             args.includeNeverServed === true
           )
   );
-  const {
-    writable: changing,
-    refused: notYours,
-    drafted,
-  } = await writableOf(
+  const wanting = matched.planned.filter(page => page.places.length > 0);
+  const waiting = wanting.filter(page => page.leftOut !== undefined);
+  const { writable: changing, refused: notYours } = await writableOf(
     engine,
-    matched.planned.filter(page => page.places.length > 0),
-    locale
+    wanting.filter(page => page.leftOut === undefined)
   );
   // Not looked for, so not said to be missing from the library either.
   if (!mayReadMedia) tally.missingImages = 0;
@@ -1388,16 +1519,7 @@ export async function planImport(
       "You may not read the media library, so the share images in the file can't be matched to it."
     );
   }
-  if (notYours.length > 0) {
-    warnings.push(
-      `${count(notYours.length, "page")} would change, but you may not change ${either(notYours.length, "its", "their")} SEO, so ${either(notYours.length, "it is", "they are")} left out: ${someOf(notYours.map(page => page.label))}.`
-    );
-  }
-  if (drafted.length > 0) {
-    warnings.push(
-      `${count(drafted.length, "page")} would change, but ${either(drafted.length, "its type keeps", "their types keep")} drafts, so ${either(drafted.length, "its", "their")} SEO is changed in ${either(drafted.length, "its", "each page's")} own editor and ${either(drafted.length, "it is", "they are")} left out: ${someOf(drafted.map(page => page.label))}.`
-    );
-  }
+  warnings.push(...leftOutWarnings(notYours, waiting));
   const placed = await placeRedirects(
     ctx,
     matched.redirects,
@@ -1417,16 +1539,20 @@ export async function planImport(
     engine,
     args,
     body: {
-      checked: source.kind === "group" ? pages.length : parsed.records.length,
+      checked:
+        source.kind === "group"
+          ? new Set(versions.map(pageKey)).size
+          : parsed.records.length,
       fromFile: source.kind !== "group",
       held: parsed.records.filter(
         record => Object.keys(record.values).length > 0
       ).length,
       lines: linesOf(changing, parsed.from),
-      pages: changing.length,
+      pages: pagesIn(changing),
+      versions: changing.length,
       same: tally.same,
       kept: tally.kept,
-      // Counted from the pages' own decisions, the list the report shows.
+      // Counted from the versions' own decisions, the list the report shows.
       neverServed: matched.planned.reduce(
         (sum, page) => sum + page.neverServed.length,
         0
@@ -1436,7 +1562,7 @@ export async function planImport(
       warnings,
       documents: reportOf(matched.planned, matched.skipped, {
         refused: notYours,
-        drafted,
+        waiting,
       }),
       plan: planDigest(locale, changing, kept),
     },
@@ -1451,44 +1577,82 @@ function redirectRefusal(redirect: PlannedRedirect, why: string): NextlyError {
   });
 }
 
+/** The revision each page was last written at, in each language, as an apply goes. */
+type Revs = Map<string, string | undefined>;
+
+/** Where a page's revision is kept in `Revs`. */
+const revKey = (page: PlannedPage) =>
+  `${page.type}|${page.id}|${page.locale ?? ""}`;
+
+/** The revision a version's write names: the last one written, else the one read. */
+function revFor(revs: Revs, page: PlannedPage): string | undefined {
+  return revs.has(revKey(page)) ? revs.get(revKey(page)) : page.rev;
+}
+
+/** The version's data a write sends, with `seo` its group. */
+function versionData(
+  page: PlannedPage,
+  seo: Record<string, unknown>,
+  rev: string | undefined
+): Record<string, unknown> {
+  return {
+    [SEO_GROUP]: seo,
+    // A published page of a type keeping drafts is written naming its state,
+    // or the write would be held as a new draft.
+    ...(page.write === "live" ? { status: "published" } : {}),
+    ...(rev === undefined ? { _overwrite: true } : { _rev: rev }),
+  };
+}
+
+/** Each page's published version before its draft, so the draft is written last. */
+function inOrder(pages: readonly PlannedPage[]): PlannedPage[] {
+  return [...pages].sort(
+    (a, b) => Number(a.write === "held") - Number(b.write === "held")
+  );
+}
+
 /**
- * Write every page's changes and add every redirect on `transaction`. Any
- * refusal is thrown, which undoes everything written before it.
+ * Write every version's changes that go on `transaction` (a collection's,
+ * in the default language) and add every redirect. Any refusal is thrown,
+ * which undoes everything written before it.
  */
 async function writeAll(
   transaction: Transaction,
   plan: ImportPlan,
-  stored: ReadonlyMap<string, Record<string, unknown>>
+  revs: Revs
 ): Promise<void> {
   const { ctx, actor } = plan.engine;
-  // Written as the actor, in the language the import was asked for.
-  const { locale } = plan.args;
-  const as = { ...actor.as, ...(locale === undefined ? {} : { locale }) };
-  for (const page of plan.pages) {
-    // A Single's page is written before the transaction (`writeSingles`).
-    if (pageTypeOf(page.type).kind === "single") continue;
-    // Written over the group as stored, every value the person may not
-    // read kept as it was.
-    const group = stored.get(`${page.type}|${page.id}`)?.[SEO_GROUP];
+  for (const page of inOrder(plan.pages.filter(each => each.inTransaction))) {
+    // Written as the actor, in the version's language.
+    const as = {
+      ...actor.as,
+      ...(page.locale === undefined ? {} : { locale: page.locale }),
+    };
     try {
-      await ctx.services.collections.updateEntryInTransaction(
+      // Over the group as stored, every value the person may not read
+      // kept as it was.
+      const saved = await ctx.services.collections.updateEntryInTransaction(
         transaction,
         page.type,
         page.id,
-        {
-          [SEO_GROUP]: seoWith(group, page.writes),
-          ...(page.rev === undefined
-            ? { _overwrite: true }
-            : { _rev: page.rev }),
-        },
+        versionData(page, seoWith(page.seo, page.writes), revFor(revs, page)),
         as
       );
-      await refuseIfNotStored(
-        ctx,
-        transaction,
-        { type: page.type, id: page.id, locale: plan.locale },
-        page.writes
+      revs.set(
+        revKey(page),
+        typeof saved._rev === "string" ? saved._rev : undefined
       );
+      if (page.write === "held") {
+        // A held save answers with the draft it holds, as stored.
+        refuseDroppedValues(saved, page.writes, page.id);
+      } else {
+        await refuseIfNotStored(
+          ctx,
+          transaction,
+          { type: page.type, id: page.id, locale: page.locale ?? plan.locale },
+          page.writes
+        );
+      }
     } catch (error) {
       throw refusalAbout(error, page.label);
     }
@@ -1506,67 +1670,129 @@ async function writeAll(
   }
 }
 
-/** A Single's page as written, with its group as it was stored before. */
-interface WrittenSingle {
-  type: string;
-  before: unknown;
-  rev: string | undefined;
+/** The Direct API a version written as a step of its own reads back with. */
+interface StepReads {
+  findByID(args: Record<string, unknown>): Promise<unknown>;
+  findSingle(args: Record<string, unknown>): Promise<unknown>;
 }
 
-/** Put each written Single back as it was, newest first. */
-async function restoreSingles(
-  ctx: PluginContext,
-  written: readonly WrittenSingle[],
-  locale: string
+/** A version as the site stores it, in its own language and form. */
+async function storedVersion(page: PlannedPage): Promise<unknown> {
+  const api = (await getCachedNextly()) as unknown as StepReads;
+  const type = pageTypeOf(page.type);
+  const read = {
+    ...SINGLE_AS_STORED,
+    status: "all",
+    depth: 0,
+    ...(page.write === "held" ? { draft: true } : {}),
+    ...(page.locale === undefined
+      ? {}
+      : { locale: page.locale, fallbackLocale: false }),
+  };
+  return type.kind === "single"
+    ? api.findSingle({ slug: type.slug, createIfMissing: false, ...read })
+    : api.findByID({ collection: type.slug, id: page.id, ...read });
+}
+
+/**
+ * Write one version with `seo` as its group, as `who` (the actor, or the
+ * site putting it back), outside the transaction: a Single's page, or a
+ * collection's page in a language other than the default. Answers the
+ * revision it was written at.
+ */
+async function writeVersion(
+  plan: ImportPlan,
+  page: PlannedPage,
+  seo: Record<string, unknown>,
+  rev: string | undefined,
+  who: "actor" | "site"
+): Promise<string | undefined> {
+  const { ctx, actor } = plan.engine;
+  const type = pageTypeOf(page.type);
+  if (type.kind === "single") {
+    const access: SingleAccess =
+      who === "actor" ? actor.single : SINGLE_AS_STORED;
+    return writeSingleSeo(
+      type.slug,
+      access,
+      page.locale,
+      seo,
+      rev,
+      page.write === "live" ? { status: "published" } : {}
+    );
+  }
+  const as = who === "actor" ? actor.as : { as: "system" as const };
+  const saved = await ctx.services.collections.updateEntry(
+    page.type,
+    page.id,
+    versionData(page, seo, rev),
+    { ...as, ...(page.locale === undefined ? {} : { locale: page.locale }) }
+  );
+  const next = (saved.item as { _rev?: unknown } | undefined)?._rev;
+  return typeof next === "string" ? next : undefined;
+}
+
+/** A version written as a step of its own, which a later refusal puts back. */
+type Written = PlannedPage[];
+
+/**
+ * Write a version outside the transaction as the actor, then read it back
+ * as stored and refuse where a value sent was left out. It is noted as
+ * written before it is judged, so a refusal puts it back too.
+ */
+async function writeStep(
+  plan: ImportPlan,
+  page: PlannedPage,
+  revs: Revs,
+  written: Written
 ): Promise<void> {
-  for (const single of [...written].reverse()) {
+  let rev: string | undefined;
+  try {
+    rev = await writeVersion(
+      plan,
+      page,
+      seoWith(page.seo, page.writes),
+      revFor(revs, page),
+      "actor"
+    );
+  } catch (error) {
+    throw refusalAbout(error, page.label);
+  }
+  revs.set(revKey(page), rev);
+  written.push(page);
+  refuseDroppedValues(await storedVersion(page), page.writes, page.id);
+}
+
+/**
+ * Put each version written as a step back as it was stored, newest first,
+ * as the site, at the revision the import left it at.
+ */
+async function putBack(
+  plan: ImportPlan,
+  written: Written,
+  revs: Revs
+): Promise<void> {
+  for (const page of [...written].reverse()) {
     try {
-      await restoreSingleSeo(
-        pageTypeOf(single.type).slug,
-        locale,
-        single.before,
-        single.rev
+      revs.set(
+        revKey(page),
+        await writeVersion(plan, page, page.seo, revFor(revs, page), "site")
       );
     } catch (error) {
       // Logged rather than thrown, so the refusal that undid the import is
       // the one the person reads.
-      ctx.logger.error("An imported Single could not be put back", {
-        error,
-        single: single.type,
-      });
-    }
-  }
-}
-
-/**
- * Write each Single's page of `plan` as its own step, and answer what was
- * written; where one is refused, those already written are put back and the
- * refusal is thrown.
- */
-async function writeSingles(
-  plan: ImportPlan,
-  stored: ReadonlyMap<string, Record<string, unknown>>
-): Promise<WrittenSingle[]> {
-  const { ctx, actor } = plan.engine;
-  const written: WrittenSingle[] = [];
-  for (const page of plan.pages) {
-    if (pageTypeOf(page.type).kind !== "single") continue;
-    const entry = stored.get(`${page.type}|${page.id}`) ?? {};
-    try {
-      const rev = await saveSingleSeo(
-        actor.single,
-        { type: page.type, id: page.id, label: page.label, rev: page.rev },
-        entry,
-        page.writes,
-        plan.locale
+      plan.engine.ctx.logger.error(
+        "An imported version could not be put back",
+        {
+          error,
+          type: page.type,
+          id: page.id,
+          locale: page.locale,
+          form: page.form,
+        }
       );
-      written.push({ type: page.type, before: entry[SEO_GROUP], rev });
-    } catch (error) {
-      await restoreSingles(ctx, written, plan.locale);
-      throw error;
     }
   }
-  return written;
 }
 
 /**
@@ -1586,50 +1812,47 @@ async function recordImport(ctx: PluginContext): Promise<void> {
 }
 
 /**
- * Write what `plan` worked out: in one transaction, in full or not at all,
- * each Single's page a step of its own before it, put back where a later
- * step is refused. Each write names the version its page was read at, so a
- * page changed since the plan is refused rather than written over. Applied
- * again, a plan worked out again sets nothing: every place it filled is
- * filled.
+ * Write what `plan` worked out, in full or not at all: every version of a
+ * collection's page in the default language, and every redirect, in one
+ * transaction; each Single's page and each page in another language, which
+ * cannot join it, as a step of its own before it, put back as it was where
+ * any later write is refused. Each write names the revision its page was
+ * read at, so a page changed since the plan is refused rather than written
+ * over. Applied again, a plan worked out again sets nothing: every place it
+ * filled is filled.
  */
 export async function applyImport(
   plan: ImportPlan
 ): Promise<{ pages: number; redirects: number }> {
   const { ctx, setup } = plan.engine;
-  // The groups as stored, read before the transaction so it holds no lock
-  // on the rows it then writes; each write sends its page's version, which
-  // refuses it where the page changed since.
-  const stored = new Map<string, Record<string, unknown>>();
-  for (const type of new Set(plan.pages.map(page => page.type))) {
-    const ids = plan.pages
-      .filter(page => page.type === type)
-      .map(page => page.id);
-    for (const [id, entry] of await readStored(
-      ctx,
-      type,
-      ids,
-      asStored(plan.locale)
-    )) {
-      stored.set(`${type}|${id}`, entry);
-    }
-    if (pageTypeOf(type).kind === "collection") {
-      await ctx.services.collections.warmLocalizedReadiness(type);
-    }
+  for (const type of new Set(
+    plan.pages.filter(page => page.inTransaction).map(page => page.type)
+  )) {
+    await ctx.services.collections.warmLocalizedReadiness(type);
   }
-  const singles = await writeSingles(plan, stored);
+  const revs: Revs = new Map();
+  const written: Written = [];
   try {
+    for (const page of inOrder(
+      plan.pages.filter(each => !each.inTransaction)
+    )) {
+      await writeStep(plan, page, revs, written);
+    }
+    // A conflict retries the transaction's work from the start, so each
+    // attempt starts from the revisions the steps left.
+    const before = new Map(revs);
     await ctx.services.collections.withTransaction(transaction =>
-      writeAll(transaction, plan, stored)
+      writeAll(transaction, plan, new Map(before))
     );
   } catch (error) {
-    await restoreSingles(ctx, singles, plan.locale);
+    await putBack(plan, written, revs);
     throw error;
   }
   // Committed: each changed page is checked again for the problem list.
-  for (const page of plan.pages) {
+  const pages = new Map(plan.pages.map(page => [pageKey(page), page]));
+  for (const page of pages.values()) {
     recheckSaved(ctx, setup.checks, page.type, page.id);
   }
   await recordImport(ctx);
-  return { pages: plan.pages.length, redirects: plan.redirects.length };
+  return { pages: pages.size, redirects: plan.redirects.length };
 }

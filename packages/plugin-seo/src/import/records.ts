@@ -48,8 +48,11 @@ export type Variables = "yoast" | "rankMath";
 
 /** How a record is matched to a page here. */
 export interface RecordMatch {
-  /** The page itself, where the record was read from it. */
-  page?: { type: string; id: string };
+  /**
+   * The page itself, where the record was read from it, and the version of
+   * it (`import/versions`) it was read from, where it was read from one.
+   */
+  page?: { type: string; id: string; version?: string };
   /** The address the record was served at, from the root. */
   path?: string;
   /** Its slug, where the source gives one. */

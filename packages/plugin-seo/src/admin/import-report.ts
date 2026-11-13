@@ -14,8 +14,15 @@ import type {
   ImportTarget,
 } from "../import/contract";
 
-/** A value's result for one page, as the report's table says it. */
-export type ValueResult = "set" | "same" | "kept" | "neverServed" | "none";
+/** A value's result for one version of a page, as the report's table says it. */
+export type ValueResult =
+  | "set"
+  | "same"
+  | "kept"
+  | "neverServed"
+  | "withDraft"
+  | "waiting"
+  | "none";
 
 /** Each result's words, and the line under it. */
 export const RESULT_WORDS: Readonly<
@@ -25,6 +32,8 @@ export const RESULT_WORDS: Readonly<
   same: { label: "Same as automatic", why: "left empty" },
   kept: { label: "Kept", why: "already typed" },
   neverServed: { label: "Skipped", why: "never served" },
+  withDraft: { label: "With the draft", why: "live once published" },
+  waiting: { label: "Skipped", why: "a draft waits" },
 };
 
 /** `place`'s result on the page `entry` reports. */
@@ -36,7 +45,42 @@ export function resultOf(
   if (entry.kept.includes(place)) return "kept";
   if (entry.same.includes(place)) return "same";
   if (entry.neverServed.includes(place)) return "neverServed";
+  if (entry.withDraft?.includes(place) === true) return "withDraft";
+  if (entry.waiting?.includes(place) === true) return "waiting";
   return "none";
+}
+
+/** Each version's name in words: its language, where it has one, and its form. */
+export function versionWords(entry: ImportReportEntry): string {
+  const form = entry.version ?? "published";
+  const language = entry.language ?? entry.locale;
+  return language === undefined ? form : `${language} · ${form}`;
+}
+
+/**
+ * Whether a report tells versions apart: a page in more than one language,
+ * or with a draft, gets a row per version, each named. A site with neither
+ * has one row a page, as before.
+ */
+export function showsVersions(entries: readonly ImportReportEntry[]): boolean {
+  return entries.some(
+    entry => entry.locale !== undefined || entry.version === "draft"
+  );
+}
+
+/** Whether `entry` is the first row of its page in `entries`, as listed. */
+export function firstOfPage(
+  entries: readonly ImportReportEntry[],
+  at: number
+): boolean {
+  const entry = entries[at];
+  const before = entries[at - 1];
+  return (
+    entry === undefined ||
+    before === undefined ||
+    before.type !== entry.type ||
+    before.id !== entry.id
+  );
 }
 
 /** The four counts the last step shows, in values, with the pages each is on. */
@@ -47,26 +91,34 @@ export interface ValueCounts {
   neverServed: { values: number; pages: number; labels: string[] };
 }
 
-/** The counts, from the dry run's report of each page. */
+/** The page a version is of, each counted once whatever its versions. */
+const pageOf = (entry: ImportReportEntry) =>
+  `${entry.type ?? ""}|${entry.id ?? ""}`;
+
+/**
+ * The counts, from the dry run's report of each version: values counted in
+ * every version, pages once each.
+ */
 export function valueCounts(run: DryRunBody): ValueCounts {
-  const pages = run.documents.filter(entry => entry.id !== undefined);
+  const versions = run.documents.filter(entry => entry.id !== undefined);
   const tally = (
     list: (entry: ImportReportEntry) => readonly ImportTarget[]
   ) => {
-    const holding = pages.filter(entry => list(entry).length > 0);
+    const holding = versions.filter(entry => list(entry).length > 0);
     return {
       values: holding.reduce((sum, entry) => sum + list(entry).length, 0),
-      pages: holding.length,
+      pages: new Set(holding.map(pageOf)).size,
     };
   };
-  const skipped = pages.filter(entry => entry.neverServed.length > 0);
+  const skipped = versions.filter(entry => entry.neverServed.length > 0);
+  const labels = new Map(skipped.map(entry => [pageOf(entry), entry.label]));
   return {
     set: tally(entry => entry.set),
     same: tally(entry => entry.same),
     kept: tally(entry => entry.kept),
     neverServed: {
       ...tally(entry => entry.neverServed),
-      labels: skipped.map(entry => entry.label),
+      labels: [...labels.values()],
     },
   };
 }
@@ -104,14 +156,15 @@ function resultWords(entry: ImportReportEntry, place: ImportTarget): string {
 }
 
 /**
- * The report of `run` as CSV: one row per page and per record passed over,
- * with each value the source holds, what the import does with it, and why
- * a row is skipped.
+ * The report of `run` as CSV: one row per version of each page and per
+ * record passed over, with each value the source holds, what the import
+ * does with it, and why a row is skipped.
  */
 export function reportCsv(run: DryRunBody): string {
   const rows = [
     [
       "Page",
+      "Version",
       "Outcome",
       "Title on Google",
       "Title result",
@@ -121,6 +174,7 @@ export function reportCsv(run: DryRunBody): string {
     ],
     ...run.documents.map(entry => [
       entry.label,
+      entry.id === undefined ? "" : versionWords(entry),
       entry.outcome,
       entry.values.title ?? "",
       resultWords(entry, "title"),
