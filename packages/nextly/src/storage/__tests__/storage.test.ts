@@ -321,7 +321,8 @@ describe("MediaStorage", () => {
       const data = await storage.getClientUploadUrl(
         "photo.jpg",
         "image/jpeg",
-        "media"
+        "media",
+        { size: 2048, expiresIn: 600 }
       );
 
       expect(data).not.toBeNull();
@@ -329,8 +330,82 @@ describe("MediaStorage", () => {
       expect(plugin.getClientUploadUrl).toHaveBeenCalledWith(
         "photo.jpg",
         "image/jpeg",
-        "media"
+        "media",
+        { size: 2048, expiresIn: 600 }
       );
+    });
+
+    describe("judges the claim before anything is signed", () => {
+      const signer = () => {
+        const plugin = createMockPlugin(
+          "s3-plugin",
+          "s3",
+          { media: { clientUploads: true } },
+          { supportsClientUploads: true }
+        );
+        return { plugin, storage: new MediaStorage({ plugins: [plugin] }) };
+      };
+      const refusal = async (
+        filename: string,
+        mimeType: string,
+        size: number
+      ): Promise<{ code?: string; signed: boolean }> => {
+        const { plugin, storage } = signer();
+        try {
+          await storage.getClientUploadUrl(filename, mimeType, "media", {
+            size,
+          });
+          return { signed: true };
+        } catch (error) {
+          const errors = (
+            error as { publicData?: { errors?: { code: string }[] } }
+          ).publicData?.errors;
+          return {
+            code: errors?.[0]?.code,
+            signed: vi.mocked(plugin.getClientUploadUrl!).mock.calls.length > 0,
+          };
+        }
+      };
+
+      it("never signs an SVG, which only the standard upload sanitises", async () => {
+        expect(await refusal("logo.svg", "image/svg+xml", 512)).toEqual({
+          code: "SVG_NOT_DIRECT",
+          signed: false,
+        });
+      });
+
+      it("refuses a type the extension does not name", async () => {
+        expect(await refusal("page.html.png", "image/png", 512)).toEqual({
+          signed: true,
+        });
+        expect(await refusal("photo.jpg", "image/png", 512)).toEqual({
+          code: "EXTENSION_TYPE_MISMATCH",
+          signed: false,
+        });
+      });
+
+      it("refuses a file over the size cap, and a size that is not one", async () => {
+        expect(
+          await refusal("photo.jpg", "image/jpeg", 50 * 1024 * 1024)
+        ).toEqual({
+          code: "SIZE_EXCEEDED",
+          signed: false,
+        });
+        expect(await refusal("photo.jpg", "image/jpeg", 0)).toEqual({
+          code: "SIZE_INVALID",
+          signed: false,
+        });
+      });
+
+      it("refuses a blocked extension and a type outside the allowlist", async () => {
+        expect(await refusal("run.exe", "image/png", 512)).toEqual({
+          code: "EXTENSION_BLOCKED",
+          signed: false,
+        });
+        expect(await refusal("page.html", "text/html", 512)).toMatchObject({
+          signed: false,
+        });
+      });
     });
 
     it("should return null when client uploads not supported", async () => {
@@ -340,7 +415,8 @@ describe("MediaStorage", () => {
       const data = await storage.getClientUploadUrl(
         "photo.jpg",
         "image/jpeg",
-        "media"
+        "media",
+        { size: 2048 }
       );
 
       expect(data).toBeNull();

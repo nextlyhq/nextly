@@ -307,7 +307,7 @@ describe("withBuilderForeignKeys, for the admin's relationTo", () => {
   });
 });
 
-describe("withBuilderForeignKeys refuses to leave a key checking the wrong thing", () => {
+describe("withBuilderForeignKeys moves a keyed relationship's key with its target", () => {
   const recorded = [TITLE, adminAuthor()];
   const keyed = live(recorded, [LIVE_KEY]);
 
@@ -324,9 +324,44 @@ describe("withBuilderForeignKeys refuses to leave a key checking the wrong thing
     }
   }
 
-  it("refuses pointing a keyed relationship at another collection", () => {
-    expect(refusalOf([TITLE, adminAuthor("editors")])).toBe(
-      "KEYED_RELATIONSHIP_CANNOT_CHANGE_TARGET"
+  it("moves a keyed relationship's key to the collection it now points at", () => {
+    expect(
+      keysWithTargets(
+        collection([TITLE, adminAuthor("editors")], true, recorded),
+        keyed
+      )
+    ).toEqual([
+      {
+        ...LIVE_KEY,
+        // A name of its own, so it is added before the old key is dropped.
+        name: "fk_dc_posts_author_to_dc_editors",
+        referencesTable: "dc_editors",
+      },
+    ]);
+  });
+
+  it("moves it back under the column's usual name", () => {
+    const moved = live(recorded, [
+      {
+        ...LIVE_KEY,
+        name: "fk_dc_posts_author_to_dc_editors",
+        referencesTable: "dc_editors",
+      },
+    ]);
+    expect(
+      keysWithTargets(
+        collection([TITLE, adminAuthor("authors")], true, [
+          TITLE,
+          adminAuthor("editors"),
+        ]),
+        moved
+      )
+    ).toEqual([LIVE_KEY]);
+  });
+
+  it("refuses pointing a keyed relationship at a target with no table", () => {
+    expect(refusalOf([TITLE, adminAuthor("site-settings")])).toBe(
+      "KEYED_RELATIONSHIP_TARGET_HAS_NO_TABLE"
     );
   });
 
@@ -341,7 +376,7 @@ describe("withBuilderForeignKeys refuses to leave a key checking the wrong thing
     expect(() =>
       keysWithTargets(
         collection(
-          [TITLE, adminAuthor("editors", { label: "Lead author" })],
+          [TITLE, adminAuthor("site-settings", { label: "Lead author" })],
           true,
           recorded
         ),

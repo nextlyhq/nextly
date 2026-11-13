@@ -1176,6 +1176,7 @@ const adminKeyTo = (pair: Pair) => ({
 
 /** One database for the admin-shape cases: a target, a statement runner, and a reset. */
 interface AdminHarness {
+  dialect: SupportedDialect;
   target: () => Target;
   run: (statement: string) => Promise<unknown>;
   quote: (name: string) => string;
@@ -1270,7 +1271,20 @@ function adminShapeCases(pair: Pair, harness: AdminHarness) {
     expect(await postColumns(harness.target(), pair)).toContain("subtitle");
   });
 
-  it("refuses pointing a keyed relationship at another collection, keeping its key", async () => {
+  /** `desired` recording the posts' admin fields as they were before the save. */
+  const recordingAdminPosts = (desired: DesiredSchema): DesiredSchema => ({
+    ...desired,
+    collections: {
+      ...desired.collections,
+      posts: {
+        ...desired.collections.posts,
+        recordedFields: adminPostFields(pair) as never,
+      },
+    },
+  });
+
+  /** The posts, keyed to the authors through the admin's relationship, as a save leaves them. */
+  async function keyedPosts() {
     await createTables(adminPostFields(pair).slice(0, 2));
     expect(
       (
@@ -1280,25 +1294,157 @@ function adminShapeCases(pair: Pair, harness: AdminHarness) {
         )
       ).error
     ).toBeUndefined();
-    const desired = desiredFor(
-      pair,
-      authorFields("text"),
-      adminPostFields(pair, `${pair.authorsSlug}_posts`)
+  }
+
+  /** The save pointing the posts' relationship at the posts themselves. */
+  const pointedAtPosts = () =>
+    recordingAdminPosts(
+      desiredFor(
+        pair,
+        authorFields("text"),
+        adminPostFields(pair, `${pair.authorsSlug}_posts`)
+      )
     );
-    const result = await save(harness.target(), {
-      ...desired,
-      collections: {
-        ...desired.collections,
-        posts: {
-          ...desired.collections.posts,
-          recordedFields: adminPostFields(pair) as never,
-        },
+
+  it("moves a keyed relationship's key when every value exists in its new target", async () => {
+    await keyedPosts();
+    // `x1` is both an author and a post, so the value is valid under the old key and the new one.
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.authors)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("name")}, ${harness.quote("rank")}) VALUES ('x1', 'A', 'a', 'Ada', '1')`
+    );
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.posts)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("score")}) VALUES ('x1', 'P', 'p', '1')`
+    );
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.posts)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("score")}, ${harness.quote("lead_author")}) VALUES ('p2', 'Q', 'q', '1', 'x1')`
+    );
+
+    const result = await save(harness.target(), pointedAtPosts());
+
+    expect(result.error).toBeUndefined();
+    expect(await postKeys(harness.target(), pair)).toEqual([
+      {
+        columns: ["lead_author"],
+        referencesTable: pair.posts,
+        onDelete: "set null",
       },
-    });
+    ]);
+    // The value it held is kept, and a value from the new target is accepted.
+    await harness.run(
+      `UPDATE ${harness.quote(pair.posts)} SET ${harness.quote("lead_author")} = 'p2' WHERE ${harness.quote("id")} = 'x1'`
+    );
+  });
+
+  it("refuses the move while a value has no entry in its new target, keeping the key", async () => {
+    await keyedPosts();
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.authors)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("name")}, ${harness.quote("rank")}) VALUES ('a1', 'A', 'a', 'Ada', '1')`
+    );
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.posts)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("score")}, ${harness.quote("lead_author")}) VALUES ('p1', 'P', 'p', '1', 'a1')`
+    );
+
+    const result = await save(harness.target(), pointedAtPosts());
+
     expect(result.success).toBe(false);
-    expect(result.error?.message).toContain('"leadAuthor"');
+    expect(result.error?.message).toContain("leadAuthor");
+    expect(result.error?.message).toContain("1 row holds");
     expect(await postKeys(harness.target(), pair)).toEqual([adminKeyTo(pair)]);
   });
+
+  /**
+   * The posts keyed, by a relationship this save adds over a column already there, to a collection
+   * this same save creates (`fresh`), whose table does not exist yet.
+   */
+  function keyedToANewCollection(fresh: string): DesiredSchema {
+    const base = desiredFor(pair, authorFields("text"), [
+      { name: "title", type: "text" },
+      { name: "score", type: "text" },
+      adminAuthorField(pair, fresh),
+    ]);
+    return {
+      ...base,
+      collections: {
+        ...base.collections,
+        fresh: {
+          slug: fresh,
+          tableName: `dc_${fresh}`,
+          fields: [{ name: "name", type: "text" }] as never,
+          builderOwned: true,
+        },
+        posts: {
+          ...base.collections.posts,
+          recordedFields: adminPostFields(pair).slice(0, 2) as never,
+        },
+      },
+    };
+  }
+
+  it("keys a column holding no values to a collection the same save creates", async () => {
+    const fresh = `${pair.authorsSlug}_fresh`;
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+    await createTables(adminPostFields(pair).slice(0, 2));
+    await harness.run(authorColumnWithoutKey(harness.target().dialect, pair));
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.posts)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("score")}) VALUES ('p1', 'P', 'p', '1')`
+    );
+
+    const result = await save(harness.target(), keyedToANewCollection(fresh));
+
+    expect(result.error).toBeUndefined();
+    expect(
+      (await postKeys(harness.target(), pair)).map(k => k.referencesTable)
+    ).toEqual([`dc_${fresh}`]);
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(pair.posts)}`);
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+  });
+
+  it("refuses keying a column holding values to a collection the same save creates", async () => {
+    const fresh = `${pair.authorsSlug}_fresh`;
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+    await createTables(adminPostFields(pair).slice(0, 2));
+    await harness.run(authorColumnWithoutKey(harness.target().dialect, pair));
+    await harness.run(
+      `INSERT INTO ${harness.quote(pair.posts)} (${harness.quote("id")}, ${harness.quote("title")}, ${harness.quote("slug")}, ${harness.quote("score")}, ${harness.quote("lead_author")}) VALUES ('p1', 'P', 'p', '1', 'someone')`
+    );
+
+    const result = await save(harness.target(), keyedToANewCollection(fresh));
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain("leadAuthor");
+    expect(await postKeys(harness.target(), pair)).toEqual([]);
+    await harness.run(`DROP TABLE IF EXISTS ${harness.quote(`dc_${fresh}`)}`);
+  });
+
+  it.runIf(harness.dialect === "mysql")(
+    "leaves the column keyed when the old key's drop fails after the new one is added",
+    async () => {
+      await keyedPosts();
+      // The real executor, refusing the old key's drop: MySQL has committed the new key by then.
+      const executor = new DrizzleStatementExecutor(
+        harness.target().dialect,
+        harness.target().db
+      );
+      const execute = executor.executeStatements.bind(executor);
+      executor.executeStatements = async (tx, statements) => {
+        for (const statement of statements) {
+          if (/DROP (FOREIGN KEY|CONSTRAINT)/i.test(statement)) {
+            throw new Error("the old key's drop failed");
+          }
+          await execute(tx, [statement]);
+        }
+      };
+
+      const result = await save(harness.target(), pointedAtPosts(), {
+        executor,
+      });
+
+      expect(result.success).toBe(false);
+      const keys = await postKeys(harness.target(), pair);
+      expect(keys.length).toBeGreaterThan(0);
+      expect(keys.every(k => k.columns.join() === "lead_author")).toBe(true);
+    }
+  );
 }
 
 describe("the admin's relationships get their keys (sqlite)", () => {
@@ -1317,6 +1463,7 @@ describe("the admin's relationships get their keys (sqlite)", () => {
     sqlite.close();
   });
   adminShapeCases(pair, {
+    dialect: "sqlite",
     target: () => target,
     // Async, so a statement the database refuses is a rejection, as on the servers.
     run: async statement => {
@@ -1352,6 +1499,7 @@ for (const server of SERVERS) {
         clearCachedSnapshot();
       });
       adminShapeCases(pair, {
+        dialect: server.dialect,
         target: () => connection.target,
         run: statement => connection.run(statement),
         quote,

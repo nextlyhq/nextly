@@ -1,0 +1,858 @@
+---
+title: Coming from Payload
+description: Each schema capability Payload offers, what Nextly gives you in its place, on which databases, and the few things Nextly refuses on purpose.
+---
+
+# Coming from Payload
+
+If you have extended a Payload schema with `beforeSchemaInit`, `afterSchemaInit`,
+`extendTable` or `rawTables`, this page maps each of those capabilities to Nextly,
+row by row. The list is Payload's schema extensibility as of v4 (`4.0.0-canary.37`),
+and every row reads the same at `3.90.2`.
+
+Three things work differently, and they explain most of the rows:
+
+- **Tables are declared, not built.** You describe a table once with `defineTable` and
+  `col.*`, and Nextly creates it on PostgreSQL, MySQL and SQLite. A declaration that
+  would fail on any one of the three is refused when you write it, so a schema that
+  works on your laptop works on every deployment.
+- **Plugins extend the schema too.** Payload's schema hooks live in the database
+  adapter's options, so only the app has them. In Nextly a plugin declares tables,
+  schema hooks and migrations of its own, and every table, column, index, key and
+  check records which plugin (or the app) owns it.
+- **What migrations can't carry is refused.** Payload's Drizzle-level hooks can add
+  things its migration generator never writes down, which then exist on your machine
+  and nowhere else. Nextly's escape hatch refuses those at startup instead.
+
+The full guide to declaring tables is
+[Extending the schema](/docs/database/extending-the-schema). For plugins, see
+[Schema & data lifecycle](/docs/plugins/schema).
+
+## At a glance
+
+"Yes" means it works on that database, with the same declaration on all three.
+
+| #   | Payload                                        | Nextly                                                   | PostgreSQL | MySQL   | SQLite  |
+| --- | ---------------------------------------------- | -------------------------------------------------------- | ---------- | ------- | ------- |
+| 1   | Add tables (`rawTables`, schema hooks)         | `defineTable` in `db.schema.extend` or a plugin's schema | Yes        | Yes     | Yes     |
+| 2   | Hooks that see every generated table           | `schema.tables()` and `schema.getTable()` in a hook      | Yes        | Yes     | Yes     |
+| 3   | Add columns to a collection's table            | `schema.extendTable(table, { columns })`, hidden         | Yes        | Yes     | Yes     |
+| 4   | Override a generated column                    | Not available yet                                        | -          | -       | -       |
+| 5   | Compound and unique indexes                    | Collection `indexes`; `indexes` on `defineTable`         | Yes        | Yes     | Yes     |
+| 6   | Partial indexes                                | Refused, on purpose                                      | Refused    | Refused | Refused |
+| 7   | Expression indexes                             | `expression` in a table's `indexes`                      | Yes        | Yes     | Yes     |
+| 8   | Foreign keys with delete and update actions    | `foreignKeys` on `defineTable`                           | Yes        | Yes     | Yes     |
+| 9   | Check constraints                              | `checks` on `defineTable`                                | Yes        | Yes     | Yes     |
+| 10  | Enums                                          | `col.enum([...])`, stored as a check                     | Yes        | Yes     | Yes     |
+| 11  | Any Drizzle column type                        | The `col.*` kinds, plus the app's `afterDrizzle` hook    | Yes        | Yes     | Yes     |
+| 12  | Relations for relational queries               | `relations` on `defineTable`, and `col.ref()` edges      | Yes        | Yes     | Yes     |
+| 13  | Typed access to added tables                   | Types from the declaration, no codegen                   | Yes        | Yes     | Yes     |
+| 14  | Adopt an existing table                        | `schema.adoptTable()`                                    | Yes        | Yes     | Yes     |
+| 15  | Extend system tables                           | Hidden columns and indexes on five core tables           | Yes        | Yes     | Yes     |
+| 16  | The app extending a plugin's tables            | `schema.extendTable()` from the app                      | Yes        | Yes     | Yes     |
+| 17  | Added schema in migrations                     | `nextly migrate:create`, and `--plugin` for a plugin     | Yes        | Yes     | Yes     |
+| 18  | Added schema in development push               | Development push, hook edits included                    | Yes        | Yes     | Yes     |
+| 19  | A custom table name                            | `dbName`                                                 | Yes        | Yes     | Yes     |
+| 20  | Fields with no column                          | `virtual: true`                                          | Yes        | Yes     | Yes     |
+| 21  | Custom configuration                           | `custom`                                                 | Yes        | Yes     | Yes     |
+| 22  | A collection's id type                         | `db.idType`: `uuid` or `uuidv7`; `serial` refused        | Yes        | Yes     | Yes     |
+| 23  | A client-supplied id on create                 | `db.allowIdOnCreate`                                     | Yes        | Yes     | Yes     |
+| 24  | A PostgreSQL schema other than `public`        | `db.postgres.schema`                                     | Yes        | Ignored | Ignored |
+| 25  | A plugin changing another plugin's collection  | `contributes.transforms`                                 | Yes        | Yes     | Yes     |
+| 26  | A plugin adding fields to another's collection | `contributes.extend`                                     | Yes        | Yes     | Yes     |
+
+The three refusals (rows 6 and 22, and part of row 11) are explained under
+[What Nextly refuses on purpose](#what-nextly-refuses-on-purpose).
+
+## Tables and hooks
+
+### 1. Add tables
+
+**Payload:** return tables from `beforeSchemaInit` or `afterSchemaInit`, or list them
+in the adapter's `rawTables`.
+
+**Nextly:** declare the table with `defineTable` and add it from a schema hook. The
+app's hooks go in `db.schema.extend`:
+
+```ts
+import { defineConfig } from "nextly";
+import { col, defineTable } from "nextly/schema-extension";
+
+const auditTrail = defineTable(
+  "audit_trail",
+  {
+    id: col.id(),
+    actorId: col.ref("users"),
+    action: col.shortText(),
+    ...col.timestamps(),
+  },
+  { indexes: [{ columns: ["actorId", "createdAt"] }] }
+);
+
+export default defineConfig({
+  db: {
+    schema: {
+      extend: [({ schema }) => schema.addTable(auditTrail)],
+    },
+  },
+});
+```
+
+A plugin lists its tables under `contributes.schema.tables`, and they're created as
+`<prefix>__<name>`, so a plugin with the prefix `shop` gets `shop__orders`. See
+[Tables of your own](/docs/plugins/schema#tables-of-your-own).
+
+### 2. Hooks that see every generated table
+
+**Payload:** `afterSchemaInit` receives every table the adapter built.
+
+**Nextly:** a hook's `schema` lists every table registered before it runs:
+
+- core tables such as `users` and `media`;
+- the tables of collections, Singles and field groups declared in code;
+- the tables of plugins earlier in dependency order.
+
+Hooks run in a fixed order, whatever order your config lists plugins in: each plugin's
+after the plugins it depends on, then the app's, which sees them all.
+
+```ts
+import { defineConfig } from "nextly";
+import { col, defineTable } from "nextly/schema-extension";
+
+const postViews = defineTable("post_views", {
+  id: col.id(),
+  postId: col.shortText(),
+  ...col.timestamps(),
+});
+
+export default defineConfig({
+  db: {
+    schema: {
+      extend: [
+        ({ schema }) => {
+          // Only when the posts collection exists in this config.
+          if (schema.getTable("dc_posts")) schema.addTable(postViews);
+        },
+      ],
+    },
+  },
+});
+```
+
+A hook must declare the same schema every time it runs, so derive nothing from the
+clock or a random value. Collections made in the admin's Schema Builder aren't known
+yet when hooks run, so a hook can't target their tables.
+
+### 14. Adopt an existing table
+
+**Payload:** introspect the table and return it from `beforeSchemaInit`.
+
+**Nextly:** `schema.adoptTable()` registers a table that already exists, for typed
+access and relational queries, and Nextly never creates, alters, diffs or drops it:
+
+```ts
+import { defineConfig } from "nextly";
+import { col, defineTable } from "nextly/schema-extension";
+
+export default defineConfig({
+  db: {
+    schema: {
+      extend: [
+        ({ schema }) =>
+          schema.adoptTable(
+            defineTable("legacy_orders", {
+              id: col.id(),
+              total: col.integer(),
+            })
+          ),
+      ],
+    },
+  },
+});
+```
+
+Adoption is the app's alone. A plugin's tables are always created by the plugin, so
+there's nothing for a plugin to adopt.
+
+### 19. A custom table name
+
+**Payload:** `dbName`.
+
+**Nextly:** `dbName` on a collection or Single. A collection's table keeps the `dc_`
+prefix every collection table has, so `dbName: "articles"` is the table
+`dc_articles`:
+
+```ts
+import { defineCollection, text } from "nextly";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  dbName: "articles",
+  fields: [text({ name: "title" })],
+});
+```
+
+Changing `dbName` on a site that already has the table needs a migration of its own,
+as [A changed `dbName`](/docs/guides/production-migrations#a-changed-dbname)
+describes.
+
+## Columns
+
+### 3. Add columns to a collection's table
+
+**Payload:** `extendTable({ columns })` in `afterSchemaInit`.
+
+**Nextly:** `schema.extendTable()` adds a column to a collection's, Single's or field
+group's table, from the app or from a plugin:
+
+```ts
+import { defineConfig } from "nextly";
+import { col } from "nextly/schema-extension";
+
+export default defineConfig({
+  db: {
+    schema: {
+      extend: [
+        ({ schema }) =>
+          schema.extendTable("dc_posts", {
+            columns: { searchVector: col.text({ nullable: true }) },
+          }),
+      ],
+    },
+  },
+});
+```
+
+The column is **hidden**. It's in the table, so push, migrations and SQLite's table
+rebuilds keep it with its data. But no REST response, Direct API read, version
+snapshot or webhook payload includes it, and an entry write can't set it. Its
+contributor reads and writes it by row id through `ctx.db.contributed`.
+
+A column added to a table that already has rows must be nullable or have a default.
+To give editors and API callers a real field, use a field instead (row 26).
+
+See [Columns on a table you do not own](/docs/database/extending-the-schema#columns-on-a-table-you-do-not-own).
+
+### 4. Override a generated column
+
+**Payload:** `extendTable` with a column of the same name replaces the column Payload
+generated, for example to make `city` a `varchar(10)`.
+
+**Nextly:** not available yet. A collection field's column comes from its type and
+options. To store something alongside it, add a hidden column (row 3) or a table of
+your own (row 1). On a table you declare yourself, the `afterDrizzle` hook can reshape
+a column (row 11).
+
+### 10. Enums
+
+**Payload:** `pgEnum` through a hook, or `enumName` on a `select` or `radio` field.
+
+**Nextly:** `col.enum()` on a declared table:
+
+```ts
+import { col, defineTable } from "nextly/schema-extension";
+
+export const orders = defineTable("orders", {
+  id: col.id(),
+  state: col.enum(["open", "paid", "shipped"]),
+});
+```
+
+It's the same on every database: a text column (`varchar(255)` on MySQL, so it can be
+indexed) with a check constraint that allows only the listed values. There's no native
+PostgreSQL enum type. A check is one thing all three databases have, so adding a value
+is the same change everywhere.
+
+You can add a value at any time. Taking one away is refused by the database while a row
+still holds it, so move those rows to another value first.
+
+A collection's `select` and `radio` fields store their value as text, and the entry API
+checks it against the field's options. There's no database constraint on those
+columns.
+
+See [Enums](/docs/database/extending-the-schema#enums).
+
+### 11. Any Drizzle column type
+
+**Payload:** any Drizzle column builder, returned from a hook.
+
+**Nextly:** the `col.*` kinds, each of which works on all three databases:
+
+| Kind                              | Notes                                                              |
+| --------------------------------- | ------------------------------------------------------------------ |
+| `text`, `shortText`, `longText`   | `varchar(255)` on MySQL for the first two; `longText` is unbounded |
+| `varchar(n)`, `char(n)`           | `char` is fixed width; PostgreSQL pads it with spaces              |
+| `uuid`                            | Native on PostgreSQL, `char(36)` on MySQL, text on SQLite          |
+| `boolean`                         |                                                                    |
+| `smallint`, `integer`, `bigint`   | `bigint` reads as a JavaScript number, exact up to 2^53            |
+| `real`, `double`, `decimal(p, s)` | `decimal` reads as a number; keep money as integer minor units     |
+| `timestamp`, `timestamps()`       | `timestamps()` adds `created_at` and `updated_at`                  |
+| `json<T>()`, `bytes`              |                                                                    |
+| `enum([...])`                     | Row 10                                                             |
+| `id()`, `serial()`, `ref(table)`  | A UUID key, a database-numbered key, and a recorded reference      |
+
+```ts
+import { col, defineTable } from "nextly/schema-extension";
+
+export const shipments = defineTable("shipments", {
+  id: col.id(),
+  carrier: col.char(3),
+  trackingId: col.uuid(),
+  weightGrams: col.bigint(),
+  boxes: col.smallint({ default: 1 }),
+  label: col.bytes({ nullable: true }),
+  meta: col.json<{ fragile?: boolean }>({ nullable: true }),
+});
+```
+
+For anything else, the app has an escape hatch: `db.schema.afterDrizzle` reshapes
+Drizzle tables for one database. It refuses what migrations can't carry (see
+[the list below](#what-the-escape-hatch-refuses)), and plugins don't get it. See
+[The escape hatch](/docs/database/extending-the-schema#the-escape-hatch).
+
+### 20. Fields with no column
+
+**Payload:** `virtual: true`.
+
+**Nextly:** `virtual: true` on any field of a collection, Single or component. The
+field has no column, isn't selected or written, and is meant to be filled in an
+`afterRead` hook:
+
+```ts
+import { defineCollection, text } from "nextly";
+
+export const People = defineCollection({
+  slug: "people",
+  fields: [
+    text({ name: "firstName" }),
+    text({ name: "lastName" }),
+    text({ name: "fullName", virtual: true }),
+  ],
+});
+```
+
+A custom field on the users collection is always stored, so `virtual` is refused there.
+
+### 21. Custom configuration
+
+**Payload:** `custom`, for configuration only the server reads.
+
+**Nextly:** `custom` on a collection and on a field holds any metadata your hooks and
+plugins read. It adds no column and changes nothing about the table. Don't keep secrets
+in it.
+
+```ts
+import { defineCollection, number } from "nextly";
+
+export const Products = defineCollection({
+  slug: "products",
+  custom: { feed: "google-shopping" },
+  fields: [number({ name: "views", custom: { dashboard: { hidden: true } } })],
+});
+```
+
+## Indexes and constraints
+
+### 5. Compound and unique indexes
+
+**Payload:** collection `indexes`, or `extraConfig` in a hook.
+
+**Nextly:** a collection's `indexes`, or `index: true` on one field. They're created by
+development push and written into migrations:
+
+```ts
+import { defineCollection, text } from "nextly";
+
+export const Places = defineCollection({
+  slug: "places",
+  fields: [text({ name: "country" }), text({ name: "city", index: true })],
+  indexes: [{ fields: ["country", "city"], unique: true }],
+});
+```
+
+A declared table takes `indexes` too, by column key:
+`{ indexes: [{ columns: ["provider", "accountId"], unique: true }] }`. A unique index
+fails to build over rows that already break it, so check for duplicates before you add
+one to a table with data. See
+[Indexes on your collections](/docs/database/extending-the-schema#indexes-on-your-collections).
+
+### 6. Partial indexes
+
+**Payload:** Drizzle's `.where()` in `extraConfig`.
+
+**Nextly:** refused on every database. See
+[What Nextly refuses on purpose](#what-nextly-refuses-on-purpose).
+
+### 7. Expression indexes
+
+**Payload:** Drizzle's `index().on(sql...)`.
+
+**Nextly:** an index with an `expression` in place of columns:
+
+```ts
+import { col, defineTable } from "nextly/schema-extension";
+
+export const subscribers = defineTable(
+  "subscribers",
+  { id: col.id(), email: col.shortText() },
+  {
+    indexes: [
+      {
+        columns: [],
+        expression: "lower(email)",
+        name: "subscribers_email_lower",
+      },
+    ],
+  }
+);
+```
+
+Write column names bare (`lower(email)`). An expression that only orders or collates,
+such as `DESC` or `text_pattern_ops`, is refused, because no database reports it back
+and every push would plan the index again. MySQL builds expression indexes from 8.0.13.
+
+### 8. Foreign keys with delete and update actions
+
+**Payload:** `.references()` in a hook, or the adapter's raw foreign keys.
+
+**Nextly:** `foreignKeys` on `defineTable`:
+
+```ts
+import { col, defineTable } from "nextly/schema-extension";
+
+export const lines = defineTable(
+  "order_lines",
+  {
+    id: col.id(),
+    orderId: col.varchar(36),
+    quantity: col.integer(),
+  },
+  {
+    foreignKeys: [
+      {
+        columns: ["orderId"],
+        references: { table: "shop__orders", columns: ["id"] },
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      },
+    ],
+    checks: [{ name: "quantity_positive", sql: "quantity > 0" }],
+  }
+);
+```
+
+`onDelete` and `onUpdate` take `"cascade"`, `"set null"`, `"restrict"` or
+`"no action"`, the default. `"set default"` is refused, because MySQL can't create a
+key that uses it. `references.columns` are the target's SQL column names (`id`,
+`owner_id`).
+
+`col.ref()` on its own records a reference for relations and validation. It creates no
+constraint; a constraint comes from `foreignKeys`.
+
+### 9. Check constraints
+
+**Payload:** Drizzle's `check()`.
+
+**Nextly:** `checks` on `defineTable`, as in the sample above. The `sql` reaches every
+database as written, so name columns bare (`quantity > 0`) and don't quote
+identifiers. MySQL enforces checks from 8.0.16; before that it accepts them and
+ignores them.
+
+## Relations and typed access
+
+### 12. Relations for relational queries
+
+**Payload:** `relations` returned from a hook, for Drizzle's relational queries.
+
+**Nextly:** a `col.ref()` column gets an edge on its own, named for what it points at
+(`customerId` becomes `customer`). Declare others in `relations`:
+
+```ts
+import { col, defineTable } from "nextly/schema-extension";
+
+export const orders = defineTable(
+  "orders",
+  {
+    id: col.id(),
+    customerId: col.ref("shop__customers"),
+  },
+  {
+    relations: [
+      {
+        name: "lines",
+        kind: "many",
+        targetTable: "shop__order_lines",
+        toColumn: "order_id",
+      },
+    ],
+  }
+);
+```
+
+A plugin follows them with
+`ctx.db.query["shop__orders"]?.findMany({ with: { customer: true } })`, which reaches
+only the tables the plugin may reach, at every depth. Nextly
+checks every relation once all tables are registered, so one naming a table or column
+that doesn't exist stops the boot rather than failing the first query. The rows a
+relational query returns are untyped (`unknown`); `select` and `insertReturning`
+(row 13) are typed.
+
+See [Relations](/docs/database/extending-the-schema#relations).
+
+### 13. Typed access to added tables
+
+**Payload:** run `generate:db-schema`, which covers `rawTables` only.
+
+**Nextly:** the declaration is the type, with no codegen step. `InferRow` and
+`InferInsert` give a table's row types, and a plugin's `ctx.db` is typed from the
+table you pass it:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { eq } from "@nextlyhq/plugin-sdk/db";
+import { col, defineTable, type InferRow } from "@nextlyhq/plugin-sdk/schema";
+
+const notes = defineTable("notes", {
+  id: col.id(),
+  title: col.shortText(),
+  pinned: col.boolean({ default: false }),
+});
+
+type Note = InferRow<typeof notes>;
+
+export default definePlugin({
+  name: "@acme/notes",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.75",
+  contributes: { schema: { prefix: "notes", tables: [notes] } },
+  async init(ctx) {
+    // The id is filled with a UUIDv7 when you leave it out.
+    const created: Note = await ctx.db.insertReturning(notes, {
+      title: "First",
+    });
+    const pinned = await ctx.db
+      .select(notes)
+      .where(eq(ctx.db.table(notes).pinned, true))
+      .all();
+    ctx.logger.info(`${created.id}: ${String(pinned.length)} pinned`);
+  },
+});
+```
+
+A plugin's `ctx.db` reaches its own tables, the tables of the plugins it lists in
+`dependsOn`, and the columns it added to other tables, and nothing else. It works the
+same on every database, transactions included. See
+[When to drop to `ctx.db`](/docs/plugins/services#when-to-drop-to-ctxdb).
+
+## Other owners' tables
+
+### 15. Extend system tables
+
+**Payload:** `jobsCollectionOverrides`, or a hook on any table.
+
+**Nextly:** hidden columns and indexes on five core tables: `users`, `media`,
+`nextly_jobs`, `audit_log` and `activity_log`, the core tables that hold your
+application's data. The tables Nextly's own machinery runs on refuse them.
+
+```ts
+import { defineConfig } from "nextly";
+import { col } from "nextly/schema-extension";
+
+export default defineConfig({
+  db: {
+    schema: {
+      extend: [
+        ({ schema }) =>
+          schema.extendTable("users", {
+            columns: { theme: col.shortText({ nullable: true }) },
+          }),
+      ],
+    },
+  },
+});
+```
+
+Core tables change only through migrations, so development push doesn't create a
+column added there. `nextly migrate:create` in the app writes it, whoever contributed
+it.
+
+### 16. The app extending a plugin's tables
+
+**Payload:** the app's `afterSchemaInit` sees every table, a plugin's included.
+
+**Nextly:** the app's `extendTable` takes columns, indexes, foreign keys, checks and
+relations on any plugin's table:
+
+```ts
+import { defineConfig } from "nextly";
+import { col } from "nextly/schema-extension";
+
+export default defineConfig({
+  db: {
+    schema: {
+      extend: [
+        ({ schema }) =>
+          schema.extendTable("shop__orders", {
+            columns: { erpRef: col.varchar(64, { nullable: true }) },
+            indexes: [{ columns: ["erpRef"], name: "shop_orders_erp_ref" }],
+          }),
+      ],
+    },
+  },
+});
+```
+
+Each element you add is recorded as yours. It ships in your migrations, the plugin's own
+migrations leave it alone, and the plugin can't be fully uninstalled while it's there.
+A plugin can do the same to the tables of a plugin it lists in `dependsOn`. See
+[Keys, checks and relations on a table you do not own](/docs/database/extending-the-schema#keys-checks-and-relations-on-a-table-you-do-not-own).
+
+### 25. A plugin changing another plugin's collection
+
+**Payload:** each plugin receives the whole config and returns a changed one.
+
+**Nextly:** `contributes.transforms` receives a frozen copy of a collection, Single or
+component and returns the new definition. It runs after every plugin's collections are
+merged, in dependency order:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "@acme/public-posts",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.75",
+  dependsOn: { "@acme/blog": "^1.0.0" },
+  contributes: {
+    transforms: [
+      {
+        target: "posts",
+        transform: entity => ({ ...entity, access: { read: () => true } }),
+      },
+    ],
+  },
+});
+```
+
+To change another plugin's collection, list that plugin in `dependsOn`, so it can't be
+uninstalled from under the change. A transform can't rename or delete another plugin's
+collection, move its table, or change how a field another plugin declared is stored.
+Those are refused at startup. See
+[Change entities you don't own](/docs/plugins/schema#change-entities-you-dont-own).
+
+### 26. A plugin adding fields to another plugin's collection
+
+**Payload:** the same config change as row 25.
+
+**Nextly:** `contributes.extend` adds fields to an entity by slug, whoever declared it:
+
+```ts
+import { definePlugin, number } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "@acme/priority",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.75",
+  contributes: {
+    extend: [{ target: "posts", fields: [number({ name: "priority" })] }],
+  },
+});
+```
+
+The fields are real fields, with REST, the admin and validation, and they're recorded
+as your plugin's, so they leave with it. See
+[Extend existing entities](/docs/plugins/schema#extend-existing-entities).
+
+## Migrations and push
+
+### 17. Added schema in migrations
+
+**Payload:** `migrate:create` diffs the schema after the hooks have run.
+
+**Nextly:** the same for the app, and a plugin ships migrations of its own:
+
+```bash
+nextly migrate:create                          # the app's tables, collections and contributions
+nextly migrate:create --plugin ./src/index.ts  # a plugin's next migration module
+nextly migrate                                 # core, then each plugin in dependency order, then the app
+```
+
+Every command that reads the desired schema reads the same one: development push,
+`migrate:create` and `migrate:check`. So a table that push creates
+is one a migration carries.
+
+### 18. Added schema in development push
+
+**Payload:** development push applies hook tables, with caveats around hot reload.
+
+**Nextly:** development push applies declared tables and every contribution, and an
+edit to a hook alone is picked up on the next reload. A table that has been pushed
+reads back the same, so a second push plans nothing.
+
+## Ids and where tables live
+
+### 22. A collection's id type
+
+**Payload:** `idType` on the adapter, for every collection: `serial`, `uuid` or
+`uuidv7`.
+
+**Nextly:** `db.idType` per collection, `uuid` (the default) or the time-ordered
+`uuidv7`. `serial` is refused where the collection is defined. See
+[What Nextly refuses on purpose](#what-nextly-refuses-on-purpose).
+
+```ts
+import { defineCollection, text } from "nextly";
+
+export const Orders = defineCollection({
+  slug: "orders",
+  db: { idType: "uuidv7", allowIdOnCreate: true },
+  fields: [text({ name: "reference" })],
+});
+```
+
+### 23. A client-supplied id on create
+
+**Payload:** `allowIDOnCreate`.
+
+**Nextly:** `db.allowIdOnCreate: true`, as above. A create that sends an `id` keeps it;
+one that sends an id that isn't a UUID is refused. Without the option, a sent `id` is
+ignored and Nextly generates one.
+
+### 24. A PostgreSQL schema other than `public`
+
+**Payload:** `schemaName` on the PostgreSQL adapter (experimental).
+
+**Nextly:** `db.postgres.schema` keeps every table, core and plugin tables and the
+migration history included, in the schema you name:
+
+```ts
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  db: { postgres: { schema: "cms" } },
+});
+```
+
+Choose it before the first start and keep it: a start whose schema holds no
+installation, while another schema of the same database does, is refused. MySQL and
+SQLite have no equivalent, so they ignore the setting and log a warning, and one config
+can serve all three. See
+[The PostgreSQL schema](/docs/database/extending-the-schema#the-postgresql-schema).
+
+## What Nextly refuses on purpose
+
+Each of these is refused where you write it, on every database, with a message that
+names the table and what to do instead.
+
+### Partial indexes
+
+MySQL can't build an index with a `where` clause. Building it there without the clause
+would enforce a unique index over rows you meant to leave out. A plugin that used one
+would work on PostgreSQL and break for every MySQL user, so an index carrying `where`
+is refused on all three. Index the column whole, or keep the rows the index should
+skip in a table of their own.
+
+### Serial ids for collections
+
+A collection's id is text: its key, every relationship column and join table that
+points at it, its REST paths and its admin screens all read it that way. Changing that
+per collection would change the type of every column that refers to it. So `db.idType`
+offers `uuid` and `uuidv7`, and `serial` is refused, with the message naming the
+alternative.
+
+For a sequential number, such as an order number, use a table keyed by `col.serial()`
+beside the rows it numbers:
+
+```ts
+import { col, defineTable } from "nextly/schema-extension";
+
+export const orderNumbers = defineTable(
+  "order_numbers",
+  { number: col.serial(), orderId: col.varchar(36) },
+  { indexes: [{ columns: ["orderId"], unique: true }] }
+);
+```
+
+`col.serial()` is the table's primary key, on its own: MySQL numbers only a key column
+and SQLite only an `INTEGER PRIMARY KEY`. `ctx.db.insertReturning` gives back the
+number the database chose. See
+[Generated integer keys](/docs/database/extending-the-schema#generated-integer-keys).
+
+### What the escape hatch refuses
+
+Payload accepts any Drizzle construct in its hooks, including ones its migration
+generator drops. Nextly's `afterDrizzle` hook refuses, at startup, a table that
+declares any of these, because a migration couldn't carry it to production:
+
+| Refused                 | Do this instead                                    |
+| ----------------------- | -------------------------------------------------- |
+| A partial index         | Index the column whole                             |
+| An expression index     | `expression` in `indexes` on `defineTable` (row 7) |
+| A column-level unique   | A unique index                                     |
+| A table-level unique    | A unique index                                     |
+| A generated column      | Compute the value when you write the row           |
+| An identity column      | `col.id()`, or `col.serial()` as the key           |
+| An enum column          | `col.enum()` (row 10), or a text column            |
+| A check constraint      | `checks` on `defineTable` (row 9)                  |
+| A foreign key           | `foreignKeys` on `defineTable` (row 8)             |
+| A composite primary key | A single id and a unique index over the columns    |
+
+The hook may also change only tables the app owns: a core table, a collection's table,
+a plugin's table or an adopted one is refused.
+
+## Where Nextly goes further
+
+Payload doesn't offer these. Each works on PostgreSQL, MySQL and SQLite.
+
+- **Plugins declare schema.** A plugin adds tables, hooks and migrations through
+  `contributes.schema`, the same way the app does. In Payload, a plugin can only
+  wrap the database adapter's startup.
+- **Ownership, and a guard on drops.** Every table, and every column, index, key and
+  check added to someone else's table, records its owner. A migration, push or
+  rollback that would drop, rename or alter another owner's schema is refused before
+  anything runs. See
+  [Nothing drops a table it does not own](/docs/guides/production-migrations#nothing-drops-a-table-it-does-not-own).
+- **Plugin migrations, checked.** A plugin ships its migrations as modules in its
+  package, generated with `nextly migrate:create --plugin`. They run in dependency
+  order, under the migrate lock, before any plugin starts. Each module carries a
+  checksum, and the history is append-only: a module edited, renamed, removed or
+  reordered after it was applied is refused before anything runs. A generated module
+  never drops a table or column an earlier one created. See
+  [Production](/docs/plugins/schema#production).
+- **Install and uninstall.** `nextly plugins install` applies a plugin's migrations and
+  runs its `onInstall`. `nextly plugins uninstall` runs `onUninstall` and the
+  migrations' DOWNs, or with `--keep-data` keeps every table and row. Uninstall is
+  refused while another plugin depends on the plugin, or while another owner has built
+  on its tables. Running the install again for a plugin that's already installed only
+  applies what its upgraded package added. See
+  [Uninstalling & data cleanup](/docs/plugins/schema#uninstalling--data-cleanup).
+- **A plugin reaches only what it should.** `ctx.db` reaches the plugin's own tables,
+  its dependencies' tables, and the columns it contributed, and checks every table a
+  relational query traverses. The full database handle needs the plugin to ask for it
+  and the app to list it in `db.rawSqlPlugins`. See
+  [Raw SQL](/docs/plugins/security#raw-sql).
+- **Plugins build on each other's tables.** A plugin adds columns, indexes, foreign
+  keys, checks and relations to the tables of a plugin it depends on. Each element
+  belongs to the plugin that added it: it ships in that plugin's migrations, the
+  owner's migrations leave it alone, and a full uninstall of the contributor removes
+  only its own elements.
+- **Each migration file applies whole.** A migration file or plugin module runs in one
+  transaction, so on PostgreSQL and SQLite a failure part-way leaves none of it
+  applied. A statement that can't run in a transaction, such as
+  `CREATE INDEX CONCURRENTLY`, goes in a file marked to run outside one. See
+  [Running a file outside a transaction](/docs/guides/production-migrations#running-a-file-outside-a-transaction).
+- **Types without codegen.** A declared table is typed from its declaration (row 13).
+
+## Not on this release yet
+
+These are being built and aren't available yet:
+
+- **Overriding a generated column** (row 4).
+- **Version checks for checks and expression indexes on MySQL.** Today an older MySQL
+  server is left to fail or, for a check before 8.0.16, to accept it without enforcing
+  it. A refusal that names the server's version, before anything is applied, is
+  coming.
+- **A clear refusal when an enum loses a value rows still hold.** Today the database
+  refuses the new constraint, and on MySQL, which commits each schema change as it
+  goes, the old constraint is already gone by then. Check for rows holding the value
+  before you remove it.
