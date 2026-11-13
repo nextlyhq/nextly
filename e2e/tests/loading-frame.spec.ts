@@ -21,7 +21,13 @@ import { expect, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
 import { mainColumnBox } from "./support/shell-geometry";
-import { freeDocumentAt, includingHidden, test } from "./support/test";
+import {
+  fileAccount,
+  freeDocumentAt,
+  includingHidden,
+  ownSeat,
+  test,
+} from "./support/test";
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -405,10 +411,6 @@ async function screenSettled(page: Page): Promise<void> {
     .toBe("settled");
 }
 
-/** Whether `url` is the admin's address for claiming a document. */
-const isDocumentLock = (url: string): boolean =>
-  new URL(url).pathname === "/admin/api/document-lock";
-
 /** The shell's own boxes: the rail, the bar and the main column. */
 async function shellBoxes(page: Page) {
   const box = async (selector: string) => {
@@ -423,62 +425,15 @@ async function shellBoxes(page: Page) {
   };
 }
 
-/** Where the playground's posts are written. */
-const POSTS = "/admin/api/collections/posts/entries";
-/** The posts the edit test made, deleted after it, so no list counts them. */
-const ownPosts: string[] = [];
-
 test.describe("the screen replacing its outline", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test.afterEach(async ({ page }) => {
-    for (const id of ownPosts.splice(0)) {
-      const removed = await page.request.delete(`${POSTS}/${id}`);
-      expect(removed.ok(), await removed.text()).toBe(true);
-    }
-  });
-
-  for (const screenName of ["dashboard", "edit"] as const) {
+  for (const screenName of ["dashboard"] as const) {
     test(`moves no part of the ${screenName} as its data arrives`, async ({
       page,
     }) => {
       test.setTimeout(90_000);
-      let path = "";
-      if (screenName === "edit") {
-        // A post of the test's own, which no other test opens: an editor
-        // open on a post elsewhere (another spec, a repeat on another worker)
-        // holds it, and the banner saying so would land above the fields.
-        const stamp = `${Date.now()}-${test.info().repeatEachIndex}`;
-        const created = await page.request.post(POSTS, {
-          data: {
-            title: `Loading frame ${stamp}`,
-            slug: `loading-frame-${stamp}`,
-            excerpt: "Opened while every request is held.",
-          },
-        });
-        expect(created.ok(), await created.text()).toBe(true);
-        const { item } = (await created.json()) as { item: { id: string } };
-        ownPosts.push(item.id);
-        path = `/collections/posts/${item.id}`;
-        // The edit route's code, compiled before the measured visit. The
-        // editor claims the document it opens, and the claim outlives a page
-        // left while every request is held, so the measured visit would open
-        // a document its own warm-up still holds, with the banner saying so.
-        // Freed here, as a reader's closed tab frees it.
-        const claimed = page.waitForResponse(
-          response =>
-            isDocumentLock(response.url()) &&
-            response.request().method() === "POST"
-        );
-        await page.goto(`${ADMIN}${path}`);
-        await claimed;
-        await page.goto("about:blank");
-        await freeDocumentAt(
-          page.request,
-          { scopeKind: "collection", slug: "posts", entryId: item.id },
-          "post"
-        );
-      }
+      const path = "";
 
       await recordShifts(page);
       await recordParts(page);
@@ -809,4 +764,151 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
       }
     });
   }
+});
+
+/**
+ * The widths an editor is held to: those every screen is, and 1366, where
+ * the editor docks its side panel with the menu panel open.
+ */
+const EDITOR_WIDTHS = [1024, 1280, 1366, 1440] as const;
+
+/** A post of the test's own, which no other test opens or holds. */
+async function ownPost(page: Page, made: string[]): Promise<string> {
+  const stamp = `${Date.now()}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+  const created = await page.request.post(entriesOf("posts"), {
+    data: {
+      title: `Editor frame ${stamp}`,
+      slug: `editor-frame-${stamp}`,
+      excerpt: "Opened by the editor's frame test.",
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const { item } = (await created.json()) as { item: { id: string } };
+  made.push(`${entriesOf("posts")}/${item.id}`);
+  return item.id;
+}
+
+/** Where the Page Builder answers a post's own design. */
+const designReadOf = (id: string) =>
+  `/admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs?collection=posts&entry=${encodeURIComponent(id)}`;
+
+/** When the page asked for each read, and when it answered, by its address. */
+async function recordReads(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const reads: { path: string; started: number; ended: number | null }[] =
+      [];
+    (window as unknown as { __reads: typeof reads }).__reads = reads;
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = new URL(
+        input instanceof Request ? input.url : String(input),
+        window.location.href
+      );
+      const read = {
+        path: url.pathname + url.search,
+        started: performance.now(),
+        ended: null as number | null,
+      };
+      reads.push(read);
+      return original(input, init).finally(() => {
+        read.ended = performance.now();
+      });
+    };
+  });
+}
+
+test.describe("an editor, held to the screen it stands for", () => {
+  /** Entries the tests made, deleted after each. */
+  const made: string[] = [];
+
+  test.afterEach(async ({ page }) => {
+    for (const address of made.splice(0)) {
+      const removed = await page.request.delete(address);
+      expect(removed.ok(), await removed.text()).toBe(true);
+    }
+  });
+
+  EDITOR_WIDTHS.forEach((width, index) => {
+    test.describe(`at ${width} px`, () => {
+      // An account of its own per width, apart from the other block's.
+      ownSeat(index + 11);
+      test.use({ viewport: { width, height: 900 } });
+
+      for (const mode of ["held", "unheld"] as const) {
+        test(`moves no part of a post's editor, ${mode}`, async ({ page }) => {
+          test.setTimeout(90_000);
+          const id = await ownPost(page, made);
+          await expectStillLoad(page, `/collections/posts/${id}`, mode);
+        });
+
+        test(`draws a colleague's claim with the editor, ${mode}`, async ({
+          page,
+          playwright,
+          baseURL,
+        }, testInfo) => {
+          test.setTimeout(90_000);
+          const id = await ownPost(page, made);
+          const ref = { scopeKind: "collection", slug: "posts", entryId: id };
+          // A colleague, another account, holds the post.
+          const colleague = await playwright.request.newContext({
+            baseURL,
+            storageState: await fileAccount(
+              baseURL ?? "",
+              testInfo,
+              index + 21
+            ),
+          });
+          try {
+            const claimed = await colleague.post("/admin/api/document-lock", {
+              data: ref,
+            });
+            expect(claimed.ok(), await claimed.text()).toBe(true);
+            await expectStillLoad(page, `/collections/posts/${id}`, mode);
+            // The banner is on screen, drawn with the fields it sits above.
+            await expect(
+              page.getByRole("button", { name: "Take over" })
+            ).toBeVisible();
+          } finally {
+            await colleague.dispose();
+            await freeDocumentAt(page.request, ref, "post");
+          }
+        });
+      }
+    });
+  });
+
+  test("asks for a part's declared read before the entry has answered", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const id = await ownPost(page, made);
+    await recordReads(page);
+    await page.addInitScript(key => {
+      window.localStorage.setItem(key, "1");
+    }, SIGNED_IN_HERE_KEY);
+    await page.goto(`${ADMIN}/collections/posts/${id}`);
+    await expect(page.locator('[data-testid="screen-outline"]')).toHaveCount(0, {
+      timeout: 60_000,
+    });
+    const reads = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __reads: { path: string; started: number; ended: number | null }[];
+          }
+        ).__reads
+    );
+    const entry = reads.find(read =>
+      read.path.startsWith(`/admin/api/collections/posts/entries/${id}`)
+    );
+    const designs = reads.filter(read => read.path === designReadOf(id));
+    expect(entry, JSON.stringify(reads)).toBeDefined();
+    // Started with the page's own reads, not after the entry it waits on.
+    expect(designs[0]?.started, JSON.stringify(reads)).toBeLessThan(
+      entry?.ended ?? 0
+    );
+    // And asked once: the section's own read took the started one.
+    expect(designs, JSON.stringify(reads)).toHaveLength(1);
+  });
 });
