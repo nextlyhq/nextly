@@ -134,23 +134,26 @@ function sameJunctionColumns(a: JunctionShape, b: JunctionShape): boolean {
 }
 
 /**
- * Refuse a save that renames more than one of something whose data moves with
- * the rename. A wrong pairing migrates the wrong rows, so the author renames
- * one per save; the refusal names both sides so they can see what to split.
+ * The one rename a save holds among `pairs`, or null when it holds none. A save that renames more
+ * than one of something whose data moves with the rename is refused: a wrong pairing migrates the
+ * wrong rows, so the author renames one per save, and the refusal names both sides so they can see
+ * what to split.
  */
-function refuseAmbiguousRename(args: {
-  code: string;
-  /** Plural, for the count: "field groups". */
-  what: string;
-  /** What each rename moves: "the group's existing rows to the new field name". */
-  moves: string;
-  /** Singular, for the instruction: "field group". */
-  one: string;
-  oldOnly: FieldDefinition[];
-  newOnly: FieldDefinition[];
-}): void {
-  const { oldOnly, newOnly } = args;
-  if (oldOnly.length <= 1 && newOnly.length <= 1) return;
+function onlyRename(
+  pairs: Array<{ from: FieldDefinition; to: FieldDefinition }>,
+  args: {
+    code: string;
+    /** Plural, for the count: "field groups". */
+    what: string;
+    /** What each rename moves: "the group's existing rows to the new field name". */
+    moves: string;
+    /** Singular, for the instruction: "field group". */
+    one: string;
+  }
+): { from: FieldDefinition; to: FieldDefinition } | null {
+  if (pairs.length <= 1) return pairs[0] ?? null;
+  const oldOnly = [...new Set(pairs.map(p => p.from))];
+  const newOnly = [...new Set(pairs.map(p => p.to))];
   throw NextlyError.validation({
     errors: [
       {
@@ -2639,18 +2642,12 @@ ${allColumnDefs.join(",\n")}
         .filter(to => this.sameRelationTarget(from, to))
         .map(to => ({ from, to }))
     );
-    if (pairs.length === 0) return null;
-    if (pairs.length > 1) {
-      refuseAmbiguousRename({
-        code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
-        what: "many-to-many fields",
-        moves: "the field's links to the new name",
-        one: "many-to-many field",
-        oldOnly: [...new Set(pairs.map(p => p.from))],
-        newOnly: [...new Set(pairs.map(p => p.to))],
-      });
-    }
-    return pairs[0];
+    return onlyRename(pairs, {
+      code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
+      what: "many-to-many fields",
+      moves: "the field's links to the new name",
+      one: "many-to-many field",
+    });
   }
 
   /**
@@ -2680,20 +2677,12 @@ ${allColumnDefs.join(",\n")}
   ): { from: FieldDefinition; to: FieldDefinition } | null {
     // The pairs that may be one field renamed (`fieldGroupRenamePairs`), which `migrate:create`
     // asks about too: incompatible combinations never count toward the refusal below.
-    const pairs = fieldGroupRenamePairs(oldFields, newFields);
-    if (pairs.length === 0) return null;
-    if (pairs.length > 1) {
-      refuseAmbiguousRename({
-        code: "FIELD_GROUP_RENAME_AMBIGUOUS",
-        what: "field groups",
-        moves: "the group's existing rows to the new field name",
-        one: "field group",
-        oldOnly: [...new Set(pairs.map(p => p.from))],
-        newOnly: [...new Set(pairs.map(p => p.to))],
-      });
-    }
-
-    return pairs[0];
+    return onlyRename(fieldGroupRenamePairs(oldFields, newFields), {
+      code: "FIELD_GROUP_RENAME_AMBIGUOUS",
+      what: "field groups",
+      moves: "the group's existing rows to the new field name",
+      one: "field group",
+    });
   }
 
   /**
