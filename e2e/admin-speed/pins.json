@@ -6,13 +6,11 @@
     },
     "screens": {
       "login": {
-        "requests": 4,
+        "requests": 2,
         "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
-          "GET /admin/api/general-settings": 1,
-          "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
@@ -97,13 +95,11 @@
     },
     "screens": {
       "login": {
-        "requests": 4,
+        "requests": 2,
         "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
-          "GET /admin/api/general-settings": 1,
-          "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
@@ -188,13 +184,11 @@
     },
     "screens": {
       "login": {
-        "requests": 4,
+        "requests": 2,
         "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
-          "GET /admin/api/general-settings": 1,
-          "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
