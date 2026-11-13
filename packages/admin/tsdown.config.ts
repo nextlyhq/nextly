@@ -157,6 +157,9 @@ export default defineConfig([
   {
     entry: [
       "src/index.ts",
+      // What `@nextlyhq/plugin-sdk/admin` re-exports to plugins, apart from the
+      // root so it loads with the plugin pages that use it (`src/kit.ts`).
+      "src/kit.ts",
       "src/lib/plugins/component-registry.ts",
       "src/lib/plugins/plugin-components.ts",
       // For tests alone: no admin module imports it, so it never joins the

@@ -16,7 +16,7 @@
  * depend on its own build; `vitest.global-setup.ts` stops a run that bypasses
  * that edge before it reaches a missing entry.
  */
-import * as admin from "@nextlyhq/admin";
+import * as admin from "@nextlyhq/admin/kit";
 import * as entry from "@nextlyhq/plugin-sdk/admin";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
