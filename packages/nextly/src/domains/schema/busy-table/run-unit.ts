@@ -105,25 +105,24 @@ function keepingOf(unit: MigrationUnit, dialect: SupportedDialect): TryKeeping {
  */
 function commitsOnMysql(statement: string): boolean {
   const [first, second, third] = leadingWords(statement, "mysql", 3);
-  switch (first) {
-    case "CREATE":
-      return (
-        second === "TABLE" ||
-        second === "INDEX" ||
-        ((second === "UNIQUE" ||
-          second === "FULLTEXT" ||
-          second === "SPATIAL") &&
-          third === "INDEX")
-      );
-    case "ALTER":
-    case "DROP":
-      return second === "TABLE" || second === "INDEX";
-    case "RENAME":
-      return second === "TABLE";
-    default:
-      return false;
-  }
+  const objects = MYSQL_COMMITTING[first ?? ""];
+  if (objects === undefined) return false;
+  // `CREATE UNIQUE|FULLTEXT|SPATIAL INDEX`: the object is the third word.
+  const object =
+    first === "CREATE" && INDEX_KINDS.has(second ?? "") ? third : second;
+  return objects.has(object ?? "");
 }
+
+/** The objects whose creation, change, drop or rename commits MySQL's transaction, by verb. */
+const MYSQL_COMMITTING: Readonly<Record<string, ReadonlySet<string>>> = {
+  CREATE: new Set(["TABLE", "INDEX"]),
+  ALTER: new Set(["TABLE", "INDEX"]),
+  DROP: new Set(["TABLE", "INDEX"]),
+  RENAME: new Set(["TABLE"]),
+};
+
+/** The kinds of index MySQL writes before `INDEX`. */
+const INDEX_KINDS = new Set(["UNIQUE", "FULLTEXT", "SPATIAL"]);
 
 /**
  * The index of the first statement an ended try did not keep, from the try's first (`from`) and
@@ -264,6 +263,8 @@ export async function runUnitInTries(
             },
             onStatement: index => {
               reached = index;
+              // The watch cancels only the statement it saw waiting, never a later one.
+              watchdog.moveTo(index);
             },
             // The watch stops before the commit hands the connection back to the pool.
             settle: async () => {

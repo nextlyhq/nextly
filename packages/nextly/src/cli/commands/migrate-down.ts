@@ -26,6 +26,7 @@ import {
   type StepFile,
 } from "../../domains/i18n/migration/step-windows";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { busyTableLeftNothing } from "../../domains/schema/busy-table/report";
 import {
   runUnitInTries,
   type BusyTableRun,
@@ -731,12 +732,23 @@ export async function rollBackOne(
       }
     );
   } catch (err) {
-    if (!isConcurrentRun(err) || partial) {
-      await deps.recordFailed(
-        p.filename,
-        truncateErrorMessage(describeError(err, { context: false })),
-        p.transaction
-      );
+    // A DOWN that stopped waiting for a busy table before anything of it was made durable left
+    // the migration applied, as it was: no failed rollback is recorded, and run again it starts.
+    const leftNothing = busyTableLeftNothing(err);
+    if (!leftNothing && (!isConcurrentRun(err) || partial)) {
+      await deps
+        .recordFailed(
+          p.filename,
+          truncateErrorMessage(describeError(err, { context: false })),
+          p.transaction
+        )
+        .catch((recordError: unknown) => {
+          // A busy-table stop says so whatever its record does: on SQLite the holder can still
+          // hold the database, so the record cannot be written.
+          if (!(NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY")) {
+            throw recordError;
+          }
+        });
     }
     // Recorded failed above; a lost race rolled back whole left nothing to
     // record, and the other run's rollback is the migration's outcome. A

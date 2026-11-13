@@ -288,3 +288,16 @@ export function tableBusyError(stop: BusyTableStop): NextlyError {
     logContext: { reason: why, stop: plainStop(stop) },
   });
 }
+
+/**
+ * Whether `error` is a busy-table stop that left nothing of its change: one whose attempt ends
+ * with nothing applied, recorded as no failure.
+ */
+export function busyTableLeftNothing(error: unknown): boolean {
+  if (!NextlyError.is(error) || error.code !== "NEXTLY_TABLE_BUSY")
+    return false;
+  const stop = (
+    error.logContext as { stop?: { outcome?: { kind?: unknown } } } | undefined
+  )?.stop;
+  return stop?.outcome?.kind === "nothing-changed";
+}
