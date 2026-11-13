@@ -25,6 +25,9 @@ import { z } from "zod";
 import { isVirtualField } from "../../collections/fields/virtual";
 import { NextlyError } from "../../errors";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
+import type { SanitizedLocalizationConfig } from "../i18n/config/types";
+import { isLocaleSelector } from "../i18n/locale-selector";
+import { isValidLocale } from "../i18n/resolve-locale";
 
 import { snapshotRecord } from "./shared-publish-base";
 import type { VersionRow } from "./versions-repository";
@@ -52,12 +55,8 @@ export type FieldRewriteValue =
       readonly from: (current: unknown, copy: FieldRewriteCopy) => unknown;
     };
 
-/**
- * @experimental A rewrite of one field of one collection entry.
- */
-export interface FieldRewriteRequest {
-  readonly collection: string;
-  readonly id: string;
+/** What every rewrite names, whether of an entry or of a Single. */
+interface FieldRewriteRequestBase {
   /** A top-level field, by name. */
   readonly field: string;
   /**
@@ -81,6 +80,32 @@ export interface FieldRewriteRequest {
   readonly reason: string;
 }
 
+/** A rewrite of one field of one collection entry. */
+export interface EntryFieldRewriteRequest extends FieldRewriteRequestBase {
+  readonly collection: string;
+  readonly id: string;
+}
+
+/** A rewrite of one field of a Single, which is one document. */
+export interface SingleFieldRewriteRequest extends FieldRewriteRequestBase {
+  readonly single: string;
+}
+
+/**
+ * @experimental A rewrite of one field of one document: a collection entry
+ * (`collection` and `id`) or a Single (`single`).
+ */
+export type FieldRewriteRequest =
+  | EntryFieldRewriteRequest
+  | SingleFieldRewriteRequest;
+
+/** Whether a request rewrites a Single rather than a collection entry. */
+export function rewritesSingle(
+  request: FieldRewriteRequest
+): request is SingleFieldRewriteRequest {
+  return "single" in request;
+}
+
 /**
  * @experimental What a rewrite did: the version the document is now at, which
  * a further rewrite or update gives as the one it read, and every copy it
@@ -94,9 +119,7 @@ export interface FieldRewriteResult {
 /** The longest reason a rewrite keeps: what the history's note column holds. */
 const MAX_REWRITE_REASON = 4000;
 
-const REQUEST = z.strictObject({
-  collection: z.string().trim().min(1),
-  id: z.string().trim().min(1),
+const REQUEST_FIELDS = {
   field: z.string().min(1),
   locale: z.string().min(1).optional(),
   expectedVersion: z.string().min(1),
@@ -109,10 +132,19 @@ const REQUEST = z.strictObject({
     }),
   ]),
   reason: z.string().trim().min(1).max(MAX_REWRITE_REASON),
-});
+};
+
+const REQUEST = z.union([
+  z.strictObject({
+    collection: z.string().trim().min(1),
+    id: z.string().trim().min(1),
+    ...REQUEST_FIELDS,
+  }),
+  z.strictObject({ single: z.string().trim().min(1), ...REQUEST_FIELDS }),
+]);
 
 const REQUEST_REFUSAL =
-  "A field rewrite names one entry (`collection` and `id`), one top-level `field`, the `expectedVersion` the entry was read at, the new value as `set: { value }` or `set: { from(current, copy) }`, and a `reason` of at most 4,000 characters; `locale` is optional.";
+  "A field rewrite names one entry (`collection` and `id`) or one Single (`single`), one top-level `field`, the `expectedVersion` the entry was read at, the new value as `set: { value }` or `set: { from(current, copy) }`, and a `reason` of at most 4,000 characters; `locale` is optional.";
 
 /**
  * A request as the write path takes it, or `INVALID_INPUT` saying what one
@@ -141,11 +173,87 @@ export function parseFieldRewrite(input: unknown): FieldRewriteRequest {
   return request;
 }
 
+/**
+ * Who a rewrite made through a service's request context is made as. The
+ * language is the request's own: a context naming another one would leave two
+ * answers to which language is rewritten, so it is refused.
+ */
+export function rewriteCallerOf<
+  C extends {
+    locale?: string;
+    user?: unknown;
+    overrideAccess?: boolean;
+    authenticatedScope?: unknown;
+    actor?: unknown;
+  },
+>(
+  context: C,
+  plugin: string | undefined
+): {
+  user: C["user"];
+  overrideAccess: C["overrideAccess"];
+  authenticatedScope: C["authenticatedScope"];
+  actor?: NonNullable<C["actor"]>;
+  plugin?: string;
+} {
+  if (context.locale !== undefined) {
+    throw NextlyError.invalidInput({
+      message:
+        "A field rewrite names its language as the request's `locale`, not in the call's options.",
+    });
+  }
+  return {
+    user: context.user,
+    overrideAccess: context.overrideAccess,
+    authenticatedScope: context.authenticatedScope,
+    ...(context.actor === undefined || context.actor === null
+      ? {}
+      : { actor: context.actor as NonNullable<C["actor"]> }),
+    ...(plugin === undefined ? {} : { plugin }),
+  };
+}
+
 /** The version a request gives, as the update path's version check reads one. */
 export function versionBodyOf(
   request: Pick<FieldRewriteRequest, "expectedVersion">
 ): Record<string, unknown> {
   return { [DOCUMENT_VERSION_KEY]: request.expectedVersion };
+}
+
+/**
+ * The language a rewrite of a field reaches: the one named, or the default,
+ * for a translated field; none for a shared field, which every language holds
+ * alike, so naming one is refused rather than ignored. A language the site
+ * does not configure is refused too: written, it would be read as the default,
+ * rewriting another language than the one named.
+ */
+export function rewriteLocaleFor(
+  request: Pick<FieldRewriteRequest, "field" | "locale">,
+  translated: boolean,
+  localization: SanitizedLocalizationConfig | undefined
+): string | undefined {
+  if (!translated) {
+    if (request.locale !== undefined) {
+      throw NextlyError.invalidInput({
+        message: `The field "${request.field}" is shared by every language, so a rewrite of it names no locale.`,
+      });
+    }
+    return undefined;
+  }
+  const locale = request.locale ?? localization?.defaultLocale;
+  if (locale === undefined || isLocaleSelector(locale)) {
+    throw NextlyError.invalidInput({
+      message: `The field "${request.field}" is translated, so a rewrite of it names one language.`,
+    });
+  }
+  if (localization && !isValidLocale(localization, locale)) {
+    throw NextlyError.invalidInput({
+      message: `Unknown locale '${locale}'. Configured locales: ${localization.locales
+        .map(l => l.code)
+        .join(", ")}.`,
+    });
+  }
+  return locale;
 }
 
 /** What {@link assertRewritableField} reads of a field. */

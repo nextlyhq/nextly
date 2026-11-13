@@ -70,6 +70,7 @@ import {
   narrows,
 } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   SYSTEM_TIMESTAMP_KEYS,
@@ -185,11 +186,13 @@ import {
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   bumpDocumentRevision,
   documentVersionOn,
   mainRowBump,
+  revisionBumpColumns,
   setDocumentVersion,
   translationRevisionBumpColumns,
   translationTableOf,
@@ -206,6 +209,25 @@ import {
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
+import {
+  assertRewritableField,
+  copyWords,
+  rewriteLocaleFor,
+  versionBodyOf,
+  type FieldRewriteCopy,
+  type FieldRewriteResult,
+  type RewritableFieldShape,
+  type SingleFieldRewriteRequest,
+} from "../../versions/field-rewrite";
+import {
+  decideRewriteCopies,
+  draftsBehindLive,
+  fieldRewriteEvent,
+  moveRewrittenDraftBases,
+  rewrittenCopies,
+  saveRewrittenDraft,
+  type RewriteLiveShared,
+} from "../../versions/field-rewrite-copies";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
@@ -229,6 +251,7 @@ import {
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
+  sameSharedValue,
   sharedValuesConflict,
   snapshotRecord,
   takeLiveSharedValuesInto,
@@ -282,6 +305,7 @@ import type {
 } from "../types";
 
 import {
+  readCompanionValuesInTx,
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
@@ -402,6 +426,61 @@ type PendingChangeStale = {
 };
 
 /**
+ * A field rewrite as a Single's write path takes it: the request, and who
+ * makes it.
+ *
+ * @experimental
+ */
+export interface SingleFieldRewriteCall {
+  request: SingleFieldRewriteRequest;
+  /** The person it is made for; not judged when `overrideAccess` is set. */
+  user?: UserContext;
+  /** The system's rewrite, judged by no access rule. */
+  overrideAccess?: boolean;
+  authenticatedScope?: AuthenticatedScope;
+  actor?: RequestActor;
+  /**
+   * The plugin making it, by the name it booted under: history names it.
+   * Set by the plugin's own services from its identity, never from a request.
+   */
+  plugin?: string;
+}
+
+/** What a Single rewrite's transaction works from, once its call is judged. */
+interface SingleRewriteInTx {
+  call: SingleFieldRewriteCall;
+  singleMeta: DynamicSingleRecord;
+  field: string;
+  /** Its translations table, where it keeps one that is there to write. */
+  companion: CompanionSchema | null;
+  /** The language a translated field is rewritten in; null for a shared one. */
+  translatedIn: string | null;
+  check: VersionCheck;
+  staleWrite: StaleWriteHolder;
+  /** The person's grants, resolved before the transaction; none for the system. */
+  grants: (() => Promise<CallerGrants>) | undefined;
+  actor: RequestActor;
+  /** The Single's row, once locked, for an out-of-date refusal's answer. */
+  locked: { id?: string };
+}
+
+/**
+ * A rewritten value as a save takes it from a caller: an expanded upload or
+ * relationship reduced to the reference it stands for, so a value handed back
+ * as a read gave it is stored, judged and compared as stored.
+ */
+function singleRewritePayload(
+  fields: DynamicSingleRecord["fields"],
+  field: string,
+  value: unknown
+): unknown {
+  const data: Record<string, unknown> = { [field]: structuredClone(value) };
+  normalizeUploadFields(data, fields);
+  normalizeRelationshipFields(data, fields);
+  return data[field];
+}
+
+/**
  * SingleMutationService
  *
  * Handles the write-path for Single documents. The get-style helpers
@@ -432,7 +511,7 @@ export class SingleMutationService extends BaseService {
     tx: TransactionContext,
     singleMeta: DynamicSingleRecord,
     entryId: string,
-    companion: CompanionSchema,
+    companion: CompanionSchema | null,
     locale: string | null
   ): Promise<SharedComparison & { live: Record<string, unknown> }> {
     return liveSharedSingle(
@@ -449,7 +528,9 @@ export class SingleMutationService extends BaseService {
         singleMeta,
         entryId,
         locale,
-        translated: new Set(companion.localizedFields.map(f => f.name)),
+        translated: new Set(
+          (companion?.localizedFields ?? []).map(f => f.name)
+        ),
       }
     );
   }
@@ -5838,6 +5919,827 @@ export class SingleMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * Rewrite one field of a Single on its live copy and on every pending draft
+   * that holds it, in one transaction, without publishing anything: each
+   * draft stays a draft and the Single's status is unchanged. See
+   * `domains/versions/field-rewrite` for what a rewrite is.
+   *
+   * Judged from the version the caller read, under the Single's row lock: a
+   * Single saved since is refused with `STALE_VERSION` and nothing changes.
+   * There is no overwrite. Made for a person, it needs their permission both
+   * to update and (where the Single has a publish lifecycle) to publish it,
+   * since it changes what visitors see, and every field rule that applies to
+   * their own update.
+   *
+   * It runs none of the Single's or its fields' save hooks, nor any
+   * in-transaction handler: those are written for a whole document passing
+   * through a save, and a rewrite changes one value in several copies. Where
+   * the live copy changes, it records the `single.updated` event and the
+   * Single's revalidation, as a save of the live copy does. A change to
+   * drafts alone records neither, as a draft save records none.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: SingleFieldRewriteCall
+  ): Promise<SingleResult<FieldRewriteResult>> {
+    const slug = call.request.single;
+    const staleWrite: StaleWriteHolder = {};
+    const locked: { id?: string } = {};
+    let check: VersionCheck = { kind: "unjudged" };
+    let committed = false;
+    try {
+      // Refused first when the Single is removed from code, before any read
+      // of its document, so a refused write changes nothing.
+      await refuseWriteIfRemovedFromCode("single", slug);
+      check = versionCheckFor(versionBodyOf(call.request), { exempt: false });
+      const singleMeta = await resolveSingleForRequest(
+        this.adapter,
+        this.singleRegistryService,
+        slug,
+        this.logger,
+        // A write: refused in production where the Single was never registered.
+        { intent: "write" }
+      );
+      if (!singleMeta) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: `Single "${slug}" not found`,
+        };
+      }
+      const target = await this.singleRewriteTarget(call, singleMeta, check);
+      const denied = await this.singleRewriteRefusal(call, singleMeta);
+      if (denied) return { ...denied, data: undefined };
+      // Resolved before the transaction: they take a pooled connection.
+      const grants =
+        call.overrideAccess === true
+          ? undefined
+          : await resolvedCallerGrants(
+              call.user,
+              call.authenticatedScope,
+              this.fieldRuleVisitor
+            );
+      const done = await this.adapter.transaction(tx =>
+        this.rewriteSingleFieldInTx(tx, {
+          call,
+          singleMeta,
+          ...target,
+          check,
+          staleWrite,
+          grants,
+          actor: actorForWrite(call.actor ?? null, call.user),
+          locked,
+        })
+      );
+      committed = true;
+      // A release holding the Single is judged again once the write is
+      // durable, as after any save of it.
+      const entryId = done.entryId;
+      await this.afterCommit(() =>
+        stopReleasesHolding({
+          documents: [{ scopeKind: "single", scopeSlug: slug, entryId }],
+        })
+      );
+      return {
+        success: true,
+        statusCode: 200,
+        message: "The field was rewritten.",
+        data: { version: done.version, copies: done.copies },
+        eventRecorded: done.eventRecorded,
+        // The live copy changed, so the Single's pages revalidate.
+        revalidationIntent: done.liveChanged
+          ? buildSingleRevalidationIntent(
+              slug,
+              readRevalidateConfig(singleMeta)
+            )
+          : undefined,
+        committed: true,
+      };
+    } catch (error) {
+      // Out of date: answered after the rollback, from the Single as it is now.
+      if (staleWrite.at && locked.id && check.kind === "judge") {
+        return buildSingleErrorResult(
+          await staleVersionErrorFor(poolRevisionReader(this.adapter), {
+            dialect: this.adapter.dialect,
+            scopeKind: "single",
+            slug,
+            id: locked.id,
+            given: check.given,
+            at: staleWrite.at,
+            reader: {
+              user: call.user,
+              trusted: call.overrideAccess === true,
+              authenticatedScope: call.authenticatedScope,
+            },
+          }),
+          "Failed to rewrite the field"
+        );
+      }
+      rethrowIfRuleCouldNotRun(error);
+      // A refusal thrown inside the transaction comes back wrapped by the
+      // adapter: answered as itself.
+      const cause = (error as { cause?: unknown } | null)?.cause;
+      return {
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            cause instanceof NextlyError ? cause : error,
+            singleNotMigrated(this.singleRegistryService, slug, {
+              trusted: call.overrideAccess === true,
+            }),
+            { written: committed }
+          ),
+          "Failed to rewrite the field"
+        ),
+        committed,
+      };
+    }
+  }
+
+  /**
+   * The field a Single's rewrite names and where it is stored, judged before
+   * anything of the Single is read: a field it may rewrite, translated or
+   * shared as its translations table stores it, and the language it reaches.
+   */
+  private async singleRewriteTarget(
+    call: SingleFieldRewriteCall,
+    singleMeta: DynamicSingleRecord,
+    check: VersionCheck
+  ): Promise<{
+    field: string;
+    companion: CompanionSchema | null;
+    translatedIn: string | null;
+  }> {
+    // Looked up among the fields stored at the document's top level, and
+    // refused where storage keeps it in tables of its own, by storage's own
+    // predicates.
+    const field = assertRewritableField(
+      addressableFields(singleMeta.fields) as unknown as RewritableFieldShape[],
+      call.request.field,
+      f => isFieldGroupField(f) || usesJunctionTable(f)
+    );
+    const companion = this.translationsOf(singleMeta);
+    // Asked on the pool before the transaction, which only consults it.
+    const ready =
+      companion !== null &&
+      (await resolveCompanionReadiness(this.adapter, {
+        companionTableName: companion.companionTableName,
+        mainTableName: singleMeta.tableName,
+        localizedColumns: companion.localizedFields.map(f => f.column),
+      })) === "ready";
+    const translated =
+      companion?.localizedFields.some(f => f.name === field.name) === true;
+    // A translated value has nowhere to be written until its table exists.
+    if (translated && !ready) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message: companionNotReadyMessage("single"),
+        logContext: {
+          cause: "field-rewrite-without-companion",
+          single: singleMeta.slug,
+        },
+      });
+    }
+    const locale = rewriteLocaleFor(call.request, translated, this.localization);
+    // A translated field's language is judged on its own counter, so the
+    // version must be a read of that language.
+    if (translated && check.kind === "judge") {
+      judgedLanguage(check.given, locale);
+    }
+    // The field groups' translations, read before the transaction, which
+    // only consults their readiness: unread, a language's would be skipped.
+    await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+      fields: singleMeta.fields,
+      data: {},
+      locale: undefined,
+    });
+    return {
+      field: field.name ?? call.request.field,
+      companion: ready ? companion : null,
+      translatedIn: translated ? (locale ?? null) : null,
+    };
+  }
+
+  /**
+   * Whether a person may rewrite the Single: their update of it and, where it
+   * has a publish lifecycle, their publish of it, since a rewrite changes the
+   * live copy. Never route-authorized: a route attests an update, never a
+   * publish. Null for the system, which asks neither.
+   */
+  private async singleRewriteRefusal(
+    call: SingleFieldRewriteCall,
+    singleMeta: DynamicSingleRecord
+  ): Promise<SingleResult | null> {
+    if (call.overrideAccess === true) return null;
+    const ask = (operation: "update" | "publish") =>
+      checkSingleAccess({
+        slug: singleMeta.slug,
+        operation,
+        user: call.user,
+        overrideAccess: false,
+        routeAuthorized: false,
+        rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
+        authenticatedScope: call.authenticatedScope,
+        logger: this.logger,
+      });
+    const update = await ask("update");
+    if (update) return update;
+    return singleMeta.status === true ? ask("publish") : null;
+  }
+
+  /** The body of {@link rewriteField}, in its transaction. */
+  private async rewriteSingleFieldInTx(
+    tx: TransactionContext,
+    args: SingleRewriteInTx
+  ): Promise<{
+    entryId: string;
+    version: string;
+    copies: FieldRewriteCopy[];
+    liveChanged: boolean;
+    eventRecorded: boolean;
+  }> {
+    const { singleMeta, call, field, translatedIn, companion } = args;
+    const slug = singleMeta.slug;
+    // The lock every save and publish of the Single takes, so nothing moves
+    // the copies between the judgement below and the writes.
+    const entryId = await this.lockedSingleRowId(
+      tx,
+      singleMeta.tableName,
+      slug,
+      undefined,
+      "field-rewrite-single-replaced"
+    );
+    if (entryId === undefined) {
+      throw NextlyError.notFound({
+        message: "This Single has no document to rewrite.",
+        logContext: { reason: "field-rewrite-single-missing", single: slug },
+      });
+    }
+    args.locked.id = entryId;
+    // The main row's counter moves with every save of the live copy's shared
+    // values and of any draft, so one version covers every copy a rewrite
+    // reaches. The languages the given version names are judged with it.
+    const languagesTable = translationTableOf(companion);
+    const given = givenOf(args.check);
+    await refuseIfMainMoved(
+      tx,
+      this.adapter.dialect,
+      args.check,
+      {
+        table: singleMeta.tableName,
+        id: entryId,
+        languages: languagesJudged(
+          languagesTable,
+          given ? Object.keys(given.languages) : undefined
+        ),
+      },
+      args.staleWrite
+    );
+    const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
+    const liveBefore = await this.rewriteLiveSingle(tx, args, entryId);
+    const decided = await decideRewriteCopies({
+      set: call.request.set,
+      field,
+      translatedIn,
+      liveValue: liveBefore.value,
+      workingDrafts: await new VersionsRepository(tx).findAllWorkingDrafts(ref),
+      allowed: (copy, value) =>
+        this.assertSingleRewriteAllowed(tx, args, entryId, copy, value),
+    });
+    const localized = companion !== null;
+    // Read before the live copy moves: a language change already behind on
+    // another field keeps its base (`moveRewrittenDraftBases`).
+    const behindBefore = await draftsBehindLive(tx, {
+      localized,
+      field,
+      translatedIn,
+      ref,
+      liveBefore,
+      slots: decided.held,
+    });
+    // The live copy as events carry it, before the write.
+    const previous = decided.liveChanges
+      ? await this.singleEventDocument(tx, args, entryId)
+      : null;
+    if (decided.liveChanges) {
+      await this.writeRewrittenSingleValue(tx, args, entryId, {
+        value: decided.liveValue,
+        stored: liveBefore.value,
+      });
+    } else if (decided.drafts.length > 0) {
+      // Only drafts move: the Single's version still does, as a draft save's
+      // does, so a later save from an older read is refused.
+      await bumpDocumentRevision(
+        tx,
+        singleMeta.tableName,
+        { id: entryId },
+        args.actor
+      );
+    }
+    const liveAfter = await this.rewriteLiveSingle(tx, args, entryId);
+    const versionNo = decided.liveChanges
+      ? await this.captureRewrittenSingle(tx, args, entryId)
+      : null;
+    // Pinned before the drafts are saved, so their retention keeps the
+    // version the bases now name.
+    if (decided.liveChanges) {
+      await moveRewrittenDraftBases(tx, {
+        localized,
+        translatedIn,
+        ref,
+        slots: decided.held,
+        behindBefore,
+        liveAfter,
+      });
+    }
+    // Each draft whose value moved, saved as a save of it is, each still a
+    // draft.
+    const reach = await passwordReachOf(
+      singleMeta.fields,
+      this.fieldGroupDataService,
+      tx.getDrizzle()
+    );
+    for (const { slot, value } of decided.drafts) {
+      await saveRewrittenDraft(tx, this.versionCapture, {
+        ref,
+        field,
+        fields: singleMeta.fields,
+        reach,
+        slot,
+        value,
+        liveAfter: liveAfter.document,
+        maxPerDoc: singleMeta.versions?.maxPerDoc,
+        rewrittenBy: call.user?.id ?? null,
+        // A Single without languages keeps its field groups in the default
+        // language, as its saves record them.
+        componentLocale: this.localization?.defaultLocale ?? null,
+      });
+    }
+    const copies = rewrittenCopies(decided);
+    // A rewrite that changed nothing records nothing.
+    if (copies.length > 0) {
+      await recordWriteEvent(
+        tx,
+        { adapter: this.adapter },
+        {
+          subject: { kind: "single", slug, id: entryId },
+          ...fieldRewriteEvent({
+            field,
+            copies,
+            reason: call.request.reason,
+            actor: args.actor,
+            personName: call.user?.name ?? null,
+            plugin: call.plugin,
+            versionNo,
+            localized,
+            translatedIn,
+          }),
+        }
+      );
+    }
+    const eventRecorded = previous
+      ? await this.recordRewrittenSingleLive(tx, args, entryId, previous)
+      : false;
+    const version = await documentVersionOn(tx, {
+      dialect: this.adapter.dialect,
+      table: singleMeta.tableName,
+      id: entryId,
+      languagesTable,
+      localization: this.localization,
+      locale: translatedIn ?? undefined,
+    });
+    return {
+      entryId,
+      version: version ?? "",
+      copies,
+      liveChanged: decided.liveChanges,
+      eventRecorded,
+    };
+  }
+
+  /**
+   * The live Single as a rewrite reads it, on its transaction: as a version
+   * snapshot holds it (passwords and server-only columns left out), with the
+   * rewritten language's translations over it for a translated field, its
+   * shared fields, and the field's current live value.
+   */
+  private async rewriteLiveSingle(
+    tx: TransactionContext,
+    args: SingleRewriteInTx,
+    entryId: string
+  ): Promise<RewriteLiveShared & { value: unknown }> {
+    const { singleMeta, field, translatedIn, companion } = args;
+    const { live, shared, views } = await this.liveSharedDocument(
+      tx,
+      singleMeta,
+      entryId,
+      companion,
+      translatedIn
+    );
+    const translations =
+      translatedIn !== null && companion
+        ? this.queryService.deserializeJsonFields(
+            (await readCompanionValuesInTx(
+              tx,
+              companion,
+              entryId,
+              translatedIn
+            )) as SingleDocument,
+            singleMeta.fields
+          )
+        : {};
+    const document: Record<string, unknown> = { ...live, ...translations };
+    applyReadShape(
+      document,
+      singleMeta.fields,
+      singleMeta.tableName,
+      await passwordReachOf(
+        singleMeta.fields,
+        this.fieldGroupDataService,
+        tx.getDrizzle()
+      )
+    );
+    return { shared, views, document, value: document[field] };
+  }
+
+  /**
+   * Refuse a copy's new value that a save would not take: one a field rule
+   * keeps from the person it is made for, or one the field's own checks
+   * refuse, named with the copy it was for. Nothing is written yet, and
+   * nothing is read off the transaction.
+   */
+  private async assertSingleRewriteAllowed(
+    tx: TransactionContext,
+    args: SingleRewriteInTx,
+    entryId: string,
+    copy: FieldRewriteCopy,
+    value: unknown
+  ): Promise<void> {
+    const { singleMeta, field, call, companion } = args;
+    const slug = singleMeta.slug;
+    const fields = singleMeta.fields;
+    const written = singleRewritePayload(fields, field, value);
+    if (call.overrideAccess !== true) {
+      // Judged on a copy: the rule pass removes a field the person may not
+      // set, and may change one, and either refuses the rewrite.
+      const probe: Record<string, unknown> = {
+        [field]: structuredClone(written),
+      };
+      await applyFieldWriteAccess({
+        kind: "single",
+        slug,
+        data: probe,
+        operation: "update",
+        user: call.user,
+        authenticatedScope: call.authenticatedScope,
+        overrideAccess: false,
+        id: entryId,
+        grants: args.grants,
+      });
+      if (!(field in probe) || !sameSharedValue(probe[field], written)) {
+        throw NextlyError.forbidden({
+          logContext: {
+            reason: "field-rewrite-field-rule",
+            single: slug,
+            field,
+          },
+        });
+      }
+    }
+    const defaultLocale = this.localization?.defaultLocale ?? null;
+    const issues = await validateEntryData(
+      relationshipValidationView({ [field]: written }, fields),
+      attachFieldValidators("single", slug, fields),
+      {
+        mode: "update",
+        req: call.user ? { user: call.user } : {},
+        // A component inside a group or repeater, judged with its schema
+        // read on the transaction.
+        componentFields: await containedComponentResolver(
+          fields,
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug,
+              tx.getDrizzle()
+            )) ?? null
+        ),
+        localizedFieldNames: new Set(
+          (companion?.localizedFields ?? []).map(f => f.name)
+        ),
+        // Another language may leave a required translated field blank, as
+        // a save in that language may.
+        enforceLocalizedRequired:
+          copy.locale === null || copy.locale === defaultLocale,
+        write: storedFieldRead.entryWriteContext({
+          kind: "single",
+          slug,
+          ...(copy.locale === null ? {} : { locale: copy.locale }),
+          connection: {
+            db: this.adapter,
+            executor: tx.getDrizzle(),
+            defaultLocale,
+          },
+        }),
+      }
+    );
+    if (issues.length > 0) {
+      throw NextlyError.validation({
+        errors: issues.map(issue => ({
+          ...issue,
+          message: `${issue.message} (the ${copyWords(copy)})`,
+        })),
+      });
+    }
+  }
+
+  /**
+   * Write a copy's new value to the live Single: its row, or its language's
+   * row of the translations table for a translated field, shaped as a save
+   * shapes it, with the Single's counter moved once.
+   */
+  private async writeRewrittenSingleValue(
+    tx: TransactionContext,
+    args: SingleRewriteInTx,
+    entryId: string,
+    write: { value: unknown; stored: unknown }
+  ): Promise<void> {
+    const { singleMeta, field, translatedIn, companion } = args;
+    const fields = singleMeta.fields;
+    const data: Record<string, unknown> = {
+      [field]: singleRewritePayload(fields, field, write.value),
+    };
+    // Repeater rows keep their ids against the live value, as a save's do.
+    assignRepeaterRowIds(
+      data,
+      { [field]: write.stored },
+      fields,
+      await passwordReachOf(fields, this.fieldGroupDataService, tx.getDrizzle())
+    );
+    coerceDateFieldsToDate(data, fields);
+    const columns = stripImmutableSystemFields(
+      keysToSnakeCase(serializeJsonFields(data, fields)) as Record<
+        string,
+        unknown
+      >,
+      "single",
+      singleMeta.tableName,
+      fields
+    );
+    // A translated value goes to its language's row, and leaves the main one.
+    const { main, companion: translation } =
+      translatedIn !== null && companion
+        ? splitLocalizedWrite(columns, companion.localizedFields)
+        : { main: columns, companion: {} as Record<string, unknown> };
+    const at = new Date();
+    await tx.update(
+      singleMeta.tableName,
+      { ...main, updated_at: at, ...revisionBumpColumns(args.actor, at) },
+      this.whereEq("id", entryId)
+    );
+    if (translatedIn === null || !companion) return;
+    // The language row's version is claimed where the version given names
+    // it; the main row's was judged under the lock already.
+    const given = givenOf(args.check);
+    const { claimed } = await refuseIfLanguageMoved(
+      tx,
+      this.adapter.dialect,
+      args.check,
+      {
+        table: singleMeta.tableName,
+        id: entryId,
+        languagesTable: companion.companionTableName,
+        judged:
+          given && Object.hasOwn(given.languages, translatedIn)
+            ? translatedIn
+            : undefined,
+        written: translatedIn,
+      },
+      args.actor,
+      args.staleWrite
+    );
+    await writeCompanionValues({
+      tx,
+      dialect: this.adapter.dialect,
+      companionTableName: companion.companionTableName,
+      entryId,
+      locale: translatedIn,
+      values: translation,
+      savedBy: args.actor,
+      revisionClaimed: claimed,
+    });
+  }
+
+  /**
+   * The language a rewrite's live copy is recorded and announced in: the
+   * translated field's own, or for a shared field the default one, whose
+   * translations the Single shows beside it. None for a Single without
+   * translations.
+   */
+  private rewriteViewLocale(args: SingleRewriteInTx): string | undefined {
+    if (args.translatedIn !== null) return args.translatedIn;
+    return args.companion ? this.localization?.defaultLocale : undefined;
+  }
+
+  /**
+   * A version of the live Single as the rewrite left it, as a save of it
+   * records one, in the language {@link rewriteViewLocale} names, with that
+   * language's own status. Null where the Single keeps no versions, or the
+   * snapshot matches the last one.
+   */
+  private async captureRewrittenSingle(
+    tx: TransactionContext,
+    args: SingleRewriteInTx,
+    entryId: string
+  ): Promise<number | null> {
+    const { singleMeta, companion, call } = args;
+    if (!singleMeta.versions?.enabled) return null;
+    const fields = singleMeta.fields;
+    const row = await tx.selectOne<Record<string, unknown>>(
+      singleMeta.tableName,
+      { where: this.whereEq("id", entryId) }
+    );
+    const parentRow = convertTimestampsToCamelCase({ ...(row ?? {}) });
+    const locale = this.rewriteViewLocale(args);
+    // A translated rewrite records its language; a shared one records the
+    // default language's translations with it only where there are any, as
+    // a save of a shared field does.
+    let inLanguage = args.translatedIn !== null;
+    if (companion && locale !== undefined) {
+      const translations = await readCompanionValuesInTx(
+        tx,
+        companion,
+        entryId,
+        locale
+      );
+      Object.assign(parentRow, translations);
+      if (Object.values(translations).some(v => v != null)) inLanguage = true;
+    }
+    // A snapshot of a language records that language's own status: a draft
+    // translation is never recorded as published.
+    if (inLanguage && companion?.hasStatus && locale !== undefined) {
+      const own = await this.readCompanionStatusInTx(
+        tx,
+        companion,
+        entryId,
+        locale
+      );
+      if (own !== null) parentRow.status = own;
+    }
+    applyReadShape(
+      parentRow,
+      fields,
+      singleMeta.tableName,
+      await passwordReachOf(fields, this.fieldGroupDataService, tx.getDrizzle())
+    );
+    const service = this.fieldGroupDataService;
+    const componentSchemas = service
+      ? await resolveComponentFieldMap(fields, componentSlug =>
+          service.getComponentFields(componentSlug, tx.getDrizzle())
+        )
+      : new Map<string, (typeof fields)[number][]>();
+    const resolve = (componentSlug: string) =>
+      componentSchemas.get(componentSlug);
+    const components = await readComponentSubtrees({
+      fieldGroupDataService: service,
+      tx,
+      entryId,
+      parentTable: singleMeta.tableName,
+      fieldConfigs: fields,
+      locale,
+      reason: "field-rewrite-single-component-read",
+      logContext: { slug: singleMeta.slug },
+    });
+    const { versionNo } = await captureInTx(tx, this.versionCapture, {
+      onlyIfChanged: true,
+      lifecycle: hasLifecycle(singleMeta),
+      ref: { scopeKind: "single", scopeSlug: singleMeta.slug, entryId },
+      contentStatus: parentRow.status,
+      parts: {
+        parentRow: tagNestedComponentTypes(
+          parentRow,
+          fields,
+          resolve
+        ) as Record<string, unknown>,
+        components: tagComponentTypes(components, fields, resolve),
+      },
+      createdBy: call.user?.id ?? null,
+      locale:
+        inLanguage || carriesComponentValues(fields) ? (locale ?? null) : null,
+      maxPerDoc: singleMeta.versions.maxPerDoc,
+    });
+    return versionNo;
+  }
+
+  /**
+   * The live Single as the `single.updated` event and the activity trail
+   * carry it, in the language {@link rewriteViewLocale} names.
+   */
+  private async singleEventDocument(
+    tx: TransactionContext,
+    args: SingleRewriteInTx,
+    entryId: string
+  ): Promise<Record<string, unknown>> {
+    const { singleMeta, companion } = args;
+    const row = await tx.selectOne<Record<string, unknown>>(
+      singleMeta.tableName,
+      { where: this.whereEq("id", entryId) }
+    );
+    const locale = this.rewriteViewLocale(args);
+    const inLanguage = companion !== null && locale !== undefined;
+    return buildSingleWebhookDoc(
+      this.fieldGroupDataService,
+      tx,
+      entryId,
+      singleMeta.tableName,
+      row ?? {},
+      singleMeta.fields,
+      companion,
+      companion !== null,
+      inLanguage
+        ? await readCompanionLocaleValues(
+            this.adapter,
+            tx,
+            companion,
+            entryId,
+            locale
+          )
+        : {},
+      locale,
+      // A language's own status, where each language publishes on its own.
+      inLanguage && companion.hasStatus
+        ? ((await this.readCompanionStatusInTx(
+            tx,
+            companion,
+            entryId,
+            locale
+          )) ?? undefined)
+        : undefined
+    );
+  }
+
+  /**
+   * What a rewrite of the live Single records beside its writes: the media
+   * it now uses, its row in the activity trail and the `single.updated`
+   * event. Answers whether that event was recorded.
+   */
+  private async recordRewrittenSingleLive(
+    tx: TransactionContext,
+    args: SingleRewriteInTx,
+    entryId: string,
+    previous: Record<string, unknown>
+  ): Promise<boolean> {
+    const { singleMeta, companion, translatedIn, actor } = args;
+    const slug = singleMeta.slug;
+    const data = await this.singleEventDocument(tx, args, entryId);
+    const { recordSingleMediaUsage } = await import("./single-media-usage");
+    await recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
+      slug,
+      rowId: entryId,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields,
+      companion,
+    });
+    // An edit of the live copy, and no change to whether it is live.
+    await recordSingleSaveActivity(tx, {
+      slug,
+      entryId,
+      label: singleMeta.label,
+      locale: translatedIn,
+      actor,
+      data,
+      previous,
+      publication: {
+        statusAfter: undefined,
+        statusBefore: undefined,
+        promotedPendingEdits: false,
+        restores: false,
+        requestEdits: true,
+      },
+    });
+    const service = this.fieldGroupDataService;
+    return recordMutationEvent(tx, {
+      type: "single.updated",
+      resource: {
+        kind: "single",
+        slug,
+        id: entryId,
+        ...(translatedIn === null ? {} : { locale: translatedIn }),
+      },
+      data,
+      previous,
+      // Expanded on the transaction, so a component's secret and hidden
+      // fields are stripped from the payload too.
+      fields: await expandComponentFields(singleMeta.fields, async componentSlug =>
+        service
+          ? await service.getComponentFields(componentSlug, tx.getDrizzle())
+          : null
+      ),
+      actor,
+    });
   }
 
   /**

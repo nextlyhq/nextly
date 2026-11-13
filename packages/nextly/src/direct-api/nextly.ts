@@ -614,9 +614,9 @@ export class Nextly implements NextlyContext {
   }
 
   /**
-   * @experimental Rewrite one field of an entry on its live copy and on every
-   * pending draft that holds it, without publishing, from the version the
-   * caller read. See `RewriteFieldArgs`.
+   * @experimental Rewrite one field of an entry or a Single on its live copy
+   * and on every pending draft that holds it, without publishing, from the
+   * version the caller read. See `RewriteFieldArgs`.
    */
   rewriteField(
     args: RewriteFieldArgs
@@ -1024,7 +1024,7 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
-  /** Rewrite one field on an entry's live copy and drafts. @experimental */
+  /** Rewrite one field on an entry's or a Single's live copy and drafts. @experimental */
   rewriteField: async (args: RewriteFieldArgs) =>
     (await requireNextlyOnceStarted()).rewriteField(args),
   /** Publish the chosen parts of one entry. @experimental */

@@ -16,6 +16,7 @@ import type {
   DirectAPIConfig,
   PopulateOptions,
   RunAsPrincipal,
+  SingleSlug,
   WhereFilter,
 } from "./shared";
 
@@ -766,22 +767,9 @@ export interface PublishResult {
   shared: { changes: boolean; added: boolean };
 }
 
-/**
- * @experimental Arguments for `nextly.rewriteField`: one field of one entry,
- * rewritten on its live copy and on every pending draft that holds it, without
- * publishing, from the version the caller read.
- *
- * Trusted server code by default, as every Direct API call is
- * (`overrideAccess: true`). Made for a person (`overrideAccess: false` with
- * `user`), it needs their permission to update the entry and, where the
- * collection has a publish lifecycle, to publish it.
- */
-export interface RewriteFieldArgs
+/** What every `nextly.rewriteField` call names, of an entry or of a Single. */
+interface RewriteFieldArgsBase
   extends Pick<DirectAPIConfig, "overrideAccess" | "user"> {
-  /** The entry's collection. */
-  collection: CollectionSlug;
-  /** The entry's id. */
-  id: string;
   /** A top-level field, by name. */
   field: string;
   /**
@@ -789,10 +777,33 @@ export interface RewriteFieldArgs
    * when omitted. A shared field takes none.
    */
   locale?: string;
-  /** The version (`_rev`) the entry was read at. */
+  /** The version (`_rev`) the document was read at. */
   expectedVersion: string;
   /** The new value, or how to compute it from each copy's own. */
   set: FieldRewriteValue;
-  /** Why, kept in the entry's history. */
+  /** Why, kept in the document's history. */
   reason: string;
 }
+
+/**
+ * @experimental Arguments for `nextly.rewriteField`: one field of one entry
+ * (`collection` and `id`) or of a Single (`single`), rewritten on its live
+ * copy and on every pending draft that holds it, without publishing, from the
+ * version the caller read.
+ *
+ * Trusted server code by default, as every Direct API call is
+ * (`overrideAccess: true`). Made for a person (`overrideAccess: false` with
+ * `user`), it needs their permission to update the document and, where it has
+ * a publish lifecycle, to publish it.
+ */
+export type RewriteFieldArgs =
+  | (RewriteFieldArgsBase & {
+      /** The entry's collection. */
+      collection: CollectionSlug;
+      /** The entry's id. */
+      id: string;
+    })
+  | (RewriteFieldArgsBase & {
+      /** The Single, by slug. */
+      single: SingleSlug;
+    });
