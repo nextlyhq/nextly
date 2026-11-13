@@ -39,6 +39,7 @@ import {
 } from "../migration/reconcile-companion";
 import {
   readRecordedEntities,
+  type RecordedEntities,
   type RecordedEntity,
   recordedBeforeOf,
 } from "../migration/recorded-before";
@@ -121,6 +122,27 @@ export async function prepareFieldsLeavingOnReload(
       cause: error instanceof Error ? error : undefined,
     });
   });
+  return fieldsLeavingUnder(
+    adapter,
+    config,
+    fieldGroupTables,
+    recorded,
+    report
+  );
+}
+
+/**
+ * The same for a run that read the registry before changing it (`nextly db:sync` and its watch),
+ * from `recorded`, what it read. Nothing leaves when nothing was read: the run's companion pass
+ * judges no translations column then either, and leaves each where it is.
+ */
+export async function fieldsLeavingUnder(
+  adapter: DrizzleAdapter,
+  config: ReloadConfig,
+  fieldGroupTables: ReadonlyMap<string, string>,
+  recorded: RecordedEntities | undefined,
+  report: (message: string) => void
+): Promise<{ entries: FieldsLeavingOnReload[]; refused: string[] }> {
   const entries: FieldsLeavingOnReload[] = [];
   const renamed: { slug: string; message: string }[] = [];
   for (const [kind, entities, tableNameOf] of localizableConfigEntities(
@@ -502,17 +524,61 @@ function withoutLeavingIndexes(
 ): DesiredSchema["collections"] {
   return Object.fromEntries(
     Object.entries(collections).map(([key, collection]) => {
-      const entry = entries.find(
-        e => e.kind === "collection" && e.slug === key
-      );
-      const indexes = collection.indexes?.filter(
-        index =>
-          index.unique !== true ||
-          !index.fields.some(field => entry?.leaving.has(field))
-      );
+      const indexes = indexesHeld(collection.indexes, entries, key);
       return [key, indexes ? { ...collection, indexes } : collection];
     })
   );
+}
+
+/** A collection's `indexes` without the unique ones that cover a field of its that leaves. */
+function indexesHeld<I extends { fields: readonly string[]; unique?: boolean }>(
+  indexes: readonly I[] | undefined,
+  entries: readonly FieldsLeavingOnReload[],
+  slug: string
+): I[] | undefined {
+  const entry = entries.find(e => e.kind === "collection" && e.slug === slug);
+  return indexes?.filter(
+    index =>
+      index.unique !== true ||
+      !index.fields.some(field => entry?.leaving.has(field))
+  );
+}
+
+/**
+ * `config` with each leaving field's Required and Unique held back, as `withLeavingSettingsHeld`
+ * holds them in a desired schema: for a run that pushes from the config itself (`nextly db:sync`),
+ * which pushes this first and the config as it is once the values are copied.
+ */
+export function configWithLeavingSettingsHeld<C extends ReloadConfig>(
+  config: C,
+  entries: readonly FieldsLeavingOnReload[]
+): C {
+  if (entries.length === 0) return config;
+  const held = (
+    kind: I18nTransitionKind,
+    list: readonly unknown[] | undefined
+  ): unknown[] | undefined =>
+    list?.map(item => {
+      const entity = item as LocalizableEntity & {
+        indexes?: readonly { fields: readonly string[]; unique?: boolean }[];
+      };
+      if (entity.slug === undefined || entity.fields === undefined) return item;
+      const indexes =
+        kind === "collection"
+          ? indexesHeld(entity.indexes, entries, entity.slug)
+          : undefined;
+      return {
+        ...entity,
+        fields: heldFields(entries, kind, entity.slug, entity.fields),
+        ...(indexes ? { indexes } : {}),
+      };
+    });
+  return {
+    ...config,
+    collections: held("collection", config.collections),
+    singles: held("single", config.singles),
+    fieldGroups: held("fieldGroup", config.fieldGroups),
+  };
 }
 
 /**
