@@ -43,6 +43,7 @@ import {
   firstNoRetry,
   renamedTables,
   targetTable,
+  type JudgeContext,
   type StatementJudgement,
   type TriggerTables,
 } from "./judge";
@@ -66,15 +67,31 @@ export interface BusyTableRun {
   readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
+/** Where `triggerTables` looks on PostgreSQL. */
+export interface TriggerTablesScope {
+  /**
+   * Every schema, not only those the connection's search path reaches: for a unit that changes its
+   * search path, whose unqualified names may then reach a schema the path did not.
+   */
+  readonly everySchema?: boolean;
+}
+
 /** The tables of this database with a trigger a row change would fire. */
-function triggerTablesQuery(dialect: SupportedDialect): SQL {
+function triggerTablesQuery(
+  dialect: SupportedDialect,
+  scope: TriggerTablesScope
+): SQL {
   if (dialect === "postgresql") {
-    // Only the schemas an unqualified name reaches: a trigger on a same-named table elsewhere is
-    // not this table's.
+    // Only the schemas an unqualified name reaches, unless the unit moves the path: a trigger on a
+    // same-named table elsewhere is not this table's.
+    const reached =
+      scope.everySchema === true
+        ? sql``
+        : sql` AND n.nspname = ANY (current_schemas(false))`;
     return sql`SELECT DISTINCT c.relname AS name FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE NOT t.tgisinternal AND n.nspname = ANY (current_schemas(false))`;
+      WHERE NOT t.tgisinternal${reached}`;
   }
   if (dialect === "mysql") {
     return sql`SELECT DISTINCT EVENT_OBJECT_TABLE AS name FROM information_schema.TRIGGERS
@@ -107,7 +124,8 @@ function mysqlSeesEveryTriggerQuery(): SQL {
  */
 export async function triggerTables(
   adapter: Pick<DrizzleAdapter, "queryStatement">,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  scope: TriggerTablesScope = {}
 ): Promise<TriggerTables> {
   if (dialect === "mysql") {
     const seen = await adapter.queryStatement<{ seen: unknown }>(
@@ -116,9 +134,69 @@ export async function triggerTables(
     if (seen.length === 0) return "unseen";
   }
   const rows = await adapter.queryStatement<{ name: unknown }>(
-    triggerTablesQuery(dialect)
+    triggerTablesQuery(dialect, scope)
   );
   return new Set(rows.map(row => String(row.name).toLowerCase()));
+}
+
+/**
+ * Whether PostgreSQL has an enabled DDL event trigger that no installed extension owns: one runs
+ * code the system does not know on every CREATE, ALTER and DROP, so a schema statement may not be
+ * sent again (`JudgeContext`). An extension's own (Supabase's, PostGIS's) is vetted code that only
+ * notifies or grants, which a rollback takes back. False on the other dialects, which have none. A
+ * read that fails answers yes, failing closed.
+ */
+export async function hasDdlEventTriggers(
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
+  dialect: SupportedDialect
+): Promise<boolean> {
+  if (dialect !== "postgresql") return false;
+  try {
+    const rows = await adapter.queryStatement<{ found: unknown }>(
+      sql`SELECT 1 AS found FROM pg_event_trigger e
+        WHERE e.evtenabled <> 'D'
+          AND NOT EXISTS (SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_event_trigger'::regclass AND d.objid = e.oid AND d.deptype = 'e')
+        LIMIT 1`
+    );
+    return rows.length > 0;
+  } catch {
+    return true;
+  }
+}
+
+/** What a unit's judgements read of the database: its triggers and its DDL event triggers. */
+interface UnitCatalog {
+  readonly triggers: TriggerTables;
+  readonly context: JudgeContext;
+}
+
+/**
+ * Whether `statement` sets PostgreSQL's search path (`SET [LOCAL | SESSION] search_path`), after
+ * which an unqualified name may reach a schema the connection's path did not.
+ */
+function setsSearchPath(statement: string, dialect: SupportedDialect): boolean {
+  const [first, second, third] = leadingWords(statement, dialect, 3);
+  if (first !== "SET") return false;
+  const name = second === "LOCAL" || second === "SESSION" ? third : second;
+  return name === "SEARCH_PATH";
+}
+
+/** Reads the catalog a unit is judged against (`UnitCatalog`). */
+async function readUnitCatalog(
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
+  dialect: SupportedDialect,
+  statements: readonly string[]
+): Promise<UnitCatalog> {
+  const everySchema =
+    dialect === "postgresql" &&
+    statements.some(statement => setsSearchPath(statement, dialect));
+  return {
+    triggers: await triggerTables(adapter, dialect, { everySchema }),
+    context: {
+      ddlEventTriggers: await hasDdlEventTriggers(adapter, dialect),
+    },
+  };
 }
 
 /**
@@ -240,7 +318,7 @@ function firstNoRetryBetween(
   start: number,
   end: number,
   dialect: SupportedDialect,
-  triggers: TriggerTables
+  catalog: UnitCatalog
 ): ReturnType<typeof firstNoRetry> {
   // Asked first, whatever the next try sends: it runs on a new session either way.
   const sessionState = sessionStateBefore(statements, start, dialect);
@@ -263,7 +341,8 @@ function firstNoRetryBetween(
       ...statements.slice(start, end),
     ],
     dialect,
-    triggers
+    catalog.triggers,
+    catalog.context
   );
   if (found === undefined) return undefined;
   const at = found.statementNumber - 1;
@@ -298,7 +377,7 @@ export async function runUnitInTries(
   const dialect = adapter.getCapabilities().dialect;
   const keeping = keepingOf(unit, dialect);
   // Read again after each try that ended (below): a statement a try kept may have made a trigger.
-  let triggers = await triggerTables(adapter, dialect);
+  let catalog = await readUnitCatalog(adapter, dialect, statements);
   // Where the next try starts: past every statement an earlier try kept.
   let from = 0;
   return withBusyTableTries(
@@ -368,8 +447,11 @@ export async function runUnitInTries(
         // transaction each statement committed as it ran, and on MySQL a trigger's CREATE commits
         // on its own. The list is read again, after the try let go of its session, before judging
         // what the next try sends; a read that fails counts every table as having one.
-        triggers = await triggerTables(adapter, dialect).catch(
-          (): TriggerTables => "unseen"
+        catalog = await readUnitCatalog(adapter, dialect, statements).catch(
+          (): UnitCatalog => ({
+            triggers: "unseen",
+            context: { ddlEventTriggers: true },
+          })
         );
         // Nothing of this try's own was sent where no index was told: a setting sent again first
         // waited, and the try kept nothing.
@@ -391,7 +473,7 @@ export async function runUnitInTries(
               kept,
               Math.min(waiting + 1, statements.length),
               dialect,
-              triggers
+              catalog
             );
         const waited = statements[Math.min(waiting, statements.length - 1)];
         return {

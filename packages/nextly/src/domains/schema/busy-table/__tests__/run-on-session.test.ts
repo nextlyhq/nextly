@@ -212,6 +212,56 @@ describe("runStatementsInTries", () => {
     expect(sent).toEqual([A, B]);
   });
 
+  it("stops after one try where a PostgreSQL DDL event trigger would fire again on the schema change", async () => {
+    const onSession: string[] = [];
+    const adapter = {
+      getCapabilities: () => ({ dialect: "postgresql" as const }),
+      // Only the event-trigger read finds anything: one enabled trigger no extension owns.
+      queryStatement: (query: unknown) =>
+        Promise.resolve(
+          JSON.stringify(query).includes("pg_event_trigger")
+            ? [{ found: 1 }]
+            : []
+        ),
+      executeQuery: () => Promise.resolve([]),
+      withSession: <T>(
+        work: (session: {
+          execute: (statement: string) => Promise<unknown[]>;
+        }) => Promise<T>
+      ): Promise<T> =>
+        work({
+          execute: statement => {
+            onSession.push(statement);
+            return statement === B
+              ? Promise.reject(pgLockNotAvailable())
+              : Promise.resolve([]);
+          },
+        }),
+    } as unknown as DrizzleAdapter;
+
+    const stopped = await runStatementsInTries(adapter, [A, B], {
+      change: "nextly test",
+      bounds: BOUNDS,
+      notify: () => {},
+      appliedBefore: [],
+    }).catch((error: unknown) => error);
+
+    expect(stopped).toMatchObject({
+      code: "NEXTLY_TABLE_BUSY",
+      logContext: {
+        stop: {
+          tries: 1,
+          outcome: {
+            kind: "no-retry",
+            statementNumber: 1,
+            reason: "event-trigger",
+          },
+        },
+      },
+    });
+    expect(onSession.filter(statement => statement === B)).toHaveLength(1);
+  });
+
   it("runs every statement and every try of a PostgreSQL list on one session, its lock wait bounded", async () => {
     let sessions = 0;
     const onSession: string[] = [];

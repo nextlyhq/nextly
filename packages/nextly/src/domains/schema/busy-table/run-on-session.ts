@@ -38,7 +38,7 @@ import {
   type StatementJudgement,
 } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
-import { triggerTables } from "./run-unit";
+import { hasDdlEventTriggers, triggerTables } from "./run-unit";
 import {
   boundSessionTry,
   boundSqliteWait,
@@ -87,13 +87,17 @@ async function judgedForResend(
     asksTriggers = true;
     return true;
   });
-  if (!asksTriggers) return judgement;
+  if (judgement.kind === "no-retry" && !asksTriggers) return judgement;
   // Judged as a unit's statements are (`firstNoRetry`): where the account cannot see every trigger
-  // (`unseen`), any table may have one, so a row change fails closed as a hidden trigger.
-  const triggers = await triggerTables(adapter, dialect);
+  // (`unseen`), any table may have one, so a row change fails closed as a hidden trigger; and a
+  // schema statement that a DDL event trigger fires on may not be sent again.
+  const triggers = asksTriggers
+    ? await triggerTables(adapter, dialect)
+    : new Set<string>();
+  const ddlEventTriggers = await hasDdlEventTriggers(adapter, dialect);
   return (
-    firstNoRetry([statement], dialect, triggers)?.judgement ??
-    judgeStatement(statement, dialect, () => false)
+    firstNoRetry([statement], dialect, triggers, { ddlEventTriggers })
+      ?.judgement ?? judgeStatement(statement, dialect, () => false)
   );
 }
 

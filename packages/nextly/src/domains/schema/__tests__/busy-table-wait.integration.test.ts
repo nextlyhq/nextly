@@ -538,6 +538,153 @@ describe.each(DIALECTS)(
       }
     );
 
+    /**
+     * Makes a DDL event trigger for the test, owned by `plpgsql` where `extensionOwned`, and
+     * returns what drops it again.
+     */
+    async function ddlEventTrigger(
+      extensionOwned: boolean
+    ): Promise<() => Promise<void>> {
+      const name = `${PREFIX}_ddl_watch`;
+      await adapter.executeQuery(
+        `CREATE FUNCTION ${name}() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$`
+      );
+      await adapter.executeQuery(
+        `CREATE EVENT TRIGGER ${name} ON ddl_command_start EXECUTE FUNCTION ${name}()`
+      );
+      if (extensionOwned) {
+        await adapter.executeQuery(
+          `ALTER EXTENSION plpgsql ADD EVENT TRIGGER ${name}`
+        );
+      }
+      return async () => {
+        if (extensionOwned) {
+          await adapter.executeQuery(
+            `ALTER EXTENSION plpgsql DROP EVENT TRIGGER ${name}`
+          );
+        }
+        await adapter.executeQuery(`DROP EVENT TRIGGER IF EXISTS ${name}`);
+        await adapter.executeQuery(`DROP FUNCTION IF EXISTS ${name}()`);
+      };
+    }
+
+    it.runIf(dialect === "postgresql")(
+      "stops after one try where a DDL event trigger would run its code again for the schema change",
+      async () => {
+        const drop = await ddlEventTrigger(false);
+        try {
+          writeFile("20261113_000001_add_late", [
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: {
+                tries: 1,
+                outcome: {
+                  kind: "no-retry",
+                  statementNumber: 1,
+                  reason: "event-trigger",
+                  restUndone: true,
+                },
+              },
+            },
+          });
+          expect(notices).toHaveLength(0);
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await drop();
+        }
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "keeps trying where the only DDL event trigger belongs to an installed extension",
+      async () => {
+        const drop = await ddlEventTrigger(true);
+        try {
+          writeFile("20261113_000001_add_late", [
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: { tries: 2, outcome: { kind: "nothing-changed" } },
+            },
+          });
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await drop();
+        }
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "reads the triggers of a schema the file puts on its search path before judging a row change",
+      async () => {
+        const schema = `${PREFIX}_audit`;
+        const touch = `${PREFIX}_touch`;
+        await adapter.executeQuery(`CREATE SCHEMA ${schema}`);
+        try {
+          await adapter.executeQuery(
+            `CREATE TABLE ${schema}.${OTHER} (id integer)`
+          );
+          await adapter.executeQuery(
+            `CREATE FUNCTION ${schema}.${touch}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`
+          );
+          await adapter.executeQuery(
+            `CREATE TRIGGER ${touch} BEFORE INSERT ON ${schema}.${OTHER} FOR EACH ROW EXECUTE FUNCTION ${schema}.${touch}()`
+          );
+          writeFile("20261113_000001_audited", [
+            `SET LOCAL search_path TO ${schema}, public`,
+            `INSERT INTO ${OTHER} (id) VALUES (1)`,
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          // Sent again, the insert would fire the trigger's code a second time.
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: {
+                tries: 1,
+                outcome: {
+                  kind: "no-retry",
+                  statementNumber: 2,
+                  reason: "trigger",
+                },
+              },
+            },
+          });
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await adapter.executeQuery(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+        }
+      }
+    );
+
     it.runIf(dialect === "mysql")(
       "trusts the trigger list of an account that may see every trigger of the database",
       async () => {
