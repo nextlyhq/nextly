@@ -114,9 +114,11 @@ describe("assertRewritableField", () => {
       type: "relationship",
       options: { relationType: "manyToMany" },
     },
+    { name: "login", type: "group" },
   ];
   const separately = (f: RewritableFieldShape) =>
     f.type === "component" || f.options?.relationType === "manyToMany";
+  const holdsPassword = (f: RewritableFieldShape) => f.name === "login";
 
   it("takes a field stored on the document's own row", () => {
     expect(assertRewritableField(fields, "layout", separately).name).toBe(
@@ -139,11 +141,12 @@ describe("assertRewritableField", () => {
     ["a password", "secret"],
     ["a field group", "seo"],
     ["a many-to-many relationship", "tags"],
+    ["a group holding a password", "login"],
   ])("refuses %s, naming it", (_name, field) => {
     let message = "";
     const code = codeOf(() => {
       try {
-        assertRewritableField(fields, field, separately);
+        assertRewritableField(fields, field, separately, holdsPassword);
       } catch (error) {
         message = error instanceof NextlyError ? error.publicMessage : "";
         throw error;

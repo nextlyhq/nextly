@@ -307,16 +307,19 @@ function refuseField(field: string, why: string): never {
  *   collide only at the next publish;
  * - **not a field stored in tables of its own** (a field group's rows, a
  *   many-to-many relationship's join rows), which need row edits rather than a
- *   value swap; nor a password, which no copy holds; nor a virtual field,
- *   which nothing stores.
+ *   value swap; nor a password, which no copy holds, or a field holding one;
+ *   nor a virtual field, which nothing stores.
  *
  * @param separatelyStored Whether the write path keeps the field in tables of
  *   its own: the same predicate its own writes split a payload by.
+ * @param holdsPassword Whether the field holds a password at any depth, as
+ *   the write path's password walk reaches one.
  */
 export function assertRewritableField<F extends RewritableFieldShape>(
   fields: readonly F[],
   name: string,
-  separatelyStored: (field: F) => boolean
+  separatelyStored: (field: F) => boolean,
+  holdsPassword: (field: F) => boolean = () => false
 ): F {
   if (SYSTEM_FIELDS.has(name)) {
     refuseField(name, "the system keeps it, and it has a path of its own.");
@@ -328,6 +331,15 @@ export function assertRewritableField<F extends RewritableFieldShape>(
   }
   if (field.type === "password") {
     refuseField(name, "it is a password, which no copy of a document holds.");
+  }
+  // A group or repeater holding a password: a read gives it without the
+  // password, so writing it back would drop the stored hash, and a draft
+  // would keep a given one as written.
+  if (holdsPassword(field)) {
+    refuseField(
+      name,
+      "it holds a password, which a read leaves out and a draft would keep as written."
+    );
   }
   if (field.unique === true) {
     refuseField(

@@ -20,7 +20,16 @@ import {
   recordTransactionEscapes,
   takeTransactionEscapes,
 } from "../../../__tests__/transaction-escapes";
-import { defineSingle, password, repeater, text } from "../../../config";
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  group,
+  json,
+  password,
+  repeater,
+  text,
+} from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
 import {
   definePlugin,
@@ -40,8 +49,13 @@ const SITE = "rwsite";
 const PLAIN = "rwplainsite";
 /** Translated, with drafts. */
 const LOCALIZED = "rwlsite";
-/** Versions kept, and a password stored on the row. */
+/** Versions kept, and a password stored on the row and inside a group. */
 const SECRET = "rwsecretsite";
+/** A JSON field inside an unnamed layout group. */
+const LAYOUT = "rwlayoutsite";
+/** No translations of its own, versions kept, and a translated field group. */
+const BANNERED = "rwbannersite";
+const BANNER = "rwsitebanner";
 const PLUGIN = "@test/single-rewriter";
 const REASON = "Layout 'Wide' was deleted";
 const EDITOR = { id: "rw-single-editor" };
@@ -95,10 +109,27 @@ async function boot(
         slug: SECRET,
         status: true,
         versions: true,
-        fields: [text({ name: "layout" }), password({ name: "secret" })],
+        fields: [
+          text({ name: "layout" }),
+          password({ name: "secret" }),
+          group({ name: "login", fields: [password({ name: "pin" })] }),
+        ],
+      }),
+      defineSingle({
+        slug: LAYOUT,
+        fields: [group({ fields: [json({ name: "meta" })] })],
       }),
       ...(localized
         ? [
+            defineSingle({
+              slug: BANNERED,
+              status: true,
+              versions: true,
+              fields: [
+                text({ name: "layout" }),
+                fieldGroup({ name: "banner", component: BANNER }),
+              ],
+            }),
             defineSingle({
               slug: LOCALIZED,
               localized: true,
@@ -112,6 +143,17 @@ async function boot(
           ]
         : []),
     ],
+    ...(localized
+      ? {
+          fieldGroups: [
+            defineFieldGroup({
+              slug: BANNER,
+              localized: true,
+              fields: [text({ name: "words" })],
+            }),
+          ],
+        }
+      : {}),
     plugins: [
       definePlugin({
         name: PLUGIN,
@@ -458,6 +500,56 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(t, SITE)).status).toBe("published");
     });
 
+    it("refuses a group holding a password, which a read gives without it", async () => {
+      const t = await boot(dialect);
+      await save(t, SECRET, {
+        layout: "wide",
+        login: { pin: "1234-secret" },
+        status: "published",
+      });
+      await expect(
+        t.nextly.rewriteField({
+          single: SECRET,
+          field: "login",
+          expectedVersion: await versionOf(t, SECRET),
+          set: { value: { pin: "plain" } },
+          reason: REASON,
+        })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      // POPULATION CONTROL: the Single's other fields can be rewritten.
+      await t.nextly.rewriteField({
+        single: SECRET,
+        field: "layout",
+        expectedVersion: await versionOf(t, SECRET),
+        set: { value: "narrow" },
+        reason: REASON,
+      });
+    });
+
+    it("stores a JSON field inside a layout group as given", async () => {
+      const t = await boot(dialect);
+      await save(t, LAYOUT, { meta: { heroTitle: "Old" } });
+      let seen: unknown;
+      await t.nextly.rewriteField({
+        single: LAYOUT,
+        field: "meta",
+        expectedVersion: await versionOf(t, LAYOUT),
+        set: {
+          from: current => {
+            seen = current;
+            return { heroTitle: "Hello" };
+          },
+        },
+        reason: REASON,
+      });
+      // The stored value reached the function parsed.
+      expect(seen).toEqual({ heroTitle: "Old" });
+      const stored = (await read(t, LAYOUT)).meta;
+      expect(typeof stored === "string" ? JSON.parse(stored) : stored).toEqual({
+        heroTitle: "Hello",
+      });
+    });
+
     it("needs a person's permission to update and to publish", async () => {
       const t = await boot(dialect);
       await userWhoMay(t, EDITOR.id, "update", [SITE]);
@@ -662,6 +754,40 @@ describe.each(getConfiguredTestDialects())(
       // POPULATION CONTROL: the newest German version is the rewrite's.
       expect(snapshot.title).toBe("DE neu");
       expect(newest.status).toBe("draft");
+    });
+
+    it("records the language a Single's translated field group was captured in", async () => {
+      const t = await boot(dialect, true);
+      await save(t, BANNERED, {
+        layout: "wide",
+        banner: { words: "Hello" },
+        status: "published",
+      });
+      await t.nextly.rewriteField({
+        single: BANNERED,
+        field: "layout",
+        expectedVersion: await versionOf(t, BANNERED),
+        set: { value: "narrow" },
+        reason: REASON,
+      });
+      const { items } = await t.nextly.versions.list({
+        single: BANNERED,
+      } as never);
+      const newest = items[0] as { versionNo: number; locale?: string | null };
+      const version = await t.nextly.versions.get({
+        single: BANNERED,
+        versionNo: newest.versionNo,
+      } as never);
+      const snapshot = (
+        typeof version.snapshot === "string"
+          ? JSON.parse(version.snapshot)
+          : version.snapshot
+      ) as Record<string, unknown>;
+      // POPULATION CONTROL: the newest version is the rewrite's, and holds
+      // the field group as read in the default language.
+      expect(snapshot.layout).toBe("narrow");
+      expect(snapshot.banner).toMatchObject({ words: "Hello" });
+      expect(newest.locale).toBe("en");
     });
 
     it("lets another language leave a required translated field blank, as an update does", async () => {

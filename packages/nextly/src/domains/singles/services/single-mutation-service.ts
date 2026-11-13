@@ -479,9 +479,21 @@ function singleRewritePayload(
   value: unknown
 ): unknown {
   const data: Record<string, unknown> = { [field]: structuredClone(value) };
-  normalizeUploadFields(data, fields);
-  normalizeRelationshipFields(data, fields);
+  const stored = storedAtTopLevel(fields);
+  normalizeUploadFields(data, stored);
+  normalizeRelationshipFields(data, stored);
   return data[field];
+}
+
+/**
+ * The fields a Single stores at its top level, a field inside an unnamed
+ * layout group included: what a rewritten value is decoded and encoded by,
+ * so a field's placement in a layout cannot change how its value is stored.
+ */
+function storedAtTopLevel(
+  fields: DynamicSingleRecord["fields"]
+): DynamicSingleRecord["fields"] {
+  return addressableFields(fields) as unknown as DynamicSingleRecord["fields"];
 }
 
 /**
@@ -6095,10 +6107,16 @@ export class SingleMutationService extends BaseService {
     // Looked up among the fields stored at the document's top level, and
     // refused where storage keeps it in tables of its own, by storage's own
     // predicates.
+    // On the pool, before the transaction, as the field groups' schemas are.
+    const reach = await passwordReachOf(
+      singleMeta.fields,
+      this.fieldGroupDataService
+    );
     const field = assertRewritableField(
       addressableFields(singleMeta.fields) as unknown as RewritableFieldShape[],
       call.request.field,
-      f => isFieldGroupField(f) || usesJunctionTable(f)
+      f => isFieldGroupField(f) || usesJunctionTable(f),
+      f => reachesPasswordField([f], reach)
     );
     const companion = this.translationsOf(singleMeta);
     // Asked on the pool before the transaction, which only consults it.
@@ -6401,6 +6419,15 @@ export class SingleMutationService extends BaseService {
           )
         : {};
     const document: Record<string, unknown> = { ...live, ...translations };
+    // A field inside an unnamed layout group is decoded by its own type too,
+    // so a JSON value reaches `set.from` parsed.
+    Object.assign(
+      document,
+      this.queryService.deserializeJsonFields(
+        { [field]: document[field] } as SingleDocument,
+        storedAtTopLevel(singleMeta.fields)
+      )
+    );
     applyReadShape(
       document,
       singleMeta.fields,
@@ -6509,16 +6536,20 @@ export class SingleMutationService extends BaseService {
     write: { value: unknown; stored: unknown }
   ): Promise<void> {
     const { singleMeta, field, translatedIn, companion } = args;
-    const fields = singleMeta.fields;
+    const fields = storedAtTopLevel(singleMeta.fields);
     const data: Record<string, unknown> = {
-      [field]: singleRewritePayload(fields, field, write.value),
+      [field]: singleRewritePayload(singleMeta.fields, field, write.value),
     };
     // Repeater rows keep their ids against the live value, as a save's do.
     assignRepeaterRowIds(
       data,
       { [field]: write.stored },
       fields,
-      await passwordReachOf(fields, this.fieldGroupDataService, tx.getDrizzle())
+      await passwordReachOf(
+        singleMeta.fields,
+        this.fieldGroupDataService,
+        tx.getDrizzle()
+      )
     );
     coerceDateFieldsToDate(data, fields);
     const columns = stripImmutableSystemFields(
@@ -6577,12 +6608,11 @@ export class SingleMutationService extends BaseService {
   /**
    * The language a rewrite's live copy is recorded and announced in: the
    * translated field's own, or for a shared field the default one, whose
-   * translations the Single shows beside it. None for a Single without
-   * translations.
+   * translations and translated field groups the Single shows beside it, as
+   * a save of a shared field reads them. None for a site without languages.
    */
   private rewriteViewLocale(args: SingleRewriteInTx): string | undefined {
-    if (args.translatedIn !== null) return args.translatedIn;
-    return args.companion ? this.localization?.defaultLocale : undefined;
+    return args.translatedIn ?? this.localization?.defaultLocale;
   }
 
   /**

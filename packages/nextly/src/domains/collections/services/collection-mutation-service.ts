@@ -6513,10 +6513,12 @@ export class CollectionMutationService extends BaseService {
       // Looked up among the fields stored at the document's top level, a
       // field inside an unnamed layout group included, and refused where
       // storage keeps it in tables of its own, by storage's own predicates.
+      const reach = await this.passwordReach(fields);
       const field = assertRewritableField(
         addressableFields(fields) as unknown as FieldDefinition[],
         request.field,
-        f => isFieldGroupField(f) || usesJunctionTable(f)
+        f => isFieldGroupField(f) || usesJunctionTable(f),
+        f => reachesPasswordField([f], reach)
       );
       // The translations' readiness, read before the transaction, which only
       // consults it: unread, a language's values would be skipped.
