@@ -72,7 +72,6 @@ import {
 } from "./outputs/sitemap-files";
 import { checklistRoutes } from "./overview/checklist";
 import {
-  CHECKLIST_ROUTE_PATH,
   IMPORT_PAGE,
   INSPECT_PAGE,
   OVERVIEW_PAGE,
@@ -801,15 +800,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
-        {
-          ...OVERVIEW_PAGE,
-          requiredPermission: MANAGE_SEO_PERMISSION,
-          // The checklist is what the Overview reads first, and what decides
-          // whether it sends a new site to Settings instead: asked for in the
-          // admin's startup request when a tab opens here, so the Overview
-          // does not wait a round of its own for it.
-          startupReads: [{ path: CHECKLIST_ROUTE_PATH }],
-        },
+        // No startup reads: the startup request answers only when every part
+        // has, and the checklist can read every page while an earlier SEO
+        // field group waits to be imported, which would hold up the whole
+        // admin's first answer on a large site.
+        { ...OVERVIEW_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...IMPORT_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...INSPECT_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
