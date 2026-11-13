@@ -153,9 +153,10 @@ Register components and reference admin contribution types through
 
 > **Never import from `@nextlyhq/admin`.** It is an application, not a published API —
 > reaching into it (e.g. `@nextlyhq/admin/lib/*`) is unsupported and will break. That
-> includes `@nextlyhq/admin/kit`, the internal path `@nextlyhq/plugin-sdk/admin` re-exports
-> its parts from: its exports change in any release, while the SDK's names keep the
-> stability their tags state. If a primitive you need isn't yet exported from
+> includes `@nextlyhq/admin/kit` and its areas (`@nextlyhq/admin/kit/<area>`), the internal
+> paths `@nextlyhq/plugin-sdk/admin` re-exports its parts from: their exports change in any
+> release, while the SDK's names keep the stability their tags state. Importing through
+> the SDK also keeps your admin module light: it brings only the parts you name. If a primitive you need isn't yet exported from
 > `@nextlyhq/ui`, open an issue so it can be promoted to the kit rather than copied.
 
 ## Styling your admin UI

@@ -23,6 +23,7 @@ import {
 import {
   addressHeldError,
   firstHolder,
+  newSaveKey,
   hasParticipants,
   onParticipantsChange,
   recordEverywhere,
@@ -78,9 +79,12 @@ const askOnSave: InTransactionRunner = async (tx, write) => {
     },
     holds: await heldIn(type, await readEveryLanguage(tx, write), tx),
   };
-  const clash = await firstHolder(update, [update], tx);
+  // One question: every participant's `holderOf` calls and the `record`
+  // after them share it, and the next save gets another.
+  const saveKey = newSaveKey();
+  const clash = await firstHolder(update, [update], tx, saveKey);
   if (clash !== null) throw addressHeldError(update, clash);
-  await recordEverywhere([update], tx);
+  await recordEverywhere([update], tx, saveKey);
 };
 
 /**
