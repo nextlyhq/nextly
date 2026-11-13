@@ -21,16 +21,23 @@ import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import type { EntityContributionSource } from "../../domains/schema/extension/entity-contributions";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
+  planCoreDeletions,
   planCoreReconcile,
   reconcileCore,
 } from "../../domains/schema/migrate/core-reconcile";
+import {
+  consentCovers,
+  consentToCover,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
 import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
 import { exitWithError, failWithError } from "../errors";
-import { coreDestructiveNeedsTerminal } from "../errors/areas/migrations";
 import { createContext } from "../program";
 import {
   createCliAdapter,
@@ -39,6 +46,12 @@ import {
 } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  askToDeleteInTerminal,
+  deletionChanges,
+  readDataLossConsent,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import {
@@ -55,6 +68,7 @@ import type {
   UpgradeStepContext,
 } from "./upgrade-step";
 import { UPGRADE_STEPS } from "./upgrade-steps";
+import { judgeCoreDeletions } from "./upgrade-steps/core-upgrade-consent";
 
 export type { RunUpgradeOptions, UpgradeAdapter } from "./upgrade-step";
 
@@ -236,7 +250,18 @@ function stepChange(title: string, pending: number): DryRunChange {
 export interface RunReconcileCoreDeps {
   adapter: UpgradeAdapter;
   logger?: UpgradeLogger;
-  confirmDestructive: (reasons: string[]) => Promise<boolean>;
+  /**
+   * The run's data-loss consent (`--accept-data-loss` or
+   * `NEXTLY_ACCEPT_DATA_LOSS`; `NEXTLY_ALLOW_CORE_DESTRUCTIVE` honoured, as
+   * deprecated, for Nextly's own tables).
+   */
+  consent: DataLossConsent;
+  /** Whether a person is at a terminal to be asked. */
+  interactive: boolean;
+  /** Asks that person a yes-or-no question; only called when `interactive`. */
+  askToDelete?: (question: string) => Promise<boolean>;
+  /** What plugins and hooks contributed to the core tables (the compiled extension schema). */
+  contributions?: EntityContributionSource;
   /**
    * The app history checks every command that changes core tables makes
    * before its first write (`assertAppHistoryHolds`), asked under the lock
@@ -246,26 +271,44 @@ export interface RunReconcileCoreDeps {
   checkAppHistory: () => Promise<void>;
 }
 
-/** Injected for tests; defaults to the real reconcileCore. */
+/** Injected for tests; defaults to the real reconcileCore and its plan. */
 interface ReconcileCoreInjection {
   reconcileCore?: typeof reconcileCore;
+  planCoreDeletions?: typeof planCoreDeletions;
 }
 
 /**
- * `nextly upgrade --reconcile-core` (spec §4.10.3). Standalone Phase 1 in
- * dev-loose with per-destructive-op confirmation. Gated by the legacy
- * bookkeeping check and the shared migrate lock. Use only when `nextly
- * migrate` reports core schema drift after upgrading.
+ * `nextly upgrade --reconcile-core` (spec §4.10.3): the core reconcile alone,
+ * gated by the legacy bookkeeping check and the shared migrate lock. Use only
+ * when `nextly migrate` reports core schema drift after upgrading.
+ *
+ * What it deletes (a retired column, a type change, a column made required)
+ * is judged by the one data-loss consent, as `nextly migrate` judges it:
+ * listed and asked about at a terminal before the lock, refused without a
+ * terminal unless the consent covers it, and accepted under the lock only as
+ * agreed. A retired column agreed to is dropped once the push has succeeded.
  */
 export async function runReconcileCore(
   deps: RunReconcileCoreDeps,
   injection: ReconcileCoreInjection = {}
 ): Promise<void> {
   const reconcile = injection.reconcileCore ?? reconcileCore;
+  const planDeletions = injection.planCoreDeletions ?? planCoreDeletions;
   const { adapter } = deps;
   const dialect = adapter.getCapabilities().dialect;
+  const warn = (line: string) => deps.logger?.warn?.(line);
 
   await assertNoLegacyBookkeeping(adapter);
+
+  const target = await reconcileTarget(adapter, deps.contributions);
+  // Before the lock, so a person is asked without other runs waiting on them.
+  const agreed = await judgeCoreDeletions({
+    deletions: await planDeletions(target),
+    consent: deps.consent,
+    interactive: deps.interactive,
+    askToDelete: deps.askToDelete,
+    warn,
+  });
 
   await withMigrateLock(
     adapter as unknown as DrizzleAdapter,
@@ -276,13 +319,17 @@ export async function runReconcileCore(
       // applied file with exit 2, an unresolved attempt as it says.
       await deps.checkAppHistory();
       await reconcile({
-        ...(await reconcileTarget(adapter)),
-        // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
-        // The retired-table cleanup is gated on the latter and therefore never
-        // runs from here, which is deliberate: dropping `accounts`/`sessions` is
-        // the documented `nextly migrate` + NEXTLY_ALLOW_CORE_DESTRUCTIVE flow,
-        // and an upgrade that only confirmed a backup has not asked for it.
-        confirmDestructive: deps.confirmDestructive,
+        ...target,
+        // The core tables as they stand under the lock, accepted only as
+        // agreed before it, or as the consent covers them.
+        judgeDeletions: async deletions => {
+          await judgeCoreDeletions({
+            deletions,
+            consent: deps.consent,
+            agreed,
+            warn,
+          });
+        },
         logger: deps.logger,
       });
     },
@@ -297,11 +344,14 @@ export async function runReconcileCore(
 
 /**
  * What `--reconcile-core` reconciles, for the real run and its dry run alike:
- * the database, and the core shape in development's loose mode. Same reason as
+ * the database, and what plugins and hooks contributed to its core tables. Same reason as
  * `nextly migrate`: the desired core shape must name the field-group registry
  * this database actually holds, or the reconcile creates the other one empty.
  */
-async function reconcileTarget(adapter: UpgradeAdapter) {
+async function reconcileTarget(
+  adapter: UpgradeAdapter,
+  contributions: EntityContributionSource | undefined
+) {
   const dialect = adapter.getCapabilities().dialect;
   const db = adapter.getDrizzle();
   return {
@@ -311,25 +361,32 @@ async function reconcileTarget(adapter: UpgradeAdapter) {
       dialect,
       getDrizzle: <T>() => db as T,
     }),
-    mode: "dev-loose" as const,
+    // What plugins and hooks contributed to the core tables, as `nextly
+    // migrate` passes it: set aside rather than read as retired, so a
+    // plugin's column on `users` is never listed, nor dropped, as one this
+    // version no longer declares.
+    ...(contributions !== undefined ? { contributions } : {}),
   };
 }
 
 /**
  * `nextly upgrade --reconcile-core --dry-run`: the reconcile's own plan
  * (`planCoreReconcile`), read-only, with no lock: each statement its push
- * would run, and each retired auth table it would drop. A table or column
- * drop the push strips is named as left in place. A destructive change the
- * push makes is asked about at a terminal, so it is named as a question there;
- * where nobody can be asked, the real run refuses it, and the dry run says so.
- * A second push pass, and the core rows a reconcile fills in, are described,
- * not counted. A database still keeping its migration records the earlier way
- * is refused, as the real run refuses it.
+ * would run, each thing it would delete, and each retired auth table it would
+ * drop. What it deletes needs the consent: where nobody can be asked and the
+ * consent does not cover it, the real run refuses, and the dry run says so
+ * with the consent that would cover it. A second push pass, and the core rows
+ * a reconcile fills in, are described, not counted. A database still keeping
+ * its migration records the earlier way is refused, as the real run refuses it.
  */
 export async function previewReconcileCore(deps: {
   adapter: UpgradeAdapter;
   /** Whether a real run could ask at a terminal. */
   interactive: boolean;
+  /** The run's consent, as the real run would read it. */
+  consent: DataLossConsent;
+  /** As `RunReconcileCoreDeps.contributions`. */
+  contributions?: EntityContributionSource;
   /** As `RunReconcileCoreDeps.checkAppHistory`, read-only: recording no checksum. */
   checkAppHistory: () => Promise<void>;
 }): Promise<DryRunPlan> {
@@ -345,20 +402,18 @@ export async function previewReconcileCore(deps: {
   // run reports that refusal and plans nothing past it.
   const history = await historyRefusalIn(deps.checkAppHistory);
   if (history !== undefined) return { changes: [], refusals: [history] };
-  const plan = await planCoreReconcile(await reconcileTarget(adapter));
+  const plan = await planCoreReconcile(
+    await reconcileTarget(adapter, deps.contributions)
+  );
   const changes: DryRunChange[] = [
     ...plan.statements.map(statement => ({ action: "run", target: statement })),
+    ...deletionChanges(plan.deletions),
     ...plan.retiredDrops.map(table => ({
       action: "remove",
       target: `retired auth table ${table}`,
     })),
   ];
-  const destructive = plan.destructiveReasons;
   const notes = [
-    ...plan.leftInPlace.map(
-      reason =>
-        `Left in place: ${reason}. A core reconcile never drops a table or column.`
-    ),
     ...(plan.degraded
       ? [
           "The push then takes a second pass over what the first created; its statements are not counted.",
@@ -366,18 +421,30 @@ export async function previewReconcileCore(deps: {
       : []),
     "A real run also fills in core rows a new column leaves without a value (how an address was verified, the account a reset or verification link belongs to); those are not counted.",
   ];
-  if (destructive.length > 0 && deps.interactive) {
+  const uncovered = plan.deletions.filter(
+    deletion => !consentCovers(deps.consent, deletion)
+  );
+  // As the real run judges it (`judgeDataLoss`): a consent naming targets
+  // that leaves one out is refused even at a terminal; with no consent, a
+  // terminal is asked and no terminal is refused.
+  const asks = deps.interactive && deps.consent.given === null;
+  if (uncovered.length > 0 && asks) {
     notes.push(
-      `A real run asks to confirm each destructive change: ${destructive.join("; ")}.`
+      `A real run lists what it deletes and asks; to agree without being asked, pass ${consentToCover(uncovered)}.`
     );
   }
   return {
     changes,
-    ...(destructive.length > 0 && !deps.interactive
-      ? { refusals: [coreDestructiveNeedsTerminal(destructive).why] }
+    ...(uncovered.length > 0 && !asks
+      ? { refusals: [coreDeletionsNeedConsent(uncovered)] }
       : {}),
     notes,
   };
+}
+
+/** Why a real run with nobody to ask would refuse `uncovered`. */
+function coreDeletionsNeedConsent(uncovered: readonly Deletion[]): string {
+  return `Bringing Nextly's own tables up to date deletes data that the consent given does not cover, and no one would be asked. Pass ${consentToCover(uncovered)}.`;
 }
 
 export interface UpgradeCommandOptions {
@@ -389,6 +456,8 @@ export interface UpgradeCommandOptions {
   forceUnlock?: boolean;
   /** Show what the upgrade would change, and change nothing. */
   dryRun?: boolean;
+  /** The data-loss consent for what `--reconcile-core` deletes. */
+  acceptDataLoss?: AcceptDataLossOption;
 }
 
 /** Where the config is read from: the command's global options. */
@@ -399,17 +468,21 @@ interface ConfigOptions {
 }
 
 /**
- * The app history checks `upgrade --reconcile-core` makes before its
- * reconcile (`assertAppHistoryHolds`), over the migrations folder the config
- * names, loaded as `nextly migrate` loads it: a config that cannot load
- * refuses here, before the lock. `recordChecksums` false for a dry run.
+ * What `upgrade --reconcile-core` reads from the config, loaded as `nextly
+ * migrate` loads it (a config that cannot load refuses here, before the lock):
+ * the app history checks it makes before its reconcile (`assertAppHistoryHolds`,
+ * over the migrations folder the config names; `recordChecksums` false for a
+ * dry run), and what plugins and hooks contributed to the core tables.
  */
-async function reconcileHistoryCheck(
+async function reconcileSetup(
   globalOpts: ConfigOptions,
   adapter: UpgradeAdapter,
   logger: ReturnType<typeof createContext>["logger"],
   recordChecksums: boolean
-): Promise<() => Promise<void>> {
+): Promise<{
+  checkAppHistory: () => Promise<void>;
+  contributions: EntityContributionSource;
+}> {
   const configResult = await loadConfig({
     configPath: globalOpts.config,
     cwd: globalOpts.cwd,
@@ -419,16 +492,45 @@ async function reconcileHistoryCheck(
     globalOpts.cwd ?? process.cwd(),
     configResult.config.db.migrationsDir
   );
-  return () =>
-    assertAppHistoryHolds({
-      adapter: adapter as unknown as CLIDatabaseAdapter,
-      db: adapter.getDrizzle(),
-      dialect: adapter.getCapabilities().dialect,
-      migrationsDir,
-      logger,
-      command: "nextly upgrade --reconcile-core",
-      recordChecksums,
-    });
+  const dialect = adapter.getCapabilities().dialect;
+  const { compileExtensionSchema } = await import(
+    "../../domains/schema/extension/publish"
+  );
+  const contributions = await compileExtensionSchema({
+    dialect,
+    plugins: configResult.config.plugins ?? [],
+    config: configResult.config,
+    logger: { warn: m => logger.warn(m) },
+  });
+  return {
+    contributions,
+    checkAppHistory: () =>
+      assertAppHistoryHolds({
+        adapter: adapter as unknown as CLIDatabaseAdapter,
+        db: adapter.getDrizzle(),
+        dialect,
+        migrationsDir,
+        logger,
+        command: "nextly upgrade --reconcile-core",
+        recordChecksums,
+      }),
+  };
+}
+
+/**
+ * `--reconcile-core`'s consent: `--accept-data-loss` or
+ * `NEXTLY_ACCEPT_DATA_LOSS`, with `NEXTLY_ALLOW_CORE_DESTRUCTIVE` honoured, as
+ * deprecated, for what it always covered: Nextly's own tables.
+ */
+function reconcileConsent(
+  cmdOptions: UpgradeCommandOptions,
+  logger: ReturnType<typeof createContext>["logger"]
+): DataLossConsent {
+  return readDataLossConsent({
+    flag: cmdOptions.acceptDataLoss,
+    honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE"],
+    warn: line => logger.warn(line),
+  });
 }
 
 /** The action of `nextly upgrade`, loaded when it runs. */
@@ -470,27 +572,17 @@ export async function upgradeAction(
     if (cmdOptions.reconcileCore) {
       await runReconcileCore({
         adapter,
-        checkAppHistory: await reconcileHistoryCheck(
-          globalOpts,
-          adapter,
-          context.logger,
-          true
-        ),
+        ...(await reconcileSetup(globalOpts, adapter, context.logger, true)),
         logger: {
           info: msg => context.logger.info(msg),
           warn: msg => context.logger.warn(msg),
         },
-        // Asked only where someone can answer. Otherwise the run ends here,
-        // before the reconcile changes anything, and says the confirmation
-        // needs a terminal rather than waiting on input nobody will give.
-        confirmDestructive: reasons => {
-          if (!canPrompt()) {
-            return Promise.reject(coreDestructiveNeedsTerminal(reasons));
-          }
-          return askYesInTerminal(
-            `Reconcile core schema with these destructive operations?\n  - ${reasons.join("\n  - ")}\nProceed? [y/N]: `
-          );
-        },
+        consent: reconcileConsent(cmdOptions, context.logger),
+        // Asked only where someone can answer. Otherwise a deletion the
+        // consent does not cover is refused before anything changes, with
+        // the consent that would cover it.
+        interactive: canPrompt(),
+        askToDelete: askToDeleteInTerminal,
       });
     } else {
       await runUpgrade(
@@ -555,12 +647,8 @@ async function reportUpgradeDryRun(
       ? await previewReconcileCore({
           adapter,
           interactive,
-          checkAppHistory: await reconcileHistoryCheck(
-            globalOpts,
-            adapter,
-            context.logger,
-            false
-          ),
+          consent: reconcileConsent(cmdOptions, context.logger),
+          ...(await reconcileSetup(globalOpts, adapter, context.logger, false)),
         })
       : await previewUpgrade(
           {

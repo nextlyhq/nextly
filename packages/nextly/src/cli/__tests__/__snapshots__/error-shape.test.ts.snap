@@ -962,12 +962,25 @@ exports[`each code, as a command ends with it > MISSING_SNAPSHOT 1`] = `
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_CORE_DESTRUCTIVE_REFUSED 1`] = `
-"✗ Core schema reconciliation requires destructive operations.
-  Why:  drops column 'nextly_users.legacy_role'
-        drops table 'nextly_sessions_old'
-        This usually means a Nextly version mismatch.
-  Next: Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).
+"✗ Bringing Nextly's own tables up to date deletes data. Nothing was changed.
+  Why:  column dynamic_collections.access_rules: the collections' stored access rules, no longer enforced since 0.0.2-alpha.66
+        column dynamic_singles.access_rules: the Singles' stored access rules, no longer enforced since 0.0.2-alpha.66
+  Next: To go ahead, give consent: --accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules (or NEXTLY_ACCEPT_DATA_LOSS=dynamic_collections.access_rules,dynamic_singles.access_rules). NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works for Nextly's own tables but is deprecated.
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-destructive-refused  (NEXTLY_CORE_DESTRUCTIVE_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_CORE_UPGRADE_INCOMPLETE 1`] = `
+"✗ The core upgrade ran, but Nextly's own tables are not up to date.
+  Why:  The core upgrade ran, but Nextly's own tables still lack what this version declares (dynamic_collections: revalidate, webhooks).
+  Next: Run \`npx nextly@0.0.2-alpha.65 migrate\` first, then this version's \`nextly migrate\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-upgrade-incomplete  (NEXTLY_CORE_UPGRADE_INCOMPLETE)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_CORE_UPGRADE_UNSUPPORTED 1`] = `
+"✗ This version of Nextly cannot bring dynamic_collections, dynamic_singles up to date from this database in one step, so it changed nothing.
+  Why:  drizzle-kit cannot plan this upgrade of Nextly's own tables from the database as it stands.
+  Next: Run \`npx nextly@0.0.2-alpha.65 migrate\` first, then this version's \`nextly migrate\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-upgrade-unsupported  (NEXTLY_CORE_UPGRADE_UNSUPPORTED)"
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_MIGRATE_LOCK_BUSY 1`] = `

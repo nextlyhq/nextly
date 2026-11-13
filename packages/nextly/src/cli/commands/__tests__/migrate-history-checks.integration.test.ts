@@ -43,6 +43,7 @@ import {
   resolveMigration,
   type ResolveMode,
 } from "../../../domains/schema/migrate/resolve";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
@@ -166,7 +167,8 @@ describe.each(LOCK_DIALECTS)(
     function reconcileCore() {
       return runReconcileCore({
         adapter: adapter as never,
-        confirmDestructive: () => Promise.resolve(true),
+        consent: resolveDataLossConsent({}),
+        interactive: false,
         checkAppHistory: () =>
           assertAppHistoryHolds({
             adapter: adapter as never,

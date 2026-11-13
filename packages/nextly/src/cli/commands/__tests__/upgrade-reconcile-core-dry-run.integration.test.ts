@@ -1,21 +1,21 @@
 /**
  * `nextly upgrade --reconcile-core --dry-run` names what the reconcile would
- * do and changes nothing, on every dialect, and the confirmation of a real
- * run asks only about what it will actually do.
+ * do and changes nothing, on every dialect, and the real run does exactly
+ * that under the consent.
  *
  * Behind the reconciler's back, a core index is dropped and a column added to
  * a core table. The dry run names the exact statement the push would run
- * (restoring the index) and names the column's drop as left in place, since
- * the push strips every table or column drop on a core table. With nothing
- * destructive left to make, it names no refusal even where nobody could be
- * asked, and it leaves the table as it found it. The real reconcile asks
- * nobody anything and runs exactly the statements the dry run named. That a
- * confirmation still asks about a destructive change the push does make is
- * held in `core-reconcile.test.ts`.
+ * (restoring the index) and the column as a deletion: the push carries it, so
+ * it is not among the statements, and only Nextly's own drop, under the
+ * data-loss consent, removes it. Where nobody can be asked and no consent
+ * covers it, the dry run names the refusal and the consent; and it leaves the
+ * table as it found it. The real reconcile with that consent runs exactly the
+ * push statements the dry run named, then drops the column.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { freshPushSchema } from "../../../domains/schema/pipeline/fresh-push";
 import {
@@ -63,11 +63,13 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
-    it("names the push's statements and what it leaves in place, asks nothing, and changes nothing", async () => {
+    it("names the push's statements and the column it deletes, refuses without consent, and changes nothing", async () => {
+      const none = resolveDataLossConsent({});
       // The control: a fresh install's core schema needs nothing.
       const clean = await previewReconcileCore({
         adapter: adapter(),
         interactive: false,
+        consent: none,
         // A database whose history the build holds: nothing to refuse.
         checkAppHistory: () => Promise.resolve(),
       });
@@ -88,34 +90,59 @@ describe.each(getConfiguredTestDialects())(
       const plan = await previewReconcileCore({
         adapter: adapter(),
         interactive: false,
+        consent: none,
         // A database whose history the build holds: nothing to refuse.
         checkAppHistory: () => Promise.resolve(),
       });
-      const statements = plan.changes.map(c => c.target);
+      const statements = plan.changes
+        .filter(c => c.action === "run")
+        .map(c => c.target);
       expect(statements.join("\n")).toContain(INDEX);
       expect(statements.join("\n")).not.toContain(EXTRA);
-      expect((plan.notes ?? []).join("\n")).toMatch(
-        new RegExp(`Left in place: .*${EXTRA}`)
+      expect(
+        plan.changes
+          .filter(c => c.action === "remove")
+          .map(c => c.target)
+          .join("\n")
+      ).toContain(`${TABLE}.${EXTRA}`);
+      // Nobody can be asked and no consent covers the column: the real run
+      // refuses, and the dry run says so with the consent that covers it.
+      expect((plan.refusals ?? []).join("\n")).toContain(
+        `--accept-data-loss=${TABLE}.${EXTRA}`
       );
-      // The column's drop is never made, so nothing needs confirming, and a
-      // real run with nobody to ask is not refused.
-      expect(plan.refusals ?? []).toEqual([]);
+
+      // A consent naming other targets is refused even at a terminal, as the
+      // real run refuses it: nobody is asked about what it leaves out.
+      const elsewhere = await previewReconcileCore({
+        adapter: adapter(),
+        interactive: true,
+        consent: resolveDataLossConsent({ flag: "users.nothing_here" }),
+        checkAppHistory: () => Promise.resolve(),
+      });
+      expect((elsewhere.refusals ?? []).join("\n")).toContain(
+        `--accept-data-loss=${TABLE}.${EXTRA}`
+      );
+      // With no consent at a terminal, a real run asks: no refusal.
+      const asked = await previewReconcileCore({
+        adapter: adapter(),
+        interactive: true,
+        consent: none,
+        checkAppHistory: () => Promise.resolve(),
+      });
+      expect(asked.refusals ?? []).toEqual([]);
 
       expect(await table()).toEqual(before);
 
-      // The real reconcile asks nothing, and runs exactly the statements the
-      // dry run named.
-      const questions: string[][] = [];
+      // The real reconcile with that consent runs exactly the statements the
+      // dry run named, then drops the column itself.
       const executed: string[] = [];
       await runReconcileCore(
         {
           adapter: adapter(),
+          consent: resolveDataLossConsent({ flag: `${TABLE}.${EXTRA}` }),
+          interactive: false,
           // A database whose history the build holds: nothing to refuse.
           checkAppHistory: () => Promise.resolve(),
-          confirmDestructive: async reasons => {
-            questions.push(reasons);
-            return true;
-          },
         },
         {
           reconcileCore: deps =>
@@ -129,11 +156,10 @@ describe.each(getConfiguredTestDialects())(
             }),
         }
       );
-      expect(questions).toEqual([]);
       expect(executed).toEqual(statements);
       const after = await table();
       expect(after.indexes).toContain(INDEX);
-      expect(after.columns).toContain(EXTRA);
+      expect(after.columns).not.toContain(EXTRA);
     });
   }
 );

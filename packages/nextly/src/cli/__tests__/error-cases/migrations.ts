@@ -10,6 +10,12 @@ import {
   judgeDataLoss,
   resolveDataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
+import {
+  coreDestructiveRefused,
+  coreUpgradeIncomplete,
+  coreUpgradeUnsupported,
+} from "../../../domains/schema/migrate/core-reconcile";
+import { coreDeletionOf } from "../../../domains/schema/migrate/core-retired-columns";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
 import {
   assertNotPartiallyApplied,
@@ -31,7 +37,6 @@ import {
 import { refusalOf } from "../../commands/migrate-down";
 import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
-  coreDestructiveNeedsTerminal,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
@@ -321,26 +326,46 @@ export const MIGRATION_CASES = {
   // As `reconcileCore` in `domains/schema/migrate/core-reconcile.ts` throws it in production-strict
   // mode, with the classifier's reasons.
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: () =>
-    new NextlyError({
-      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-      publicMessage:
-        "Core schema reconciliation requires destructive operations: " +
-        "drops column 'nextly_users.legacy_role'; drops table 'nextly_sessions_old'" +
-        ". This usually means a Nextly version mismatch. Set " +
-        "NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
-    }),
-  // As `reconcileCore` throws it when the prompt is declined.
+    coreDestructiveRefused(
+      ["dynamic_collections", "dynamic_singles"].map(tableName =>
+        coreDeletionOf({
+          type: "drop_column",
+          tableName,
+          columnName: "access_rules",
+          columnType: "text",
+        })
+      )
+    ),
+  // As `reconcileCore` throws it when drizzle-kit cannot plan the push.
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: () =>
+    coreUpgradeUnsupported(
+      ["dynamic_collections", "dynamic_singles"].map(tableName => ({
+        type: "add_column" as const,
+        tableName,
+        column: { name: "webhooks", type: "jsonb", nullable: true },
+      }))
+    ),
+  // As `reconcileCore` throws it when a declared column is still missing.
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: () =>
+    coreUpgradeIncomplete(["dynamic_collections: revalidate, webhooks"]),
+  // Retired: as `reconcileCore` threw it when the per-change prompt was declined.
   CORE_DESTRUCTIVE_CHANGE_DECLINED: () =>
-    new NextlyError({
-      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-      publicMessage:
-        "Core schema reconciliation aborted: destructive operations were not confirmed: " +
-        "drops column 'nextly_users.legacy_role'" +
-        ".",
+    new CliError("CORE_DESTRUCTIVE_CHANGE_DECLINED", {
+      what: "Core schema reconciliation aborted: destructive operations were not confirmed.",
+      why: "drops column 'nextly_users.legacy_role'",
+      next: "Run `nextly upgrade --reconcile-core` again and confirm each change once you have checked its data is not needed.",
     }),
-  // As `upgradeAction` in `cli/commands/upgrade.ts` throws it with no terminal to confirm on.
+  // Retired: as `upgradeAction` threw it with no terminal to confirm on, before its deletions were
+  // judged by the data-loss consent.
   CORE_DESTRUCTIVE_NEEDS_TERMINAL: () =>
-    coreDestructiveNeedsTerminal(["drops column 'nextly_users.legacy_role'"]),
+    new CliError("CORE_DESTRUCTIVE_NEEDS_TERMINAL", {
+      what: "This confirmation needs a terminal, so nothing was changed.",
+      why: [
+        "`--reconcile-core` asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or `--non-interactive` was given, or `CI` is set). The changes it would make:",
+        "- drops column 'nextly_users.legacy_role'",
+      ].join("\n"),
+      next: "Run `nextly upgrade --reconcile-core` again at a terminal, and confirm each change once you have checked its data is not needed.",
+    }),
   // As `reconcileCore` throws it when the core apply fails.
   CORE_SCHEMA_APPLY_FAILED: () =>
     new NextlyError({
