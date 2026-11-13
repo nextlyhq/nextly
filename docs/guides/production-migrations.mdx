@@ -1543,8 +1543,11 @@ calls `onUninstall` again, and carries on. Run the other way, it is refused
 reason. `nextly plugins install` reinstates the plugin instead.
 
 A full uninstall that would drop tables, or run a DOWN that drops a column,
-lists what it would drop and stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until
-you re-run it with `--yes`. Each module's DOWN is read, judged and run exactly
+lists what it would drop and asks before it drops anything. At a terminal it
+asks once; without one, it stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until you
+re-run it with `--accept-data-loss`, alone or naming each table and
+`table.column` it drops (or `NEXTLY_ACCEPT_DATA_LOSS`). `--yes` does not
+consent to deleting data. Each module's DOWN is read, judged and run exactly
 as `migrate:down --plugin` runs it, newest first. Tables that a
 development push created, with no applied migration module to undo them, are
 refused with `PLUGIN_UNINSTALL_IRREVERSIBLE` (`logContext.reason` is

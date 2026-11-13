@@ -16,8 +16,8 @@ import type {
 
 import { listItems, lists, POSTS_TABLE, postColumns, PREFIX } from "./schema";
 
-export type ReadingList = InferRow<typeof lists>;
-export type ReadingListItem = InferRow<typeof listItems>;
+type ReadingList = InferRow<typeof lists>;
+type ReadingListItem = InferRow<typeof listItems>;
 
 /** Start an empty list for a user. */
 export function createList(
@@ -51,9 +51,9 @@ export function removePost(
 ): Promise<void> {
   return db.transaction(async tx => {
     const item = tx.table(listItems);
-    await tx
-      .delete(listItems)
-      .where(and(eq(item.listId, listId), eq(item.postId, postId)));
+    // `and` is undefined only when given no condition, never here.
+    const saved = and(eq(item.listId, listId), eq(item.postId, postId));
+    if (saved) await tx.delete(listItems).where(saved);
     await recountPost(tx, postId);
   });
 }

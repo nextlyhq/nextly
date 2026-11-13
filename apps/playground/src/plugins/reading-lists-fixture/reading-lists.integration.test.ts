@@ -47,7 +47,13 @@ import { defineCollection, text } from "nextly/config";
 import { createAdapter } from "nextly/database";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createList, readList, savedCount, savePost } from "./lists";
+import {
+  createList,
+  readList,
+  removePost,
+  savedCount,
+  savePost,
+} from "./lists";
 import { READING_LISTS_PLUGIN, readingListsFixturePlugin } from "./plugin";
 
 const run = promisify(execFile);
@@ -246,12 +252,16 @@ function makeSite(scratch: string, databaseUrl: string) {
       ].join("\n")
     );
   writeConfig(true);
+  // This process's environment, pointed at the scratch site's database and
+  // out of vitest's `test` mode: the commands run as a developer's do, and
+  // the dialect is read from the URL.
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key !== "DB_DIALECT")
+    ),
+    NODE_ENV: "development",
     DATABASE_URL: databaseUrl,
   };
-  delete environment.DB_DIALECT;
-  delete environment.NODE_ENV;
   return {
     writeConfig,
     migrationsDir: join(scratch, "src/db/migrations"),
@@ -436,11 +446,11 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
         password: "Password123!",
         data: { name: "Reader", isActive: true },
       });
-      const post = (await t.nextly.create({
+      const post = await t.nextly.create({
         collection: "posts",
         data: { title: "Saved", slug: "saved" },
-      })) as { item: { id: string } };
-      postId = post.item.id;
+      });
+      postId = String(post.item.id);
 
       const list = await createList(ctx.db, user.item.id, "Weekend");
       await savePost(ctx.db, list.id, postId);
@@ -460,6 +470,12 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
       expect(entry).not.toHaveProperty("saved_count");
       // The table's unique index refuses the same post twice on a list.
       await expect(savePost(ctx.db, list.id, postId)).rejects.toThrow();
+      // Taking it off recounts the post, and saving it again counts it back.
+      await removePost(ctx.db, list.id, postId);
+      expect(await savedCount(ctx.db, postId)).toBe(0);
+      expect((await readList(ctx.db, list.id))?.items).toEqual([]);
+      await savePost(ctx.db, list.id, postId);
+      expect(await savedCount(ctx.db, postId)).toBe(1);
     });
     expect(codeOf(failure)).toBeUndefined();
     expect(await savedCountStored()).toBe(1);
