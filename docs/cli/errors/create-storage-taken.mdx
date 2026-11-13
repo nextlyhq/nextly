@@ -1,0 +1,24 @@
+---
+title: CREATE_STORAGE_TAKEN
+description: "A field group or Single would be created where tables or other objects that nothing registered owns already stand."
+---
+
+## Cause
+
+A field group or Single would be created where tables or other objects that nothing registered owns already stand.
+
+Before it builds anything, a field group's or Single's create checks the tables it would use. An empty table an earlier attempt left behind is replaced. It refuses instead, and changes nothing, when what stands there is not its own to replace: a table that holds rows, a leftover table other tables reference, or an object standing where it would build or reading what it would replace, such as a view. The message names each one.
+
+## Fix
+
+- Check the tables the message names. If they hold data you need, back it up first.
+- Drop or rename them, then retry the create.
+
+## Example
+
+```text
+✗ Creating the Single "home" was refused.
+  Why:  "single_home" (3 rows) already exists and holds rows, but nothing registered describes them.
+  Next: Drop or rename those tables, then retry the create.
+  Docs: https://nextlyhq.com/docs/cli/errors/create-storage-taken  (CREATE_STORAGE_TAKEN)
+```

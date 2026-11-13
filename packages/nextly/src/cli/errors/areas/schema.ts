@@ -11,7 +11,29 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { contextString, sentences } from "../messages";
+import { asSentence, contextString, sentences } from "../messages";
+
+/**
+ * A create refused over storage nothing registered owns, as its three parts. The refusal reads
+ * "Creating the <kind> "<slug>" was refused: <what stands there>. <what to do>.", so the part before
+ * the colon is what happened, the rest of that sentence why, and the last sentence what to do.
+ */
+function leftoverStorageRefusal(error: NextlyError): CliErrorParts {
+  const parts = sentences(error.publicMessage);
+  const last = parts.length > 1 ? parts[parts.length - 1] : undefined;
+  const body = (last === undefined ? parts : parts.slice(0, -1)).join(" ");
+  const colon = body.indexOf(": ");
+  return {
+    what: colon === -1 ? body : `${body.slice(0, colon)}.`,
+    why:
+      colon === -1
+        ? "Tables or other objects that nothing registered owns stand where it would build."
+        : asSentence(body.slice(colon + 2)),
+    next:
+      last ??
+      "Drop or rename the tables the message names, then retry the create.",
+  };
+}
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -303,6 +325,30 @@ export const SCHEMA_CODES = defineCodes({
           why: "The column's type differs from what its field makes now, and a save converts only the columns its review showed.",
           next: "Review the save in the Schema Builder and confirm the conversion, or pass the column in `acknowledgedConversions`.",
         }),
+      },
+    ],
+  },
+  // A field group's or Single's create checks the storage it would build in first, and refuses
+  // when something nothing registered owns stands there: objects in its place, a leftover table
+  // others reference, or one holding rows. Each refusal names the tables and what to do.
+  CREATE_STORAGE_TAKEN: {
+    cause:
+      "A field group or Single would be created where tables or other objects that nothing registered owns already stand.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "create-objects-taken",
+        describe: leftoverStorageRefusal,
+      },
+      {
+        code: "CONFLICT",
+        reason: "create-table-referenced",
+        describe: leftoverStorageRefusal,
+      },
+      {
+        code: "CONFLICT",
+        reason: "create-table-occupied",
+        describe: leftoverStorageRefusal,
       },
     ],
   },
