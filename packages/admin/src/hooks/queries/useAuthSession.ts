@@ -23,8 +23,8 @@ import {
 
 import { abandonStartupRequest } from "@admin/lib/api/startup-request";
 import {
-  isAuthenticated as checkIsAuthenticated,
   SessionUnavailableError,
+  sessionStanding,
 } from "@admin/lib/auth/session";
 import {
   readSetupState,
@@ -39,6 +39,10 @@ export interface AuthSession {
   isSetup: boolean;
   /** Whether this browser currently holds a valid session. */
   isAuthenticated: boolean;
+  /** Whether the signed-in account holds any role; false when signed out. */
+  hasRole: boolean;
+  /** The signed-in account's email; null when signed out. */
+  email: string | null;
 }
 
 async function verifyAuth(): Promise<AuthSession> {
@@ -46,18 +50,24 @@ async function verifyAuth(): Promise<AuthSession> {
   // An installation with no setup has no session to check, and asking anyway
   // would report "not authenticated" for a reason that is not about the caller.
   if (setup.answered && !setup.isSetup) {
-    return { isSetup: false, isAuthenticated: false };
+    return {
+      isSetup: false,
+      isAuthenticated: false,
+      hasRole: false,
+      email: null,
+    };
   }
   // Throws SessionUnavailableError when the server could not answer, which
   // leaves the query in its error state rather than reporting "signed out".
-  const isAuthenticated = await checkIsAuthenticated();
+  const standing = await sessionStanding();
+  const { isAuthenticated } = standing;
   // A signed-in user means setup is done whatever setup-status said. Signed
   // out with setup unanswered, the visitor could belong on login or on setup,
   // and guessing login would strand the very first visitor of a new install.
   if (!setup.answered && !isAuthenticated) {
     throw new SessionUnavailableError(null);
   }
-  return { isSetup: true, isAuthenticated };
+  return { isSetup: true, ...standing };
 }
 
 /** Retries a server that could not answer, twice; never a definite answer. */

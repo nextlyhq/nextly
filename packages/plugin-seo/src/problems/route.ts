@@ -72,6 +72,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
     {
       method: "GET",
       path: PROBLEMS_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       noStore: true,
       handler: async (_req, ctx) => {
         const readable = await readableTypes(ctx, checks);
@@ -86,6 +87,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
     {
       method: "POST",
       path: PROBLEMS_CHECK_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (_req, ctx) => {
         // Asked before the check, which reads and writes as the system.
         const readable = await readableTypes(ctx, checks);

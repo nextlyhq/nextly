@@ -63,6 +63,7 @@ function match(extra: Partial<PluginRoute> = {}): RouteMatch {
   return {
     pluginName: "@a/x",
     route: {
+      siteWide: false,
       method: "POST",
       path: "/patterns",
       handler: () => {
@@ -248,7 +249,9 @@ describe("a route that opts out with csrf: false", () => {
           name: "@a/x",
           version: "1.0.0",
           nextly: ">=0.0.1",
-          contributes: { routes: [match({ public: true }).route] },
+          contributes: {
+            routes: [match({ public: true, siteWide: undefined }).route],
+          },
         } as PluginDefinition,
       ]).map(entry => entry.fullPath)
     ).toEqual(["/plugins/@a/x/patterns"]);

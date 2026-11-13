@@ -597,12 +597,14 @@ export function readPageCollection(
  */
 export function pageCollectionRoute(): {
   method: "GET";
+  siteWide: false;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: PAGE_COLLECTION_ROUTE_PATH,
+    siteWide: false, // Acts on no site content; signing in is enough.
     handler: (_req, ctx) =>
       Promise.resolve(Response.json(readPageCollection(ctx))),
   };

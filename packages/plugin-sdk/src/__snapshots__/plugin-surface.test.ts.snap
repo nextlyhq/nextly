@@ -508,6 +508,7 @@ exports[`plugin-sdk public export surface > \`./testing\` surface is unchanged 1
   "getConfiguredTestDialects (value)",
   "runWidgetLoad (value)",
   "takeAbortedTransactionSightings (value)",
+  "undeclaredPluginRoutes (value)",
 ]
 `;
 
