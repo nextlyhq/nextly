@@ -8,16 +8,28 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { isPublicEndpoint, parseRestRoute, requiresAuthOnly } from "../route-parser";
+import {
+  isPublicEndpoint,
+  parseRestRoute,
+  requiresAuthOnly,
+} from "../route-parser";
 
 const route = (httpMethod: string, path: string) =>
   parseRestRoute(path.split("/").filter(Boolean), httpMethod);
 
 describe("the address check routes", () => {
   it.each([
-    ["/collections/schema/address-check", "collections", "checkCollectionAddress"],
+    [
+      "/collections/schema/address-check",
+      "collections",
+      "checkCollectionAddress",
+    ],
     ["/singles/schema/address-check", "singles", "checkSingleAddress"],
-    ["/field-groups/schema/address-check", "field-groups", "checkComponentAddress"],
+    [
+      "/field-groups/schema/address-check",
+      "field-groups",
+      "checkComponentAddress",
+    ],
   ])("POST %s is the %s service's %s", (path, service, method) => {
     const parsed = route("POST", path);
     expect(parsed.service).toBe(service);

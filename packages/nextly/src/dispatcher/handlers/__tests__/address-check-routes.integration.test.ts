@@ -118,7 +118,8 @@ describeEachDialect("the address check routes", dialect => {
   ): Promise<string[]> {
     const tables: string[] = [];
     const record = (table: unknown) => {
-      if (typeof table === "string" && REGISTRIES.has(table)) tables.push(table);
+      if (typeof table === "string" && REGISTRIES.has(table))
+        tables.push(table);
     };
     const selectOne = t.adapter.selectOne.bind(t.adapter);
     const select = t.adapter.select.bind(t.adapter);

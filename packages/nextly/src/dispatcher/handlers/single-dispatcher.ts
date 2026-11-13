@@ -134,6 +134,7 @@ import {
 } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -556,6 +557,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     },
   },
 
+  // What creating a Single under an address would answer, for the Builder's new-entity dialog;
+  // writes nothing.
+  checkSingleAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("single", body),
+  },
   createSingle: {
     execute: async (svc, _, body) => {
       const b = body as
@@ -582,11 +588,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           }
         | undefined;
 
-      if (!b?.slug) throw new Error("Single slug is required");
       // Judged by the one address rule every road shares, before the DDL below runs, so a refused
       // address leaves no `single_<slug>` table behind. A system resource's name is among its
-      // refusals: it seeds the same permission rows that resource's routes check.
-      assertAddressAllowed("single", b.slug);
+      // refusals: it seeds the same permission rows that resource's routes check. A missing or
+      // empty address is the rule's refusal too, so a save answers it as the Builder's address
+      // check does, with the rule's reason.
+      assertAddressAllowed("single", b?.slug);
+      if (!b?.slug) throw new Error("Single slug is required");
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");

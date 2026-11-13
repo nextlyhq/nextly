@@ -65,6 +65,7 @@ import {
 } from "../../schemas/dynamic-field-groups/types";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
+import { assertAddressAllowed } from "../../shared/address-rule";
 import type { Logger } from "../../shared/types";
 import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
@@ -86,6 +87,7 @@ import { readRequestLocalized } from "../helpers/request-localized";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -362,6 +364,11 @@ export const COMPONENTS_METHODS: Record<
     },
   },
 
+  // What creating a field group under an address would answer, for the Builder's new-entity
+  // dialog and the field picker; writes nothing.
+  checkComponentAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("fieldGroup", body),
+  },
   createComponent: {
     execute: async (svc, _, body) => {
       const b = body as
@@ -377,6 +384,10 @@ export const COMPONENTS_METHODS: Record<
           }
         | undefined;
 
+      // A missing or empty address is the address rule's refusal, answered with its reason as the
+      // Builder's address check answers it, before the request's other shape is judged. The
+      // service judges the address again, against the other field groups, under its lock.
+      assertAddressAllowed("fieldGroup", b?.slug);
       if (!b?.slug || !b?.fields) {
         throw new Error("Component slug and fields are required");
       }
