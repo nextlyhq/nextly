@@ -14,10 +14,16 @@
  * again at once after a write made here. A change saved through another
  * instance is seen here within the interval.
  *
- * A decision that guards access reads the row itself instead
- * (`getSettings({ fresh: true })`): preview-link revocation and where a
- * preview link sends its holder must reflect a change made elsewhere a moment
- * ago, so those reads never answer with a kept copy.
+ * Two kinds of reader read the row itself instead
+ * (`getSettings({ fresh: true })`), never answering with a kept copy:
+ * - a decision that guards access: preview-link revocation, and where a
+ *   preview link sends its holder, must reflect a change made elsewhere a
+ *   moment ago;
+ * - a read that fills a cache outside this process whose expiry another
+ *   instance's save drives: the public site settings pages render
+ *   (`Nextly.publicSiteSettings()`) are cached under the tag a save expires,
+ *   and a refill made here from a copy older than that save would be kept
+ *   until the next one.
  *
  * @module services/general-settings/general-settings-service
  * @since 1.0.0
