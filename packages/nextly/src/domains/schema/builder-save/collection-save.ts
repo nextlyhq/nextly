@@ -272,8 +272,21 @@ export async function writeCollectionSave(
      * it has run, each written file is recorded applied where the database
      * stands as its snapshot says, and the save is refused, its files kept,
      * where it does not.
+     *
+     * It answers `"partly-applied"` where it changed the database and then
+     * failed part way: the files are kept, as the change they describe has
+     * partly run, and recorded applied nowhere, so the next `nextly migrate`
+     * names them rather than the database holding a change no file records.
      */
-    appliedBy?: () => Promise<void>;
+    appliedBy?: () => Promise<void | "partly-applied">;
+    /**
+     * Outside development, the change made here once its files are written,
+     * as a field group's or a Single's own DDL makes it (a collection's
+     * leaves it to the deploy's `nextly migrate`). A failure withdraws the
+     * files, as one in development does, so the deploy never applies a change
+     * that was refused; `"partly-applied"` keeps them, recorded nowhere.
+     */
+    appliedAfter?: () => Promise<void | "partly-applied">;
   } = {}
 ): Promise<CollectionSaveResult> {
   const written = await writeSave(deps, save, options);
@@ -281,11 +294,17 @@ export async function writeCollectionSave(
   let pushed = false;
   try {
     if (deps.applies && options.appliedBy !== undefined) {
-      await options.appliedBy();
+      const applied = await options.appliedBy();
       pushed = true;
+      if (applied === "partly-applied") {
+        return { files: [...written.names], applied: false };
+      }
       await recordWhatWasPushed(deps, written.files, written.table);
     } else if (deps.applies) {
       await runWritten(deps, written.files, written.table);
+    } else if (options.appliedAfter !== undefined) {
+      await options.appliedAfter();
+      pushed = true;
     }
     return { files: [...written.names], applied: deps.applies };
   } catch (error) {
