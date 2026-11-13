@@ -51,8 +51,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { passwordCredentialDeps } from "../auth/credentials/credential-deps";
 import type { CredentialDeps } from "../auth/credentials/verify-credentials";
+import { readSessionRoles } from "../auth/session/read-session-roles";
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/service-access";
+import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
@@ -88,7 +90,7 @@ import { consoleLogger } from "../shared/types";
 import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
-import type { NextlyContext } from "./namespaces/context";
+import type { DirectLoginDeps, NextlyContext } from "./namespaces/context";
 import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
   createAccessNamespace,
@@ -418,6 +420,22 @@ export class Nextly implements NextlyContext {
       container.get<DrizzleAdapter>("adapter")
     );
     return this._passwordCredentialDeps;
+  }
+
+  /** Cached Direct API login dependencies, read through the container. */
+  private _directLoginDeps: DirectLoginDeps | null = null;
+
+  /** @internal */
+  public get directLoginDeps(): DirectLoginDeps {
+    // Resolved per call through the container, as the auth router resolves
+    // them, so a login made before the services finish registering reads the
+    // adapter that is registered when it runs, not one captured here.
+    this._directLoginDeps ??= {
+      fetchSessionRoles: userId =>
+        readSessionRoles(container.get<DrizzleAdapter>("adapter"), userId),
+      auditLog: buildAuditLogWriter(name => container.get(name)),
+    };
+    return this._directLoginDeps;
   }
 
   /** Cached UserAccountService — not registered in the DI container. */
