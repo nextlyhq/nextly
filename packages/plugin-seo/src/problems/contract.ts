@@ -31,6 +31,7 @@ export type ProblemKind =
   | "connection"
   | "noAddress"
   | "redirectChain"
+  | "datesToday"
   | "languageCode"
   | "notListed"
   | "robotsBlocked"
@@ -75,6 +76,12 @@ export const KIND_TEXT: Readonly<
     title: "Redirect that takes more than one hop",
     explain:
       "Each extra hop slows the visit, and search engines may stop following before the end.",
+    siteWide: true,
+  },
+  datesToday: {
+    title: "Sitemap dates that keep matching the day they're checked",
+    explain:
+      "Search engines may stop trusting the site's dates when most pages say they changed on the day they're read.",
     siteWide: true,
   },
   languageCode: {
@@ -191,6 +198,7 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   canonical: "error",
   connection: "warning",
   redirectChain: "warning",
+  datesToday: "warning",
   languageCode: "warning",
   notListed: "warning",
   brokenLink: "warning",
@@ -253,6 +261,7 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "proxyNotWired",
   "connection",
   "redirectChain",
+  "datesToday",
   "languageCode",
   "notListed",
   "robotsBlocked",

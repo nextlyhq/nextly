@@ -25,6 +25,10 @@ import {
   type Separator,
 } from "../settings/patterns";
 import {
+  VERIFICATION_SERVICES,
+  type VerificationServiceKey,
+} from "../settings/verification";
+import {
   DETAIL_GUESSES,
   STRUCTURED_DATA_TYPES,
   type StructuredDataDetail,
@@ -51,6 +55,21 @@ export interface RobotsRulesDraft {
   text: string;
   confirmed?: { text: string; pages: string };
 }
+
+/** One other service's tag, as the form holds it while a person types. */
+export interface OtherTagDraft {
+  name: string;
+  code: string;
+}
+
+/**
+ * The verification codes as the form holds them: each box's text as typed,
+ * and the other services' tags. A box holds only a code once what was pasted
+ * is read (`settings/verification`); until then the save is held up.
+ */
+export type VerificationDraft = Record<VerificationServiceKey, string> & {
+  others: OtherTagDraft[];
+};
 
 /** Every value the screen edits, as the form holds it. */
 export interface SettingsDraft {
@@ -81,6 +100,8 @@ export interface SettingsDraft {
   plainTextCopies: boolean;
   /** The site's own robots.txt lines. */
   robotsRules: RobotsRulesDraft;
+  /** The codes other services verify the site with. */
+  verificationCodes: VerificationDraft;
 }
 
 /** The stored Single as the admin reads it. */
@@ -160,6 +181,48 @@ function storedRobotsRules(draft: RobotsRulesDraft): RobotsRulesDraft | null {
   return confirmed === undefined ? { text: kept } : { text: kept, confirmed };
 }
 
+/**
+ * The stored verification codes as the form holds them: each service's
+ * code, and each other service's tag, with anything that is not text left
+ * out. Nothing stored, as before the field existed, is every box empty.
+ */
+export function verificationDraftOf(value: unknown): VerificationDraft {
+  const stored = isRecord(value) ? value : {};
+  const codes = Object.fromEntries(
+    VERIFICATION_SERVICES.map(service => [
+      service.key,
+      text(stored[service.key]),
+    ])
+  ) as Record<VerificationServiceKey, string>;
+  const others = Array.isArray(stored.others)
+    ? stored.others.filter(isRecord).map(tag => ({
+        name: text(tag.name),
+        code: text(tag.code),
+      }))
+    : [];
+  return { ...codes, others };
+}
+
+/**
+ * The verification codes as they are stored: each code trimmed, an empty box
+ * left out, an empty other-service row dropped, and null where nothing is
+ * left, so clearing every box clears the value.
+ */
+function storedVerification(
+  draft: VerificationDraft
+): Record<string, unknown> | null {
+  const stored: Record<string, unknown> = {};
+  for (const service of VERIFICATION_SERVICES) {
+    const code = draft[service.key].trim();
+    if (code !== "") stored[service.key] = code;
+  }
+  const others = draft.others
+    .map(tag => ({ name: tag.name.trim(), code: tag.code.trim() }))
+    .filter(tag => tag.name !== "" || tag.code !== "");
+  if (others.length > 0) stored.others = others;
+  return Object.keys(stored).length === 0 ? null : stored;
+}
+
 /** What the plugin's own options answer while the settings hold nothing. */
 export interface SettingsDefaults {
   /** The plugin's `aiCrawlers` option: what robots.txt asks until the site chooses. */
@@ -221,6 +284,7 @@ export function draftOf(
     llmsTxt: stored.llmsTxt === true,
     plainTextCopies: stored.plainTextCopies === true,
     robotsRules: robotsRulesDraftOf(stored.robotsRules),
+    verificationCodes: verificationDraftOf(stored.verificationCodes),
   };
 }
 
@@ -428,6 +492,7 @@ function storedForm(
     ...draft,
     structuredData: savedRules(draft.structuredData, defaults),
     robotsRules: storedRobotsRules(draft.robotsRules),
+    verificationCodes: storedVerification(draft.verificationCodes),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -488,7 +553,34 @@ export function rebasedDraft(
       before.socialProfiles,
       after.socialProfiles
     ),
+    verificationCodes: rebasedVerification(
+      draft.verificationCodes,
+      before.verificationCodes,
+      after.verificationCodes
+    ),
   };
+}
+
+/**
+ * The verification codes moved service by service, and the other services'
+ * tags row by row, so an edit to one service's code keeps another person's
+ * edit to another's.
+ */
+function rebasedVerification(
+  draft: VerificationDraft,
+  before: VerificationDraft,
+  after: VerificationDraft
+): VerificationDraft {
+  const next: VerificationDraft = {
+    ...after,
+    others: rebasedSet(draft.others, before.others, after.others),
+  };
+  for (const service of VERIFICATION_SERVICES) {
+    if (draft[service.key] !== before[service.key]) {
+      next[service.key] = draft[service.key];
+    }
+  }
+  return next;
 }
 
 /** The values moved as a whole map or list rather than as one value. */
@@ -498,6 +590,7 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "hiddenTypes",
   "productionAddresses",
   "socialProfiles",
+  "verificationCodes",
 ]);
 
 /** The draft's own values, other than the per-type ones, edited since `before`. */

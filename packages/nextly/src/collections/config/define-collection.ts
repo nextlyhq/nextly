@@ -822,6 +822,16 @@ export interface CollectionConfig {
   publicAddressField?: string;
 
   /**
+   * @experimental On a collection a plugin contributes: it holds the site's
+   * own content, such as its pages, so a plugin that extends every content
+   * type (`contributes.extend` with a scope) reaches it as it reaches the
+   * site's own collections. A plugin's other collections, such as form
+   * submissions or internal records, are never reached by a scope. Read only
+   * on a plugin's collection; the site's own are reached without it.
+   */
+  siteContent?: boolean;
+
+  /**
    * @experimental Internal/private storage (D30). The collection stays in the
    * merged schema — relatable and accessible via `ctx.services` / `ctx.db.raw` —
    * but is hidden from the content-admin navigation (implies `admin.hidden`).

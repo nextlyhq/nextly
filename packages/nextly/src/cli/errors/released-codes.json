@@ -206,5 +206,6 @@
   "PLUGIN_REGISTRATION_UNKNOWN": "`nextly plugins add` cannot tell how to register a package: it declares nothing, and its entry exports no single plugin.",
   "PLUGIN_OPTION_MISSING": "A plugin asks for options at install, and `nextly plugins add` was given none for some of them with no one at the terminal to ask.",
   "PLUGIN_OPTION_INVALID": "An option given to `nextly plugins add` is malformed, is not one the plugin asks for, or was refused by the plugin.",
-  "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was."
+  "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.",
+  "CREATE_BLOCKED_BY_LEFTOVER_TABLE": "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them."
 }

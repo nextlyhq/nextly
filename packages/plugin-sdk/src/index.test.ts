@@ -87,6 +87,13 @@ describe("the content-type scope the SDK publishes", () => {
     expect(sdk.isContentTypeScope({ every: ["single"] })).toBe(true);
   });
 
+  it("re-exports typesExtendedBy, which answers what the start added", async () => {
+    const sdk = await import("./index");
+    // A value export, not a type alone: a plugin calls it at run time.
+    expect(typeof sdk.typesExtendedBy).toBe("function");
+    expect(sdk.typesExtendedBy("@acme/never-installed", "meta")).toEqual([]);
+  });
+
   it("accepts a scope as an extend target", () => {
     const def: PluginDefinition = definePlugin({
       name: "@acme/meta",

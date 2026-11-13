@@ -15,8 +15,12 @@ import { singleKey } from "./page-types";
 import { markOutOfDate } from "./store";
 
 /** What a hook the checks are started from is handed, as far as they read it. */
-interface SavedContext {
+export interface SavedContext {
+  /** The collection's slug, or a Single's hook key (`single:<slug>`). */
+  collection?: string;
   data?: unknown;
+  /** The document as it was before an update, where the hook is handed it. */
+  originalData?: unknown;
   /**
    * Runs an effect once the write is durable: after its transaction commits,
    * where it is made on one, or at once. Absent on a context built by hand.
@@ -33,27 +37,38 @@ export function idOf(context: SavedContext): string | undefined {
 }
 
 /**
+ * The key a saved document's type is kept under where SEO is added to it:
+ * a collection's slug, or a Single's `single:<slug>`, which is also the key
+ * its hooks are named by. Nothing for any other type.
+ */
+function seoTypeKeyOf(
+  checks: ProblemChecks,
+  context: SavedContext
+): string | undefined {
+  const key = context.collection;
+  if (key === undefined) return undefined;
+  if (checks.targets.includes(key)) return key;
+  return checks.singles.some(slug => singleKey(slug) === key) ? key : undefined;
+}
+
+/**
  * Check each page of the types SEO is added to after it is saved, a
- * Single's included, and forget it after it is deleted. After the save, so a failed check can
- * never undo the save, and the check reads the address the save recorded.
+ * Single's included, and forget it after it is deleted. After the save, so a
+ * failed check can never undo the save, and the check reads the address the
+ * save recorded.
+ *
+ * Heard on every type and kept to the ones with SEO as each save is made, so
+ * a type that gets SEO after the plugin started, as a development reload
+ * can give one, is checked too.
  */
 export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
-  for (const slug of checks.targets) {
-    const saved = (context: SavedContext) => {
-      const id = idOf(context);
-      if (id !== undefined) {
-        onceDurable(context, () => recheckSaved(ctx, checks, slug, id));
-      }
-    };
-    ctx.hooks.on("afterCreate", slug, saved);
-    ctx.hooks.on("afterUpdate", slug, saved);
-    ctx.hooks.on("afterDelete", slug, (context: SavedContext) => {
-      const id = idOf(context);
-      if (id !== undefined) {
-        onceDurable(context, () => forgetDeleted(ctx, slug, id));
-      }
-    });
-  }
+  const saved = (context: SavedContext) => {
+    const key = seoTypeKeyOf(checks, context);
+    const id = idOf(context);
+    if (key !== undefined && id !== undefined) {
+      onceDurable(context, () => recheckSaved(ctx, checks, key, id));
+    }
+  };
   // A save of the SEO settings can change many pages' results at once, such
   // as an own robots.txt rule that comes to block pages the sitemap lists:
   // the full check is marked out of date, so the list says so and the next
@@ -71,15 +86,15 @@ export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
   });
   // A Single is never created or deleted by a person: its save is an
   // update, its hooks named by its key.
-  for (const slug of checks.singles) {
-    const key = singleKey(slug);
-    ctx.hooks.on("afterUpdate", key, (context: SavedContext) => {
-      const id = idOf(context);
-      if (id !== undefined) {
-        onceDurable(context, () => recheckSaved(ctx, checks, key, id));
-      }
-    });
-  }
+  ctx.hooks.on("afterCreate", "*", saved);
+  ctx.hooks.on("afterUpdate", "*", saved);
+  ctx.hooks.on("afterDelete", "*", (context: SavedContext) => {
+    const key = seoTypeKeyOf(checks, context);
+    const id = idOf(context);
+    if (key !== undefined && checks.targets.includes(key) && id !== undefined) {
+      onceDurable(context, () => forgetDeleted(ctx, key, id));
+    }
+  });
 }
 
 /**
@@ -90,7 +105,7 @@ export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
  * and MySQL the two name the same savepoint and either can fail. Held until
  * the commit, it runs outside the transaction and reads what was saved.
  */
-function onceDurable(context: SavedContext, start: () => void): void {
+export function onceDurable(context: SavedContext, start: () => void): void {
   if (context.afterCommit === undefined) {
     start();
     return;

@@ -4,11 +4,14 @@
  * a created entry round-trips the nested `seo` fields, and the same collection
  * booted WITHOUT the plugin has no `seo` (so the plugin is what adds them).
  */
+import { typesExtendedBy } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly";
+import { defineCollection, defineSingle, group, text } from "nextly";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../plugin";
@@ -132,3 +135,86 @@ describe("seoPlugin extend (integration)", () => {
     });
   });
 });
+
+/**
+ * Where the site names no types, the group reaches every collection and
+ * Single it defines, and nothing else: not a type it leaves out, not one
+ * with a field of its own named `seo`, not users or a plugin's own records.
+ */
+describe.each(getConfiguredTestDialects())(
+  "seoPlugin on every content type (%s)",
+  (dialect: TestDialect) => {
+    it("adds the group to the site's types, and to no other", async () => {
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          pages(),
+          defineCollection({
+            slug: "logs",
+            fields: [text({ name: "slug" }), text({ name: "message" })],
+          }),
+          defineCollection({
+            slug: "landing",
+            fields: [
+              text({ name: "slug" }),
+              // The site's own field by the plugin's name, which it keeps.
+              group({ name: "seo", fields: [text({ name: "headline" })] }),
+            ],
+          }),
+        ],
+        singles: [
+          defineSingle({ slug: "home", fields: [text({ name: "headline" })] }),
+        ],
+        plugins: [seoPlugin({ exclude: ["logs"] })],
+      });
+
+      // The start's record of where the group went, which every part of the
+      // plugin reads.
+      expect(
+        typesExtendedBy("@nextlyhq/plugin-seo", "seo")
+          .map(type => `${type.kind}:${type.slug}`)
+          .sort()
+      ).toEqual(["collection:pages", "single:home"]);
+
+      // A collection and a Single round-trip SEO values.
+      const created = await current.nextly.create({
+        collection: "pages",
+        data: { slug: "a", title: "A", seo: { metaTitle: "On pages" } },
+      });
+      const page = (await current.nextly.findByID({
+        collection: "pages",
+        id: (created.item as { id: string }).id,
+      })) as { seo?: { metaTitle?: string } } | null;
+      expect(page?.seo?.metaTitle).toBe("On pages");
+      const home = await current.nextly.updateSingle({
+        slug: "home",
+        data: {
+          _overwrite: true,
+          headline: "Hi",
+          seo: { metaTitle: "On home" },
+        },
+        overrideAccess: true,
+      });
+      expect(
+        (home.item as { seo?: { metaTitle?: string } }).seo?.metaTitle
+      ).toBe("On home");
+
+      // The type left out has no group: the same write is refused.
+      await expect(
+        current.nextly.create({
+          collection: "logs",
+          data: { slug: "l", message: "m", seo: { metaTitle: "x" } },
+        })
+      ).rejects.toBeDefined();
+
+      // The type with its own `seo` keeps its own field's shape.
+      const own = await current.nextly.create({
+        collection: "landing",
+        data: { slug: "l", seo: { headline: "Its own" } },
+      });
+      expect((own.item as { seo?: { headline?: string } }).seo?.headline).toBe(
+        "Its own"
+      );
+    });
+  }
+);

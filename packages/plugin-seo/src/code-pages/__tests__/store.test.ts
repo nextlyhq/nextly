@@ -9,6 +9,7 @@ import {
   codePageDocument,
   nameOfAddress,
   recorded,
+  statedDateOf,
   type CodePageRow,
 } from "../store";
 
@@ -92,5 +93,61 @@ describe("what a route's call records", () => {
       recorded({ ...ROW, connected: false }, { code: { title: "Pricing" } })
     ).toBe(false);
     expect(recorded(undefined, { code: {} })).toBe(false);
+  });
+});
+
+describe("the date a page built in code states", () => {
+  it("is the route's openGraph.modifiedTime, as ISO text, and nothing else", () => {
+    expect(
+      statedDateOf({
+        openGraph: { type: "article", modifiedTime: "2026-10-01" },
+      })
+    ).toBe("2026-10-01T00:00:00.000Z");
+    expect(
+      statedDateOf({
+        openGraph: {
+          type: "article",
+          modifiedTime: new Date(Date.UTC(2026, 9, 2)).toISOString(),
+        },
+      })
+    ).toBe("2026-10-02T00:00:00.000Z");
+    // No stated date, or one that is no date: none, never the time now.
+    expect(statedDateOf({ title: "Pricing" })).toBeUndefined();
+    expect(statedDateOf(undefined)).toBeUndefined();
+    expect(
+      statedDateOf({ openGraph: { type: "article", modifiedTime: "soon" } })
+    ).toBeUndefined();
+  });
+
+  it("is recorded with the call, and a changed one is a call to record", () => {
+    const stated = { ...ROW, lastModified: "2026-10-01T00:00:00.000Z" };
+    expect(
+      recorded(stated, {
+        code: { title: "Pricing" },
+        lastModified: "2026-10-01T00:00:00.000Z",
+      })
+    ).toBe(true);
+    expect(
+      recorded(stated, {
+        code: { title: "Pricing" },
+        lastModified: "2026-10-05T00:00:00.000Z",
+      })
+    ).toBe(false);
+    expect(recorded(stated, { code: { title: "Pricing" } })).toBe(false);
+    expect(
+      recorded(ROW, {
+        code: { title: "Pricing" },
+        lastModified: "2026-10-01T00:00:00.000Z",
+      })
+    ).toBe(false);
+  });
+
+  it("is handed to the resolver with the page", () => {
+    expect(
+      codePageDocument("/pricing", ROW, undefined, "2026-10-01T00:00:00.000Z")
+    ).toMatchObject({ lastModified: "2026-10-01T00:00:00.000Z" });
+    expect(codePageDocument("/pricing", ROW, undefined)).not.toHaveProperty(
+      "lastModified"
+    );
   });
 });

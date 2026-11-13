@@ -3,7 +3,8 @@
  * production addresses, default description and share image, the title
  * pattern of each content type, the brand facts every output reads, what kind
  * of site it is, what AI tools may do, which optional outputs for AI tools
- * are switched on, and how far first-time setup got.
+ * are switched on, the codes other services verify the site with, and how
+ * far first-time setup got.
  *
  * A Single rather than plugin settings because it is content: its text is
  * kept per language where the site is translated, its images are media
@@ -36,6 +37,7 @@ import {
   socialProfilesProblem,
 } from "./stored-values";
 import { structuredDataSettingsProblem } from "./structured-data-choices";
+import { verificationProblem } from "./verification-stored";
 
 /**
  * The cache tags every read of the SEO settings carries. Each write to the
@@ -141,6 +143,13 @@ export function seoSettingsSingle(): SingleConfig {
         name: "robotsRules",
         label: "Your own robots.txt rules",
         validate: refusing(robotsRulesProblem),
+      }),
+      // The codes other services read from the home page's head to confirm
+      // the site is the owner's: only codes, each checked on the way in.
+      json({
+        name: "verificationCodes",
+        label: "Verification codes",
+        validate: refusing(verificationProblem),
       }),
       // The optional connections and outputs, each off until switched on.
       checkbox({ name: "indexNow", label: "IndexNow" }),
