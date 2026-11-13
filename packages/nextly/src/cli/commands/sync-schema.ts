@@ -48,6 +48,23 @@ async function pushEntities(
   await syncComponents(configResult, adapter, options, context);
 }
 
+/**
+ * The settings push, once every table exists: field groups first. The collection sync's push plans
+ * field groups from their registry rows, which the first pass wrote with the settings held, and the
+ * field-group sync's own push only adds missing columns; registered first, the collection push
+ * reads their settings as the config states them and applies them.
+ */
+async function pushSettings(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  options: ResolvedDevOptions,
+  context: CommandContext
+): Promise<void> {
+  await syncComponents(configResult, adapter, options, context);
+  await syncCollections(configResult, adapter, options, context);
+  await syncSingles(configResult, adapter, options, context);
+}
+
 /** Stops the run, naming the entities whose translated fields stay where they are. */
 function translationsStayPut(
   slugs: readonly string[],
@@ -124,37 +141,91 @@ export async function syncSchemaInOrder(
 
   // Before the pushes, which plan plugin tables and contributed elements from it.
   await publishExtensionSchema(configResult, adapter, context);
-  await pushEntities(
-    {
-      ...configResult,
-      config:
-        mover?.configWithLeavingSettingsHeld(config, leaving.entries) ?? config,
-    },
-    adapter,
-    options,
-    context
-  );
+  if (!mover || leaving.entries.length === 0) {
+    await pushEntities(configResult, adapter, options, context);
+    // The companion of every localized entity, which the pushes do not manage, after all three:
+    // it references its main table. Gated on `--no-auto-sync` as the pushes are, since it issues
+    // DDL and can copy rows.
+    if (autoSync) {
+      await ensureLocalizedCompanions(config, adapter, context, "afterApply", {
+        recordedBefore,
+      });
+    }
+    return;
+  }
 
-  // The companion of every localized entity, which the pushes do not manage, after all three:
-  // it references its main table. Gated on `--no-auto-sync` as the pushes are, since it issues DDL
-  // and can copy rows.
-  if (!autoSync) return;
-  await ensureLocalizedCompanions(config, adapter, context, "afterApply", {
-    recordedBefore,
-  });
-  if (!mover || leaving.entries.length === 0) return;
-  const stopped = await mover.moveFieldsLeavingOnReload({
-    adapter: live,
-    entries: leaving.entries,
-    deferred: new Set(),
-    config,
-    blockedBy: [],
-    // The settings push: the config as it is, whose leaving fields' values are now shared.
-    push: async () => {
-      await pushEntities(configResult, adapter, options, context);
-      return { success: true };
-    },
-    report: m => logger.error(m),
-  });
-  if (stopped.length > 0) translationsStayPut(stopped, true);
+  // From the first push on, the registry records the leaving fields as shared. Until the move
+  // finishes, a stop writes them back as recorded, still translated, with no schema change, so
+  // the values stay readable through the translations table and a rerun finds the fields leaving.
+  let moved = false;
+  try {
+    await pushEntities(
+      {
+        ...configResult,
+        config: mover.configWithLeavingSettingsHeld(config, leaving.entries),
+      },
+      adapter,
+      options,
+      context
+    );
+    await ensureLocalizedCompanions(config, adapter, context, "afterApply", {
+      recordedBefore,
+    });
+    const stopped = await mover.moveFieldsLeavingOnReload({
+      adapter: live,
+      entries: leaving.entries,
+      deferred: new Set(),
+      config,
+      blockedBy: [],
+      // The config as it is, whose leaving fields' values are now shared.
+      push: async () => {
+        await pushSettings(configResult, adapter, options, context);
+        return { success: true };
+      },
+      report: m => logger.error(m),
+    });
+    if (stopped.length > 0) translationsStayPut(stopped, true);
+    moved = true;
+  } finally {
+    if (!moved) {
+      await keepRecordedTranslated(
+        {
+          ...configResult,
+          config: mover.configWithLeavingFieldsTranslated(
+            config,
+            leaving.entries
+          ),
+        },
+        adapter,
+        options,
+        context
+      );
+    }
+  }
+}
+
+/**
+ * The registry written back from `configResult` alone, with no push (`autoSync: false`). Its own
+ * failure is reported rather than raised, so the error that stopped the move is the one the run
+ * ends on.
+ */
+async function keepRecordedTranslated(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  options: ResolvedDevOptions,
+  context: CommandContext
+): Promise<void> {
+  try {
+    await pushEntities(
+      configResult,
+      adapter,
+      { ...options, autoSync: false },
+      context
+    );
+  } catch (error) {
+    context.logger.error(
+      `The registry could not be put back to the fields' translated definitions: ${describeError(error)}. ` +
+        "Set the fields back to `localized: true` and sync, then make them shared again."
+    );
+  }
 }

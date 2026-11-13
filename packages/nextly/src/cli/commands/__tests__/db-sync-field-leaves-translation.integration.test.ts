@@ -15,6 +15,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../../config";
+import { ensureI18nArchive } from "../../../domains/i18n/migration/ensure-archive";
+import { defineFieldGroup } from "../../../field-groups/config/define-field-group";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import type { LoadConfigResult } from "../../utils/config-loader";
 import { syncSchemaInOrder } from "../sync-schema";
@@ -129,6 +131,48 @@ const archived = async (): Promise<{ locale: string; value: string }[]> =>
         `SELECT "locale", "value" FROM "nextly_i18n_archive" ORDER BY "locale"`
       );
 
+const GROUP = "dbsleavegrp";
+const GROUP_TABLE = `comp_${GROUP}`;
+
+/** A translated field group whose `body` is translated, or shared and Required. */
+const groupConfigWith = (localized: boolean): LoadConfigResult["config"] =>
+  defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    fieldGroups: [
+      defineFieldGroup({
+        slug: GROUP,
+        localized: true,
+        fields: [
+          { name: "body", type: "text", localized, required: !localized },
+        ] as never,
+      }),
+    ],
+  });
+
+/** A row of `table` with `values`, every other required column given a placeholder. */
+async function insertRow(
+  table: string,
+  values: Record<string, string>
+): Promise<void> {
+  const columns = await query<{
+    name: string;
+    notnull: number;
+    dflt_value: unknown;
+    pk: number;
+  }>(`PRAGMA table_info("${table}")`);
+  const row: Record<string, string | number> = { ...values };
+  for (const c of columns) {
+    if (c.name in row || c.notnull !== 1 || c.dflt_value !== null) continue;
+    row[c.name] = c.name.endsWith("_at") || c.name === "_order" ? 0 : "x";
+  }
+  const names = Object.keys(row);
+  const literal = (v: string | number) =>
+    typeof v === "number" ? String(v) : `'${v}'`;
+  await query(
+    `INSERT INTO "${table}" (${names.map(n => `"${n}"`).join(", ")}) VALUES (${names.map(n => literal(row[n])).join(", ")})`
+  );
+}
+
 describe("db:sync making a translated field shared (sqlite)", () => {
   it("keeps the default language's value on the main table, and archives the others", async () => {
     await seed({ a: { en: "Hello", es: "Hola" } });
@@ -186,5 +230,47 @@ describe("db:sync making a translated field shared (sqlite)", () => {
     expect(before.companion).toContain("body");
     expect(await mainBodies()).toEqual({ a: null, b: null });
     expect(await archived()).toEqual([]);
+  });
+  // A stop after the first push leaves the registry saying the field is still translated, so the
+  // values stay readable through the translations table and running the sync again moves them.
+  it("moves the values on a rerun after a move that stopped part-way", async () => {
+    await seed({ a: { en: "Hello", es: "Hola" } });
+    await ensureI18nArchive(target!.adapter, "sqlite");
+    await query(
+      `CREATE TRIGGER "refuse_archive" BEFORE INSERT ON "nextly_i18n_archive" BEGIN SELECT RAISE(ABORT, 'archive refused'); END`
+    );
+
+    await expect(sync(configWith({ localized: false }))).rejects.toThrow(
+      /were not moved \(see above\)/
+    );
+    expect(await columnsOf(COMPANION)).toContain("body");
+
+    await query(`DROP TRIGGER "refuse_archive"`);
+    await sync(configWith({ localized: false }));
+
+    expect(await mainBodies()).toEqual({ a: "Hello" });
+    expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+    expect(await columnsOf(COMPANION)).not.toContain("body");
+  });
+
+  it("makes a field group's Required field required once its values are copied", async () => {
+    await sync(groupConfigWith(true));
+    await insertRow(GROUP_TABLE, { id: "g1" });
+    await query(
+      `INSERT INTO "${GROUP_TABLE}_locales" ("_parent", "_locale", "body") VALUES ('g1', 'en', 'Hello'), ('g1', 'es', 'Hola')`
+    );
+
+    await sync(groupConfigWith(false));
+
+    expect(
+      await query(`SELECT "body" FROM "${GROUP_TABLE}" WHERE "id" = 'g1'`)
+    ).toEqual([{ body: "Hello" }]);
+    expect(await columnsOf(`${GROUP_TABLE}_locales`)).not.toContain("body");
+    const body = (
+      await query<{ name: string; notnull: number }>(
+        `PRAGMA table_info("${GROUP_TABLE}")`
+      )
+    ).find(c => c.name === "body");
+    expect(body?.notnull).toBe(1);
   });
 });

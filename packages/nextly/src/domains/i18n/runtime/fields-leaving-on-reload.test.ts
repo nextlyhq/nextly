@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  configWithLeavingFieldsTranslated,
   configWithLeavingSettingsHeld,
   type FieldsLeavingOnReload,
   translationStaysOn,
@@ -75,5 +76,50 @@ describe("configWithLeavingSettingsHeld", () => {
 
   it("returns the config itself when no field leaves", () => {
     expect(configWithLeavingSettingsHeld(config, [])).toBe(config);
+  });
+});
+
+// A run whose move stops writes the registry back from this, so the field is still recorded
+// translated, as it was before the run, and the retry finds it leaving again.
+describe("configWithLeavingFieldsTranslated", () => {
+  it("puts back each leaving field as recorded, and leaves the rest", () => {
+    const recordedBody = {
+      name: "body",
+      type: "text",
+      localized: true,
+      maxLength: 80,
+    };
+    const config = {
+      collections: [
+        {
+          slug: "posts",
+          fields: [
+            { name: "body", type: "text", localized: false, required: true },
+            { name: "title", type: "text" },
+          ],
+        },
+      ],
+      singles: [{ slug: "posts", fields: [{ name: "body", type: "text" }] }],
+    };
+    const entry: FieldsLeavingOnReload = {
+      kind: "collection",
+      slug: "posts",
+      tableName: "dc_posts",
+      status: false,
+      perLanguageStatus: false,
+      newFields: config.collections[0].fields,
+      oldFields: [recordedBody, { name: "title", type: "text" }],
+      leaving: new Set(["body"]),
+      uniqueIndexes: [],
+      uniqueIndexed: new Set(),
+    };
+
+    const put = configWithLeavingFieldsTranslated(config, [entry]);
+
+    expect(put.collections?.[0]).toEqual({
+      slug: "posts",
+      fields: [recordedBody, { name: "title", type: "text" }],
+    });
+    expect(put.singles).toEqual(config.singles);
   });
 });
