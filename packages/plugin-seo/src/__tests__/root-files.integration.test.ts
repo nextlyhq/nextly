@@ -33,6 +33,7 @@ import { catchUp, lastCatchUp } from "../address-record/catch-up";
 import { forgetNote } from "../address-record/__tests__/record-tables";
 import { contentDatesSettled } from "../content-dates/hooks";
 import type { ListedPagesService } from "../outputs/listing";
+import { seoMetadata } from "../code-pages/metadata";
 import { seoPlugin, type SeoPluginOptions } from "../plugin";
 import { SEO_SETTINGS_SLUG } from "../settings/contract";
 
@@ -203,6 +204,35 @@ async function create(
 ): Promise<string> {
   const created = await t.nextly.create({ collection, data });
   return String(created.item.id);
+}
+
+/**
+ * Settings a site saved before an upgrade, none of them a default: a reader
+ * that dropped every stored setting when one column is missing would lose
+ * each of them.
+ */
+async function saveSettingsToKeep(
+  t: TestNextly,
+  more: Record<string, unknown> = {}
+) {
+  await t.nextly.updateSingle({
+    slug: SEO_SETTINGS_SLUG,
+    data: {
+      _overwrite: true,
+      siteName: "Acme",
+      llmsTxt: true,
+      robotsRules: { text: "User-agent: *\nDisallow: /search" },
+      ...more,
+    },
+  });
+}
+
+/** A head's title as the browser shows it. */
+function titleOf(head: { title?: unknown }): unknown {
+  const title = head.title;
+  return typeof title === "object" && title !== null && "absolute" in title
+    ? title.absolute
+    : title;
 }
 
 /** The head a public route serves for the entry at `slug` of `collection`. */
@@ -804,9 +834,56 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    // Turned on once the shared settings reader reads a missing column as unset.
-    it.todo(
-      "keeps answering robots.txt, the sitemap and each head until the own rules' column is migrated"
-    );
+    it("keeps answering robots.txt, the sitemap and each head until the own rules' column is migrated", async () => {
+      const { t } = await boot(dialect, { aiCrawlers: "search" });
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      const pluginLines = (await rootFile("robots.txt")).body;
+      await saveSettingsToKeep(t);
+      // A database the upgrade has not been migrated for: the own rules'
+      // column is missing, so core refuses a read that asks for it.
+      await t.adapter.executeQuery(
+        "ALTER TABLE single_seo_settings DROP COLUMN robots_rules"
+      );
+      // The own rules read as unset: the plugin's lines alone.
+      const robots = await rootFile("robots.txt");
+      expect(robots.status).toBe(200);
+      expect(robots.body).toBe(pluginLines);
+      const sitemap = await rootFile("sitemap.xml");
+      expect(sitemap.status).toBe(200);
+      expect(sitemap.body).toContain(`<loc>${SITE}/blog/hello</loc>`);
+      // The rest as stored: llms.txt stays on, and the head keeps the site's
+      // name.
+      expect((await rootFile("llms.txt")).status).toBe(200);
+      expect(titleOf(await headOf(t, "posts", "hello"))).toBe("Hello | Acme");
+    });
+
+    it("keeps answering robots.txt and the home page's head until the verification codes' column is migrated", async () => {
+      const { t } = await boot(dialect, { aiCrawlers: "search" });
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      await saveSettingsToKeep(t, {
+        verificationCodes: { bing: "8A2F61C4D0E9B7A35F0C19D2E6B4A7C9" },
+      });
+      const withOwnRules = (await rootFile("robots.txt")).body;
+      expect(withOwnRules).toContain("Disallow: /search");
+      // A database the upgrade has not been migrated for: the verification
+      // codes' column is missing, so they read as unset, the rest as stored.
+      await t.adapter.executeQuery(
+        "ALTER TABLE single_seo_settings DROP COLUMN verification_codes"
+      );
+      const robots = await rootFile("robots.txt");
+      expect(robots.status).toBe(200);
+      expect(robots.body).toBe(withOwnRules);
+      expect((await rootFile("llms.txt")).status).toBe(200);
+      expect((await seoMetadata("/")).verification).toBeUndefined();
+      expect(titleOf(await headOf(t, "posts", "hello"))).toBe("Hello | Acme");
+    });
   }
 );
