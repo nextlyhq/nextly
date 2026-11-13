@@ -72,8 +72,8 @@ describe("a create refused over storage nothing registered owns", () => {
   }
 
   // A shared field-group table holds other entities' rows, so the advice keeps the table and
-  // removes only the rows naming the leftover as their parent.
-  it("tells the owner of shared field-group rows to delete only those rows, never the table", () => {
+  // removes the leftover's rows, the nested ones beneath them included.
+  it("tells the owner of shared field-group rows to delete them and the rows nested beneath, never the table", () => {
     const ended = toCliError(
       occupiedRefusal(SINGLE, [], [{ table: "comp_chip", rows: 1 }])
     );
@@ -82,7 +82,7 @@ describe("a create refused over storage nothing registered owns", () => {
       'The shared field-group table "comp_chip" (1 row) holds rows whose `_parent_table` is "single_home", which nothing registered owns.'
     );
     expect(ended.next).toBe(
-      'Delete only the rows whose `_parent_table` is "single_home" from that table, keeping the table and every other row, then retry the create.'
+      'Delete the field-group rows "single_home" left in that table: those whose `_parent_table` is "single_home" and every row nested beneath them, keeping the table and other entities\' rows, then retry the create.'
     );
     expect(ended.next).not.toMatch(/drop|rename/i);
   });
@@ -102,7 +102,7 @@ describe("a create refused over storage nothing registered owns", () => {
       '"single_home" (3 rows) already exists and holds rows, but nothing registered describes them. The shared field-group tables "comp_chip" (1 row), "comp_card" (2 rows) hold rows whose `_parent_table` is "single_home", which nothing registered owns.'
     );
     expect(ended.next).toBe(
-      'Drop or rename "single_home", and delete only the rows whose `_parent_table` is "single_home" from "comp_chip", "comp_card", keeping the tables and every other row, then retry the create.'
+      'Drop or rename "single_home", and delete the field-group rows "single_home" left in "comp_chip", "comp_card": those whose `_parent_table` is "single_home" and every row nested beneath them, keeping the tables and other entities\' rows, then retry the create.'
     );
   });
 

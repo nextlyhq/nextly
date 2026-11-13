@@ -27,7 +27,7 @@ function leftoverStorageRefusal(error: NextlyError): CliErrorParts {
     what: colon === -1 ? body : `${body.slice(0, colon)}.`,
     why:
       colon === -1
-        ? "Tables or views that nothing registered owns stand where it would build."
+        ? "Tables, views or field-group rows that nothing registered owns are in its way."
         : asSentence(body.slice(colon + 2)),
     next:
       last ??
@@ -334,7 +334,7 @@ export const SCHEMA_CODES = defineCodes({
   // to do.
   CREATE_STORAGE_TAKEN: {
     cause:
-      "A field group or Single would be created where tables or views that nothing registered owns already stand.",
+      "A field group or Single would be created over tables, views or field-group rows that nothing registered owns.",
     from: [
       {
         code: "CONFLICT",

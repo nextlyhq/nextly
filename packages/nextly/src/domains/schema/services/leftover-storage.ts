@@ -438,9 +438,12 @@ function sharedRowsPart(
       `${first ? "the" : "The"} shared field-group ${one ? "table" : "tables"} ` +
       `${tablesWithRows(shared)} ${one ? "holds" : "hold"} rows whose \`_parent_table\` is ` +
       `"${tableName}", which nothing registered owns.`,
+    // Nested field groups hang below those rows by their parent's id, not by this table's name,
+    // so the remedy takes them too: deleting the top rows alone would strand the nested ones.
     remedy:
-      `delete only the rows whose \`_parent_table\` is "${tableName}" from ${where}, ` +
-      `keeping the ${one ? "table" : "tables"} and every other row`,
+      `delete the field-group rows "${tableName}" left in ${where}: those whose \`_parent_table\` is ` +
+      `"${tableName}" and every row nested beneath them, keeping the ` +
+      `${one ? "table" : "tables"} and other entities' rows`,
   };
 }
 
