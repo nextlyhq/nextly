@@ -1015,9 +1015,9 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * i18n M7: publish every language of an entry at once (spec §10). Refused first where a
-   * language going live breaks a value rule a publish of chosen languages applies, so the two
-   * ways of publishing every language agree.
+   * Publish every language of an entry at once. Refused first where a language going live
+   * breaks a value rule a publish of chosen languages applies, so the two ways of publishing
+   * every language agree.
    */
   async publishAllLocales(params: EveryLanguageLifecycleParams) {
     const refusal = await this.valueRuleRefusal(params, "all");

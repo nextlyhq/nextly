@@ -5,6 +5,11 @@ import { fileURLToPath } from "url";
 
 import { defineConfig, type Rolldown } from "tsdown";
 
+import {
+  NOTICES_FILE,
+  thirdPartyNotices,
+} from "./scripts/third-party-notices.mjs";
+
 // ESM __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -54,8 +59,11 @@ const EXTERNAL_DEPS = [
  * This avoids requiring users to install dozens of UI libraries
  */
 const NO_EXTERNAL_DEPS = [
-  // Radix UI primitives
-  /@radix-ui\/.*/,
+  // Not here, and so left to the application: `@radix-ui/*`, `tailwind-merge`,
+  // `clsx` and `class-variance-authority`. `@nextlyhq/ui`, a peer every app
+  // installs, depends on each at the same range, so the app's bundler resolves
+  // one copy for both rather than the admin shipping a second. The ranges are
+  // held equal by `scripts/shared-dependency-ranges.test.mjs`.
   // Lexical rich text editor
   /lexical/,
   /@lexical\/.*/,
@@ -69,9 +77,6 @@ const NO_EXTERNAL_DEPS = [
   "react-hook-form",
   "zod",
   // UI utilities
-  "class-variance-authority",
-  "clsx",
-  "tailwind-merge",
   "tailwind-variants",
   "tailwindcss-animate",
   "cmdk",
@@ -122,16 +127,19 @@ export const BUNDLE_MODULES_FILE = "bundle-modules.json";
 
 /**
  * A module's name in the record: a package's file from where its package
- * starts (`react-hook-form/dist/index.esm.mjs`), anything else relative to this
- * package (`src/index.ts`), with `/` on every system.
+ * starts (`react-hook-form/dist/index.esm.mjs`), a module the bundler made
+ * itself as `virtual:<id>`, anything else relative to this package
+ * (`src/index.ts`), with `/` on every system.
  */
 function recordedModuleName(id: string): string {
-  const file = id.replace(/^\0/, "");
-  const packages = file.lastIndexOf("/node_modules/");
+  // A module the bundler made itself (its runtime helpers), named apart from
+  // a package's file or the admin's own source.
+  if (id.startsWith("\0")) return `virtual:${id.slice(1)}`;
+  const packages = id.lastIndexOf("/node_modules/");
   if (packages !== -1) {
-    return file.slice(packages + "/node_modules/".length);
+    return id.slice(packages + "/node_modules/".length);
   }
-  return path.relative(__dirname, file).split(path.sep).join("/");
+  return path.relative(__dirname, id).split(path.sep).join("/");
 }
 
 const recordBundleModules: Rolldown.Plugin = {
@@ -155,6 +163,28 @@ const recordBundleModules: Rolldown.Plugin = {
       type: "asset",
       fileName: BUNDLE_MODULES_FILE,
       source: JSON.stringify({ chunks, imports }),
+    });
+  },
+};
+
+/**
+ * The bundled packages' licences, once, in `dist/THIRD-PARTY-NOTICES`.
+ *
+ * The build drops each module's `@license` banner (`comments.legal: false`
+ * below): `lucide-react` alone repeats one per icon, about 32 KB of what the
+ * admin ships. The licences still travel with the code, written here from each
+ * bundled package's own licence file (`scripts/third-party-notices.mjs`).
+ */
+const writeThirdPartyNotices: Rolldown.Plugin = {
+  name: "nextly:third-party-notices",
+  generateBundle(_options, bundle) {
+    const moduleIds = Object.values(bundle).flatMap(output =>
+      output.type === "chunk" ? output.moduleIds : []
+    );
+    this.emitFile({
+      type: "asset",
+      fileName: NOTICES_FILE,
+      source: thirdPartyNotices(moduleIds),
     });
   },
 };
@@ -212,6 +242,15 @@ export default defineConfig([
       // What `@nextlyhq/plugin-sdk/admin` re-exports to plugins, apart from the
       // root so it loads with the plugin pages that use it (`src/kit.ts`).
       "src/kit.ts",
+      // The kit's areas, each its own entry, so the SDK can re-export a name
+      // from the area that holds it (`src/kit.ts` says why).
+      "src/kit/core.ts",
+      "src/kit/document.ts",
+      "src/kit/field-ui.ts",
+      "src/kit/media.ts",
+      "src/kit/plugin-parts.ts",
+      "src/kit/table.ts",
+      "src/kit/widgets.ts",
       "src/lib/plugins/component-registry.ts",
       "src/lib/plugins/plugin-components.ts",
       // For tests alone: no admin module imports it, so it never joins the
@@ -321,8 +360,17 @@ export default defineConfig([
     // rebuild; every other chunk keeps the default name.
     outputOptions: {
       chunkFileNames: chunkFileName,
+      // No `@license` banners in the chunks: the bundled packages' licences
+      // ship once, in `THIRD-PARTY-NOTICES` (`writeThirdPartyNotices`). The
+      // `@__PURE__` annotations stay, so an application's bundler can still
+      // drop a call nothing uses.
+      comments: { legal: false, annotation: true, jsdoc: false },
     },
-    plugins: [stylesheetImportsAreEmpty, recordBundleModules],
+    plugins: [
+      stylesheetImportsAreEmpty,
+      recordBundleModules,
+      writeThirdPartyNotices,
+    ],
     onSuccess: () => {
       const distDir = path.join(process.cwd(), "dist");
 
