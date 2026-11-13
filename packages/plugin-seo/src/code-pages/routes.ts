@@ -102,6 +102,28 @@ export function addressOfAppPath(appPath: string): string | undefined {
 const isDynamic = (path: string) => path.includes("[");
 
 /**
+ * The page `prerendered` names for a route with a variable part, `dynamic`
+ * keyed by the name Next.js gives each; none for an address no such route
+ * made, one with a variable part left, or one of the framework's own.
+ */
+function dynamicRouteOf(
+  { path, srcRoute, declared }: Prerendered,
+  dynamic: ReadonlyMap<string, string>,
+  fileOf: (appPath: string) => string
+): CodeRoute | undefined {
+  const appPath = srcRoute === null ? undefined : dynamic.get(srcRoute);
+  if (appPath === undefined || isDynamic(path) || frameworkAddress(path)) {
+    return undefined;
+  }
+  return {
+    path,
+    source: "dynamic",
+    route: fileOf(appPath),
+    ...(declared === true ? { declared } : {}),
+  };
+}
+
+/**
  * The pages the routes at `appPaths` render from their own code: each one
  * with no variable part, and each address `prerendered` names for one that
  * has, but never an address the build answered not found. Sorted by
@@ -124,16 +146,11 @@ export function codeRoutesOf(
       found.set(path, { path, source: "built", route: fileOf(appPath) });
     }
   }
-  for (const { path, srcRoute, declared } of prerendered) {
-    const appPath = srcRoute === null ? undefined : dynamic.get(srcRoute);
-    if (appPath === undefined || isDynamic(path) || found.has(path)) continue;
-    if (frameworkAddress(path)) continue;
-    found.set(path, {
-      path,
-      source: "dynamic",
-      route: fileOf(appPath),
-      ...(declared === true ? { declared } : {}),
-    });
+  for (const each of prerendered) {
+    const route = dynamicRouteOf(each, dynamic, fileOf);
+    if (route !== undefined && !found.has(route.path)) {
+      found.set(route.path, route);
+    }
   }
   // No page is served where the build's render answered not found.
   const notFound = new Set(

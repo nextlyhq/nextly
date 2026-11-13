@@ -278,6 +278,18 @@ export async function listPages(
 }
 
 /**
+ * Whether the route serving a page built in code calls the metadata
+ * function: its call is recorded, or the page was declared for the build,
+ * which counts before it renders, since the build may list it first.
+ */
+function callsMetadata(
+  route: CodeRoute,
+  row: { connected?: boolean } | undefined
+): boolean {
+  return row?.connected === true || route.declared === true;
+}
+
+/**
  * The pages built in code whose route calls the metadata function, listed
  * into `found` in the site's language where their answer lets search
  * engines index them at their own address. An address an entry already
@@ -295,14 +307,12 @@ async function listCodePages(
   const held = await heldByDocuments(
     ctx,
     connected.flatMap(({ route, row }) =>
-      row?.connected === true || route.declared === true ? [route.path] : []
+      callsMetadata(route, row) ? [route.path] : []
     ),
     options.origin
   );
   for (const { route, row, answer } of connected) {
-    // A page declared for the build counts as connected before it renders:
-    // its route calls `seoMetadata`, and the build may list it first.
-    if (row?.connected !== true && route.declared !== true) continue;
+    if (!callsMetadata(route, row)) continue;
     // An entry holds it in its language, hidden from search or not: the
     // address is the entry's.
     if (held.has(route.path)) continue;
