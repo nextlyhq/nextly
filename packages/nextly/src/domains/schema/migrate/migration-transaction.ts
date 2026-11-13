@@ -5,25 +5,20 @@
  * @module domains/schema/migrate/migration-transaction
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type {
-  StatementSession,
-  SupportedDialect,
-} from "@nextlyhq/adapter-drizzle/types";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { ownSessionId, sessionIdOfRows } from "../busy-table/ended-waiting";
 import {
-  ownSessionId,
-  ownSessionIdText,
-  sessionIdOfRows,
-} from "../busy-table/ended-waiting";
+  boundSessionTry,
+  boundSqliteWait,
+  sentUnderSchemaLock,
+} from "../busy-table/session-try";
 import { isPluginLedgerRow } from "../events/ledger-scope";
-import {
-  assertSchemaLockHeld,
-  markedForSchemaLock,
-} from "../pipeline/schema-lock";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import { leadingWords } from "./split-sql";
@@ -329,32 +324,6 @@ export async function runMigrationStatements(
 }
 
 /**
- * Sets SQLite's busy timeout to `tryMs` and returns what puts the connection's own back. Putting
- * it back is best effort: the unit has already ended, and a failure here must not change how.
- */
-async function boundSqliteWait(
-  adapter: DrizzleAdapter,
-  tryMs: number
-): Promise<() => Promise<void>> {
-  const [row] = await adapter.executeQuery<Record<string, unknown>>(
-    "PRAGMA busy_timeout"
-  );
-  const previous = Number(Object.values(row ?? {})[0] ?? 0);
-  await adapter.executeQuery(
-    `PRAGMA busy_timeout = ${String(Math.round(tryMs))}`
-  );
-  return () =>
-    adapter
-      .executeQuery(
-        `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
-      )
-      .then(
-        () => undefined,
-        () => undefined
-      );
-}
-
-/**
  * Whether `statement` sets something on its connection (`SET`): sent again before a try that
  * resumes past it, since the try may run on another connection than the one it was set on.
  */
@@ -363,43 +332,6 @@ function isConnectionSetting(
   dialect: SupportedDialect
 ): boolean {
   return leadingWords(statement, dialect, 1)[0] === "SET";
-}
-
-/**
- * Bounds each lock wait of a session that runs a unit outside a transaction, half a second past
- * the try's bound, as a backstop for a watch that could not ask; and tells the try the session's
- * id, so the watch can follow it. The session is one `withSession` holds and closes afterwards,
- * so the setting ends with it; on PostgreSQL it is put back all the same, best effort, before the
- * session runs anything else.
- */
-async function boundSessionTry<T>(
-  session: StatementSession,
-  dialect: "postgresql" | "mysql",
-  bound: StatementTryBound,
-  work: () => Promise<T>
-): Promise<T> {
-  // Fixed text with a whole number of milliseconds or seconds, never caller input.
-  await session.execute(
-    dialect === "postgresql"
-      ? `SET lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
-      : `SET SESSION lock_wait_timeout = ${String(Math.ceil((bound.tryMs + 500) / 1000))}`
-  );
-  const query = ownSessionIdText(dialect);
-  const id =
-    query === undefined
-      ? undefined
-      : sessionIdOfRows(await session.execute<Record<string, unknown>>(query));
-  if (id !== undefined) bound.onSession?.(id);
-  try {
-    return await work();
-  } finally {
-    if (dialect === "postgresql") {
-      await session.execute("RESET lock_timeout").then(
-        () => undefined,
-        () => undefined
-      );
-    }
-  }
 }
 
 /** `runMigrationStatements`'s unit, run once, bounded as one try where `bound` is given. */
@@ -417,16 +349,10 @@ async function runUnitStatements(
   // its statement, after the fill, through the handle the statements run on; undefined when the
   // unit has no such column, so this costs nothing.
   const checkpoint = requiredColumnCheckpoint(statements, dialect, unit);
-  // Each statement is marked with the lock's claim on the servers, where a run taking over a
-  // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
-  // a time, so a taker cannot start while a statement of the holder runs, and its adapter reads a
-  // statement's first word.
-  // The unit's name goes with the claim, so a run refused by one of these statements names the
-  // file, never the statement's text.
+  // Each statement is marked with the lock's claim on the servers (`sentUnderSchemaLock`), with
+  // the unit's name, so a run refused by one of these statements names the file, never its text.
   const sent = (statement: string) =>
-    dialect === "sqlite"
-      ? statement
-      : markedForSchemaLock(statement, unit.source);
+    sentUnderSchemaLock(statement, dialect, unit.source);
   // A try that resumes starts at `from`; the settings made before it are made again first.
   const from = Math.max(0, Math.min(bound?.from ?? 0, statements.length));
   const settingsBefore = statements

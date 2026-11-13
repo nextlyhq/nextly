@@ -36,13 +36,10 @@ import {
 } from "../pipeline/schema-lock";
 
 import type { BusyTableBounds } from "./bounds";
-import { endedWaiting } from "./ended-waiting";
-import { readHolders } from "./holder";
 import { firstNoRetry, renamedTables, targetTable } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
-import type { HolderReport } from "./types";
-import { prepareTryWatchdog } from "./watchdog";
+import { watchTry } from "./watched-try";
 
 /** What a run hands every unit it runs in tries. */
 export interface BusyTableRun {
@@ -70,8 +67,11 @@ function triggerTablesQuery(dialect: SupportedDialect): SQL {
   return sql`SELECT DISTINCT tbl_name AS name FROM sqlite_master WHERE type = 'trigger'`;
 }
 
-/** The tables with a trigger, lower-cased; read once before a unit's first try. */
-async function triggerTables(
+/**
+ * The tables with a trigger, lower-cased, as the live catalog has them now: read once before a
+ * unit's first try, and by every other runner of a try that judges a statement it would send again.
+ */
+export async function triggerTables(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
 ): Promise<ReadonlySet<string>> {
@@ -219,20 +219,12 @@ export async function runUnitInTries(
         : {}),
     },
     async (_tryNumber, tryMs): Promise<TryResult<number>> => {
-      let session: string | undefined;
       // The index last told: a statement about to be sent, or the count once all have run; -1
       // while none has been told.
       let reached = -1;
       // Made before the unit's transaction or session opens, so the watch's asks on another
       // connection never run inside that flow; it starts once the session is known.
-      // What holds the table, read by the watch just before it ends the try, while the session
-      // still waits; after the rollback it waits for nothing and the database names no holder.
-      let holder: HolderReport | undefined;
-      const watchdog = prepareTryWatchdog(adapter, dialect, tryMs, {
-        beforeCancel: async waiting => {
-          holder = await readHolders(adapter, dialect, waiting);
-        },
-      });
+      const watch = watchTry(adapter, dialect, tryMs);
       try {
         const value = await runMigrationStatements(
           adapter,
@@ -242,24 +234,20 @@ export async function runUnitInTries(
           {
             tryMs,
             from,
-            onSession: id => {
-              session = id;
-              watchdog.watch(id);
-            },
+            onSession: watch.onSession,
             onStatement: index => {
               reached = index;
             },
             // The watch stops before the commit hands the connection back to the pool.
-            settle: async () => {
-              await watchdog.stop();
-            },
+            settle: watch.settle,
           }
         );
-        await watchdog.stop();
+        await watch.settle();
         return { kind: "done", value };
       } catch (error) {
-        const { fired } = await watchdog.stop();
-        if (!endedWaiting(error, dialect, fired)) throw error;
+        // What held the table, where the try ended waiting for it; any other failure goes on.
+        const holder = await watch.ended(error);
+        if (holder === undefined) throw error;
         const started = from;
         // Nothing of this try's own was sent where no index was told: a setting sent again first
         // waited, and the try kept nothing.
@@ -286,7 +274,7 @@ export async function runUnitInTries(
           kind: "ended",
           ended: {
             table: waited === undefined ? null : targetTable(waited, dialect),
-            holder: holder ?? (await readHolders(adapter, dialect, session)),
+            holder,
           },
           ...(lasting === undefined ? {} : { lasting }),
           // Only a transaction that kept nothing undid the rest of the change.

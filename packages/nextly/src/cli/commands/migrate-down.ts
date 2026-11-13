@@ -732,11 +732,18 @@ export async function rollBackOne(
     );
   } catch (err) {
     if (!isConcurrentRun(err) || partial) {
-      await deps.recordFailed(
-        p.filename,
-        truncateErrorMessage(describeError(err, { context: false })),
-        p.transaction
-      );
+      await deps
+        .recordFailed(
+          p.filename,
+          truncateErrorMessage(describeError(err, { context: false })),
+          p.transaction
+        )
+        .catch((recordError: unknown) => {
+          // A DOWN that stopped waiting for a busy table says so whatever its record does. On
+          // SQLite the holder can still hold the whole database, so the record cannot be
+          // written, and its failure would otherwise stand in for the stop.
+          if (!NextlyError.isCode(err, "NEXTLY_TABLE_BUSY")) throw recordError;
+        });
     }
     // Recorded failed above; a lost race rolled back whole left nothing to
     // record, and the other run's rollback is the migration's outcome. A
@@ -1556,16 +1563,12 @@ export async function runMigrateDown(
         plugin: pluginModules(configResult.config.plugins, plugin),
         migrationsDir,
         declared,
-        // An app's down sections wait for a busy table in tries, each try's notice on standard
-        // error. A plugin's modules keep their own single try here.
-        ...(plugin === undefined
-          ? {
-              busyTable: {
-                bounds,
-                notify: (line: string) => process.stderr.write(`${line}\n`),
-              },
-            }
-          : {}),
+        // An app's down sections and a plugin's modules wait for a busy table in tries, each
+        // try's notice on standard error.
+        busyTable: {
+          bounds,
+          notify: (line: string) => process.stderr.write(`${line}\n`),
+        },
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,
