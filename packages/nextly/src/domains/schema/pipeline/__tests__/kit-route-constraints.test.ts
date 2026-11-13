@@ -94,6 +94,41 @@ describe("kitRouteConstraintStatements", () => {
     });
   });
 
+  it("replaces checks that exchange names in one ALTER TABLE on mysql, every drop first", () => {
+    // Column x's check takes the name y's held and the other way round: each
+    // add is valid only once BOTH old checks are gone, which no per-pair
+    // statement reaches — MySQL refuses the first with a duplicate name.
+    const swapped: Operation[] = [
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_a", sql: "`x` IN ('p', 'q')" },
+      },
+      {
+        type: "drop_check",
+        tableName: "cx__items",
+        check: { name: "ck_b", sql: "`y` IN ('p', 'q')" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_b", sql: "`x` IN ('p', 'q', 'r')" },
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_a", sql: "`y` IN ('p', 'q', 'r')" },
+      },
+    ];
+    expect(kitRouteConstraintStatements(swapped, [items], "mysql")).toEqual({
+      before: [],
+      after: [
+        "ALTER TABLE `cx__items` DROP CHECK `ck_a`, DROP CHECK `ck_b`, ADD CONSTRAINT `ck_b` CHECK (`x` IN ('p', 'q', 'r')), ADD CONSTRAINT `ck_a` CHECK (`y` IN ('p', 'q', 'r'))",
+      ],
+      liftRestores: [],
+    });
+  });
+
   it("keeps drop_check before the kit on mysql when the constrained column is altered", () => {
     const withTypeChange: Operation[] = [
       ...rekey,

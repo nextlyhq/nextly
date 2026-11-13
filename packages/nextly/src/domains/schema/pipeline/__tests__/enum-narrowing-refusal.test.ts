@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors";
+import { enumColumnIn } from "../../extension/enum-check";
 
 import {
   checkNarrowings,
@@ -41,7 +42,13 @@ describe("checkNarrowings", () => {
       addCheck("t__items", NARROW),
     ]);
     expect(narrowings).toEqual([
-      { table: "t__items", column: "state", values: ["live"], kept: ["draft"] },
+      {
+        table: "t__items",
+        column: "state",
+        liveColumn: "state",
+        values: ["live"],
+        kept: ["draft"],
+      },
     ]);
   });
 
@@ -84,6 +91,48 @@ describe("checkNarrowings", () => {
         addCheck("t__items", `"status" IN ('draft')`),
       ])
     ).toEqual([]);
+  });
+
+  it("follows a column the same apply renames, pairing the old name's check with the new", () => {
+    const narrowings = checkNarrowings([
+      {
+        type: "rename_column",
+        tableName: "t__items",
+        fromColumn: "state",
+        toColumn: "status",
+      } as Operation,
+      dropCheck("t__items", WIDE),
+      addCheck("t__items", `"status" IN ('draft')`),
+    ]);
+    expect(narrowings).toEqual([
+      {
+        table: "t__items",
+        column: "status",
+        liveColumn: "state",
+        values: ["live"],
+        kept: ["draft"],
+      },
+    ]);
+  });
+
+  it("pairs a dropped check it cannot read by its name, leaving the rows to decide", () => {
+    // MySQL reports a literal holding a backslash escaped, in a form whose
+    // meaning depends on its sql_mode, so the old side is not read back.
+    const unreadable = "(`state` in (_utf8mb4\\'back\\\\slash\\'))";
+    expect(enumColumnIn(unreadable)).toBeNull();
+    const narrowings = checkNarrowings([
+      dropCheck("t__items", unreadable),
+      addCheck("t__items", NARROW),
+    ]);
+    expect(narrowings).toEqual([
+      {
+        table: "t__items",
+        column: "state",
+        liveColumn: "state",
+        values: [],
+        kept: ["draft"],
+      },
+    ]);
   });
 
   it("does not pair checks that are not enum value sets", () => {
@@ -136,6 +185,58 @@ describe("refuseEnumNarrowingsOverRows", () => {
       expect(messages).toContain("2 rows hold");
       return true;
     });
+  });
+
+  it("names the values the rows hold and counts them all", async () => {
+    const db = {
+      all: (): Array<{ v: string; n: number }> => [
+        { v: "live", n: 2 },
+        { v: "archived", n: 1 },
+      ],
+    };
+    const refusal = refuseEnumNarrowingsOverRows({
+      db,
+      dialect: "sqlite",
+      desired: emptyDesired,
+      operations: [
+        dropCheck("t__items", `(\`state\` in (_utf8mb4\\'odd\\'))`),
+        addCheck("t__items", NARROW),
+      ],
+    });
+    await expect(refusal).rejects.toSatisfy((error: unknown) => {
+      const messages = JSON.stringify((error as NextlyError).publicData);
+      expect(messages).toContain("'live', 'archived'");
+      expect(messages).toContain("3 rows hold");
+      return true;
+    });
+  });
+
+  it("counts a renamed column under the name it has before the apply", async () => {
+    const seen: string[] = [];
+    const db = {
+      all: (query: unknown): Array<{ n: number }> => {
+        seen.push(JSON.stringify(query));
+        return [{ n: 0 }];
+      },
+    };
+    await refuseEnumNarrowingsOverRows({
+      db,
+      dialect: "sqlite",
+      desired: emptyDesired,
+      operations: [
+        {
+          type: "rename_column",
+          tableName: "t__items",
+          fromColumn: "state",
+          toColumn: "status",
+        } as Operation,
+        dropCheck("t__items", WIDE),
+        addCheck("t__items", `"status" IN ('draft')`),
+      ],
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('"state"');
+    expect(seen[0]).not.toContain('"status"');
   });
 
   it("names the entity and field path a table belongs to rather than the table", async () => {

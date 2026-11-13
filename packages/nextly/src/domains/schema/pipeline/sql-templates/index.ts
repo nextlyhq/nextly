@@ -21,6 +21,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Operation, TableSpec } from "../diff/types";
 
 import { generateMysqlSQL } from "./mysql";
+import { withMysqlCheckReplacements } from "./mysql-check-replacement";
 import { mysqlLiveStatements } from "./mysql-live-restate";
 import { generatePgSQL } from "./postgres";
 import { generateSqliteSQL } from "./sqlite";
@@ -33,7 +34,11 @@ export {
 } from "./foreign-key-action";
 export type { ForeignKeyActionDialect } from "./foreign-key-action";
 export { quoteIdent } from "./identifier-quoting";
-export { MysqlUnsupportedOperationError, replaceMysqlCheckSql } from "./mysql";
+export { MysqlUnsupportedOperationError } from "./mysql";
+export {
+  mysqlCheckReplacements,
+  replaceMysqlChecksSql,
+} from "./mysql-check-replacement";
 export { SqliteUnsupportedOperationError } from "./sqlite";
 export { sqliteTableRebuildStatements } from "./sqlite-rebuild";
 
@@ -97,7 +102,8 @@ export function generateSQL(
  * On PostgreSQL this is exactly `generateSQL` per operation. On MySQL too,
  * except a nullability change and a column rename, which are each a short run
  * of statements built from the live catalog when the file runs
- * (`mysql-live-restate.ts`). SQLite cannot add or drop a check or a foreign
+ * (`mysql-live-restate.ts`), and a check dropped and added back, which joins
+ * its table's other replaced checks in one statement. SQLite cannot add or drop a check or a foreign
  * key on an existing table, nor change a column's nullability or default, and
  * one such operation does not say what the rest of the table looks like, so
  * there every such change on a table becomes ONE rebuild of that table to its
@@ -122,8 +128,11 @@ export function generateStatements(
   // A MySQL nullability change and a rename are built from the live catalog when the file runs, so
   // they keep the comment, character set, collation and checks the snapshot does not record
   // (`mysql-live-restate.ts`).
+  // A check replaced on MySQL is one statement per table, its drops and adds together, so a row
+  // the new check refuses fails the change before the old check is gone (`mysql-check-replacement.ts`).
   if (dialect === "mysql") {
-    return ops.flatMap(
+    return withMysqlCheckReplacements(
+      ops,
       op => mysqlLiveStatements(op) ?? [generateSQL(op, dialect, tablesAfter)]
     );
   }

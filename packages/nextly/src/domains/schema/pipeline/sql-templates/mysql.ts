@@ -13,7 +13,6 @@ import type {
   ChangeColumnDefaultOp,
   ChangeColumnNullableOp,
   ChangeColumnTypeOp,
-  CheckSpec,
   DropIndexOp,
   DropTableOp,
   Operation,
@@ -23,7 +22,6 @@ import { referenceConversionStatements } from "../reference-list-conversion";
 
 import { commonStatementSql, dropConstraintSql } from "./common-statements";
 import { createIndexSql, tableColumnTypes } from "./create-index";
-import { checkClause } from "./create-table-body";
 import {
   changeForeignKeyActionSql,
   unsupportedOperation,
@@ -178,21 +176,4 @@ export class MysqlUnsupportedOperationError extends Error {
     super(`MySQL F11 PR 3 limitation: ${opType}. ${hint}`);
     this.name = "MysqlUnsupportedOperationError";
   }
-}
-
-/**
- * Replaces a MySQL CHECK constraint in one `ALTER TABLE` statement.
- *
- * MySQL DDL auto-commits each statement, so dropping a check before a later
- * statement adds its replacement leaves the column unconstrained if the add
- * fails or a writer slips in between. Combining both subclauses runs them
- * under one metadata lock and keeps the old check intact when existing rows
- * violate the new one.
- */
-export function replaceMysqlCheckSql(
-  tableName: string,
-  dropCheckName: string,
-  addCheck: CheckSpec
-): string {
-  return `ALTER TABLE ${q(tableName)} DROP CHECK ${q(dropCheckName)}, ADD CONSTRAINT ${q(addCheck.name)} ${checkClause(addCheck)}`;
 }

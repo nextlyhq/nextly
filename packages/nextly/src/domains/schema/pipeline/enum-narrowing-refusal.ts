@@ -17,9 +17,17 @@
  *
  * A pair is matched by the COLUMN each side constrains, read from the check's
  * own expression, so renaming the constraint (`col.enum(..., { name })`)
- * still narrows rather than falling to the database. Sides naming different
- * columns are not read as a pair — a column rename the check cannot be
- * followed through — and stay with the database's own judgement.
+ * still narrows rather than falling to the database. A column the same apply
+ * renames is followed through its rename: the old check names the column as
+ * it stands, the new one the name it takes. A dropped check whose expression
+ * cannot be read back — MySQL reports a literal holding a backslash in an
+ * escaped form whose meaning depends on its `sql_mode` — is paired by its
+ * constraint name instead, since the add it is replaced by is ours to read.
+ *
+ * What is refused is decided by the rows, not by the values the old check
+ * listed: the rows outside the new set are counted, grouped by value, so a
+ * pair whose old side could not be read is judged as surely as one whose
+ * could, and the refusal names the values the rows actually hold.
  *
  * @module domains/schema/pipeline/enum-narrowing-refusal
  */
@@ -43,9 +51,14 @@ import type { DesiredSchema } from "./types";
 interface Narrowing {
   /** The table as the operations name it. */
   table: string;
-  /** The column both sides of the pair constrain. */
+  /** The column the new check constrains, by the name the apply leaves it. */
   column: string;
-  /** The values the pair takes away, in the order the old check listed them. */
+  /** The same column as it stands before the apply: where its rows are counted. */
+  liveColumn: string;
+  /**
+   * The values the pair takes away, in the order the old check listed them;
+   * empty when the old check could not be read, where the rows name them.
+   */
   values: string[];
   /** The values the replacement check keeps, evaluated by the database. */
   kept: string[];
@@ -56,51 +69,95 @@ function pairKey(table: string, column: string): string {
   return `${table.toLowerCase()} ${column.toLowerCase()}`;
 }
 
+/** Each dropped check's SQL, under the keys an add may find it by. */
+interface DroppedChecks {
+  /** By the table and the column a readable enum check constrained. */
+  byColumn: Map<string, string[]>;
+  /** By the table and constraint name, for a check whose expression cannot be read. */
+  unreadableByName: Map<string, string[]>;
+}
+
+function pushTo(map: Map<string, string[]>, key: string, sql: string): void {
+  const list = map.get(key) ?? [];
+  list.push(sql);
+  map.set(key, list);
+}
+
 /**
- * Each dropped enum check's SQL, by the table and column it constrained. A
- * drop that is not an enum set constrains nothing this refusal can read.
+ * Each dropped check, keyed by the column it constrained where its expression
+ * is an enum set this module can read, and by its name where it cannot.
  */
-function droppedEnumChecks(
-  operations: readonly Operation[]
-): Map<string, string[]> {
-  const dropped = new Map<string, string[]>();
+function droppedChecks(operations: readonly Operation[]): DroppedChecks {
+  const byColumn = new Map<string, string[]>();
+  const unreadableByName = new Map<string, string[]>();
   for (const op of operations) {
     if (op.type !== "drop_check") continue;
     const column = enumColumnIn(op.check.sql);
-    if (column === null) continue;
-    const key = pairKey(op.tableName, column);
-    const list = dropped.get(key) ?? [];
-    list.push(op.check.sql);
-    dropped.set(key, list);
+    if (column === null) {
+      pushTo(
+        unreadableByName,
+        pairKey(op.tableName, op.check.name),
+        op.check.sql
+      );
+    } else {
+      pushTo(byColumn, pairKey(op.tableName, column), op.check.sql);
+    }
   }
-  return dropped;
+  return { byColumn, unreadableByName };
+}
+
+/**
+ * Table and new column name, lower-cased, to the column's name before the
+ * apply, for every column the operations rename.
+ */
+function columnsBeforeRename(
+  operations: readonly Operation[]
+): Map<string, string> {
+  const before = new Map<string, string>();
+  for (const op of operations) {
+    if (op.type !== "rename_column") continue;
+    before.set(pairKey(op.tableName, op.toColumn), op.fromColumn);
+  }
+  return before;
 }
 
 /**
  * The check narrowings among the operations: each `add_check` whose expression
  * is an enum set, paired with the `drop_check` of the same table constraining
- * the same column. Sides that are not enum sets, pairs that only add, and a
- * pair read through a column rename (the sides naming different columns) are
- * not narrowings.
+ * the same column — the column as it stood, where the apply renames it — or,
+ * where the dropped check cannot be read, carrying the same name. Sides that
+ * are not enum sets, pairs that only add, and sides naming unrelated columns
+ * are not narrowings.
  */
 export function checkNarrowings(operations: readonly Operation[]): Narrowing[] {
-  const dropped = droppedEnumChecks(operations);
+  const dropped = droppedChecks(operations);
+  const renamedFrom = columnsBeforeRename(operations);
   const narrowings: Narrowing[] = [];
   for (const op of operations) {
     if (op.type !== "add_check") continue;
     const column = enumColumnIn(op.check.sql);
     const kept = enumValuesIn(op.check.sql);
     if (column === null || kept === null) continue;
-    for (const before of dropped.get(pairKey(op.tableName, column)) ?? []) {
+    const liveColumn = renamedFrom.get(pairKey(op.tableName, column)) ?? column;
+    const pair = { table: op.tableName, column, liveColumn, kept };
+    for (const before of dropped.byColumn.get(
+      pairKey(op.tableName, liveColumn)
+    ) ?? []) {
       const values = removedEnumValues(before, op.check.sql);
-      if (values.length === 0) continue;
-      narrowings.push({ table: op.tableName, column, values, kept });
+      if (values.length > 0) narrowings.push({ ...pair, values });
+    }
+    // An unreadable old check may have allowed anything, so the rows decide.
+    if (dropped.unreadableByName.has(pairKey(op.tableName, op.check.name))) {
+      narrowings.push({ ...pair, values: [] });
     }
   }
   return narrowings;
 }
 
-/** How many rows of `table` hold a non-null `column` value outside `kept`. */
+/**
+ * The non-null `column` values of `table` outside `kept`, each with how many
+ * rows hold it.
+ */
 function rowsHolding(
   table: string,
   column: string,
@@ -113,10 +170,10 @@ function rowsHolding(
   // so values retained under case- or accent-insensitive comparisons are not
   // refused while NULL continues to pass CHECK.
   const col = sql.identifier(column);
-  return sql`SELECT COUNT(*) AS n FROM ${sql.identifier(table)} WHERE ${col} IS NOT NULL AND ${col} NOT IN (${sql.join(
+  return sql`SELECT ${col} AS v, COUNT(*) AS n FROM ${sql.identifier(table)} WHERE ${col} IS NOT NULL AND ${col} NOT IN (${sql.join(
     kept.map(value => sql`${value}`),
     sql`, `
-  )})`;
+  )}) GROUP BY ${col}`;
 }
 
 /** The entity and field a table's column belongs to, as a refusal names them. */
@@ -152,6 +209,26 @@ function subjectOf(
   return { label: `Table '${table}'`, field: column, isEntity: false };
 }
 
+/**
+ * The values a refusal names: those the rows hold, as the database returned
+ * them, or the values the old check listed when the rows did not say.
+ */
+function heldValues(
+  rows: ReadonlyArray<{ v?: unknown }>,
+  listed: readonly string[]
+): string {
+  const fromRows = rows
+    .map(row => row.v)
+    .filter(
+      (value): value is string | number =>
+        typeof value === "string" || typeof value === "number"
+    )
+    .map(String);
+  const names = fromRows.length > 0 ? fromRows : listed;
+  if (names.length === 0) return "the values it no longer allows";
+  return names.map(value => `'${value}'`).join(", ");
+}
+
 /** `rows` counted, as a refusal words it. */
 function rowsHold(rows: number): string {
   return rows === 1 ? "1 row holds" : `${String(rows)} rows hold`;
@@ -161,9 +238,9 @@ function rowsHold(rows: number): string {
  * Refuses the apply, before any statement runs, when a check it narrows takes
  * a value away that a row still holds.
  *
- * Counted on the table as it stands now, under the name a rename in the same
- * apply is taking it from, so the rows the change would break are the rows
- * read.
+ * Counted on the table and column as they stand now, under the names a rename
+ * in the same apply is taking them from, so the rows the change would break
+ * are the rows read.
  *
  * @throws NextlyError (validation, `ENUM_VALUE_HELD_BY_ROWS`) naming each such
  *   column and the rows in its way
@@ -181,12 +258,12 @@ export async function refuseEnumNarrowingsOverRows(args: {
   const errors: Array<{ path: string; code: string; message: string }> = [];
   for (const narrowing of narrowings) {
     const table = liveTableName(narrowing.table, renames);
-    const [row] = await querySqlRows<{ n: number | string }>(
+    const rows = await querySqlRows<{ v?: unknown; n: number | string }>(
       args.db,
       args.dialect,
-      rowsHolding(table, narrowing.column, narrowing.kept)
+      rowsHolding(table, narrowing.liveColumn, narrowing.kept)
     );
-    const count = Number(row?.n ?? 0);
+    const count = rows.reduce((sum, row) => sum + Number(row.n ?? 0), 0);
     if (count === 0) continue;
     const { label, field, isEntity } = subjectOf(
       args.desired,
@@ -194,7 +271,7 @@ export async function refuseEnumNarrowingsOverRows(args: {
       narrowing.column
     );
     const those = count === 1 ? "that row" : "those rows";
-    const values = narrowing.values.map(value => `'${value}'`).join(", ");
+    const values = heldValues(rows, narrowing.values);
     errors.push({
       path: isEntity ? `fields.${field}` : `tables.${narrowing.table}.${field}`,
       code: "ENUM_VALUE_HELD_BY_ROWS",
