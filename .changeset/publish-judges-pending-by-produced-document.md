@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A publish that carries a pending draft's fields now judges each one with the field rules run on the document the publish will produce. Before, they were judged on the draft alone. A rule that reads another field now reads the value the publish writes, not the draft's. So a publish that sets that field back, and makes the result allowed, succeeds. A publish whose result denies a pending value is refused, and nothing is written. A publish that would discard a pending edit to a field the publisher may not write is still refused.
+A publish that carries a pending draft's fields no longer refuses a plain value only because the draft's own siblings denied it. Such a value is judged again on the document the publish will produce, and published if the rules allow it there. A rule that reads another field now reads the value the publish writes, not the draft's, so a publish that sets that field back, and makes the result allowed, succeeds. A group, a list, or a value the draft deleted is still judged on the draft alone, and a publish that would discard a pending edit to a field the publisher may not write is still refused.
