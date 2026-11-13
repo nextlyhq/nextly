@@ -53,10 +53,13 @@ const appHasher: PasswordHasher = {
 const FIRST = "Str0ng-P@ssw0rd!";
 const SECOND = "Another-Str0ng-P@ss-2";
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  hasher: PasswordHasher = appHasher
+): Promise<TestNextly> {
   current = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
-    passwordHasher: appHasher,
+    passwordHasher: hasher,
   });
   if (dialect === "sqlite") {
     // The SQLite runtime auto-sync does not create the core auth tables.
@@ -240,6 +243,30 @@ describe.each(getConfiguredTestDialects())(
       // A password stored as given: never a working credential.
       await setStoredHash(t, "founder@example.com", FIRST);
       expect(await signIns(t, "founder@example.com", FIRST)).toEqual(NONE);
+    });
+
+    it("refuses, on create and on an administrator's set, a password longer than the hasher reads", async () => {
+      // A hasher that reads 16 bytes: a longer password would be stored as its
+      // first 16, which a different password sharing them would also match.
+      const t = await boot(dialect, { ...appHasher, reach: 16 });
+      const id = await seed(t, "founder@example.com");
+      const long = "Str0ng-P@ssw0rd!-and-more";
+      await expect(
+        new ServiceContainer(t.adapter).users.createLocalUser({
+          email: "long@example.com",
+          name: "Long",
+          password: long,
+          isActive: true,
+          emailVerification: "admin-vouched",
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      await expect(
+        new ServiceContainer(t.adapter).users.updateUser(id, { password: long })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      // Nothing was written: the account keeps its password.
+      expect((await row(t, "founder@example.com")).passwordHash).toBe(
+        digest(FIRST)
+      );
     });
   }
 );

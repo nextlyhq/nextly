@@ -40,6 +40,7 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
+import { validatePasswordStrength } from "../../../auth/password";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import {
@@ -527,6 +528,27 @@ function isExternalIdentityShape(account: {
   hasPassword: boolean;
 }): boolean {
   return account.isActive && account.verified && !account.hasPassword;
+}
+
+/**
+ * Refuse a password the app's hasher cannot take whole, before it is hashed:
+ * its declared `reach`, or its own `validate`. The input schema judges a
+ * password by core bcrypt's reach, and a hasher reading less would store one a
+ * different password with the same beginning also matches. Without a hasher
+ * there is nothing to add: the schema's check is bcrypt's.
+ */
+function assertPasswordFitsHasher(password: string, path: string): void {
+  const { hasher } = appPasswordDigester();
+  if (!hasher) return;
+  const strength = validatePasswordStrength(password, { hasher });
+  if (strength.ok) return;
+  throw NextlyError.validation({
+    errors: strength.errors.map(message => ({
+      path,
+      code: "WEAK_PASSWORD",
+      message,
+    })),
+  });
 }
 
 /** Whether a stored value is a password the app's sign-in takes. */
@@ -1292,6 +1314,7 @@ export class UserMutationService extends BaseService {
       // write that takes a hash, and which refuses anything else.
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
+        assertPasswordFitsHasher(userData.password, "password");
         passwordHash = await appPasswordDigester().hash(userData.password);
       }
 
@@ -1978,6 +2001,7 @@ export class UserMutationService extends BaseService {
         // a space at either end can be the password's symbol, and hashing the
         // trimmed form would store a password nobody typed.
         if (rawPassword.trim().length > 0) {
+          assertPasswordFitsHasher(rawPassword, "password");
           Object.assign(
             updateData,
             passwordColumns(await appPasswordDigester().hash(rawPassword))
