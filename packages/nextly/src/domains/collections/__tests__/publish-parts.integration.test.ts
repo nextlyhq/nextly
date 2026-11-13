@@ -788,6 +788,93 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(main?.tagline).toBe("Shared");
   });
 
+  // The value rules are judged again on the entry as the publish locks it: a change saved after
+  // they were first judged is what goes live, so it is what they judge.
+  it("judges the value rules again on the change the lock finds", async () => {
+    let onAsk: (() => Promise<void>) | undefined;
+    await boot(
+      defineCollection({
+        slug: "pages",
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          // Asked in Spanish, once: the shared part is asked first, with no language.
+          publish: async ({ locale }: { locale?: string }) => {
+            if (locale === "es" && onAsk) {
+              const once = onAsk;
+              onAsk = undefined;
+              await once();
+            }
+            return true;
+          },
+        },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug", required: true, unique: true }),
+        ],
+      } as never)
+    );
+    const created = await t!.nextly.create({
+      collection: "pages",
+      locale: "en",
+      data: { title: "Hello", slug: "hola", status: "published" },
+    });
+    const id = String(created.item.id);
+    // Spanish's pending change supplies its own slug, as the value rules first see it.
+    await t!.nextly.update({
+      collection: "pages",
+      id,
+      locale: "es",
+      data: { title: "Hola", slug: "hola-es", _overwrite: true },
+    });
+    // While the rule is asked, another writer replaces Spanish's pending change with one that
+    // has no slug of its own (an ordinary save keeps the slug a change already holds).
+    onAsk = async () => {
+      const where = {
+        and: [
+          { column: "entryId", op: "=" as const, value: id },
+          { column: "locale", op: "=" as const, value: "es" },
+          { column: "versionNo", op: "IS NULL" as const },
+        ],
+      };
+      const [pending] = await t!.adapter.select<{ snapshot: unknown }>(
+        "nextly_versions",
+        { where }
+      );
+      const snapshot =
+        typeof pending?.snapshot === "string"
+          ? (JSON.parse(pending.snapshot) as Record<string, unknown>)
+          : { ...(pending?.snapshot as Record<string, unknown>) };
+      await t!.adapter.update(
+        "nextly_versions",
+        { snapshot: JSON.stringify({ ...snapshot, slug: "" }) },
+        where
+      );
+    };
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["pages"]);
+    await grantTo(t!, publisher, "read", ["pages"]);
+    await grantTo(t!, publisher, "update", ["pages"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "pages",
+        id,
+        locales: ["es"],
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+
+    // The newer change was saved while the rule was asked, so the race happened.
+    expect(onAsk).toBeUndefined();
+    expect(refusal).toMatch(/UNIQUE_VALUE_REQUIRED_IN_LANGUAGE/);
+    expect((await states(id, "dc_pages")).es ?? "none").not.toBe("published");
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({
