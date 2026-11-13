@@ -959,6 +959,25 @@ describeEachDialect(
 
     // The relationship's key needs an index on MySQL, and the Unique mark replaces the plain one
     // with a unique one as the field leaves translation: the unique one is made first.
+    // The column comes back with the edit, and its unique index with it, made once.
+    it("makes a many-to-many edited into a one-to-one unique", async () => {
+      const t = await boot(dialect, "manyToOne");
+      await apply(t, [
+        { name: "title", type: "text" },
+        {
+          name: "person",
+          type: "relationship",
+          options: { target: PEOPLE, relationType: "manyToMany" },
+        },
+      ]);
+
+      await apply(t, profileFields("oneToOne"));
+
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada);
+      expect(await refusedAsRepeat(aProfile(t, ada))).toBe(true);
+    }, 120_000);
+
     it("makes a many-to-one renamed and marked Unique in one save unique under its new name", async () => {
       const t = await boot(dialect, "manyToOne");
       const ada = await aPerson(t, "Ada");
