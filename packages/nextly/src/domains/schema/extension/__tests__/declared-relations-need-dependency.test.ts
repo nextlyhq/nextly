@@ -106,11 +106,15 @@ const reportBy = {
 
 describe.each(Object.entries(reportBy))(
   "a plugin's own table naming another plugin's table by %s",
-  (_how, table) => {
+  (how, table) => {
     it("is refused at startup without a dependency, naming the edge and the plugin", async () => {
       const message = await refusal(() => compile([table]));
+      // A key is judged with every declared key, by the migration streams'
+      // order; a relation, which no stream carries, by the draft.
       expect(message).toMatch(
-        /plugin "@acme\/reports" declares on "rp__rows" points at "fm__submissions", which belongs to plugin "@acme\/forms"\. Name "@acme\/forms" in dependsOn/
+        how === "foreignKey"
+          ? /references "fm__submissions", a table plugin "@acme\/forms" creates, and plugin "@acme\/reports" does not declare a dependency on it/
+          : /plugin "@acme\/reports" declares on "rp__rows" points at "fm__submissions", which belongs to plugin "@acme\/forms"\. Name "@acme\/forms" in dependsOn/
       );
     });
 
@@ -370,8 +374,10 @@ describe("a table's own foreign key", () => {
   });
 
   it("carries none to a column other than id on a collection, which the compile cannot check", async () => {
+    // The app's table: a plugin's key to a collection's table is refused,
+    // since the app's stream creates that table after every plugin's.
     const table = defineTable(
-      "rows",
+      "app_rows",
       { id: col.id(), postSlug: col.varchar(20), postId: col.varchar(36) },
       {
         foreignKeys: [
@@ -387,7 +393,9 @@ describe("a table's own foreign key", () => {
         ],
       }
     );
-    const built = await compile([table], {
+    const built = await buildExtensionSchema({
+      dialect: "postgresql",
+      coreTableNames: ["users"],
       entities: [
         {
           name: "dc_posts",
@@ -399,8 +407,14 @@ describe("a table's own foreign key", () => {
           ],
         },
       ],
+      pluginPrefixes: new Map(),
+      plugins: [],
+      app: {
+        owner: { kind: "app" },
+        extend: [({ schema }) => schema.addTable(table)],
+      },
     });
-    expect(built.relations.get("rp__rows")).toEqual([
+    expect(built.relations.get("app_rows")).toEqual([
       {
         key: "post",
         kind: "one",
