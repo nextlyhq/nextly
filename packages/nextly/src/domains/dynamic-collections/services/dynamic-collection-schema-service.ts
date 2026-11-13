@@ -2380,13 +2380,16 @@ ${allColumnDefs.join(",\n")}
     }
 
     // A field kept whose `unique` flag changed: its index, which neither the column rewrite above
-    // nor the add and remove loops create or drop.
+    // nor the add and remove loops create or drop. A field whose storage moved (a many-to-many
+    // become a one-to-one) is left out: the add path writes its column with its index.
     statements.push(
       ...this.uniquenessToggleStatements(
         tableName,
         newFields.flatMap(field => {
           const previous = previousDefinitionOf(field);
-          return previous ? [{ previous, field }] : [];
+          return previous && !this.storageClassChanged(previous, field)
+            ? [{ previous, field }]
+            : [];
         }),
         options
       )
