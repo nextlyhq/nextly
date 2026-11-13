@@ -117,6 +117,16 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     reason: PIPELINE,
   },
   {
+    // The kit counts the rows of a table it would drop (its data-loss
+    // suggestions) on its own pool connection: here the table of a plugin
+    // removed from the config, whose drop the push then withholds.
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select rp__ledger",
+    witness:
+      "packages/nextly/src/domains/schema/extension/removed-plugin-keeps-tables.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
     dialect: "mysql",
     key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
     witness:

@@ -106,11 +106,16 @@ ownership, its email records), with a message such as _This user is still used
 by 12 Posts in "Author". Change or delete those first._ An optional one is
 emptied, and the account is deleted.
 
-A relationship whose column holds a key can't be pointed at another collection:
-the save is refused, naming the field, and the key stays. Add a new
-relationship field instead, then remove the old one. Switching it to hold
-several entries works as for any relationship: each value becomes a one-item
-list, and the key goes with the conversion.
+Pointing a relationship whose column holds a key at another collection moves
+the key there, once every value it holds is checked against the new collection.
+If some entries hold a value the new collection doesn't have, the save is
+refused before anything changes, naming the field and how many entries are in
+the way, and the old key stays: change or clear those entries first. A target
+with no table to check against (a Single, for example) is refused the same way.
+The new key is added before the old one is dropped, so the field is never left
+unchecked, even on MySQL. Switching the relationship to hold several entries
+works as for any relationship: each value becomes a one-item list, and the key
+goes with the conversion.
 
 ### Container fields and nesting
 

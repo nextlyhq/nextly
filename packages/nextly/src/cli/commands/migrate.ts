@@ -697,17 +697,20 @@ export async function runMigrate(
     // from the applied subset instead is not worth it: the operator stepping through migrations
     // will reach the end, and the run that gets there does the provisioning.
     try {
-      const stillPending = await findPendingFiles(
+      const stillPending = await migrationsStillPending({
         adapter,
         db,
         dialect,
-        appMigrationsDir,
+        migrationsDir: appMigrationsDir,
         logger,
-        declared
-      );
-      if (stillPending.length > 0) {
+        declared,
+        pluginMigrationSets: (
+          await pluginMigrationArgs(configResult.config.plugins ?? [])
+        ).pluginMigrationSets,
+      });
+      if (stillPending > 0) {
         logger.info(
-          `Skipping translation-table provisioning: ${formatCount(stillPending.length, "migration")} still pending. ` +
+          `Skipping translation-table provisioning, user fields and the workflow pass: ${formatCount(stillPending, "migration")} still pending. ` +
             `Run \`nextly migrate\` without --step to finish.`
         );
       } else {
@@ -3574,6 +3577,45 @@ export async function findPendingFiles(
       declared
     )
   ).flatMap(({ file, applied }) => (applied ? [] : [file]));
+}
+
+/**
+ * How many migrations a run left for a later one: the app's files and the plugins' modules both.
+ * The work that follows the configuration's final schema (translation tables, user fields, the
+ * workflow pass) waits while any is pending, which a run cut short by `--step` leaves. Plugin
+ * modules count too: they run before the app's files, so a step can stop among them while no app
+ * file is pending.
+ */
+export async function migrationsStillPending(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+  declared?: DeclaredNames;
+  pluginMigrationSets: readonly PluginMigrationSet[];
+}): Promise<number> {
+  const files = await findPendingFiles(
+    args.adapter,
+    args.db,
+    args.dialect,
+    args.migrationsDir,
+    args.logger,
+    args.declared
+  );
+  const modules =
+    args.pluginMigrationSets.length === 0
+      ? []
+      : pendingPluginModules(
+          args.pluginMigrationSets,
+          await appliedPluginModules({
+            adapter: args.adapter,
+            db: args.db,
+            dialect: args.dialect,
+          }),
+          undefined
+        );
+  return files.length + modules.length;
 }
 
 /** The app's migration files in run order, each with whether the ledger records it applied. */
