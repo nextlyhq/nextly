@@ -147,6 +147,12 @@ export interface DeclaredForeignKey
   name?: string;
   onDelete: DeclaredReferentialAction;
   onUpdate: DeclaredReferentialAction;
+  /**
+   * Who added the key, when it is not the table's owner: the app, or a plugin
+   * that depends on the owner. It travels in the contributor's migrations and
+   * is recorded per element, never in the compiled spec.
+   */
+  contributedBy?: SchemaOwner;
 }
 
 /** A check as DECLARED: the compile step derives the ck_<table>_<name> form. */
@@ -154,6 +160,8 @@ export interface DeclaredCheck {
   /** The author’s semantic name, not the final SQL constraint name. */
   name: string;
   sql: string;
+  /** Who added the check, when it is not the table's owner; as a key's. */
+  contributedBy?: SchemaOwner;
 }
 
 export interface ExtensionIndex {

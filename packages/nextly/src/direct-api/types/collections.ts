@@ -8,6 +8,7 @@
 
 import type { TimeseriesInterval } from "../../domains/collections/query/timeseries-interval";
 import type { PartOutcome } from "../../domains/collections/services/publish-parts";
+import type { FieldRewriteValue } from "../../domains/versions/field-rewrite";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 
 import type {
@@ -763,4 +764,35 @@ export interface PublishResult {
   id: string;
   languages: PartOutcome[];
   shared: { changes: boolean; added: boolean };
+}
+
+/**
+ * @experimental Arguments for `nextly.rewriteField`: one field of one entry,
+ * rewritten on its live copy and on every pending draft that holds it, without
+ * publishing, from the version the caller read.
+ *
+ * Trusted server code by default, as every Direct API call is
+ * (`overrideAccess: true`). Made for a person (`overrideAccess: false` with
+ * `user`), it needs their permission to update the entry and, where the
+ * collection has a publish lifecycle, to publish it.
+ */
+export interface RewriteFieldArgs
+  extends Pick<DirectAPIConfig, "overrideAccess" | "user"> {
+  /** The entry's collection. */
+  collection: CollectionSlug;
+  /** The entry's id. */
+  id: string;
+  /** A top-level field, by name. */
+  field: string;
+  /**
+   * The language a translated field is rewritten in; the default language
+   * when omitted. A shared field takes none.
+   */
+  locale?: string;
+  /** The version (`_rev`) the entry was read at. */
+  expectedVersion: string;
+  /** The new value, or how to compute it from each copy's own. */
+  set: FieldRewriteValue;
+  /** Why, kept in the entry's history. */
+  reason: string;
 }
