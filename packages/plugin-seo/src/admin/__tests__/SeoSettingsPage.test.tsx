@@ -820,6 +820,51 @@ describe("saving", () => {
       { description: "Things.", _rev: "2" },
     ]);
   });
+
+  it("keeps what a save stored over a read that landed while it was on its way", async () => {
+    serving({ _rev: "1", siteName: "Acme", setupStep: 3 });
+    let cached = stored;
+    // The re-read after the save fails, answering with the cached copy.
+    vi.mocked(useSingleDocument).mockImplementation(
+      () =>
+        ({
+          data: cached,
+          error: null,
+          refetch: async () => ({ data: cached, error: new Error("offline") }),
+        }) as unknown as ReturnType<typeof useSingleDocument>
+    );
+    let finish = () => {};
+    answerSave = () =>
+      new Promise<void>(resolve => {
+        finish = resolve;
+      });
+    const { rerender } = render(<SeoSettingsPage />);
+    fireEvent.change(screen.getByLabelText("Site name"), {
+      target: { value: "Acme Ltd" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    // Someone else's save is read while this one is on its way; this one
+    // then stores a later version, holding both.
+    stored = { ...stored, description: "Theirs.", _rev: "2" };
+    cached = stored;
+    rerender(<SeoSettingsPage />);
+    finish();
+    await settle();
+    rerender(<SeoSettingsPage />);
+    await settle();
+
+    expect((screen.getByLabelText("Site name") as HTMLInputElement).value).toBe(
+      "Acme Ltd"
+    );
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "Mine." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect(sent.at(-1)).toEqual({ description: "Mine.", _rev: "3" });
+  });
 });
 
 describe("the content types tab", () => {
@@ -936,6 +981,24 @@ describe("the content types tab", () => {
     ).toBeTruthy();
     expect(screen.getByText("Optional for Product")).toBeTruthy();
     expect(screen.getByText("Google needs this for Product")).toBeTruthy();
+  });
+
+  it("keeps the open details on the type chosen when the type changes", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    await choose("Structured data for Blog posts", "Article");
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(
+      screen.getByRole("combobox", { name: "Field that holds author" })
+    ).toBeTruthy();
+
+    await choose("Structured data for Blog posts", "Product");
+    expect(
+      screen.getByRole("combobox", { name: "Field that holds currency" })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("combobox", { name: "Field that holds author" })
+    ).toBeNull();
   });
 
   it("shows the field the markup reads first by its name, and keeps another chosen over it", async () => {
