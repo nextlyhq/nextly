@@ -84,12 +84,12 @@ import {
   type ImportTool,
 } from "./import-files";
 import {
+  cellResultOf,
   firstOfPage,
   neverServedWords,
   otherChanges,
   reportCsv,
   reportedPages,
-  resultOf,
   RESULT_WORDS,
   showsVersions,
   valueCounts,
@@ -672,7 +672,10 @@ function FileTable({ run }: { run: DryRunBody }): JSX.Element {
     },
     {
       name: "pages",
-      header: "Pages with a value",
+      // The engine counts the pages each value would change: a page whose
+      // value is the same as its automatic one holds a value and is not
+      // counted, so the column says what it counts.
+      header: "Pages it changes",
       cell: ({ row }) => row.pages.toLocaleString(),
     },
   ];
@@ -740,7 +743,7 @@ function ValueCell({
   /** Whether the table has a Version column beside, so less room. */
   narrow: boolean;
 }): JSX.Element {
-  const result = resultOf(entry, place);
+  const result = cellResultOf(entry, place);
   const value = entry.values[place];
   return (
     <div className="flex items-start justify-between gap-3">
@@ -795,7 +798,9 @@ function Counts({ run }: { run: DryRunBody }): JSX.Element {
     },
   ];
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    // Two by two on a phone, so the four counts take half its first screen
+    // rather than all of it and the report's rows start in view.
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {cards.map(card => (
         <Card key={card.label} className="px-4 py-3">
           <Stat label={card.label} value={counted(card.value, "value")} />
