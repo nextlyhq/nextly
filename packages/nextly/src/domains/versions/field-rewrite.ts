@@ -447,7 +447,7 @@ function computesFromCurrent(
 }
 
 /** A copy in words, for a refusal: "live copy", "draft", "es draft". */
-export function copyWords(copy: FieldRewriteCopy): string {
+function copyWords(copy: FieldRewriteCopy): string {
   if (copy.form === "live") return "live copy";
   return copy.locale === null ? "draft" : `${copy.locale} draft`;
 }
