@@ -5,11 +5,16 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
+import { definePlugin } from "../../../../plugins/plugin-context";
 import type { DependentsSources } from "../../../collections/services/collection-dependents";
 import { resolveIndexName } from "../../extension/compile";
+import { col, defineTable } from "../../extension/dsl";
+import { compileExtensionSchema } from "../../extension/publish";
 import { enumCheckName } from "../../extension/enum-check";
 import type { ExtensionSchemaRecord } from "../dependent-elements";
 import type { OwnerRecord } from "../owner-registry";
+import { planUninstall } from "../uninstall-plan";
 import {
   findUninstallDependents,
   pluginEntities,
@@ -1152,5 +1157,127 @@ describe("what the plugin owns", () => {
         name: "settings.appNote",
       }),
     ]);
+  });
+});
+
+describe("relations pointing into the plugin's tables", () => {
+  const edge = (key: string, targetTable: string) => ({
+    key,
+    kind: "one" as const,
+    fromColumn: `${key}Id`,
+    targetTable,
+  });
+
+  it("finds a relation another owner declares into its table, and names who added one to a third table", async () => {
+    const found = await find(
+      [row({})],
+      sources({
+        extension: schema({
+          relations: new Map([
+            ["sso__links", [edge("note", "fx__notes")]],
+            // The app's table, carrying a relation sso added to it.
+            ["app_pages", [edge("pinned", "fx__notes")]],
+            // CONTROL: fx's own edge between its own tables, and an edge
+            // elsewhere, go with it or are not its business.
+            ["fx__notes", [edge("parent", "fx__notes")]],
+            ["sso__other", [edge("user", "users")]],
+          ]),
+          tables: [
+            {
+              name: "app_pages",
+              relations: [
+                {
+                  name: "pinned",
+                  kind: "one",
+                  targetTable: "fx__notes",
+                  contributedBy: SSO,
+                },
+              ],
+            },
+          ] as unknown as ExtensionSchemaRecord["tables"],
+          owners: new Map([
+            ["sso__links", SSO],
+            ["sso__other", SSO],
+            ["app_pages", { kind: "app" as const }],
+            ["fx__notes", FX],
+          ]),
+        }),
+      })
+    );
+    expect(found).toEqual([
+      {
+        kind: "relation",
+        name: "note",
+        table: "sso__links",
+        owner: 'plugin "sso"',
+      },
+      {
+        kind: "relation",
+        name: "pinned",
+        table: "app_pages",
+        owner: 'plugin "sso"',
+      },
+    ]);
+  });
+
+  it("finds a disabled plugin's relation, compiled as boot compiles it, and the full uninstall is refused", async () => {
+    const notes = defineTable("notes", { id: col.id() });
+    const links = defineTable("links", {
+      id: col.id(),
+      noteId: col.ref("fx__notes"),
+    });
+    const plugins = [
+      definePlugin({
+        name: "fx",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { schema: { prefix: "fx", tables: [notes] } },
+      }),
+      definePlugin({
+        name: "sso",
+        version: "1.0.0",
+        nextly: "*",
+        enabled: false,
+        optionalDependsOn: { fx: "*" },
+        contributes: { schema: { prefix: "sso", tables: [links] } },
+      }),
+    ];
+    const compiled = await compileExtensionSchema({
+      dialect: "sqlite",
+      plugins,
+      config: {},
+      logger: { warn: () => {} },
+    });
+    const found = await find(
+      [row({})],
+      sources({ extension: compiled ?? null })
+    );
+    expect(found).toEqual([
+      {
+        kind: "relation",
+        name: "note",
+        table: "sso__links",
+        owner: 'plugin "sso"',
+      },
+    ]);
+    // An optional dependency of a disabled plugin is no requirement the
+    // dependency check refuses on, so the relation is what stops it.
+    const refused = (() => {
+      try {
+        planUninstall({
+          pluginName: "fx",
+          enabled: [{ name: "fx", dependsOn: [] }],
+          disabled: [{ name: "sso", requires: [] }],
+          owned: [row({})],
+          dependents: found,
+          modules: [{ name: "001", reversible: true }],
+          keepData: false,
+        });
+      } catch (error) {
+        return error instanceof NextlyError ? error.publicMessage : error;
+      }
+      return "planned";
+    })();
+    expect(String(refused)).toMatch(/relation "note" on sso__links/);
   });
 });

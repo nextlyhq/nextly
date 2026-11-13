@@ -5,7 +5,7 @@
  * A full uninstall runs the plugin's DOWNs: they drop its tables and the
  * columns it contributed to other owners' tables. Anything another owner
  * built on those goes with them, so the uninstall refuses while any of it
- * remains (`planUninstall`). Four kinds are found:
+ * remains (`planUninstall`). Five kinds are found:
  *
  * - **elements on the plugin's tables**: a column, index, foreign key or
  *   check the app or another plugin added;
@@ -13,7 +13,9 @@
  * - **relationship and upload fields** elsewhere that point at one of the
  *   plugin's collections;
  * - **elements using a column the plugin contributed** to another owner's
- *   table: an index or key the DOWN would break by dropping the column.
+ *   table: an index or key the DOWN would break by dropping the column;
+ * - **relations pointing in**: a relation edge on another owner's table that
+ *   a relational query follows into one of the plugin's tables.
  *
  * Keys pointing in are read from the database's catalog too, so a key whose
  * declaration was removed from code while its constraint stayed is found.
@@ -685,9 +687,62 @@ export async function findUninstallDependents(
   let read: Promise<readonly LiveTable[]> | undefined;
   const live = () => (read ??= input.liveSchema());
   await onItsTables(input, ownTables, found);
+  await relationsPointingIn(input, new Set(ownTables), found);
   await onItsContributedColumns(input, new Set(ownTables), live, found);
   await liveKeysPointingIn(input, new Set(ownTables), live, found);
   return found.list;
+}
+
+/**
+ * Relation edges on other owners' tables that lead into the plugin's tables.
+ *
+ * A relation is no database element: it has no constraint the catalog
+ * reports and no owner row, yet a relational query through it fails once
+ * the table it leads to is dropped, and the plugin that declared it asked
+ * for the target among its dependencies to rely on it staying. Read from
+ * the compiled schema, which holds disabled plugins' tables and edges as it
+ * holds enabled ones': turning a plugin off withholds its code, not its
+ * schema, and enabling it again brings its queries back. A relation another
+ * owner added to a third table is named under that owner. Compared as a
+ * database that may fold case compares table names.
+ */
+async function relationsPointingIn(
+  input: UninstallDependentsInput,
+  own: ReadonlySet<string>,
+  found: Found
+): Promise<void> {
+  if (own.size === 0) return;
+  const schema = await input.sources.extensionSchema();
+  if (schema === null) return;
+  const ownFolded = new Set([...own].map(folded));
+  const declared = new Map(
+    (schema.tables ?? []).map(table => [table.name, table])
+  );
+  const edges = [
+    ...(schema.relations ?? new Map()),
+    ...(schema.adoptedRelations ?? new Map()),
+  ];
+  for (const [table, list] of edges) {
+    if (ownFolded.has(folded(table))) continue;
+    for (const edge of list) {
+      if (!ownFolded.has(folded(edge.targetTable))) continue;
+      const contributor = declared
+        .get(table)
+        ?.relations?.find(
+          relation => relation.name === edge.key
+        )?.contributedBy;
+      const owner = contributor ?? schema.owners.get(table);
+      if (owner !== undefined && isThePlugin(owner, input.pluginName)) {
+        continue;
+      }
+      found.add({
+        kind: "relation",
+        name: edge.key,
+        table,
+        owner: owner === undefined ? "its schema" : describeOwner(owner),
+      });
+    }
+  }
 }
 
 /**

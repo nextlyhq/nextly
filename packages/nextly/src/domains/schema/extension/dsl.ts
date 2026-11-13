@@ -1395,6 +1395,56 @@ function resolveRelations(
   });
 }
 
+/**
+ * The one-edges a table's own foreign keys carry, as a `ref()` column
+ * carries one: a key already says which row a value points at, and asking
+ * the author to say it again as a relation is a second place to keep in
+ * step. Named by the key's column, as a `ref()` column's edge is.
+ *
+ * A key over one column only: an edge joins one column to one, so a
+ * composite key carries none and a declared relation is the way to query
+ * through it. None either where a declared relation or a `ref()` column's
+ * edge already joins that column to that table, or already holds the name:
+ * the author's own edge wins, as it does over a `ref()` column's. The
+ * target's `id` is left implied, as a `ref()` column's is, so a key to a
+ * collection's or Single's table, whose columns the compiler does not know,
+ * still carries its edge; any other target column is named.
+ */
+function foreignKeyRelations(
+  foreignKeys: readonly DeclaredForeignKey[],
+  columns: readonly ResolvedColumn[],
+  columnKeys: ReadonlySet<string>,
+  existing: readonly TableRelationInput[]
+): TableRelationInput[] {
+  const names = new Set(existing.map(rel => rel.name));
+  const edges: TableRelationInput[] = [];
+  for (const fk of foreignKeys) {
+    if (fk.columns.length !== 1) continue;
+    const [fromColumn] = fk.columns;
+    const [toColumn] = fk.referencesColumns;
+    const joined = [...existing, ...edges].some(
+      rel =>
+        rel.kind === "one" &&
+        rel.fromColumn === fromColumn &&
+        rel.targetTable === fk.referencesTable
+    );
+    if (joined) continue;
+    const key =
+      columns.find(column => column.name === fromColumn)?.key ?? fromColumn;
+    const name = implicitEdgeName(key, columnKeys);
+    if (names.has(name)) continue;
+    names.add(name);
+    edges.push({
+      name,
+      kind: "one",
+      targetTable: fk.referencesTable,
+      fromColumn,
+      ...(toColumn !== "id" ? { toColumn } : {}),
+    });
+  }
+  return edges;
+}
+
 /** The name of the one-edge a `ref()` column carries; see `defineTable`. */
 function implicitEdgeName(
   key: string,
@@ -1581,7 +1631,14 @@ export function defineTable<
       fromColumn: column.name,
     }))
     .filter(rel => !declaredNames.has(rel.name));
-  const relations = [...declaredRelations, ...autoRelations];
+  const relations = [
+    ...declaredRelations,
+    ...autoRelations,
+    ...foreignKeyRelations(foreignKeys, resolved, columnKeys, [
+      ...declaredRelations,
+      ...autoRelations,
+    ]),
+  ];
   assertDistinctRelationNames(
     name,
     relations,
