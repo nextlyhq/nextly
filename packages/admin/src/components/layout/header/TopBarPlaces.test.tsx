@@ -260,7 +260,7 @@ describe("the bar's width, as a page reads it", () => {
 
 describe("the bar's width, measured as its container query measures it", () => {
   it("takes the first measurement inside the bar's padding, so a 720 px bar with 24 px padding folds from the start", () => {
-    // The bar's box is 720 px with 24 px of padding either side: its content,
+    // The measured box is 720 px with 24 px of padding either side: its content,
     // which the observer and the outline's container query both read, is
     // 672 px, below the fold. An observer that never answers leaves the
     // first measurement standing alone.
@@ -272,8 +272,8 @@ describe("the bar's width, measured as its container query measures it", () => {
     const style = vi.spyOn(window, "getComputedStyle").mockImplementation(
       element =>
         ({
-          paddingLeft: element.tagName === "HEADER" ? "24px" : "0px",
-          paddingRight: element.tagName === "HEADER" ? "24px" : "0px",
+          paddingLeft: element.hasAttribute("data-bar-room") ? "24px" : "0px",
+          paddingRight: element.hasAttribute("data-bar-room") ? "24px" : "0px",
           borderLeftWidth: "0px",
           borderRightWidth: "0px",
         }) as CSSStyleDeclaration
@@ -306,6 +306,53 @@ describe("the bar's width, measured as its container query measures it", () => {
     } finally {
       vi.unstubAllGlobals();
       style.mockRestore();
+      rect.mockRestore();
+    }
+  });
+});
+
+describe("the room a document's controls share in the bar", () => {
+  it("leaves out a plugin's header item, so the controls fold rather than run past the bar", () => {
+    // A 704 px bar holding a 224 px plugin item: the trail and the controls
+    // share what is left, 468 px, which is below the fold.
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const width =
+          this.tagName === "HEADER"
+            ? 704
+            : this.hasAttribute("data-bar-room")
+              ? 468
+              : 0;
+        return DOMRect.fromRect({ x: 0, y: 0, width, height: 52 });
+      });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    function Reader() {
+      const width = useTopBarWidth();
+      return (
+        <span data-testid="bar-width">
+          {width === null
+            ? "none"
+            : `${width} ${barFolds(width) ? "folded" : "open"}`}
+        </span>
+      );
+    }
+    try {
+      render(
+        <Shell>
+          <Reader />
+        </Shell>
+      );
+      expect(screen.getByTestId("bar-width").textContent).toBe("468 folded");
+    } finally {
+      vi.unstubAllGlobals();
       rect.mockRestore();
     }
   });

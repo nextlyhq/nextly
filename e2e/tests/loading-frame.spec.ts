@@ -1045,6 +1045,13 @@ test.describe("an editor, held to the screen it stands for", () => {
           test.setTimeout(90_000);
           const id = await ownPost(page, made);
           await expectStillLoad(page, `/collections/posts/${id}`, mode);
+          // And the bar's controls stand within it, folded where there is
+          // no room for them, never run past its right edge.
+          const overflow = await page.evaluate(() => {
+            const bar = document.querySelector("header");
+            return bar === null ? null : bar.scrollWidth - bar.clientWidth;
+          });
+          expect(overflow).toBe(0);
         });
 
         test(`draws a colleague's claim with the editor, ${mode}`, async ({

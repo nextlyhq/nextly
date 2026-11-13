@@ -26,6 +26,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { BAR_ROOM_ATTRIBUTE } from "./bar-fold";
+
 /** The bar's two places: its left part and its right part. */
 export type TopBarPlaceName = "start" | "end";
 
@@ -128,14 +130,15 @@ export function TopBarPlaceTarget({
 }
 
 /**
- * The width of the bar itself, in pixels, while it is drawn; `null` outside the
- * shell or before it has been measured. Unlike a place's, it does not follow
- * what the page draws, such as how long its trail is.
+ * The width, in pixels, of the room the bar gives a page's trail and right
+ * part (the bar less any plugin's header items), while it is drawn; `null`
+ * outside the shell or before it has been measured. Unlike a place's, it does
+ * not follow what the page draws, such as how long its trail is.
  */
 export function useTopBarWidth(): number | null {
   const places = useContext(TopBarPlacesContext);
   const end = places?.targets.end ?? null;
-  return useMeasuredWidth(end?.closest("header") ?? null);
+  return useMeasuredWidth(end?.closest(`[${BAR_ROOM_ATTRIBUTE}]`) ?? null);
 }
 
 /**
