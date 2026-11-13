@@ -735,26 +735,35 @@ export async function rollBackOne(
     // A DOWN that stopped waiting for a busy table before anything of it was made durable left
     // the migration applied, as it was: no failed rollback is recorded, and run again it starts.
     const leftNothing = busyTableLeftNothing(err);
-    if (!leftNothing && (!isConcurrentRun(err) || partial)) {
-      await deps
+    // Whether the ledger tells this DOWN's ending without its start row: nothing of it stayed
+    // (a busy stop that changed nothing, or a lost race rolled back whole, whose other run's
+    // rollback is the migration's outcome), or its failed rollback is recorded below. Only then
+    // may the start row go; otherwise it is the one trace that statements of it may have
+    // committed, and removing it would let the next DOWN send them again.
+    let endingRecorded = leftNothing || (isConcurrentRun(err) && !partial);
+    if (!endingRecorded) {
+      endingRecorded = await deps
         .recordFailed(
           p.filename,
           truncateErrorMessage(describeError(err, { context: false })),
           p.transaction
         )
-        .catch((recordError: unknown) => {
-          // A busy-table stop says so whatever its record does: on SQLite the holder can still
-          // hold the database, so the record cannot be written.
-          if (!(NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY")) {
-            throw recordError;
+        .then(
+          () => true,
+          (recordError: unknown) => {
+            // A busy-table stop says so whatever its record does: on SQLite the holder can still
+            // hold the database, so the record cannot be written. Its start row then stays.
+            if (!(NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY")) {
+              throw recordError;
+            }
+            return false;
           }
-        });
+        );
     }
-    // Recorded failed above; a lost race rolled back whole left nothing to
-    // record, and the other run's rollback is the migration's outcome. A
-    // start row left behind reads as a stopped DOWN, which is still true, so
-    // failing to remove it never hides the DOWN's own error.
-    if (attempt !== undefined) {
+    // Removed only once the ending is recorded (above). A start row left
+    // behind reads as a stopped DOWN, which is still true, so failing to
+    // remove it never hides the DOWN's own error.
+    if (attempt !== undefined && endingRecorded) {
       await deps.endDownAttempt?.(attempt).catch(() => undefined);
     }
     throw err;

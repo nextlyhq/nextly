@@ -8,9 +8,11 @@
  * statement: PostgreSQL's `pg_cancel_backend`, MySQL's `KILL QUERY`. Time the statement spends
  * working is not counted.
  *
- * It asks on the adapter's pool, never on the watched session, which is busy running the
- * statement. It reads only whether the session waits, never what the session runs: a statement's
- * text can hold a literal value that must not leave the database.
+ * It asks on another connection than the watched session, which is busy running the statement:
+ * the adapter's pool where it can spare one, else a connection of the watch's own
+ * (`openWatchConnection`), since on a pool of one every ask would wait behind the watched session.
+ * It reads only whether the session waits, never what the session runs: a statement's text can
+ * hold a literal value that must not leave the database.
  *
  * @module domains/schema/busy-table/watchdog
  */
@@ -22,6 +24,11 @@ import { NextlyError } from "../../../errors/nextly-error";
 
 import { sessionNumberOf } from "./ended-waiting";
 import type { TryWatchdog } from "./types";
+import {
+  openWatchConnection,
+  poolCanSpareOne,
+  type WatchConnection,
+} from "./watch-connection";
 
 /** How often the session is asked about, by default, in milliseconds. */
 const DEFAULT_POLL_MS = 100;
@@ -109,9 +116,10 @@ export interface PreparedTryWatchdog extends TryWatchdog {
 /**
  * A watchdog made before the try's transaction opens, so its asks never run inside that
  * transaction's flow: the loop starts here, waits for `watch(session)`, and only then polls.
- * Every poll and cancel goes through the adapter's pool, another connection than the watched one,
- * which is the point of the watch, and resumes in the context the loop started in. On SQLite it
- * does nothing, as `startTryWatchdog` does.
+ * Every poll and cancel goes through another connection than the watched one, which is the point
+ * of the watch: the adapter's pool, or on a pool of one a connection the watch opens once it is
+ * given the session and closes when it stops. Each resumes in the context the loop started in.
+ * On SQLite it does nothing, as `startTryWatchdog` does.
  */
 export function prepareTryWatchdog(
   adapter: DrizzleAdapter,
@@ -121,7 +129,9 @@ export function prepareTryWatchdog(
     pollMs?: number;
     /**
      * Called once the session's waits reach the bound, just before it is ended: while it is still
-     * waiting, which is when the database can still say what it waits for.
+     * waiting, which is when the database can still say what it waits for. Not called where the
+     * adapter's pool cannot spare a connection: its reads go through that pool, so they would wait
+     * behind the watched session, holding the cancel back until the try had ended by itself.
      */
     beforeCancel?: (session: string) => Promise<void>;
   } = {}
@@ -152,6 +162,13 @@ export function prepareTryWatchdog(
   let cancelling: Promise<void> = Promise.resolve();
   // The statement the session runs now, as the runner says (`moveTo`).
   let current = -1;
+  // Where the asks go, opened by the loop once the session is given (`openWatchConnection`), and
+  // closed by `stop`. Until it opens, nothing is asked.
+  let asking: Promise<WatchConnection> | undefined;
+  let closing: Promise<void> | undefined;
+  // Whether the holder read, which goes through the adapter's pool, can be answered while the
+  // watched session holds a connection of that pool.
+  const holderReadable = poolCanSpareOne(adapter, dialect);
 
   /**
    * Whether the session is waiting for a lock now. On MySQL a wait the process list does not word
@@ -159,14 +176,17 @@ export function prepareTryWatchdog(
    * that read needs the PROCESS privilege, and where it is refused the process list's answer
    * stands, the try's backstops still bounding the wait.
    */
-  async function waitingNow(target: number): Promise<boolean> {
-    const rows = await adapter.queryStatement<{ state: unknown }>(
+  async function waitingNow(
+    connection: WatchConnection,
+    target: number
+  ): Promise<boolean> {
+    const rows = await connection.query<{ state: unknown }>(
       waitingQuery(dialect, target)
     );
     if (rows.some(row => isWaiting(dialect, row.state))) return true;
     if (dialect !== "mysql") return false;
-    const trx = await adapter
-      .queryStatement<{ state: unknown }>(innodbLockWaitQuery(target))
+    const trx = await connection
+      .query<{ state: unknown }>(innodbLockWaitQuery(target))
       .catch(() => []);
     return trx.some(row => row.state === "LOCK WAIT");
   }
@@ -175,13 +195,20 @@ export function prepareTryWatchdog(
    * Reads the holder, then ends the waiting statement, unless it stopped waiting meanwhile, the
    * runner moved on to another statement (`seen`), or the watch was stopped.
    */
-  async function cancel(target: number, seen: number): Promise<void> {
+  async function cancel(
+    connection: WatchConnection,
+    target: number,
+    seen: number
+  ): Promise<void> {
     const stillThere = () => !stopped && current === seen;
-    // What holds the table is read before the cancel; a failed read leaves the cancel to go on.
-    await options.beforeCancel?.(String(target)).catch(() => undefined);
+    // What holds the table is read before the cancel, where the pool it is read through can
+    // answer now; a failed read leaves the cancel to go on.
+    if (holderReadable) {
+      await options.beforeCancel?.(String(target)).catch(() => undefined);
+    }
     if (!stillThere()) return;
     if (dialect === "postgresql") {
-      const cancelled = await adapter.queryStatement<{ cancelled: unknown }>(
+      const cancelled = await connection.query<{ cancelled: unknown }>(
         cancelQuery(dialect, target)
       );
       // No row: the session stopped waiting between the two asks, so it goes on, unended.
@@ -191,14 +218,17 @@ export function prepareTryWatchdog(
     // MySQL's kill cannot be made conditional: asked again just before it, so a statement that
     // got its lock while the holder was read goes on; the runner holds its next statement until
     // this has ended (`idle`), so the kill can only reach the statement that waited.
-    if (!(await waitingNow(target)) || !stillThere()) return;
-    await adapter.queryStatement(cancelQuery(dialect, target));
+    if (!(await waitingNow(connection, target)) || !stillThere()) return;
+    await connection.query(cancelQuery(dialect, target));
     fired = true;
   }
 
-  async function poll(target: number): Promise<void> {
+  async function poll(
+    connection: WatchConnection,
+    target: number
+  ): Promise<void> {
     const seen = current;
-    const waiting = await waitingNow(target);
+    const waiting = await waitingNow(connection, target);
     const now = performance.now();
     if (!waiting) {
       lastSeenWaitingAt = undefined;
@@ -209,7 +239,7 @@ export function prepareTryWatchdog(
     // Decided and begun with no await in between, so the runner, which awaits `idle` before it
     // moves on, either sees this cancel under way or has already moved, which the cancel checks.
     if (waitedMs < tryMs || stopped || current !== seen) return;
-    cancelling = cancel(target, seen).catch(() => undefined);
+    cancelling = cancel(connection, target, seen).catch(() => undefined);
     await cancelling;
   }
 
@@ -217,10 +247,15 @@ export function prepareTryWatchdog(
     const session = await sessionGiven;
     if (session === undefined || stopped) return;
     const target = sessionNumber(session);
+    // Opened here, in the loop's own context, outside the try's transaction; set with no await
+    // between the check above and here, so a `stop` from now on finds it to close. It never
+    // rejects: a connection that cannot be opened leaves the asks on the pool.
+    asking = openWatchConnection(adapter, dialect);
+    const connection = await asking;
     while (!stopped && !fired) {
       // A failed ask (a dropped connection, a busy pool) says nothing about the session; the next
       // poll asks again.
-      await poll(target).catch(() => undefined);
+      await poll(connection, target).catch(() => undefined);
       if (stopped || fired) return;
       await new Promise<void>(resolve => {
         wake = resolve;
@@ -247,9 +282,13 @@ export function prepareTryWatchdog(
       if (timer !== undefined) clearTimeout(timer);
       wake?.();
       // A cancel under way is awaited, so none lands after the try has been let go. A poll still
-      // asking is not: on a pool of one it waits for the connection the try itself holds, and once
-      // stopped it cancels nothing.
+      // asking is not: on the pool it can wait for a connection, and once stopped it cancels
+      // nothing.
       await cancelling;
+      // The watch's own connection, if it opened one, is closed once; a poll still asking on it
+      // fails, which the loop lets go. Closing never throws.
+      closing ??= asking?.then(connection => connection.close());
+      await closing;
       return { fired };
     },
   };

@@ -117,6 +117,10 @@ const NO_RETRY_KINDS: Record<NoRetryReason, string> = {
   trigger:
     "a row change on a table with a trigger, which runs code the system does not know,",
   "outside-write": "a write outside the database's own transaction",
+  "hidden-trigger":
+    "a row change on a table whose triggers this database account cannot see, which may run code the system does not know,",
+  "session-state":
+    "a statement an earlier try kept that made state of its own session (a temporary table, a prepared statement, a cursor), which the next try's session would not have,",
   unread: "a statement of a kind the system does not recognise",
 };
 

@@ -50,11 +50,17 @@ interface Source {
   readonly value: string;
 }
 
+/**
+ * The environment the bounds are read from: `process.env`, or any map of names to values, since
+ * only the two `NEXTLY_LOCK_TIMEOUT` names are read from it.
+ */
+type BoundsEnv = Readonly<Record<string, string | undefined>>;
+
 /** The flag's value where it was given, else the environment's, else undefined. */
 function sourceOf(
   flag: string | undefined,
   flagName: string,
-  env: NodeJS.ProcessEnv,
+  env: BoundsEnv,
   envName: string
 ): Source | undefined {
   if (flag !== undefined) return { name: flagName, value: flag };
@@ -88,7 +94,7 @@ function seconds(
  */
 export function busyTableBounds(input: {
   flags?: BusyTableFlags;
-  env: NodeJS.ProcessEnv;
+  env: BoundsEnv;
 }): BusyTableBounds {
   const { flags = {}, env } = input;
   const trySource = sourceOf(

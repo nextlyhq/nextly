@@ -624,4 +624,92 @@ describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
     await runMigrationStatements(pgAdapter, statements, unit);
     expect(log).toEqual(statements.map(s => `pool: ${s}`));
   });
+
+  /**
+   * `sessionAdapter` with a transaction too, whose statements are logged as `tx:`, for the ledger
+   * write a bounded unit makes after its session has closed.
+   */
+  function boundedAdapter(dialect: "postgresql" | "mysql") {
+    const { log, adapter: base } = sessionAdapter(dialect);
+    const fake = Object.assign(Object.create(base) as object, {
+      transactionOpenInFlow: () => false,
+      transaction: async <T>(
+        work: (ctx: {
+          execute: (statement: string) => Promise<unknown[]>;
+          getDrizzle: () => unknown;
+        }) => Promise<T>
+      ): Promise<T> =>
+        work({
+          execute: async statement => {
+            log.push(`tx: ${statement}`);
+            return [];
+          },
+          getDrizzle: () => ({ tx: true }),
+        }),
+    });
+    return { log, adapter: fake as unknown as DrizzleAdapter };
+  }
+
+  it("writes the ledger of a bounded PostgreSQL unit in a transaction bounded as the try, once the session has closed", async () => {
+    const { log, adapter: pgAdapter } = boundedAdapter("postgresql");
+    let ledgerDb: unknown;
+    await runMigrationStatements(
+      pgAdapter,
+      statements,
+      unit,
+      async db => {
+        ledgerDb = db;
+        log.push("after");
+      },
+      { tryMs: 1_000 }
+    );
+    // A ledger table another session holds ends the try at the bound, never waits unbounded.
+    expect(log.slice(log.indexOf("session closed"))).toEqual([
+      "session closed",
+      "tx: SET LOCAL lock_timeout = '1500ms'",
+      "after",
+    ]);
+    expect(ledgerDb).toEqual({ tx: true });
+  });
+
+  describe("a bounded unit with a column made required after a statement filled it", () => {
+    const filled = [
+      "UPDATE t SET v = 'x' WHERE v IS NULL",
+      "ALTER TABLE t ALTER COLUMN v SET NOT NULL",
+    ];
+
+    it("counts the column through the session the statements run on, never the pool", async () => {
+      const { log, adapter: pgAdapter } = boundedAdapter("postgresql");
+      await runMigrationStatements(pgAdapter, filled, unit, undefined, {
+        tryMs: 1_000,
+      }).catch(() => undefined);
+      // On a pool of one, the session holds the only connection: a read through the pool waits
+      // for it, and escapes the try's bounds besides.
+      expect(log.filter(line => line.startsWith("pool:"))).toEqual([]);
+      // The checkpoint's reads, after the fill, on the session (its first read is the session's
+      // own id, asked when the try opens).
+      const filledAt = log.indexOf(`session: ${filled[0]}`);
+      expect(filledAt).toBeGreaterThanOrEqual(0);
+      expect(
+        log.some((line, at) => at > filledAt && /^session: SELECT/i.test(line))
+      ).toBe(true);
+    });
+
+    it("tells the statement before its checkpoint reads, so a wait there is the statement's", async () => {
+      const { log, adapter: pgAdapter } = boundedAdapter("postgresql");
+      await runMigrationStatements(pgAdapter, filled, unit, undefined, {
+        tryMs: 1_000,
+        onStatement: index => log.push(`told ${String(index)}`),
+      }).catch(() => undefined);
+      // The checkpoint's reads come after the fill, the first statement, has run.
+      const filledAt = log.indexOf(`session: ${filled[0]}`);
+      const told = log.indexOf("told 1");
+      const firstRead = log.findIndex(
+        (line, at) => at > filledAt && /^session: SELECT/i.test(line)
+      );
+      expect(filledAt).toBeGreaterThanOrEqual(0);
+      expect(told).toBeGreaterThan(filledAt);
+      expect(firstRead).toBeGreaterThan(told);
+    });
+  });
 });
