@@ -43,6 +43,21 @@ import type {
 export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   extends DirectAPIConfig,
     RunAsPrincipal {
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
+
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -218,6 +233,32 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
    * and a caller passing it before this field existed was silently ignored.
    */
   status?: "published" | "draft" | "all";
+
+  /**
+   * Whole-document fallback. A published read in a language the document is
+   * not published in answers not found; with this set it answers in the first
+   * language of the fallback chain the document is published in instead, and
+   * says which in `_locale`. Its relationships, components and field fallback
+   * are read in that language.
+   *
+   * @default false
+   */
+  wholeDocumentFallback?: boolean;
+
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
 
   /**
    * Specific fields to include/exclude.

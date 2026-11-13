@@ -12,6 +12,7 @@ import { isReservedPath } from "../../../runtime/routing/reserved-paths";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import { decodeEachLanguage } from "../../i18n/read-in-language";
 
 /**
  * Field types that are always stored as JSON in the database.
@@ -478,6 +479,15 @@ export function getMinSearchLength(
   return (searchConfig?.minSearchLength as number) ?? 2;
 }
 
+/** A stored JSON text as its value; a string that is not JSON is the value. */
+function parseStoredJson(stored: string): unknown {
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return stored;
+  }
+}
+
 /**
  * Turn storage-encoded JSON columns back into the values the field was
  * configured with.
@@ -516,6 +526,9 @@ export function decodeJsonFieldValues(
   for (const entry of entries) {
     for (const field of fields) {
       if (!isJsonFieldType(field.type, field)) continue;
+      // Every language's values beside the row, read as stored, decode as
+      // the row's own value does.
+      decodeEachLanguage(entry, field.name, parseStoredJson);
       const value = entry[field.name];
       if (typeof value === "string") {
         try {

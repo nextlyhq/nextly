@@ -3,16 +3,17 @@ import * as path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
-import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
 import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
-import type { CompanionSchema } from "../domains/i18n/runtime/companion-io";
+import {
+  type CompanionSchema,
+  localizedFieldRefs,
+  markStructuredFields,
+} from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
-import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import { NextlyError } from "../errors/nextly-error";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -358,10 +359,7 @@ export class CollectionFileManager {
     const cached = this.schemaRegistry.get(companionTableName);
     // Pair each translatable field's API name (camelCase row key) with its physical companion
     // column (snake_case) — the same conversion the column descriptor applies to main columns.
-    const localizedFields: LocalizedFieldRef[] = resolveLocalizedFieldNames(
-      metadata.fields,
-      true
-    ).map(name => ({ name, column: toSnakeCase(name) }));
+    const localizedFields = localizedFieldRefs(metadata.fields);
     if (localizedFields.length === 0) return null;
     // A per-language `_status` only where the collection publishes each language on its own.
     const hasStatus = publishesPerLanguage(metadata);
@@ -374,7 +372,7 @@ export class CollectionFileManager {
       return {
         table: cached,
         companionTableName,
-        localizedFields,
+        localizedFields: markStructuredFields(localizedFields, cached),
         hasStatus,
         hasUpdatedAt,
       };
@@ -394,7 +392,7 @@ export class CollectionFileManager {
     return {
       table: companion.table,
       companionTableName,
-      localizedFields,
+      localizedFields: markStructuredFields(localizedFields, companion.table),
       hasStatus,
       hasUpdatedAt,
     };

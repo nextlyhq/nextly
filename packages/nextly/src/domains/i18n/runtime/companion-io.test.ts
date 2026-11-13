@@ -52,6 +52,34 @@ describe("buildCompanionSchema", () => {
     });
   });
 
+  // A translatable column that stores JSON is never blank text, and the
+  // non-blank test must not compare it with '' (PostgreSQL parses that as
+  // JSON and fails the query). It is marked where the dialect stores JSON,
+  // and only there: SQLite keeps it as text.
+  it.each([
+    { dialect: "postgresql" as const, structured: true },
+    { dialect: "mysql" as const, structured: true },
+    { dialect: "sqlite" as const, structured: false },
+  ])(
+    "marks a JSON column structured on $dialect: $structured",
+    ({ dialect, structured }) => {
+      const schema = buildCompanionSchema({
+        slug: "data",
+        tableName: "dc_data",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "meta", type: "json", localized: true },
+        ],
+        dialect,
+      });
+      const byName = new Map(
+        schema!.localizedFields.map(field => [field.name, field.structured])
+      );
+      expect(byName.get("meta") === true).toBe(structured);
+      expect(byName.get("title")).toBeUndefined();
+    }
+  );
+
   it("returns null when the entity has no translatable fields", () => {
     const schema = buildCompanionSchema({
       slug: "counters",

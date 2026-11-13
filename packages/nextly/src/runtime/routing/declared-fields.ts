@@ -19,6 +19,7 @@
  */
 import { getService, isServicesRegistered } from "../../di/service-access";
 import { withSystemTextFields } from "../../domains/collections/system-text-fields";
+import { narrowToRowFields } from "../../domains/i18n/read-in-language";
 import { buildEnvelope } from "../../domains/webhooks/envelope";
 import { expandComponentFields } from "../../domains/webhooks/expand-component-fields";
 import {
@@ -157,7 +158,7 @@ export function withoutHidden(
   hidden: ReadonlySet<string>
 ): Record<string, unknown> {
   if (hidden.size === 0) return document;
-  return buildEnvelope({
+  const stripped = buildEnvelope({
     id: "public-read",
     type: "entry.updated",
     timestamp: new Date(0),
@@ -165,4 +166,8 @@ export function withoutHidden(
     data: document,
     sensitiveFields: [...hidden],
   }).data;
+  // Every language's values beside the document are its own fields in other
+  // languages, so each language's are stripped as the document's are.
+  narrowToRowFields(stripped, values => withoutHidden(values, hidden));
+  return stripped;
 }

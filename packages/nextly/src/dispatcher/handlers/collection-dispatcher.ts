@@ -114,6 +114,8 @@ import {
 import {
   isTruthyParam,
   parseCountParam,
+  parseFallbackParam,
+  parseTranslationsParam,
   parseRichTextFormat,
   parseRichTextStyles,
   parseSelectParam,
@@ -1314,6 +1316,20 @@ const COLLECTIONS_METHODS: Record<
     // translate to canonical PaginationMeta via paginatedResponseToMeta.
     execute: async (svc, p, _body, request) => {
       requireParam(p, "collectionName");
+      // Whole-document fallback answers for one document in the first
+      // language it is published in; a list has no one such language, so it
+      // is refused rather than read without it.
+      if (parseFallbackParam(p.fallback)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fallback",
+              code: "INVALID_VALUE",
+              message: "fallback=document applies to a read of one document.",
+            },
+          ],
+        });
+      }
 
       // Build sort parameter from sortBy and sortOrder.
       // Frontend sends: sortBy=createdAt&sortOrder=desc
@@ -1370,6 +1386,10 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
         // `?count=capped` counts the total no further than the list shows.
         countUpTo: parseCountParam(p.count),
       });
@@ -1505,8 +1525,15 @@ const COLLECTIONS_METHODS: Record<
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the entry is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

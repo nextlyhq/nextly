@@ -27,6 +27,7 @@ import {
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
+import { decodeEachLanguage } from "../../i18n/read-in-language";
 import { getFieldType } from "../../schema/field-types/field-type-registry";
 import { relationshipStoresJson } from "../../schema/services/field-column-descriptor";
 import type { SingleDocument, SingleResult } from "../types";
@@ -570,6 +571,20 @@ export function deserializeJsonFields(
 
   for (const field of fields) {
     if (!("name" in field) || !field.name) continue;
+
+    // Every language's values beside the document, read as stored, decode as
+    // the document's own value does.
+    if (shouldTreatAsJson(field)) {
+      const name = field.name;
+      decodeEachLanguage(result, name, stored => {
+        try {
+          return JSON.parse(stored);
+        } catch {
+          logger.warn("Failed to parse JSON field", { field: name });
+          return stored;
+        }
+      });
+    }
 
     if (shouldTreatAsJson(field) && result[field.name] != null) {
       const value = result[field.name];

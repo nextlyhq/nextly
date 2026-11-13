@@ -17,7 +17,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, isTable, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
@@ -84,6 +84,7 @@ interface CompanionFieldLike {
   name: string;
   type: string;
   localized?: boolean;
+  unique?: boolean;
 }
 
 /**
@@ -126,6 +127,49 @@ export interface CompanionSchema {
  */
 function toColumn(name: string): string {
   return toCanonicalSnakeCase(name);
+}
+
+/**
+ * The translatable fields of `fields`, each with its companion column, and
+ * marked where it is unique, so a read never fills it from another language
+ * (`LocalizedFieldRef.unique`). The one mapping every companion schema is
+ * built with.
+ */
+export function localizedFieldRefs(
+  fields: readonly CompanionFieldLike[]
+): LocalizedFieldRef[] {
+  const unique = new Set(
+    fields.filter(field => field.unique === true).map(field => field.name)
+  );
+  return resolveLocalizedFieldNames([...fields], true).map(name => ({
+    name,
+    column: toColumn(name),
+    ...(unique.has(name) ? { unique: true } : {}),
+  }));
+}
+
+/**
+ * `fields` with each one whose companion column stores JSON on this dialect
+ * marked `structured`, read off the companion table built for them: such a
+ * value is never blank text, and comparing it with an empty string makes
+ * PostgreSQL parse `''` as JSON and fail the query.
+ */
+export function markStructuredFields(
+  fields: readonly LocalizedFieldRef[],
+  table: unknown
+): LocalizedFieldRef[] {
+  const jsonColumns = new Set(
+    isTable(table)
+      ? Object.values(getTableColumns(table))
+          // Drizzle spells a JSON column's data type with "json" among its
+          // words ("object json" on PostgreSQL and MySQL).
+          .filter(column => column.dataType.split(" ").includes("json"))
+          .map(column => column.name)
+      : []
+  );
+  return fields.map(field =>
+    jsonColumns.has(field.column) ? { ...field, structured: true } : field
+  );
 }
 
 /**
@@ -184,10 +228,7 @@ function companionSchemaOf(args: {
   dialect: SupportedDialect;
   status?: boolean;
 }): CompanionSchema | null {
-  const localizedFields: LocalizedFieldRef[] = resolveLocalizedFieldNames(
-    args.fields,
-    true
-  ).map(name => ({ name, column: toColumn(name) }));
+  const localizedFields = localizedFieldRefs(args.fields);
   if (localizedFields.length === 0) return null;
 
   const companion = buildCompanionRuntimeTable({
@@ -203,7 +244,7 @@ function companionSchemaOf(args: {
   return {
     table: companion.table,
     companionTableName: companion.companionTableName,
-    localizedFields,
+    localizedFields: markStructuredFields(localizedFields, companion.table),
     hasStatus: args.status === true,
     hasUpdatedAt: true,
   };
