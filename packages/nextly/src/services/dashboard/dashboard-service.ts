@@ -893,7 +893,7 @@ export class DashboardService extends BaseService {
   ): Promise<CollectionInfo[]> {
     try {
       const registryService = container.get<{
-        getAllCollections: () => Promise<
+        getAllCollectionsForRead: () => Promise<
           Array<{
             slug: string;
             tableName: string;
@@ -919,9 +919,10 @@ export class DashboardService extends BaseService {
 
       // A collection kept off the dashboard is neither listed nor counted here, for any caller,
       // a super-admin included; see `keptOffDashboard`.
-      const collections = (await registryService.getAllCollections()).filter(
-        c => !leftOut("collection", c, keptOff?.slugs)
-      );
+      // From the registry cache: read again only once the registry changes.
+      const collections = (
+        await registryService.getAllCollectionsForRead()
+      ).filter(c => !leftOut("collection", c, keptOff?.slugs));
       if (keptOff) keptOff.complete = true;
       const mapped = collections.map(c => ({
         slug: c.slug,
@@ -950,7 +951,7 @@ export class DashboardService extends BaseService {
   ): Promise<RegisteredSingle[]> {
     try {
       const singleRegistryService = container.get<{
-        getAllSingles: () => Promise<
+        getAllSinglesForRead: () => Promise<
           Array<
             RegisteredSingle & {
               /** Who defines it, read with `admin` by the kept-off rule. */
@@ -962,9 +963,9 @@ export class DashboardService extends BaseService {
       }>("singleRegistryService");
 
       // Kept off the dashboard, for the reason the collections above are.
-      const singles = (await singleRegistryService.getAllSingles()).filter(
-        single => !leftOut("single", single, keptOff?.slugs)
-      );
+      const singles = (
+        await singleRegistryService.getAllSinglesForRead()
+      ).filter(single => !leftOut("single", single, keptOff?.slugs));
       if (keptOff) keptOff.complete = true;
       return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {

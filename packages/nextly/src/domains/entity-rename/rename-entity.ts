@@ -22,6 +22,7 @@ import type { CacheRevalidator } from "../../revalidation/types";
 import { writingPermissions } from "../../services/lib/permissions";
 import type { Logger } from "../../shared/types";
 import { clearRegistryRowCache } from "../dynamic-collections/services/collection-row-cache";
+import { countRegistryWriteOn } from "../schema/schema-version";
 import { withSchemaChangeExcluded } from "../schema/services/schema-change-exclusion";
 import type { WebhookEndpointRegistry } from "../webhooks/endpoint-registry";
 import {
@@ -105,6 +106,9 @@ export async function renameEntity<T>(
           // before it.
           clearRegistryRowCache();
           if (row === null) return null;
+          // The stored schema version's count moves with the row, in this
+          // transaction (or the registry write it runs inside).
+          await countRegistryWriteOn(tx, dialect);
           await moveEntitySlug(tx, { dialect, present, move });
           // Read after the registry row is written, so a collection relating to itself is
           // pointed at its new slug too.

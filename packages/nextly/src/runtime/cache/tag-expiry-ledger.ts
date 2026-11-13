@@ -31,7 +31,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, asc, count, inArray, lt, sql, type SQL } from "drizzle-orm";
 
 import { tablePresence } from "../../domains/dashboard/table-presence";
-import { COLLECTION_ROW_LIFETIME_MS } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { REGISTRY_ROW_STALENESS_MS } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { databaseNowMs } from "../../domains/limits/store-clock";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
@@ -51,12 +51,13 @@ export const LEDGER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * How far past the database's time a recorded expiry is set. Another instance
- * may still hold a registry row from before a schema change for up to its
- * cached lifetime, and fill an entry from it after the change's expiry was
- * recorded; an expiry graced by that lifetime still judges such an entry. The
- * writer itself is not held to it (see the tag expiry view).
+ * may still hold a registry row from before a schema change for up to
+ * `REGISTRY_ROW_STALENESS_MS` after it, and fill an entry from it after the
+ * change's expiry was recorded; an expiry graced by that bound still judges
+ * such an entry. The writer itself is not held to it (see the tag expiry
+ * view).
  */
-export const TAG_EXPIRY_GRACE_MS = COLLECTION_ROW_LIFETIME_MS;
+export const TAG_EXPIRY_GRACE_MS = REGISTRY_ROW_STALENESS_MS;
 
 /** How often the retention pass prunes the ledger. */
 export const LEDGER_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
