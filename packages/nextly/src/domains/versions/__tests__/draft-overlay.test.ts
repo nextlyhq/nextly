@@ -145,6 +145,26 @@ describe("resolveDraftOverlay", () => {
     }
   );
 
+  // A collection's draft held before the rule is shown, read-only, because
+  // its writes refuse while it is there. A Single's writes hold no such
+  // refusal, so its earlier draft is not shown for a write to act on.
+  it.each([
+    { entityKind: "collection" as const, shows: true },
+    { entityKind: "single" as const, shows: false },
+  ])(
+    "shows a $entityKind's draft held before the rule: $shows",
+    ({ entityKind, shows }) => {
+      expect(
+        resolveDraftOverlay({
+          ...base,
+          componentSchemas: LOCALIZED_COMPONENT,
+          entityKind,
+          requestLocale: "es",
+        }).overlay
+      ).toBe(shows);
+    }
+  );
+
   it("agrees with the WRITE rule about an unresolved component", () => {
     const shared = {
       collectionHasStatus: true,

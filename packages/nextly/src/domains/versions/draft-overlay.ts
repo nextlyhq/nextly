@@ -146,9 +146,12 @@ export function resolveDraftOverlay(
   });
 
   const overlay =
-    // A draft held before the `localized-component` rule is still shown, as
-    // the publish that puts it live still finds it.
-    (verdict.eligible || heldBeforeTheRule(verdict)) &&
+    // A collection's draft held before the `localized-component` rule is
+    // still shown, read-only: its writes refuse while it is there. A Single's
+    // writes hold no such refusal, so a Single's earlier draft is not shown,
+    // as before the rule covered collections.
+    (verdict.eligible ||
+      (heldBeforeTheRule(verdict) && input.entityKind !== "single")) &&
     input.includeWorkingDraft &&
     input.callerMayEdit &&
     input.requestedStatus !== "published" &&
