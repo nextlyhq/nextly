@@ -144,4 +144,65 @@ describe.runIf(process.env.TEST_MYSQL_URL)("the MySQL catalog", () => {
     expect(operations).toHaveLength(1);
     expect(operations[0]).toMatch(/^change column t\.total: .*\* .* -> .*\+ /);
   });
+
+  it("reads a CHECK no longer enforced as a change", async () => {
+    const database = await makeScratchDatabase(
+      "mysql",
+      { server: process.env.TEST_MYSQL_URL },
+      "_gate_check_enforced"
+    );
+    try {
+      await query(
+        "mysql",
+        database.url,
+        "CREATE TABLE t (n int, CONSTRAINT t_n_positive CHECK (n > 0))"
+      );
+      const before = await readCatalog("mysql", database.url);
+      await query(
+        "mysql",
+        database.url,
+        "ALTER TABLE t ALTER CHECK t_n_positive NOT ENFORCED"
+      );
+      const operations = operationsBetween(
+        before,
+        await readCatalog("mysql", database.url)
+      );
+      expect(operations).toHaveLength(1);
+      expect(operations[0]).toMatch(
+        /^change constraint t\.t_n_positive: check .* -> check .* not enforced$/
+      );
+    } finally {
+      await database.drop();
+    }
+  });
+});
+
+/**
+ * PostgreSQL's catalog states a column's collation where it is not its type's
+ * own, so an upgrade that changes only the collation is an operation.
+ */
+describe.runIf(process.env.TEST_POSTGRES_URL)("the PostgreSQL catalog", () => {
+  it("reads a column whose collation changed as a change", async () => {
+    const database = await makeScratchDatabase(
+      "postgresql",
+      { server: process.env.TEST_POSTGRES_URL },
+      "_gate_collation"
+    );
+    try {
+      await query("postgresql", database.url, "CREATE TABLE t (email text)");
+      const before = await readCatalog("postgresql", database.url);
+      await query(
+        "postgresql",
+        database.url,
+        'ALTER TABLE t ALTER COLUMN email TYPE text COLLATE "C"'
+      );
+      expect(
+        operationsBetween(before, await readCatalog("postgresql", database.url))
+      ).toEqual([
+        'change column t.email: text null -> text null collate pg_catalog."C"',
+      ]);
+    } finally {
+      await database.drop();
+    }
+  });
 });

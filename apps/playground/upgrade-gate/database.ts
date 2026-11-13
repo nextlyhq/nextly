@@ -770,15 +770,24 @@ async function readPostgresCatalog(url: string): Promise<Catalog> {
       defaultValue: string | null;
       identity: string;
       generated: string;
+      collation: string | null;
     }>(
+      // A collation is named only where it is not the type's own, which is
+      // what a column that names none has.
       `SELECT c.relname AS "tableName", a.attname AS name,
               format_type(a.atttypid, a.atttypmod) AS type,
               a.attnotnull AS "notNull",
               pg_get_expr(d.adbin, d.adrelid) AS "defaultValue",
-              a.attidentity AS identity, a.attgenerated AS generated
+              a.attidentity AS identity, a.attgenerated AS generated,
+              CASE WHEN a.attcollation <> 0 AND a.attcollation <> ty.typcollation
+                   THEN quote_ident(cn.nspname) || '.' || quote_ident(co.collname)
+              END AS collation
          FROM pg_attribute a
          JOIN pg_class c ON c.oid = a.attrelid
          JOIN pg_namespace n ON n.oid = c.relnamespace
+         JOIN pg_type ty ON ty.oid = a.atttypid
+         LEFT JOIN pg_collation co ON co.oid = a.attcollation
+         LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
          LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
         WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
           AND a.attnum > 0 AND NOT a.attisdropped`
@@ -788,7 +797,8 @@ async function readPostgresCatalog(url: string): Promise<Catalog> {
         column.notNull ? "not null" : "null",
         column.defaultValue !== null &&
           `${column.generated ? "generated" : "default"} ${column.defaultValue}`,
-        column.identity !== "" && "identity"
+        column.identity !== "" && "identity",
+        column.collation !== null && `collate ${column.collation}`
       );
     }
     for (const index of await query<{
@@ -945,17 +955,21 @@ async function mysqlChecksAndTriggers(query: MysqlQuery, catalog: Catalog) {
     tableName: string;
     name: string;
     clause: string;
+    enforced: string;
   }>(
     `SELECT t.table_name AS tableName, c.constraint_name AS name,
-            c.check_clause AS clause
+            c.check_clause AS clause, t.enforced AS enforced
        FROM information_schema.check_constraints c
        JOIN information_schema.table_constraints t
          ON t.constraint_schema = c.constraint_schema
         AND t.constraint_name = c.constraint_name
       WHERE c.constraint_schema = DATABASE() AND t.constraint_type = 'CHECK'`
   )) {
-    tableIn(catalog, check.tableName).constraints[check.name] =
-      `check ${check.clause}`;
+    // A check left in place but no longer enforced accepts what it refused.
+    tableIn(catalog, check.tableName).constraints[check.name] = words(
+      `check ${check.clause}`,
+      check.enforced === "NO" && "not enforced"
+    );
   }
   for (const trigger of await query<{
     tableName: string;
