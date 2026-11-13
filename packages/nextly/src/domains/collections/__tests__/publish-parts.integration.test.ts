@@ -913,6 +913,48 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(await states(id)).toEqual(before);
   });
 
+  // Taking one language down is not a publish, whatever a language it did not move holds: the
+  // trail judges the move by the parts it moved.
+  it("records no publish when one language alone is taken down beside a language still a draft", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["en", "es"],
+      shared: true,
+      data: { _overwrite: true },
+    });
+    const editor = await userWhoMay(t!, "editor", "unpublish", ["posts"]);
+    await grantTo(t!, editor, "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    const publishMarks = async () =>
+      (
+        await t!.adapter.select<{ metadata: unknown }>("activity_log", {
+          where: { and: [{ column: "entryId", op: "=", value: id }] },
+        })
+      ).filter(row => {
+        const metadata =
+          typeof row.metadata === "string"
+            ? (JSON.parse(row.metadata) as Record<string, unknown>)
+            : (row.metadata as Record<string, unknown> | null);
+        return metadata?.published === true;
+      }).length;
+    const before = await publishMarks();
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      overrideAccess: false,
+      user: { id: editor, email: "editor@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect((await states(id)).es).toBe("draft");
+    expect(await publishMarks()).toBe(before);
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({

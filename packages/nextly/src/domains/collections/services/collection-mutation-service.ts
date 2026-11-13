@@ -10402,13 +10402,19 @@ export class CollectionMutationService extends BaseService {
         // Publishing every language puts each one live, so it publishes the
         // entry whenever ANY of them was not, even with the main row already
         // live, when the changed fields name no status at all.
-        const priorLanguageStatuses = [
-          (preImageRow as { status?: unknown }).status as
-            | string
-            | null
-            | undefined,
-          ...priorCompanionStatuses.values(),
+        // Only the parts this write moves: the entry's own status where the shared part moves,
+        // and each moved language's. A move of chosen languages is judged by those alone, so a
+        // language it left as a draft does not make taking another down read as a publish.
+        const entryStatusBefore = (preImageRow as { status?: unknown })
+          .status as string | null | undefined;
+        const movedStatuses = [
+          ...(movesShared(params.parts) ? [entryStatusBefore] : []),
+          ...[...priorCompanionStatuses]
+            .filter(([locale]) => movesLanguage(params.parts, locale))
+            .map(([, status]) => status),
         ];
+        const priorLanguageStatuses =
+          movedStatuses.length > 0 ? movedStatuses : [entryStatusBefore];
         const statusBeforeEveryLanguage = priorLanguageStatuses.every(
           status => status === "published"
         )
