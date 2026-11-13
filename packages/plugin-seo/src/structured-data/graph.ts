@@ -1295,6 +1295,28 @@ function present<T extends object>(value: T): T {
   ) as T;
 }
 
+/**
+ * The image a listed page's structured data reads from a field its content
+ * type maps for its type, such as a post's cover under a name no share-image
+ * guess reads; none where the type maps no image field. Worked out as the
+ * page's structured data works it out, for a page search engines may list.
+ */
+export async function mappedImageOf(
+  ctx: PluginContext,
+  key: string,
+  document: Readonly<Record<string, unknown>>,
+  rules: StructuredDataRules
+): Promise<PageMetadataImage | undefined> {
+  const rule = rules.types[key];
+  if (rule?.details === undefined) return undefined;
+  const offered = structuredDataTypesFor({ hidden: false });
+  const automatic = automaticType(document, {}, offered);
+  const { type } = chosenType({ document }, rule, offered, automatic);
+  const source = rule.details[type]?.image;
+  if (source === undefined) return undefined;
+  return pictureOf(ctx, readDetail(document, "image", source));
+}
+
 /** The type a page is described as, how that was decided, and what is offered. */
 function decidedType(
   document: Readonly<Record<string, unknown>>,

@@ -734,7 +734,11 @@ export class CollectionService extends BaseService {
     );
 
     if (!result.success) {
-      this.logger.warn("Entry creation failed", {
+      // A duplicate is thrown to the caller, which receives it and decides:
+      // several writers making one row at once (parallel build workers) is
+      // no fault, so only other failures are warned of here.
+      const log = result.statusCode === 409 ? "debug" : "warn";
+      this.logger[log]("Entry creation failed", {
         collectionName,
         message: result.message,
         statusCode: result.statusCode,

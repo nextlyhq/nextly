@@ -20,6 +20,7 @@
 import {
   publicAddressOf,
   type AddressHolder,
+  type PageMetadataImage,
   type PublicAddress,
   type PluginContext,
   type PublicAddressType,
@@ -45,9 +46,12 @@ import {
   standingOf,
   type HeldLanguages,
 } from "../languages/versions";
+import { singleKey } from "../problems/page-types";
 import type { SeoAnswer } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
 import { publishedWhere, toLastModified } from "../sitemap";
+import { mappedImageOf } from "../structured-data/graph";
+import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import type { SitemapPage } from "./sitemap-files";
 
@@ -90,6 +94,11 @@ export interface ListingOptions {
   origin: string;
   /** The site's rules, as the page's head reads them. */
   readRules?: ReadRules;
+  /**
+   * Structured data's rules, where a content type maps a field its pages'
+   * structured data reads an image from: that image is listed too.
+   */
+  readStructuredDataRules?: ReadStructuredDataRules;
   /** Only these collections, where given; Singles are listed either way. */
   collections?: readonly string[];
   /**
@@ -232,6 +241,10 @@ export async function listPages(
   // once a page; nothing is kept past it, so the next listing reads afresh.
   const readRules =
     options.readRules === undefined ? undefined : onceEach(options.readRules);
+  const readStructuredDataRules =
+    options.readStructuredDataRules === undefined
+      ? undefined
+      : onceEach(options.readStructuredDataRules);
   for await (const batch of candidates(ctx, options)) {
     await listBatch(
       ctx,
@@ -240,6 +253,9 @@ export async function listPages(
         ...options,
         language,
         ...(readRules === undefined ? {} : { readRules }),
+        ...(readStructuredDataRules === undefined
+          ? {}
+          : { readStructuredDataRules }),
       },
       found
     );
@@ -274,6 +290,7 @@ async function listCodePages(
   found: { pages: ListedPage[]; problems: ListingProblem[] }
 ): Promise<void> {
   const connected = await codePages(ctx, routes, options.readRules);
+  const siteImage = await siteImageIn(ctx, options.readRules, options.language);
   // Who holds each address, read once per language for every connected one.
   const held = await heldByDocuments(
     ctx,
@@ -294,7 +311,11 @@ async function listCodePages(
       path: route.path,
       language: options.language,
       holder: { collection: codePagesSlug(ctx), id: row.id },
-      images: ownImage(answer, options.origin),
+      images: ownImages(
+        answer,
+        options.origin,
+        siteImage === undefined ? {} : { siteImage }
+      ),
     });
   }
 }
@@ -404,11 +425,59 @@ async function listIn(
   });
 }
 
-/** The page's own image as an absolute address, not the site's default. */
-function ownImage(answer: SeoAnswer, origin: string): string[] {
-  if (answer.image === undefined || answer.image.from === "site") return [];
-  const image = absolute(answer.image.value.url, origin);
-  return image === null ? [] : [image];
+/**
+ * The page's own images as absolute addresses, each once: its share image,
+ * and the image its structured data reads from a mapped field. Never the
+ * site's default share image, whichever level names it: a route handing its
+ * page the site's card, or a page set to it, is no image of the page's own.
+ */
+function ownImages(
+  answer: SeoAnswer,
+  origin: string,
+  also: { siteImage?: string; mapped?: PageMetadataImage }
+): string[] {
+  const site =
+    also.siteImage === undefined ? null : absolute(also.siteImage, origin);
+  const share = answer.image?.from === "site" ? undefined : answer.image?.value;
+  const found: string[] = [];
+  for (const image of [share, also.mapped]) {
+    if (image === undefined) continue;
+    const url = absolute(image.url, origin);
+    if (url === null || url === site || found.includes(url)) continue;
+    found.push(url);
+  }
+  return found;
+}
+
+/** The site's default share image in `language`, where its rules name one. */
+async function siteImageIn(
+  ctx: PluginContext,
+  readRules: ReadRules | undefined,
+  language: string
+): Promise<string | undefined> {
+  return (await readRules?.(ctx, language))?.image?.url;
+}
+
+/** The images `candidate` is listed with in `language`, from its `answer`. */
+async function entryImages(
+  ctx: PluginContext,
+  candidate: Candidate,
+  answer: SeoAnswer,
+  language: string,
+  options: ListingOptions
+): Promise<string[]> {
+  const { type, document } = candidate;
+  const rules = await options.readStructuredDataRules?.(ctx, language);
+  const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
+  const mapped =
+    rules === undefined
+      ? undefined
+      : await mappedImageOf(ctx, key, document, rules);
+  const siteImage = await siteImageIn(ctx, options.readRules, language);
+  return ownImages(answer, options.origin, {
+    ...(siteImage === undefined ? {} : { siteImage }),
+    ...(mapped === undefined ? {} : { mapped }),
+  });
 }
 
 /**
@@ -453,7 +522,7 @@ async function listed(
       path: own.path,
       language,
       holder,
-      images: ownImage(answer, options.origin),
+      images: await entryImages(ctx, candidate, answer, language, options),
       ...(lastModified === undefined ? {} : { lastModified }),
     },
   };

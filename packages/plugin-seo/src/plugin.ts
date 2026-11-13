@@ -142,6 +142,7 @@ import { withStructuredData } from "./structured-data/provider";
 import {
   checkedTypeRules,
   rulesFromOptions,
+  type ReadStructuredDataRules,
   type StructuredDataOptions,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
@@ -482,14 +483,17 @@ function configuredOrigin(
  */
 function rootFilesConfig(
   options: SeoPluginOptions,
-  readRules: ReadRules,
+  readers: {
+    readRules: ReadRules;
+    readStructuredDataRules: ReadStructuredDataRules;
+  },
   collections: readonly string[] | undefined,
   codeRoutes: () => readonly CodeRoute[]
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
   return {
     ...configuredOrigin(options, sitemap),
-    readRules,
+    ...readers,
     codeRoutes,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
@@ -505,11 +509,14 @@ function rootFilesConfig(
  */
 function siteFileRoutes(
   options: SeoPluginOptions,
-  readRules: ReadRules,
+  readers: {
+    readRules: ReadRules;
+    readStructuredDataRules: ReadStructuredDataRules;
+  },
   collections: readonly string[] | undefined,
   codeRoutes: () => readonly CodeRoute[]
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readRules, collections, codeRoutes);
+  const config = rootFilesConfig(options, readers, collections, codeRoutes);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -716,6 +723,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           listPages(ctx, {
             origin,
             readRules,
+            readStructuredDataRules:
+              problemChecks.readers.readStructuredDataRules,
             codeRoutes,
             ...(sitemapSubset === undefined
               ? {}
@@ -860,7 +869,15 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   routes.push(
     // The Connections tab's reads, and Search Console's sign-in.
     ...searchConsoleRoutes({ readRules, client: googleClient, ...siteOrigin }),
-    ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
+    ...siteFileRoutes(
+      options,
+      {
+        readRules,
+        readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
+      },
+      sitemapSubset,
+      codeRoutes
+    ),
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.

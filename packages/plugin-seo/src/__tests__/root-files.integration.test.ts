@@ -33,6 +33,7 @@ import { catchUp, lastCatchUp } from "../address-record/catch-up";
 import { forgetNote } from "../address-record/__tests__/record-tables";
 import type { ListedPagesService } from "../outputs/listing";
 import { seoPlugin, type SeoPluginOptions } from "../plugin";
+import { SEO_SETTINGS_SLUG } from "../settings/contract";
 
 const SITE = "https://acme.example";
 
@@ -121,7 +122,13 @@ async function boot(
         slug: "posts",
         status: true,
         access: open,
-        fields: [text({ name: "title" }), text({ name: "slug" })],
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug" }),
+          // A cover under a name no share-image guess reads: structured
+          // data reads it where the plugin's options map it.
+          upload({ name: "picture", relationTo: "media" }),
+        ],
         publicAddress: "/blog/{slug}",
       }),
       // A kind of listing page, with no draft state.
@@ -526,6 +533,49 @@ describe.each(getConfiguredTestDialects())(
         `<image:loc>${new URL(live.url, SITE).href}</image:loc>`
       );
       expect(entry).not.toContain(new URL(drafted.url, SITE).pathname);
+    });
+
+    it("lists a post's mapped cover, and never the site's default share image", async () => {
+      const { t } = await boot(dialect, {
+        structuredData: {
+          types: {
+            posts: {
+              type: "article",
+              details: { article: { image: "picture" } },
+            },
+          },
+        },
+      });
+      const card = await image(t, "seo-site-card.png");
+      const cover = await image(t, "seo-post-cover.png");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, image: card.id },
+      });
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+        picture: cover.id,
+      });
+      // A page whose own card is the site's default one, and a page with no
+      // image of its own.
+      await create(t, "pages", {
+        title: "About",
+        slug: "about",
+        status: "published",
+        seo: { ogImage: card.id },
+      });
+      await create(t, "tags", { title: "News", slug: "news" });
+
+      const post = await entryOf(`${SITE}/blog/hello`);
+      expect(post).toContain(
+        `<image:loc>${new URL(cover.url, SITE).href}</image:loc>`
+      );
+      const cardPath = new URL(card.url, SITE).pathname;
+      expect(post).not.toContain(cardPath);
+      expect(await entryOf(`${SITE}/about`)).not.toContain("<image:");
+      expect(await entryOf(`${SITE}/tags/news`)).not.toContain("<image:");
     });
 
     // Each limit crossed on its own: two addresses a file, or room in a file

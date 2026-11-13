@@ -739,6 +739,31 @@ describe("a hand-off to the ledger", () => {
     warn.mockRestore();
   });
 
+  it("logs no error for writes outside a request it takes, only the one waiting line", async () => {
+    // A server's start expires what it changed before any request exists:
+    // handing those tags to the ledger is what it is for, not a failure.
+    const recorded = installLedger();
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error(NO_REQUEST);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const revalidator = new NextCacheRevalidator(() => next);
+    for (const part of ["address-record", "code-pages", "settings"]) {
+      await revalidator.flush([{ tags: [`nextly:plugin:seo:${part}`] }]);
+    }
+
+    expect(recorded.flat()).toHaveLength(3);
+    expect(error).not.toHaveBeenCalled();
+    expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
+    for (const [line] of warn.mock.calls) {
+      expect(String(line)).toContain("cache expiry waits for a request");
+    }
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
   it("tries a tag that failed twice inside a request again at the next request", async () => {
     installLedger();
     const next = fakeNextCache();
