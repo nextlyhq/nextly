@@ -256,7 +256,6 @@ describe("NewEntityDialog", () => {
   it("a field group", async () => {
     const { user } = renderDialog(FIELD_GROUP_BUILDER_CONFIG);
     expect(screen.queryByLabelText("Plural name")).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Icon:/ })).toBeNull();
     const options = screen.getByRole("button", { name: /More options/ });
     expect(options).toHaveAccessibleName("More options, none on");
     await user.click(options);
@@ -265,6 +264,41 @@ describe("NewEntityDialog", () => {
     await waitFor(() =>
       expect(check).toHaveBeenLastCalledWith("fieldGroup", "hero_banner")
     );
+  });
+
+  // A field group's icon shows in its list and in the navigation, so it is
+  // chosen at create as for the other kinds.
+  it("offers a field group an icon, and creates it with the one picked", async () => {
+    const { onCreate, user } = renderDialog(FIELD_GROUP_BUILDER_CONFIG);
+    await user.type(nameInput(), "Hero banner");
+    await user.click(screen.getByRole("button", { name: /^Icon:/ }));
+    await user.type(screen.getByPlaceholderText("Search icons..."), "camera");
+    await user.click(screen.getByTitle("Camera"));
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    await user.click(createButton());
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ icon: "Camera" })
+    );
+  });
+
+  // The answer arrives after typing has stopped, so it is announced when it
+  // comes, not only read with the field.
+  it("announces what the address check says when its answer arrives", async () => {
+    refusals = {
+      select: {
+        code: "SLUG_SQL_KEYWORD",
+        message: "Collection address 'select' is a reserved SQL word",
+      },
+    };
+    const { user } = renderDialog();
+    await user.type(nameInput(), "Thing");
+    await user.clear(addressInput());
+    await user.type(addressInput(), "select");
+    const note = await screen.findByText(
+      "Collection address 'select' is a reserved SQL word"
+    );
+    expect(note).toHaveAttribute("role", "status");
+    expect(note).toHaveAttribute("aria-live", "polite");
   });
 
   it("checks the address as Create sends it, without surrounding spaces", async () => {

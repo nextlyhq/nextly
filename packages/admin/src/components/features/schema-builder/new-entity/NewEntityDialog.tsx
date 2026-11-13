@@ -139,9 +139,9 @@ export function NewEntityDialog({
     config.basicsFields.includes("startingField") &&
     hasStartingFieldChoice(kindChoices);
   const hasPlural = config.basicsFields.includes("pluralName");
-  // A field group is placed inside other fields, never listed in the sidebar,
-  // so it has no icon.
-  const hasIcon = kind !== "field-group";
+  // Each kind whose settings hold an icon picks it here; a field group's shows
+  // in its list and the navigation, as a collection's and a Single's do.
+  const hasIcon = config.basicsFields.includes("icon");
   const icon = pickedIcon ?? suggestIcon(values.singularName);
 
   // The address as Create sends it, so the check judges what the create gets.
@@ -324,8 +324,12 @@ function AddressField({
         aria-describedby={`${ids}-address-note`}
         onChange={e => onChange(e.target.value)}
       />
+      {/* A live region: the check answers after typing stops, so its answer
+          is announced when it arrives, not only read with the field. */}
       <p
         id={`${ids}-address-note`}
+        role="status"
+        aria-live="polite"
         className={
           note.refused
             ? "text-xs text-destructive"
