@@ -1,7 +1,8 @@
 /**
  * The submissions export, at
- * `/api/plugins/@nextlyhq/plugin-form-builder/submissions/export`: what a
- * submissions list shows, as a CSV headed by one form's labels or as JSON.
+ * `/admin/api/plugins/@nextlyhq/plugin-form-builder/submissions/export`:
+ * what a submissions list shows, as a CSV headed by one form's labels or as
+ * JSON.
  *
  * It exports either every submission a list's scope matches (its form, status
  * tab and dates, read from the address with the list's own functions, so the
