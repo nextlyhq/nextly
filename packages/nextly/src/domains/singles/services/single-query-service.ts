@@ -2921,10 +2921,13 @@ export class SingleQueryService extends BaseService {
  * The default a field states: `defaultValue`, as code and the Schema Builder spell it, or else
  * `default`, as a field saved through the REST API may. A Single's table carries neither as a
  * column default, so its first document is given the value here or not at all.
+ *
+ * A `default` of `null` states nothing, as the table's own fill reads it: a REST payload may pass
+ * it through, and taken as a value it would put NULL in a required field's NOT NULL column, so
+ * the first read could never write the document.
  */
 function declaredDefaultOf(field: object): unknown {
   const stated = field as { defaultValue?: unknown; default?: unknown };
-  return stated.defaultValue !== undefined
-    ? stated.defaultValue
-    : stated.default;
+  if (stated.defaultValue !== undefined) return stated.defaultValue;
+  return stated.default === null ? undefined : stated.default;
 }
