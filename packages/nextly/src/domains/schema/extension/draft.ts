@@ -953,15 +953,15 @@ function assertContributedKeysReach(
 ): void {
   for (const fk of keys) {
     assertColumnsReachable(fk.columns, "foreign key", table, scope);
-    // On its own table as well: a key is a dependency on its target
-    // whoever's table it is written on.
-    if (scope.owner.kind !== "plugin") continue;
+    // A key on the plugin's own table is judged with every declared key by
+    // the compile (`assertForeignKeyTargetsExist`, which orders the
+    // migration streams); only one added to another owner's table is here.
+    if (scope.isOwn || scope.owner.kind !== "plugin") continue;
     record({
       contributor: scope.owner.id,
       table: table.name,
       element: "foreign key",
       target: fk.referencesTable,
-      own: scope.isOwn,
     });
   }
 }
@@ -1142,28 +1142,20 @@ export function createOwnerDraft(
         ...(def.checks.length > 0 ? { checks: [...def.checks] } : {}),
         ...(def.relations.length > 0 ? { relations: [...def.relations] } : {}),
       });
-      // Every key and relation a plugin's table declares (the edges its
-      // `ref()` columns and keys carry included) is judged once every hook
-      // has run, as one it adds to another owner's table is: a later
-      // plugin, or the app, may declare the table it points at.
+      // Every relation a plugin's table declares (a `ref()` column's
+      // included) is judged once every hook has run, as one it adds to
+      // another owner's table is: a later plugin, or the app, may declare
+      // the table it points at. Its keys are judged by the compile with
+      // every declared key (`assertForeignKeyTargetsExist`).
       if (owner.kind === "plugin") {
-        const contributor = owner.id;
-        const target = (
-          element: ContributedTarget["element"],
-          targetTable: string
-        ) =>
+        for (const relation of def.relations) {
           store.recordContributedTarget({
-            contributor,
+            contributor: owner.id,
             table: name,
-            element,
-            target: targetTable,
+            element: "relation",
+            target: relation.targetTable,
             own: true,
           });
-        for (const fk of def.foreignKeys) {
-          target("foreign key", fk.referencesTable);
-        }
-        for (const relation of def.relations) {
-          target("relation", relation.targetTable);
         }
       }
     },
