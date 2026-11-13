@@ -69,86 +69,119 @@ function pairKey(table: string, column: string): string {
   return `${table.toLowerCase()} ${column.toLowerCase()}`;
 }
 
-/** Each dropped check's SQL, under the keys an add may find it by. */
-interface DroppedChecks {
-  /** By the table and the column a readable enum check constrained. */
-  byColumn: Map<string, string[]>;
-  /** By the table and constraint name, for a check whose expression cannot be read. */
-  unreadableByName: Map<string, string[]>;
+/** A dropped check, with the column it constrains before the apply runs. */
+interface DroppedCheck {
+  sql: string;
+  /** Null when the check's expression cannot be read back. */
+  liveColumn: string | null;
 }
 
-function pushTo(map: Map<string, string[]>, key: string, sql: string): void {
+/** Each dropped check, under the keys an add may find it by. */
+interface DroppedChecks {
+  /**
+   * By the table and the column a readable enum check constrains once the
+   * apply's column renames have run.
+   */
+  byColumn: Map<string, DroppedCheck[]>;
+  /** By the table and constraint name, for a check whose expression cannot be read. */
+  unreadableByName: Map<string, DroppedCheck[]>;
+}
+
+function pushTo(
+  map: Map<string, DroppedCheck[]>,
+  key: string,
+  check: DroppedCheck
+): void {
   const list = map.get(key) ?? [];
-  list.push(sql);
+  list.push(check);
   map.set(key, list);
 }
 
 /**
- * Each dropped check, keyed by the column it constrained where its expression
- * is an enum set this module can read, and by its name where it cannot.
+ * Each dropped check, keyed by the column it constrains after the apply's
+ * renames where its expression is an enum set this module can read, and by its
+ * name where it cannot.
  */
 function droppedChecks(operations: readonly Operation[]): DroppedChecks {
-  const byColumn = new Map<string, string[]>();
-  const unreadableByName = new Map<string, string[]>();
+  const renamed = renamesOf(operations).desiredColumn;
+  const byColumn = new Map<string, DroppedCheck[]>();
+  const unreadableByName = new Map<string, DroppedCheck[]>();
   for (const op of operations) {
     if (op.type !== "drop_check") continue;
-    const column = enumColumnIn(op.check.sql);
-    if (column === null) {
-      pushTo(
-        unreadableByName,
-        pairKey(op.tableName, op.check.name),
-        op.check.sql
-      );
-    } else {
-      pushTo(byColumn, pairKey(op.tableName, column), op.check.sql);
+    const liveColumn = enumColumnIn(op.check.sql);
+    if (liveColumn === null) {
+      pushTo(unreadableByName, pairKey(op.tableName, op.check.name), {
+        sql: op.check.sql,
+        liveColumn: null,
+      });
+      continue;
     }
+    const column =
+      renamed.get(op.tableName.toLowerCase())?.get(liveColumn.toLowerCase()) ??
+      liveColumn;
+    pushTo(byColumn, pairKey(op.tableName, column), {
+      sql: op.check.sql,
+      liveColumn,
+    });
   }
   return { byColumn, unreadableByName };
 }
 
 /**
- * Table and new column name, lower-cased, to the column's name before the
- * apply, for every column the operations rename.
+ * The live name of a column the operations rename to `column`, or `column`
+ * itself: where the rows of a check pairing only by name are counted.
  */
-function columnsBeforeRename(
-  operations: readonly Operation[]
-): Map<string, string> {
-  const before = new Map<string, string>();
+function liveNameOf(
+  operations: readonly Operation[],
+  table: string,
+  column: string
+): string {
   for (const op of operations) {
-    if (op.type !== "rename_column") continue;
-    before.set(pairKey(op.tableName, op.toColumn), op.fromColumn);
+    if (
+      op.type === "rename_column" &&
+      op.tableName.toLowerCase() === table.toLowerCase() &&
+      op.toColumn.toLowerCase() === column.toLowerCase()
+    ) {
+      return op.fromColumn;
+    }
   }
-  return before;
+  return column;
 }
 
 /**
  * The check narrowings among the operations: each `add_check` whose expression
  * is an enum set, paired with the `drop_check` of the same table constraining
- * the same column — the column as it stood, where the apply renames it — or,
- * where the dropped check cannot be read, carrying the same name. Sides that
- * are not enum sets, pairs that only add, and sides naming unrelated columns
- * are not narrowings.
+ * the same column, followed through a rename of that column — or, where the
+ * dropped check cannot be read, carrying the same name. Sides that are not
+ * enum sets, pairs that only add, and sides naming unrelated columns are not
+ * narrowings.
  */
 export function checkNarrowings(operations: readonly Operation[]): Narrowing[] {
   const dropped = droppedChecks(operations);
-  const renamedFrom = columnsBeforeRename(operations);
   const narrowings: Narrowing[] = [];
   for (const op of operations) {
     if (op.type !== "add_check") continue;
     const column = enumColumnIn(op.check.sql);
     const kept = enumValuesIn(op.check.sql);
     if (column === null || kept === null) continue;
-    const liveColumn = renamedFrom.get(pairKey(op.tableName, column)) ?? column;
-    const pair = { table: op.tableName, column, liveColumn, kept };
-    for (const before of dropped.byColumn.get(
-      pairKey(op.tableName, liveColumn)
-    ) ?? []) {
-      const values = removedEnumValues(before, op.check.sql);
-      if (values.length > 0) narrowings.push({ ...pair, values });
+    const pair = { table: op.tableName, column, kept };
+    for (const before of dropped.byColumn.get(pairKey(op.tableName, column)) ??
+      []) {
+      const values = removedEnumValues(before.sql, op.check.sql);
+      if (values.length === 0) continue;
+      narrowings.push({
+        ...pair,
+        liveColumn: before.liveColumn ?? column,
+        values,
+      });
     }
     // An unreadable old check may have allowed anything, so the rows decide.
     if (dropped.unreadableByName.has(pairKey(op.tableName, op.check.name))) {
-      narrowings.push({ ...pair, values: [] });
+      narrowings.push({
+        ...pair,
+        liveColumn: liveNameOf(operations, op.tableName, column),
+        values: [],
+      });
     }
   }
   return narrowings;

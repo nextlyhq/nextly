@@ -36,6 +36,27 @@ describe("generateStatements: MySQL check replacement", () => {
     ]);
   });
 
+  it("places the replacement at the add, the operations between it in order", () => {
+    const statements = generateStatements(
+      [
+        narrowing[0] as Operation,
+        {
+          type: "add_column",
+          tableName: "cx__items",
+          column: { name: "note", type: "text", nullable: true },
+        },
+        narrowing[1] as Operation,
+      ],
+      "mysql",
+      [items]
+    );
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain("ADD COLUMN");
+    expect(statements[1]).toBe(
+      "ALTER TABLE `cx__items` DROP CHECK `ck_state`, ADD CONSTRAINT `ck_state` CHECK (`state` IN ('draft'))"
+    );
+  });
+
   it("writes checks that exchange names as one statement, every drop first", () => {
     const swapped: Operation[] = [
       {
