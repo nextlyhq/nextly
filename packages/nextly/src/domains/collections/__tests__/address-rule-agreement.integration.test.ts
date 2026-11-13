@@ -167,6 +167,39 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     }, 300_000);
 
+    /** A field group `seo` recorded under a table name of its own, as older ones may be. */
+    async function fieldGroupInACustomTable(): Promise<void> {
+      const groups = t!.getService("fieldGroupRegistryService") as unknown as {
+        registerComponent(data: object): Promise<unknown>;
+      };
+      await groups.registerComponent({
+        slug: "seo",
+        label: "SEO",
+        tableName: "my_seo_block",
+        fields: [{ name: "title", type: "text" }],
+        source: "ui",
+        locked: false,
+        schemaHash: "seo",
+      });
+    }
+
+    it("a field group's address held under a custom table name is used, by the check", async () => {
+      await fieldGroupInACustomTable();
+      expect(await checkVerdict("fieldGroup", "seo")).toEqual({
+        code: "DUPLICATE",
+        message: "Resource already exists.",
+      });
+    });
+
+    it("a field group's address held under a custom table name refuses the create, which builds no table", async () => {
+      await fieldGroupInACustomTable();
+      expect(await createVerdict("fieldGroup", "seo")).toEqual({
+        code: "DUPLICATE",
+        message: "Resource already exists.",
+      });
+      expect(await t!.adapter.tableExists("comp_seo")).toBe(false);
+    });
+
     it.each([
       // An address held exactly, where the two kinds must differ.
       ["single", "about", "collection", "about", "refused"],
@@ -183,6 +216,8 @@ for (const dialect of getConfiguredTestDialects()) {
       // A field group is compared with field groups only.
       ["collection", "blog_posts", "fieldGroup", "blog-posts", "accepted"],
       ["fieldGroup", "blog_posts", "fieldGroup", "blog-posts", "refused"],
+      // A Single's tables: `foo-locales` holds the companion `foo` would need.
+      ["single", "foo-locales", "single", "foo", "refused"],
     ] as const)(
       "beside a %s '%s', a %s '%s' is %s by both",
       async (heldKind, held, kind, address, outcome) => {

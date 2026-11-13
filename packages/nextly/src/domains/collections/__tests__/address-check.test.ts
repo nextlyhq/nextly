@@ -36,7 +36,11 @@ const adapter = {
 
 const fieldGroups = { assertNewAddressAvailable: vi.fn(async () => {}) };
 
-const deps: AddressCheckDeps = { adapter, fieldGroups };
+/** The Singles the registry holds, with the tables each stores in. */
+let singles: Array<{ slug: string; tableName: string }> = [];
+const singleRegistry = { getAllSingles: vi.fn(async () => singles) };
+
+const deps: AddressCheckDeps = { adapter, fieldGroups, singleRegistry };
 
 const check = (
   kind: UsedAddress["kind"],
@@ -46,6 +50,7 @@ const check = (
 
 beforeEach(() => {
   registered = {};
+  singles = [];
   vi.clearAllMocks();
   fieldGroups.assertNewAddressAvailable.mockImplementation(async () => {});
 });
@@ -89,6 +94,24 @@ describe("an address a saved entity holds", () => {
   it("accepts one no entity holds", async () => {
     registered = { dynamic_collections: ["posts"] };
     expect(await check("collection", "articles")).toBeNull();
+  });
+});
+
+describe("a Single's address whose tables another Single holds", () => {
+  // A Single stores in its table and the `_locales` companion beside it, so a
+  // Single `foo-locales` (table `single_foo_locales`) already holds the
+  // companion a new Single `foo` would need.
+  it("is used, as the Single create refuses it", async () => {
+    singles = [{ slug: "foo-locales", tableName: "single_foo_locales" }];
+    expect(await check("single", "foo")).toEqual({
+      code: "DUPLICATE",
+      message: "Resource already exists.",
+    });
+  });
+
+  it("is free when no Single's tables meet the new one's", async () => {
+    singles = [{ slug: "about", tableName: "single_about" }];
+    expect(await check("single", "foo")).toBeNull();
   });
 });
 
