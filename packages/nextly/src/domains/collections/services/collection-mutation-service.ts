@@ -328,7 +328,7 @@ import {
   refuseRewrittenValue,
   rewriteLocaleFor,
   versionBodyOf,
-  type EntryFieldRewriteRequest,
+  type FieldRewriteRequest,
   type FieldRewriteCopy,
   type FieldRewriteResult,
 } from "../../versions/field-rewrite";
@@ -1935,7 +1935,7 @@ type PendingChangeJudging = {
  * @experimental
  */
 export interface FieldRewriteCall {
-  request: EntryFieldRewriteRequest;
+  request: FieldRewriteRequest;
   /** The person it is made for; not judged when `overrideAccess` is set. */
   user?: UserContext;
   /** The system's rewrite, judged by no access rule. */

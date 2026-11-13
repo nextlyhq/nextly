@@ -115,6 +115,17 @@ describe("assertRewritableField", () => {
       options: { relationType: "manyToMany" },
     },
     { name: "login", type: "group" },
+    {
+      name: "box",
+      type: "group",
+      fields: [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [{ name: "hero", type: "component" }],
+        },
+      ],
+    },
   ];
   const separately = (f: RewritableFieldShape) =>
     f.type === "component" || f.options?.relationType === "manyToMany";
@@ -142,6 +153,7 @@ describe("assertRewritableField", () => {
     ["a field group", "seo"],
     ["a many-to-many relationship", "tags"],
     ["a group holding a password", "login"],
+    ["a group holding a field group, at any depth", "box"],
   ])("refuses %s, naming it", (_name, field) => {
     let message = "";
     const code = codeOf(() => {

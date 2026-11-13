@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 
+import { isFieldGroupField } from "../../collections/fields/guards";
 import { isVirtualField } from "../../collections/fields/virtual";
 import { NextlyError } from "../../errors";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
@@ -81,28 +82,29 @@ interface FieldRewriteRequestBase {
   readonly reason: string;
 }
 
-/** A rewrite of one field of one collection entry. */
-export interface EntryFieldRewriteRequest extends FieldRewriteRequestBase {
+/** @experimental A rewrite of one field of one collection entry. */
+export interface FieldRewriteRequest extends FieldRewriteRequestBase {
   readonly collection: string;
   readonly id: string;
 }
 
-/** A rewrite of one field of a Single, which is one document. */
+/** @experimental A rewrite of one field of a Single, which is one document. */
 export interface SingleFieldRewriteRequest extends FieldRewriteRequestBase {
   readonly single: string;
 }
 
 /**
  * @experimental A rewrite of one field of one document: a collection entry
- * (`collection` and `id`) or a Single (`single`).
+ * (`collection` and `id`, {@link FieldRewriteRequest}) or a Single (`single`,
+ * {@link SingleFieldRewriteRequest}).
  */
-export type FieldRewriteRequest =
-  | EntryFieldRewriteRequest
+export type DocumentFieldRewriteRequest =
+  | FieldRewriteRequest
   | SingleFieldRewriteRequest;
 
 /** Whether a request rewrites a Single rather than a collection entry. */
 export function rewritesSingle(
-  request: FieldRewriteRequest
+  request: DocumentFieldRewriteRequest
 ): request is SingleFieldRewriteRequest {
   return "single" in request;
 }
@@ -152,12 +154,12 @@ const REQUEST_REFUSAL =
  * holds. A plugin's call is outside input whatever its types say, so the shape
  * is checked here before anything is read.
  */
-export function parseFieldRewrite(input: unknown): FieldRewriteRequest {
+export function parseFieldRewrite(input: unknown): DocumentFieldRewriteRequest {
   const parsed = REQUEST.safeParse(input);
   if (!parsed.success) {
     throw NextlyError.invalidInput({ message: REQUEST_REFUSAL });
   }
-  const request = parsed.data as FieldRewriteRequest;
+  const request = parsed.data as DocumentFieldRewriteRequest;
   // A rewrite that clears a field gives `null`. A missing value is a mistake
   // (a key misspelled, a variable unset), refused rather than written.
   if (!computesFromCurrent(request.set) && request.set.value === undefined) {
@@ -216,7 +218,7 @@ export function rewriteCallerOf<
 
 /** The version a request gives, as the update path's version check reads one. */
 export function versionBodyOf(
-  request: Pick<FieldRewriteRequest, "expectedVersion">
+  request: Pick<DocumentFieldRewriteRequest, "expectedVersion">
 ): Record<string, unknown> {
   return { [DOCUMENT_VERSION_KEY]: request.expectedVersion };
 }
@@ -229,7 +231,7 @@ export function versionBodyOf(
  * rewriting another language than the one named.
  */
 export function rewriteLocaleFor(
-  request: Pick<FieldRewriteRequest, "field" | "locale">,
+  request: Pick<DocumentFieldRewriteRequest, "field" | "locale">,
   translated: boolean,
   localization: SanitizedLocalizationConfig | undefined
 ): string | undefined {
@@ -261,6 +263,8 @@ export function rewriteLocaleFor(
 export interface RewritableFieldShape {
   readonly name?: string;
   readonly type: string;
+  /** A group's or repeater's own fields. */
+  readonly fields?: readonly RewritableFieldShape[];
   readonly unique?: boolean;
   readonly virtual?: boolean;
   readonly hasMany?: boolean;
@@ -307,7 +311,9 @@ function refuseField(field: string, why: string): never {
  *   collide only at the next publish;
  * - **not a field stored in tables of its own** (a field group's rows, a
  *   many-to-many relationship's join rows), which need row edits rather than a
- *   value swap; nor a password, which no copy holds, or a field holding one;
+ *   value swap; nor a group or repeater holding a field group, whose own
+ *   rules and type a save judges; nor a password, which no copy holds, or a
+ *   field holding one;
  *   nor a virtual field, which nothing stores.
  *
  * @param separatelyStored Whether the write path keeps the field in tables of
@@ -353,7 +359,23 @@ export function assertRewritableField<F extends RewritableFieldShape>(
       "it is stored in tables of its own, which a value swap doesn't reach."
     );
   }
+  // A field group held inline in a group or repeater has write rules and a
+  // type of its own, which a save judges and records and a value swap
+  // doesn't.
+  if (holdsFieldGroup(field.fields ?? [])) {
+    refuseField(
+      name,
+      "it holds a field group, whose own rules and type a value swap doesn't judge."
+    );
+  }
   return field;
+}
+
+/** Whether any of `fields`, at any depth, is a field group. */
+function holdsFieldGroup(fields: readonly RewritableFieldShape[]): boolean {
+  return fields.some(
+    field => isFieldGroupField(field) || holdsFieldGroup(field.fields ?? [])
+  );
 }
 
 /** One pending draft of a document, as a rewrite reads it. */

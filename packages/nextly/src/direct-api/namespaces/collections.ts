@@ -40,6 +40,7 @@ import type {
   PublishArgs,
   PublishResult,
   RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   UpdateArgs,
 } from "../types/index";
 
@@ -721,7 +722,7 @@ export async function duplicate<TSlug extends CollectionSlug>(
  */
 export async function rewriteField(
   ctx: NextlyContext,
-  args: RewriteFieldArgs
+  args: RewriteFieldArgs | RewriteSingleFieldArgs
 ): Promise<MutationResult<FieldRewriteResult>> {
   const config = mergeConfig(ctx.defaultConfig, args);
   // The request is the call's own fields alone: the instance's default

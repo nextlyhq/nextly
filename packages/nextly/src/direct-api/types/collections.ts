@@ -786,24 +786,28 @@ interface RewriteFieldArgsBase
 }
 
 /**
- * @experimental Arguments for `nextly.rewriteField`: one field of one entry
- * (`collection` and `id`) or of a Single (`single`), rewritten on its live
- * copy and on every pending draft that holds it, without publishing, from the
- * version the caller read.
+ * @experimental Arguments for `nextly.rewriteField` on an entry: one field of
+ * one entry, rewritten on its live copy and on every pending draft that holds
+ * it, without publishing, from the version the caller read.
  *
  * Trusted server code by default, as every Direct API call is
  * (`overrideAccess: true`). Made for a person (`overrideAccess: false` with
- * `user`), it needs their permission to update the document and, where it has
- * a publish lifecycle, to publish it.
+ * `user`), it needs their permission to update the entry and, where the
+ * collection has a publish lifecycle, to publish it.
  */
-export type RewriteFieldArgs =
-  | (RewriteFieldArgsBase & {
-      /** The entry's collection. */
-      collection: CollectionSlug;
-      /** The entry's id. */
-      id: string;
-    })
-  | (RewriteFieldArgsBase & {
-      /** The Single, by slug. */
-      single: SingleSlug;
-    });
+export interface RewriteFieldArgs extends RewriteFieldArgsBase {
+  /** The entry's collection. */
+  collection: CollectionSlug;
+  /** The entry's id. */
+  id: string;
+}
+
+/**
+ * @experimental Arguments for `nextly.rewriteField` on a Single: as
+ * {@link RewriteFieldArgs}, with the Single named by its slug in place of a
+ * collection and an id.
+ */
+export interface RewriteSingleFieldArgs extends RewriteFieldArgsBase {
+  /** The Single, by slug. */
+  single: SingleSlug;
+}

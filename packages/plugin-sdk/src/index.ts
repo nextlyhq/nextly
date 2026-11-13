@@ -971,10 +971,12 @@ export type {
  *   which names the plugin. Runs no save hooks.
  */
 export type {
+  DocumentFieldRewriteRequest,
   FieldRewriteCopy,
   FieldRewriteRequest,
   FieldRewriteResult,
   FieldRewriteValue,
+  SingleFieldRewriteRequest,
 } from "nextly";
 
 /**

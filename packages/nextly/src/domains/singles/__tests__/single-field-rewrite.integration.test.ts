@@ -57,6 +57,10 @@ const BANNERED = "rwbannersite";
 const BANNER = "rwsitebanner";
 /** What the Single under test relates to. */
 const TARGETS = "rwtargets";
+/** A field group, placed inside a group of the Single under test. */
+const HERO = "rwsitehero";
+/** Translated, versions kept, with no drafts. */
+const TAGLINED = "rwtaglinesite";
 const PLUGIN = "@test/single-rewriter";
 const REASON = "Layout 'Wide' was deleted";
 const EDITOR = { id: "rw-single-editor" };
@@ -103,6 +107,10 @@ async function boot(
           text({ name: "layout", maxLength: 12 }),
           repeater({ name: "items", fields: [text({ name: "label" })] }),
           relationship({ name: "featured", relationTo: TARGETS }),
+          group({
+            name: "box",
+            fields: [fieldGroup({ name: "hero", component: HERO })],
+          }),
         ],
       }),
       defineSingle({
@@ -144,17 +152,18 @@ async function boot(
           ]
         : []),
     ],
-    ...(localized
-      ? {
-          fieldGroups: [
+    fieldGroups: [
+      defineFieldGroup({ slug: HERO, fields: [text({ name: "heading" })] }),
+      ...(localized
+        ? [
             defineFieldGroup({
               slug: BANNER,
               localized: true,
               fields: [text({ name: "words" })],
             }),
-          ],
-        }
-      : {}),
+          ]
+        : []),
+    ],
     plugins: [
       definePlugin({
         name: PLUGIN,
@@ -429,6 +438,41 @@ describe.each(getConfiguredTestDialects())(
       ) as Record<string, unknown>;
       expect(draft.title).toBe("Unfinished");
       expect(draft.featured).toBe(target);
+    });
+
+    it("changes nothing where a populated reference names the id stored", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: TARGETS,
+        data: { title: "Target" },
+      });
+      const target = String(created.item.id);
+      await save(t, SITE, { featured: target, status: "published" });
+      const before = await versionOf(t, SITE);
+      const done = await t.nextly.rewriteField({
+        single: SITE,
+        field: "featured",
+        expectedVersion: before,
+        set: { value: { id: target, title: "Target" } },
+        reason: REASON,
+      });
+      expect(done.item.copies).toEqual([]);
+      expect(await versionOf(t, SITE)).toBe(before);
+      expect(await kinds(t, SITE)).not.toContain("field-rewritten");
+    });
+
+    it("refuses a group holding a field group, whose own rules a value swap doesn't judge", async () => {
+      const t = await boot(dialect);
+      await save(t, SITE, { layout: "wide", status: "published" });
+      await expect(
+        t.nextly.rewriteField({
+          single: SITE,
+          field: "box",
+          expectedVersion: await versionOf(t, SITE),
+          set: { value: { hero: { heading: "Hi" } } },
+          reason: REASON,
+        })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     });
 
     it("changes the live copy of a Single that keeps no drafts", async () => {
@@ -806,6 +850,70 @@ describe.each(getConfiguredTestDialects())(
       expect(snapshot.layout).toBe("narrow");
       expect(snapshot.banner).toMatchObject({ words: "Hello" });
       expect(newest.locale).toBe("en");
+    });
+
+    it("records a shared rewrite in the default language where its translation row is blank", async () => {
+      const t = await boot(dialect, true);
+      await save(
+        t,
+        TAGLINED,
+        { layout: "wide", tagline: null, status: "published" },
+        "en"
+      );
+      await t.nextly.rewriteField({
+        single: TAGLINED,
+        field: "layout",
+        expectedVersion: await versionOf(t, TAGLINED, "en"),
+        set: { value: "narrow" },
+        reason: REASON,
+      });
+      const { items } = await t.nextly.versions.list({
+        single: TAGLINED,
+      } as never);
+      const newest = items[0] as { versionNo: number; locale?: string | null };
+      const version = await t.nextly.versions.get({
+        single: TAGLINED,
+        versionNo: newest.versionNo,
+      } as never);
+      const snapshot = (
+        typeof version.snapshot === "string"
+          ? JSON.parse(version.snapshot)
+          : version.snapshot
+      ) as Record<string, unknown>;
+      // POPULATION CONTROL: the newest version is the rewrite's.
+      expect(snapshot.layout).toBe("narrow");
+      expect(newest.locale).toBe("en");
+    });
+
+    it("leaves another language's read current when only a translation's live value moves", async () => {
+      const t = await boot(dialect, true);
+      await save(
+        t,
+        LOCALIZED,
+        { title: "EN", layout: "wide", status: "published" },
+        "en"
+      );
+      await save(t, LOCALIZED, { title: "DE", status: "published" }, "de");
+      const englishRead = await versionOf(t, LOCALIZED, "en");
+      const done = await t.nextly.rewriteField({
+        single: LOCALIZED,
+        field: "title",
+        locale: "de",
+        expectedVersion: await versionOf(t, LOCALIZED, "de"),
+        set: { value: "DE neu" },
+        reason: REASON,
+      });
+      // POPULATION CONTROL: German's live copy alone changed.
+      expect(done.item.copies).toEqual([{ form: "live", locale: "de" }]);
+      await t.nextly.rewriteField({
+        single: LOCALIZED,
+        field: "title",
+        locale: "en",
+        expectedVersion: englishRead,
+        set: { value: "EN neu" },
+        reason: REASON,
+      });
+      expect((await read(t, LOCALIZED, { locale: "en" })).title).toBe("EN neu");
     });
 
     it("lets another language leave a required translated field blank, as an update does", async () => {

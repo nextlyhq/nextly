@@ -24,7 +24,7 @@ import {
   parseFieldRewrite,
   rewriteCallerOf,
   rewritesSingle,
-  type FieldRewriteRequest,
+  type DocumentFieldRewriteRequest,
   type FieldRewriteResult,
 } from "../domains/versions/field-rewrite";
 import { holdsFieldOfType } from "../domains/versions/tag-component-types";
@@ -632,7 +632,7 @@ export type PluginCollectionService = Pick<
    * field rule that applies to their own update.
    */
   rewriteField(
-    request: FieldRewriteRequest,
+    request: DocumentFieldRewriteRequest,
     opts?: ServiceOpts
   ): Promise<FieldRewriteResult>;
 } & {

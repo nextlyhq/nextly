@@ -6246,6 +6246,8 @@ export class SingleMutationService extends BaseService {
       workingDrafts: await new VersionsRepository(tx).findAllWorkingDrafts(ref),
       allowed: (copy, value) =>
         this.assertSingleRewriteAllowed(tx, args, entryId, copy, value),
+      // Reduced as a save reduces it: a populated reference stores its id.
+      stored: value => singleRewritePayload(singleMeta.fields, field, value),
     });
     const localized = companion !== null;
     // Read before the live copy moves: a language change already behind on
@@ -6266,6 +6268,9 @@ export class SingleMutationService extends BaseService {
       await this.writeRewrittenSingleValue(tx, args, entryId, {
         value: decided.liveValue,
         stored: liveBefore.value,
+        // The Single's own counter moves with its shared values and with any
+        // draft; a translated value alone moves only its language's.
+        movesMain: translatedIn === null || decided.drafts.length > 0,
       });
     } else if (decided.drafts.length > 0) {
       // Only drafts move: the Single's version still does, as a draft save's
@@ -6349,9 +6354,9 @@ export class SingleMutationService extends BaseService {
         fields: singleMeta.fields,
         reach,
         slot,
-        // Reduced to the references it stands for, as the live write and a
-        // held save store it: a later publish promotes the draft as stored.
-        value: singleRewritePayload(singleMeta.fields, field, value),
+        // Already reduced to the references it stands for (`stored` above),
+        // as the live write and a held save store it.
+        value,
         liveAfter: copies.liveAfter,
         maxPerDoc: singleMeta.versions?.maxPerDoc,
         rewrittenBy: call.user?.id ?? null,
@@ -6529,13 +6534,13 @@ export class SingleMutationService extends BaseService {
   /**
    * Write a copy's new value to the live Single: its row, or its language's
    * row of the translations table for a translated field, shaped as a save
-   * shapes it, with the Single's counter moved once.
+   * shapes it, with the counters a save of that value moves moved once.
    */
   private async writeRewrittenSingleValue(
     tx: TransactionContext,
     args: SingleRewriteInTx,
     entryId: string,
-    write: { value: unknown; stored: unknown }
+    write: { value: unknown; stored: unknown; movesMain: boolean }
   ): Promise<void> {
     const { singleMeta, field, translatedIn, companion } = args;
     const fields = storedAtTopLevel(singleMeta.fields);
@@ -6571,7 +6576,11 @@ export class SingleMutationService extends BaseService {
     const at = new Date();
     await tx.update(
       singleMeta.tableName,
-      { ...main, updated_at: at, ...revisionBumpColumns(args.actor, at) },
+      {
+        ...main,
+        updated_at: at,
+        ...(write.movesMain ? revisionBumpColumns(args.actor, at) : {}),
+      },
       this.whereEq("id", entryId)
     );
     if (translatedIn === null || !companion) return;
@@ -6638,8 +6647,8 @@ export class SingleMutationService extends BaseService {
     const parentRow = convertTimestampsToCamelCase({ ...(row ?? {}) });
     const locale = this.rewriteViewLocale(args);
     // A translated rewrite records its language; a shared one records the
-    // default language's translations with it only where there are any, as
-    // a save of a shared field does.
+    // default language's translations with it where that language has a row,
+    // as a save of a shared field does.
     let inLanguage = args.translatedIn !== null;
     if (companion && locale !== undefined) {
       const translations = await readCompanionValuesInTx(
@@ -6649,7 +6658,20 @@ export class SingleMutationService extends BaseService {
         locale
       );
       Object.assign(parentRow, translations);
-      if (Object.values(translations).some(v => v != null)) inLanguage = true;
+      // The language's row is its state even where every value in it is
+      // blank, as a save of a shared field reads it: recorded with it, a
+      // restore can put those blanks back.
+      if (
+        await companionRowExists(
+          tx.getDrizzle<Parameters<typeof companionRowExists>[0]>(),
+          companion.table,
+          entryId,
+          locale,
+          cachedCompanionReadiness(this.adapter, companion.companionTableName)
+        )
+      ) {
+        inLanguage = true;
+      }
     }
     // A snapshot of a language records that language's own status: a draft
     // translation is never recorded as published.
