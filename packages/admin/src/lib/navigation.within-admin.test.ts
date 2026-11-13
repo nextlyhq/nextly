@@ -37,6 +37,33 @@ describe("navigateWithinAdmin", () => {
     expect(window.location.search).toBe("");
   });
 
+  it("pushes a new entry by default, so Back returns to where it was", () => {
+    window.history.pushState(null, "", "/admin/plugins/seo/bulk");
+    const before = window.history.length;
+    navigateWithinAdmin("/admin/plugins/seo/pages");
+    expect(window.location.pathname).toBe("/admin/plugins/seo/pages");
+    expect(window.history.length).toBe(before + 1);
+  });
+
+  it("replaces the current entry when asked, so Back skips the old address", () => {
+    window.history.pushState(null, "", "/admin/plugins/seo/bulk");
+    const before = window.history.length;
+    navigateWithinAdmin("/admin/plugins/seo/pages?mode=edit", {
+      replace: true,
+    });
+    expect(window.location.pathname).toBe("/admin/plugins/seo/pages");
+    expect(window.location.search).toBe("?mode=edit");
+    expect(window.history.length).toBe(before);
+  });
+
+  it("refuses an address outside the admin when replacing too", () => {
+    window.history.pushState(null, "", "/admin/collections/pages/p1");
+    expect(() =>
+      navigateWithinAdmin("https://example.com/admin", { replace: true })
+    ).toThrow("https://example.com/admin");
+    expect(window.location.pathname).toBe("/admin/collections/pages/p1");
+  });
+
   it.each([
     "https://example.com/admin/collections",
     "//example.com/admin/collections",

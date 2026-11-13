@@ -1,0 +1,25 @@
+---
+title: FIELDS_LEAVING_TRANSLATION_NOT_MOVED
+description: "`db:sync` could not move the values of a field that stops being translated, so the field keeps them in its translations table."
+---
+
+## Cause
+
+`db:sync` could not move the values of a field that stops being translated, so the field keeps them in its translations table.
+
+When a field of a translated collection, Single or field group stops being translated (`localized: false`), `db:sync` moves its values: the other languages go to the localization archive, the default language's value becomes the field's shared value, and then the translated column is removed. A Required or Unique field gets its setting once its values are copied.
+
+The sync stops on this code when it can't do that. Usually it refuses before changing anything: the field's type or length changes in the same edit, the field is renamed as it becomes shared, or the default language's values can't take its Required or Unique setting (an entry with no value, or two entries sharing one). The error printed just before it names the field and how many entries are in the way. If the move stops part-way, every value is still in the translations table, so nothing is lost.
+
+## Fix
+
+Fix what the error above names, then run `nextly db:sync` again. Give the entries in the way their values, or make the change in two steps: change the field's type or name first, then make it shared.
+
+## Example
+
+```text
+✗ The fields leaving translation in `posts` were not moved.
+  Why:  They can't be moved as the configuration says, for the reason printed above, so nothing was changed.
+  Next: Fix what the error above names, then run `nextly db:sync` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/fields-leaving-translation-not-moved  (FIELDS_LEAVING_TRANSLATION_NOT_MOVED)
+```

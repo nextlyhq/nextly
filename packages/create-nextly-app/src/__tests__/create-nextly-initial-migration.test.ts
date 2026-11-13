@@ -151,7 +151,9 @@ describe("a code-first blog's first migration", () => {
     // in place before the command runs, or it can only fail.
     expect(steps).toContain("install");
     expect(steps).toContain("env");
-    expect(steps.indexOf("migration")).toBeGreaterThan(steps.indexOf("install"));
+    expect(steps.indexOf("migration")).toBeGreaterThan(
+      steps.indexOf("install")
+    );
     expect(steps.indexOf("migration")).toBeGreaterThan(steps.indexOf("env"));
   });
 

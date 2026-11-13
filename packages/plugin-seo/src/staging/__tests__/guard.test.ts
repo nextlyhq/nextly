@@ -5,30 +5,36 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { keepRecord } from "../../address-record/__tests__/record-double";
 import type { SiteRules } from "../../resolver/page-levels";
 import { PRODUCTION_ADDRESSES_ENV, originsFrom } from "../../canonical";
 import { decideStanding, keptOutOfSearch, stagingGuard } from "../guard";
+
+// The address record's notes, as each context keeps them.
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("../../address-record/__tests__/record-double"))
+    .recordDouble,
+}));
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+/** A plugin context whose standing note is read by `note`. */
+function withNote(note: () => Promise<string | undefined>): PluginContext {
+  const ctx = { self: { collections: {} } } as unknown as PluginContext;
+  keepRecord(ctx, [], note);
+  return ctx;
+}
+
 /** A plugin context whose record holds `standing`, counting its reads. */
 function context(standing?: "listable" | "guarded") {
   const reads = { count: 0 };
-  const ctx = {
-    self: { collections: {} },
-    services: {
-      ownCollections: {
-        listEntries: async () => {
-          reads.count += 1;
-          return {
-            data: standing === undefined ? [] : [{ id: "m1", path: standing }],
-          };
-        },
-      },
-    },
-  } as unknown as PluginContext;
+  const ctx = withNote(async () => {
+    reads.count += 1;
+    return standing;
+  });
   return { ctx, reads };
 }
 
@@ -115,17 +121,10 @@ describe("the Proxy handler", () => {
   it("with addresses named, never waits on the database, even when it is down", async () => {
     vi.stubEnv(PRODUCTION_ADDRESSES_ENV, "https://acme.example");
     const reads = { count: 0 };
-    const ctx = {
-      self: { collections: {} },
-      services: {
-        ownCollections: {
-          listEntries: async () => {
-            reads.count += 1;
-            throw new Error("database unavailable");
-          },
-        },
-      },
-    } as unknown as PluginContext;
+    const ctx = withNote(async () => {
+      reads.count += 1;
+      throw new Error("database unavailable");
+    });
     const guard = stagingGuard(rules([]));
 
     expect(
@@ -138,16 +137,7 @@ describe("the Proxy handler", () => {
     // The first request comes before the start has recorded the standing;
     // the guarded standing recorded next must count from the next request.
     let standing: string | undefined;
-    const ctx = {
-      self: { collections: {} },
-      services: {
-        ownCollections: {
-          listEntries: async () => ({
-            data: standing === undefined ? [] : [{ id: "m1", path: standing }],
-          }),
-        },
-      },
-    } as unknown as PluginContext;
+    const ctx = withNote(async () => standing);
     const guard = stagingGuard(rules([]));
 
     expect(
@@ -163,20 +153,11 @@ describe("the Proxy handler", () => {
     vi.useFakeTimers();
     try {
       let reads = 0;
-      let answer: Promise<{ data: unknown[] }> = Promise.resolve({
-        data: [{ id: "m1", path: "guarded" }],
+      let answer: Promise<string | undefined> = Promise.resolve("guarded");
+      const ctx = withNote(() => {
+        reads += 1;
+        return answer;
       });
-      const ctx = {
-        self: { collections: {} },
-        services: {
-          ownCollections: {
-            listEntries: () => {
-              reads += 1;
-              return answer;
-            },
-          },
-        },
-      } as unknown as PluginContext;
       const guard = stagingGuard(rules([]));
       const noindex = { headers: { "X-Robots-Tag": "noindex" } };
       expect(
@@ -187,7 +168,7 @@ describe("the Proxy handler", () => {
       // still answered at once, from what was read, and the read goes on in
       // the background.
       vi.advanceTimersByTime(31_000);
-      answer = new Promise(() => undefined);
+      answer = new Promise<string | undefined>(() => undefined);
       expect(
         await guard.handle(new Request("https://acme.example/"), ctx)
       ).toEqual(noindex);
@@ -212,7 +193,6 @@ describe("the Proxy handler", () => {
  * `pages` in turn, keeping the standing it records.
  */
 function startingContext(pages: { holds: unknown[] }[][]) {
-  const recorded: Record<string, unknown>[] = [];
   const ctx = {
     self: { collections: {} },
     publicAddresses: {
@@ -229,17 +209,9 @@ function startingContext(pages: { holds: unknown[] }[][]) {
         };
       },
     },
-    services: {
-      ownCollections: { listEntries: async () => ({ data: [] }) },
-      collections: {
-        createEntry: async (_slug: string, data: Record<string, unknown>) => {
-          recorded.push(data);
-          return data;
-        },
-      },
-    },
   } as unknown as PluginContext;
-  return { ctx, recorded };
+  const { notes } = keepRecord(ctx);
+  return { ctx, recorded: notes };
 }
 
 describe("the standing a site starts with", () => {
@@ -247,7 +219,7 @@ describe("the standing a site starts with", () => {
     // Authors, say: stored, but with no page of their own on the site.
     const { ctx, recorded } = startingContext([[{ holds: [] }, { holds: [] }]]);
     expect(await decideStanding(ctx)).toBe("guarded");
-    expect(recorded.map(row => row.path)).toEqual(["guarded"]);
+    expect([...recorded.values()]).toEqual(["guarded"]);
   });
 
   it("is listable where a page holds an address, however far into the list", async () => {

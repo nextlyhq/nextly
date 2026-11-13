@@ -42,6 +42,7 @@ const SYSTEM_NAMES: Readonly<Record<SystemResource, string>> = {
   settings: "settings",
   "email-providers": "email providers",
   "email-templates": "email templates",
+  "email-deliveries": "email deliveries",
   "api-keys": "API keys",
   webhooks: "webhooks",
   "content-releases": "content releases",

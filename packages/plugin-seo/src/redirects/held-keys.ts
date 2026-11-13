@@ -20,7 +20,8 @@
  */
 import type { KeptAddress, PluginContext } from "@nextlyhq/plugin-sdk";
 
-import { keysHolding, recordSlug } from "../address-record/rows";
+import { keysHolding } from "../address-record/rows";
+import { keysHeldBy } from "../address-record/store";
 import { keptValue } from "../kept-value";
 
 import { redirectsSlug } from "./collection";
@@ -28,29 +29,9 @@ import { redirectsSlug } from "./collection";
 /** How old the kept keys may grow before they are read again. */
 const REDIRECT_KEYS_REFRESH_MS = 15_000;
 
-/** Rows read per page while the keys are read. */
-const PAGE = 500;
-
 /** The claim key of every record row a redirect holds. */
-async function readHeldKeys(ctx: PluginContext): Promise<ReadonlySet<string>> {
-  const keys = new Set<string>();
-  for (let page = 1; ; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: { holderCollection: { equals: redirectsSlug(ctx) } },
-        select: { claimKey: true },
-        sort: { field: "id", direction: "asc" },
-        pagination: { limit: PAGE, page },
-        depth: 0,
-      }
-    );
-    const rows = data as { claimKey?: unknown }[];
-    for (const row of rows) {
-      if (typeof row.claimKey === "string") keys.add(row.claimKey);
-    }
-    if (rows.length < PAGE) return keys;
-  }
+function readHeldKeys(ctx: PluginContext): Promise<ReadonlySet<string>> {
+  return keysHeldBy(ctx, redirectsSlug(ctx));
 }
 
 /** The kept keys, and the two questions asked of them. */

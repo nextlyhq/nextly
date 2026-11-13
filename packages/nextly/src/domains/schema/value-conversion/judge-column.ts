@@ -11,6 +11,7 @@
 import { keeps, lateWriteCanChange, valueJudgeFor } from "./judge-value";
 import type {
   AffectedRows,
+  RowKey,
   ColumnConversion,
   ConversionClass,
   ConversionJudgement,
@@ -32,9 +33,24 @@ const CLASS_OF: Record<ConversionReasonKind, ConversionClass> = {
   "unreadable-reference-list": "blocked",
   "no-conversion": "blocked",
   "late-write": "blocked",
+  "cleared-under-not-null": "blocked",
 };
 
 const RANK: Record<ConversionClass, number> = { safe: 0, lossy: 1, blocked: 2 };
+
+/** The class one reason gives: the one table every path that judges a column reads. */
+export function reasonClass(kind: ConversionReasonKind): ConversionClass {
+  return CLASS_OF[kind];
+}
+
+export interface JudgeColumnOptions {
+  /**
+   * Called for every row a reason names, past the bound the judgement keeps, so a caller that acts
+   * on the rows (clearing exactly the values a lossy conversion names) reads them from this one
+   * judgement rather than judging them a second way.
+   */
+  noteRow?: (kind: ConversionReasonKind, key: RowKey) => void;
+}
 
 /**
  * The class of `conversion` over `values`, with every reason and the rows that give it.
@@ -42,10 +58,15 @@ const RANK: Record<ConversionClass, number> = { safe: 0, lossy: 1, blocked: 2 };
  * Reasons the pair of types gives come first, then each reason a row gives, in the order its first
  * row was read. `values` may be a list or pages read one after another; each value is judged once
  * and only its key is kept.
+ *
+ * A value that would be cleared is cleared to null. Where the new column does not allow a null,
+ * clearing it would leave one the column refuses, so a value would have to be invented: that row
+ * also gives the blocking `cleared-under-not-null`, beside the reason it would be cleared for.
  */
 export async function judgeColumn(
   conversion: ColumnConversion,
-  values: Iterable<StoredValue> | AsyncIterable<StoredValue>
+  values: Iterable<StoredValue> | AsyncIterable<StoredValue>,
+  options: JudgeColumnOptions = {}
 ): Promise<ConversionJudgement> {
   const judge = valueJudgeFor(conversion);
   if (judge === null) return withClass([reason("no-conversion")]);
@@ -62,6 +83,7 @@ export async function judgeColumn(
     if (rows.first.length < AFFECTED_ROWS_BOUND) rows.first.push(value.key);
     rows.count += 1;
     rowReasons.set(kind, rows);
+    options.noteRow?.(kind, value.key);
   };
 
   for await (const value of values) {
@@ -71,7 +93,11 @@ export async function judgeColumn(
       continue;
     }
     const kind = judge({ ...value, text });
-    if (kind !== null) note(kind, value);
+    if (kind === null) continue;
+    note(kind, value);
+    if (CLASS_OF[kind] === "lossy" && !conversion.to.nullable) {
+      note("cleared-under-not-null", value);
+    }
   }
 
   return withClass([

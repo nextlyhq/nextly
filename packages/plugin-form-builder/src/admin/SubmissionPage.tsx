@@ -51,10 +51,21 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
-import { type JSX, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  type JSX,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import type { FormField } from "../types";
 import { type AskedSnapshot, askedFieldsOf } from "../utils/asked-fields";
+import { formatExportValue } from "../utils/export-formats";
+import { pageFromReferer } from "../utils/sent-from";
 import { senderOf } from "../utils/submission-title";
 
 import { SUBMISSION_COUNT_KEY } from "./components/editor/useSubmissionCount";
@@ -81,8 +92,13 @@ import {
   AnswerValue,
   SubmissionAnswers,
 } from "./components/submissions/SubmissionAnswers";
+import { SubmissionEmails } from "./components/submissions/SubmissionEmails";
 import { readPermissions } from "./use-admin-permissions";
 import { useBuilderConfig } from "./use-builder-config";
+import {
+  type SubmissionExtensionField,
+  useSubmissionFields,
+} from "./use-submission-fields";
 
 /** A submission as the entries API answers it. */
 export type SubmissionDocument = SubmissionRow;
@@ -103,6 +119,12 @@ export interface SubmissionPageProps {
    * none, the automatic Read among them.
    */
   documentLock?: DocumentLockGates;
+  /**
+   * Tells the entry page the submission was deleted: it stands its leave
+   * guard down and returns to the list. Used when unsaved work is on the
+   * page; otherwise the page moves to the next submission itself.
+   */
+  onDelete?: () => void;
 }
 
 const STATUSES = [
@@ -306,7 +328,7 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
 type Save = (
   changes: Record<string, unknown>,
   basis?: Record<string, unknown>
-) => Promise<void>;
+) => Promise<SubmissionDocument | undefined>;
 
 /** The bar: where it sits in its list, newer and older, and its actions. */
 function SubmissionBar({
@@ -474,8 +496,139 @@ function answersChanged(
   );
 }
 
-/** The key this page reports its unsaved answers under. */
+/**
+ * What on the page holds unsaved work, by key: each part reports to the
+ * admin's leave guard and to the page, which asks before handing off a
+ * deleted submission.
+ */
+const UnsavedOnPage = createContext<(key: string, unsaved: boolean) => void>(
+  () => undefined
+);
+
+/** The page's record of which of its parts hold unsaved work. */
+function useUnsavedOnPage() {
+  const held = useRef(new Map<string, boolean>());
+  const report = useCallback((key: string, unsaved: boolean) => {
+    held.current.set(key, unsaved);
+  }, []);
+  const any = useCallback(() => [...held.current.values()].some(Boolean), []);
+  return { report, any };
+}
+
+/** Report unsaved work to the admin's leave guard and to the page. */
+function useHoldPage(key: string, unsaved: boolean): void {
+  useReportUnsavedWork(key, unsaved);
+  const report = useContext(UnsavedOnPage);
+  useEffect(() => {
+    report(key, unsaved);
+    return () => report(key, false);
+  }, [report, key, unsaved]);
+}
+
+/** The keys this page reports its unsaved answers and note under. */
 const UNSAVED_ANSWERS_KEY = "forms.submission-answers";
+const UNSAVED_NOTE_KEY = "forms.submission-note";
+
+/**
+ * Editing a submission's answers: the draft, the answers it is made from, and
+ * saving it. An answer changed and not yet saved holds the page until it is
+ * saved or the person cancels. Edits made while a save is on its way stay
+ * open, now made from the answers just saved.
+ */
+function useAnswerDraft(
+  submission: SubmissionDocument,
+  fields: readonly FormField[],
+  save: Save
+) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const draftNow = useRef(draft);
+  draftNow.current = draft;
+  // The answers as they were when editing began, which the draft is made from.
+  const [basis, setBasis] = useState<Record<string, unknown> | null>(null);
+  const changed = editing && answersChanged(fields, basis ?? undefined, draft);
+  useHoldPage(UNSAVED_ANSWERS_KEY, changed);
+  // Another submission opened: not editing it.
+  useEffect(() => setEditing(false), [submission.id]);
+  const begin = () => {
+    setDraft(submission.data ?? {});
+    setBasis(submission.data ?? null);
+    setEditing(true);
+  };
+  const change = (name: string, value: unknown) =>
+    setDraft(current => ({ ...current, [name]: value }));
+  const afterSave = (
+    sent: Record<string, unknown>,
+    stored: SubmissionDocument | undefined
+  ) => {
+    if (JSON.stringify(draftNow.current) === JSON.stringify(sent)) {
+      setEditing(false);
+    } else {
+      // Later edits are now made from the answers as the server stored them.
+      setBasis(stored?.data ?? sent);
+    }
+  };
+  const saveDraft = () => {
+    // Saving untouched answers writes nothing: a `data` write stamps the
+    // submission as edited in the admin.
+    if (!answersChanged(fields, submission.data, draft)) {
+      setEditing(false);
+      return;
+    }
+    const sent = draft;
+    void save({ data: sent }, { data: basis })
+      .then(stored => afterSave(sent, stored))
+      .catch(() => undefined);
+  };
+  return {
+    editing,
+    draft,
+    begin,
+    change,
+    saveDraft,
+    cancel: () => setEditing(false),
+  };
+}
+
+/** The answers as inputs, and saving or leaving them. */
+function AnswerEditor({
+  fields,
+  asked,
+  draft,
+}: {
+  fields: readonly FormField[];
+  asked: AskedSnapshot;
+  draft: ReturnType<typeof useAnswerDraft>;
+}): JSX.Element {
+  return (
+    <div className="space-y-4 px-4 py-4 sm:px-5">
+      {fields.map(field => (
+        <div key={field.name} className="space-y-1.5">
+          <label
+            htmlFor={`submission-field-${field.name}`}
+            className="text-sm font-medium text-foreground"
+          >
+            {field.label || field.name}
+          </label>
+          <EditableAnswer
+            field={field}
+            asked={asked}
+            value={draft.draft[field.name]}
+            onChange={value => draft.change(field.name, value)}
+          />
+        </div>
+      ))}
+      <div className="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="outline" onClick={draft.cancel}>
+          Cancel
+        </Button>
+        <Button type="button" onClick={draft.saveDraft}>
+          Save answers
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 /** The answers, as asked, and editing them for a person who may. */
 function AnswersBox({
@@ -491,89 +644,22 @@ function AnswersBox({
   canUpdate: boolean;
   save: Save;
 }): JSX.Element {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Record<string, unknown>>({});
-  // The answers as they were when editing began, which the draft is made from.
-  const [draftBasis, setDraftBasis] = useState<Record<string, unknown> | null>(
-    null
-  );
-  // An answer changed and not yet saved holds the page: leaving it asks first.
-  useReportUnsavedWork(
-    UNSAVED_ANSWERS_KEY,
-    editing &&
-      answersChanged(form?.fields ?? [], draftBasis ?? undefined, draft)
-  );
-  // Another submission opened: not editing it.
-  useEffect(() => setEditing(false), [submission.id]);
+  const fields = form?.fields ?? [];
+  const draft = useAnswerDraft(submission, fields, save);
   return (
     <Box
       title="Answers"
       action={
-        canUpdate && !editing ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setDraft(submission.data ?? {});
-              setDraftBasis(submission.data ?? null);
-              setEditing(true);
-            }}
-          >
+        canUpdate && !draft.editing ? (
+          <Button type="button" variant="ghost" size="sm" onClick={draft.begin}>
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
             Edit answers
           </Button>
         ) : null
       }
     >
-      {editing ? (
-        <div className="space-y-4 px-4 py-4 sm:px-5">
-          {(form?.fields ?? []).map(field => (
-            <div key={field.name} className="space-y-1.5">
-              <label
-                htmlFor={`submission-field-${field.name}`}
-                className="text-sm font-medium text-foreground"
-              >
-                {field.label || field.name}
-              </label>
-              <EditableAnswer
-                field={field}
-                asked={asked}
-                value={draft[field.name]}
-                onChange={value =>
-                  setDraft(current => ({ ...current, [field.name]: value }))
-                }
-              />
-            </div>
-          ))}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setEditing(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                // Saving untouched answers writes nothing: a `data` write
-                // stamps the submission as edited in the admin.
-                if (
-                  !answersChanged(form?.fields ?? [], submission.data, draft)
-                ) {
-                  setEditing(false);
-                  return;
-                }
-                void save({ data: draft }, { data: draftBasis })
-                  .then(() => setEditing(false))
-                  .catch(() => undefined);
-              }}
-            >
-              Save answers
-            </Button>
-          </div>
-        </div>
+      {draft.editing ? (
+        <AnswerEditor fields={fields} asked={asked} draft={draft} />
       ) : (
         <SubmissionAnswers asked={asked} data={submission.data ?? {}} />
       )}
@@ -643,6 +729,10 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
   // The stored note once the page's own saves have landed, and how many are on their way.
   const expected = useRef<string>(stored);
   const pending = useRef(0);
+  // The note as stored before the page's current run of note saves: what a
+  // retry replaces if the whole run fails, since a failed save drops the
+  // saves queued behind it.
+  const runBasis = useRef<string>(stored);
   const openedId = useRef(submission.id);
   useEffect(() => {
     // Another submission opened: its note, nothing typed, nothing saved.
@@ -654,33 +744,107 @@ function useNoteDraft(submission: SubmissionDocument, save: Save) {
       setSavedText(null);
       return;
     }
-    if (noteNow.current === shown.current) setNote(stored);
+    // Text typed since the stored note last shown keeps its basis: a newer
+    // stored note, someone else's, must not become what the draft replaces.
+    const typed = noteNow.current !== shown.current;
+    if (!typed) setNote(stored);
     shown.current = stored;
-    if (pending.current === 0) expected.current = stored;
+    // "Saved" names text the server holds; a newer stored note ends that.
+    setSavedText(current => (current === stored ? current : null));
+    if (pending.current === 0 && !typed) expected.current = stored;
   }, [submission.id, stored]);
   const saveNote = () => {
     const text = noteNow.current;
     if (text === expected.current) return;
     const basis = expected.current;
+    if (pending.current === 0) runBasis.current = basis;
     expected.current = text;
     pending.current += 1;
     void save({ notes: text }, { notes: basis })
-      .then(() => setSavedText(text))
+      .then(() => {
+        setSavedText(text);
+        runBasis.current = text;
+      })
       .catch(() => {
         // Not stored: once no other note save is on its way, the next one
-        // replaces the note as stored, so leaving the note retries it.
-        if (pending.current === 1) expected.current = storedNow.current;
+        // replaces the note as stored before this run of saves, so leaving
+        // the note retries it, and is refused again if someone else changed
+        // the note meanwhile.
+        if (pending.current === 1) expected.current = runBasis.current;
       })
       .finally(() => {
         pending.current -= 1;
       });
   };
+  // A note typed and not yet stored holds the page: leaving it asks first.
+  useHoldPage(UNSAVED_NOTE_KEY, note !== stored && note !== savedText);
   return {
     note,
-    edit: (text: string) => setNote(text),
+    edit: (text: string) => {
+      setNote(text);
+      // Taking the note as stored now, after someone else changed it, makes
+      // it the note a further edit replaces; a draft made from the older
+      // note is still refused until then.
+      if (pending.current === 0 && text === storedNow.current) {
+        expected.current = text;
+        runBasis.current = text;
+        shown.current = text;
+      }
+    },
     saveNote,
     saved: savedText !== null && savedText === note,
   };
+}
+
+/**
+ * The fields a host added to submissions, with their values. Read-only: the
+ * page draws no editor for a field it does not know, so they are changed
+ * through the API, as the documentation says.
+ */
+function ExtensionDetails({
+  submission,
+  fields,
+}: {
+  submission: SubmissionDocument;
+  fields: readonly SubmissionExtensionField[];
+}): JSX.Element | null {
+  const values = submission as unknown as Record<string, unknown>;
+  return (
+    <>
+      {fields.map(field => (
+        <Detail key={field.name} label={field.label}>
+          {formatExportValue(values[field.name]) || "—"}
+        </Detail>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The page a submission was sent from, by its path, linking to it. Read again
+ * through the rule that kept it, so a value written some other way (the API)
+ * is linked only when it is a web page.
+ */
+function SentFrom({
+  page,
+}: {
+  page: string | null | undefined;
+}): JSX.Element | null {
+  const address = pageFromReferer(page);
+  if (!address) return null;
+  return (
+    <Detail label="Page">
+      <a
+        href={address}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={address}
+        className="underline decoration-muted-foreground underline-offset-4 hover:decoration-foreground"
+      >
+        {new URL(address).pathname}
+      </a>
+    </Detail>
+  );
 }
 
 /** The side panel: its status, the internal note, and its details. */
@@ -692,6 +856,7 @@ function SidePanel({
   formId,
   formName,
   formsSlug,
+  extensionFields,
 }: {
   submission: SubmissionDocument;
   status: string;
@@ -700,12 +865,13 @@ function SidePanel({
   formId: string | undefined;
   formName: string;
   formsSlug: string;
+  extensionFields: readonly SubmissionExtensionField[];
 }): JSX.Element {
   const { note, edit, saveNote, saved } = useNoteDraft(submission, save);
   return (
     <aside
       aria-label="Submission details"
-      className="w-full shrink-0 border-t border-border bg-card lg:w-80 lg:border-t-0 lg:border-l"
+      className="w-full shrink-0 border-t border-border bg-card @4xl/content:w-80 @4xl/content:border-t-0 @4xl/content:border-l"
     >
       <div className="space-y-6 px-4 py-6 sm:px-6">
         <section
@@ -775,7 +941,7 @@ function SidePanel({
             <Detail label="Form">
               {formId ? (
                 <a
-                  className="underline decoration-border underline-offset-4 hover:decoration-foreground"
+                  className="underline decoration-muted-foreground underline-offset-4 hover:decoration-foreground"
                   href={`/admin/collections/${encodeURIComponent(formsSlug)}/${encodeURIComponent(formId)}`}
                 >
                   {formName}
@@ -787,6 +953,7 @@ function SidePanel({
             <Detail label="Submitted">
               {whenText(submission.submittedAt ?? submission.createdAt)}
             </Detail>
+            <SentFrom page={submission.page} />
             {submission.userAgent ? (
               <Detail label="Browser">
                 {browserLabel(submission.userAgent)}
@@ -800,6 +967,10 @@ function SidePanel({
             <Detail label="ID">
               <span className="font-mono">{submission.id.slice(0, 8)}</span>
             </Detail>
+            <ExtensionDetails
+              submission={submission}
+              fields={extensionFields}
+            />
           </dl>
         </section>
       </div>
@@ -904,7 +1075,8 @@ function usePageMoves(
   slug: string,
   scope: SubmissionListScope,
   place: ListPlace | undefined,
-  remove: () => Promise<boolean>
+  remove: () => Promise<boolean>,
+  leaveDeleted: { onDelete?: () => void; holdsUnsaved: () => boolean }
 ) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const go = (target: string | undefined) => {
@@ -913,6 +1085,13 @@ function usePageMoves(
   const deleteSubmission = async () => {
     setConfirmDelete(false);
     if (!(await remove())) return;
+    // With unsaved work on the page the admin's leave guard would ask about a
+    // submission that no longer exists, so the page hands the move to the
+    // host, which stands the guard down and returns to the list.
+    if (leaveDeleted.holdsUnsaved() && leaveDeleted.onDelete) {
+      leaveDeleted.onDelete();
+      return;
+    }
     const next = place?.older ?? place?.newer;
     navigateTo(
       next
@@ -937,6 +1116,11 @@ function useSubmissionRights(slug: string, held: boolean) {
     known: has !== undefined,
     canUpdate: !held && has?.(`update-${slug}`) === true,
     canDelete: !held && has?.(`delete-${slug}`) === true,
+    // Resend asks both: updating submissions and managing email deliveries.
+    canResend:
+      !held &&
+      has?.(`update-${slug}`) === true &&
+      has?.("manage-email-deliveries") === true,
   };
 }
 
@@ -972,6 +1156,10 @@ function useSubmissionForm(submission: SubmissionDocument | undefined) {
   });
   return { formId, form, formsSlug };
 }
+
+/** What the page says when reading the submission again failed. */
+const REFRESH_FAILED_MESSAGE =
+  "This submission could not be read again, so it may have changed since. Your edits are kept.";
 
 /** What a change the server never received says; the page keeps the draft. */
 const UNSENT_MESSAGE =
@@ -1055,7 +1243,17 @@ function useSubmissionWrites(slug: string, id: string, held: boolean) {
       await refresh();
       refuse(message);
     }
+    // The saved submission, as the update answered it, is what the page
+    // holds now, before reading it again: a read that then fails must not
+    // leave the page holding the version this save replaced.
+    const saved = (await response.json().catch(() => null)) as {
+      item?: SubmissionDocument;
+    } | null;
+    if (saved?.item?.id === id) queryClient.setQueryData(key, saved.item);
     await refresh();
+    // What the server stored, which may differ from what was sent: answers
+    // are trimmed and cleaned as they are saved.
+    return saved?.item?.id === id ? saved.item : undefined;
   };
   /**
    * Save a change once every change asked for before it has settled, unless
@@ -1140,14 +1338,37 @@ function PageMessage({ error }: { error?: Error | null }): JSX.Element {
   );
 }
 
+/** The submission the page is of, and its collection, as the host names them. */
+function pageTarget(
+  collectionSlug: string | undefined,
+  entryId: string | undefined,
+  initialData: Partial<SubmissionDocument> | undefined
+): { slug: string; id: string } {
+  return {
+    slug: collectionSlug ?? "form-submissions",
+    id: entryId ?? initialData?.id ?? "",
+  };
+}
+
+/** Whether a colleague's claim withholds every change. */
+function heldBy(lock: DocumentLockGates | undefined): boolean {
+  return lock?.readOnly === true || lock?.actionsDisabled === true;
+}
+
+/** What the page says above the answers: a refused change, or a failed refresh. */
+function pageNotice(error: string | null, readError: unknown): string | null {
+  if (error) return error;
+  return readError ? REFRESH_FAILED_MESSAGE : null;
+}
+
 export function SubmissionPage({
   entryId,
   collectionSlug,
   initialData,
   documentLock,
+  onDelete,
 }: SubmissionPageProps): JSX.Element {
-  const slug = collectionSlug ?? "form-submissions";
-  const id = entryId ?? initialData?.id ?? "";
+  const { slug, id } = pageTarget(collectionSlug, entryId, initialData);
   const [scope] = useState<SubmissionListScope>(initialScope);
   const { data: submission, error: readError } = useSubmission(
     slug,
@@ -1155,22 +1376,31 @@ export function SubmissionPage({
     initialData
   );
   const { formId, form, formsSlug } = useSubmissionForm(submission);
-  const held =
-    documentLock?.readOnly === true || documentLock?.actionsDisabled === true;
-  const { known, canUpdate, canDelete } = useSubmissionRights(slug, held);
+  const extensionFields = useSubmissionFields();
+  const held = heldBy(documentLock);
+  const { known, canUpdate, canDelete, canResend } = useSubmissionRights(
+    slug,
+    held
+  );
   const { data: place } = useListPlace(slug, submission, scope);
   const { save, remove, error } = useSubmissionWrites(slug, id, held);
   useReadOnOpen(submission, known, canUpdate, save);
+  const unsaved = useUnsavedOnPage();
   const { go, confirmDelete, setConfirmDelete, deleteSubmission } =
-    usePageMoves(slug, scope, place, remove);
+    usePageMoves(slug, scope, place, remove, {
+      onDelete,
+      holdsUnsaved: unsaved.any,
+    });
 
-  if (readError || !submission) return <PageMessage error={readError} />;
+  // Only a submission never read replaces the page. A refresh that fails
+  // after it was read keeps the page, and every draft on it, and says so.
+  if (!submission) return <PageMessage error={readError} />;
 
   const { asked, sender, formName, when } = describe(submission, form);
   const status = submission.status;
 
   return (
-    <>
+    <UnsavedOnPage.Provider value={unsaved.report}>
       <SubmissionBar
         place={place}
         go={go}
@@ -1188,10 +1418,14 @@ export function SubmissionPage({
       />
 
       <PageFrame type="editor">
-        <div className="flex min-h-full flex-col lg:flex-row">
-          <div className="min-w-0 flex-1 space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+        {/* Beside the answers once the admin's content area, not the window,
+            is wide enough: its sidebars take a varying share of the window,
+            and a viewport breakpoint at 1024px left the answers a column
+            narrower than the details. */}
+        <div className="flex min-h-full flex-col @4xl/content:flex-row">
+          <div className="min-w-0 flex-1 space-y-5 px-4 py-6 sm:px-6 @4xl/content:px-8">
             <SubmissionHeader sender={sender} formName={formName} when={when} />
-            <ChangeError error={error} />
+            <ChangeError error={pageNotice(error, readError)} />
 
             <AnswersBox
               submission={submission}
@@ -1200,6 +1434,14 @@ export function SubmissionPage({
               canUpdate={canUpdate}
               save={save}
             />
+
+            <Box title="Emails">
+              <SubmissionEmails
+                submissionId={submission.id}
+                status={status}
+                canResend={canResend}
+              />
+            </Box>
 
             <ActivityBox submission={submission} status={status} />
           </div>
@@ -1212,9 +1454,10 @@ export function SubmissionPage({
             formId={formId}
             formName={formName}
             formsSlug={formsSlug}
+            extensionFields={extensionFields}
           />
         </div>
       </PageFrame>
-    </>
+    </UnsavedOnPage.Provider>
   );
 }

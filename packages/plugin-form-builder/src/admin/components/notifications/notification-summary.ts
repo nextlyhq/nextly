@@ -10,6 +10,7 @@ import type {
   ConditionalLogicCondition,
   FormNotification,
 } from "../../../types";
+import { optionLabels } from "../../../utils/export-formats";
 import { parseFieldRef } from "../../../utils/field-references";
 import {
   conditionsOf,
@@ -36,9 +37,15 @@ export const COMPARISON_WORDS: Record<
 export const VALUELESS: ReadonlySet<ConditionalLogicCondition["comparison"]> =
   new Set(["isEmpty", "isNotEmpty"]);
 
+function fieldNamed(
+  fields: readonly AnyFormField[],
+  name: string
+): AnyFormField | undefined {
+  return fields.find(each => each.name === name);
+}
+
 function labelOf(fields: readonly AnyFormField[], name: string): string {
-  const field = fields.find(each => each.name === name);
-  return field?.label || name;
+  return fieldNamed(fields, name)?.label || name;
 }
 
 /** Who a notification goes to, in a few words. */
@@ -57,10 +64,18 @@ export function recipientSummary(
   return addresses.join(", ");
 }
 
-/** A condition's value as a sentence ends with it, with a leading space. */
-function valueText(value: unknown): string {
+/**
+ * A condition's value as a sentence ends with it, with a leading space: an
+ * option by its label, read the way a submission's answers are, so a
+ * condition on a choice reads "is In person" rather than the stored
+ * `in_person`.
+ */
+function valueText(value: unknown, field: AnyFormField | undefined): string {
   if (typeof value === "string" || typeof value === "number") {
-    return ` ${value}`;
+    const options = field && "options" in field ? field.options : undefined;
+    return options?.length
+      ? ` ${optionLabels({ options }, String(value))}`
+      : ` ${value}`;
   }
   if (typeof value === "boolean") return value ? " checked" : " not checked";
   return "";
@@ -77,7 +92,7 @@ export function whenSummary(
     const [condition] = list;
     const value = VALUELESS.has(condition.comparison)
       ? ""
-      : valueText(condition.value);
+      : valueText(condition.value, fieldNamed(fields, condition.field));
     return `Only when ${labelOf(fields, condition.field)} ${COMPARISON_WORDS[condition.comparison]}${value}`;
   }
   return `Only when ${match === "any" ? "any" : "all"} of ${list.length} conditions hold`;

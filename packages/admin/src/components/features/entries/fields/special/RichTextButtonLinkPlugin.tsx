@@ -109,6 +109,9 @@ function ButtonLinkColorFields({
               className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
             />
             <Input
+              // The picker beside it holds the label; this is the same colour
+              // typed as a hex value, and needs a name of its own.
+              aria-label="Background Color hex value"
               value={bgColor}
               onChange={e => onBgColorChange(e.target.value)}
               className="flex-1"
@@ -128,6 +131,7 @@ function ButtonLinkColorFields({
             className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
           />
           <Input
+            aria-label="Text Color hex value"
             value={textColor}
             onChange={e => onTextColorChange(e.target.value)}
             className="flex-1"
