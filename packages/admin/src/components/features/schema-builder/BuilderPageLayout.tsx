@@ -116,6 +116,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           config={config}
           name={name}
           locked={locked}
+          saving={isSaving}
           unsavedCount={unsavedCount}
           pending={pending}
           onAddField={() => onActiveChange({ kind: "picker", position: {} })}

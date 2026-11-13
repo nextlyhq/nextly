@@ -348,6 +348,7 @@ export default function CollectionBuilderEditPage({
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
+    previewedWith: { localized },
   });
 
   // ----------------------------------------------------------------
@@ -401,7 +402,7 @@ export default function CollectionBuilderEditPage({
           context="collection"
         />
       }
-      isSaving={isSaving || confirmation.isApplying}
+      isSaving={isSaving || confirmation.isBusy}
       savingLabel="Saving collection changes…"
     >
       <BuilderSchemaChangeDialogs

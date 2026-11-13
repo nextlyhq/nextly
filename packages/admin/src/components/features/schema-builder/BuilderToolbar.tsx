@@ -28,6 +28,8 @@ type Props = {
   pending: BuilderPendingChanges;
   /** True when the entity is code-first / locked from UI edits. */
   locked?: boolean;
+  /** A save is on its way, its preview included. */
+  saving?: boolean;
   /** Opens the field picker for a field at the end of the list. */
   onAddField: () => void;
   onOpenSettings: () => void;
@@ -62,6 +64,7 @@ export function BuilderToolbar({
   unsavedCount,
   pending,
   locked = false,
+  saving = false,
   onAddField,
   onOpenSettings,
   onSave,
@@ -108,6 +111,7 @@ export function BuilderToolbar({
           pending={pending}
           count={unsavedCount}
           locked={locked}
+          saving={saving}
         />
         {/* Adding is an edit, so a read-only entity has no add here. */}
         {!locked && (

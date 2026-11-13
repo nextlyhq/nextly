@@ -267,6 +267,7 @@ export default function FieldGroupBuilderEditPage({
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
+    previewedWith: { localized },
   });
 
   // ---------------------------- Loading / error guards ----------------------
@@ -358,7 +359,7 @@ export default function FieldGroupBuilderEditPage({
           <FieldGroupUsedBy slug={fieldGroup.slug} />
         </>
       }
-      isSaving={isSaving || confirmation.isApplying}
+      isSaving={isSaving || confirmation.isBusy}
       savingLabel="Saving field group changes…"
     >
       <ReconcileFieldGroupDialog
