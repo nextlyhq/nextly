@@ -147,12 +147,7 @@ describe("override a generated column", () => {
     // Crossing families leaves the field's validation describing a column
     // that cannot hold what it accepts.
     expect(() =>
-      resolveColumnOverride(
-        { kind: "text" },
-        col.integer(),
-        "dc_posts",
-        "city"
-      )
+      resolveColumnOverride({ kind: "text" }, col.integer(), "dc_posts", "city")
     ).toThrow(NextlyError);
     // A plugin doing this would change what every reader of that field gets.
     expect(() =>

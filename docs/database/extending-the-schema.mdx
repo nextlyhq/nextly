@@ -616,15 +616,15 @@ place to a column it did not declare.
 
 What a column may become depends on what its field holds:
 
-| The field's column | May become | PostgreSQL | MySQL | SQLite |
-| --- | --- | --- | --- | --- |
-| a string (text, email, select, radio, textarea, rich text, code, password, icon) | `col.text()` | `text` | `varchar(255)` | `text` |
-| | `col.longText()` | `text` | `text` | `text` |
-| | `col.shortText()` | `varchar(255)` | `varchar(255)` | `text` |
-| | `col.varchar(n)` | `varchar(n)` | `varchar(n)` | `text` |
-| a whole number (`number`) | `col.integer()` | `integer` | `int` | `integer` |
-| | `col.bigint()` | `bigint` | `bigint` | `integer` |
-| a decimal (`number` with `dbType: "decimal"`) | `col.decimal(p, s)`, no fewer digits on either side of the point | `numeric(p, s)` | `decimal(p, s)` | `numeric` |
+| The field's column                                                               | May become                                                       | PostgreSQL      | MySQL           | SQLite    |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------- | --------------- | --------- |
+| a string (text, email, select, radio, textarea, rich text, code, password, icon) | `col.text()`                                                     | `text`          | `varchar(255)`  | `text`    |
+|                                                                                  | `col.longText()`                                                 | `text`          | `text`          | `text`    |
+|                                                                                  | `col.shortText()`                                                | `varchar(255)`  | `varchar(255)`  | `text`    |
+|                                                                                  | `col.varchar(n)`                                                 | `varchar(n)`    | `varchar(n)`    | `text`    |
+| a whole number (`number`)                                                        | `col.integer()`                                                  | `integer`       | `int`           | `integer` |
+|                                                                                  | `col.bigint()`                                                   | `bigint`        | `bigint`        | `integer` |
+| a decimal (`number` with `dbType: "decimal"`)                                    | `col.decimal(p, s)`, no fewer digits on either side of the point | `numeric(p, s)` | `decimal(p, s)` | `numeric` |
 
 - **A width is enforced where the database enforces one.** `col.varchar(10)`
   refuses an 11-character value on PostgreSQL and MySQL. SQLite stores no

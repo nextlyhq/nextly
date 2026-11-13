@@ -103,9 +103,7 @@ export function entitySeedColumns(
   }
   // Every column an index or unique constraint of the entity's own covers, so
   // an override that would leave one unbuildable is refused when declared.
-  const indexed = new Set(
-    (spec.indexes ?? []).flatMap(index => index.columns)
-  );
+  const indexed = new Set((spec.indexes ?? []).flatMap(index => index.columns));
 
   return spec.columns.map(column => ({
     name: column.name,

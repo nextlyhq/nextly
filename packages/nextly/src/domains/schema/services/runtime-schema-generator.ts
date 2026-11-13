@@ -71,8 +71,8 @@ import {
   toColumnDescriptor,
   withDeclaredModifiers,
 } from "../extension/column-descriptor";
-import { enumChecks } from "../extension/enum-check";
 import type { ColumnOverride } from "../extension/draft";
+import { enumChecks } from "../extension/enum-check";
 import type { ExtensionColumn } from "../extension/types";
 import type { ForeignKeySpec } from "../pipeline/diff/types";
 

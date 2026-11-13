@@ -261,9 +261,7 @@ function expectOverridden(
       expect(declaredSize(column!), table).toBe("10");
     }
   }
-  const views = tables
-    .get(POSTS_TABLE)
-    ?.columns.find(c => c.name === "views");
+  const views = tables.get(POSTS_TABLE)?.columns.find(c => c.name === "views");
   expect(normalizeType(views!.type)).toBe(
     dialect === "sqlite" ? "int4" : "int8"
   );
@@ -293,10 +291,7 @@ async function insertRow(
     c => c.name !== column && !c.nullable && c.default === undefined
   );
   const names = [...required.map(c => c.name), column];
-  const values = [
-    ...required.map(c => literalFor(c.type, id)),
-    value,
-  ];
+  const values = [...required.map(c => literalFor(c.type, id)), value];
   await instance!.adapter.executeQuery(
     `INSERT INTO ${q(dialect, table.name)} (${names
       .map(name => q(dialect, name))
