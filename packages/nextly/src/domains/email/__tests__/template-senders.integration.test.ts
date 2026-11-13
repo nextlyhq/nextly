@@ -65,10 +65,10 @@ function shop(references: () => unknown) {
       ],
     },
     init(ctx: PluginContext) {
-      ctx.filters.add("email.templateReferences", (refs: unknown[]) => [
+      ctx.filters.add("email.templateReferences", ((refs: unknown[]) => [
         ...refs,
         ...(references() as unknown[]),
-      ]);
+      ]) as never);
     },
   } as never);
 }
