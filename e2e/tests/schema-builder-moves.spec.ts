@@ -276,3 +276,98 @@ test.describe("moving fields in the Builder outline", () => {
     await expect(row(page, "sections/draft_note")).toBeVisible();
   });
 });
+
+test.describe("focusing one container in the Builder outline", () => {
+  const slug = `focus_${Date.now()}`;
+
+  test.beforeEach(async ({ page }) => {
+    await createRuntimeCollection(page.request, slug, [
+      plain("summary", "Summary"),
+      {
+        ...plain("sections", "Sections"),
+        type: "repeater",
+        fields: [
+          plain("heading", "Heading"),
+          {
+            ...plain("items", "Items"),
+            type: "repeater",
+            fields: [
+              {
+                ...plain("cta", "Call to action"),
+                type: "group",
+                fields: [plain("label", "Label"), plain("kind", "Kind")],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await removeRuntimeCollection(page.request, slug);
+  });
+
+  /** Focus a row's container from its menu, as the keyboard opens it. */
+  async function focusOn(page: Page, path: string): Promise<void> {
+    await row(page, path).focus();
+    await page.keyboard.press("Shift+F10");
+    await page.getByRole("menuitem", { name: "Focus", exact: true }).click();
+  }
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`focuses a container three levels deep (${theme})`, async ({
+      page,
+    }) => {
+      await gotoAdmin(page, `/builder/collections/${slug}`, theme);
+      await expect(row(page, "sections")).toBeVisible();
+      await focusOn(page, "sections");
+      await focusOn(page, "sections/items");
+      await focusOn(page, "sections/items/cta");
+
+      const crumbs = page.getByRole("navigation", { name: "Focus" });
+      await expect(crumbs.getByRole("listitem")).toHaveText([
+        "All fields",
+        "Sections",
+        "Items",
+        "Call to action",
+      ]);
+      // Only the focused container's fields, as the first level drawn.
+      await expect(page.locator('[role="treeitem"]')).toHaveCount(2);
+      await expect(row(page, "sections/items/cta/label")).toHaveAttribute(
+        "aria-level",
+        "1"
+      );
+      await expect(row(page, "summary")).toHaveCount(0);
+      await expectNoAxeViolations(page, { include: '[aria-label="Focus"]' });
+
+      // A crumb is a place to drop a field: a saved one changing level is
+      // refused, said while dragging, and nothing moves.
+      const handle = row(page, "sections/items/cta/label").locator(
+        "xpath=preceding-sibling::span[1]"
+      );
+      const start = await handle.boundingBox();
+      const target = await crumbs
+        .getByRole("button", { name: "Items", exact: true })
+        .boundingBox();
+      if (!start || !target) throw new Error("a drag end is not drawn");
+      await page.mouse.move(start.x + 4, start.y + 4);
+      await page.mouse.down();
+      await page.mouse.move(start.x + 4, start.y + 16, { steps: 4 });
+      await page.mouse.move(
+        target.x + target.width / 2,
+        target.y + target.height / 2,
+        { steps: 12 }
+      );
+      await expect(page.getByText(NOT_YET, { exact: true })).toBeVisible();
+      await page.mouse.up();
+      await says(page, `${NOT_YET} Nothing moved.`);
+      await expect(row(page, "sections/items/cta/label")).toBeVisible();
+
+      // Exit focus: the whole outline again.
+      await page.getByRole("button", { name: "Exit focus" }).click();
+      await expect(crumbs).toHaveCount(0);
+      await expect(row(page, "summary")).toBeVisible();
+    });
+  }
+});
