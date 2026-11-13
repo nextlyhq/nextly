@@ -35,6 +35,7 @@ const surface = () =>
     },
     owner: { kind: "plugin", name: "test" } as never,
     onTeardown: () => {},
+    dialect: () => "sqlite",
   });
 
 describe("the default address language", () => {

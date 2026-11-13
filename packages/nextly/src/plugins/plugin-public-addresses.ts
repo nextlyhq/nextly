@@ -11,8 +11,12 @@
  * @module plugins/plugin-public-addresses
  * @experimental
  */
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 
+import { toDbError } from "../database/errors";
 import { whenServicesRegistered } from "../di/service-access";
 import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
@@ -29,6 +33,7 @@ import {
   siteTypes,
   type PublicAddressType,
 } from "../domains/public-addresses/public-address";
+import { NextlyError } from "../errors/nextly-error";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
@@ -145,21 +150,43 @@ export interface PublicAddressesDeps {
   owner: HookOwner;
   /** Called with the undo of each `participate`, so teardown withdraws it. */
   onTeardown: (undo: () => void) => void;
+  /** The database's dialect, read when a participant's statement fails. */
+  dialect: () => SupportedDialect;
 }
 
-/** Run `work` with this plugin's handles on the save's transaction `tx`. */
-function withParticipantTransaction<T>(
+/**
+ * Run `work` with this plugin's handles on the save's transaction `tx`.
+ *
+ * A participant writing through `db` meets the database's own failures, and
+ * two saves of one address at once can deadlock on a row both make. Such a
+ * failure is reported as core reports its own: a deadlock or a serialization
+ * failure asks the editor to try again (`CONFLICT`) rather than surfacing as
+ * an internal error. Anything else is passed on as thrown.
+ */
+async function withParticipantTransaction<T>(
   deps: PublicAddressesDeps,
   tx: TransactionContext,
   work: (handles: ParticipantTransaction) => Promise<T>
 ): Promise<T> {
-  return deps.bindTo(tx, db =>
-    withWriteTransactionToken(
-      tx,
-      transaction => work({ db, transaction }),
-      "ctx.publicAddresses"
-    )
-  );
+  try {
+    return await deps.bindTo(tx, db =>
+      withWriteTransactionToken(
+        tx,
+        transaction => work({ db, transaction }),
+        "ctx.publicAddresses"
+      )
+    );
+  } catch (error) {
+    if (NextlyError.is(error)) throw error;
+    const failure = toDbError(deps.dialect(), error);
+    if (
+      failure.kind === "deadlock" ||
+      failure.kind === "serialization-failure"
+    ) {
+      throw NextlyError.fromDatabaseError(failure);
+    }
+    throw error;
+  }
 }
 
 /** Build `ctx.publicAddresses` for one plugin. */
