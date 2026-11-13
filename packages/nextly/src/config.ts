@@ -212,7 +212,16 @@ export {
   isPluginCategory,
   type PluginCategory,
 } from "./plugins/plugin-categories";
-export { pluginAdminSlug } from "./plugins/plugin-slug";
+export { pluginAdminSlug, pluginPageAddress } from "./plugins/plugin-slug";
+// The plugin pages' startup reads the admin layout writes into the prebuilt
+// page, and the one rule and bound of the startup request they keep to: the
+// layout, the admin's startup request and the route answering it read the
+// same answers.
+export {
+  ADMIN_STARTUP_SCREENS_ELEMENT_ID,
+  adminStartupScreensJson,
+} from "./plugins/startup-reads";
+export { MAX_STARTUP_PATHS } from "./route-handler/startup-path";
 // The admin places, for the same reason: the catalogue the server checks a
 // plugin's contributions against is the one the admin renders them from.
 export {

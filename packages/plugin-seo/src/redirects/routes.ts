@@ -21,7 +21,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
-import { recordSlug, rowOf } from "../address-record/participant";
+import { heldRows } from "../address-record/store";
 import {
   type LoggedRow,
   readNotFoundLog,
@@ -329,18 +329,9 @@ async function deleteRedirect(ctx: PluginRouteContext): Promise<Response> {
 async function livePages(ctx: PluginContext): Promise<LivePage[]> {
   const redirects = redirectsSlug(ctx);
   const live: LivePage[] = [];
-  for (let page = 1; live.length < MOST_CANDIDATES; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: { kind: { equals: "address" } },
-        pagination: { limit: PAGE, page },
-        sort: { field: "claimKey", direction: "asc" },
-        depth: 0,
-      }
-    );
-    for (const entry of data as unknown[]) {
-      const row = rowOf(entry);
+  for (let offset = 0; live.length < MOST_CANDIDATES; offset += PAGE) {
+    const rows = await heldRows(ctx, ["address"], { limit: PAGE, offset });
+    for (const row of rows) {
       if (row.address === null || row.holder?.collection === redirects)
         continue;
       live.push({
@@ -348,7 +339,7 @@ async function livePages(ctx: PluginContext): Promise<LivePage[]> {
         path: await servedOf(row.address.path, row.address.locale),
       });
     }
-    if ((data as unknown[]).length < PAGE) break;
+    if (rows.length < PAGE) break;
   }
   return live;
 }

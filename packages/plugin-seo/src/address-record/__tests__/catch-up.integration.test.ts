@@ -20,7 +20,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { statementsOf, writesAmong } from "../../__tests__/count-statements";
 import { seoPlugin } from "../../plugin";
 import { catchUp, lastCatchUp } from "../catch-up";
-import { ADDRESS_RECORD_SLUG } from "../collection";
+import { noteKey, putNote } from "../store";
+
+import {
+  forgetNote,
+  forgetRecord,
+  recordedRows,
+  seoContext,
+} from "./record-tables";
 
 let current: TestNextly | undefined;
 
@@ -78,47 +85,19 @@ async function publish(t: TestNextly, collection: string, slug: string) {
   return String(created.item.id);
 }
 
-/** Every row of the record, address rows as `locale|path` → `collection:id`. */
-async function rows(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: ADDRESS_RECORD_SLUG,
-    limit: 500,
-  });
-  return items as Record<string, unknown>[];
-}
-
-async function recorded(t: TestNextly) {
-  return Object.fromEntries(
-    (await rows(t))
-      .filter(row => row.kind === "address" || row.kind === "range")
-      .map(row => [
-        `${row.locale}|${row.path}`,
-        `${row.holderCollection}:${row.holderId}`,
-      ])
-  );
+async function recorded(_t: TestNextly) {
+  return recordedRows();
 }
 
 /** Empty the record, as on a site the plugin has just been added to. */
-async function forget(t: TestNextly) {
-  for (const row of await rows(t)) {
-    await t.nextly.delete({
-      collection: ADDRESS_RECORD_SLUG,
-      id: String(row.id),
-    });
-  }
+async function forget(_t: TestNextly) {
+  await forgetRecord();
 }
 
 /** Forget the fingerprint of the last run, as a changed template would. */
-async function forgetFingerprint(t: TestNextly) {
-  for (const row of await rows(t)) {
-    // The fingerprint alone; the list of site types beside it stays.
-    if (row.kind === "meta" && !String(row.path).startsWith("[")) {
-      await t.nextly.delete({
-        collection: ADDRESS_RECORD_SLUG,
-        id: String(row.id),
-      });
-    }
-  }
+async function forgetFingerprint(_t: TestNextly) {
+  // The fingerprint alone; the list of site types beside it stays.
+  await forgetNote("fingerprint");
 }
 
 /** Run the catch-up again, as the next start would. */
@@ -213,12 +192,12 @@ describe.each(getConfiguredTestDialects())(
       // The fingerprint is made again; the list of types is not saved over.
       expect(
         writesAmong(statements).filter(sql =>
-          /^\s*update\s+\S*nx_seo_addresses/i.test(sql)
+          /^\s*update\s+\S*seo__notes/i.test(sql)
         )
       ).toEqual([]);
       expect(
         writesAmong(statements).filter(sql =>
-          /^\s*insert\s+into\s+\S*nx_seo_addresses/i.test(sql)
+          /^\s*insert\s+into\s+\S*seo__notes/i.test(sql)
         )
       ).toHaveLength(1);
     });
@@ -354,18 +333,11 @@ describe.each(getConfiguredTestDialects())(
       // A plugin's own page, never one of the site's types.
       await hold("lists", "1", "/list");
       await restart();
-      const [types] = (await rows(t)).filter(
-        row => row.kind === "meta" && String(row.path).startsWith("[")
+      await putNote(
+        seoContext(),
+        noteKey("site-types"),
+        JSON.stringify(["articles", "pages", "posts"])
       );
-      if (types === undefined) throw new Error("no site types were stored");
-      await t.nextly.update({
-        collection: ADDRESS_RECORD_SLUG,
-        id: String(types.id),
-        data: {
-          path: JSON.stringify(["articles", "pages", "posts"]),
-          _overwrite: true,
-        },
-      });
       await forgetFingerprint(t);
 
       await restart();

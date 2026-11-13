@@ -417,8 +417,15 @@ async function sample(context, log, load, before) {
   const kept = await load(page);
   const to = await watcher.quiet();
   await page.close();
+  // How long after the load began the startup request was sent: the admin
+  // sends it as early as it can, so a later start is a slower screen even
+  // when no count moves. Reported, never pinned, as it is a time.
+  const startup = watcher.requests.find(r =>
+    r.path.endsWith("/admin/api/startup")
+  );
   return {
     kept,
+    startupStartsMs: startup === undefined ? null : startup.start - from,
     requests: watcher.requests.length,
     rounds: roundsOf(watcher.requests),
     statements: readLog(log).filter(s => s.t >= from && s.t <= to).length,
@@ -482,6 +489,7 @@ async function steady(context, log, load, { fresh, before } = {}) {
   const fewestStatements = Math.min(...samples.map(x => x.statements));
   return {
     kept: samples[0].kept,
+    startupStartsMs: median(samples.map(x => x.startupStartsMs)),
     result: {
       requests: Object.values(kinds).reduce((a, b) => a + b, 0),
       rounds: Math.min(...samples.map(x => x.rounds)),
@@ -493,6 +501,16 @@ async function steady(context, log, load, { fresh, before } = {}) {
   };
 }
 
+/** The middle of the times measured, or null when none was. */
+function median(values) {
+  const known = values.filter(v => v !== null).sort((a, b) => a - b);
+  if (known.length === 0) return null;
+  const mid = Math.floor(known.length / 2);
+  return known.length % 2 === 1
+    ? known[mid]
+    : Math.round((known[mid - 1] + known[mid]) / 2);
+}
+
 /** A full measurement of one dialect: the start and every screen. */
 async function measureDialect(dialect, dir) {
   const { database, url } = await freshDatabase(dialect);
@@ -501,7 +519,13 @@ async function measureDialect(dialect, dir) {
   // Everything acquired is released in `finally`, whichever step failed.
   let browser;
   let server;
-  const out = { start: {}, screens: {} };
+  // `timings` sits beside `screens`, not in it, so `--update-pins` never
+  // writes a time into the pins.
+  const out = { start: {}, screens: {}, timings: {} };
+  const keep = (name, measured) => {
+    out.timings[name] = { startupStartsMs: measured.startupStartsMs };
+    return measured.result;
+  };
   try {
     prepare(serverEnv(dialect, url));
     browser = await chromium.launch();
@@ -547,17 +571,19 @@ async function measureDialect(dialect, dir) {
     };
 
     // The sign-in screen, signed out, on the started server.
-    out.screens.login = (
+    out.screens.login = keep(
+      "login",
       await steady(context, log, openForm, { fresh })
-    ).result;
+    );
 
     // Signing in through the real form, counted from the click.
-    out.screens.signin = (
+    out.screens.signin = keep(
+      "signin",
       await steady(context, log, signIn, {
         fresh,
         before: openForm,
       })
-    ).result;
+    );
 
     // The signed-in browser whose fresh tabs open the remaining screens.
     const first = await context.newPage();
@@ -581,7 +607,8 @@ async function measureDialect(dialect, dir) {
     // The edit page: the entry's own Title field.
     const titleBox = p =>
       p.getByRole("main").getByRole("textbox", { name: /^title/i });
-    out.screens.dashboard = (
+    out.screens.dashboard = keep(
+      "dashboard",
       await steady(
         context,
         log,
@@ -591,7 +618,7 @@ async function measureDialect(dialect, dir) {
         },
         {}
       )
-    ).result;
+    );
     const list = await steady(
       context,
       log,
@@ -604,9 +631,10 @@ async function measureDialect(dialect, dir) {
       },
       {}
     );
-    out.screens.list = list.result;
+    out.screens.list = keep("list", list);
     const href = list.kept;
-    out.screens.edit = (
+    out.screens.edit = keep(
+      "edit",
       await steady(
         context,
         log,
@@ -616,7 +644,7 @@ async function measureDialect(dialect, dir) {
         },
         {}
       )
-    ).result;
+    );
   } finally {
     await browser?.close();
     await server?.stop();

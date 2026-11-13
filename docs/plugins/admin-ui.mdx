@@ -256,7 +256,9 @@ contributes: {
     // Custom pages, namespaced under /admin/plugins/<slug>/<path>, RBAC-gated (D21).
     pages: [
       { path: "summary", component: "@acme/nextly-plugin-reports/admin#ReportsView",
-        requiredPermission: "read-reports" },
+        requiredPermission: "read-reports",
+        // Read as the page opens, in the admin's first request (experimental).
+        startupReads: [{ path: "/summary/totals" }] },
     ],
     // A settings panel rendered at /admin/plugins/<slug> (D21).
     settings: { component: "@acme/nextly-plugin-reports/admin#ReportsSettings" },
@@ -274,6 +276,27 @@ contributes: {
 `menu` and `pages` honour `requiredPermission` for client-side gating (see
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
+
+### The data a page reads first
+
+> **Experimental.** `startupReads` may change before it is marked stable.
+
+A page can name the reads of your plugin's own routes it makes as it opens, with
+`startupReads`, as the `summary` page above does. Name each read as the page's
+`usePluginRoute` names it: `path`, and `mount: "root"` for a route mounted at the root.
+When a tab opens on that page, the admin asks for them in the same request as the
+session, the menu and the settings, before its own code has loaded. Your page's
+`usePluginRoute` read then takes that answer instead of waiting a round of its own.
+
+- Each read is answered by its route with the route's own permission check. A read the
+  person may not make is refused on its own, and your page then reads it as usual.
+- The whole request waits for its slowest part, so name only quick reads the page needs
+  first, never a count or a report. A page may name at most four.
+- The admin layout carries the reads in the prebuilt admin page, so they take effect
+  once the app is built again. The layout `create-nextly-app` scaffolds writes them with
+  `adminStartupScreensJson(config.plugins)`.
+- The app refuses to start if a page names more than four, or a path that isn't a
+  route path starting with `/`.
 
 ### Where your own item goes
 

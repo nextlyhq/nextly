@@ -17,15 +17,9 @@
  *
  * @module staging/guard
  */
-import { createHash } from "node:crypto";
+import type { PluginContext, PluginProxyHandler } from "@nextlyhq/plugin-sdk";
 
-import {
-  NextlyError,
-  type PluginContext,
-  type PluginProxyHandler,
-} from "@nextlyhq/plugin-sdk";
-
-import { recordSlug } from "../address-record/participant";
+import { addNoteOnce, noteKey, readNotes } from "../address-record/store";
 import { productionAddressesOf } from "../canonical";
 import { keptValue } from "../kept-value";
 import type { ReadRules } from "../resolver/provider";
@@ -37,10 +31,8 @@ import type { ReadRules } from "../resolver/provider";
  */
 export type StagingStanding = "listable" | "guarded";
 
-/** The key of the record's row that stores the site's standing. */
-const STANDING_KEY = createHash("sha256")
-  .update("meta:staging-standing", "utf8")
-  .digest("hex");
+/** The key of the note that stores the site's standing. */
+const STANDING_KEY = noteKey("staging-standing");
 
 /**
  * How old the addresses and the standing read from the database may grow
@@ -66,16 +58,15 @@ export function keptOutOfSearch(
 export async function readStanding(
   ctx: PluginContext
 ): Promise<StagingStanding | undefined> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { claimKey: { equals: STANDING_KEY } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
+  return standingOf(
+    (await readNotes(ctx, [STANDING_KEY])).notes.get(STANDING_KEY)
   );
-  const [row] = data as Record<string, unknown>[];
-  const value = row?.path;
+}
+
+/** A stored standing, or nothing where the note names none. */
+function standingOf(
+  value: string | null | undefined
+): StagingStanding | undefined {
   return value === "listable" || value === "guarded" ? value : undefined;
 }
 
@@ -109,19 +100,9 @@ export async function decideStanding(
   const standing: StagingStanding = (await hasPages(ctx))
     ? "listable"
     : "guarded";
-  try {
-    await ctx.services.collections.createEntry(recordSlug(ctx), {
-      claimKey: STANDING_KEY,
-      kind: "meta",
-      path: standing,
-    });
-  } catch (error) {
-    // Another process starting at the same moment recorded it first: its
-    // decision stands.
-    if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-    return (await readStanding(ctx)) ?? standing;
-  }
-  return standing;
+  // Another process starting at the same moment may record it first: its
+  // decision stands.
+  return standingOf(await addNoteOnce(ctx, STANDING_KEY, standing)) ?? standing;
 }
 
 /** What a request is judged by where the environment names no address. */

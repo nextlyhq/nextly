@@ -70,7 +70,7 @@ interface PluginContributions {
   dashboard?: DashboardContribution; // @experimental: { widgets?, suggest?, alternatives?, attention? } — see Dashboard widgets below
   admin?: {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
-    pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
+    pages?: PluginAdminPage[]; // { path, component, requiredPermission?, startupReads? }
     settings?: { component: ComponentPath };
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions and panelSections, by collection slug
     documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level, inside named groups, or in a repeater's rows

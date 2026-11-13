@@ -53,6 +53,7 @@ import type {
   PluginAdminPage,
   PluginCollectionView,
   PluginMenuItem,
+  PluginPageStartupRead,
 } from "@nextlyhq/plugin-sdk/admin";
 
 // The root entry also re-exports the contract types (node-safe, no React).
@@ -73,6 +74,15 @@ expectTypeOf(adminEntry.useCurrentUserId).returns.toEqualTypeOf<
 expectTypeOf<PluginAdminContributions>().toMatchTypeOf<{
   menu?: PluginMenuItem[];
   pages?: PluginAdminPage[];
+}>();
+// A page's startup reads are the reads of the plugin's own routes it makes as
+// it opens, named as `usePluginRoute` names them.
+expectTypeOf<PluginAdminPage["startupReads"]>().toEqualTypeOf<
+  readonly PluginPageStartupRead[] | undefined
+>();
+expectTypeOf<PluginPageStartupRead>().toEqualTypeOf<{
+  path: string;
+  mount?: "plugin" | "root";
 }>();
 expectTypeOf<PluginCollectionView>().toMatchTypeOf<{
   edit?: ComponentPath;
