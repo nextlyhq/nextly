@@ -26,12 +26,10 @@ const own = (name: string): string => `${PREFIX}__${name}`;
 export const POSTS_TABLE = "dc_posts";
 
 /**
- * A person's reading list. `ownerId` names a core user. It takes no foreign
- * key: a cascade from `users` would delete the items under the plugin, with no
- * chance to recount the posts they held, so the plugin removes a person's
- * lists itself when `user.deleted` arrives (see `plugin.ts`). `items` is the
- * reverse of `list_items`' `listId`, so a list reads with its items in one
- * query.
+ * A person's reading list. Its owner is a core user, held by a foreign key that
+ * removes the list, and through `list_items`' key its items, with its owner.
+ * `items` is the reverse of `list_items`' `listId`, so a list reads with its
+ * items in one query.
  */
 export const lists = defineTable(
   "lists",
@@ -43,6 +41,13 @@ export const lists = defineTable(
   },
   {
     indexes: [{ columns: ["ownerId"] }],
+    foreignKeys: [
+      {
+        columns: ["ownerId"],
+        references: { table: "users", columns: ["id"] },
+        onDelete: "cascade",
+      },
+    ],
     relations: [
       {
         name: "items",
@@ -87,11 +92,14 @@ export const listItems = defineTable(
 );
 
 /**
- * The hidden column the plugin adds to the posts table: how many lists hold the
- * post. A default, because the table already has rows when the column arrives.
+ * The hidden column the plugin adds to the posts table: when someone last saved
+ * the post to a list, for a "recently saved" sort. A record of something that
+ * happened, rather than a total of rows elsewhere, so no later write can put
+ * it out of step: removing an item, or a list going with its owner, leaves it
+ * true. Nullable, because the table already has rows when the column arrives.
  * Hidden means no entry read returns it and no entry write sets it; the plugin
  * reads and writes it through `ctx.db.contributed`, by passing this object.
  */
 export const postColumns = {
-  savedCount: col.integer({ default: 0 }),
+  lastSavedAt: col.timestamp({ nullable: true }),
 };

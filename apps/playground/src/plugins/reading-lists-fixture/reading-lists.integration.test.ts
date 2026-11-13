@@ -11,7 +11,7 @@
  * against what the plugin and production-migration docs say it does, not
  * against what the command prints. Between commands the booted site uses the
  * plugin as its code does: lists and items through `ctx.db`, the `items`
- * relation, and the hidden `savedCount` through `ctx.db.contributed`.
+ * relation, and the hidden `lastSavedAt` through `ctx.db.contributed`.
  *
  * Which dialects run: PostgreSQL when TEST_POSTGRES_URL is set, MySQL when
  * TEST_MYSQL_URL is set, and SQLite, on a file, when neither is, which is how
@@ -52,7 +52,7 @@ import {
   createList,
   readList,
   removePost,
-  savedCount,
+  lastSavedAt,
   savePost,
 } from "./lists";
 import { READING_LISTS_PLUGIN, readingListsFixturePlugin } from "./plugin";
@@ -449,11 +449,18 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     );
   const ownTables = async () =>
     (await db.tables()).filter(name => OWN_TABLES.includes(name)).sort();
-  const savedCountStored = async () => {
-    const [row] = await db.rows(
-      `SELECT saved_count AS n FROM dc_posts WHERE id = '${postId}'`
+  /** How many items hold the post, counted in the table. */
+  const held = () =>
+    count(
+      `SELECT COUNT(*) AS n FROM reading__list_items WHERE post_id = '${postId}'`
     );
-    return row === undefined ? undefined : Number(row.n);
+  /** Whether the post's hidden column holds a time, read from the table. */
+  const savedTimeStored = async () => {
+    const [row] = await db.rows(
+      `SELECT last_saved_at AS t FROM dc_posts WHERE id = '${postId}'`
+    );
+    if (row === undefined) throw new Error("The post is not in the table.");
+    return row.t !== null;
   };
 
   it("generates the app's migration with the hidden column, and none of the plugin's tables", async () => {
@@ -472,8 +479,8 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     const sql = readFileSync(join(site.migrationsDir, files[0]), "utf8");
     // A plugin's addition to a collection's table travels with the app's
     // migrations, and its own tables with its own modules.
-    expect(sql).toMatch(/saved_count/);
-    expect(sql).toMatch(/dc_posts_saved_count/);
+    expect(sql).toMatch(/last_saved_at/);
+    expect(sql).toMatch(/dc_posts_last_saved_at/);
     expect(sql).not.toMatch(/reading__/);
   });
 
@@ -482,7 +489,7 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     expect(outcome.code, outcome.output).toBe(0);
 
     expect(await ownTables()).toEqual(OWN_TABLES);
-    expect(await db.columns("dc_posts")).toContain("saved_count");
+    expect(await db.columns("dc_posts")).toContain("last_saved_at");
     expect(await moduleRows()).toBe(1);
     expect(await lifecycleEvents()).toBe(0);
     expect(codeOf(await boot())).toBe("PLUGIN_NOT_INSTALLED");
@@ -511,47 +518,52 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
       postId = String(post.item.id);
 
       const list = await createList(ctx.db, user.item.id, "Weekend");
+      expect(await lastSavedAt(ctx.db, postId)).toBeNull();
       await savePost(ctx.db, list.id, postId);
 
       // The relation reads the list with its item in one query.
       const read = await readList(ctx.db, list.id);
       expect(read?.items.map(item => item.postId)).toEqual([postId]);
-      // The hidden column holds the count, and no entry read shows it.
-      expect(await savedCount(ctx.db, postId)).toBe(1);
+      // The hidden column records the save, and no entry read shows it.
+      expect(await lastSavedAt(ctx.db, postId)).toBeInstanceOf(Date);
       const entry = (await t.nextly.findByID({
         collection: "posts",
         id: postId,
       })) as Record<string, unknown>;
       // The read is the post itself, so the absence below is about the column.
       expect(entry.title).toBe("Saved");
-      expect(entry).not.toHaveProperty("savedCount");
-      expect(entry).not.toHaveProperty("saved_count");
+      expect(entry).not.toHaveProperty("lastSavedAt");
+      expect(entry).not.toHaveProperty("last_saved_at");
       // The table's unique index refuses the same post twice on a list.
       await expect(savePost(ctx.db, list.id, postId)).rejects.toThrow();
-      // Taking it off recounts the post, and saving it again counts it back.
+      // Taking it off removes the item; the post keeps when it was saved.
       await removePost(ctx.db, list.id, postId);
-      expect(await savedCount(ctx.db, postId)).toBe(0);
       expect((await readList(ctx.db, list.id))?.items).toEqual([]);
+      expect(await lastSavedAt(ctx.db, postId)).toBeInstanceOf(Date);
       await savePost(ctx.db, list.id, postId);
-      expect(await savedCount(ctx.db, postId)).toBe(1);
 
-      // Deleting a person takes their lists with them, and the posts those
-      // held are recounted.
+      // Two saves of the post at once, to two lists, both land.
       const leaver = await t.nextly.users.create({
         email: "leaver@example.com",
         password: "Password123!",
         data: { name: "Leaver", isActive: true },
       });
-      const leaversList = await createList(ctx.db, leaver.item.id, "Gone");
-      await savePost(ctx.db, leaversList.id, postId);
-      expect(await savedCount(ctx.db, postId)).toBe(2);
+      const first = await createList(ctx.db, leaver.item.id, "One");
+      const second = await createList(ctx.db, leaver.item.id, "Two");
+      await Promise.all([
+        savePost(ctx.db, first.id, postId),
+        savePost(ctx.db, second.id, postId),
+      ]);
+      expect(await held()).toBe(3);
+      // Deleting a person takes their lists, and through the lists' key their
+      // items, with them.
       await t.nextly.users.delete({ id: leaver.item.id });
-      await t.events.settle();
-      expect(await readList(ctx.db, leaversList.id)).toBeNull();
-      expect(await savedCount(ctx.db, postId)).toBe(1);
+      expect(await readList(ctx.db, first.id)).toBeNull();
+      expect(await readList(ctx.db, second.id)).toBeNull();
+      expect(await held()).toBe(1);
     });
     expect(codeOf(failure)).toBeUndefined();
-    expect(await savedCountStored()).toBe(1);
+    expect(await savedTimeStored()).toBe(true);
   });
 
   it("an install run again changes nothing and records no second install", async () => {
@@ -591,7 +603,7 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     expect(await count("SELECT COUNT(*) AS n FROM reading__list_items")).toBe(
       1
     );
-    expect(await savedCountStored()).toBe(1);
+    expect(await savedTimeStored()).toBe(true);
     expect(await moduleRows()).toBe(1);
     // Still in the config, so a start refuses it until it is installed again
     // or removed.
@@ -599,10 +611,12 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
   });
 
   it("an install after it is a full install: onInstall runs and finds the kept rows", async () => {
-    // Put the count out of step while the plugin is uninstalled, so only the
-    // install hook's recount can bring it back.
-    await db.rows(`UPDATE dc_posts SET saved_count = 0 WHERE id = '${postId}'`);
-    expect(await savedCountStored()).toBe(0);
+    // Clear the post's time while the plugin is uninstalled, so only the
+    // install hook's backfill from the kept item can put one back.
+    await db.rows(
+      `UPDATE dc_posts SET last_saved_at = NULL WHERE id = '${postId}'`
+    );
+    expect(await savedTimeStored()).toBe(false);
 
     const outcome = await site.nextly(
       "plugins",
@@ -610,7 +624,7 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
       READING_LISTS_PLUGIN
     );
     expect(outcome.code, outcome.output).toBe(0);
-    expect(await savedCountStored()).toBe(1);
+    expect(await savedTimeStored()).toBe(true);
     expect(await count("SELECT COUNT(*) AS n FROM reading__list_items")).toBe(
       1
     );
@@ -630,10 +644,9 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     expect(await moduleRows()).toBe(0);
     // The hidden column came with the app's migration, so it stays until the
     // app's own migrations remove it.
-    expect(await db.columns("dc_posts")).toContain("saved_count");
-    // Its items went with the tables, so the uninstall hook has set the count
-    // they made to none rather than leave it naming lists that are gone.
-    expect(await savedCountStored()).toBe(0);
+    expect(await db.columns("dc_posts")).toContain("last_saved_at");
+    // What it records happened, so the values stay with it.
+    expect(await savedTimeStored()).toBe(true);
     expect(codeOf(await boot())).toBe("PLUGIN_SCHEMA_UNINSTALLED");
   });
 
@@ -649,8 +662,6 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     expect(await count("SELECT COUNT(*) AS n FROM reading__list_items")).toBe(
       0
     );
-    // A fresh install finds no items, and the post counts none.
-    expect(await savedCountStored()).toBe(0);
 
     const failure = await boot(async ctx => {
       const [owner] = await db.rows("SELECT id FROM users");
@@ -676,15 +687,15 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
       "--name",
       "remove_reading_lists",
       "--non-interactive",
-      "--accept-data-loss=dc_posts.saved_count"
+      "--accept-data-loss=dc_posts.last_saved_at"
     );
     expect(create.code, create.output).toBe(0);
     const migrate = await site.nextly(
       "migrate",
-      "--accept-data-loss=dc_posts.saved_count"
+      "--accept-data-loss=dc_posts.last_saved_at"
     );
     expect(migrate.code, migrate.output).toBe(0);
-    expect(await db.columns("dc_posts")).not.toContain("saved_count");
+    expect(await db.columns("dc_posts")).not.toContain("last_saved_at");
     expect(codeOf(await boot(undefined, []))).toBeUndefined();
   });
 });

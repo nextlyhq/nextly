@@ -8,13 +8,13 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261113_135905_264_create_reading_lists",
+  name: "20261113_140950_391_create_reading_lists",
   schemaVersion: 1,
-  checksum: "15b825cf17c892a5c93222ecf7fdf84cff079b77490d760f83bc92b05ec9fcb0",
+  checksum: "5a4183056fe82c090a2a3777dd5f40d3ca86c9dbac8acf4ab050ccbb8213a4c8",
   dialects: {
     postgresql: {
       up: [
-        'CREATE TABLE "reading__lists" (\n  "id" text PRIMARY KEY NOT NULL,\n  "owner_id" varchar(255) NOT NULL,\n  "name" varchar(255) NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE INDEX IF NOT EXISTS "idx_reading__lists_owner_id" ON "reading__lists" ("owner_id")',
+        'CREATE TABLE "reading__lists" (\n  "id" text PRIMARY KEY NOT NULL,\n  "owner_id" varchar(255) NOT NULL,\n  "name" varchar(255) NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now(),\n  CONSTRAINT "fk_reading__lists_owner_id" FOREIGN KEY ("owner_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE INDEX IF NOT EXISTS "idx_reading__lists_owner_id" ON "reading__lists" ("owner_id")',
         'CREATE TABLE "reading__list_items" (\n  "id" text PRIMARY KEY NOT NULL,\n  "list_id" varchar(255) NOT NULL,\n  "post_id" text NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now(),\n  CONSTRAINT "fk_reading__list_items_list_id" FOREIGN KEY ("list_id") REFERENCES "reading__lists" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_reading__list_items_list_id_post_id_11e06ud" ON "reading__list_items" ("list_id", "post_id");\nCREATE INDEX IF NOT EXISTS "idx_reading__list_items_post_id" ON "reading__list_items" ("post_id")',
       ],
       down: [
@@ -24,14 +24,14 @@ export default {
     },
     mysql: {
       up: [
-        "CREATE TABLE `reading__lists` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `owner_id` varchar(255) NOT NULL,\n  `name` varchar(255) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE INDEX `idx_reading__lists_owner_id` ON `reading__lists` (`owner_id`)",
+        "CREATE TABLE `reading__lists` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `owner_id` varchar(255) NOT NULL,\n  `name` varchar(255) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `fk_reading__lists_owner_id` FOREIGN KEY (`owner_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE INDEX `idx_reading__lists_owner_id` ON `reading__lists` (`owner_id`)",
         "CREATE TABLE `reading__list_items` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `list_id` varchar(255) NOT NULL,\n  `post_id` varchar(36) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `fk_reading__list_items_list_id` FOREIGN KEY (`list_id`) REFERENCES `reading__lists` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX `uq_reading__list_items_list_id_post_id_11e06ud` ON `reading__list_items` (`list_id`, `post_id`);\nCREATE INDEX `idx_reading__list_items_post_id` ON `reading__list_items` (`post_id`)",
       ],
       down: ["DROP TABLE `reading__list_items`", "DROP TABLE `reading__lists`"],
     },
     sqlite: {
       up: [
-        'CREATE TABLE "reading__lists" (\n  "id" text PRIMARY KEY NOT NULL,\n  "owner_id" text NOT NULL,\n  "name" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE INDEX IF NOT EXISTS "idx_reading__lists_owner_id" ON "reading__lists" ("owner_id")',
+        'CREATE TABLE "reading__lists" (\n  "id" text PRIMARY KEY NOT NULL,\n  "owner_id" text NOT NULL,\n  "name" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  CONSTRAINT "fk_reading__lists_owner_id" FOREIGN KEY ("owner_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE INDEX IF NOT EXISTS "idx_reading__lists_owner_id" ON "reading__lists" ("owner_id")',
         'CREATE TABLE "reading__list_items" (\n  "id" text PRIMARY KEY NOT NULL,\n  "list_id" text NOT NULL,\n  "post_id" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  CONSTRAINT "fk_reading__list_items_list_id" FOREIGN KEY ("list_id") REFERENCES "reading__lists" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_reading__list_items_list_id_post_id_11e06ud" ON "reading__list_items" ("list_id", "post_id");\nCREATE INDEX IF NOT EXISTS "idx_reading__list_items_post_id" ON "reading__list_items" ("post_id")',
       ],
       down: ['DROP TABLE "reading__list_items"', 'DROP TABLE "reading__lists"'],
@@ -79,7 +79,16 @@ export default {
               unique: false,
             },
           ],
-          foreignKeys: [],
+          foreignKeys: [
+            {
+              name: "fk_reading__lists_owner_id",
+              columns: ["owner_id"],
+              referencesTable: "users",
+              referencesColumns: ["id"],
+              onDelete: "cascade",
+              onUpdate: "no action",
+            },
+          ],
           checks: [],
         },
         {
@@ -181,7 +190,16 @@ export default {
               unique: false,
             },
           ],
-          foreignKeys: [],
+          foreignKeys: [
+            {
+              name: "fk_reading__lists_owner_id",
+              columns: ["owner_id"],
+              referencesTable: "users",
+              referencesColumns: ["id"],
+              onDelete: "cascade",
+              onUpdate: "no action",
+            },
+          ],
           checks: [],
         },
         {
@@ -283,7 +301,16 @@ export default {
               unique: false,
             },
           ],
-          foreignKeys: [],
+          foreignKeys: [
+            {
+              name: "fk_reading__lists_owner_id",
+              columns: ["owner_id"],
+              referencesTable: "users",
+              referencesColumns: ["id"],
+              onDelete: "cascade",
+              onUpdate: "no action",
+            },
+          ],
           checks: [],
         },
         {

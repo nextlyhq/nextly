@@ -1,14 +1,13 @@
 /**
  * A fixture plugin that exercises the schema a plugin can declare, written the
  * way a plugin author writes one: tables of its own with the migration modules
- * that carry them to production, a foreign key and a relation between them, a
- * hidden column on a collection it does not own, an event handler, and
- * install and uninstall hooks. Everything comes from `@nextlyhq/plugin-sdk`,
- * never `nextly`.
+ * that carry them to production, foreign keys to each other and to a core
+ * table, a relation, a hidden column on a collection it does not own, and an
+ * install hook. Everything comes from `@nextlyhq/plugin-sdk`, never `nextly`.
  *
  * People keep reading lists of posts: `reading__lists` and
  * `reading__list_items` (see `schema.ts`), and each post carries a hidden
- * `saved_count` that the plugin keeps in step (see `lists.ts`).
+ * `last_saved_at` the plugin writes when the post is saved (see `lists.ts`).
  *
  * The playground registers it only when `NEXTLY_PLAYGROUND_PLUGINS` names
  * `reading-lists`, so a contributor's daily playground and the browser
@@ -23,13 +22,9 @@
  *
  * which writes the next module to `./migrations` beside this file.
  */
-import {
-  definePlugin,
-  UserEvents,
-  type UserDeletedPayload,
-} from "@nextlyhq/plugin-sdk";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 
-import { clearCounts, deleteListsOf, recountAll } from "./lists";
+import { backfillLastSaved } from "./lists";
 import { migrations } from "./migrations";
 import { lists, listItems, PREFIX, POSTS_TABLE, postColumns } from "./schema";
 
@@ -62,30 +57,17 @@ export const readingListsFixturePlugin = definePlugin({
           if (!schema.getTable(POSTS_TABLE)) return;
           schema.extendTable(POSTS_TABLE, {
             columns: postColumns,
-            indexes: [{ columns: ["savedCount"] }],
+            indexes: [{ columns: ["lastSavedAt"] }],
           });
         },
       ],
     },
   },
-  init(ctx) {
-    // A person's lists go with them. Core emits this once the deletion has
-    // committed, and the handler is safe to run twice.
-    ctx.events.on<UserDeletedPayload>(UserEvents.Deleted, event =>
-      deleteListsOf(ctx.db, event.payload.userId)
-    );
-  },
   // Runs once per install, after the plugin's migrations, never at boot. A
   // reinstall after `nextly plugins uninstall --keep-data` finds the kept
-  // items, so the counts are rebuilt from them; on a first install there are
-  // none and nothing is written.
+  // items, and fills in any post that records no saved time; on a first
+  // install there are none and nothing is written.
   async onInstall(ctx) {
-    await recountAll(ctx.db);
-  },
-  // Runs before the DOWN, while the items can still be read. Without
-  // `--keep-data` they are about to go, so the counts they made go first; with
-  // it they stay, and the next install recounts from them.
-  async onUninstall(ctx, { keepData }) {
-    if (!keepData) await clearCounts(ctx.db);
+    await backfillLastSaved(ctx.db);
   },
 });
