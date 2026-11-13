@@ -1,0 +1,21 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // A test regenerates `src/sdk-stability.json` from the SDK's stability
+      // record and fails while the committed copy differs. That record lives
+      // outside this package, so its files are named here: without them a
+      // surface tagged or graduated in the SDK would leave this package's
+      // cached pass standing over a stale manifest.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "scripts/**",
+        "$TURBO_ROOT$/packages/plugin-sdk/STABILITY.md",
+        "$TURBO_ROOT$/packages/plugin-sdk/package.json",
+        "$TURBO_ROOT$/packages/plugin-sdk/src/**/*.ts",
+        "$TURBO_ROOT$/packages/nextly/src/plugins/plugin-context.ts"
+      ]
+    }
+  }
+}
