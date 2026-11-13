@@ -66,6 +66,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -219,7 +220,7 @@ export default function EditEntryPage({
     // collection has the draft/published split enabled, so the editor shows and
     // saves onto the unpublished edits. Inert for non-drafts collections (the
     // server only overlays a draft it actually has).
-    draft: collection?.draftsEnabled === true,
+    draft: readsHeldDraft(collection),
     locale,
     // Edit the ACTUAL per-locale values — disable fallback so an untranslated field
     // shows empty (not the default-language text, which a save would otherwise persist
@@ -239,7 +240,7 @@ export default function EditEntryPage({
   const storedEntry = useStoredEntry({
     collectionSlug: slug,
     entryId: id,
-    draft: collection?.draftsEnabled === true,
+    draft: readsHeldDraft(collection),
     locale,
     fallbackLocale: localizationEnabled ? "none" : undefined,
     // Held for the schema, as the populated read above is.
