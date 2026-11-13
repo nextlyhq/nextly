@@ -56,12 +56,21 @@ export interface PruneTarget {
   dependents?: readonly { table: string; key: string }[];
   /**
    * Run in each batch's transaction before its rows are deleted, with the keys about to go:
-   * removes other rows those take with them, returning how many it removed.
+   * removes other rows those take with them, and says how many it removed. `holdBack` keeps the
+   * batch's own rows for a later batch: what they take with them was more than one batch's work,
+   * and a row must not go before everything it takes.
    */
   beforeRemove?: (
     db: Pick<DrizzleAdapter, "select" | "delete">,
     keys: readonly string[]
-  ) => Promise<number>;
+  ) => Promise<BeforeRemoveResult>;
+}
+
+/** What {@link PruneTarget.beforeRemove} did. */
+export interface BeforeRemoveResult {
+  removed: number;
+  /** Keep the batch's own rows for a later batch. */
+  holdBack?: boolean;
 }
 
 /**
@@ -81,34 +90,49 @@ export async function pruneInBatches(
   for (let batch = 0; batch < maxBatches; batch++) {
     if (limits.deadline !== undefined && clock() >= limits.deadline) break;
     started = true;
-    // Both tables key their rows by text: an id, or a hash.
-    const rows = await adapter.select<Record<string, string>>(target.table, {
-      columns: [target.key],
-      where: { and: [past] },
-      ...(target.oldestFirst
-        ? { orderBy: [{ column: target.at, direction: "asc" as const }] }
-        : {}),
-      limit: BATCH,
-    });
-    if (rows.length === 0) break;
+    const keys = await readBatchKeys(adapter, target, past);
+    if (keys.length === 0) break;
     const where = {
-      and: [
-        {
-          column: target.key,
-          op: "IN" as const,
-          value: rows.map(row => row[target.key]),
-        },
-        past,
-      ],
+      and: [{ column: target.key, op: "IN" as const, value: keys }, past],
     };
     // In a transaction, never as a lone statement: on SQLite a lone statement
     // joins whatever transaction another flow has open and rolls back with it.
-    removed += adapter.transaction
+    const done = adapter.transaction
       ? await adapter.transaction(tx => removeBatch(tx, target, where))
       : await removeBatch(adapter, target, where);
-    if (rows.length < BATCH) break;
+    removed += done.removed;
+    if (!anotherBatch(done, keys.length)) break;
   }
   return { removed, started };
+}
+
+/** Up to a batch of keys past the cutoff; both tables key their rows by text. */
+async function readBatchKeys(
+  adapter: PruneInBatchesAdapter,
+  target: PruneTarget,
+  past: { column: string; op: "<"; value: Date }
+): Promise<string[]> {
+  const rows = await adapter.select<Record<string, string>>(target.table, {
+    columns: [target.key],
+    where: { and: [past] },
+    ...(target.oldestFirst
+      ? { orderBy: [{ column: target.at, direction: "asc" as const }] }
+      : {}),
+    limit: BATCH,
+  });
+  return rows.map(row => row[target.key]);
+}
+
+/**
+ * Whether the sweep reads another batch. A batch held back is read again by
+ * the next one, which goes on from what this one removed; one that removed
+ * nothing would only repeat. Otherwise a full batch means more may wait.
+ */
+function anotherBatch(
+  done: { removed: number; heldBack: boolean },
+  read: number
+): boolean {
+  return done.heldBack ? done.removed > 0 : read === BATCH;
 }
 
 type BatchWhere = {
@@ -128,7 +152,7 @@ async function removeBatch(
   db: Pick<DrizzleAdapter, "select" | "delete">,
   target: PruneTarget,
   where: BatchWhere
-): Promise<number> {
+): Promise<{ removed: number; heldBack: boolean }> {
   if (
     (target.dependents && target.dependents.length > 0) ||
     target.beforeRemove
@@ -137,25 +161,27 @@ async function removeBatch(
       columns: [target.key],
       where,
     });
-    if (still.length === 0) return 0;
+    if (still.length === 0) return { removed: 0, heldBack: false };
     const keys = still.map(row => row[target.key]);
+    // First, so a batch held back has lost none of its dependents either.
+    const alongside = target.beforeRemove
+      ? await target.beforeRemove(db, keys)
+      : { removed: 0 };
+    if (alongside.holdBack) {
+      return { removed: alongside.removed, heldBack: true };
+    }
     for (const dependent of target.dependents ?? []) {
       await db.delete(dependent.table, {
         and: [{ column: dependent.key, op: "IN", value: keys }],
       });
     }
-    const alongside = target.beforeRemove
-      ? await target.beforeRemove(db, keys)
-      : 0;
-    return (
-      alongside +
-      (await db.delete(target.table, {
-        and: [
-          { column: target.key, op: "IN", value: keys },
-          ...where.and.slice(1),
-        ],
-      }))
-    );
+    const own = await db.delete(target.table, {
+      and: [
+        { column: target.key, op: "IN", value: keys },
+        ...where.and.slice(1),
+      ],
+    });
+    return { removed: alongside.removed + own, heldBack: false };
   }
-  return db.delete(target.table, where);
+  return { removed: await db.delete(target.table, where), heldBack: false };
 }
