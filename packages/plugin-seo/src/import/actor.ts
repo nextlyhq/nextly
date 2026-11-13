@@ -14,7 +14,6 @@ import {
   type ServiceOpts,
 } from "@nextlyhq/plugin-sdk";
 
-import { keepsDrafts } from "../bulk/pages";
 import { asCaller, writablePages } from "../bulk/route";
 import {
   SINGLE_AS_STORED,
@@ -57,10 +56,12 @@ export async function callerActor(
     as: asCaller(ctx),
     single: await singleAccessOf(ctx),
     mayRead: key => caller.can("read", pageTypeOf(key).slug),
+    // Each version is written as its own save, a working draft included.
     writable: (type, ids, locale) =>
       writablePages(ctx, type, ids, {
         locale,
         pagePermissions: options.pagePermissions,
+        versions: true,
       }),
     mayReadMedia: await caller.can("read", "media"),
     userId: ctx.user?.id ?? null,
@@ -69,16 +70,14 @@ export async function callerActor(
 
 /**
  * The site itself, for a command run on the server by whoever runs it: it
- * reads every type and changes every page, except a type that keeps working
- * drafts, whose pages' SEO is changed in each page's editor.
+ * reads every type and changes every version of every page.
  */
-export function siteActor(ctx: PluginContext): ImportActor {
+export function siteActor(_ctx: PluginContext): ImportActor {
   return {
     as: { as: "system" },
     single: SINGLE_AS_STORED,
     mayRead: () => Promise.resolve(true),
-    writable: async (type, ids) =>
-      (await keepsDrafts(ctx, type)) ? new Set() : new Set(ids),
+    writable: (_type, ids) => Promise.resolve(new Set(ids)),
     mayReadMedia: true,
     userId: null,
   };

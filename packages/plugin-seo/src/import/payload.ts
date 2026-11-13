@@ -18,6 +18,7 @@ import {
   ImportFileRefused,
   count,
   idText,
+  originOfAddress,
   pathOfAddress,
   textValue,
   type ImageRef,
@@ -129,15 +130,16 @@ function recordOf(
   locale: string | undefined,
   values: ImportedValues
 ): ImportedRecord {
-  const path = pathOfAddress(
-    textValue(document.url) ?? textValue(document.path)
-  );
+  const address = textValue(document.url) ?? textValue(document.path);
+  const path = pathOfAddress(address);
+  const origin = path === undefined ? undefined : originOfAddress(address);
   const slug = textValue(inLanguage(document.slug, locale).value);
   const ownTitle = textValue(inLanguage(document.title, locale).value);
   return {
     label: ownTitle ?? slug ?? path ?? idText(document.id) ?? "Untitled",
     match: {
       ...(path === undefined ? {} : { path }),
+      ...(origin === undefined ? {} : { origin }),
       ...(slug === undefined ? {} : { slug }),
     },
     values,

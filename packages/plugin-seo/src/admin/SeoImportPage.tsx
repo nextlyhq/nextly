@@ -84,12 +84,14 @@ import {
   type ImportTool,
 } from "./import-files";
 import {
+  firstOfPage,
   neverServedWords,
   otherChanges,
   reportCsv,
   reportedPages,
   resultOf,
   RESULT_WORDS,
+  showsVersions,
   valueCounts,
 } from "./import-report";
 import { entryHref } from "./pages-view";
@@ -195,7 +197,12 @@ function stepsOf(
 }
 
 /** What the header says on each step. */
-function leadOf(step: Step, name: string): string {
+function leadOf(step: Step, name: string, fromFile: boolean): string {
+  // A file's fields are matched by the tool's own names and can't be
+  // changed here; a field group's can.
+  if (step === 1 && fromFile) {
+    return `Each field in the ${name} goes to one place in the plugin, matched by the name the tool gives it.`;
+  }
   if (step === 1) {
     return `Each field in ${name} goes to one place in the plugin. We matched them by name; change any that's wrong.`;
   }
@@ -726,19 +733,22 @@ function NeverServedNote({
 function ValueCell({
   entry,
   place,
+  narrow,
 }: {
   entry: ImportReportEntry;
   place: "title" | "description";
+  /** Whether the table has a Version column beside, so less room. */
+  narrow: boolean;
 }): JSX.Element {
   const result = resultOf(entry, place);
   const value = entry.values[place];
   return (
     <div className="flex items-start justify-between gap-3">
-      {/* At most 13rem wide and two lines, so the table, which sizes its
-          columns to their content, fits its card with every result in view;
-          the whole value is the line's title. */}
+      {/* At most 13rem wide (8rem beside a Version column) and two lines, so
+          the table, which sizes its columns to their content, fits its card
+          with every result in view; the whole value is the line's title. */}
       <span
-        className="line-clamp-2 min-w-0 max-w-52 whitespace-normal text-muted-foreground [overflow-wrap:anywhere]"
+        className={`line-clamp-2 min-w-0 whitespace-normal text-muted-foreground [overflow-wrap:anywhere] ${narrow ? "max-w-32" : "max-w-52"}`}
         title={value ?? undefined}
       >
         {value ?? ""}
@@ -796,6 +806,33 @@ function Counts({ run }: { run: DryRunBody }): JSX.Element {
   );
 }
 
+/** A row's version: its language, where it has one, over its form. */
+function VersionCell({ row }: { row: ImportReportEntry }): JSX.Element {
+  const language = row.language ?? row.locale;
+  if (language === undefined) {
+    return (
+      <span className="whitespace-nowrap text-foreground">
+        {row.version ?? "published"}
+      </span>
+    );
+  }
+  return (
+    <span className="grid whitespace-nowrap">
+      <span className="text-foreground">{language}</span>
+      <span className="text-xs text-muted-foreground">
+        {/* Read as one name: "English · published". */}
+        <span className="sr-only"> · </span>
+        {row.version ?? "published"}
+      </span>
+    </span>
+  );
+}
+
+/** A row's key: its page and its version. */
+function rowKey(row: ImportReportEntry): string {
+  return `${row.type ?? ""}|${row.id ?? row.label}|${row.locale ?? ""}|${row.version ?? ""}`;
+}
+
 /**
  * Where a reported page is edited, on its SEO tab; none for a record that
  * matched no page. Types are keyed by collection slug, or `single:<slug>`.
@@ -815,14 +852,24 @@ function reportedPageHref(row: ImportReportEntry): string | undefined {
 
 /**
  * A reported page's name, opening the page in a new tab so the dry run
- * stays here; a record that matched no page is its name alone.
+ * stays here; a record that matched no page is its name alone. A page's
+ * versions after its first are named for a screen reader only, the name
+ * shown once on its first row.
  */
-function ReportedPage({ row }: { row: ImportReportEntry }): JSX.Element {
+function ReportedPage({
+  row,
+  named,
+}: {
+  row: ImportReportEntry;
+  named: boolean;
+}): JSX.Element {
   const href = reportedPageHref(row);
   const others = otherChanges(row);
   return (
     <div className="grid gap-0.5">
-      {href === undefined ? (
+      {!named ? (
+        <span className="sr-only">{row.label}</span>
+      ) : href === undefined ? (
         <span className="font-medium text-foreground">{row.label}</span>
       ) : (
         <a
@@ -848,23 +895,51 @@ function ReportedPage({ row }: { row: ImportReportEntry }): JSX.Element {
   );
 }
 
-/** The last step: the dry run's counts and each page's result. */
+/**
+ * The last step: the dry run's counts and each page's result, one row per
+ * version where a page is in several languages or has a draft, its name on
+ * the first of them.
+ */
 function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
+  const rows = reportedPages(run);
+  const versions = showsVersions(rows);
+  const named = new Set(
+    rows.filter((_row, at) => firstOfPage(rows, at)).map(rowKey)
+  );
   const columns: NextlyColumn<ImportReportEntry>[] = [
     {
       name: "page",
       header: "Page",
-      cell: ({ row }) => <ReportedPage row={row} />,
+      cell: ({ row }) => (
+        <ReportedPage row={row} named={named.has(rowKey(row))} />
+      ),
     },
+    ...(versions
+      ? [
+          {
+            name: "version",
+            header: "Version",
+            // Its language over its form, so the column stays narrow
+            // enough for the table to fit its card on a smaller screen.
+            cell: ({ row }: { row: ImportReportEntry }) => (
+              <VersionCell row={row} />
+            ),
+          },
+        ]
+      : []),
     {
       name: "title",
       header: "Title on Google",
-      cell: ({ row }) => <ValueCell entry={row} place="title" />,
+      cell: ({ row }) => (
+        <ValueCell entry={row} place="title" narrow={versions} />
+      ),
     },
     {
       name: "description",
       header: "Description on Google",
-      cell: ({ row }) => <ValueCell entry={row} place="description" />,
+      cell: ({ row }) => (
+        <ValueCell entry={row} place="description" narrow={versions} />
+      ),
     },
   ];
   return (
@@ -872,8 +947,8 @@ function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
       <Counts run={run} />
       <DataTableView<ImportReportEntry>
         columns={columns}
-        rows={reportedPages(run)}
-        getRowId={row => `${row.type ?? ""}|${row.id ?? row.label}`}
+        rows={rows}
+        getRowId={rowKey}
         emptyMessage="The source holds no title or description for a page here."
       />
       {run.warnings.length === 0 ? null : (
@@ -1217,6 +1292,7 @@ function useImportFlow() {
     failure,
     stopped,
     name: sourceName(choice, groups),
+    fromFile: choice?.kind === "file",
     ready: group !== undefined || fileRead !== undefined,
     /** Moves to `next`, the dry run worked out again for it. */
     goTo: (next: 0 | 1 | 2) => {
@@ -1345,7 +1421,7 @@ export function SeoImportPage(): JSX.Element {
     <PageFrame type="form">
       <PageHeader
         title="Import SEO values"
-        description={leadOf(flow.step, flow.name)}
+        description={leadOf(flow.step, flow.name, flow.fromFile)}
         breadcrumbs={<SeoTrail steps={[PAGES_STEP, { label: "Import" }]} />}
       />
       {/* One column no wider than the screen: a wide table scrolls inside
