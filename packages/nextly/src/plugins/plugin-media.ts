@@ -237,10 +237,14 @@ function checkedWrite(
 ): (...args: unknown[]) => Promise<unknown> {
   const entry: MediaWriteEntry = MEDIA_WRITES[name];
   const { at, actor: takesActor } = entry;
-  const write = (entry.via?.(service) ?? Reflect.get(service, name)) as (
-    ...args: unknown[]
-  ) => Promise<unknown>;
   return async (...args: unknown[]) => {
+    // Read from the service when the write is called, not when the facade is
+    // built: every plugin context builds this facade, so a host service that
+    // lacks one method must fail only the write that needs it, never the
+    // context and every other write and read with it.
+    const write = (entry.via?.(service) ?? Reflect.get(service, name)) as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
     const opts = (args[at] ?? {}) as ServiceOpts;
     const resolved = await resolveServiceOpts(opts);
     const config = callerConfig(resolved);

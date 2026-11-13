@@ -14,8 +14,11 @@
 //
 // Either one made the destructive-statement guard refuse the whole push, so
 // the column the push existed to add never arrived, and no consent flag
-// could change that. The push must apply, keep `sizes` and its values, and
-// leave both field-group tables exactly as they were.
+// could change that. The push must apply and keep `sizes` and its values.
+// A field group's table now has one shape whoever builds it, defaults
+// included, so the earlier release's table gains those defaults with this
+// push, keeping its columns, its indexes and its rows; this release's table
+// is left exactly as it was.
 //
 // Against a real in-memory SQLite, the real drizzle-kit, and the production
 // DDL of the core tables, the Builder and the field groups.
@@ -84,6 +87,29 @@ const storedSql = (table: string): string | undefined =>
       )
       .get(table) as { sql: string } | undefined
   )?.sql;
+
+/** Each column's declared default, by column name, sorted by name. */
+const defaultsOf = (table: string) =>
+  sqlite
+    .prepare(`SELECT name, dflt_value FROM pragma_table_info(?) ORDER BY name`)
+    .all(table) as Array<{ name: string; dflt_value: string | null }>;
+
+/** The table's column names, sorted, so a rebuild's column order is not judged. */
+const columnNames = (table: string) =>
+  columnsOf(table)
+    .map(column => column.name)
+    .sort();
+
+/** Each index on `table` by name with the columns it keys, in key order. */
+const indexColumns = (table: string) =>
+  indexesOf(table).map(index => [
+    index.name,
+    (
+      sqlite
+        .prepare(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`)
+        .all(index.name) as Array<{ name: string }>
+    ).map(column => column.name),
+  ]);
 
 const columnsOf = (table: string) =>
   sqlite
@@ -194,6 +220,8 @@ describe("a SQLite push through drizzle-kit on a database with unrelated drift",
     const legacyBefore = storedSql(LEGACY_GROUP);
     const currentBefore = storedSql(CURRENT_GROUP);
     const legacyIndexes = indexesOf(LEGACY_GROUP);
+    // Read before the push, so the comparison after it cannot be with itself.
+    const legacyIndexColumns = indexColumns(LEGACY_GROUP);
     const currentIndexes = indexesOf(CURRENT_GROUP);
     // Each has its parent index, so the comparison below has one to lose.
     for (const indexes of [legacyIndexes, currentIndexes]) {
@@ -219,21 +247,20 @@ describe("a SQLite push through drizzle-kit on a database with unrelated drift",
       .get() as { sizes: string | null };
     expect(media.sizes).toBe(SIZES);
 
-    // Neither field-group table was rebuilt: each is as it was created, with
-    // every index it had and its rows. The desired schema also declares a
-    // created_at index these tables were created without, and that one index
-    // is the only thing the push adds to them.
-    expect(storedSql(LEGACY_GROUP)).toBe(legacyBefore);
+    // This release's table was not rebuilt: it is as it was created, with
+    // every index it had.
     expect(storedSql(CURRENT_GROUP)).toBe(currentBefore);
-    for (const [table, before] of [
-      [LEGACY_GROUP, legacyIndexes],
-      [CURRENT_GROUP, currentIndexes],
-    ] as const) {
-      const declared = `idx_${table}_created_at`;
-      const after = indexesOf(table);
-      expect(after.filter(index => index.name !== declared)).toEqual(before);
-      expect(after.map(index => index.name)).toContain(declared);
-    }
+    expect(indexesOf(CURRENT_GROUP)).toEqual(currentIndexes);
+
+    // The earlier release's table gained the defaults this release's table
+    // has, and nothing else: the same columns, and the same indexes on the
+    // same columns, however the rebuild spells their statements.
+    expect(storedSql(LEGACY_GROUP)).not.toBe(legacyBefore);
+    expect(defaultsOf(LEGACY_GROUP)).toEqual(defaultsOf(CURRENT_GROUP));
+    expect(columnNames(LEGACY_GROUP)).toEqual(columnNames(CURRENT_GROUP));
+    expect(indexColumns(LEGACY_GROUP)).toEqual(legacyIndexColumns);
+    // The control: before the push, the two tables' defaults differed.
+    expect(legacyBefore).not.toContain("DEFAULT");
     for (const table of [LEGACY_GROUP, CURRENT_GROUP]) {
       const row = sqlite
         .prepare(`SELECT note FROM ${table} WHERE id = 'row-1'`)
