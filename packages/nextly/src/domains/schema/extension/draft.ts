@@ -58,6 +58,12 @@ export type DraftOwner =
       kind: "entity";
       slug: string;
       entityKind: "collection" | "single" | "component";
+      /**
+       * The plugin that declared the entity, when one did; absent for the
+       * app's own. A plugin building on an entity another plugin declared
+       * must depend on that plugin (`assertMayExtendEntity`).
+       */
+      plugin?: string;
     };
 
 export interface DraftTableView {
@@ -122,6 +128,8 @@ export interface SeedEntityTable {
   name: string;
   slug: string;
   entityKind: "collection" | "single" | "component";
+  /** The plugin whose `contributes` declared the entity; absent for the app's. */
+  ownerPlugin?: string;
   /**
    * The table's real columns — its fields' and its system columns — so a
    * contribution is checked against them. `kind` is omitted where the seed
@@ -236,6 +244,9 @@ export class SchemaDraftStore {
           kind: "entity",
           slug: entity.slug,
           entityKind: entity.entityKind,
+          ...(entity.ownerPlugin !== undefined
+            ? { plugin: entity.ownerPlugin }
+            : {}),
         },
         // Built from the same descriptor path the diff uses, so the draft and
         // the diff agree on column names rather than each deriving their own.
@@ -480,6 +491,64 @@ function isPluginOnDependencyTable(
 }
 
 /**
+ * Refuse a plugin building on a collection, Single or field group another
+ * plugin declared, unless it names that plugin among its dependencies.
+ *
+ * The same rule a plugin's own tables follow (`isPluginOnDependencyTable`):
+ * the dependency is what keeps the entity's owner from being uninstalled
+ * while a column or index another plugin hung on it is still there, and what
+ * puts the two in a known order. The app, the entity's own plugin, and any
+ * plugin extending the app's own entities need no dependency: no plugin can
+ * declare the app as one, and the app's entities are what plugins extend.
+ */
+function assertMayExtendEntity(table: DraftTable, scope: ExtendScope): void {
+  if (table.owner.kind !== "entity" || scope.owner.kind !== "plugin") return;
+  const declaredBy = table.owner.plugin;
+  if (declaredBy === undefined || declaredBy === scope.owner.id) return;
+  if (scope.mayIndexForeignTablesOf?.has(declaredBy) === true) return;
+  refuse(
+    `${scope.ownerPath}.extendTable.${table.name}`,
+    `${describeOwner(scope.owner)} may not extend the ${table.owner.entityKind} "${table.owner.slug}", which plugin "${declaredBy}" declared. Name "${declaredBy}" in dependsOn (or optionalDependsOn) to extend it.`
+  );
+}
+
+/**
+ * Refuse a plugin's index over a column a THIRD owner contributed, unless the
+ * plugin names that contributor among its dependencies.
+ *
+ * The column exists only while its contributor is installed, and arrives in
+ * the contributor's migrations. Without the dependency nothing orders the two
+ * plugins, so the index could be created before the column it names, and the
+ * contributor could be uninstalled from under it. The app is exempt: its
+ * stream runs after every plugin's, and it may build on anything.
+ */
+function assertIndexColumnsReachable(
+  index: ExtensionIndex,
+  table: DraftTable,
+  scope: ExtendScope
+): void {
+  if (scope.owner.kind !== "plugin") return;
+  for (const name of index.columns) {
+    const contributor = table.columns.find(
+      column => column.name === name
+    )?.contributedBy;
+    if (contributor === undefined || sameOwner(contributor, scope.owner)) {
+      continue;
+    }
+    if (
+      contributor.kind === "plugin" &&
+      scope.mayIndexForeignTablesOf?.has(contributor.id) === true
+    ) {
+      continue;
+    }
+    refuse(
+      `${scope.ownerPath}.extendTable.${table.name}`,
+      `${describeOwner(scope.owner)} may not index the column "${name}" on "${table.name}": ${describeOwner(contributor)} contributed it. Name it in dependsOn (or optionalDependsOn), so its migrations run first and it can't be uninstalled from under the index.`
+    );
+  }
+}
+
+/**
  * Refuse a column the table already declares, or a second primary key.
  *
  * The one-key rule `defineTable` applies, applied to the table as it stands:
@@ -649,6 +718,7 @@ function addIndexes(
       );
     }
     const resolved = contributedIndexOf(index, scope);
+    assertIndexColumnsReachable(resolved, table, scope);
     assertSeededIndexBuildable(resolved, table);
     table.indexes.push(resolved);
   }
@@ -795,6 +865,12 @@ export function createOwnerDraft(
             ? store.dependencies?.get(owner.id)
             : undefined,
       };
+      // Judged before anything is added, so a refused contribution leaves
+      // the entity exactly as it was.
+      const contributes =
+        Object.keys(ext.columns ?? {}).length > 0 ||
+        (ext.indexes ?? []).length > 0;
+      if (contributes) assertMayExtendEntity(table, scope);
       addColumns(table, ext.columns, scope);
       addIndexes(table, ext.indexes ?? [], scope);
     },
