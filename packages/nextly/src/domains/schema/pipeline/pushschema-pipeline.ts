@@ -1958,8 +1958,13 @@ export class PushSchemaPipeline {
     // instead of collection columns (title, slug). FieldGroupSchemaService
     // owns that column layout; generateRuntimeSchema would inject wrong
     // system columns.
-    const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
     for (const c of Object.values(desired.components)) {
+      // Rendered as DDL by drizzle-kit, so the builder that made it is named here too, as for a
+      // Single above: a code-first field group's text is 255 wide, a Builder one's unbounded.
+      const fieldGroupSchemaService = new FieldGroupSchemaService(
+        dialect,
+        builtByFor("fieldGroup", c.builderOwned)
+      );
       // i18n: omit a localized component's translatable columns from the main
       // comp_ table handed to drizzle-kit (they live in comp_<slug>_locales,
       // provisioned out-of-band) — same rule as collections/singles above.

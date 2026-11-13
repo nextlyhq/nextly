@@ -809,110 +809,90 @@ describeEachDialect(
       });
     }, 120_000);
 
-    // MySQL refuses adding a translated relationship to a translated collection as if the new
-    // column were reshaped (field-leaves-translation-rules); re-enable once that refusal is fixed.
-    const translatedRelationshipRefused = dialect === "mysql";
-
     // -------------------------------------------------------------------------
     // Translated
     // -------------------------------------------------------------------------
 
-    it.skipIf(translatedRelationshipRefused)(
-      "makes a translated one-to-one unique within each language",
-      async () => {
-        const t = await boot(dialect, "oneToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        const profile = await aProfile(t, ada, "en");
+    it("makes a translated one-to-one unique within each language", async () => {
+      const t = await boot(dialect, "oneToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      const profile = await aProfile(t, ada, "en");
 
-        // The same profile's other language may point at the same person.
-        await t.nextly.update({
-          collection: PROFILES,
-          id: profile,
-          locale: "de",
-          data: { person: ada, _overwrite: true },
-        });
-        // Another profile may not, in either language.
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
-        expect(await refusedAsRepeat(aProfile(t, ada, "de"))).toBe(true);
-      },
-      120_000
-    );
+      // The same profile's other language may point at the same person.
+      await t.nextly.update({
+        collection: PROFILES,
+        id: profile,
+        locale: "de",
+        data: { person: ada, _overwrite: true },
+      });
+      // Another profile may not, in either language.
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+      expect(await refusedAsRepeat(aProfile(t, ada, "de"))).toBe(true);
+    }, 120_000);
 
-    it.skipIf(translatedRelationshipRefused)(
-      "makes a translated many-to-one edited into a one-to-one unique within each language",
-      async () => {
-        const t = await boot(dialect, "manyToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        const profile = await aProfile(t, ada, "en");
+    it("makes a translated many-to-one edited into a one-to-one unique within each language", async () => {
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      const profile = await aProfile(t, ada, "en");
 
-        await apply(t, profileFields("oneToOne", true), true);
+      await apply(t, profileFields("oneToOne", true), true);
 
-        await t.nextly.update({
-          collection: PROFILES,
-          id: profile,
-          locale: "de",
-          data: { person: ada, _overwrite: true },
-        });
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
-      },
-      120_000
-    );
+      await t.nextly.update({
+        collection: PROFILES,
+        id: profile,
+        locale: "de",
+        data: { person: ada, _overwrite: true },
+      });
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+    }, 120_000);
 
-    it.skipIf(translatedRelationshipRefused)(
-      "refuses a translated many-to-one edited into a one-to-one while two profiles in one language point at one person, and changes nothing",
-      async () => {
-        const t = await boot(dialect, "manyToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        await aProfile(t, ada, "en");
-        await aProfile(t, ada, "en");
+    it("refuses a translated many-to-one edited into a one-to-one while two profiles in one language point at one person, and changes nothing", async () => {
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada, "en");
+      await aProfile(t, ada, "en");
 
-        // With an untranslated field added in the same save, whose column the main table's push
-        // would add before the translations table's index is created.
-        const outcome = await apply(
-          t,
-          [...profileFields("oneToOne", true), { name: "bio", type: "text" }],
-          true
-        ).then(
-          () => undefined,
-          (error: unknown) => error
-        );
+      // With an untranslated field added in the same save, whose column the main table's push
+      // would add before the translations table's index is created.
+      const outcome = await apply(
+        t,
+        [...profileFields("oneToOne", true), { name: "bio", type: "text" }],
+        true
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
 
-        expect(NextlyError.is(outcome)).toBe(true);
-        expect((outcome as NextlyError).code).toBe("VALIDATION_ERROR");
-        expect(JSON.stringify((outcome as NextlyError).publicData)).toContain(
-          `in \\"en\\", these documents share a value`
-        );
-        // Nothing ran: no column added, and a third profile in English still points at the same
-        // person.
-        const live = await introspectLiveSnapshot(
-          t.adapter.getDrizzle(),
-          t.adapter.dialect,
-          [PROFILES_TABLE]
-        );
-        expect(
-          live.tables[0]?.columns.map(column => column.name)
-        ).not.toContain("bio");
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(false);
-      },
-      120_000
-    );
+      expect(NextlyError.is(outcome)).toBe(true);
+      expect((outcome as NextlyError).code).toBe("VALIDATION_ERROR");
+      expect(JSON.stringify((outcome as NextlyError).publicData)).toContain(
+        `in \\"en\\", these documents share a value`
+      );
+      // Nothing ran: no column added, and a third profile in English still points at the same
+      // person.
+      const live = await introspectLiveSnapshot(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect,
+        [PROFILES_TABLE]
+      );
+      expect(live.tables[0]?.columns.map(column => column.name)).not.toContain(
+        "bio"
+      );
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(false);
+    }, 120_000);
 
-    it.skipIf(translatedRelationshipRefused)(
-      "keeps a one-to-one unique as translation is turned on and then off",
-      async () => {
-        const t = await boot(dialect, "oneToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        await aProfile(t, ada, "en");
+    it("keeps a one-to-one unique as translation is turned on and then off", async () => {
+      const t = await boot(dialect, "oneToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada, "en");
 
-        // Translation on for the field: its uniqueness follows its column to each language.
-        await apply(t, profileFields("oneToOne", true), true);
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+      // Translation on for the field: its uniqueness follows its column to each language.
+      await apply(t, profileFields("oneToOne", true), true);
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
 
-        // And off again: back on the main table, unique there.
-        await apply(t, profileFields("oneToOne", false), true);
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
-      },
-      120_000
-    );
+      // And off again: back on the main table, unique there.
+      await apply(t, profileFields("oneToOne", false), true);
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+    }, 120_000);
   }
 );
