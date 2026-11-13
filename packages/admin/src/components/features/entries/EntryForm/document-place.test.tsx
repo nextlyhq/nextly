@@ -19,10 +19,7 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   useBranding: () => branding.value,
 }));
 
-import {
-  useWithoutWithheldFields,
-  type DocumentPlace,
-} from "./document-place";
+import { useWithoutWithheldFields, type DocumentPlace } from "./document-place";
 
 const place = (collection: string): DocumentPlace =>
   ({
@@ -35,22 +32,19 @@ const fields = [{ name: "title" }, { name: "seo" }, { name: "body" }];
 describe("useWithoutWithheldFields", () => {
   it("leaves out of a past version the fields withheld on its type", () => {
     const { result } = renderHook(() =>
-      useWithoutWithheldFields(place("authors"), fields)
+      useWithoutWithheldFields(place("authors").context, fields)
     );
-    expect(result.current?.map(field => field.name)).toEqual([
-      "title",
-      "body",
-    ]);
+    expect(result.current?.map(field => field.name)).toEqual(["title", "body"]);
   });
 
   it("keeps every field on a type with none withheld, and nothing viewed as nothing", () => {
     expect(
-      renderHook(() => useWithoutWithheldFields(place("posts"), fields)).result
-        .current
+      renderHook(() => useWithoutWithheldFields(place("posts").context, fields))
+        .result.current
     ).toEqual(fields);
     expect(
-      renderHook(() => useWithoutWithheldFields(place("authors"), null)).result
-        .current
+      renderHook(() => useWithoutWithheldFields(place("authors").context, null))
+        .result.current
     ).toBeNull();
   });
 });

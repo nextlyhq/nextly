@@ -977,7 +977,12 @@ export function SingleForm({
   // Single, whose slug its config fixes). Per the
   // special-casing. Any user-defined field with admin.position: "sidebar"
   // now renders inline like every other Builder field.
-  const allFields = schema.fields;
+  // Less any field a plugin's switch keeps off this Single, which is then
+  // drawn nowhere and never decides the takeover layout.
+  const allFields = useWithoutWithheldFields(
+    { single: schema.slug },
+    schema.fields
+  ) as typeof schema.fields;
   const titleField = allFields.find(f => "name" in f && f.name === "title");
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
   // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
@@ -1575,7 +1580,7 @@ export function SingleForm({
   // A past version is drawn as it was stored, less any field a plugin's
   // switch keeps off this Single now.
   const shownHistoricalFields = useWithoutWithheldFields(
-    documentPlace,
+    documentPlace.context,
     historicalFields
   );
   // The side panel's sections in the order the server placed them, with the

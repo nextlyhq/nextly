@@ -31,6 +31,8 @@ const READER = "user-esw-reader";
 
 /** The types the plugin's switch has `notes` off on, as the test sets them. */
 const off = new Set<string>();
+/** How many times the switch was asked. */
+const asked = { count: 0 };
 
 /** Adds `notes` to every content type, with a tab following it, and a switch. */
 const NOTES: PluginDefinition = {
@@ -46,10 +48,12 @@ const NOTES: PluginDefinition = {
     ],
     services: {
       [EXTENSION_SWITCH_SERVICE]: () => ({
-        switchedOff: (field: string) =>
-          field === "notes"
+        switchedOff: (field: string) => {
+          asked.count += 1;
+          return field === "notes"
             ? [...off].map(slug => ({ kind: "collection" as const, slug }))
-            : [],
+            : [];
+        },
       }),
     },
     admin: {
@@ -84,6 +88,7 @@ const collections = () => [
 let current: TestNextly | undefined;
 afterEach(async () => {
   off.clear();
+  asked.count = 0;
   await current?.destroy();
   current = undefined;
 });
@@ -168,6 +173,22 @@ describe.each(getConfiguredTestDialects())(
       const back = await workspace();
       expect(tabCollections(back)).toEqual([POSTS, LOGS]);
       expect(back.withheldFields).toBeUndefined();
+    });
+
+    it("never asks the switch for the public branding, which a visitor reads", async () => {
+      await boot(dialect);
+      const handlers = createDynamicHandlers({
+        config: sanitizeConfig({ collections: [], plugins: [NOTES] }),
+      });
+      const res = await handlers.GET(
+        new Request("http://localhost/api/admin-meta"),
+        { params: Promise.resolve({ params: ["admin-meta"] }) }
+      );
+      expect(res.status).toBe(200);
+      expect(asked.count).toBe(0);
+      // The workspace, for a signed-in reader, does ask it.
+      await workspace();
+      expect(asked.count).toBeGreaterThan(0);
     });
   }
 );

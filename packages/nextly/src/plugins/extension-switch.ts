@@ -101,16 +101,26 @@ export async function switchedOffExtensions(
   return off;
 }
 
-/** Every field each plugin's `extend` adds, by plugin. */
+/**
+ * Every field each plugin's `extend` adds, by plugin, or with
+ * `"switchable"` only those its switch may turn off: never a required one,
+ * since a page that drew it nowhere could not be saved, so a required field
+ * is always shown.
+ */
 export function extensionFieldsOf(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  which: "all" | "switchable" = "all"
 ): Record<string, string[]> {
   const fields: Record<string, string[]> = {};
   for (const plugin of plugins) {
     const names = (plugin.contributes?.extend ?? []).flatMap(clause =>
       clause.fields.flatMap(field => {
-        const name = (field as { name?: unknown }).name;
-        return typeof name === "string" ? [name] : [];
+        const { name, required } = field as {
+          name?: unknown;
+          required?: unknown;
+        };
+        const kept = which === "all" || required !== true;
+        return typeof name === "string" && kept ? [name] : [];
       })
     );
     if (names.length > 0) fields[plugin.name] = [...new Set(names)];

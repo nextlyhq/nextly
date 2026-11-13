@@ -196,19 +196,20 @@ export function topLevelFieldNames(
 }
 
 /**
- * `fields` less the ones a plugin's switch keeps off this type
- * (`withheldFields`): for a past version's fields, which the page draws as
- * the version stored them, tab fields included, but never a withheld one.
- * `null` stays `null`, as nothing is being viewed.
+ * `fields` less the ones a plugin's switch keeps off the type `context`
+ * names (`withheldFields`): the fields an editor lays out and draws, live,
+ * embedded or a past version, so a withheld field is drawn nowhere and
+ * never decides the layout. Their values stay in the form. `null` stays
+ * `null`, as when no past version is being viewed.
  */
 export function useWithoutWithheldFields<F extends { name?: unknown }>(
-  place: DocumentPlace,
+  context: unknown,
   fields: F[] | null
 ): F[] | null {
   const { withheldFields } = useBranding();
-  const withheldKey = [
-    ...fieldsWithheldHere(withheldFields, place.context),
-  ].join("\u0000");
+  const withheldKey = [...fieldsWithheldHere(withheldFields, context)].join(
+    "\u0000"
+  );
   return useMemo(() => {
     if (fields === null || withheldKey === "") return fields;
     const withheld = new Set(withheldKey.split("\u0000"));

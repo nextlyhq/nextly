@@ -186,17 +186,17 @@ import {
   listFiltersForReader,
   type ContributionAudience,
 } from "./plugins/admin-contributions-offer";
-import {
-  extensionFieldsOf,
-  switchedOffExtensions,
-  withheldFieldsOf,
-} from "./plugins/extension-switch";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import {
   contributionAudienceFor,
   NOBODY,
 } from "./plugins/contribution-audience";
 import { assertDocumentSurfaces } from "./plugins/document-surfaces";
+import {
+  extensionFieldsOf,
+  switchedOffExtensions,
+  withheldFieldsOf,
+} from "./plugins/extension-switch";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
@@ -2220,11 +2220,16 @@ async function buildAdminMeta(
   // What each plugin's extension switch has off now, read once: its
   // contributions that follow those fields are withheld there, and the
   // fields themselves are drawn nowhere on those types' pages.
-  const switchedOff = await switchedOffExtensions(
-    config?.plugins ?? [],
-    extensionFieldsOf(config?.plugins ?? []),
-    consoleLogger
-  );
+  // Asked for a signed-in reader only: the public branding route offers
+  // nothing a switch narrows, and is never kept waiting on one.
+  const switchedOff =
+    offerTo === NOBODY
+      ? new Map()
+      : await switchedOffExtensions(
+          config?.plugins ?? [],
+          extensionFieldsOf(config?.plugins ?? [], "switchable"),
+          consoleLogger
+        );
   const contributions = await contributionsForReader(
     config?.plugins ?? [],
     offerTo,

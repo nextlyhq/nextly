@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   EXTENSION_SWITCH_SERVICE,
+  extensionFieldsOf,
   switchedOffExtensions,
   withheldFieldsOf,
 } from "./extension-switch";
@@ -93,5 +94,32 @@ describe("withheldFieldsOf", () => {
       "@acme/notes": ["notes"],
     });
     expect(withheldFieldsOf(off)).toEqual({ "collection:logs": ["notes"] });
+  });
+});
+
+describe("extensionFieldsOf", () => {
+  it("names each field a plugin's extend adds, but never a required one", () => {
+    expect(
+      extensionFieldsOf(
+        [
+          {
+            ...plugin("@acme/notes"),
+            contributes: {
+              extend: [
+                {
+                  target: { every: ["collection"] },
+                  fields: [
+                    { name: "notes", type: "text" },
+                    // Required: a page that drew it nowhere could not be saved.
+                    { name: "code", type: "text", required: true },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+        "switchable"
+      )
+    ).toEqual({ "@acme/notes": ["notes"] });
   });
 });
