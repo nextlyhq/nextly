@@ -12,6 +12,7 @@
  * Works in both Node and Edge runtimes (uses Web Crypto's
  * `crypto.getRandomValues`).
  */
+import { carryDatesFormatted } from "../shared/lib/dates-formatted";
 
 const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -83,9 +84,13 @@ export function withRequestIdHeader(
   if (response.headers.has("x-request-id")) return response;
   const headers = new Headers(response.headers);
   headers.set("x-request-id", requestId);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  // A copy of the response: whether its dates are formatted goes with it.
+  return carryDatesFormatted(
+    response,
+    new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+  );
 }
