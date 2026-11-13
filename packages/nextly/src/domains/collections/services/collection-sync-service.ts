@@ -63,7 +63,10 @@ import {
 import type { SupportedDialect } from "../../../types/database";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
-import { flushContentChange } from "../../flush-content-change";
+import {
+  deletedEntityIntent,
+  flushContentChange,
+} from "../../flush-content-change";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 import { busyTableBounds } from "../../schema/busy-table/bounds";
@@ -988,7 +991,8 @@ export class CollectionSyncService extends BaseService {
             // companion holds an FK to `<main>.id` — so the main drop below cascades
             // nothing onto the former and is rejected by the latter on MySQL. Doing this
             // first also means a failure leaves the registry row intact, so the orphan is
-            // detected again on the next sync instead of being silently lost.
+            // detected again on the next sync instead of being silently lost; the table's own
+            // drop comes before the registry delete for the same reason.
             await teardownEntityComponentData({
               adapter: this.adapter,
               parentTable: tableName,
@@ -999,6 +1003,47 @@ export class CollectionSyncService extends BaseService {
               slug,
               tableName,
             });
+
+            // The table is dropped before the registry entry is deleted: a drop that stops (a
+            // busy table whose tries ran out, say) leaves the entry, so the next sync still finds
+            // the orphan and drops it then. Deleted first, the entry would be gone and the table
+            // with it out of every later sync's sight.
+            const capabilities = this.adapter.getCapabilities();
+            const q = capabilities.dialect === "mysql" ? "`" : '"';
+            const sql =
+              capabilities.dialect === "postgresql"
+                ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
+                : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
+            // The drop waits for a table another session is using in tries on one connection,
+            // bounded by `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's notice
+            // through the logger's warning; one that stays busy throws `NEXTLY_TABLE_BUSY`,
+            // naming what this pass did before it.
+            // What expires the collection's cached reads, read from its registry row while the
+            // row is there; best effort, as the registry's own delete reads it again below.
+            const dropIntent = await this.registry
+              .getCollection(slug)
+              .then(record =>
+                deletedEntityIntent("collection", slug, record.revalidate)
+              )
+              .catch(() => undefined);
+            applied.push(
+              ...(await runStatementsInTries(this.adapter, [sql], {
+                change,
+                bounds,
+                notify: line => this.logger.warn(line),
+                appliedBefore: applied,
+                name: () => `the drop of table ${JSON.stringify(tableName)}`,
+              }))
+            );
+            // Its cached reads point at a table that is gone: expired as soon as the drop has
+            // run, whatever the registry delete below then does.
+            await this.afterCommit(() =>
+              flushContentChange(
+                dropIntent,
+                this.logger,
+                "an orphaned collection's table was dropped"
+              )
+            );
 
             // Delete from registry directly via raw query to avoid
             // re-fetch issues with getCollection/updateCollection. The
@@ -1013,39 +1058,20 @@ export class CollectionSyncService extends BaseService {
             const { expire } = await this.adapter.transaction(tx =>
               deleteEntityRegistryRow(tx, "collection", slug, tables)
             );
-            // Its cached reads describe a collection that is gone from the
-            // registry: expired once that is durable, before the table drop,
-            // which can fail and would otherwise leave them live.
-            await this.afterCommit(() =>
-              flushContentChange(
-                expire,
-                this.logger,
-                "an orphaned collection was deleted"
-              )
-            );
+            // Expired above once the table was dropped; here only where its setting could not be
+            // read then.
+            if (dropIntent === undefined) {
+              await this.afterCommit(() =>
+                flushContentChange(
+                  expire,
+                  this.logger,
+                  "an orphaned collection was deleted"
+                )
+              );
+            }
 
             applied.push(
               `${change}: the registry entry of collection ${JSON.stringify(slug)}`
-            );
-
-            const capabilities = this.adapter.getCapabilities();
-            const q = capabilities.dialect === "mysql" ? "`" : '"';
-            const sql =
-              capabilities.dialect === "postgresql"
-                ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
-                : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
-            // The drop waits for a table another session is using in tries on one connection,
-            // bounded by `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's notice
-            // through the logger's warning; one that stays busy throws `NEXTLY_TABLE_BUSY`,
-            // naming what this pass did before it.
-            applied.push(
-              ...(await runStatementsInTries(this.adapter, [sql], {
-                change,
-                bounds,
-                notify: line => this.logger.warn(line),
-                appliedBefore: applied,
-                name: () => `the drop of table ${JSON.stringify(tableName)}`,
-              }))
             );
 
             deletedSlugs.add(slug);

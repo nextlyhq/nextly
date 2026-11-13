@@ -970,7 +970,7 @@ async function detectRemovedSingles(
 }
 
 /**
- * Delete orphaned singles: remove registry entry and drop data table.
+ * Delete orphaned singles: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getSingle/updateSingle.
  */
 async function handleRemovedSingles(
@@ -995,6 +995,23 @@ async function handleRemovedSingles(
       await teardownEntityComponentData({ adapter, parentTable: tableName });
       await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
+      const sql =
+        dialect === "postgresql"
+          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
+          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
+      applied.push(
+        ...(await runSyncStatements(adapter, [sql], {
+          change,
+          bounds,
+          logger,
+          appliedBefore: applied,
+          name: () => `the drop of table ${JSON.stringify(tableName)}`,
+        }))
+      );
+
       // Delete the registry entry directly, then the Single's autosaves and
       // version pins, in one transaction and in that order, as the
       // registry's own delete does: see `deleteEntityRegistryRow`.
@@ -1008,21 +1025,6 @@ async function handleRemovedSingles(
       );
       applied.push(
         `${change}: the registry entry of single ${JSON.stringify(slug)}`
-      );
-
-      // Drop the data table, waiting for it in tries where another session is using it.
-      const sql =
-        dialect === "postgresql"
-          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
-          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
-      applied.push(
-        ...(await runSyncStatements(adapter, [sql], {
-          change,
-          bounds,
-          logger,
-          appliedBefore: applied,
-          name: () => `the drop of table ${JSON.stringify(tableName)}`,
-        }))
       );
 
       logger.success(`Deleted orphaned single: ${slug} (table: ${tableName})`);
@@ -1053,7 +1055,7 @@ async function detectRemovedComponents(
 }
 
 /**
- * Delete orphaned components: remove registry entry and drop data table.
+ * Delete orphaned components: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getComponent/updateComponent.
  */
 /**
@@ -1122,18 +1124,9 @@ async function deleteOrphanedComponents(
         kind: "fieldGroup",
       });
 
-      // Delete registry entry directly
-      // Resolved: this delete runs AFTER the nested instances and localized
-      // data are torn down, so addressing a registry that is not there fails
-      // once the dependent content is already gone.
-      await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
-        and: [{ column: "slug", op: "=", value: slug }],
-      });
-      applied.push(
-        `${change}: the registry entry of field group ${JSON.stringify(slug)}`
-      );
-
-      // Drop the data table, waiting for it in tries where another session is using it.
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
       const sql =
         dialect === "postgresql"
           ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
@@ -1146,6 +1139,17 @@ async function deleteOrphanedComponents(
           appliedBefore: applied,
           name: () => `the drop of table ${JSON.stringify(tableName)}`,
         }))
+      );
+
+      // Delete registry entry directly
+      // Resolved: this delete runs AFTER the nested instances and localized
+      // data are torn down, so addressing a registry that is not there fails
+      // once the dependent content is already gone.
+      await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
+        and: [{ column: "slug", op: "=", value: slug }],
+      });
+      applied.push(
+        `${change}: the registry entry of field group ${JSON.stringify(slug)}`
       );
 
       logger.success(
