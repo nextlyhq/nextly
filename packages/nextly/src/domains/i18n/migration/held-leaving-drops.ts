@@ -10,9 +10,13 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { applyMigrationWhole } from "../../schema/services/apply-migration-statements";
+import {
+  applyMigrationWhole,
+  applyStatementsInTries,
+  type BusyTableWait,
+} from "../../schema/services/apply-migration-statements";
 
-import { ensureI18nArchive } from "./ensure-archive";
+import { ensureI18nArchive, runI18nSchemaStatements } from "./ensure-archive";
 import type { CompanionTransitionPlan } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
 
@@ -39,17 +43,22 @@ import type { I18nTransitionKind } from "./transition-state";
 export async function applyCompanionTransition(args: {
   adapter: DrizzleAdapter;
   plan: CompanionTransitionPlan;
+  /**
+   * Where given (a Schema Builder save), the plan's statements and its held drops wait for a table
+   * another session is using in short tries, as `nextly migrate` waits; without it, they run once.
+   */
+  busyTable?: BusyTableWait;
   /** Planned with `holdLeavingDrops`: applies the settings, throwing when they are refused. */
   settleLeaving?: () => Promise<void>;
   kind: I18nTransitionKind;
   slug: string;
   tableName: string;
 }): Promise<void> {
-  const { adapter, plan, settleLeaving } = args;
-  await applyCompanionStatements(adapter, plan);
+  const { adapter, plan, settleLeaving, busyTable } = args;
+  await applyCompanionStatements(adapter, plan, busyTable);
   if (settleLeaving) {
     await settleLeaving();
-    await dropHeldLeavingFields(adapter, plan, args.kind);
+    await dropHeldLeavingFields(adapter, plan, args.kind, busyTable);
   }
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale:
@@ -78,15 +87,29 @@ export async function applyCompanionTransition(args: {
  */
 export async function applyCompanionStatements(
   adapter: DrizzleAdapter,
-  plan: Pick<CompanionTransitionPlan, "needsArchive" | "statements">
+  plan: Pick<CompanionTransitionPlan, "needsArchive" | "statements">,
+  busyTable?: BusyTableWait
 ): Promise<void> {
   if (plan.needsArchive) {
     await ensureI18nArchive(adapter, adapter.dialect);
   }
-  // One at a time: `executeQuery` runs a single statement on some drivers, SQLite's among them.
-  for (const statement of plan.statements) {
-    await adapter.executeQuery(statement);
+  if (busyTable !== undefined) {
+    // The same one-at-a-time run, strict, waiting for a busy table in short tries.
+    await applyStatementsInTries(
+      busyTable,
+      plan.statements,
+      "the translations table's change"
+    );
+    return;
   }
+  // One at a time: `executeQuery` runs a single statement on some drivers, SQLite's among them.
+  // Each waits for a table another database session holds in short tries, then stops with
+  // `NEXTLY_TABLE_BUSY` naming it and its holder, rather than holding the save without bound.
+  await runI18nSchemaStatements(
+    adapter,
+    plan.statements,
+    "the localization change"
+  );
 }
 
 /**
@@ -98,14 +121,44 @@ export async function applyCompanionStatements(
 export async function dropHeldLeavingFields(
   adapter: DrizzleAdapter,
   plan: Pick<CompanionTransitionPlan, "leavingDrops">,
-  entity: string
+  entity: string,
+  busyTable?: BusyTableWait
 ): Promise<void> {
   const drops = plan.leavingDrops ?? [];
   if (drops.length === 0) return;
+  // Run as one unit in short tries for a table another database session holds: a try that waited
+  // is rolled back whole on PostgreSQL and SQLite and the next runs the drops again from the first,
+  // and the tries stop with `NEXTLY_TABLE_BUSY` naming the table and its holder rather than holding
+  // the save without bound (`runUnitInTries`). Inside an open transaction, where a unit of its own
+  // is refused, they run once, whole, as before.
+  if (!adapter.inTransaction()) {
+    const [{ runUnitInTries }, { busyTableBounds }, { consoleLogger }] =
+      await Promise.all([
+        import("../../schema/busy-table/run-unit"),
+        import("../../schema/busy-table/bounds"),
+        import("../../../shared/types"),
+      ]);
+    await runUnitInTries(
+      adapter,
+      drops,
+      {
+        source: `the drop of the ${entity}'s columns leaving translation`,
+        transaction: true,
+      },
+      () => Promise.resolve(),
+      {
+        bounds: busyTableBounds({ env: process.env }),
+        notify: line => consoleLogger.warn(line),
+        appliedBefore: () => [],
+      }
+    );
+    return;
+  }
   await applyMigrationWhole({
     db: adapter.getDrizzle(),
     dialect: adapter.getCapabilities().dialect,
     migrationSQL: drops.join("\n--> statement-breakpoint\n"),
     entity,
+    ...(busyTable === undefined ? {} : { busyTable }),
   });
 }

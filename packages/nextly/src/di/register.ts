@@ -1877,6 +1877,10 @@ async function prepareBootSchema(
     // see the same set.
     plugins: transformedPlugins,
     config: transformedConfig,
+    // The connected server's limits, so a declared check it will not enforce
+    // or an expression index it cannot build is refused at the compile,
+    // before the push applies anything.
+    server: adapter.getCapabilities(),
     logger,
   });
 }

@@ -1699,6 +1699,40 @@ pass the same directory as `nextBuildDir`.
 
 </Callout>
 
+## Upgrading while the earlier release still serves
+
+A deploy rarely swaps every server at once. A rolling update starts the new servers before it
+stops the old ones, and a serverless host can keep an older deployment answering for hours.
+For a while, then, the earlier release of the plugin and the new one both serve the same
+database.
+
+Some releases move what the plugin keeps to a new place. 0.0.2-alpha.76 moves the record of
+which page holds each address from the collection `nx_seo_addresses` to the table
+`seo__addresses` (with its notes in `seo__notes`), and the not-found log from
+`nx_seo_not_found` to `seo__not_found`. Both moves run by themselves when the new release
+starts. From the release after 0.0.2-alpha.76, neither loses anything, even while servers of
+the earlier release keep writing the old places, and a site that upgraded to 0.0.2-alpha.76
+while old servers still ran is repaired the first time the later release starts:
+
+- **The address record.** The move keeps the old collection's size and the time of its newest
+  row. Each start compares them again, and so does each long-running server once more, half an
+  hour after it starts. When they changed, an earlier server saved, moved or deleted a page
+  meanwhile, so the plugin rebuilds the record from the pages themselves, makes the redirects
+  owed for the moves those servers noted, and takes over the redirects they saved. A start where
+  nothing changed costs one small read and writes nothing.
+- **The not-found log.** Each start, and the same later check, moves any address an earlier
+  server logged meanwhile.
+
+While both releases serve, each one keeps an address to one page only among the pages it saves
+itself, so two pages saved on different releases can end up asking for one address. The next
+start of the new release settles it: the page already holding the address keeps it, the other
+is left without one, and the [Problems](#problems) list says its last full check is out of date
+until it runs again, when it names the page.
+
+The old collections stay in place, and the plugin records in `seo__notes` when each has been
+taken in. A later release will stop declaring them once those notes show it is safe; until
+then, leave them.
+
 ## Next steps
 
 - [Routing and SEO](/docs/guides/routing-and-seo) for rendering the tags and serving the sitemap

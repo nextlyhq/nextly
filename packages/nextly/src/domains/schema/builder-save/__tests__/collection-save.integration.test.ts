@@ -361,6 +361,117 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    describe("while another session holds the collection's table", () => {
+      let free: () => void = () => {};
+      let holding: Promise<unknown> = Promise.resolve();
+      let holder: DrizzleAdapter | undefined;
+      const previous = {
+        tryBound: process.env.NEXTLY_LOCK_TIMEOUT,
+        total: process.env.NEXTLY_LOCK_TIMEOUT_TOTAL,
+      };
+
+      beforeEach(() => {
+        // Short bounds, so the tries run in seconds: one second a try, four in all.
+        process.env.NEXTLY_LOCK_TIMEOUT = "1";
+        process.env.NEXTLY_LOCK_TIMEOUT_TOTAL = "4";
+      });
+
+      afterEach(async () => {
+        free();
+        await holding.catch(() => {});
+        await holder?.disconnect();
+        holder = undefined;
+        for (const [key, value] of [
+          ["NEXTLY_LOCK_TIMEOUT", previous.tryBound],
+          ["NEXTLY_LOCK_TIMEOUT_TOTAL", previous.total],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      });
+
+      /**
+       * A second session holds `dc_posts` until `free()`: on PostgreSQL and MySQL an open
+       * transaction that has read it, so a schema change waits for its lock; on SQLite an open
+       * write transaction on a second connection to the file, which holds the whole database.
+       */
+      async function holdTheTable(): Promise<void> {
+        let held: () => void = () => {};
+        const isHeld = new Promise<void>(resolve => {
+          held = resolve;
+        });
+        const freed = new Promise<void>(resolve => {
+          free = resolve;
+        });
+        const on =
+          dialect === "sqlite"
+            ? (holder = (await createAdapter({
+                type: "sqlite",
+                url: process.env.DATABASE_URL,
+              } as Parameters<
+                typeof createAdapter
+              >[0])) as unknown as DrizzleAdapter)
+            : adapter;
+        holding = on.transaction(async tx => {
+          await tx.execute(
+            dialect === "sqlite"
+              ? "UPDATE dc_posts SET title = title"
+              : "SELECT id FROM dc_posts"
+          );
+          held();
+          await freed;
+        });
+        await isHeld;
+      }
+
+      const create = () =>
+        writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: null,
+          entity: posts([text("title")]),
+          change: "create",
+        });
+      const addSubtitle = (logger: CollectionSaveDeps["logger"] = quiet) =>
+        writeCollectionSave(deps({ logger }), {
+          slug: "posts",
+          previous: posts([text("title")]),
+          entity: posts([text("title"), text("subtitle")]),
+          change: "update",
+        });
+
+      it("waits in tries, then stops as table busy with nothing changed", async () => {
+        await create();
+        await holdTheTable();
+        const notices: string[] = [];
+        await expect(
+          addSubtitle({
+            ...quiet,
+            warn: (line: string) => {
+              notices.push(line);
+            },
+          })
+        ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+        // A notice for each try after the first, in the save's log.
+        expect(notices.length).toBeGreaterThan(0);
+        expect(await columns()).not.toContain("subtitle");
+        expect((await appliedRows()).map(r => r.filename)).toEqual(
+          migrationFiles().slice(0, 1)
+        );
+      }, 30_000);
+
+      it("applies the change on a later try once the table is free", async () => {
+        await create();
+        await holdTheTable();
+        // Freed during the first pause, after the first try ended waiting.
+        setTimeout(() => free(), 1_500);
+        await addSubtitle();
+        expect(await columns()).toContain("subtitle");
+        expect((await appliedRows()).map(r => r.filename)).toEqual(
+          migrationFiles()
+        );
+      }, 30_000);
+    });
+
     it("leaves no file and puts the definition back when the statements fail with nothing applied", async () => {
       // Declared 255 characters wide, so making `code` unique is the index alone on every dialect
       // (on MySQL a unique field that states no width is also bounded, a change of its own).

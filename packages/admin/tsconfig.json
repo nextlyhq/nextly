@@ -47,6 +47,9 @@
         "../nextly/src/shared/lib/deprecation-notice.ts"
       ],
       // Same reason: the kinds and keys Needs attention's answer is written in.
+      "nextly/admin-root-exports": [
+        "../nextly/src/plugins/codegen/admin-root-exports.ts"
+      ],
       "nextly/attention-keys": [
         "../nextly/src/domains/widgets/attention-keys.ts"
       ],

@@ -23,6 +23,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
+import {
+  keptElements,
+  pushElementOwners,
+  withKeptElements,
+} from "../ownership/kept-elements";
 
 import { RealClassifier } from "./classifier/classifier";
 import {
@@ -140,12 +145,35 @@ export async function previewDesiredSchema(
   // The fields a plugin holds back from a type switched off, kept while
   // their columns are live, as the apply keeps them (`kept-scope-fields.ts`).
   desired = withKeptScopeFieldsIn(desired, liveSnapshot, dialect);
-  const { snapshot: desiredSnapshot } = buildDesiredSnapshot({
+  const { snapshot: configuredSnapshot } = buildDesiredSnapshot({
     desired,
     dialect,
     liveSnapshot,
     extensions,
   });
+  // What a plugin no longer configured added to other owners' tables, kept
+  // as the apply keeps it (`kept-elements.ts`), so the preview shows no drop
+  // the apply will not make. Read only: the apply records the owner rows.
+  const owners = await pushElementOwners({
+    db,
+    dialect,
+    schema: extensions,
+    managedTables: desiredSchemaTableNames(desired, extensions),
+    live: liveSnapshot,
+    record: false,
+  });
+  const desiredSnapshot = withKeptElements(
+    configuredSnapshot,
+    liveSnapshot,
+    owners
+      ? keptElements({
+          rows: owners.rows,
+          declaring: owners.declaring,
+          live: liveSnapshot,
+          desired: configuredSnapshot,
+        })
+      : []
+  );
 
   // The live columns given the shape each relation's recorded field stored, so a switch the type
   // does not show is previewed as the apply plans it (`withRecordedShapes`).

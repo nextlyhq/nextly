@@ -18,6 +18,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { NextlyServiceConfig } from "../../di/register";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import { NextlyError } from "../../errors";
 import type { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
@@ -43,8 +44,20 @@ async function syncUserExtSchema(
 ): Promise<void> {
   if (!userExtSchemaService) return;
   await userExtSchemaService.reloadMergedFields();
-  const drizzleDb = getAdapterFromDI()?.getDrizzle();
-  await userExtSchemaService.ensureUserExtSchema(drizzleDb);
+  const adapter = getAdapterFromDI();
+  // A user field's column waits for a table another session is using in short tries, as
+  // `nextly migrate` waits, each try after the first noted in the log.
+  await userExtSchemaService.ensureUserExtSchema(
+    adapter?.getDrizzle(),
+    adapter === undefined
+      ? {}
+      : {
+          busyTable: {
+            adapter,
+            notify: line => (getLoggerFromDI() ?? consoleLogger).warn(line),
+          },
+        }
+  );
 }
 
 /**
@@ -59,8 +72,16 @@ async function syncUserExtSchema(
 function withUserFieldChangeExcluded<T>(
   label: string,
   svc: UserFieldsServices,
-  change: () => Promise<T>
+  change: () => Promise<T>,
+  /**
+   * Takes back what `change` wrote when the `user_ext` sync after it fails (a busy table whose
+   * tries ran out, say), so the change reads as not made and can be made again as it was.
+   */
+  undo?: (result: T) => Promise<void>
 ): Promise<T> {
+  // The bounds a busy table is waited for within, read before anything changes: a value out of
+  // range refuses the change here rather than after its definition was written.
+  if (getAdapterFromDI() !== undefined) busyTableBounds({ env: process.env });
   return withSchemaChangeExcluded(
     {
       adapter: getAdapterFromDI(),
@@ -78,7 +99,22 @@ function withUserFieldChangeExcluded<T>(
     },
     async () => {
       const result = await change();
-      await syncUserExtSchema(svc.userExtSchemaService);
+      try {
+        await syncUserExtSchema(svc.userExtSchemaService);
+      } catch (error) {
+        if (undo !== undefined) {
+          await undo(result).catch((undoError: unknown) =>
+            (getLoggerFromDI() ?? consoleLogger).error(
+              `The ${label} failed, and what it wrote could not be taken back: ${
+                undoError instanceof Error
+                  ? undoError.message
+                  : String(undoError)
+              }`
+            )
+          );
+        }
+        throw error;
+      }
       return result;
     }
   );
@@ -142,7 +178,9 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
         () =>
           svc.fieldDefinitionService.createField(
             body as Parameters<typeof svc.fieldDefinitionService.createField>[0]
-          )
+          ),
+        // A field whose column could not be made is not created: its definition goes too.
+        created => svc.fieldDefinitionService.deleteField(created.id)
       );
       return respondMutation("User field created.", field, { status: 201 });
     },

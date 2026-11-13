@@ -107,6 +107,58 @@ const stylesheetImportsAreEmpty: Rolldown.Plugin = {
   },
 };
 
+/**
+ * The record of what each shipped chunk holds, and what each module imports:
+ * `dist/bundle-modules.json`, kept out of the published package (`files` in
+ * package.json).
+ *
+ * The chunks say how big the shell is, not what is in it. The shell guard in
+ * `scripts/check-bundle-budgets.mjs` reads this to name a module that must
+ * never reach the admin's first load, and the import chain that brought it
+ * there. Written by the build that wrote the chunks, so the two describe the
+ * same bytes.
+ */
+export const BUNDLE_MODULES_FILE = "bundle-modules.json";
+
+/**
+ * A module's name in the record: a package's file from where its package
+ * starts (`react-hook-form/dist/index.esm.mjs`), anything else relative to this
+ * package (`src/index.ts`), with `/` on every system.
+ */
+function recordedModuleName(id: string): string {
+  const file = id.replace(/^\0/, "");
+  const packages = file.lastIndexOf("/node_modules/");
+  if (packages !== -1) {
+    return file.slice(packages + "/node_modules/".length);
+  }
+  return path.relative(__dirname, file).split(path.sep).join("/");
+}
+
+const recordBundleModules: Rolldown.Plugin = {
+  name: "nextly:bundle-modules",
+  generateBundle(_options, bundle) {
+    const chunks: Record<string, string[]> = {};
+    for (const output of Object.values(bundle)) {
+      if (output.type === "chunk") {
+        chunks[output.fileName] = output.moduleIds.map(recordedModuleName);
+      }
+    }
+    // Static imports only: what a module's evaluation pulls in with it.
+    const imports: Record<string, string[]> = {};
+    for (const id of this.getModuleIds()) {
+      const imported = this.getModuleInfo(id)?.importedIds ?? [];
+      if (imported.length > 0) {
+        imports[recordedModuleName(id)] = imported.map(recordedModuleName);
+      }
+    }
+    this.emitFile({
+      type: "asset",
+      fileName: BUNDLE_MODULES_FILE,
+      source: JSON.stringify({ chunks, imports }),
+    });
+  },
+};
+
 /** Whether an import names a listed package, or a subpath of one. */
 function matches(id: string, patterns: readonly (string | RegExp)[]): boolean {
   return patterns.some(pattern =>
@@ -157,6 +209,9 @@ export default defineConfig([
   {
     entry: [
       "src/index.ts",
+      // What `@nextlyhq/plugin-sdk/admin` re-exports to plugins, apart from the
+      // root so it loads with the plugin pages that use it (`src/kit.ts`).
+      "src/kit.ts",
       "src/lib/plugins/component-registry.ts",
       "src/lib/plugins/plugin-components.ts",
       // For tests alone: no admin module imports it, so it never joins the
@@ -267,7 +322,7 @@ export default defineConfig([
     outputOptions: {
       chunkFileNames: chunkFileName,
     },
-    plugins: [stylesheetImportsAreEmpty],
+    plugins: [stylesheetImportsAreEmpty, recordBundleModules],
     onSuccess: () => {
       const distDir = path.join(process.cwd(), "dist");
 

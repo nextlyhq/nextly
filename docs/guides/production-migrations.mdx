@@ -1070,6 +1070,65 @@ What the people affected see: signing in with a password is refused with the sam
 as a wrong password, as it already was. They set a new password with **Forgot password**,
 or an administrator sets one for them.
 
+## Upgrades while old instances still run
+
+Nextly assumes the old and the new release of your site run side by side for a while during
+every deploy. A rolling update starts new instances before it stops old ones; a serverless
+host can keep an older deployment answering for hours (Vercel's Skew Protection pins a
+visitor to the deployment they started on); a gradual rollout sends some requests to each.
+`nextly migrate` runs before the new code serves, so for that window **the database is
+ahead of some of the code reading and writing it**. Everything below follows from that.
+
+### What a release that changes your data promises
+
+- **It only adds, then later removes.** A release that changes how something is stored
+  first adds the new place (a table, a column) beside the old one and starts using it, while
+  the old place stays as it was. This is the expand step of what is often called
+  expand/contract, or parallel change. Old instances keep working against the old place,
+  because nothing they read or write has gone.
+- **It takes in what the old release wrote during the overlap.** A release that moves data
+  does not rely on a single copy at start. Old instances may write the old place after the
+  move, so the new release checks the old place again at later starts and takes in, or
+  repairs from, anything written there since. The SEO plugin's move of its address record
+  and not-found log works this way; [its page](/docs/plugins/seo) describes what a site
+  sees.
+- **It removes the old place only behind a recorded marker, never by date.** Once a move has
+  taken in everything, the release records a "drained" marker in the database, together
+  with what the old place looked like at that moment. A later release, at least two
+  releases after the one that moved the data, may stop using the old place, and only on a
+  database where that marker is recorded and the old place still looks as the marker
+  says. If the marker is missing, or an older instance wrote to the old place after it,
+  that release will refuse to start with a message naming the release to install (and
+  start once) first, rather than lose what the old place held.
+- **It never drops your data by itself.** An old place a release no longer uses stays in
+  the database. You remove it when you choose: `nextly prune` lists what it would drop, and
+  `nextly prune --accept-data-loss` drops it.
+- **Its release notes name every move.** Each release that moves data says what moves, what
+  you may see while old instances still run, and when the old place can go.
+
+### What to do as a site owner
+
+Nothing special during the deploy itself. Let the rollout finish as usual: the new release
+catches up at its next start, and a long-running instance looks again a while after it
+starts.
+
+- Do not drop an old table or collection by hand because a release stopped writing to it.
+  Wait for the release notes to say it can go, then use `nextly prune`.
+- Do not skip past a release whose notes say it is a required step. Install it, start the
+  app once, then upgrade further.
+- Keep deploys short where you can. The overlap is repaired after the fact, not prevented:
+  while both releases serve, each one keeps its own rules (such as one page per address)
+  only among the writes it makes itself.
+
+### Not yet: refusing writes from older code
+
+Some systems let a migration declare that older code must stop writing a piece of data once
+the migration is applied, so the old instances refuse those writes ("a newer version is
+deploying; try again") instead of writing somewhere the new release no longer reads. Nextly
+does not have this yet. It will be built when a data move needs it, and it will be opt-in
+per migration: most migrations only add, and old code working against a database that is
+ahead of it is the normal, safe case.
+
 ## What you should never do
 
 - **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with a lint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
