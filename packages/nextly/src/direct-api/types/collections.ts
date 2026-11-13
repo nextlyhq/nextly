@@ -747,8 +747,11 @@ export interface PublishArgs<TSlug extends CollectionSlug = CollectionSlug>
   shared?: boolean;
   /** Say what the change would do, and change nothing. */
   describe?: boolean;
-  /** The version the change is made from (`_rev`), or `_overwrite: true`. */
-  data?: { _rev?: number; _overwrite?: boolean };
+  /**
+   * The version the change is made from, as a read returned it (`_rev`, such as `"7"`, or
+   * `"7.es:3"` from a read of Spanish), or `_overwrite: true`.
+   */
+  data?: { _rev?: string; _overwrite?: boolean };
 }
 
 /**
