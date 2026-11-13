@@ -55,6 +55,12 @@ export interface RecordMatch {
   page?: { type: string; id: string; version?: string };
   /** The address the record was served at, from the root. */
   path?: string;
+  /**
+   * The origin that address was served on, where the source wrote it in
+   * full: on a site whose languages have domains of their own, it says
+   * which language the address is in.
+   */
+  origin?: string;
   /** Its slug, where the source gives one. */
   slug?: string;
 }
@@ -96,6 +102,19 @@ export function textValue(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
+}
+
+/** The origin of an address written in full, or none for a path alone. */
+export function originOfAddress(
+  address: string | undefined
+): string | undefined {
+  const text = textValue(address);
+  if (text === undefined || !/^https?:\/\//i.test(text)) return undefined;
+  try {
+    return new URL(text).origin;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

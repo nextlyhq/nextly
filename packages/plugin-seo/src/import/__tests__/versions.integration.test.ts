@@ -91,25 +91,41 @@ async function call(
   });
 }
 
-/** A dry run of the old group, as `key`. */
-async function dryRun(key: string): Promise<DryRunBody> {
-  const response = await call(key, "/import/dry-run", { source: SOURCE });
+/** A dry run of `source` (the old group), as `key`. */
+async function dryRun(
+  key: string,
+  source: ImportSource = SOURCE
+): Promise<DryRunBody> {
+  const response = await call(key, "/import/dry-run", { source });
   expect(response.status, await response.clone().text()).toBe(200);
   return (await response.json()) as DryRunBody;
 }
 
-/** The apply of the dry run `plan`, as `key`. */
-function apply(key: string, plan: string): Promise<Response> {
-  return call(key, "/import/apply", { source: SOURCE, plan });
+/** The apply of the dry run `plan` of `source` (the old group), as `key`. */
+function apply(
+  key: string,
+  plan: string,
+  source: ImportSource = SOURCE
+): Promise<Response> {
+  return call(key, "/import/apply", { source, plan });
 }
 
 /** A site, its content types each holding the old group. */
 async function boot(
   dialect: TestDialect,
-  options: { languages: boolean }
+  options: { languages: boolean; domains?: boolean }
 ): Promise<{ t: TestNextly; key: string }> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
+    // English on example.com and German on example.de, where asked.
+    ...(options.domains === true
+      ? {
+          languageAddresses: {
+            by: "domain" as const,
+            domains: { en: "https://example.com", de: "https://example.de" },
+          },
+        }
+      : {}),
     ...(options.languages
       ? {
           localization: {
@@ -691,6 +707,58 @@ describe.each(getConfiguredTestDialects())(
         _isWorkingDraft: true,
       });
       expect(typedTitle(draft)).toBe("");
+    });
+
+    it("matches a file's address on a language's own domain to that language", async () => {
+      const { t, key } = await boot(dialect, {
+        languages: true,
+        domains: true,
+      });
+      const about = await create(
+        t,
+        "pages",
+        { title: "About", slug: "about" },
+        "en"
+      );
+      await save(t, "pages", about, { title: "Über uns" }, "de");
+      const source: ImportSource = {
+        kind: "rankMath",
+        fileName: "rank-math.csv",
+        text: [
+          "id,url,seo_title",
+          "1,https://example.com/about,About the team",
+          "2,https://example.de/about,Über das Team",
+          // The old site's address, read by its path: the default language.
+          "3,https://old.example/about/,Old about",
+        ].join("\n"),
+      };
+
+      const run = await dryRun(key, source);
+      expect(rowOf(run, "About", "published", "en")).toMatchObject({
+        outcome: "set",
+        set: ["title"],
+        values: { title: "About the team" },
+      });
+      expect(rowOf(run, "Über uns", "published", "de")).toMatchObject({
+        outcome: "set",
+        set: ["title"],
+        values: { title: "Über das Team" },
+      });
+      // The third names a page already matched: the first is used.
+      expect(
+        run.documents.filter(
+          entry => entry.reason === "Named more than once; the first is used."
+        )
+      ).toMatchObject([{ label: "/about", outcome: "skipped" }]);
+
+      const applied = await apply(key, run.plan, source);
+      expect(applied.status, await applied.clone().text()).toBe(200);
+      expect(
+        typedTitle(await version(t, "pages", about, { locale: "en" }))
+      ).toBe("About the team");
+      expect(
+        typedTitle(await version(t, "pages", about, { locale: "de" }))
+      ).toBe("Über das Team");
     });
 
     it("leaves every version as it was when a save fails part-way", async () => {

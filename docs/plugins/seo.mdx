@@ -1259,7 +1259,11 @@ import { previewDraftGate } from "nextly/runtime";
 
 const { ContentPage, generateMetadata } = createContentPage({
   ...pageBuilderContent(),
-  pages: { collections: ["pages"], field: "content", draft: previewDraftGate() },
+  pages: {
+    collections: ["pages"],
+    field: "content",
+    draft: previewDraftGate(),
+  },
   notFound: notFoundLogged,
 });
 
@@ -1519,12 +1523,15 @@ One import covers every version of a page a value applies to:
   draft, and a published page with no draft gets no new one. A page never published is imported
   into as it is.
 
-A value is only ever written into an empty place, in every version. Every version of a
-collection's page in the default language is written in the import's one step. A Single's page
-and a page in another language cannot be part of it, so each is written first and put back as it
-was when anything after it fails. Where such a published version has a draft waiting, writing it
-would publish the draft with it, so its row says **With the draft**: the draft gets the value and
-takes it live when it is published.
+A value is only ever written into an empty place, in every version. A collection's published
+pages, and pages never published, in the default language are written in the import's one step.
+A draft, a Single's page and a page in another language cannot be part of it, so each is written
+first, checked as stored, and put back as it was when anything after it fails. Where a published
+Single has a draft waiting, writing it would publish the draft with it, so its row says **With
+the draft**: the draft gets the value and takes it live when it is published. A page in another
+language with a draft waiting is left as it is, since neither its draft nor what is published can
+take the value without publishing the draft; its row says **Skipped, a draft waits**, and an
+import run again once the draft is published or discarded fills it in.
 
 The import is one engine, whichever way it is started: it reads each page as the person
 importing and reports, for every page and every record it passes over, what it would set, what

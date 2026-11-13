@@ -15,12 +15,12 @@
  *
  * Applying works the import out again and refuses unless it is exactly the
  * one the dry run showed (`plan`, a digest of every change and each
- * version's revision), then writes every version of a collection's page in
- * the default language, and adds every redirect, in one transaction: in
- * full, or, where anything is refused part-way, not at all. A Single's page
- * and a page in another language cannot join that transaction, so each is
- * written first, as a step of its own, and put back as it was where any
- * later step is refused.
+ * version's revision), then writes a collection's published pages and
+ * pages never published, in the default language, and adds every redirect,
+ * in one transaction: in full, or, where anything is refused part-way, not
+ * at all. A working draft, a Single's page and a page in another language
+ * are each written first, as a step of its own, read back as stored, and
+ * put back as it was where any later step is refused.
  *
  * The engine holds no request and draws nothing: `planImport(engine, args)`
  * and `applyImport(plan)` take the site's context and who the import is made
@@ -84,6 +84,7 @@ import {
   fillTemplate,
   idText,
   ImportFileRefused,
+  originOfAddress,
   pathOfAddress,
   textValue,
   type ImageRef,
@@ -454,13 +455,21 @@ const placeOf = (version: ReadVersion) =>
 
 /**
  * The address a version is served at, as a file's address is read: decoded
- * and without a trailing slash, in its own language (a translated page's
- * address carries its language's prefix or domain).
+ * and without a trailing slash, in its own language, with the origin it is
+ * served on where its language has a domain of its own.
  */
-async function servedPath(version: ReadVersion): Promise<string | undefined> {
+async function servedAddress(
+  version: ReadVersion
+): Promise<{ origin?: string; path: string } | undefined> {
   if (version.path === undefined) return undefined;
-  if (version.locale === undefined) return pathOfAddress(version.path);
-  return pathOfAddress(await servedOf(version.path, version.locale));
+  const served =
+    version.locale === undefined
+      ? version.path
+      : await servedOf(version.path, version.locale);
+  const path = pathOfAddress(served);
+  if (path === undefined) return undefined;
+  const origin = originOfAddress(served);
+  return origin === undefined ? { path } : { origin, path };
 }
 
 /** Adds `place` to the places found at `at`. */
@@ -479,16 +488,26 @@ async function matcher(
 ): Promise<(record: ImportedRecord) => Found> {
   const byKey = new Map<string, ReadVersion>();
   const places = new Map<string, ReadVersion[]>();
+  // An address on a language's own domain is found by its origin and path.
+  // By its path alone, as an address on another site (the old one) or with
+  // no origin is read, only the default language is found where the
+  // languages have domains, since every language serves the same path.
+  const byAddress = new Map<string, Set<string>>();
   const byPath = new Map<string, Set<string>>();
   const bySlug = new Map<string, Set<string>>();
   for (const version of versions) {
     byKey.set(version.key, version);
     const place = placeOf(version);
     places.set(place, [...(places.get(place) ?? []), version]);
-    const path = await servedPath(version);
-    if (path !== undefined) index(byPath, path, place);
     const inDefault =
       version.locale === undefined || version.locale === defaultLocale;
+    const served = await servedAddress(version);
+    if (served?.origin !== undefined) {
+      index(byAddress, `${served.origin}${served.path}`, place);
+    }
+    if (served !== undefined && (served.origin === undefined || inDefault)) {
+      index(byPath, served.path, place);
+    }
     if (version.slug !== undefined && inDefault) {
       index(bySlug, version.slug, place);
     }
@@ -515,6 +534,11 @@ async function matcher(
       );
       return list.length === 0 ? undefined : list;
     }
+    const atAddress =
+      match.path === undefined || match.origin === undefined
+        ? undefined
+        : byAddress.get(`${match.origin}${match.path}`);
+    if (atAddress !== undefined) return one(atAddress);
     const atPath =
       match.path === undefined ? undefined : byPath.get(match.path);
     if (atPath !== undefined) return one(atPath);
@@ -1614,8 +1638,9 @@ function inOrder(pages: readonly PlannedPage[]): PlannedPage[] {
 }
 
 /**
- * Write every version's changes that go on `transaction` (a collection's,
- * in the default language) and add every redirect. Any refusal is thrown,
+ * Write every version's changes that go on `transaction` (a collection's
+ * published page, or a page never published, in the default language) and
+ * add every redirect. Any refusal is thrown,
  * which undoes everything written before it.
  */
 async function writeAll(
@@ -1644,17 +1669,12 @@ async function writeAll(
         revKey(page),
         typeof saved._rev === "string" ? saved._rev : undefined
       );
-      if (page.write === "held") {
-        // A held save answers with the draft it holds, as stored.
-        refuseDroppedValues(saved, page.writes, page.id);
-      } else {
-        await refuseIfNotStored(
-          ctx,
-          transaction,
-          { type: page.type, id: page.id, locale: page.locale ?? plan.locale },
-          page.writes
-        );
-      }
+      await refuseIfNotStored(
+        ctx,
+        transaction,
+        { type: page.type, id: page.id, locale: page.locale ?? plan.locale },
+        page.writes
+      );
     } catch (error) {
       throw refusalAbout(error, page.label);
     }
@@ -1814,13 +1834,13 @@ async function recordImport(ctx: PluginContext): Promise<void> {
 }
 
 /**
- * Write what `plan` worked out, in full or not at all: every version of a
- * collection's page in the default language, and every redirect, in one
- * transaction; each Single's page and each page in another language, which
- * cannot join it, as a step of its own before it, put back as it was where
- * any later write is refused. Each write names the revision its page was
- * read at, so a page changed since the plan is refused rather than written
- * over. Applied again, a plan worked out again sets nothing: every place it
+ * Write what `plan` worked out, in full or not at all: a collection's
+ * published pages and pages never published, in the default language, and
+ * every redirect, in one transaction; each working draft, each Single's page
+ * and each page in another language as a step of its own before it, read
+ * back as stored and put back as it was where any later write is refused.
+ * Each write names the revision its page was read at, so a page changed
+ * since the plan is refused rather than written over. Applied again, a plan worked out again sets nothing: every place it
  * filled is filled.
  */
 export async function applyImport(
