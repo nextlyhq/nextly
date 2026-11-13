@@ -148,7 +148,13 @@ describe.each(DIALECTS)(
         })
       );
 
-      expect(sql).toContain('{"theme":"dark"}');
+      // MySQL writes a JSON default as a hex literal it converts back (`quoteExpressionSqlDefault`).
+      const json = '{"theme":"dark"}';
+      expect(sql).toContain(
+        dialect === "mysql"
+          ? `X'${Buffer.from(json, "utf8").toString("hex")}'`
+          : json
+      );
     });
 
     it("never writes a password field's stated default into the column", () => {

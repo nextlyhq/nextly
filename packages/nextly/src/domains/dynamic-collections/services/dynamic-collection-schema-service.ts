@@ -1127,15 +1127,21 @@ export class DynamicCollectionSchemaService {
 
   /**
    * `field` with the default it states as `default`, read from `defaultValue` (as code and the
-   * Schema Builder spell it) where `default` is absent. Only a plain value is taken: a function
-   * default is the application's to work out per document, and no SQL literal can hold it.
+   * Schema Builder spell it) where `default` is absent. A structured default is taken as it is,
+   * written as JSON (`formatDefaultValue`). A function default is not: it is the application's to
+   * work out per document, and no SQL literal can hold it. Nor is a password field's: a stored
+   * password is only ever a hash, and the application refuses a password default, so the row is
+   * filled with the type's own empty value instead.
    */
   private withStatedDefault(field: FieldDefinition): FieldDefinition {
+    if (field.type === "password") return { ...field, default: undefined };
     if (field.default !== undefined) return field;
     const stated = (field as { defaultValue?: unknown }).defaultValue;
-    return ["string", "number", "boolean"].includes(typeof stated)
-      ? { ...field, default: stated }
-      : field;
+    return stated === undefined ||
+      stated === null ||
+      typeof stated === "function"
+      ? field
+      : { ...field, default: stated };
   }
 
   private requiredColumnBackfill(field: FieldDefinition): string | null {
@@ -3965,7 +3971,7 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       type === "select" ||
       type === "radio"
     ) {
-      return `'${String(value)}'`;
+      return quotedSqlString(value);
     }
 
     // Handle checkbox (SQLite uses 0/1, PostgreSQL uses TRUE/FALSE)
@@ -3992,7 +3998,7 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
         const timestamp = new Date(value).getTime() / 1000;
         return String(Math.floor(timestamp));
       }
-      return `'${String(value)}'`;
+      return quotedSqlString(value);
     }
 
     // Handle numeric types (no quotes)
@@ -4043,4 +4049,13 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     };
     return actionMap[action.toLowerCase()] || "NO ACTION";
   }
+}
+
+/**
+ * A value as an SQL string literal: in single quotes, each quote inside doubled, which every
+ * supported dialect reads back as one quote. A value holding an apostrophe ("Editor's pick")
+ * otherwise ends the literal early and the statement is refused.
+ */
+function quotedSqlString(value: unknown): string {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
