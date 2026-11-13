@@ -35,7 +35,6 @@ import type {
 } from "../../../shared/base-registry-service";
 import { canonicalJson } from "../../../shared/lib/canonical-json";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
-import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
@@ -47,10 +46,6 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
-import {
-  deleteEntityRegistryRow,
-  mediaUsageTablePresent,
-} from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -462,10 +457,10 @@ export class CollectionRegistryService extends BaseRegistryService<
    * Every collection's slug and labels, read without the rest of its record:
    * what a screen naming every collection needs.
    */
-  async getAllLabels(): Promise<
-    Array<Pick<DynamicCollectionRecord, "slug" | "labels">>
-  > {
-    const records = await this.getAllRecordsWithColumns(["labels"]);
+  async getAllLabels(
+    options: { forWrite?: boolean } = {}
+  ): Promise<Array<Pick<DynamicCollectionRecord, "slug" | "labels">>> {
+    const records = await this.getAllRecordsWithColumns(["labels"], options);
     return records.map(({ slug, labels }) => ({ slug, labels }));
   }
 
@@ -500,6 +495,18 @@ export class CollectionRegistryService extends BaseRegistryService<
     options?: ListCollectionsOptions
   ): Promise<DynamicCollectionRecord[]> {
     return this.getAllRecords(options);
+  }
+
+  /**
+   * Every collection, oldest first, from the registry cache outside a
+   * transaction (`getAllRecordsForRead`): for a read that decides no write,
+   * such as a screen or a widget listing the collections. A write decides
+   * from `getAllCollections`, which reads them as stored.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllCollectionsForRead(): Promise<DynamicCollectionRecord[]> {
+    return this.getAllRecordsForRead();
   }
 
   /**
@@ -694,10 +701,13 @@ export class CollectionRegistryService extends BaseRegistryService<
     };
 
     try {
-      const result = await this.adapter.insert<DynamicCollectionRecord>(
-        this.registryTableName,
-        record,
-        { returning: "*" }
+      // With the stored schema version's count (`writeRegistry`).
+      const result = await this.writeRegistry(() =>
+        this.adapter.insert<DynamicCollectionRecord>(
+          this.registryTableName,
+          record,
+          { returning: "*" }
+        )
       );
       clearRegistryRowCache();
 
@@ -862,13 +872,12 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.update<DynamicCollectionRecord>(
+      // With the stored schema version's count (`updateRowBySlug`).
+      const results = await this.updateRowBySlug<DynamicCollectionRecord>(
         this.registryTableName,
-        updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
+        slug,
+        updateData
       );
-      clearRegistryRowCache();
 
       if (results.length === 0) {
         // Generic "Not found." from the factory; slug moves to logContext.
@@ -996,17 +1005,12 @@ export class CollectionRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
-      // Asked before the transaction opens: see `DashboardTables`.
-      const tables = {
-        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
-        mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
-      };
-      const { deleted: count, expire } = await this.adapter.transaction(
-        async tx => deleteEntityRegistryRow(tx, "collection", slug, tables)
+      // The row, its sweep and the stored schema version's count in one
+      // transaction (`deleteEntityRow`).
+      const { deleted: count, expire } = await this.deleteEntityRow(
+        "collection",
+        slug
       );
-      // Once the transaction has committed, so no read in between keeps the
-      // row it is deleting.
-      clearRegistryRowCache();
 
       if (count === 0) {
         throw NextlyError.notFound({ logContext: { slug } });
@@ -1409,6 +1413,8 @@ export class CollectionRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The stored schema version's count moves in the caller's transaction.
+    await this.countWriteOn(tx);
     // A new row: until the caller commits, a read outside the transaction
     // finds none, and a missing row is never cached.
     clearRegistryRowCache();
