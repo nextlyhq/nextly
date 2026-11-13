@@ -155,7 +155,11 @@ describe("a plugin upgrade that changes its schema prefix (sqlite)", () => {
   afterAll(() => sqlite.close());
 
   it("is refused before its new module runs, naming both prefixes", async () => {
-    const v2 = await module("pb", 2, [notes, tags], [v1]);
+    // Written as a fresh history: generated over version 1, the module is
+    // refused already (`migrate:create --plugin` reads the move as dropping
+    // `pa__notes`), so this is the module a hand-written or regenerated
+    // history would ship.
+    const v2 = await module("pb", 2, [notes, tags], []);
     await expect(
       runPluginPhase((await phase("pb", [notes, tags], [v1, v2])) as never)
     ).rejects.toThrow(
