@@ -6032,7 +6032,7 @@ export class SingleMutationService extends BaseService {
             at: staleWrite.at,
             reader: {
               user: call.user,
-              trusted: call.overrideAccess === true,
+              trusted: fieldTrustOf(call),
               authenticatedScope: call.authenticatedScope,
             },
           }),
@@ -6048,7 +6048,7 @@ export class SingleMutationService extends BaseService {
           await asNotMigrated(
             cause instanceof NextlyError ? cause : error,
             singleNotMigrated(this.singleRegistryService, slug, {
-              trusted: call.overrideAccess === true,
+              trusted: fieldTrustOf(call),
             }),
             { written: committed }
           ),
@@ -6103,7 +6103,11 @@ export class SingleMutationService extends BaseService {
         },
       });
     }
-    const locale = rewriteLocaleFor(call.request, translated, this.localization);
+    const locale = rewriteLocaleFor(
+      call.request,
+      translated,
+      this.localization
+    );
     // A translated field's language is judged on its own counter, so the
     // version must be a read of that language.
     if (translated && check.kind === "judge") {
@@ -6148,7 +6152,9 @@ export class SingleMutationService extends BaseService {
       });
     const update = await ask("update");
     if (update) return update;
-    return singleMeta.status === true ? ask("publish") : null;
+    return (singleMeta as { status?: boolean }).status === true
+      ? ask("publish")
+      : null;
   }
 
   /** The body of {@link rewriteField}, in its transaction. */
@@ -6733,10 +6739,12 @@ export class SingleMutationService extends BaseService {
       previous,
       // Expanded on the transaction, so a component's secret and hidden
       // fields are stripped from the payload too.
-      fields: await expandComponentFields(singleMeta.fields, async componentSlug =>
-        service
-          ? await service.getComponentFields(componentSlug, tx.getDrizzle())
-          : null
+      fields: await expandComponentFields(
+        singleMeta.fields,
+        async componentSlug =>
+          service
+            ? await service.getComponentFields(componentSlug, tx.getDrizzle())
+            : null
       ),
       actor,
     });

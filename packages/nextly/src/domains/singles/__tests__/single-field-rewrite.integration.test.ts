@@ -16,6 +16,10 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
+import {
+  recordTransactionEscapes,
+  takeTransactionEscapes,
+} from "../../../__tests__/transaction-escapes";
 import { defineSingle, password, repeater, text } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
 import {
@@ -59,10 +63,12 @@ async function boot(
   localized = false
 ): Promise<TestNextly> {
   hookCalls = [];
-  const note = (stage: string) => ({ data }: { data?: unknown }) => {
-    hookCalls.push(stage);
-    return data;
-  };
+  const note =
+    (stage: string) =>
+    ({ data }: { data?: unknown }) => {
+      hookCalls.push(stage);
+      return data;
+    };
   current = await createTestNextly({
     dialect,
     singles: [
@@ -180,8 +186,7 @@ const kinds = async (t: TestNextly, slug: string) =>
   (await events(t, slug)).map(event => event.kind);
 
 const versionOf = async (t: TestNextly, slug: string, locale?: string) =>
-  (await read(t, slug, locale === undefined ? {} : { locale }))
-    ._rev as string;
+  (await read(t, slug, locale === undefined ? {} : { locale }))._rev as string;
 
 describe.each(getConfiguredTestDialects())(
   "a field rewrite of a Single (%s)",
@@ -239,6 +244,34 @@ describe.each(getConfiguredTestDialects())(
       });
       // The version returned is the one the Single is at now.
       expect(live._rev).toBe(done.item.version);
+    });
+
+    it("reads nothing off its own transaction", async () => {
+      const t = await boot(dialect);
+      await save(t, SITE, { layout: "wide", status: "published" });
+      await save(t, SITE, { title: "Unfinished" });
+      const version = await versionOf(t, SITE);
+      // What the boot and the saves above left is theirs, recorded as the
+      // setup file records every test's.
+      recordTransactionEscapes(
+        takeTransactionEscapes(),
+        expect.getState().testPath
+      );
+      await t.nextly.rewriteField({
+        single: SITE,
+        field: "layout",
+        expectedVersion: version,
+        set: { value: "narrow" },
+        reason: REASON,
+      });
+      // Every escape, accepted or not: on PostgreSQL and MySQL a read on the
+      // pool runs outside the rewrite's transaction. SQLite reports none.
+      const escapes = takeTransactionEscapes();
+      recordTransactionEscapes(escapes, expect.getState().testPath);
+      expect(
+        escapes.map(escape => escape.key),
+        escapes.map(escape => escape.stack).join("\n\n")
+      ).toEqual([]);
     });
 
     it("changes the live copy alone where no draft waits, and records the update event", async () => {
@@ -501,7 +534,10 @@ describe.each(getConfiguredTestDialects())(
       const rewrite = (await events(t, SITE)).find(
         e => e.kind === "field-rewritten"
       );
-      expect(rewrite).toMatchObject({ actorKind: "person", actorId: EDITOR.id });
+      expect(rewrite).toMatchObject({
+        actorKind: "person",
+        actorId: EDITOR.id,
+      });
     });
 
     it("names the plugin that made it, from its own identity", async () => {

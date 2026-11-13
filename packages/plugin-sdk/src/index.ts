@@ -962,12 +962,13 @@ export type {
 
 /**
  * @experimental A field rewrite, made with `ctx.services.collections.rewriteField`:
- *   one field of an entry changed on its live copy and on every pending draft
- *   that holds it, in one transaction, without publishing, applied only from
- *   the version the plugin read (`STALE_VERSION` otherwise, with nothing
- *   changed). The new value is given (`{ value }`) or computed from each
- *   copy's own (`{ from(current, copy) }`); the reason is kept in the entry's
- *   history, which names the plugin. Runs no save hooks.
+ *   one field of an entry (`{ collection, id }`) or a Single (`{ single }`)
+ *   changed on its live copy and on every pending draft that holds it, in one
+ *   transaction, without publishing, applied only from the version the plugin
+ *   read (`STALE_VERSION` otherwise, with nothing changed). The new value is
+ *   given (`{ value }`) or computed from each copy's own
+ *   (`{ from(current, copy) }`); the reason is kept in the document's history,
+ *   which names the plugin. Runs no save hooks.
  */
 export type {
   FieldRewriteCopy,

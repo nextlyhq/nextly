@@ -301,7 +301,7 @@ reads no Single's content, so a plugin has no `_rev` to send for a Single.
 
 <Callout type="warn">
   `rewriteField` is `@experimental`. It takes a top-level field of a collection
-  entry; Singles are not rewritten yet.
+  entry or of a Single.
 </Callout>
 
 Some jobs change one value on many entries on nobody's behalf: moving pages off a layout before it
@@ -328,6 +328,12 @@ const { version, copies } = await ctx.services.collections.rewriteField({
 });
 // copies: [{ form: "live", locale: null }, { form: "draft", locale: null }]
 ```
+
+A Single is rewritten through the same call, named by its slug instead of a collection and an id:
+`{ single: "site-settings", field, expectedVersion, set, reason }`. Its `expectedVersion` is the
+`_rev` a read of the Single returned, such as `nextly.findSingle({ slug: "site-settings" })`. A
+Single's live copy, its drafts, its history and its `single.updated` event are changed and
+recorded exactly as an entry's are below.
 
 - **Only from the version you read.** `expectedVersion` is the `_rev` you read the entry at. If
   anyone has saved the entry since, the rewrite throws `STALE_VERSION` (409) and changes nothing.
