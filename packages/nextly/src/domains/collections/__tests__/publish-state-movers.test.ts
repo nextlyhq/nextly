@@ -39,14 +39,14 @@ const ALLOWED: Record<string, string> = {
   // The service and the transition it moves the parts through.
   "services/collections/collection-entry-service.ts#publishParts -> publishPartsReads":
     "the service reads the entry and asks every refusal",
-  "services/collections/collection-entry-service.ts#publishParts -> publishAllLocales":
-    "the service moves the chosen parts through the transition of every language",
   "services/collections/collection-entry-service.ts#publishParts -> unpublishAllLocales":
     "the same, taking the chosen parts down",
   "services/collections/collection-entry-service.ts#publishParts -> previewPublishAllLocales":
     "the service describes a publish through that transition's own preview",
-  "services/collections/collection-entry-service.ts#publishAllLocales -> publishAllLocales":
-    "the entry service's door to the transition, which the service calls",
+  "services/collections/collection-entry-service.ts#transitionEveryLanguage -> publishAllLocales":
+    "the transition of every language (or of the chosen parts), which the service moves the parts through",
+  "services/collections/collection-entry-service.ts#valueRuleRefusal -> publishPartsReads":
+    "publishing every language, and a save that publishes, ask the service's value rules",
   "services/collections/collection-entry-service.ts#unpublishAllLocales -> unpublishAllLocales":
     "the same, taking parts down",
   "services/collections/collection-entry-service.ts#previewPublishAllLocales -> previewPublishAllLocales":
@@ -189,7 +189,7 @@ describe("the calls that move an entry's publishing state", () => {
     // read cannot pass as a clean one.
     expect(filesRead).toBeGreaterThan(500);
     expect(calls).toContain(
-      "services/collections/collection-entry-service.ts#publishParts -> publishAllLocales"
+      "services/collections/collection-entry-service.ts#publishParts -> publishPartsReads"
     );
     expect(calls).toEqual(Object.keys(ALLOWED).sort());
   });

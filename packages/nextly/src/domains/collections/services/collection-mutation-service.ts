@@ -11633,6 +11633,26 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether a value rule of a publish could refuse anything in this collection: it requires every
+   * language to hold its own values, or it has a required unique translated field. Read from the
+   * declaration alone, so publishing a collection with neither reads nothing more for them.
+   *
+   * @experimental
+   */
+  async valueRulesCanRefuse(collectionName: string): Promise<boolean> {
+    if (requiresEveryLanguage(collectionName)) return true;
+    const collection = (await this.collectionService.getCollection(
+      collectionName
+    )) as { localized?: boolean; fields?: FieldDefinition[] };
+    return (collection.fields ?? []).some(
+      field =>
+        field.required === true &&
+        (field as { unique?: unknown }).unique === true &&
+        isFieldLocalized(field, collection.localized === true)
+    );
+  }
+
+  /**
    * What a publish or unpublish of chosen parts reads before it decides anything, on the pool:
    * the entry as stored (whether its shared part is live, and each stored language's own state and
    * values, never filled from another language) and the caller's refusal for each chosen language

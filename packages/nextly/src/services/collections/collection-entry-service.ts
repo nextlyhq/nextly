@@ -981,6 +981,12 @@ export class CollectionEntryService extends BaseService {
     locales: readonly string[] | "all",
     written?: Readonly<Record<string, unknown>>
   ): Promise<CollectionServiceResult | null> {
+    // Nothing to read where no value rule could refuse: most collections.
+    if (
+      !(await this.mutationService.valueRulesCanRefuse(params.collectionName))
+    ) {
+      return null;
+    }
     const read = await this.mutationService.publishPartsReads(params, {
       action: "publish",
       locales: [],
