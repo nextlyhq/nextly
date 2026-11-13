@@ -272,8 +272,9 @@ function executableBody(comment: string): string {
  *   SQLite's `DEFERRED`/`IMMEDIATE`/`EXCLUSIVE`, PostgreSQL's isolation and
  *   access modes, `WORK`/`TRANSACTION`), `START TRANSACTION` (with any
  *   characteristics), `COMMIT`, `END`. A unit that runs inside the runner's
- *   own transaction has its brackets left out: a COMMIT would end the
- *   runner's transaction early, and a BEGIN inside it fails on SQLite.
+ *   own transaction has a pair wrapping it whole left out, and any other
+ *   bracket refused (`splitSqlStatements`): a COMMIT would end the runner's
+ *   transaction early, and a BEGIN inside it fails on SQLite.
  * - `refused`: it would undo or hand off the runner's transaction —
  *   `ROLLBACK`/`ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, MySQL's
  *   `XA`. Leaving it out would change what the file does, and running it
@@ -634,11 +635,23 @@ function refusalOf(
   dialect: SupportedDialect | undefined,
   mode: MigrationRunMode
 ): StatementRefusal | undefined {
-  if (transactionControlOf(statement, dialect) === "refused") {
+  const control = transactionControlOf(statement, dialect);
+  if (control === "refused") {
     return {
       statement,
       code: "TRANSACTION_CONTROL_IN_MIGRATION",
       message: transactionControlMessage(statement, dialect, mode),
+    };
+  }
+  // A bracket left after the split removed a wrapper (`splitSqlStatements`):
+  // it would commit part of the unit, or open a transaction inside the
+  // runner's. A unit run outside a transaction refuses it below, with the
+  // other statements that need one.
+  if (control === "bracket" && mode.transaction) {
+    return {
+      statement,
+      code: "TRANSACTION_CONTROL_IN_MIGRATION",
+      message: bracketMessage(statement, dialect, mode),
     };
   }
   const outsideOnly = mode.transaction
@@ -666,6 +679,30 @@ function refusalOf(
       ? `${quoted(statement)} ${outside.reason} To run it as a migration, ${markAdvice(mode.unit)}: the ${mode.unit} then runs outside a transaction, statement by statement, and a failure part-way leaves the statements before it applied.`
       : `${quoted(statement)} ${outside.reason} Remove it.`,
   };
+}
+
+/**
+ * Why a bracket part-way through a unit run in a transaction is refused, and
+ * how to get what it was written for. A unit is one transaction, so the way
+ * to commit part of it first is a unit of its own; the unit marked to run
+ * outside a transaction is named because it commits each statement as it
+ * runs and so needs no COMMIT either.
+ */
+function bracketMessage(
+  statement: string,
+  dialect: SupportedDialect | undefined,
+  mode: MigrationRunMode
+): string {
+  const keyword = leadingWords(statement, dialect, 1)[0] ?? "it";
+  const marked =
+    mode.unit === "module"
+      ? "A module with `transaction: false`"
+      : `A file whose first line is \`${NO_TRANSACTION_MARKER}\``;
+  const effect =
+    bracketSideOf(statement, dialect) === "open"
+      ? "would open a transaction inside the one the runner holds"
+      : "would end the runner's transaction early, committing what came before it on its own";
+  return `${quoted(statement)}: a migration ${mode.unit} runs as one transaction, and this ${keyword} ${effect}. A ${mode.unit} wrapped whole in one BEGIN ... COMMIT runs as written. To commit part of it first, split the ${mode.unit} there into two, each its own transaction. ${marked} runs statement by statement, committing each as it runs, and takes no BEGIN or COMMIT.`;
 }
 
 /**
@@ -1014,11 +1051,11 @@ function openBlocks(words: readonly string[], from: number): number {
  * block, a function body or a `CREATE TRIGGER ... BEGIN ...; END` reaches
  * the driver whole, and its `END` is never read as a transaction bracket.
  * A fragment with nothing but comments is dropped, and so, in a unit that
- * runs in the runner's transaction, is the unit's own transaction bracket
- * (`transactionControlOf`). `mode` is how the unit runs: one that runs
- * outside a transaction keeps its brackets, so `statementRefusals` names
- * them rather than the split dropping them unseen. Everything else is kept
- * as written, including statements the runner will refuse: refusing is
+ * runs in the runner's transaction, is a bracket pair wrapping the whole
+ * unit (`withoutWrappingBrackets`). `mode` is how the unit runs. Every other
+ * bracket is kept, in either mode, so `statementRefusals` names it rather
+ * than the split dropping it unseen. Everything else is kept as written,
+ * including statements the runner will refuse: refusing is
  * `statementRefusals`' job.
  */
 export function splitSqlStatements(
@@ -1031,12 +1068,6 @@ export function splitSqlStatements(
   const collect = (fragment: string): void => {
     const statement = fragment.trim();
     if (!hasExecutableText(statement, dialect)) return;
-    if (
-      mode.transaction &&
-      transactionControlOf(statement, dialect) === "bracket"
-    ) {
-      return;
-    }
     statements.push(statement);
   };
 
@@ -1061,5 +1092,48 @@ export function splitSqlStatements(
     current += text.slice(from);
   }
   collect(current);
-  return statements;
+  return mode.transaction
+    ? withoutWrappingBrackets(statements, dialect)
+    : statements;
+}
+
+/**
+ * The statements without a bracket pair that wraps the whole unit: an opening
+ * `BEGIN` or `START TRANSACTION` as the first statement, a closing `COMMIT`
+ * or `END` as the last, and no other bracket between them.
+ *
+ * A unit that runs in the runner's transaction already runs whole, so such a
+ * wrapper asks for exactly what happens without it, and leaving it out
+ * changes nothing; run, its BEGIN fails on SQLite and its COMMIT would end
+ * the runner's transaction before the ledger row is written. A unit with any
+ * other bracket — a COMMIT part-way through, a second BEGIN, one without its
+ * pair — meant part of itself to commit on its own, which leaving brackets
+ * out would silently undo, so every bracket in it is kept for
+ * `statementRefusals` to refuse. Only a unit whose two brackets are its only
+ * ones loses them, so splitting what this returns again returns it unchanged.
+ */
+export function withoutWrappingBrackets(
+  statements: string[],
+  dialect: SupportedDialect | undefined
+): string[] {
+  const brackets = statements.filter(
+    statement => bracketSideOf(statement, dialect) !== undefined
+  );
+  if (brackets.length !== 2) return statements;
+  const first = statements[0];
+  const last = statements[statements.length - 1];
+  return bracketSideOf(first, dialect) === "open" &&
+    bracketSideOf(last, dialect) === "close"
+    ? statements.slice(1, -1)
+    : statements;
+}
+
+/** Whether a transaction bracket opens (`BEGIN`, `START`) or closes one. */
+function bracketSideOf(
+  statement: string,
+  dialect: SupportedDialect | undefined
+): "open" | "close" | undefined {
+  if (transactionControlOf(statement, dialect) !== "bracket") return undefined;
+  const [first] = leadingWords(statement, dialect, 1);
+  return first === "BEGIN" || first === "START" ? "open" : "close";
 }
