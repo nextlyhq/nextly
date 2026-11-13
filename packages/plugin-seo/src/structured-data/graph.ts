@@ -1276,6 +1276,34 @@ function present<T extends object>(value: T): T {
   ) as T;
 }
 
+/**
+ * The image a listed page's structured data reads from a field its content
+ * type maps, such as a post's cover under a name no share-image guess reads;
+ * none where the type maps no image field. The field mapped for the type the
+ * page is described as, where the page or its content type chooses one; a
+ * route's own choice (`structuredDataHints.type`) reaches the plugin only
+ * while the route renders, so where the decided type maps no image, the
+ * field the content type maps an image from for any of its types is read.
+ */
+export async function mappedImageOf(
+  ctx: PluginContext,
+  key: string,
+  document: Readonly<Record<string, unknown>>,
+  rules: StructuredDataRules
+): Promise<PageMetadataImage | undefined> {
+  const rule = rules.types[key];
+  if (rule?.details === undefined) return undefined;
+  const offered = structuredDataTypesFor({ hidden: false });
+  const automatic = automaticType(document, {}, offered);
+  const { type } = chosenType({ document }, rule, offered, automatic);
+  const source =
+    rule.details[type]?.image ??
+    Object.values(rule.details).find(mapping => mapping?.image !== undefined)
+      ?.image;
+  if (source === undefined) return undefined;
+  return pictureOf(ctx, readDetail(document, "image", source));
+}
+
 /** The type a page is described as, how that was decided, and what is offered. */
 function decidedType(
   document: Readonly<Record<string, unknown>>,
