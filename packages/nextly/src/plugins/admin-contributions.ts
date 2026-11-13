@@ -335,6 +335,38 @@ export interface PluginAdminPage {
    * have its collections there and its pages elsewhere.
    */
   section?: PluginNavSection;
+  /**
+   * @experimental The reads of this plugin's own routes the page makes as it
+   * opens, each named as the page's `usePluginRoute` names it (`path`, and
+   * `mount` where the route is mounted at the root). Where this page is the
+   * first screen a tab opens, the admin asks for them inside its startup
+   * request, so the page's data is on its way in the same round as the
+   * session and the menu, and the page's own read takes that answer instead
+   * of asking again.
+   *
+   * Each read keeps its route's own permission check, and one the reader may
+   * not make is refused on its own: the page then reads it as it always
+   * would. The startup answer waits for its slowest part, so name only the
+   * quick reads a page needs first, never a count or a report. At most four
+   * (`MAX_PAGE_STARTUP_READS`); boot refuses more, or a path the startup
+   * request cannot carry.
+   *
+   * Plain paths rather than a function of the page's address: a plugin page
+   * is matched by its exact address, and the prebuilt admin page carries
+   * these when it is built, before any code of the plugin's runs.
+   */
+  startupReads?: readonly PluginPageStartupRead[];
+}
+
+/**
+ * @experimental One read a plugin page makes as it opens: a route of the
+ * plugin's own, named as `usePluginRoute` names it.
+ */
+export interface PluginPageStartupRead {
+  /** The route's path within the plugin's namespace, starting with `/`. */
+  path: string;
+  /** Where the route answers: its plugin's namespace (the default) or the root. */
+  mount?: PluginRouteMount;
 }
 
 /**

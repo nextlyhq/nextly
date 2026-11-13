@@ -655,6 +655,7 @@ export {
   type JsonValue,
   type PluginAdminContributions,
   type PluginAdminPage,
+  type PluginPageStartupRead,
   type PluginCollectionView,
   type OverridableDocumentAction,
   type PluginDocumentActionOverride,

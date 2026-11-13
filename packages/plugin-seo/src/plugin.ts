@@ -814,6 +814,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
+        // No startup reads: the startup request answers only when every part
+        // has, and the checklist can read every page while an earlier SEO
+        // field group waits to be imported, which would hold up the whole
+        // admin's first answer on a large site.
         { ...OVERVIEW_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...IMPORT_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },

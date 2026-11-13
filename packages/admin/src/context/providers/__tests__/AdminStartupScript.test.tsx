@@ -11,6 +11,7 @@
  * name different paths; and the admin, once it starts, sends nothing more.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ADMIN_STARTUP_SCREENS_ELEMENT_ID } from "nextly/config";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -165,6 +166,75 @@ describe("the prebuilt admin page", () => {
     window.history.replaceState(null, "", "/admin/collections/posts");
     document.cookie = "nextly_session=someone";
     expect(prebuiltPage()).toBe(first);
+  });
+});
+
+/** The plugin pages' startup reads, as the admin layout writes them into the page. */
+function layoutCarries(screens: Record<string, string[]>): void {
+  const element = document.createElement("script");
+  element.type = "application/json";
+  element.id = ADMIN_STARTUP_SCREENS_ELEMENT_ID;
+  element.textContent = JSON.stringify(screens);
+  document.body.appendChild(element);
+}
+
+/** The paths a startup request URL names. */
+const namedBy = (url: string) => new URL(url).searchParams.getAll("path");
+
+describe("a plugin page that declares its startup reads", () => {
+  const PAGE = "/admin/plugins/acme-seo/overview";
+  const READ = "/plugins/@acme/seo/overview/checklist";
+
+  afterEach(() => {
+    document.getElementById(ADMIN_STARTUP_SCREENS_ELEMENT_ID)?.remove();
+  });
+
+  it("has its reads sent by the page, as the admin would send them", () => {
+    layoutCarries({ [PAGE]: [READ] });
+    window.history.replaceState(null, "", PAGE);
+    const expected = sentByTheAdminAlone();
+    expect(namedBy(expected[0] ?? "")).toContain(READ);
+
+    runScripts(prebuiltPage());
+
+    expect(startupRequests()).toEqual(expected);
+    expect(namedBy(startupRequests()[0] ?? "").at(-1)).toBe(READ);
+  });
+
+  it("hands the page its read from the startup request, once", async () => {
+    layoutCarries({ [PAGE]: [READ] });
+    window.history.replaceState(null, "", `${PAGE}/`);
+    fetchSpy.mockImplementation(async (url: string) =>
+      String(url).includes("/startup?")
+        ? new Response(
+            JSON.stringify({
+              parts: [{ path: READ, status: 200, body: { items: ["ready"] } }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          )
+        : new Response(JSON.stringify({ items: ["from-the-server"] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+    );
+    runScripts(prebuiltPage());
+
+    beginAdminStartup();
+
+    await expect(fetcher(READ, {}, false)).resolves.toEqual({
+      items: ["ready"],
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds nothing on another page", () => {
+    layoutCarries({ [PAGE]: [READ] });
+    window.history.replaceState(null, "", "/admin/plugins/acme-seo/settings");
+
+    runScripts(prebuiltPage());
+
+    expect(startupRequests()).toHaveLength(1);
+    expect(namedBy(startupRequests()[0] ?? "")).not.toContain(READ);
   });
 });
 
