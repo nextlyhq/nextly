@@ -75,6 +75,12 @@ export interface ViewedVersion {
    * language, as the panel pairs it. Changes are marked against this.
    */
   comparedWith: Predecessor;
+  /**
+   * The newest version in its language, or null when it is that version or
+   * none is known: a version with nothing before it is compared with this one
+   * to read the fields it holds that the content type no longer has.
+   */
+  newestInLocale?: number | null;
   /** The version's name, time and author, once read; null until then. */
   about: VersionMeta | null;
 }

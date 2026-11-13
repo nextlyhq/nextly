@@ -15,11 +15,11 @@ import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { useEffect, useMemo, useRef } from "react";
 import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 
-import { fieldAdminGates } from "../entries/fields/field-admin-gates";
+import { viewFieldRefusal } from "../entries/EntryForm/document-view-field-gate";
 
 import type { EditorRestoreSurface } from "./document-history-context";
 import { createEditorRestore, type EditorRestore } from "./editor-restore";
-import { formFieldsOf } from "./snapshot-to-form-values";
+import { formFieldsWithin } from "./snapshot-to-form-values";
 
 /**
  * The restore a form's values go back through: one per form, shared by the
@@ -42,16 +42,14 @@ export function useFormRestore<T extends FieldValues>(
   // reset kept as an unsaved edit.
   useEffect(() => {
     let defaults: unknown = form.formState.defaultValues;
+    // A reset announces what is dirty after it; new default values are what
+    // tell it from an edit.
     return form.subscribe({
-      formState: { defaultValues: true, dirtyFields: true },
+      formState: { isDirty: true, dirtyFields: true },
       callback: state => {
-        if (
-          state.defaultValues === undefined ||
-          state.defaultValues === defaults
-        ) {
-          return;
-        }
-        defaults = state.defaultValues;
+        const now: unknown = form.formState.defaultValues;
+        if (now === defaults) return;
+        defaults = now;
         restore.formReset(
           form.getValues(),
           new Set(Object.keys(state.dirtyFields ?? form.formState.dirtyFields))
@@ -97,8 +95,10 @@ export function useEditorRestoreSurface<T extends FieldValues>({
   }, [readOnly]);
 
   return useMemo(() => {
-    const named = new Map(
-      formFieldsOf(fields).map(field => [field.name, field])
+    const placed = formFieldsWithin(fields);
+    const named = new Map(placed.map(({ field }) => [field.name, field]));
+    const around = new Map(
+      placed.map(({ field, within }) => [field.name, within])
     );
     const translatable = localized
       ? new Set(
@@ -122,13 +122,19 @@ export function useEditorRestoreSurface<T extends FieldValues>({
       fields,
       currentValues: () => form.getValues(),
       dirtyFields: () => new Set(Object.keys(form.formState.dirtyFields)),
-      // The gates the form draws the field with, under the document's own
-      // lock: a field the form would not let them change, a restore does not.
+      // The form's own decision about the field, under the document's own
+      // lock: its gates folded over the nameless containers around it, as the
+      // form passes them down, with each condition read from the form now. A
+      // field the form would not let them change, a restore does not.
       canEdit: name => {
         const field = named.get(name);
         if (readOnlyNow.current() || !field) return false;
-        const gates = fieldAdminGates(field);
-        return !gates.readOnly && !gates.disabled;
+        return (
+          viewFieldRefusal(
+            { declaration: field, within: around.get(name) ?? [] },
+            path => form.getValues(path as Path<T>)
+          ) === null
+        );
       },
       ...(translatable ? { translatable } : {}),
       ...(localized && language ? { language } : {}),

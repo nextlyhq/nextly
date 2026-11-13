@@ -453,6 +453,26 @@ function baselineOf(viewing: ViewedVersion): number | null {
 }
 
 /**
+ * The comparison the fields a version holds that the content type no longer
+ * has are read from: the one the version view draws, against its predecessor;
+ * for a version with none, against the newest in its language, since the
+ * server names a removed field by the content type as it is now, whichever
+ * pair holds it. None for a version that is both, the only one in its language.
+ */
+export function removedFieldsPairOf(viewing: ViewedVersion | null): {
+  from: number | null;
+  to: number | null;
+} {
+  if (!viewing) return { from: null, to: null };
+  const baseline = baselineOf(viewing);
+  if (baseline !== null) return { from: baseline, to: viewing.versionNo };
+  const newest = viewing.newestInLocale ?? null;
+  return newest === null
+    ? { from: null, to: null }
+    : { from: viewing.versionNo, to: newest };
+}
+
+/**
  * The fields the version on screen holds that the content type no longer has,
  * as the comparison the version view draws names them: the history's restore
  * lists them disabled. Read from the same comparison, so it is fetched once.
@@ -461,8 +481,7 @@ export function useViewedRemovedFields(
   scope: VersionScope,
   viewing: ViewedVersion | null
 ): ReadonlySet<string> {
-  const from = viewing ? baselineOf(viewing) : null;
-  const to = viewing ? viewing.versionNo : null;
+  const { from, to } = removedFieldsPairOf(viewing);
   const diff = useVersionDiff({
     scope,
     from,

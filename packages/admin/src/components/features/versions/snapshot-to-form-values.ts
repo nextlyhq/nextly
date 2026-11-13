@@ -39,18 +39,30 @@ function presentationalChildren(field: FieldConfig): FieldConfig[] | null {
  * level. One walk for every reading of a version into the form.
  */
 export function formFieldsOf(fields: FieldConfig[]): NamedField[] {
-  const named: NamedField[] = [];
-  const visit = (list: FieldConfig[]): void => {
+  return formFieldsWithin(fields).map(entry => entry.field);
+}
+
+/**
+ * The fields that hold a value of their own, in form order, each with the
+ * nameless containers around it, outermost first: the form passes a
+ * container's gates down to its fields (a read-only row makes them all
+ * read-only), so whatever judges a field as the form does folds them in.
+ */
+export function formFieldsWithin(
+  fields: FieldConfig[]
+): { field: NamedField; within: readonly FieldConfig[] }[] {
+  const named: { field: NamedField; within: readonly FieldConfig[] }[] = [];
+  const visit = (list: FieldConfig[], within: readonly FieldConfig[]): void => {
     for (const field of list) {
       const children = presentationalChildren(field);
       if (children) {
-        visit(children);
+        visit(children, [...within, field]);
         continue;
       }
-      if (isNamed(field)) named.push(field);
+      if (isNamed(field)) named.push({ field, within });
     }
   };
-  visit(fields);
+  visit(fields, []);
   return named;
 }
 
