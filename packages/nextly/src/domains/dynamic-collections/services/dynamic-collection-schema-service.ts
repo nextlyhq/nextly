@@ -39,6 +39,7 @@ import {
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { builderColumnIsUnique } from "../../schema/field-rules";
 import type {
   ForeignKeySpec,
   ReferentialAction,
@@ -201,22 +202,10 @@ const NO_REFERENTIAL_ACTION_CHANGE: ReferentialActionChange = {
   emitAfterColumnWork: false,
 };
 
-/**
- * Whether a Builder field's column is unique.
- *
- * A one-to-one relationship is unique by its cardinality, not by anything the author ticks, so
- * the flag alone does not decide it. Asked in one place because the answer has to be the same
- * whether the column arrives with its table or is added to one that already exists (a table
- * that gained its one-to-one by an edit was not enforcing the cardinality it declared), and
- * whether a later save keeps the constraint its table holds.
- */
-export function builderColumnIsUnique(field: FieldDefinition): boolean {
-  return (
-    field.unique === true ||
-    (field.type === "relationship" &&
-      field.options?.relationType === "oneToOne")
-  );
-}
+// Whether a Builder field's column is unique: the browser-safe field rules'
+// answer, which the Builder's move rule asks too. Re-exported for this
+// module's callers; used here as before.
+export { builderColumnIsUnique };
 
 /**
  * Field types whose value is a structured object or array, stored in the
