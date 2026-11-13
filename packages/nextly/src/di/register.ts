@@ -24,6 +24,8 @@
  * ```
  */
 
+import { join } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -290,6 +292,7 @@ import {
   withdrawTagExpiryLedger,
 } from "../runtime/cache/ledger-wiring";
 import { ensureSupportedFrameworkVersions } from "../runtime/framework-versions";
+import { setMigrationLogRoot } from "../runtime/notifications/production";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -1002,6 +1005,10 @@ async function registerServicesOnce(
   // outside development and test, the app's own logger included.
   const resolvedLogger = maskingServiceLogger(logger ?? consoleLogger);
   const resolvedBasePath = basePath ?? process.cwd();
+  // The migration log is kept below the same root as every other generated
+  // file: the working directory in an app, a folder of its own for each
+  // test harness instance.
+  setMigrationLogRoot(resolvedBasePath);
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
   for (const warning of leftAloneWarnings(leftAlone)) {
@@ -1214,7 +1221,8 @@ async function registerServicesOnce(
 
       const { mediaStorage, storage } = registerBootMediaStorage(
         storagePlugins,
-        resolvedLogger
+        resolvedLogger,
+        resolvedBasePath
       );
 
       // Before any schema work, a database laid out for the other choice of the setting is refused:
@@ -2629,12 +2637,21 @@ async function registerMigrationJournal(
   }
 }
 
-/** Layer 2.5: Initialize Media Storage, and its default adapter if any. */
+/**
+ * Layer 2.5: Initialize Media Storage, and its default adapter if any. The
+ * local disk a collection with no storage plugin uploads to is
+ * `public/uploads` below `basePath`: the app's root, the working directory
+ * unless one is given.
+ */
 function registerBootMediaStorage(
   storagePlugins: NextlyServiceConfig["storagePlugins"],
-  logger: Logger
+  logger: Logger,
+  basePath: string
 ): { mediaStorage: MediaStorage; storage: IStorageAdapter | null } {
-  const mediaStorage = initializeMediaStorage({ plugins: storagePlugins });
+  const mediaStorage = initializeMediaStorage({
+    plugins: storagePlugins,
+    local: { uploadDir: join(basePath, "public", "uploads") },
+  });
   logStorageConfiguration(mediaStorage, storagePlugins, logger);
   container.registerSingleton<MediaStorage>("mediaStorage", () => mediaStorage);
 

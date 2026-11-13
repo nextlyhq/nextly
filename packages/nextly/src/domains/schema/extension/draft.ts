@@ -51,6 +51,7 @@ import {
 import type {
   DeclaredCheck,
   DeclaredForeignKey,
+  DeclaredRelation,
   ExtensionColumn,
   ExtensionIndex,
   SchemaOwner,
@@ -92,7 +93,7 @@ interface DraftTable {
   indexes: ExtensionIndex[];
   foreignKeys?: DeclaredForeignKey[];
   checks?: DeclaredCheck[];
-  relations?: TableRelationInput[];
+  relations?: DeclaredRelation[];
   /**
    * Seeded columns known by NAME only — a core table's, or an entity system
    * column the seed could not type. They take part in the duplicate-name rule
@@ -216,6 +217,17 @@ function describeOwner(owner: DraftOwner): string {
     case "entity":
       return `the ${owner.entityKind} "${owner.slug}"`;
   }
+}
+
+/**
+ * The plugin a table belongs to: its owner when that is a plugin, or the
+ * plugin that declared the entity it holds. `undefined` for core, the app
+ * and an entity the app declared.
+ */
+function pluginOf(owner: DraftOwner): string | undefined {
+  if (owner.kind === "plugin") return owner.id;
+  if (owner.kind === "entity") return owner.plugin;
+  return undefined;
 }
 
 /**
@@ -432,33 +444,40 @@ export class SchemaDraftStore {
   }
 
   /**
-   * Refuse a plugin's contributed key or relation pointing at a table its
-   * migrations cannot rely on: the app's, whose stream runs after every
+   * Refuse a plugin's key or relation pointing at a table its migrations and
+   * queries cannot rely on: the app's, whose stream runs after every
    * plugin's, or another plugin's it does not depend on, which nothing orders
-   * before it or keeps installed. A core table, or one no hook declared, is
-   * judged by the compile and the database as any key's target is.
+   * before it or keeps installed. Asked of what a plugin declares on its own
+   * tables as well as what it adds to another owner's: a relation is the
+   * same dependency wherever it is written. Another plugin's table includes
+   * the table of a collection, Single or field group that plugin declared. A
+   * core table, or one no hook declared, is judged by the compile and the
+   * database as any key's target is.
    */
   assertContributedTargetsReachable(): void {
     for (const entry of this.contributedTargets) {
       const target = this.tables.get(entry.target);
       if (target === undefined) continue;
-      const path = `plugin.${entry.contributor}.schema.extendTable.${entry.table}`;
-      const lead = `The ${entry.element} plugin "${entry.contributor}" adds to "${entry.table}" points at "${entry.target}"`;
+      const path = entry.own
+        ? `plugin.${entry.contributor}.schema.${entry.table}`
+        : `plugin.${entry.contributor}.schema.extendTable.${entry.table}`;
+      const lead = `The ${entry.element} plugin "${entry.contributor}" ${entry.own ? "declares on" : "adds to"} "${entry.table}" points at "${entry.target}"`;
       if (target.owner.kind === "app") {
         refuse(
           path,
           `${lead}, which the app declares. The app's schema runs after every plugin's, so a plugin's ${entry.element} cannot rely on it.`
         );
       }
+      const targetPlugin = pluginOf(target.owner);
       const dependsOn = this.input.dependencies?.get(entry.contributor);
       if (
-        target.owner.kind === "plugin" &&
-        target.owner.id !== entry.contributor &&
-        dependsOn?.has(target.owner.id) !== true
+        targetPlugin !== undefined &&
+        targetPlugin !== entry.contributor &&
+        dependsOn?.has(targetPlugin) !== true
       ) {
         refuse(
           path,
-          `${lead}, which belongs to ${describeOwner(target.owner)}. Name it in dependsOn (or optionalDependsOn).`
+          `${lead}, which belongs to ${describeOwner(target.owner)}${target.owner.kind === "entity" ? `, declared by plugin "${targetPlugin}"` : ""}. Name "${targetPlugin}" in dependsOn (or optionalDependsOn), so it is installed first and cannot be uninstalled while the ${entry.element} needs it.`
         );
       }
     }
@@ -826,6 +845,8 @@ interface ContributedTarget {
   table: string;
   element: "foreign key" | "relation";
   target: string;
+  /** Declared on the plugin's own table, rather than added to another's. */
+  own?: boolean;
 }
 
 /** What `extendTable` takes beyond columns and indexes. */
@@ -932,6 +953,9 @@ function assertContributedKeysReach(
 ): void {
   for (const fk of keys) {
     assertColumnsReachable(fk.columns, "foreign key", table, scope);
+    // A key on the plugin's own table is judged with every declared key by
+    // the compile (`assertForeignKeyTargetsExist`, which orders the
+    // migration streams); only one added to another owner's table is here.
     if (scope.isOwn || scope.owner.kind !== "plugin") continue;
     record({
       contributor: scope.owner.id,
@@ -953,12 +977,13 @@ function assertContributedRelationsReach(
     if (relation.fromColumn !== undefined) {
       assertColumnsReachable([relation.fromColumn], "relation", table, scope);
     }
-    if (scope.isOwn || scope.owner.kind !== "plugin") continue;
+    if (scope.owner.kind !== "plugin") continue;
     record({
       contributor: scope.owner.id,
       table: table.name,
       element: "relation",
       target: relation.targetTable,
+      own: scope.isOwn,
     });
   }
 }
@@ -983,7 +1008,10 @@ function appendConstraints(
     ];
   }
   if (resolved.relations.length > 0) {
-    table.relations = [...(table.relations ?? []), ...resolved.relations];
+    table.relations = [
+      ...(table.relations ?? []),
+      ...resolved.relations.map(relation => ({ ...relation, ...by })),
+    ];
   }
 }
 
@@ -1114,6 +1142,22 @@ export function createOwnerDraft(
         ...(def.checks.length > 0 ? { checks: [...def.checks] } : {}),
         ...(def.relations.length > 0 ? { relations: [...def.relations] } : {}),
       });
+      // Every relation a plugin's table declares (a `ref()` column's
+      // included) is judged once every hook has run, as one it adds to
+      // another owner's table is: a later plugin, or the app, may declare
+      // the table it points at. Its keys are judged by the compile with
+      // every declared key (`assertForeignKeyTargetsExist`).
+      if (owner.kind === "plugin") {
+        for (const relation of def.relations) {
+          store.recordContributedTarget({
+            contributor: owner.id,
+            table: name,
+            element: "relation",
+            target: relation.targetTable,
+            own: true,
+          });
+        }
+      }
     },
 
     extendTable(name, ext): void {
