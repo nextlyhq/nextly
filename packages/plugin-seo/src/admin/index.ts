@@ -73,6 +73,19 @@ export { SeoProblemsPage } from "./SeoProblemsPage";
 export { SeoRedirectsPage } from "./SeoRedirectsPage";
 export { SeoSettingsPage } from "./SeoSettingsPage";
 export { SeoBulkMoved, SeoReceivedMoved } from "./section";
+/**
+ * The names these two screens were published under before they became
+ * forwards to Pages and Inspect. A site's committed component map imports
+ * each component by name, and a name this entry stops exporting fails that
+ * map's compile, so the admin could not load to rewrite it. Kept so a site
+ * upgrading from an earlier release loads; the map then names the new ones.
+ *
+ * @deprecated Use `SeoBulkMoved` and `SeoReceivedMoved`.
+ */
+export {
+  SeoBulkMoved as SeoBulkPage,
+  SeoReceivedMoved as SeoReceivedPage,
+} from "./section";
 export { SeoInspectPage } from "./SeoInspectPage";
 export { SeoTab } from "./SeoTab";
 export { PageBuilderSeoTab } from "./PageBuilderSeoTab";
