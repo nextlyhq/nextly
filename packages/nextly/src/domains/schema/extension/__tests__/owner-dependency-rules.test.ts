@@ -289,6 +289,61 @@ describe("at boot, the entity's owner comes from what each plugin contributes", 
     expect(message).toMatch(/plugin "reviews".*plugin "shop"/s);
   });
 
+  it("follows a plugin's renameMap to the slug the entity carries in the config", async () => {
+    // `shop` renames its `products` to `goods`; the app keeps a collection
+    // of its own on the vacated `products` slug.
+    const renamedShop = { ...shop, renameMap: { products: "goods" } };
+    const goods = { ...products, slug: "goods" };
+    const extendGoods = {
+      name: "reviews",
+      contributes: {
+        schema: {
+          extend: [
+            ({
+              schema,
+            }: {
+              schema: { extendTable: (name: string, ext: object) => void };
+            }) =>
+              schema.extendTable("dc_goods", {
+                columns: { rating: col.integer({ nullable: true }) },
+              }),
+          ],
+        },
+      },
+    };
+    const extendAppProducts = {
+      ...reviews(),
+      name: "reviews",
+    };
+    const config = { collections: [goods, products] };
+    // The renamed entity is the plugin's: extending it needs the dependency.
+    const message = await compileExtensionSchema({
+      dialect: "postgresql",
+      plugins: [renamedShop, extendGoods] as never,
+      config,
+      logger: { warn: () => undefined },
+    }).then(
+      () => "",
+      (error: unknown) =>
+        (
+          (error as NextlyError).publicData as {
+            errors?: { message: string }[];
+          }
+        ).errors?.[0]?.message ?? ""
+    );
+    expect(message).toMatch(/plugin "reviews".*plugin "shop"/s);
+    // The app's collection on the vacated slug is not the plugin's.
+    const schema = await compileExtensionSchema({
+      dialect: "postgresql",
+      plugins: [renamedShop, extendAppProducts] as never,
+      config,
+      logger: { warn: () => undefined },
+    });
+    expect(
+      schema?.entityColumns.get("dc_products")?.map(column => column.name)
+    ).toContain("rating");
+  });
+
   it("compiles once the plugin depends on the collection's owner", async () => {
     const schema = await compile([shop, reviews({ shop: "*" })]);
     expect(
