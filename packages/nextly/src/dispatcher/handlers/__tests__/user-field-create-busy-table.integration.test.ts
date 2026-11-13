@@ -15,6 +15,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { UserExtSchemaService } from "../../../domains/users/services/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../../domains/users/services/user-field-definition-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import { dispatchUserFields } from "../user-field-dispatcher";
@@ -92,6 +93,13 @@ describe.each(SERVERS)(
       expect((await definitions().listFields()).map(f => f.name)).not.toContain(
         "ufbSecond"
       );
+      // The fields the user model is built from no longer name the field taken back.
+      const schema = handle.getService(
+        "userExtSchemaService"
+      ) as unknown as UserExtSchemaService;
+      const merged = schema.getMergedFieldConfigs().map(f => f.name);
+      expect(merged).toContain("ufbFirst");
+      expect(merged).not.toContain("ufbSecond");
 
       await create("ufbSecond");
       expect((await definitions().listFields()).map(f => f.name)).toContain(

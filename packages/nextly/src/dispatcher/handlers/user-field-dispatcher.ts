@@ -103,15 +103,19 @@ function withUserFieldChangeExcluded<T>(
         await syncUserExtSchema(svc.userExtSchemaService);
       } catch (error) {
         if (undo !== undefined) {
-          await undo(result).catch((undoError: unknown) =>
-            (getLoggerFromDI() ?? consoleLogger).error(
-              `The ${label} failed, and what it wrote could not be taken back: ${
-                undoError instanceof Error
-                  ? undoError.message
-                  : String(undoError)
-              }`
-            )
-          );
+          await undo(result)
+            // The sync loaded the fields with the change in them; once it is taken back they are
+            // loaded again, so the user model is not built with a field that is not there.
+            .then(() => svc.userExtSchemaService?.reloadMergedFields())
+            .catch((undoError: unknown) =>
+              (getLoggerFromDI() ?? consoleLogger).error(
+                `The ${label} failed, and what it wrote could not be taken back: ${
+                  undoError instanceof Error
+                    ? undoError.message
+                    : String(undoError)
+                }`
+              )
+            );
         }
         throw error;
       }
