@@ -40,6 +40,21 @@ describe("useSchemaChangeConfirmation", () => {
     expect(result.current.isApplying).toBe(false);
   });
 
+  // Busy from the moment a save asks for its preview until the apply settles,
+  // so nothing that would undo the save's work is offered meanwhile.
+  it("is busy while a preview is on its way and while the apply runs", () => {
+    const { result } = renderHook(() => useSchemaChangeConfirmation());
+    expect(result.current.isBusy).toBe(false);
+    act(() => result.current.beginPreview());
+    expect(result.current.isBusy).toBe(true);
+    act(() => result.current.endPreview());
+    expect(result.current.isBusy).toBe(false);
+    act(() => result.current.beginApply());
+    expect(result.current.isBusy).toBe(true);
+    act(() => result.current.endApply());
+    expect(result.current.isBusy).toBe(false);
+  });
+
   it("puts a previewed change in front of the user", () => {
     const { result } = renderHook(() => useSchemaChangeConfirmation());
     act(() => result.current.request(preview(7)));

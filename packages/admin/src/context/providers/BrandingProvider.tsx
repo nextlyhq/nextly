@@ -312,7 +312,7 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 // Provider
 // ============================================================================
 
-interface BrandingProviderProps {
+export interface BrandingProviderProps {
   children: React.ReactNode;
 }
 
