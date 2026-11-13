@@ -366,3 +366,51 @@ describe("diffSnapshots — a key renamed while its referenced column is dropped
     );
   });
 });
+
+describe("diffSnapshots — a key renamed while the index under its referenced column is dropped", () => {
+  it("drops the old key before the index it depends on", () => {
+    const codes: TableSpec = {
+      ...table("codes"),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "code", type: "varchar(36)", nullable: true },
+      ],
+      indexes: [{ name: "uq_codes_code", columns: ["code"], unique: true }],
+    };
+    const codesAfter: TableSpec = { ...codes, indexes: [] };
+    const notes: TableSpec = {
+      ...table("notes", ["codes"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "code", type: "varchar(36)", nullable: true },
+      ],
+      foreignKeys: [
+        { ...key("notes", "code", "codes"), referencesColumns: ["code"] },
+      ],
+    };
+    const moved: TableSpec = {
+      ...notes,
+      foreignKeys: [
+        {
+          ...key("notes", "code", "codes"),
+          referencesColumns: ["code"],
+          name: "fk_notes_code_2",
+        },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [codes, notes] },
+      { tables: [codesAfter, moved] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    expect(
+      at(
+        op =>
+          op.type === "drop_foreign_key" &&
+          op.foreignKey.name === "fk_notes_code"
+      )
+    ).toBeLessThan(
+      at(op => op.type === "drop_index" && op.index.name === "uq_codes_code")
+    );
+  });
+});
