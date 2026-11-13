@@ -635,8 +635,10 @@ function assertForeignKeyTargetsExist(
         assertReferencesAKey(fk, declaredTarget, path);
       }
       if (!adopted.has(fk.referencesTable)) {
+        // A key another owner added to this table rides that owner's
+        // migration stream, so it is that stream whose order it must keep.
         assertForeignKeyTargetInAnEarlierStream(
-          table.owner,
+          fk.contributedBy ?? table.owner,
           fk,
           target,
           path,
