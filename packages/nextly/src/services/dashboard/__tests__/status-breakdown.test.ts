@@ -106,10 +106,12 @@ beforeEach(() => {
   adapter = makeAdapter();
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+      return {
+        getAllCollectionsForRead: vi.fn().mockResolvedValue(COLLECTIONS),
+      };
     }
     if (name === "singleRegistryService") {
-      return { getAllSingles: vi.fn().mockResolvedValue([]) };
+      return { getAllSinglesForRead: vi.fn().mockResolvedValue([]) };
     }
     throw new Error(`unexpected container.get("${name}")`);
   });

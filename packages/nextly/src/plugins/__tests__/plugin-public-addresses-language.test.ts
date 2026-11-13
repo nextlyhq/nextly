@@ -46,11 +46,18 @@ describe("the default address language", () => {
     expect(await surface().defaultLanguage()).toBe("de");
   });
 
+  it("lists the site's languages as they are now, the default first", async () => {
+    // Set in Settings, English listed first and German made the default.
+    languages("de", ["en", "de", "fr"]);
+    expect(await surface().languages()).toEqual(["de", "en", "fr"]);
+  });
+
   it("is English on a site with no languages", async () => {
     languages(undefined, []);
     expect(defaultAddressLanguage()).toBe("en");
     expect(await surface().defaultLanguage()).toBe("en");
     // The one language such a site holds its addresses in.
     expect(addressLanguages()).toEqual(["en"]);
+    expect(await surface().languages()).toEqual(["en"]);
   });
 });

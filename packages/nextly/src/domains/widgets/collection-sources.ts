@@ -90,7 +90,7 @@ interface RegisteredCollection {
 }
 
 interface CollectionRegistrySurface {
-  getAllCollections(): Promise<RegisteredCollection[]>;
+  getAllCollectionsForRead(): Promise<RegisteredCollection[]>;
 }
 
 /**
@@ -241,7 +241,9 @@ async function readRegisteredCollections(): Promise<
     const registry = container.get<CollectionRegistrySurface>(
       "collectionRegistryService"
     );
-    return await registry.getAllCollections();
+    // From the registry cache: the sources are rebuilt on every dashboard
+    // request, and read nothing again while the registry is unchanged.
+    return await registry.getAllCollectionsForRead();
   } catch (error) {
     getNextlyLogger().error({
       kind: "widget-collection-sources-unavailable",

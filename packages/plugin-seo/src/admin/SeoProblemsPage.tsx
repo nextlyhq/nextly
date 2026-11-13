@@ -316,21 +316,23 @@ export function SeoProblemsPage(): JSX.Element {
                 value={shown}
                 onSelect={next => setShown(next as Shown)}
               />
-              <span
-                role="status"
-                className="ml-auto text-sm text-muted-foreground"
-              >
-                {checkedLine(list, checking)}
-              </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={checking}
-                onClick={() => check()}
-              >
-                Check again
-              </Button>
+              {/* When the list was checked and the button that checks it
+                  again wrap as one, so on a narrower screen the button
+                  stays beside its line rather than starting a row alone. */}
+              <div className="flex flex-wrap items-center gap-2 sm:ml-auto sm:justify-end">
+                <span role="status" className="text-sm text-muted-foreground">
+                  {checkedLine(list, checking)}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={checking}
+                  onClick={() => check()}
+                >
+                  Check again
+                </Button>
+              </div>
             </div>
           ),
           beforeTable:

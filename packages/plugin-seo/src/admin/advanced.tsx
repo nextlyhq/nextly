@@ -140,9 +140,10 @@ export function AdvancedFrame({
         <b className="text-sm font-medium text-foreground">Advanced</b>
         <span className="sr-only">{summary}</span>
         {problemCount > 0 ? (
+          // The count in 12px, the smallest text the admin draws.
           <span
             title={thingsToFix(problemCount)}
-            className="inline-grid h-[18px] min-w-[18px] place-items-center rounded-full border border-warning-border bg-warning-surface px-[5px] text-[11px] leading-none font-semibold text-warning-text"
+            className="inline-grid h-[18px] min-w-[18px] place-items-center rounded-full border border-warning-border bg-warning-surface px-[5px] text-xs leading-none font-semibold text-warning-text"
           >
             {problemCount}
           </span>

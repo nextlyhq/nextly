@@ -14,6 +14,7 @@
 import type { ImportTarget } from "./contract";
 import {
   ImportFileRefused,
+  originOfAddress,
   pathOfAddress,
   textValue,
   type ImportedRecord,
@@ -388,10 +389,12 @@ function recordOf(
   values: ImportedValues
 ): ImportedRecord {
   const path = addressOfItem(item.link);
+  const origin = path === undefined ? undefined : originOfAddress(item.link);
   return {
     label: item.title ?? path ?? item.slug ?? "Untitled",
     match: {
       ...(path === undefined ? {} : { path }),
+      ...(origin === undefined ? {} : { origin }),
       ...(item.slug === undefined ? {} : { slug: item.slug }),
     },
     values,

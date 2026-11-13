@@ -139,6 +139,13 @@ export interface PluginPublicAddresses {
    * `"en"` on a site with no languages.
    */
   defaultLanguage(): Promise<string>;
+  /**
+   * The languages an address is held in: the site's languages as they are
+   * now, a list set in Settings included, its default first; or, on a site
+   * with no languages, the one it serves (its default, `"en"` where none
+   * is named).
+   */
+  languages(): Promise<string[]>;
 }
 
 /** What the plugin context hands this surface. */
@@ -245,6 +252,12 @@ export function pluginPublicAddresses(
     },
     defaultLanguage: async () =>
       (await heldAddresses()).defaultAddressLanguage(),
+    languages: async () => {
+      const held = await heldAddresses();
+      const first = held.defaultAddressLanguage();
+      const all = held.addressLanguages();
+      return [first, ...all.filter(code => code !== first)];
+    },
   };
 }
 

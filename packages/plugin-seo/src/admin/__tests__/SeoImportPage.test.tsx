@@ -100,6 +100,7 @@ function dryRun(include: boolean): DryRunBody {
     held: 7,
     lines: [],
     pages: include ? 2 : 1,
+    versions: include ? 2 : 1,
     same: 0,
     kept: 0,
     neverServed: include ? 0 : 1,
@@ -188,6 +189,18 @@ const dryRuns = () => sent.filter(each => each.path.endsWith("/dry-run"));
 const table = () => screen.getByRole("table");
 
 describe("importing this site's own field group", () => {
+  it("says a field group's fields were matched by name, for a person to change", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    expect(
+      screen.getByText(
+        "Each field in SEO (old) goes to one place in the plugin. We matched them by name; change any that's wrong."
+      )
+    ).toBeTruthy();
+  });
+
   it("offers the group first, with what it holds, and another group beside it", () => {
     render(<SeoImportPage />);
     expect(
@@ -351,6 +364,134 @@ describe("importing this site's own field group", () => {
     ).toBeTruthy();
   });
 
+  it("gives each language and draft of a page its own row, each value with its own result", async () => {
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      sent.push({
+        path: request.path,
+        body: (request.body ?? {}) as Record<string, unknown>,
+      });
+      const versioned = (more: Partial<ImportReportEntry>): ImportReportEntry =>
+        entry({
+          id: "pricing",
+          values: { title: "Plans", description: "Costs" },
+          ...more,
+        });
+      return {
+        ...dryRun(false),
+        pages: 1,
+        versions: 3,
+        documents: [
+          versioned({
+            label: "Pricing",
+            locale: "en",
+            language: "English",
+            version: "published",
+            set: ["title", "description"],
+          }),
+          versioned({
+            label: "Pricing (new)",
+            locale: "en",
+            language: "English",
+            version: "draft",
+            set: ["title"],
+            kept: ["description"],
+          }),
+          versioned({
+            label: "Preise",
+            locale: "de",
+            language: "Deutsch",
+            version: "published",
+            same: ["title"],
+            set: ["description"],
+          }),
+        ],
+      };
+    });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+
+    expect(
+      within(table()).getByRole("columnheader", { name: "Version" })
+    ).toBeTruthy();
+    const rows = within(table()).getAllByRole("row").slice(1);
+    expect(rows.map(row => row.textContent)).toEqual([
+      expect.stringMatching(
+        /^Pricing.*English · published.*Will set.*Will set/
+      ),
+      expect.stringMatching(/English · draft.*Will set.*Kept/),
+      expect.stringMatching(/Deutsch · published.*Same as automatic.*Will set/),
+    ]);
+    // Named once on screen, and on each row for a screen reader.
+    expect(within(table()).getAllByText("Pricing")).toHaveLength(1);
+    expect(
+      within(rows[1] as HTMLElement).getByText("Pricing (new)").className
+    ).toBe("sr-only");
+  });
+
+  it("gives a value the source doesn't hold a result of its own, not a blank cell", async () => {
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      sent.push({
+        path: request.path,
+        body: (request.body ?? {}) as Record<string, unknown>,
+      });
+      return {
+        ...dryRun(false),
+        pages: 1,
+        versions: 2,
+        documents: [
+          entry({
+            id: "pricing",
+            label: "Pricing",
+            locale: "en",
+            language: "English",
+            set: ["title", "description"],
+            values: { title: "Plans", description: "Costs" },
+          }),
+          // The German version holds a title and no description.
+          entry({
+            id: "pricing",
+            label: "Preise",
+            locale: "de",
+            language: "Deutsch",
+            set: ["title"],
+            values: { title: "Preise" },
+          }),
+        ],
+      };
+    });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+
+    const rows = within(table()).getAllByRole("row").slice(1);
+    const german = rows[1] as HTMLElement;
+    const description = within(german).getAllByRole("cell").at(-1);
+    expect(description?.textContent).toBe("Nothing to importnot in the source");
+    // Counted in none of the four cards: it is not a value.
+    expect(
+      within(rows[0] as HTMLElement).queryByText("Nothing to import")
+    ).toBeNull();
+  });
+
+  it("shows no version column where each page has one version", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    expect(
+      within(table()).queryByRole("columnheader", { name: "Version" })
+    ).toBeNull();
+  });
+
   it("says part of the import may be in place when a Single couldn't be put back", async () => {
     applying = () =>
       Promise.reject(
@@ -497,6 +638,31 @@ describe("importing a file another tool exported", () => {
 <wp:post_type><![CDATA[page]]></wp:post_type><content:encoded><![CDATA[${"A long page. ".repeat(500)}]]></content:encoded>
 <wp:postmeta><wp:meta_key><![CDATA[_yoast_wpseo_title]]></wp:meta_key><wp:meta_value><![CDATA[Nextly pricing]]></wp:meta_value></wp:postmeta>
 </item></channel></rss>`;
+
+  it("says a file's fields are matched by the tool's names, which can't be changed here", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /WordPress/ }));
+    await choose("acme.WordPress.xml", WXR);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    expect(
+      screen.getByText(
+        "Each field in the WordPress file goes to one place in the plugin, matched by the name the tool gives it."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/change any that's wrong/)).toBeNull();
+    // A file's count is of the pages each value changes, which is fewer
+    // than the pages holding one where a value is the same as automatic,
+    // so the column says so rather than "Pages with a value".
+    expect(
+      within(table()).getByRole("columnheader", { name: "Pages it changes" })
+    ).toBeTruthy();
+    expect(
+      within(table()).queryByRole("columnheader", {
+        name: "Pages with a value",
+      })
+    ).toBeNull();
+  });
 
   it("reads a WordPress export and says what it holds, with a way to another file", async () => {
     render(<SeoImportPage />);

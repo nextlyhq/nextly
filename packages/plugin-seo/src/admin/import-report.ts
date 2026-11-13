@@ -16,17 +16,33 @@ import {
   type ImportTarget,
 } from "../import/contract";
 
-/** A value's result for one page, as the report's table says it. */
-export type ValueResult = "set" | "same" | "kept" | "neverServed" | "none";
+/** A value's result for one version of a page, as the report's table says it. */
+export type ValueResult =
+  | "set"
+  | "same"
+  | "kept"
+  | "neverServed"
+  | "withDraft"
+  | "waiting"
+  | "none";
+
+/**
+ * A title or description cell's result: the engine's, or `absent` where the
+ * source holds no value for it, so there is nothing to bring in.
+ */
+type CellResult = ValueResult | "absent";
 
 /** Each result's words, and the line under it. */
 export const RESULT_WORDS: Readonly<
-  Record<Exclude<ValueResult, "none">, { label: string; why?: string }>
+  Record<Exclude<CellResult, "none">, { label: string; why?: string }>
 > = {
   set: { label: "Will set" },
   same: { label: "Same as automatic", why: "left empty" },
   kept: { label: "Kept", why: "already typed" },
   neverServed: { label: "Skipped", why: "never served" },
+  withDraft: { label: "With the draft", why: "live once published" },
+  waiting: { label: "Skipped", why: "a draft waits" },
+  absent: { label: "Nothing to import", why: "not in the source" },
 };
 
 /** `place`'s result on the page `entry` reports. */
@@ -38,7 +54,58 @@ export function resultOf(
   if (entry.kept.includes(place)) return "kept";
   if (entry.same.includes(place)) return "same";
   if (entry.neverServed.includes(place)) return "neverServed";
+  if (entry.withDraft?.includes(place) === true) return "withDraft";
+  if (entry.waiting?.includes(place) === true) return "waiting";
   return "none";
+}
+
+/**
+ * A page's title or description result, as its cell in the report shows it:
+ * the engine's result, read from `resultOf`; where the engine reports none
+ * and the source holds no value for the place, `absent`, so every cell says
+ * what happens to it rather than one being left blank.
+ */
+export function cellResultOf(
+  entry: ImportReportEntry,
+  place: "title" | "description"
+): CellResult {
+  const result = resultOf(entry, place);
+  if (result !== "none") return result;
+  const value = entry.values[place];
+  return value === undefined || value.trim() === "" ? "absent" : "none";
+}
+
+/** Each version's name in words: its language, where it has one, and its form. */
+export function versionWords(entry: ImportReportEntry): string {
+  const form = entry.version ?? "published";
+  const language = entry.language ?? entry.locale;
+  return language === undefined ? form : `${language} · ${form}`;
+}
+
+/**
+ * Whether a report tells versions apart: a page in more than one language,
+ * or with a draft, gets a row per version, each named. A site with neither
+ * has one row a page, as before.
+ */
+export function showsVersions(entries: readonly ImportReportEntry[]): boolean {
+  return entries.some(
+    entry => entry.locale !== undefined || entry.version === "draft"
+  );
+}
+
+/** Whether `entry` is the first row of its page in `entries`, as listed. */
+export function firstOfPage(
+  entries: readonly ImportReportEntry[],
+  at: number
+): boolean {
+  const entry = entries[at];
+  const before = entries[at - 1];
+  return (
+    entry === undefined ||
+    before === undefined ||
+    before.type !== entry.type ||
+    before.id !== entry.id
+  );
 }
 
 /** The four counts the last step shows, in values, with the pages each is on. */
@@ -49,26 +116,34 @@ export interface ValueCounts {
   neverServed: { values: number; pages: number; labels: string[] };
 }
 
-/** The counts, from the dry run's report of each page. */
+/** The page a version is of, each counted once whatever its versions. */
+const pageOf = (entry: ImportReportEntry) =>
+  `${entry.type ?? ""}|${entry.id ?? ""}`;
+
+/**
+ * The counts, from the dry run's report of each version: values counted in
+ * every version, pages once each.
+ */
 export function valueCounts(run: DryRunBody): ValueCounts {
-  const pages = run.documents.filter(entry => entry.id !== undefined);
+  const versions = run.documents.filter(entry => entry.id !== undefined);
   const tally = (
     list: (entry: ImportReportEntry) => readonly ImportTarget[]
   ) => {
-    const holding = pages.filter(entry => list(entry).length > 0);
+    const holding = versions.filter(entry => list(entry).length > 0);
     return {
       values: holding.reduce((sum, entry) => sum + list(entry).length, 0),
-      pages: holding.length,
+      pages: new Set(holding.map(pageOf)).size,
     };
   };
-  const skipped = pages.filter(entry => entry.neverServed.length > 0);
+  const skipped = versions.filter(entry => entry.neverServed.length > 0);
+  const labels = new Map(skipped.map(entry => [pageOf(entry), entry.label]));
   return {
     set: tally(entry => entry.set),
     same: tally(entry => entry.same),
     kept: tally(entry => entry.kept),
     neverServed: {
       ...tally(entry => entry.neverServed),
-      labels: skipped.map(entry => entry.label),
+      labels: [...labels.values()],
     },
   };
 }
@@ -80,6 +155,8 @@ function placesOf(entry: ImportReportEntry): Set<ImportTarget> {
     ...entry.same,
     ...entry.kept,
     ...entry.neverServed,
+    ...(entry.withDraft ?? []),
+    ...(entry.waiting ?? []),
   ]);
 }
 
@@ -136,9 +213,16 @@ function cell(value: string): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-/** A value's result in words, for the downloaded report. */
-function resultWords(entry: ImportReportEntry, place: ImportTarget): string {
-  const result = resultOf(entry, place);
+/**
+ * A value's result in words, for the downloaded report: the words its cell
+ * shows, and none for a record that matched no page, which has no cells.
+ */
+function resultWords(
+  entry: ImportReportEntry,
+  place: "title" | "description"
+): string {
+  if (entry.id === undefined) return "";
+  const result = cellResultOf(entry, place);
   if (result === "none") return "";
   const words = RESULT_WORDS[result];
   return words.why === undefined
@@ -147,14 +231,15 @@ function resultWords(entry: ImportReportEntry, place: ImportTarget): string {
 }
 
 /**
- * The report of `run` as CSV: one row per page and per record passed over,
- * with each value the source holds, what the import does with it, and why
- * a row is skipped.
+ * The report of `run` as CSV: one row per version of each page and per
+ * record passed over, with each value the source holds, what the import
+ * does with it, and why a row is skipped.
  */
 export function reportCsv(run: DryRunBody): string {
   const rows = [
     [
       "Page",
+      "Version",
       "Outcome",
       "Title on Google",
       "Title result",
@@ -164,6 +249,7 @@ export function reportCsv(run: DryRunBody): string {
     ],
     ...run.documents.map(entry => [
       entry.label,
+      entry.id === undefined ? "" : versionWords(entry),
       entry.outcome,
       entry.values.title ?? "",
       resultWords(entry, "title"),

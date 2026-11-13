@@ -61,6 +61,7 @@ const PARSED = z.object({
         label: TEXT,
         match: z.object({
           path: TEXT.optional(),
+          origin: TEXT.optional(),
           slug: TEXT.optional(),
         }),
         values: z.object({

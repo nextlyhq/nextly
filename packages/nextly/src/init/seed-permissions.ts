@@ -289,9 +289,11 @@ function startPublicRoleDeps(): PublicRoleDeps {
     meta: getService("metaService"),
     config: getService("config"),
     entities: async () => {
+      // As stored: the Public role's permissions are written from them.
+      const asStored = { forWrite: true };
       const [collections, singles] = await Promise.all([
-        getService("collectionRegistryService").getAllLabels(),
-        getService("singleRegistryService").getAllLabels(),
+        getService("collectionRegistryService").getAllLabels(asStored),
+        getService("singleRegistryService").getAllLabels(asStored),
       ]);
       return { collections, singles };
     },
@@ -331,9 +333,11 @@ async function commandPublicRoleDeps(
     meta: new MetaService(adapter, logger),
     config,
     entities: async () => {
+      // As stored: the Public role's permissions are written from them.
+      const asStored = { forWrite: true };
       const [collections, singles] = await Promise.all([
-        new CollectionRegistryService(adapter, logger).getAllLabels(),
-        new SingleRegistryService(adapter, logger).getAllLabels(),
+        new CollectionRegistryService(adapter, logger).getAllLabels(asStored),
+        new SingleRegistryService(adapter, logger).getAllLabels(asStored),
       ]);
       return { collections, singles };
     },
