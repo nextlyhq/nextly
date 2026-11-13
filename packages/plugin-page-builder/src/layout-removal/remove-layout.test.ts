@@ -1634,6 +1634,31 @@ describe("Move pages, then remove", () => {
     });
   });
 
+  it("moves every live copy past one tick's bound before it removes the Layout", async () => {
+    const s = movingSite(0);
+    for (let i = 0; i < PAGES_PER_TICK + 5; i += 1) {
+      s.pages.push({
+        id: `l${String(i).padStart(3, "0")}`,
+        title: `Live ${String(i)}`,
+        status: "published",
+        layout: "landing",
+      });
+    }
+    const d = deps(s);
+
+    const ticks = await run(d);
+
+    // The first tick reached its bound; the second moved the rest, and only
+    // then was the Layout removed.
+    expect(ticks.map(progress => progress.state)).toEqual(["moving", "done"]);
+    expect(ticks.reduce((sum, progress) => sum + progress.moved, 0)).toBe(
+      PAGES_PER_TICK + 5
+    );
+    expect(s.pages.filter(page => page.layout !== null)).toEqual([]);
+    expect(ticks.at(-1)).not.toHaveProperty("liveLeft");
+    expect(s.layouts.has("landing")).toBe(false);
+  });
+
   it("keeps a copy that names another Layout", async () => {
     const s = movingSite(0);
     s.pages.push({

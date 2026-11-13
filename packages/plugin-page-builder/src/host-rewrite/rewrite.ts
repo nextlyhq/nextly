@@ -155,6 +155,15 @@ export interface HostCopiesWrite {
   /** How the step judges the live copy: `published`, or `draft` for a row not public. */
   readonly liveForm: HostForm;
   readonly step: HostStep;
+  /**
+   * The copies the walk read, each with the form it was judged as: judged
+   * again before the rewrite, so the rewrite's own transaction asks the step
+   * nothing it already knows.
+   */
+  readonly seeds: readonly {
+    readonly value: unknown;
+    readonly form: HostForm;
+  }[];
 }
 
 /**
@@ -677,14 +686,17 @@ async function decideCopies(
     single.result.reason === "pending-draft";
   if (single.kind === "done" && !leftForDraft) return single;
   const planned = await plannedValue(step, candidate, read, single);
+  const liveForm: HostForm = read.liveState === null ? "draft" : "published";
+  const seeds: { readonly value: unknown; readonly form: HostForm }[] = [];
+  if (read.published.kind === "value") {
+    seeds.push({ value: read.published.value, form: liveForm });
+  }
+  if (read.draft?.kind === "value") {
+    seeds.push({ value: read.draft.value, form: "draft" });
+  }
   return {
     kind: "copies",
-    copies: {
-      host: candidate.host,
-      rev: found.rev,
-      liveForm: read.liveState === null ? "draft" : "published",
-      step,
-    },
+    copies: { host: candidate.host, rev: found.rev, liveForm, step, seeds },
     planned: { host: candidate.host, value: planned },
     fallback: single,
   };

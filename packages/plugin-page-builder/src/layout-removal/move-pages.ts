@@ -420,19 +420,29 @@ interface TickPlan {
 }
 
 /**
- * The pages that still stop the removal after this tick: those naming the
- * Layout off a live copy that no tick has settled. A page this tick tried and
- * did not refuse is settled, whatever it came to: moved, already moved, or
- * one whose live copy the person may not publish, which is left to draw the
- * site default.
+ * The pages that still stop the removal after this tick:
+ *
+ * - every page after the cursor this tick did not reach, live copies included,
+ *   since a live copy the person may publish is moved, and the removal waits
+ *   until each has been tried;
+ * - every page naming the Layout off a live copy that no tick has settled.
+ *
+ * A page this tick tried and did not refuse is settled, whatever it came to:
+ * moved, already moved, or one whose live copy the person may not publish,
+ * which is left to draw the site default. A live copy an earlier tick tried
+ * and left is settled the same way.
  */
 function stillInTheWay(plan: TickPlan, run: TickRun): PageReference[] {
-  const settled = new Set(
-    run.tried.filter(ref => !run.refused.has(ref.id)).map(ref => ref.id)
+  const tried = new Set(run.tried.map(ref => ref.id));
+  const untried = new Set(
+    plan.ahead.filter(ref => !tried.has(ref.id)).map(ref => ref.id)
   );
-  return plan.all
-    .filter(namesItOffTheLiveRow)
-    .filter(ref => !settled.has(ref.id));
+  return plan.all.filter(
+    ref =>
+      untried.has(ref.id) ||
+      (namesItOffTheLiveRow(ref) &&
+        (!tried.has(ref.id) || run.refused.has(ref.id)))
+  );
 }
 
 /** One tick of a held move, by the steps in the module docblock. */
