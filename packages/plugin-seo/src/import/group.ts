@@ -180,6 +180,46 @@ function declaredGroups(
   return groups;
 }
 
+/**
+ * Whether `types` declare a group or component field other than the
+ * plugin's own: old SEO values can only be in one. Read from the
+ * declarations alone, before any page is.
+ */
+export function declaresOtherGroups(
+  ctx: PluginContext,
+  types: readonly { slug: string; label: string; fields: unknown }[]
+): boolean {
+  return [...declaredGroups(ctx, types).keys()].some(
+    name => name !== SEO_GROUP
+  );
+}
+
+/** The longest example a field's value is shown as, in characters. */
+const EXAMPLE_LIMIT = 80;
+
+/**
+ * A field's value on `page` as an example of what it holds: text as written
+ * (cut short), a yes or no, or that an image is chosen; none for a page
+ * holding none, or a value read as none of those.
+ */
+function exampleOf(
+  page: ReadPage | undefined,
+  group: string,
+  field: string
+): string | undefined {
+  if (page === undefined) return undefined;
+  const value = valuesIn(page, group)[field];
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+  const text = textOf(value);
+  if (text !== undefined) {
+    return text.length > EXAMPLE_LIMIT
+      ? `${text.slice(0, EXAMPLE_LIMIT - 1).trimEnd()}…`
+      : text;
+  }
+  return imageId(value) === undefined ? undefined : "An image";
+}
+
 /** One declared group as the panel offers it, counted over its pages. */
 function offeredGroup(
   name: string,
@@ -197,17 +237,32 @@ function offeredGroup(
     }
   }
   const own = name === SEO_GROUP;
-  const fields: GroupField[] = [...inner].map(([field, label]) => ({
-    name: field,
-    label,
-    filled: read.filter(page => filled(valuesIn(page, name)[field])).length,
-    suggested: own ? (OWN_FIELDS[field] ?? "skip") : suggestedTarget(field),
-  }));
+  const fields: GroupField[] = [...inner].map(([field, label]) => {
+    const holding = read.filter(page => filled(valuesIn(page, name)[field]));
+    const example = exampleOf(holding[0], name, field);
+    return {
+      name: field,
+      label,
+      filled: holding.length,
+      suggested: own ? (OWN_FIELDS[field] ?? "skip") : suggestedTarget(field),
+      ...(example === undefined ? {} : { example }),
+    };
+  });
+  // The fields whose values go to a page's title or description, as the
+  // panel first matches them.
+  const textFields = fields
+    .filter(
+      field => field.suggested === "title" || field.suggested === "description"
+    )
+    .map(field => field.name);
   return {
     field: name,
     label: group.label,
     types: group.types,
     pages: read.length,
+    withText: read.filter(page =>
+      textFields.some(field => filled(valuesIn(page, name)[field]))
+    ).length,
     fields,
     own,
   };

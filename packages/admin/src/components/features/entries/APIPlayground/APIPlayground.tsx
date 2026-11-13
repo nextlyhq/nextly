@@ -730,6 +730,7 @@ export function APIPlayground({
                     }
                   >
                     <CodeMirrorEditor
+                      label="Request body (JSON)"
                       value={requestBody}
                       onChange={setRequestBody}
                       language="json"

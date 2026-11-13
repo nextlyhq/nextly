@@ -1,13 +1,16 @@
 /**
  * Redirects at request time: the site's Proxy asks this handler about every
  * page request, and it answers with the redirect that holds the address, if
- * any, before the page is served. A saved redirect is read from the database
- * on the next request, so it applies at once, on every instance.
+ * any, before the page is served.
  *
- * Which redirect answers is read from the address record, by the claim keys
- * of the address itself and of every range above it: one indexed read. An
- * address a page holds, exactly or in one of its ranges, is served, whatever
- * pattern covers it.
+ * A request no redirect is for, nearly every one, is passed without reading
+ * the database: the addresses redirects hold are kept in this process
+ * (`held-keys`). Only an address one of them matches is read, from the
+ * address record by the claim keys of the address itself and of every range
+ * above it, which decides the redirect: an address a page holds, exactly or
+ * in one of its ranges, is served, whatever pattern covers it. A saved
+ * redirect applies at once on the server that saved it, and within
+ * `REDIRECT_KEYS_REFRESH_MS` on every other.
  *
  * @module redirects/proxy-handler
  */
@@ -22,21 +25,42 @@ import { notAPageAddress } from "../not-found/page-address";
 
 import { destinationOf, withQuery } from "./addresses";
 import { redirectsSlug } from "./collection";
+import { heldRedirectKeys, type HeldRedirectKeys } from "./held-keys";
+import { redirectHits, type RedirectHits } from "./hits";
 import { redirectMeeting } from "./meeting";
+import { proxySeenNotes } from "./proxy-seen";
 import { askedAddress } from "./served";
 import { redirectOf, type StoredRedirect } from "./store";
 
 /**
  * The request header a page renders with, naming the address that was asked
- * for, so the site's not-found page can log it (`logNotFound`).
+ * for, so a route that answers not found can log it (`notFoundLogged`).
  */
 export const ASKED_FOR_HEADER = "x-nextly-seo-asked-for";
 
 /**
- * The request header naming one request the Proxy let through, so a
- * not-found page Next.js renders more than once for it is counted once.
+ * The request header naming one request the Proxy let through, so a request
+ * whose page and head both answer not found is counted once.
  */
 export const REQUEST_HEADER = "x-nextly-seo-request";
+
+/**
+ * The request headers the App Router's client sends on a prefetch, which asks
+ * for a page ahead of a visit that may never come. Next.js keeps them from
+ * the render's `headers()`, so only the Proxy can tell a prefetch apart.
+ */
+const PREFETCH_HEADERS = [
+  "next-router-prefetch",
+  "next-router-segment-prefetch",
+];
+
+/** Whether `request` is the App Router prefetching a page rather than showing it. */
+function isPrefetch(request: Request): boolean {
+  return PREFETCH_HEADERS.some(name => request.headers.get(name) !== null);
+}
+
+/** What a request no log is for is passed on with: both headers emptied. */
+const NOT_LOGGED = { [ASKED_FOR_HEADER]: "", [REQUEST_HEADER]: "" };
 
 /** The redirect that answers `address`, if any. */
 async function redirectFor(
@@ -99,21 +123,43 @@ async function pageAddressOf(
   return { ...asked, path: asked.path.slice(0, -1) };
 }
 
-/** The handler the plugin contributes to the site's Proxy. */
-export function redirectsProxyHandler(): PluginProxyHandler {
+/** What an address that is gone for good answers: 410, and a line to read. */
+function goneResponse(): Response {
+  return new Response("This page is gone.", {
+    status: 410,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
+}
+
+/**
+ * The handler the plugin contributes to the site's Proxy, answering from
+ * `keys`: the plugin forgets them when a redirect saved here commits. Each
+ * request a redirect answers is counted on it by `hits`, in the background.
+ */
+export function redirectsProxyHandler(
+  keys: HeldRedirectKeys = heldRedirectKeys(),
+  hits: RedirectHits = redirectHits()
+): PluginProxyHandler {
+  const seen = proxySeenNotes();
   return {
     name: "redirects",
     async handle(request, ctx) {
+      // Noted in the background, so the admin can tell the Proxy runs.
+      void seen.note(ctx);
       const url = new URL(request.url);
       const address = await pageAddressOf(ctx, request, url);
       if (address === "not-a-page") {
         // Emptied rather than left alone: a value a visitor sent in this
         // header themselves must never be logged as an address asked for.
-        return {
-          requestHeaders: { [ASKED_FOR_HEADER]: "", [REQUEST_HEADER]: "" },
-        };
+        return { requestHeaders: NOT_LOGGED };
       }
-      const redirect = await redirectFor(ctx, address);
+      const redirect = (await keys.mayMeet(ctx, address))
+        ? await redirectFor(ctx, address)
+        : undefined;
+      if (redirect?.gone === true) {
+        hits.note(ctx, redirect.id);
+        return { response: goneResponse() };
+      }
       const location =
         redirect !== undefined
           ? await locationOf(redirect, address, url)
@@ -125,6 +171,7 @@ export function redirectsProxyHandler(): PluginProxyHandler {
         location !== undefined &&
         location !== url.href
       ) {
+        hits.note(ctx, redirect.id);
         return {
           response: new Response(null, {
             status: redirect.permanent ? 301 : 302,
@@ -132,8 +179,12 @@ export function redirectsProxyHandler(): PluginProxyHandler {
           }),
         };
       }
-      // The page is served; should it be found missing, its not-found page
-      // reads which address was asked for from this.
+      // A prefetch is served as any request is, but nobody has asked to see
+      // the page yet, so a miss it meets is not logged: the visit, if it
+      // comes, is its own request.
+      if (isPrefetch(request)) return { requestHeaders: NOT_LOGGED };
+      // The page is served; should a route find it missing, its not-found
+      // answer reads which address was asked for from this.
       return {
         requestHeaders: {
           [ASKED_FOR_HEADER]: `${url.origin}${url.pathname}`,

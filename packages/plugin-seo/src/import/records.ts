@@ -12,6 +12,22 @@
  */
 import type { ImportTarget } from "./contract";
 
+/**
+ * Why a file can't be read as the export it was chosen as, in one sentence a
+ * person can act on. Thrown by the file readers, which run in the browser as
+ * well as on the server and so import nothing from the server; the import's
+ * routes answer it as invalid input.
+ */
+export class ImportFileRefused extends Error {
+  /** What kind of refusal it is, for the server's log. */
+  readonly reason: string;
+  constructor(message: string, reason: string) {
+    super(message);
+    this.name = "ImportFileRefused";
+    this.reason = reason;
+  }
+}
+
 /** A share image as a source names it: an id here, or an address. */
 export type ImageRef = { id: string } | { url: string };
 

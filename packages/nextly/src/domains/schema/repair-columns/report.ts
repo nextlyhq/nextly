@@ -14,6 +14,7 @@ import type {
   RowKey,
 } from "../value-conversion/types";
 
+import { consentFlagFor } from "./consent";
 import { OWNER_CAN } from "./conversion/carry";
 import type {
   BlockedWhileRunning,
@@ -24,6 +25,7 @@ import {
   findingClass,
   OUTCOME_ORDER,
   outcomeOf,
+  type ColumnConsentFacts,
   type ColumnRunFacts,
   type ConversionFailure,
   type ConversionProgress,
@@ -114,6 +116,11 @@ export interface RepairRecord {
   lock: TableLockFacts | null;
   progress: ConversionProgress | null;
   failure: ConversionFailure | null;
+  /**
+   * For a column whose conversion clears values: whether this run's consent covered it, how many
+   * values it cleared, and the consent that would cover it. Null for any other column.
+   */
+  consent: ColumnConsentFacts | null;
 }
 
 function stateRecord(state: ColumnState | null): StateRecord | null {
@@ -160,6 +167,8 @@ const REASON_OWNER_CAN: Record<BlockingReasonKind, string> = {
   "stored-differently": OWNER_CAN.definition,
   "no-conversion": OWNER_CAN.definition,
   "late-write": OWNER_CAN.definition,
+  "cleared-under-not-null":
+    "give the named rows a value the new type holds, or make the field optional, then run the repair again",
 };
 
 function isBlockingKind(
@@ -201,6 +210,7 @@ type FindingFacts = Omit<
   | "lock"
   | "progress"
   | "failure"
+  | "consent"
 >;
 
 /** The facts no column has until its finding gives them. */
@@ -318,6 +328,27 @@ export function repairRecord(
     lock: facts.lock,
     progress: facts.progress,
     failure: facts.failure,
+    consent: consentFacts(finding, facts, own.class),
+  };
+}
+
+/**
+ * The consent facts a lossy column's record carries: what the run established, or, where it
+ * established none (a dry run, or an apply that never reached the column), that no consent covered
+ * it yet and the consent that would.
+ */
+function consentFacts(
+  finding: ColumnFinding,
+  facts: ColumnRunFacts,
+  cls: ConversionClass | null
+): ColumnConsentFacts | null {
+  if (facts.consent !== null) return facts.consent;
+  if (cls !== "lossy") return null;
+  return {
+    given: null,
+    valuesCleared: 0,
+    flag: consentFlagFor(finding.location.table, finding.location.column),
+    notice: null,
   };
 }
 
@@ -388,9 +419,12 @@ const REASON_TEXT: Record<ConversionReasonKind, string> = {
   "no-conversion": "Nextly has no conversion from this type to that one",
   "late-write":
     "MySQL checks the rows and changes the column in separate transactions, so a value written meanwhile could be changed with no error",
+  "cleared-under-not-null":
+    "values that would be cleared, where the column does not allow a null, so a value would have to be invented",
 };
 
-function describeKey(key: RowKey): string {
+/** A row as every report and question names it: by its key, never by its value. */
+export function describeKey(key: RowKey): string {
   return "id" in key
     ? `id ${key.id}`
     : `parent ${key.parent} locale ${key.locale}`;
@@ -531,7 +565,33 @@ function describeRun(record: RepairRecord): string {
       ` Owned by plugin "${record.plugin}"; reported, never changed here.`
     );
   }
+  if (record.consent !== null) parts.push(describeConsent(record));
   return parts.join("");
+}
+
+/**
+ * What a lossy column's record says of its consent: the values this run cleared and how it was
+ * consented to, or, where nothing covered it, why a consent given did not and the one that would.
+ * A blocked column says nothing of it, as no consent converts it.
+ */
+function describeConsent(record: RepairRecord): string {
+  const consent = record.consent;
+  if (consent === null) return "";
+  if (consent.given !== null) {
+    if (consent.valuesCleared === 0) return "";
+    const values =
+      consent.valuesCleared === 1
+        ? "1 value"
+        : `${consent.valuesCleared} values`;
+    const how =
+      consent.given === "flag"
+        ? "under the consent naming the column"
+        : "as confirmed at the terminal";
+    return ` Cleared ${values}, ${how}.`;
+  }
+  if (record.outcome === "blocked") return "";
+  const notice = consent.notice === null ? "" : ` ${consent.notice}.`;
+  return `${notice} To convert it, clearing the named values, run with --apply and ${consent.flag}.`;
 }
 
 /** One record as the text report prints it: one line, then the statements, indented. */

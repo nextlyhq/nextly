@@ -52,6 +52,7 @@ import {
 } from "../bulk/route";
 import { restoreSingleSeo, singleDeclaration } from "../bulk/singles";
 import { productionAddressesOf, typedCanonical } from "../canonical";
+import { writeConnections } from "../connections/store";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import { pageTypeOf } from "../problems/page-types";
@@ -64,20 +65,22 @@ import { SEPARATORS } from "../settings/patterns";
 import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
 import type { ImportActor } from "./actor";
-import type {
-  DryRunBody,
-  ImportGroup,
-  ImportReportEntry,
-  ImportSource,
-  ImportTarget,
+import {
+  IMPORT_PARTLY_APPLIED,
+  type TypeWithOwnSeo,
+  type DryRunBody,
+  type ImportGroup,
+  type ImportReportEntry,
+  type ImportSource,
+  type ImportTarget,
 } from "./contract";
-import { readRankMathCsv } from "./csv";
-import { groupsOf, OWN_FIELDS, readGroup } from "./group";
-import { readPayload } from "./payload";
+import { declaresOtherGroups, groupsOf, OWN_FIELDS, readGroup } from "./group";
+import { readFile } from "./read-file";
 import {
   count,
   fillTemplate,
   idText,
+  ImportFileRefused,
   pathOfAddress,
   textValue,
   type ImageRef,
@@ -85,7 +88,6 @@ import {
   type ParsedSource,
   type TemplateValues,
 } from "./records";
-import { readRankMathExport, readYoast } from "./wordpress";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -144,7 +146,17 @@ export interface PlannedPage {
   same: ImportTarget[];
   /** The places a person already filled, which keep their value. */
   kept: ImportTarget[];
+  /**
+   * The places whose value never reached the page, since its route's code
+   * sets that value itself: left out unless the import includes them.
+   */
+  neverServed: ImportTarget[];
+  /** The title and description the source holds for the page, as imported. */
+  values: ReportedValues;
 }
+
+/** The title and description a source holds for a page, as imported. */
+type ReportedValues = Partial<Record<"title" | "description", string>>;
 
 /** One redirect the import adds. */
 export interface PlannedRedirect {
@@ -186,6 +198,12 @@ export interface PlanImportArgs {
   mapping?: Readonly<Record<string, ImportTarget>>;
   /** The language the values are imported into: the site's default one. */
   locale?: string;
+  /**
+   * Whether values a page's own code overrides, which never reached it, are
+   * imported anyway. Left out by default: importing one would change what
+   * the page shows.
+   */
+  includeNeverServed?: boolean;
 }
 
 /** An import worked out, ready for `applyImport`. */
@@ -224,6 +242,55 @@ async function readableTypes(
     if (await engine.actor.mayRead(key)) readable.push(key);
   }
   return readable;
+}
+
+/** How many collections one listing reads while finding types with their own `seo`. */
+const LISTED_AT_ONCE = 100;
+
+/**
+ * The site's own types, other than those SEO is added to, that hold a field
+ * of their own named `seo`: the plugin's group can't join one until that
+ * field has another name, after which its values are imported from it. A
+ * type SEO is added to can't hold one, since the two would clash. Only
+ * types the actor may read are named, so none is revealed to someone who
+ * can't see it.
+ */
+export async function typesWithOwnSeo(
+  engine: ImportEngine
+): Promise<TypeWithOwnSeo[]> {
+  const { ctx, actor, setup } = engine;
+  const found: TypeWithOwnSeo[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed = await ctx.services.collections.listCollections(
+      { page, limit: LISTED_AT_ONCE, sortBy: "slug", sortOrder: "asc" },
+      {}
+    );
+    for (const row of listed.data) {
+      const type = ownSeoOf(row);
+      if (type === undefined || setup.targets.includes(type.slug)) continue;
+      if (await actor.mayRead(type.slug)) found.push(type);
+    }
+    if (!listed.pagination.hasMore) return found;
+  }
+}
+
+/** A listed collection of the site's own holding a field named `seo`, or none. */
+function ownSeoOf(row: unknown): TypeWithOwnSeo | undefined {
+  if (!isRecord(row) || (row.source !== "code" && row.source !== "ui")) {
+    return undefined;
+  }
+  const slug = textValue(row.slug);
+  const fields = Array.isArray(row.fields) ? row.fields : [];
+  const holds = fields.some(
+    field => isRecord(field) && field.name === SEO_GROUP
+  );
+  if (slug === undefined || !holds) return undefined;
+  const labels = isRecord(row.labels) ? row.labels : {};
+  return {
+    slug,
+    label: textValue(labels.plural) ?? slug,
+    definedIn: row.source === "code" ? "code" : "admin",
+  };
 }
 
 /** Every page of `types`, read as the actor in `locale`. */
@@ -288,6 +355,18 @@ async function typeFields(
 }
 
 /**
+ * Whether the types the actor may read declare a field group other than the
+ * plugin's own, read from their declarations without reading any page: where
+ * none does, there are no old values to import.
+ */
+export async function declaresOldGroups(
+  engine: ImportEngine
+): Promise<boolean> {
+  const types = await readableTypes(engine, undefined);
+  return declaresOtherGroups(engine.ctx, await typeFields(engine.ctx, types));
+}
+
+/**
  * The field groups the types the actor may read hold, each field with how
  * many pages fill it and where it is suggested to go.
  */
@@ -322,14 +401,23 @@ function parsedSource(
         source.field,
         source.field === SEO_GROUP ? OWN_FIELDS : mapping
       );
-    case "yoast":
-      return readYoast(source.text);
-    case "rankMath":
-      return source.text.trimStart().startsWith("<")
-        ? readRankMathExport(source.text)
-        : readRankMathCsv(source.text);
-    case "payload":
-      return readPayload(source.text, language);
+    case "records":
+      return source.parsed;
+    default:
+      return refusedAsInput(() => readFile(source.kind, source.text, language));
+  }
+}
+
+/** `read`'s answer, a file it refuses answered as invalid input. */
+function refusedAsInput(read: () => ParsedSource): ParsedSource {
+  try {
+    return read();
+  } catch (error) {
+    if (!(error instanceof ImportFileRefused)) throw error;
+    throw NextlyError.invalidInput({
+      message: error.message,
+      logContext: { reason: error.reason },
+    });
   }
 }
 
@@ -513,6 +601,8 @@ interface Decision {
   places: ImportTarget[];
   same: ImportTarget[];
   kept: ImportTarget[];
+  neverServed: ImportTarget[];
+  values: ReportedValues;
 }
 
 /** A decision that changes nothing yet. */
@@ -521,6 +611,8 @@ const undecided = (): Decision => ({
   places: [],
   same: [],
   kept: [],
+  neverServed: [],
+  values: {},
 });
 
 /** What deciding one record's values needs about its page. */
@@ -537,6 +629,8 @@ interface Deciding {
   templates: TemplateValues;
   tally: Tally;
   decision: Decision;
+  /** Whether values the page's own code overrides are imported anyway. */
+  includeNeverServed: boolean;
 }
 
 /**
@@ -576,6 +670,34 @@ function keep(at: Deciding, place: ImportTarget): void {
   at.decision.kept.push(place);
 }
 
+/**
+ * Whether `value` never reached the page: its route's code sets that place
+ * itself, to something else, so the stored value was never what the page
+ * showed, and importing it would change the page. Such a value is left out
+ * unless the import includes them; one that agrees with the code is not
+ * marked, since importing it changes nothing.
+ */
+function neverServed(
+  at: Deciding,
+  place: (typeof TEXT_PLACES)[number],
+  value: string
+): boolean {
+  if (at.includeNeverServed || place === "canonical") return false;
+  const fromCode = at.page.levels.code[place];
+  return fromCode !== undefined && !same(fromCode, value);
+}
+
+/** Whether `value` is left out as never served, recorded on the page. */
+function leftAsNeverServed(
+  at: Deciding,
+  place: (typeof TEXT_PLACES)[number],
+  value: string
+): boolean {
+  if (!neverServed(at, place, value)) return false;
+  at.decision.neverServed.push(place);
+  return true;
+}
+
 /** Write `value` into `place`, unless it is typed already or is automatic. */
 function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   const raw = at.record.values[place];
@@ -592,17 +714,24 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
     at.tally.unfilled++;
     return;
   }
+  // The title and description the source holds, for the report.
+  if (place === "title" || place === "description") {
+    at.decision.values[place] = value;
+  }
   if (at.unreadable.has(STORED[place])) {
     keep(at, place);
     return;
   }
   const current = textValue(at.page.seo[STORED[place]]);
   if (current !== undefined) {
-    // Typed already: kept, and said so where the source holds another value.
-    if (same(current, value)) at.decision.same.push(place);
-    else keep(at, place);
+    // Typed already: kept as typed, whether or not the source holds the
+    // same value. Never reported as the same as automatic, which it is not,
+    // nor as never served: a typed value wins over the route's code, so it
+    // is what the page shows.
+    keep(at, place);
     return;
   }
+  if (leftAsNeverServed(at, place, value)) return;
   const automatic =
     place === "canonical"
       ? ownAddress(value, at.page, at.origins)
@@ -658,8 +787,8 @@ function decideImage(at: Deciding, images: ReadonlyMap<string, string>): void {
   }
   const current = chosenImage(at.page.seo[STORED.image]);
   if (current !== undefined) {
-    if (current === id) at.decision.same.push("image");
-    else keep(at, "image");
+    // Chosen already, as this image or another: kept as chosen.
+    keep(at, "image");
     return;
   }
   at.decision.writes[STORED.image] = id;
@@ -682,9 +811,18 @@ function decideHidden(at: Deciding): void {
   } else if (hidden === true && !current) {
     at.decision.writes[STORED.hidden] = true;
     at.decision.places.push("hidden");
-  } else if (hidden === false && current) {
+  } else if (current && hidden !== undefined) {
+    // Hidden by a person: kept so, whatever the source says.
     keep(at, "hidden");
-  } else if (hidden !== undefined) {
+  } else if (
+    hidden === false &&
+    at.page.levels.typeHidden !== true &&
+    at.page.levels.code.hidden !== true
+  ) {
+    // Shown, as a page is where nothing hides it: the same as automatic.
+    // A page its type or its route's code hides stays hidden, which the
+    // import can't change, so it is not counted as the same.
+    at.tally.same++;
     at.decision.same.push("hidden");
   }
 }
@@ -700,9 +838,11 @@ function decide(
   images: ReadonlyMap<string, string>,
   tally: Tally,
   origins: readonly string[],
-  unreadable: ReadonlySet<string>
+  unreadable: ReadonlySet<string>,
+  includeNeverServed: boolean
 ): Decision {
   const at: Deciding = {
+    includeNeverServed,
     origins,
     unreadable,
     record,
@@ -725,6 +865,9 @@ function tidyOwn(page: ReadPage, tally: Tally): Decision {
   const decision = undecided();
   for (const place of ["title", "description"] as const) {
     const current = textValue(page.seo[STORED[place]]);
+    // What the page holds is what the report shows, so a value made
+    // automatic again can be checked before it is.
+    if (current !== undefined) decision.values[place] = current;
     if (current !== undefined && same(current, page.auto[place])) {
       decision.writes[STORED[place]] = "";
       decision.places.push(place);
@@ -889,6 +1032,8 @@ function matchRecords(
         places: decision.places,
         same: decision.same,
         kept: decision.kept,
+        neverServed: decision.neverServed,
+        values: decision.values,
       });
     }
   }
@@ -1002,6 +1147,8 @@ const SKIPPED = {
   refused: "You may not change this page's SEO.",
   drafted: "Its type keeps drafts: change its SEO in its own editor.",
   empty: "The source holds no value for this page.",
+  neverServed:
+    "Never served: the page's own code sets these values, so they never reached it.",
 } as const;
 
 /**
@@ -1028,6 +1175,8 @@ function reportOf(
     set: outcome === "set" ? [...page.places] : [],
     same: [...page.same],
     kept: [...page.kept],
+    neverServed: [...page.neverServed],
+    values: { ...page.values },
     ...(reason === undefined ? {} : { reason }),
   });
   const pages = planned.map(page => {
@@ -1036,6 +1185,9 @@ function reportOf(
     if (page.places.length > 0) return entry(page, "set");
     if (page.kept.length > 0) return entry(page, "kept");
     if (page.same.length > 0) return entry(page, "same");
+    if (page.neverServed.length > 0) {
+      return entry(page, "skipped", SKIPPED.neverServed);
+    }
     return entry(page, "skipped", SKIPPED.empty);
   });
   const passed = (labels: readonly string[], reason: string) =>
@@ -1046,6 +1198,8 @@ function reportOf(
         set: [],
         same: [],
         kept: [],
+        neverServed: [],
+        values: {},
         reason,
       })
     );
@@ -1226,7 +1380,8 @@ export async function planImport(
             images,
             tally,
             origins,
-            unreadable.get(`${page.type}|${page.id}`) ?? new Set()
+            unreadable.get(`${page.type}|${page.id}`) ?? new Set(),
+            args.includeNeverServed === true
           )
   );
   const {
@@ -1277,10 +1432,18 @@ export async function planImport(
     body: {
       checked: source.kind === "group" ? pages.length : parsed.records.length,
       fromFile: source.kind !== "group",
+      held: parsed.records.filter(
+        record => Object.keys(record.values).length > 0
+      ).length,
       lines: linesOf(changing, parsed.from),
       pages: changing.length,
       same: tally.same,
       kept: tally.kept,
+      // Counted from the pages' own decisions, the list the report shows.
+      neverServed: matched.planned.reduce(
+        (sum, page) => sum + page.neverServed.length,
+        0
+      ),
       redirects: kept.length,
       left: parsed.left,
       warnings,
@@ -1368,7 +1531,8 @@ async function restoreSingles(
   ctx: PluginContext,
   written: readonly WrittenSingle[],
   locale: string
-): Promise<void> {
+): Promise<boolean> {
+  let restored = true;
   for (const single of [...written].reverse()) {
     try {
       await restoreSingleSeo(
@@ -1378,14 +1542,33 @@ async function restoreSingles(
         single.rev
       );
     } catch (error) {
-      // Logged rather than thrown, so the refusal that undid the import is
-      // the one the person reads.
+      // Logged, and answered as not put back, so the refusal says part of
+      // the import may be in place rather than that nothing was written.
       ctx.logger.error("An imported Single could not be put back", {
         error,
         single: single.type,
       });
+      restored = false;
     }
   }
+  return restored;
+}
+
+/**
+ * What an import refused part-way throws once its Singles were put back:
+ * the refusal itself where every one was, else one saying part of it may be
+ * in place, the refusal as its cause.
+ */
+export function refusalAfterUndo(error: unknown, restored: boolean): unknown {
+  if (restored) return error;
+  return new NextlyError({
+    code: IMPORT_PARTLY_APPLIED,
+    statusCode: 500,
+    publicMessage:
+      "The import stopped part-way, and a Single it had written could not be put back.",
+    logContext: { reason: "seo-import-singles-not-restored" },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
 }
 
 /**
@@ -1412,11 +1595,29 @@ async function writeSingles(
       );
       written.push({ type: page.type, before: entry[SEO_GROUP], rev });
     } catch (error) {
-      await restoreSingles(ctx, written, plan.locale);
-      throw error;
+      throw refusalAfterUndo(
+        error,
+        await restoreSingles(ctx, written, plan.locale)
+      );
     }
   }
   return written;
+}
+
+/**
+ * Notes that an import was applied, which the Overview's checklist reads.
+ * The import is already committed, so a store that is missing (a run with
+ * no plugin settings) or refuses the note leaves it as it is.
+ */
+async function recordImport(ctx: PluginContext): Promise<void> {
+  if (ctx.settings === undefined) return;
+  try {
+    await writeConnections(ctx, { importedAt: new Date().toISOString() });
+  } catch (error) {
+    ctx.logger.warn("The SEO import ran, but could not be noted.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
@@ -1457,12 +1658,15 @@ export async function applyImport(
       writeAll(transaction, plan, stored)
     );
   } catch (error) {
-    await restoreSingles(ctx, singles, plan.locale);
-    throw error;
+    throw refusalAfterUndo(
+      error,
+      await restoreSingles(ctx, singles, plan.locale)
+    );
   }
   // Committed: each changed page is checked again for the problem list.
   for (const page of plan.pages) {
     recheckSaved(ctx, setup.checks, page.type, page.id);
   }
+  await recordImport(ctx);
   return { pages: plan.pages.length, redirects: plan.redirects.length };
 }

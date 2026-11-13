@@ -89,9 +89,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         versions: { drafts: true },
         fields: [text({ name: "title" }), number({ name: "articleCount" })],
       }),
+      // Kept with drafts: a restore writes the working draft, and content
+      // kept without drafts refuses a restore before asking for its version.
       defineCollection({
         slug: LOGGED,
-        versions: true,
+        status: true,
+        versions: { drafts: true },
         fields: [text({ name: "title" })],
       }),
     ],
@@ -250,6 +253,28 @@ async function stored(t: TestNextly, slug: string, id: string): Promise<Doc> {
     overrideAccess: true,
   });
   return (read as { data: Doc }).data;
+}
+
+/** The entry's working draft as stored: its version row with no number. */
+async function workingDraft(t: TestNextly, entryId: string): Promise<Doc> {
+  const rows = await t.adapter.select<{ snapshot: unknown }>(
+    "nextly_versions",
+    {
+      where: {
+        and: [
+          { column: "entryId", op: "=", value: entryId },
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    }
+  );
+  expect(rows).toHaveLength(1);
+  const { snapshot } = rows[0]!;
+  return (
+    typeof snapshot === "string" ? JSON.parse(snapshot) : snapshot
+  ) as Doc;
 }
 
 async function storedSingle(t: TestNextly, slug: string): Promise<Doc> {
@@ -525,8 +550,8 @@ describe.each(getConfiguredTestDialects())(
     it("refuses restoring a version", async () => {
       const t = await boot(dialect);
       const key = await adminKey(t);
-      const id = await create(t, LOGGED, { title: "one" });
-      await setUp(t, LOGGED, id, { title: "two" });
+      const id = await create(t, LOGGED, { title: "one", status: "published" });
+      await setUp(t, LOGGED, id, { title: "two", status: "published" });
       const restore = [
         "collections",
         LOGGED,
@@ -542,7 +567,9 @@ describe.each(getConfiguredTestDialects())(
 
       const restored = await rest(key, "POST", restore, { _overwrite: true });
       expect(restored.status, JSON.stringify(restored.json)).toBe(200);
-      expect((await stored(t, LOGGED, id)).title).toBe("one");
+      // Restored into the working draft; what readers see stays until it is published.
+      expect((await stored(t, LOGGED, id)).title).toBe("two");
+      expect((await workingDraft(t, id)).title).toBe("one");
     });
 
     // A release run's own write is the one not asked, and only the runner can

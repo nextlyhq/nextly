@@ -96,7 +96,6 @@ interface CollectionNaming {
 /** What telling reads on the pool before the move's transaction opens. */
 export interface NoticeTelling {
   service: NoticesService;
-  dialect: string;
   /** Whom the act counts as: nobody is told of their own. Null for trusted code. */
   accountable: string | null;
   /** Who acted, as a notice stores them: a key as a key, nobody by name. */
@@ -197,7 +196,6 @@ export async function prepareNoticeTelling(
   if (service === null) return null;
   return {
     service,
-    dialect: adapter.getCapabilities().dialect,
     accountable: caller.accountable,
     actor: actorName(caller.event),
     actorUserId: actorUserIdOf(caller.event),
@@ -336,7 +334,6 @@ async function tellOne(
   if (!emailsFor(telling, notice)) return;
   await enqueueNoticeEmail(
     tx,
-    telling.dialect,
     WORKFLOW_NOTICE_EMAIL_JOB,
     recorded.id,
     new Date()

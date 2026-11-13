@@ -13,7 +13,12 @@ import { container } from "../../di/container";
 import type { LanguageRegistry } from "../../domains/i18n/language-registry";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PublicData } from "../../errors/public-data";
-import { loadNextModule, requireNextApi } from "../next-api";
+import {
+  isMissingFromChain,
+  loadNextModule,
+  reportMissingFromChain,
+  requireNextApi,
+} from "../next-api";
 import { isReadRefusal } from "../routing/miss-or-denied";
 
 import { readTags } from "./nextly-tags";
@@ -33,13 +38,32 @@ export type UnstableCache = <T>(
 
 let cachedUnstableCache: UnstableCache | null | undefined;
 
-function loadUnstableCache(): UnstableCache | null {
-  if (cachedUnstableCache !== undefined) return cachedUnstableCache;
-  const mod = loadNextModule("next/cache");
-  // No Next.js installed: run uncached (context, not version).
-  cachedUnstableCache = mod
+/**
+ * Next's `unstable_cache`, loaded through `load`; null where reads run
+ * uncached. That is where Next.js is not installed (a context, not a
+ * version), and where `next/cache` was found but a module it requires was
+ * not: a deployment whose trace left part of Next.js out, where a read served
+ * uncached is still the right answer and a failed one is a 500.
+ */
+export function unstableCacheFrom(
+  load?: (specifier: string) => unknown
+): UnstableCache | null {
+  let mod: Record<string, unknown> | null;
+  try {
+    mod = loadNextModule("next/cache", load);
+  } catch (error) {
+    if (!isMissingFromChain(error, "next/cache")) throw error;
+    reportMissingFromChain("next/cache", error, "reads content uncached");
+    return null;
+  }
+  return mod
     ? requireNextApi<UnstableCache>(mod, "next/cache", "unstable_cache")
     : null;
+}
+
+function loadUnstableCache(): UnstableCache | null {
+  if (cachedUnstableCache !== undefined) return cachedUnstableCache;
+  cachedUnstableCache = unstableCacheFrom();
   return cachedUnstableCache;
 }
 

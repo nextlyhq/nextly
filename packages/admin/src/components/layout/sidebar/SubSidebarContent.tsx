@@ -154,10 +154,10 @@ export function SubSidebarContent({
   if (selectedMain.startsWith("standalone-")) {
     return (
       <div className="space-y-6 px-4 py-6">
-        <div className="space-y-1">
-          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-            {standaloneLabel}
-          </p>
+        {/* Named by the plugin, as the Content panel's nav is, but with no
+            heading of its own: the panel's title band above already says the
+            plugin's name, and a second one under it only repeats it. */}
+        <nav aria-label={standaloneLabel} className="space-y-1">
           <SidebarMenu>
             {pluginCollectionsForSection.map(collection => {
               const href = buildRoute(ROUTES.COLLECTION_ENTRIES, {
@@ -200,7 +200,7 @@ export function SubSidebarContent({
           {/* And the menu items the plugin places in its own section, under
               the groups and with the numbers it declares, if any. */}
           <StandalonePanelItems isActive={isActive} section={selectedMain} />
-        </div>
+        </nav>
       </div>
     );
   }

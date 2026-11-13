@@ -34,6 +34,7 @@ import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
 import { redirectMeeting } from "../redirects/meeting";
+import { readProxyStatus } from "../redirects/proxy-seen";
 import { redirectOf, type StoredRedirect } from "../redirects/store";
 import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
@@ -44,6 +45,7 @@ import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
 import { structuredDataProblems } from "../structured-data/provider";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
+import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
 import { contentFacts } from "./content";
 import {
@@ -60,6 +62,7 @@ import {
   listingProblems,
   noAddressProblems,
   productionAddressProblems,
+  proxyProblems,
   redirectChainProblems,
   sharedValueProblems,
   type ConnectionsReport,
@@ -334,6 +337,9 @@ async function examine(
       productionAddresses[0] ?? NO_ORIGIN,
       ownAddress
     ),
+    // Read as the page's head reads what the person typed in its group.
+    canonicalConfirmed:
+      typedPageLevel(entry[SEO_GROUP]).canonicalElsewhere === true,
     shareImage: await shareImageProblems(ctx, input, readers),
     structuredData: await structuredDataProblems(ctx, input, readers),
     images: content.images,
@@ -661,7 +667,8 @@ async function redirectChains(ctx: PluginContext): Promise<RedirectChain[]> {
     const path = pathOf(redirect.target);
     const id = await redirectMeeting(ctx, { locale: redirect.locale, path });
     const next = id === null || id === redirect.id ? undefined : byId.get(id);
-    if (next === undefined) continue;
+    // A redirect to an address that is gone is one hop, then 410: no chain.
+    if (next === undefined || next.gone) continue;
     chains.push({
       source: redirect.source,
       target: redirect.target,
@@ -831,8 +838,28 @@ async function siteProblems(
   return [
     ...productionAddressProblems(addresses, standing),
     ...noAddressProblems(types),
+    // Redirects are site-wide SEO's: their count is told no one else.
+    ...(reader.seesRedirects ? await unservedRedirects(ctx) : []),
     ...connectionProblems(await connectionsReport(ctx, checks)),
   ];
+}
+
+/**
+ * The site's saved redirects going unserved for want of a running Proxy. A
+ * status that cannot be read is reported as nothing, never as a failed list.
+ */
+async function unservedRedirects(ctx: PluginContext): Promise<Problem[]> {
+  try {
+    const status = await readProxyStatus(ctx);
+    if (status.state === "running") return [];
+    return proxyProblems(
+      status,
+      await ctx.services.ownCollections.count(redirectsSlug(ctx))
+    );
+  } catch (error) {
+    ctx.logger.warn("Whether the Proxy runs could not be read", { error });
+    return [];
+  }
 }
 
 /**
@@ -954,8 +981,16 @@ export async function problemList(
   ]).sort(byKind);
   const checkedAt = site.checkedAt;
   const age = checkedAt === undefined ? Infinity : now - Date.parse(checkedAt);
+  const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
   return {
     problems,
+    // Each version of a page the reader may read that a check read, named
+    // as its problems name it: a language only where not the default.
+    checked: pages.map(({ subject, locale }) => ({
+      type: subject.type,
+      id: subject.id,
+      ...(locale === defaultLanguage || locale === "" ? {} : { locale }),
+    })),
     ...(host === undefined ? {} : { site: host }),
     ...(checkedAt === undefined ? {} : { checkedAt }),
     pagesChecked: site.pagesChecked,

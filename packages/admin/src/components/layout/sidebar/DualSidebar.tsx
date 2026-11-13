@@ -38,7 +38,6 @@ import { useSuppressedChrome } from "../ChromeSuppression";
 
 import {
   CONTENT_RAIL_ID,
-  contentItemHref,
   contentSectionToOpen,
   panelSectionIds,
   railItemOf,
@@ -497,12 +496,7 @@ export function DualSidebar({
         can: hasPermission,
       },
       settingsHref,
-      capabilities.canManageSettings,
-      contentItemHref({
-        panelShown: !suppressedChrome.has("subSidebar"),
-        current: shownMain,
-        available: contentAvailable,
-      })
+      capabilities.canManageSettings
     );
 
   // Resolve collections for the active standalone plugin section, by the same

@@ -309,7 +309,8 @@ describe("an item's details in the library", () => {
 
 /** The element in the list view that stands for an item: its row or card. */
 const listEntry = (name: string) => {
-  const entry = screen.getAllByText(name)[0].closest("[role='button']");
+  // A list row's way in is the button its name cell is drawn in.
+  const entry = screen.getAllByText(name)[0].closest("button");
   if (!(entry instanceof HTMLElement)) throw new Error(`no entry for ${name}`);
   return entry;
 };

@@ -36,7 +36,7 @@ function textOf(value: unknown): string {
 }
 
 /** One form field as a submission keeps it. */
-function askedField(field: AnyFormField): AskedField {
+export function askedField(field: AnyFormField): AskedField {
   const options = (field as { options?: unknown }).options;
   return {
     name: field.name,

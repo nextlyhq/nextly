@@ -8,6 +8,7 @@
  */
 import { indexNowLine, type ConnectionAttempt } from "../connections/contract";
 import type { ListingProblem } from "../outputs/listing";
+import type { ProxyStatus } from "../redirects/contract";
 
 import { WHOLE_SITE, type Problem, type ProblemSubject } from "./contract";
 
@@ -119,6 +120,36 @@ export function productionAddressProblems(
       what: `${effect} Save the address people visit in SEO settings, or set NEXTLY_PRODUCTION_ADDRESSES on the server.`,
       action: "Set the address",
       fix: { place: "settings", tab: "general" },
+    },
+  ];
+}
+
+/** What a developer adds so the site's Proxy hands requests to Nextly. */
+export const PROXY_WIRING_NOTE =
+  'Redirects are saved but not served: proxy.ts is not wired. Add src/proxy.ts with `export const proxy = createNextlyProxy(nextlyConfig)` (from "nextly/runtime") and a matcher that leaves out _next/static and _next/image, or call it from the proxy.ts the site has. See the SEO plugin guide, "Running redirects".';
+
+/**
+ * The site's redirects going unserved, where `redirects` are saved and the
+ * Proxy never ran or has been quiet for a week. A site with no redirect
+ * saved has nothing unserved yet, so nothing is listed.
+ */
+export function proxyProblems(
+  status: ProxyStatus,
+  redirects: number
+): Problem[] {
+  if (status.state === "running" || redirects === 0) return [];
+  const count = `${redirects} ${redirects === 1 ? "redirect is" : "redirects are"}`;
+  const what =
+    status.state === "not-wired"
+      ? `${count} saved but not served: proxy.ts is not wired, so no request has reached the site's Proxy.`
+      : `${count} saved but not served: no request has reached the site's Proxy since ${status.lastSeen?.slice(0, 10) ?? "it last ran"}.`;
+  return [
+    {
+      kind: "proxyNotWired",
+      subject: WHOLE_SITE,
+      what,
+      action: "Copy a note for a developer",
+      fix: { place: "developer", note: PROXY_WIRING_NOTE },
     },
   ];
 }
