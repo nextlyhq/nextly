@@ -128,6 +128,10 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_UPGRADE_IN_PROGRESS: 409,
   // Plan C2 — nextly migrate phases.
   NEXTLY_MIGRATE_LOCK_BUSY: 409,
+  // A schema change waited for a table another database session holds, past
+  // its bounds, and stopped. 409 like the schema lock's refusal: another
+  // session holds what the change needs, and it can run once that ends.
+  NEXTLY_TABLE_BUSY: 409,
   NEXTLY_BASELINE_LOCK_NOT_HELD: 409,
   NEXTLY_RESOLVE_LOCK_NOT_HELD: 409,
   // Boot refused to serve: the migrate lock stayed held past the wait deadline,

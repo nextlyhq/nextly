@@ -32,6 +32,7 @@ import { checkConstraintName } from "../services/index-name";
 import { getActiveExtensionSchema } from "./active-schema";
 import {
   type DrizzleSchemaHook,
+  assertForeignKeyTargetsAfterHooks,
   rekeyRelationEdges,
   runAfterDrizzle,
   specAfterHook,
@@ -916,6 +917,9 @@ export async function buildExtensionSchema(
       coreTableNames: input.coreTableNames,
       pluginPrefixes: [...input.pluginPrefixes.values()],
     },
+    foreignKeys: compiledSpecs.flatMap(spec =>
+      (spec.foreignKeys ?? []).map(fk => ({ table: spec.name, fk }))
+    ),
   });
 
   // The edges were keyed to the compiled tables; the registry resolves them
@@ -973,6 +977,9 @@ export async function buildExtensionSchema(
     assertDistinctIndexNames(specs, entityIndexes);
     assertDistinctCheckNamesAcrossTables(specs, entityColumns, input.dialect);
     assertSetNullColumnsNullable(specs);
+    // Each declared key at its target end too: its own end is judged as
+    // each reshaped spec is built (`specAfterHook`).
+    assertForeignKeyTargetsAfterHooks(specs);
   }
 
   const { adopted, adoptedRelations } = compileAdoptedTables(
