@@ -2105,6 +2105,10 @@ async function applyReloadHolding(
       dialect,
       plugins: newConfig.plugins ?? [],
       config: newConfig,
+      // The connected server's limits: a reload that declares a check the
+      // server will not enforce is refused here, before the push that would
+      // apply it.
+      server: adapter.getCapabilities(),
       logger: {
         warn: m => logger?.warn(m),
       },

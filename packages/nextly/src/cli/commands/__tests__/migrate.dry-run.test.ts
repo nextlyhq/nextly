@@ -3,13 +3,15 @@
  * plugins' pending modules first, then the app's files, under one `--step`
  * budget, without writing anything.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import { loadDialectTables } from "../../../database/dialect-tables";
+import { NextlyError } from "../../../errors/nextly-error";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import {
   migrationChecksum,
@@ -321,5 +323,61 @@ describe("migrate --dry-run", () => {
     expect(await testDb.adapter.tableExists("nextly_schema_events")).toBe(
       false
     );
+  });
+
+  it("refuses during dry run when a pending app migration snapshot declares a check the server cannot enforce", async () => {
+    const metaDir = join(dir, "meta");
+    mkdirSync(metaDir, { recursive: true });
+    writeFileSync(
+      join(metaDir, "20260101_000000_000_init.snapshot.json"),
+      JSON.stringify({
+        version: 1,
+        migrationHash: "a".repeat(64),
+        dialect: "mysql",
+        snapshot: {
+          tables: [
+            {
+              name: "tickets",
+              columns: [{ name: "id", type: "varchar(32)", nullable: false }],
+              indexes: [],
+              checks: [{ name: "ck_tickets_score", sql: "score >= 0" }],
+            },
+          ],
+        },
+      })
+    );
+    await loadDialectTables("mysql");
+    await expect(
+      previewMigrate({
+        adapter: testDb.adapter as unknown as Parameters<
+          typeof previewMigrate
+        >[0]["adapter"],
+        db: testDb.db,
+        dialect: "mysql",
+        migrationsDir: dir,
+        plugins: [],
+        logger: {
+          info: () => {},
+          warn: () => {},
+          debug: () => {},
+          error: () => {},
+          success: () => {},
+          newline: () => {},
+          keyValue: () => {},
+        } as unknown as Parameters<typeof previewMigrate>[0]["logger"],
+        serverConstructs: {
+          enforcesCheckConstraints: false,
+          functionalIndexes: true,
+          serverVersion: "8.0.14",
+        },
+      })
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(NextlyError.isValidation(error)).toBe(true);
+      const data = (error as NextlyError).publicData as {
+        errors?: { message: string }[];
+      };
+      expect(data.errors?.[0]?.message).toContain("MySQL enforces from 8.0.16");
+      return true;
+    });
   });
 });
