@@ -4,11 +4,16 @@
  * when the default is spelled `default`, which the field payload keeps without checking.
  *
  * Only built-in types whose value needs no check beyond its form are taken: text kinds holding one
- * string, a finite number, a checkbox's boolean, a value JSON can hold, and a date naming a real
+ * string, an icon id of the shape the icon type accepts, a finite number, a checkbox's boolean, a value JSON can hold, and a date naming a real
  * moment. A relationship's or upload's id may name no row; a contributed type's value is that
  * type's to validate; a password is only ever stored as a hash. None of these is taken, and a
  * value of the wrong form (text for a number) is taken as no default at all.
  */
+
+import {
+  ICON_ID_MAX_LENGTH,
+  ICON_ID_PATTERN,
+} from "../../../collections/fields/types/icon";
 
 /** The text kinds whose stated default is taken as their text. */
 export const STATED_TEXT_TYPES: ReadonlySet<string> = new Set([
@@ -18,6 +23,7 @@ export const STATED_TEXT_TYPES: ReadonlySet<string> = new Set([
   "code",
   "select",
   "radio",
+  "icon",
 ]);
 
 /** Whether `value`, stated as `field`'s default, is one `field` can hold as it is. */
@@ -26,7 +32,11 @@ export function statedDefaultFits(
   value: unknown
 ): boolean {
   if (STATED_TEXT_TYPES.has(field.type)) {
-    return typeof value === "string" && field.hasMany !== true;
+    return (
+      typeof value === "string" &&
+      field.hasMany !== true &&
+      (field.type !== "icon" || isIconId(value))
+    );
   }
   switch (field.type) {
     case "number":
@@ -60,4 +70,9 @@ function jsonCanHold(value: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/** Whether `value` has an icon id's shape and length ("lucide:star"), as the icon type accepts. */
+function isIconId(value: string): boolean {
+  return value.length <= ICON_ID_MAX_LENGTH && ICON_ID_PATTERN.test(value);
 }
