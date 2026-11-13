@@ -147,14 +147,23 @@ export async function installDependencies(
   /** Where Nextly's packages come from; see NextlySource. */
   source: NextlySource,
   isFreshProject: boolean = false,
-  projectType?: ProjectType
+  projectType?: ProjectType,
+  /** `--package-manager` named the installer: pin its own version. */
+  packageManagerSelected: boolean = false
 ): Promise<string[]> {
   const pm = projectInfo.packageManager;
   const pluginPackages = templatePluginPackages(projectType);
   const useYalc = source.kind === "yalc";
 
   if (!isFreshProject) {
-    return installIntoExistingApp(cwd, pm, database, source, pluginPackages);
+    return installIntoExistingApp(
+      cwd,
+      pm,
+      database,
+      source,
+      pluginPackages,
+      packageManagerSelected
+    );
   }
 
   if (useYalc) {
@@ -210,11 +219,14 @@ async function installIntoExistingApp(
   pm: PackageManager,
   database: DatabaseConfig,
   source: NextlySource,
-  pluginPackages: string[]
+  pluginPackages: string[],
+  packageManagerSelected: boolean
 ): Promise<string[]> {
   // First, so the pnpm version the approvals read and the version that
   // installs are the one recorded.
-  const recorded = await recordLaunchingPackageManager(cwd, pm);
+  const recorded = await recordLaunchingPackageManager(cwd, pm, {
+    selected: packageManagerSelected,
+  });
   const notes = [
     ...(recorded
       ? [

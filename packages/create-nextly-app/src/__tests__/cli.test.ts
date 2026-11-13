@@ -2,7 +2,7 @@
  * Regression tests for the positional `[directory]` argument parser in cli.ts.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   resolveProjectArg,
@@ -10,6 +10,71 @@ import {
   validateProjectNamePromptInput,
   validateTemplateName,
 } from "../cli-args";
+import { packageVersion } from "../lib/package-version";
+import { buildProgram } from "../program";
+
+vi.mock("@nextlyhq/telemetry", () => ({
+  init: async () => {},
+  capture: () => {},
+  shutdown: async () => {},
+  classifyError: () => "unknown",
+}));
+
+/** Parses `args` without running a scaffold: what it printed and its exit code. */
+async function parse(args: string[]) {
+  const out: string[] = [];
+  const createNextly = vi.fn(async () => {});
+  let exitCode = 0;
+  let thrown = "";
+  try {
+    await buildProgram({ createNextly })
+      .exitOverride()
+      .configureOutput({
+        writeOut: text => out.push(text),
+        writeErr: text => out.push(text),
+      })
+      .parseAsync(args, { from: "user" });
+  } catch (error) {
+    exitCode = (error as { exitCode?: number }).exitCode ?? 1;
+    thrown = String(error);
+  }
+  return {
+    out: out.join(""),
+    exitCode,
+    thrown,
+    ran: createNextly.mock.calls.length,
+  };
+}
+
+describe("the create-nextly-app command line", () => {
+  it("--version is the package's version", async () => {
+    const result = await parse(["--version"]);
+    expect(result.out.trim()).toBe(packageVersion());
+    expect(result.ran).toBe(0);
+  });
+
+  it("a misspelt flag is refused with the nearest suggested", async () => {
+    const result = await parse(["my-app", "--package-manger", "pnpm"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.out).toContain("unknown option '--package-manger'");
+    expect(result.out).toContain("Did you mean --package-manager?");
+    expect(result.ran).toBe(0);
+  });
+
+  it("a misspelt choice is refused with the nearest suggested", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process, "exit").mockImplementation(code => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+    const result = await parse(["my-app", "-d", "postgres"]);
+    expect(result.thrown).toContain("process.exit(1)");
+    expect(result.ran).toBe(0);
+    expect(String(error.mock.calls[0]?.[0])).toContain(
+      "Did you mean --database postgresql?"
+    );
+    vi.restoreAllMocks();
+  });
+});
 
 // ============================================================
 // resolveProjectArg

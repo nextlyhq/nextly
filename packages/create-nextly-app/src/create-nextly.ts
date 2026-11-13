@@ -32,6 +32,7 @@ import {
   writesInitialMigration,
 } from "./installers/initial-migration";
 import { recordLaunchingPackageManager } from "./installers/package-manager-field";
+import { holdsCredentials, redactConnection } from "./lib/connection-string";
 import {
   resolveTemplateSource,
   cleanupDownload,
@@ -42,6 +43,7 @@ import {
   frameworkVersionMessage,
   frameworkVersionProblems,
 } from "./lib/framework-versions";
+import { missingAnswers, missingAnswersMessage } from "./lib/missing-answers";
 import {
   nextlySource,
   nextlyVersionConflictMessage,
@@ -84,6 +86,7 @@ import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
 import { pluginNodeRefusal } from "./utils/plugin-node";
 import { copyTemplate, resolveTemplatePath } from "./utils/template";
+import { findWorkspaceRoot, lockfileManager } from "./utils/workspace";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -107,13 +110,17 @@ function cwdProjectName(cwd: string): string {
  * failed, say why, and exit. One place for it, since both the check of the
  * templates before anything is written and the writing itself end this way.
  */
-function stopAtConfig(error: unknown, startedAt: number): never {
+function stopAtConfig(
+  error: unknown,
+  startedAt: number,
+  databaseUrl: string | undefined
+): never {
   telemetry.capture("scaffold_failed", {
     stage: "config",
     error_code: classifyError(error, "config"),
     duration_ms: Date.now() - startedAt,
   });
-  p.cancel((error as Error).message);
+  p.cancel(redactConnection((error as Error).message, databaseUrl));
   process.exit(1);
 }
 
@@ -169,6 +176,67 @@ export async function createNextly(
   // app would add app dependencies and config and never copy the plugin.
   const existingProject =
     options.projectType !== "plugin" && (await isExistingNextProject(cwd));
+
+  // --- Without a terminal, every answer comes from a flag ---
+  //
+  // Checked before any prompt, install or write, so a run in CI that lacks
+  // an answer stops with nothing written and names every flag it needs at
+  // once, rather than failing at the first prompt.
+  if (options.interactive === false) {
+    const folderName = installInCwd
+      ? undefined
+      : (options.projectNameFromArg ??
+        (defaults ? DEFAULT_PROJECT_NAME : undefined));
+    const target = installInCwd
+      ? cwd
+      : folderName
+        ? path.join(cwd, folderName)
+        : undefined;
+    const missing = missingAnswers({
+      defaults,
+      existingProject,
+      folderGiven: installInCwd || options.projectNameFromArg !== undefined,
+      targetNotEmpty:
+        !existingProject &&
+        target !== undefined &&
+        (await isDirectoryNotEmpty(target)),
+      targetLabel: installInCwd ? "the current folder" : `"${folderName}"`,
+      projectType: options.projectType,
+      approach: options.approach,
+      database: options.database,
+      databaseUrl: options.databaseUrl,
+      skills: options.skills,
+    });
+    if (missing.length > 0) {
+      telemetry.capture("scaffold_failed", {
+        stage: "detect",
+        error_code: "unknown",
+        duration_ms: Date.now() - overallStartedAt,
+      });
+      p.cancel(missingAnswersMessage(missing));
+      process.exit(1);
+    }
+  }
+
+  // An app already installed with one manager keeps it: installing with
+  // another would leave two lockfiles, which break the next install and CI.
+  if (existingProject && options.packageManager) {
+    const installedWith =
+      (await lockfileManager(cwd)) ?? (await findWorkspaceRoot(cwd))?.manager;
+    if (installedWith && installedWith !== options.packageManager) {
+      telemetry.capture("scaffold_failed", {
+        stage: "detect",
+        error_code: "unknown",
+        duration_ms: Date.now() - overallStartedAt,
+      });
+      p.cancel(
+        `This app is installed with ${installedWith}, and --package-manager ${options.packageManager} ` +
+          `would add a second lockfile. Leave out --package-manager, or pass --package-manager ${installedWith}. ` +
+          "Nothing was written."
+      );
+      process.exit(1);
+    }
+  }
 
   if (existingProject) {
     p.log.success(`${pc.green("Next.js")} project detected`);
@@ -423,7 +491,16 @@ export async function createNextly(
 
   let databaseUrl: string;
 
-  if (databaseType === "sqlite") {
+  if (projectType === "plugin" && options.databaseUrl) {
+    p.log.warn(
+      "The plugin playground runs on SQLite; --database-url does not apply."
+    );
+  }
+
+  if (options.databaseUrl && projectType !== "plugin") {
+    // Given with --database-url (from the arguments or standard input).
+    databaseUrl = options.databaseUrl;
+  } else if (databaseType === "sqlite") {
     // SQLite: auto-fill, no prompt needed
     databaseUrl = "file:./data/nextly.db";
   } else if (defaults) {
@@ -437,9 +514,11 @@ export async function createNextly(
 
     const dbLabel = databaseType === "postgresql" ? "PostgreSQL" : "MySQL";
 
-    const url = await p.text({
-      message: `Enter your ${dbLabel} connection string:`,
-      placeholder: placeholders[databaseType],
+    // Masked: the URL carries a password, and a visible answer stays in the
+    // terminal's scrollback and in any recorded session.
+    const url = await p.password({
+      message: `Paste your ${dbLabel} connection string (hidden; leave empty to set it in .env later, e.g. ${placeholders[databaseType]}):`,
+      mask: "*",
     });
 
     if (p.isCancel(url)) {
@@ -480,7 +559,7 @@ export async function createNextly(
         agentSkills = await readBundledSkills();
         agentSkillsVersion = bundledSkillsVersion(agentSkills);
       } catch (error) {
-        p.cancel((error as Error).message);
+        p.cancel(redactConnection((error as Error).message, databaseUrl));
         process.exit(1);
       }
     }
@@ -530,7 +609,8 @@ export async function createNextly(
       // agent of the command that invoked this CLI, which is the package
       // manager that will run the install a moment later; the target has no
       // lockfile yet, so nothing else could answer.
-      scaffoldPackageManager = await detectPackageManager(targetDir);
+      scaffoldPackageManager =
+        options.packageManager ?? (await detectPackageManager(targetDir));
 
       await copyTemplate({
         projectName,
@@ -541,6 +621,7 @@ export async function createNextly(
         approach,
         templateSource,
         packageManager: scaffoldPackageManager,
+        packageManagerSelected: options.packageManager !== undefined,
         // Suppress copyTemplate's "directory already exists" guard when the
         // installer has already negotiated the conflict with the user
         // (either by emptying the dir or accepting an overlay). Without
@@ -575,7 +656,7 @@ export async function createNextly(
         error_code: classifyError(error, "template-download"),
         duration_ms: Date.now() - overallStartedAt,
       });
-      p.cancel((error as Error).message);
+      p.cancel(redactConnection((error as Error).message, databaseUrl));
       process.exit(1);
     } finally {
       // Clean up temporary download directory
@@ -598,7 +679,10 @@ export async function createNextly(
         projectInfo = await detectPluginPackage(cwd, scaffoldPackageManager);
         s.stop("Detected plugin package");
       } else {
-        projectInfo = await detectProject(cwd, scaffoldPackageManager);
+        projectInfo = await detectProject(
+          cwd,
+          scaffoldPackageManager ?? options.packageManager
+        );
         s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
       }
     } catch (error) {
@@ -608,7 +692,7 @@ export async function createNextly(
         error_code: classifyError(error, "config"),
         duration_ms: Date.now() - overallStartedAt,
       });
-      p.cancel((error as Error).message);
+      p.cancel(redactConnection((error as Error).message, databaseUrl));
       process.exit(1);
     }
   }
@@ -655,7 +739,7 @@ export async function createNextly(
         resolveTemplatePath(options.localTemplatePath)
       );
     } catch (error) {
-      stopAtConfig(error, overallStartedAt);
+      stopAtConfig(error, overallStartedAt, databaseUrl);
     }
   }
 
@@ -668,7 +752,8 @@ export async function createNextly(
     if (!isFreshProject) {
       const recorded = await recordLaunchingPackageManager(
         cwd,
-        projectInfo.packageManager
+        projectInfo.packageManager,
+        { selected: options.packageManager !== undefined }
       );
       if (recorded) {
         p.log.info(
@@ -688,7 +773,8 @@ export async function createNextly(
         database,
         source,
         isFreshProject,
-        projectType
+        projectType,
+        options.packageManager !== undefined
       );
       s.stop("Dependencies installed");
       // What the install changed in the project's own settings files, said
@@ -703,7 +789,7 @@ export async function createNextly(
         duration_ms: Date.now() - installStartedAt,
         error_code: classifyError(error, "install"),
       });
-      p.cancel((error as Error).message);
+      p.cancel(redactConnection((error as Error).message, databaseUrl));
       process.exit(1);
     }
   }
@@ -773,11 +859,13 @@ export async function createNextly(
       // and packages only: nothing in it ever carries an env value.
       reportGeneratedFiles(
         envResult ? [...reported, envResult.files] : reported,
-        [...(envResult?.warnings ?? []), ...warnings]
+        [...(envResult?.warnings ?? []), ...warnings].map(warning =>
+          redactConnection(warning, databaseUrl)
+        )
       );
     } catch (error) {
       s.stop("Failed to generate configuration");
-      stopAtConfig(error, overallStartedAt);
+      stopAtConfig(error, overallStartedAt, databaseUrl);
     }
   }
 
@@ -802,7 +890,7 @@ export async function createNextly(
       // The project is whole without it; the build's `nextly migrate` needs
       // it, so the command is named for the person to run.
       p.log.warn(
-        `${failed}\nRun ${initialMigrationCommand(projectInfo.packageManager)} in the project before its first build.`
+        `${redactConnection(failed, databaseUrl)}\nRun ${initialMigrationCommand(projectInfo.packageManager)} in the project before its first build.`
       );
     }
   }
@@ -866,6 +954,12 @@ export async function createNextly(
       lines.push(
         `  Make sure your ${DATABASE_LABELS[databaseType].label} server is running before starting.`
       );
+      if (databaseUrl === database.connectionUrl) {
+        // --yes, or an empty answer at the prompt: .env holds the example URL.
+        lines.push(
+          `  Set ${pc.bold("DATABASE_URL")} in ${pc.dim(".env")} to your ${DATABASE_LABELS[databaseType].label} connection string first.`
+        );
+      }
     }
     lines.push(
       `  ${pc.bold(devCommand)} will create system tables on first run.`
@@ -891,6 +985,20 @@ export async function createNextly(
   }
 
   p.note(lines.join("\n"), "Next steps");
+
+  // A password given in the arguments is already in shell history and was
+  // visible in the process list; the scaffold cannot undo that, but it can
+  // say how to keep it out next time.
+  if (
+    options.databaseUrlInArguments &&
+    options.databaseUrl &&
+    holdsCredentials(options.databaseUrl)
+  ) {
+    p.log.warn(
+      "The database credentials went through the command line, where shell history and the process list keep them. " +
+        "Next time, pass the URL on standard input: printf '%s' \"$DATABASE_URL\" | create-nextly-app ... --database-url -"
+    );
+  }
 
   // Telemetry: full successful scaffold (after install + config + env).
   telemetry.capture("scaffold_completed", {

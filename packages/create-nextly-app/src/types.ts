@@ -108,6 +108,26 @@ export interface CreateNextlyOptions {
    * defaults mode adds them.
    */
   skills?: boolean;
+  /**
+   * The database's connection string, from `--database-url`. A secret: it is
+   * written only to the ignored `.env` and printed nowhere.
+   */
+  databaseUrl?: string;
+  /**
+   * The connection string came in the process arguments, where shell history
+   * and process lists keep it, rather than from standard input.
+   */
+  databaseUrlInArguments?: boolean;
+  /** `--package-manager`: installs with it and pins its own version. */
+  packageManager?: PackageManager;
+  /** false for `--no-git`; acted on where the scaffold makes a repository. */
+  git?: boolean;
+  /**
+   * Whether a prompt can be shown. False (no terminal) makes a run that is
+   * missing an answer stop before writing anything, naming the flags to
+   * pass. Left out, prompts are allowed, as for a direct call.
+   */
+  interactive?: boolean;
 }
 
 /**
