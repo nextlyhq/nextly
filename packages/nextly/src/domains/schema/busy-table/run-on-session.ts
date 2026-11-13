@@ -31,7 +31,12 @@ import {
 } from "../pipeline/schema-lock";
 
 import type { BusyTableBounds } from "./bounds";
-import { judgeStatement, targetTable, type StatementJudgement } from "./judge";
+import {
+  firstNoRetry,
+  judgeStatement,
+  targetTable,
+  type StatementJudgement,
+} from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { triggerTables } from "./run-unit";
 import {
@@ -83,8 +88,13 @@ async function judgedForResend(
     return true;
   });
   if (!asksTriggers) return judgement;
+  // Judged as a unit's statements are (`firstNoRetry`): where the account cannot see every trigger
+  // (`unseen`), any table may have one, so a row change fails closed as a hidden trigger.
   const triggers = await triggerTables(adapter, dialect);
-  return judgeStatement(statement, dialect, table => triggers.has(table));
+  return (
+    firstNoRetry([statement], dialect, triggers)?.judgement ??
+    judgeStatement(statement, dialect, () => false)
+  );
 }
 
 /**

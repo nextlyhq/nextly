@@ -6,10 +6,13 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
+  SqlParam,
   StatementSession,
   SupportedDialect,
 } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
@@ -563,11 +566,15 @@ async function runUnitStatements(
         for (const setting of settingsBefore) await tx.execute(sent(setting));
         for (const [offset, statement] of statements.slice(from).entries()) {
           const index = from + offset;
-          await checkpoint?.(tx.db, index);
           // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
           await assertSchemaLockHeld();
           await bound?.beforeStatement?.();
+          // Told before the statement's checkpoint, which belongs to it: a wait the checkpoint
+          // ends on is the statement's, so a try that resumes starts at it, never before it.
           bound?.onStatement?.(index);
+          await checkpoint?.(tx.db, index);
+          // A cancel the checkpoint's wait drew is settled before the statement is sent.
+          await bound?.beforeStatement?.();
           await executeTolerated(
             tx,
             sent(statement),
@@ -594,19 +601,28 @@ async function runUnitStatements(
     return statements.length;
   }
   const runEach = async (
-    execute: (statement: string) => Promise<unknown>
+    execute: (statement: string) => Promise<unknown>,
+    // What the checkpoints read through: the connection the statements run on where a session
+    // holds one, so a checkpoint neither waits for a pooled connection the session holds nor
+    // escapes the try's bounds.
+    checkpointDb: unknown
   ): Promise<void> => {
     for (const setting of settingsBefore) await execute(sent(setting));
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;
-      // Outside a transaction each statement has committed, so the pool reads what they left. The
-      // refusal names the statements that ran and says they stayed applied, so it reaches the
-      // caller as it is, not as a statement that failed part-way.
-      await checkpoint?.(adapter.getDrizzle(), index);
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
       await assertSchemaLockHeld();
       await bound?.beforeStatement?.();
+      // Told before the statement's checkpoint, which belongs to it: the statements before it
+      // committed as they ran, so a try that ends in the checkpoint resumes at this statement and
+      // never sends the one before it again.
       bound?.onStatement?.(index);
+      // Outside a transaction each statement has committed, so the checkpoint reads what they
+      // left. The refusal names the statements that ran and says they stayed applied, so it
+      // reaches the caller as it is, not as a statement that failed part-way.
+      await checkpoint?.(checkpointDb, index);
+      // A cancel the checkpoint's wait drew is settled before the statement is sent.
+      await bound?.beforeStatement?.();
       try {
         await execute(sent(statement));
       } catch (error) {
@@ -629,7 +645,7 @@ async function runUnitStatements(
       await assertForeignKeysOff(session);
       await refusingNewDanglingReferences(
         session,
-        () => runEach(onPool),
+        () => runEach(onPool, adapter.getDrizzle()),
         (count, pairs) =>
           `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
@@ -643,7 +659,11 @@ async function runUnitStatements(
     // holds, which is closed afterwards rather than pooled.
     await adapter.withSession(
       session => {
-        const each = () => runEach(statement => session.execute(statement));
+        const each = () =>
+          runEach(
+            statement => session.execute(statement),
+            sessionReader(session, dialect)
+          );
         return bound === undefined
           ? each()
           : boundSessionTry(session, dialect, bound, each);
@@ -655,17 +675,77 @@ async function runUnitStatements(
     // holds and closes afterwards, rather than each statement on whichever pooled one is free.
     await adapter.withSession(session =>
       boundSessionTry(session, dialect, bound, () =>
-        runEach(statement => session.execute(statement))
+        runEach(
+          statement => session.execute(statement),
+          sessionReader(session, dialect)
+        )
       )
     );
   } else {
-    await runEach(onPool);
+    await runEach(onPool, adapter.getDrizzle());
   }
   if (after !== undefined) {
     await assertSchemaLockHeld();
-    await after(adapter.getDrizzle(), statements.length);
+    await afterBounded(adapter, dialect, bound, db =>
+      after(db, statements.length)
+    );
   }
   return statements.length;
+}
+
+/**
+ * Runs a unit's `after` (its ledger write) once its statements have run outside a transaction,
+ * bounded as the try was: on PostgreSQL and MySQL in a short transaction of its own whose lock
+ * waits end half a second past the try, so a ledger table another session holds ends the try as
+ * a busy table does, and the next try, which resumes past every statement, writes it again. The
+ * session the statements ran on has closed by now, so this takes no connection a one-connection
+ * pool has to spare. On SQLite, whose busy timeout still bounds the connection, and where no try
+ * is bounded, it runs as it did, through the adapter's own handle.
+ */
+async function afterBounded(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  bound: StatementTryBound | undefined,
+  write: (db: unknown) => Promise<void>
+): Promise<void> {
+  if (bound === undefined || dialect === "sqlite") {
+    await write(adapter.getDrizzle());
+    return;
+  }
+  await executeTransaction(adapter, tx =>
+    withMysqlTryBackstop(tx, dialect, bound, async () => {
+      if (dialect === "postgresql") {
+        // Fixed text with a whole number of milliseconds, never caller input.
+        await tx.execute(
+          `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
+        );
+      }
+      await write(tx.db);
+    })
+  );
+}
+
+/**
+ * A reader over the session the unit's statements run on, shaped as the adapter's own Drizzle
+ * handle answers `execute` (PostgreSQL's `{ rows }`, MySQL's `[rows, fields]`), for the
+ * required-column checkpoints, which read through `execute` alone on these dialects.
+ */
+function sessionReader(
+  session: StatementSession,
+  dialect: "postgresql" | "mysql"
+): { execute(query: SQL): Promise<unknown> } {
+  const compiler =
+    dialect === "postgresql" ? new PgDialect() : new MySqlDialect();
+  return {
+    execute: async (query: SQL) => {
+      const compiled = compiler.sqlToQuery(query);
+      const rows = await session.execute(
+        compiled.sql,
+        compiled.params as SqlParam[]
+      );
+      return dialect === "postgresql" ? { rows } : [rows, []];
+    },
+  };
 }
 
 /**

@@ -39,7 +39,13 @@ import {
 import type { BusyTableBounds } from "./bounds";
 import { endedWaiting } from "./ended-waiting";
 import { readHolders } from "./holder";
-import { firstNoRetry, renamedTables, targetTable } from "./judge";
+import {
+  firstNoRetry,
+  renamedTables,
+  targetTable,
+  type StatementJudgement,
+  type TriggerTables,
+} from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
 import type { HolderReport } from "./types";
@@ -77,15 +83,88 @@ function triggerTablesQuery(dialect: SupportedDialect): SQL {
   return sql`SELECT DISTINCT tbl_name AS name FROM sqlite_master WHERE type = 'trigger'`;
 }
 
-/** The tables with a trigger, lower-cased; read once before a unit's first try. */
+/**
+ * Whether this MySQL account holds `TRIGGER` on the whole database, globally or on its schema:
+ * MySQL lists a table's triggers only to an account holding `TRIGGER` on that table, while a row
+ * change still fires them. Read from the privilege tables the account sees of its own grants. A
+ * grant this does not find (on single tables, through a role, by a schema pattern) answers no,
+ * which only makes the reading more cautious.
+ */
+function mysqlSeesEveryTriggerQuery(): SQL {
+  // `CURRENT_USER()` is `name@host`; the privilege tables name the grantee as `'name'@'host'`.
+  const grantee = sql`CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')`;
+  return sql`SELECT 1 AS seen FROM information_schema.USER_PRIVILEGES
+      WHERE PRIVILEGE_TYPE = 'TRIGGER' AND GRANTEE = ${grantee}
+    UNION ALL
+    SELECT 1 AS seen FROM information_schema.SCHEMA_PRIVILEGES
+      WHERE PRIVILEGE_TYPE = 'TRIGGER' AND TABLE_SCHEMA = DATABASE() AND GRANTEE = ${grantee}`;
+}
+
+/**
+ * The tables with a trigger, lower-cased; read once before a unit's first try. On MySQL, `"unseen"`
+ * unless the account can see every trigger of the database: a table missing from the list could
+ * still have one, so the list is trusted only where it is whole.
+ */
 export async function triggerTables(
-  adapter: DrizzleAdapter,
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
   dialect: SupportedDialect
-): Promise<ReadonlySet<string>> {
+): Promise<TriggerTables> {
+  if (dialect === "mysql") {
+    const seen = await adapter.queryStatement<{ seen: unknown }>(
+      mysqlSeesEveryTriggerQuery()
+    );
+    if (seen.length === 0) return "unseen";
+  }
   const rows = await adapter.queryStatement<{ name: unknown }>(
     triggerTablesQuery(dialect)
   );
   return new Set(rows.map(row => String(row.name).toLowerCase()));
+}
+
+/**
+ * Whether `statement` makes state of its own session alone, which a statement on another session
+ * cannot see and which ends with the session: a temporary table (or view or sequence), a prepared
+ * statement, a cursor. A connection setting (`SET`) is not one: the next try sends it again
+ * (`isConnectionSetting`).
+ */
+export function makesSessionState(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  const [first, second, third] = leadingWords(statement, dialect, 3);
+  if (first === "PREPARE" || first === "DECLARE") return true;
+  if (first !== "CREATE") return false;
+  // PostgreSQL's `CREATE GLOBAL|LOCAL TEMP|TEMPORARY`: the scope word comes first.
+  const kind = second === "GLOBAL" || second === "LOCAL" ? third : second;
+  return kind === "TEMP" || kind === "TEMPORARY";
+}
+
+/**
+ * The first statement before `start` that made state of its own session, as a judgement that
+ * stops the run: those statements were kept and are not sent again, yet the next try runs on a
+ * new session, which does not have what they made. Not on SQLite, whose one connection the next
+ * try runs on too.
+ */
+function sessionStateBefore(
+  statements: readonly string[],
+  start: number,
+  dialect: SupportedDialect
+):
+  | {
+      readonly statementNumber: number;
+      readonly judgement: Extract<StatementJudgement, { kind: "no-retry" }>;
+    }
+  | undefined {
+  // Nothing left to send: the next try writes only the ledger, which needs no session state.
+  if (dialect === "sqlite" || start >= statements.length) return undefined;
+  const index = statements
+    .slice(0, start)
+    .findIndex(statement => makesSessionState(statement, dialect));
+  if (index < 0) return undefined;
+  return {
+    statementNumber: index + 1,
+    judgement: { kind: "no-retry", reason: "session-state" },
+  };
 }
 
 /** What a try that ended keeps of a unit, by how the unit runs (see the module's comment). */
@@ -161,8 +240,11 @@ function firstNoRetryBetween(
   start: number,
   end: number,
   dialect: SupportedDialect,
-  triggers: ReadonlySet<string>
+  triggers: TriggerTables
 ): ReturnType<typeof firstNoRetry> {
+  // Asked first, whatever the next try sends: it runs on a new session either way.
+  const sessionState = sessionStateBefore(statements, start, dialect);
+  if (sessionState !== undefined) return sessionState;
   if (end <= start) return undefined;
   const replayedBefore: number[] = [];
   for (const [index, statement] of statements.slice(0, start).entries()) {
@@ -291,8 +373,10 @@ export async function runUnitInTries(
         // What the next try sends again from the statements this one ran: from its start where
         // the transaction kept nothing, from the open transaction's first on MySQL, the waiting
         // statement alone outside a transaction.
+        // A try that sent none of its own still leaves the next on a new session, without the
+        // state the statements kept before it made.
         const lasting = toldNone
-          ? undefined
+          ? sessionStateBefore(statements, kept, dialect)
           : firstNoRetryBetween(
               statements,
               kept,

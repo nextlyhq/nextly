@@ -312,6 +312,19 @@ describe("firstNoRetry", () => {
     ).toBe(2);
   });
 
+  it("counts every row change as firing a trigger where the triggers could not all be seen, and says so", () => {
+    expect(
+      firstNoRetry(
+        ["ALTER TABLE plain ADD COLUMN late integer", "UPDATE plain SET x = 1"],
+        "mysql",
+        "unseen"
+      )
+    ).toEqual({
+      statementNumber: 2,
+      judgement: { kind: "no-retry", reason: "hidden-trigger" },
+    });
+  });
+
   it("lets a change with no rename or trigger run again", () => {
     expect(
       firstNoRetry(
