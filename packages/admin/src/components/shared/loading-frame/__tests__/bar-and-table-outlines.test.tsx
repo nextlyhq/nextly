@@ -17,7 +17,7 @@
  */
 import { buttonVariants } from "@nextlyhq/ui";
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   BAR_ICON_CONTROL,
@@ -41,8 +41,10 @@ import {
   LIST_TOOLBAR_ROW,
   LIST_TOOLBAR_SEARCH,
 } from "@admin/components/ui/table/list-view/toolbar-layout";
+import { DataTableView } from "@admin/components/ui/table/data-table";
 import {
   confirmLabels,
+  recallLayout,
   rememberLayout,
   resetDeviceMemoryForTests,
 } from "@admin/lib/device-memory/device-memory";
@@ -222,5 +224,56 @@ describe("an outline not yet due", () => {
     expect(outline.hasAttribute("data-outline-shown")).toBe(false);
     expect(classesOf(outline)).toContain("invisible");
     expect(outline.querySelectorAll("tbody tr").length).toBeGreaterThan(0);
+  });
+});
+
+describe("how tall a list's pager outline stands", () => {
+  /** Every element drawn `width` wide and `height` tall. */
+  function drawnAt(width: number, height: number) {
+    return vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue(DOMRect.fromRect({ x: 0, y: 0, width, height }));
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetDeviceMemoryForTests();
+    confirmLabels({ user: "u", schemaVersion: "1", permissionVersion: "p" });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("stands as tall as the list's pager last stood at its width", () => {
+    // A pager of several pages, drawn 630 px wide, stood 133 px tall.
+    rememberLayout("list-pager:users:20", 133);
+    drawnAt(630, 117);
+    const { container } = render(<TableOutline list="users" />);
+    const pager = container.querySelector('[data-frame-part="list-pager"]');
+    expect((pager as HTMLElement).style.height).toBe("133px");
+  });
+
+  it("draws one page's pager where none was kept at that width", () => {
+    rememberLayout("list-pager:users:20", 133);
+    drawnAt(1000, 72);
+    const { container } = render(<TableOutline list="users" />);
+    const pager = container.querySelector('[data-frame-part="list-pager"]');
+    expect((pager as HTMLElement).style.height).toBe("");
+  });
+
+  it("keeps how tall the table's pager stood, at its width, for the outline", () => {
+    drawnAt(630, 133);
+    render(
+      <DataTableView
+        columns={[{ name: "name", header: "Name" }]}
+        rows={[{ id: "1", name: "Ada" }]}
+        registryKey="users"
+        pagination={{
+          currentPage: 0,
+          totalPages: 3,
+          pageSize: 10,
+          onPageChange: () => {},
+        }}
+      />
+    );
+    expect(recallLayout("list-pager:users:20")).toBe(133);
   });
 });

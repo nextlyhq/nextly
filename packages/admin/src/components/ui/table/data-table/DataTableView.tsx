@@ -52,6 +52,7 @@ import {
 } from "react";
 
 import { ChevronRight } from "@admin/components/icons";
+import { useRememberedListPager } from "@admin/components/shared/loading-frame/list-rows";
 import { Pagination } from "@admin/components/shared/pagination";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -68,6 +69,7 @@ import {
 import {
   FIXED_LAYOUT_TABLE,
   fixedColumnLayout,
+  LIST_TABLE,
   ROW_ACTIONS_COLUMN,
   ROW_ACTIONS_TRIGGER,
   SELECTION_COLUMN,
@@ -1077,6 +1079,9 @@ export function DataTableView<Row extends object>({
     typeof footer === "boolean" ||
     footer === "";
 
+  // How tall the pager stands, kept for the list's outline next time.
+  const rememberedPager = useRememberedListPager(registryKey);
+
   // The limit worth stating rather than hiding: a component that RETURNS null
   // still counts as content here, because no inspection of the node can know
   // what it renders without rendering it. That case draws an empty surface, and
@@ -1085,7 +1090,9 @@ export function DataTableView<Row extends object>({
     !footerRendersNothing || pagination !== undefined ? (
       <>
         {footer}
-        {pagination !== undefined && <Pagination {...pagination} />}
+        {pagination !== undefined && (
+          <Pagination ref={rememberedPager} {...pagination} />
+        )}
       </>
     ) : undefined;
 
@@ -1166,10 +1173,7 @@ export function DataTableView<Row extends object>({
           <div className="overflow-x-auto">
             <Table
               aria-label={ariaLabel}
-              className={cn(
-                "w-full min-w-max",
-                fixedLayout && FIXED_LAYOUT_TABLE
-              )}
+              className={cn(LIST_TABLE, fixedLayout && FIXED_LAYOUT_TABLE)}
             >
               <TableHeader>
                 <TableRow>

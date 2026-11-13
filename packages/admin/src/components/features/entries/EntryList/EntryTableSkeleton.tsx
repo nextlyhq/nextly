@@ -20,7 +20,7 @@ export const EntryTableSkeleton: React.FC<{
   headers?: readonly React.ReactNode[];
 }> = ({ list, headers }) => (
   <ScreenOutline>
-    <TableOutline headers={headers} rows={outlineRowsFor(list)} />
+    <TableOutline headers={headers} rows={outlineRowsFor(list)} list={list} />
   </ScreenOutline>
 );
 
