@@ -252,14 +252,17 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `nextly migrate:down --step 1` with `cfg`, which must succeed; what it said. */
-    async function migrateDown(cfg: unknown): Promise<string[]> {
+    async function migrateDown(
+      cfg: unknown,
+      dryRun = false
+    ): Promise<string[]> {
       state.config = cfg;
       tick();
       const { context, said } = command();
       setNonInteractive(true);
       try {
         await runMigrateDown(
-          { cwd: state.dir, step: 1, acceptDataLoss: true },
+          { cwd: state.dir, step: 1, acceptDataLoss: true, dryRun },
           context
         );
       } catch (error) {
@@ -360,6 +363,14 @@ describe.each(getConfiguredTestDialects())(
       await migrate(v2);
       const before = await grants();
       expect(before).toContain("admin:audit-mdp-seo");
+
+      // A dry run says the marks would be undone, and changes nothing.
+      const marked = await marks();
+      const preview = await migrateDown(v2, true);
+      expect(preview.join("\n")).toMatch(
+        /permission orphan marks would go back to what .* records, every grant kept/
+      );
+      expect(await marks()).toEqual(marked);
 
       // The build that rolls back still carries the release with the permission.
       const said = await migrateDown(v2);

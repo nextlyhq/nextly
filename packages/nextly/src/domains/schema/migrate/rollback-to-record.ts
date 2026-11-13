@@ -635,7 +635,9 @@ export async function planRollbackBookkeeping(args: {
   }
   return {
     perFile,
-    summary: `The registry would go back to the baseline the database's registry record keeps at ${pointNamed(point)}.`,
+    summary:
+      `The registry would go back to the baseline the database's registry record keeps at ${pointNamed(point)}, ` +
+      "and the rolled-back migrations' permission orphan marks would be undone, every grant kept.",
     restore: await baselineRestore({
       ...args,
       judge,
@@ -749,7 +751,7 @@ async function undoToOwnSource(args: {
     summary:
       decide === undefined
         ? `The registry rows would go back to what ${named} records.`
-        : `The registry rows and the permissions' orphan marks would go back to what ${named} records.`,
+        : `The registry rows and the rolled-back migrations' permission orphan marks would go back to what ${named} records, every grant kept.`,
     restore: async (inFileTransaction: boolean) => {
       if (inFileTransaction) writesInFileTransaction(args.deps, named);
       const outcome = await writeRegistryRows(
