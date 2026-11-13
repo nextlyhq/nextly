@@ -9559,7 +9559,8 @@ export class CollectionMutationService extends BaseService {
       );
       const judgedLocales = this.everyLanguageJudged(
         versionCheck,
-        languagesTable
+        languagesTable,
+        params.parts
       );
 
       // The hooks a status change of one language runs, run once for the
@@ -13838,19 +13839,23 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * Every language a write over all of them is judged on: those a read of
-   * every language names, the same list its version is spelled from. None
-   * where the entry keeps no translation table.
+   * every language names, the same list its version is spelled from, narrowed
+   * to the languages `parts` chooses when the write moves only some. A read of
+   * the chosen languages names those, and an edit of another language since
+   * changes nothing the write moves. None where the entry keeps no translation
+   * table.
    */
   private everyLanguageJudged(
     check: VersionCheck,
-    languagesTable: string | null
+    languagesTable: string | null,
+    parts?: LifecycleParts
   ): readonly string[] | undefined {
     const given = givenOf(check);
     const locales = versionLanguagesFor({
       localized: languagesTable !== null,
       localization: this.localization,
       locale: EVERY_LOCALE,
-    });
+    })?.filter(locale => movesLanguage(parts, locale));
     if (given === undefined || !locales || locales.length === 0) {
       return undefined;
     }

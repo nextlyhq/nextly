@@ -143,6 +143,55 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(applied.item.languages).toEqual(described.item.languages);
   });
 
+  it("publishes Spanish from a Spanish read after an unrelated French edit, and refuses once Spanish itself changed", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    const readSpanish = async () =>
+      (
+        (await t!.nextly.findByID({
+          collection: "posts",
+          id,
+          locale: "es",
+        })) as { _rev: string }
+      )._rev;
+
+    const edit = (locale: string, title: string) =>
+      t!.nextly.update({
+        collection: "posts",
+        id,
+        locale,
+        data: { title, _overwrite: true },
+      });
+    const publishSpanish = (rev: string) =>
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["es"],
+        shared: true,
+        data: { _rev: rev },
+      });
+
+    // A Spanish edit since the read is a change to what is being published, and is refused.
+    const stale = await readSpanish();
+    await edit("es", "Hola otra vez");
+    const refused = await publishSpanish(stale).then(
+      () => null,
+      (error: unknown) => (error as { code?: string }).code
+    );
+    expect(refused).toBe("STALE_VERSION");
+    expect(await states(id)).toMatchObject({ es: "draft" });
+
+    // A read of Spanish names only Spanish, so a French edit since says nothing about what it
+    // read: publishing Spanish alone is judged on Spanish alone.
+    const spanish = await readSpanish();
+    await edit("fr", "Salut");
+    await publishSpanish(spanish);
+    expect(await states(id)).toMatchObject({
+      es: "published",
+      fr: "draft",
+    });
+  });
+
   it("publishes no language when chosen languages fail validation, and names every one that fails", async () => {
     await boot(
       posts({
