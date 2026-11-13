@@ -12,7 +12,7 @@ export {
   registerComponent,
   registerComponents,
   registerKnownPlugin,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * Which document the surrounding form is editing, or `null` outside one
@@ -27,8 +27,8 @@ export {
 export {
   useDocumentIdentity,
   type DocumentIdentity,
-} from "@nextlyhq/admin/kit";
-export type { ComponentPath } from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/document";
+export type { ComponentPath } from "@nextlyhq/admin/kit/core";
 
 /**
  * The props a sign-in challenge view receives, and what its `resolve` call
@@ -41,7 +41,7 @@ export type { ComponentPath } from "@nextlyhq/admin/kit";
 export type {
   ChallengeResolveResult,
   ChallengeViewProps,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * The props a custom collection Edit view is handed (@experimental).
@@ -57,10 +57,8 @@ export type {
  * typing its own copy would go on compiling while an affordance renamed there
  * quietly stopped reaching the write gates that read it.
  */
-export type {
-  CustomEditViewProps,
-  DocumentLockGates,
-} from "@nextlyhq/admin/kit";
+export type { CustomEditViewProps } from "@nextlyhq/admin/kit/core";
+export type { DocumentLockGates } from "@nextlyhq/admin/kit/document";
 
 /**
  * What a plugin's document view receives (@experimental): which document it
@@ -71,7 +69,7 @@ export type {
  * are: the admin builds this object, and a plugin's own copy of the shape
  * would keep compiling after a field the admin hands over was renamed.
  */
-export type { DocumentViewProps } from "@nextlyhq/admin/kit";
+export type { DocumentViewProps } from "@nextlyhq/admin/kit/core";
 
 /**
  * What the components a plugin puts on a collection's document screen
@@ -124,7 +122,7 @@ export type {
   DocumentPanelSectionProps,
   DocumentTabProps,
   SidebarSectionProps,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * @experimental Move to a page of this admin, keeping what the current page
@@ -133,7 +131,7 @@ export type {
  * refuses anything else (an absolute or external URL, a script URL, a path
  * that climbs out with "..") by throwing, naming the address.
  */
-export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin/kit";
+export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin/kit/core";
 
 /**
  * Which language the surrounding document is being edited in (@experimental).
@@ -151,7 +149,10 @@ export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin/kit";
  * one that carries no locale context, such as an embedded quick-edit. It is an
  * ordinary answer to handle, not an error.
  */
-export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin/kit";
+export {
+  useDocumentLocale,
+  type DocumentLocale,
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * A field's address in its document (@experimental): its path from the
@@ -161,7 +162,10 @@ export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin/kit";
  * last save, or in a repeater whose rows set their own `id` field, has none
  * yet, and the answer says why. Outside repeaters it is the field's form path.
  */
-export { useFieldAddress, type FieldAddress } from "@nextlyhq/admin/kit";
+export {
+  useFieldAddress,
+  type FieldAddress,
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * The surrounding document's full-page preview (@experimental).
@@ -174,7 +178,10 @@ export { useFieldAddress, type FieldAddress } from "@nextlyhq/admin/kit";
  * an entry never saved, a reader, and outside a form. A field shows no such
  * control then, rather than one that opens nothing.
  */
-export { useDocumentPreview, type DocumentPreview } from "@nextlyhq/admin/kit";
+export {
+  useDocumentPreview,
+  type DocumentPreview,
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * The signed-in user's id (@experimental).
@@ -188,7 +195,7 @@ export { useDocumentPreview, type DocumentPreview } from "@nextlyhq/admin/kit";
  * while its first consumer settles; the intent is to keep its name and its
  * `string | null` answer stable.
  */
-export { useCurrentUserId } from "@nextlyhq/admin/kit";
+export { useCurrentUserId } from "@nextlyhq/admin/kit/core";
 
 /**
  * How the surrounding document stands (@experimental).
@@ -211,7 +218,7 @@ export {
   PILL_LABEL,
   type DocumentStatus,
   type PillState,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * Tell the surrounding form this surface holds unsaved work (@experimental).
@@ -226,7 +233,7 @@ export {
  * form; the form still decides what to do about it. Retracted automatically
  * when the surface unmounts.
  */
-export { useReportUnsavedWork } from "@nextlyhq/admin/kit";
+export { useReportUnsavedWork } from "@nextlyhq/admin/kit/document";
 
 /**
  * The document's actions, from inside its editor (@experimental).
@@ -273,7 +280,7 @@ export {
   type BeforeDocumentAction,
   type StoreReadiness,
   type SubmitRefusal,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * The editor header's own save state and leading action, for a document view
@@ -296,7 +303,7 @@ export {
 export {
   DocumentSaveIndicator,
   DocumentPrimaryAction,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * How a document view restores its own field from a recovery point
@@ -318,7 +325,7 @@ export {
 export {
   useDocumentRestore,
   type DocumentRestoreHandler,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * The entry's remaining fields, drawn for a takeover surface (@experimental).
@@ -357,7 +364,7 @@ export {
  * the form submits are one thing. Constructing a second form would fork the
  * state and lose the edit made in whichever copy did not save.
  */
-export { useEntryFieldsPanel } from "@nextlyhq/admin/kit";
+export { useEntryFieldsPanel } from "@nextlyhq/admin/kit/document";
 
 /**
  * Edit this site's rich text from your own surface (@experimental).
@@ -386,7 +393,7 @@ export { useEntryFieldsPanel } from "@nextlyhq/admin/kit";
 export {
   loadRichTextEditorKit,
   type RichTextEditorKit,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/field-ui";
 
 /**
  * Edit ONE passage in place, anywhere on your own surface (@experimental).
@@ -462,7 +469,7 @@ export {
   type InlineRichTextEditor,
   type InlineRichTextRefusal,
   type InlineRichTextSession,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/field-ui";
 
 /**
  * Record a recovery point for the surrounding document (@experimental).
@@ -483,7 +490,7 @@ export {
   type UseDocumentCheckpointOptions,
   type UseDocumentCheckpointResult,
   type AutosaveStatus,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/document";
 
 /**
  * Token-driven layout primitives (@experimental). Compose plugin admin UI from
@@ -503,13 +510,13 @@ export {
   Stack,
   Grid,
   Stat,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 export type {
   CardProps,
   StackProps,
   GridProps,
   StatProps,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * @experimental The widget kit: the parts core's own dashboard cards are drawn
@@ -542,7 +549,7 @@ export type {
  * host's single copy, and a plugin that bundled its own would draw its parts
  * outside the card it sits in.
  */
-export { FrameState, Widget } from "@nextlyhq/admin/kit";
+export { FrameState, Widget } from "@nextlyhq/admin/kit/widgets";
 /**
  * @experimental A row's time as core's list cards word it, and the clock they
  * move it on with, for a widget's own list:
@@ -556,7 +563,7 @@ export { FrameState, Widget } from "@nextlyhq/admin/kit";
  *
  * Core's own, so a plugin's times read and move as the cards beside it do.
  */
-export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin/kit";
+export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin/kit/widgets";
 /**
  * @experimental A field's key as the admin's screens word it, where the
  * field carries no label of its own or is held only by its key:
@@ -564,7 +571,7 @@ export { formatWidgetTime, useWidgetClock } from "@nextlyhq/admin/kit";
  * so a plugin names a field as the admin does. The same function the root
  * entry offers server code.
  */
-export { humanizeFieldName } from "@nextlyhq/admin/kit";
+export { humanizeFieldName } from "@nextlyhq/admin/kit/core";
 /**
  * @experimental `useRefreshDashboard()`: a function that asks every card on
  * the dashboard, and the header's summary, again, for a widget whose own
@@ -572,7 +579,7 @@ export { humanizeFieldName } from "@nextlyhq/admin/kit";
  * keeps what it shows until its answer arrives. Core's own reads, so a plugin
  * names no query of the admin's.
  */
-export { useRefreshDashboard } from "@nextlyhq/admin/kit";
+export { useRefreshDashboard } from "@nextlyhq/admin/kit/widgets";
 export type {
   CardEmptyContent,
   CardState,
@@ -591,7 +598,7 @@ export type {
   WidgetSeriesPoint,
   WidgetTableColumn,
   WidgetTableProps,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/widgets";
 
 /**
  * The controls a form is built from (@experimental).
@@ -641,7 +648,7 @@ export {
   FieldShell,
   FormSection,
   FormActions,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 export type {
   FieldLayout,
   FieldShellProps,
@@ -649,7 +656,7 @@ export type {
   FieldWidth,
   FormSectionProps,
   FormActionsProps,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * The status badge a table cell or a header carries (@experimental here; the
@@ -659,8 +666,8 @@ export type {
  * so a plugin page assembles a table, its statuses and its form from one
  * import, the same component the admin's own lists draw.
  */
-export { Badge } from "@nextlyhq/admin/kit";
-export type { BadgeProps } from "@nextlyhq/admin/kit";
+export { Badge } from "@nextlyhq/admin/kit/core";
+export type { BadgeProps } from "@nextlyhq/admin/kit/core";
 
 /**
  * The parts a plugin page needs beyond a form (@experimental here): a notice
@@ -710,7 +717,7 @@ export {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 export type {
   AlertDescriptionProps,
   AlertProps,
@@ -734,7 +741,7 @@ export type {
   DropdownMenuLabelProps,
   DropdownMenuRadioItemProps,
   DropdownMenuSeparatorProps,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * Ask the admin to hide its own chrome while an immersive surface is mounted
@@ -746,8 +753,8 @@ export type {
  * the admin, DERIVED from the affordance rather than asserted beside it — the
  * primary navigation rail is only ever hidden for a surface that can be left.
  */
-export { useSuppressAdminChrome } from "@nextlyhq/admin/kit";
-export type { AdminChromeLayer } from "@nextlyhq/admin/kit";
+export { useSuppressAdminChrome } from "@nextlyhq/admin/kit/plugin-parts";
+export type { AdminChromeLayer } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * Ask for the admin's content panel to start folded away while this page is
@@ -757,7 +764,7 @@ export type { AdminChromeLayer } from "@nextlyhq/admin/kit";
  * remembered under `key` (name the page, `"forms.builder"`, not the record it
  * shows), so the next visit starts the way they left it.
  */
-export { useFoldedPanel } from "@nextlyhq/admin/kit";
+export { useFoldedPanel } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * A store for one of the person's interface preferences, kept by the admin's
@@ -774,11 +781,11 @@ export { useFoldedPanel } from "@nextlyhq/admin/kit";
  * `read`, `write` and `remove` never throw. Key it per person (with
  * `useCurrentUserId`) where two people may share a browser.
  */
-export { devicePreferenceStore } from "@nextlyhq/admin/kit";
+export { devicePreferenceStore } from "@nextlyhq/admin/kit/core";
 export type {
   DevicePreferenceOptions,
   DevicePreferenceStore,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * Draw a page's own content into the admin's one top bar (@experimental):
@@ -788,8 +795,11 @@ export type {
  * are drawn in the bar for as long as the page is mounted. Outside the admin's
  * shell (a unit test) they render where they stand.
  */
-export { TopBarPlace } from "@nextlyhq/admin/kit";
-export type { TopBarPlaceName, TopBarPlaceProps } from "@nextlyhq/admin/kit";
+export { TopBarPlace } from "@nextlyhq/admin/kit/core";
+export type {
+  TopBarPlaceName,
+  TopBarPlaceProps,
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * A page's frame and its header, the pieces core's pages are drawn from
@@ -809,14 +819,19 @@ export type { TopBarPlaceName, TopBarPlaceProps } from "@nextlyhq/admin/kit";
  * that draws one gets no second frame from the admin. Content for the admin's
  * top bar still goes through `TopBarPlace`.
  */
-export { PageFrame, PageHeader, PageTab, PageTabs } from "@nextlyhq/admin/kit";
+export {
+  PageFrame,
+  PageHeader,
+  PageTab,
+  PageTabs,
+} from "@nextlyhq/admin/kit/core";
 export type {
   PageFrameProps,
   PageHeaderProps,
   PageTabProps,
   PageTabsProps,
   PageType,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 
 /**
  * The live values of the document being edited (@experimental), for any
@@ -835,8 +850,11 @@ export type {
  * plugin component with a form of its own still reads the document. Both
  * answer `null` outside a document editor.
  */
-export { useDocumentField, useDocumentValues } from "@nextlyhq/admin/kit";
-export type { DocumentField } from "@nextlyhq/admin/kit";
+export {
+  useDocumentField,
+  useDocumentValues,
+} from "@nextlyhq/admin/kit/document";
+export type { DocumentField } from "@nextlyhq/admin/kit/document";
 
 /**
  * Draw the contributions sent to an admin place (@experimental): blocks with
@@ -856,7 +874,7 @@ export type { DocumentField } from "@nextlyhq/admin/kit";
  * (`PlaceTabBadge`) or none with `null`. A tab stays mounted while another is
  * open, so its count stays current and what it holds is kept.
  */
-export { PlaceTabs, TargetSlot } from "@nextlyhq/admin/kit";
+export { PlaceTabs, TargetSlot } from "@nextlyhq/admin/kit/plugin-parts";
 export type {
   PlaceContributionProps,
   PlaceProps,
@@ -864,7 +882,7 @@ export type {
   PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * The unified admin data table + its extension points (@experimental). Render
@@ -884,7 +902,7 @@ export {
   transformColumns,
   registerRowAction,
   registerBulkAction,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/table";
 export type {
   DataTableProps,
   DataTableViewProps,
@@ -901,7 +919,7 @@ export type {
   CellRendererDefinition,
   RowAction,
   BulkAction,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/table";
 
 /**
  * Rows in groups and rows that open a region below them (@experimental),
@@ -923,7 +941,7 @@ export type {
   DataTableGroup,
   DataTableGrouping,
   DataTableRowDetail,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/table";
 
 /**
  * The admin's list surface around that table (@experimental): `ListView`
@@ -948,7 +966,7 @@ export {
   ListEmptyState,
   useListColumns,
   useTableColumns,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/table";
 export type {
   ListViewProps,
   ListToolbarProps,
@@ -959,7 +977,7 @@ export type {
   UseListColumnsOptions,
   UseTableColumnsOptions,
   UseTableColumnsResult,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/table";
 
 /**
  * Where a plugin's page sits, drawn in the admin's top bar (@experimental).
@@ -972,8 +990,11 @@ export type {
  *
  * Intended to be stable: every core page draws its trail with it.
  */
-export { Breadcrumbs } from "@nextlyhq/admin/kit";
-export type { BreadcrumbItem, BreadcrumbsProps } from "@nextlyhq/admin/kit";
+export { Breadcrumbs } from "@nextlyhq/admin/kit/plugin-parts";
+export type {
+  BreadcrumbItem,
+  BreadcrumbsProps,
+} from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * A segmented control (@experimental): a radio group drawn as one row of
@@ -985,12 +1006,12 @@ export type { BreadcrumbItem, BreadcrumbsProps } from "@nextlyhq/admin/kit";
  *
  * Intended to be stable: it is the control the dashboard's card settings use.
  */
-export { SegmentedChoice } from "@nextlyhq/admin/kit";
+export { SegmentedChoice } from "@nextlyhq/admin/kit/plugin-parts";
 export type {
   SegmentedChoiceProps,
   SegmentedChoiceSize,
   SegmentedOption,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * A checklist with progress (@experimental), the one the dashboard's "Set up
@@ -1009,7 +1030,7 @@ export {
   ChecklistItem,
   ChecklistMark,
   ChecklistProgress,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/plugin-parts";
 export type {
   ChecklistProps,
   ChecklistItemProps,
@@ -1017,7 +1038,7 @@ export type {
   ChecklistProgressProps,
   ChecklistStatus,
   ChecklistDoneStyle,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * A settings row whose control is a group (@experimental): label and help on
@@ -1029,8 +1050,8 @@ export type {
  * Intended to be stable: the admin's own settings pages draw their grouped
  * rows with it.
  */
-export { SettingsRowGroup } from "@nextlyhq/admin/kit";
-export type { SettingsRowGroupProps } from "@nextlyhq/admin/kit";
+export { SettingsRowGroup } from "@nextlyhq/admin/kit/plugin-parts";
+export type { SettingsRowGroupProps } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * Where a flow of a few steps is (@experimental): a numbered row of steps,
@@ -1042,8 +1063,12 @@ export type { SettingsRowGroupProps } from "@nextlyhq/admin/kit";
  *
  * Intended to be stable: the admin's own guided setup draws its steps with it.
  */
-export { Stepper } from "@nextlyhq/admin/kit";
-export type { StepperProps, StepperStep, StepState } from "@nextlyhq/admin/kit";
+export { Stepper } from "@nextlyhq/admin/kit/plugin-parts";
+export type {
+  StepperProps,
+  StepperStep,
+  StepState,
+} from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * The admin's drop area for a file a plugin screen reads itself, rather than
@@ -1052,8 +1077,8 @@ export type { StepperProps, StepperStep, StepState } from "@nextlyhq/admin/kit";
  * must be is the screen's to judge and say. It looks as the Media library's
  * upload area does, and is meant to stay part of this surface.
  */
-export { FileDropArea } from "@nextlyhq/admin/kit";
-export type { FileDropAreaProps } from "@nextlyhq/admin/kit";
+export { FileDropArea } from "@nextlyhq/admin/kit/plugin-parts";
+export type { FileDropAreaProps } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * The field-UI kit (@experimental): controlled, form-library-agnostic
@@ -1099,7 +1124,7 @@ export {
   ValidationRulesEditor,
   drawsAnyValidationRule,
   EDITABLE_VALIDATION_RULES,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/field-ui";
 
 /**
  * The shared field picker (@experimental), beside the field-UI kit above and
@@ -1116,14 +1141,14 @@ export {
  * Experimental until every built-in surface uses it; the kit above stays
  * exported and working beside it.
  */
-export { FieldPicker, describeFieldTypes } from "@nextlyhq/admin/kit";
+export { FieldPicker, describeFieldTypes } from "@nextlyhq/admin/kit/field-ui";
 export type {
   FieldPickerProps,
   FieldPickerConfig,
   FieldPickerChoice,
   FieldGroupOption,
   FieldTypeDescription,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/field-ui";
 
 /**
  * The shared field settings panel (@experimental): the one panel every surface
@@ -1145,7 +1170,7 @@ export type {
  *   `defining` settings, first in General, and the rest by tab.
  * Experimental until every built-in surface uses it.
  */
-export { FieldSettingsPanel } from "@nextlyhq/admin/kit";
+export { FieldSettingsPanel } from "@nextlyhq/admin/kit/field-ui";
 export type {
   FieldSettingsControlProps,
   FieldSettingsField,
@@ -1156,7 +1181,7 @@ export type {
   FieldSettingsTab,
   FieldTypeSettings,
   FixedFieldSetting,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/field-ui";
 
 /**
  * @experimental Upload a file into the media library, as the admin's own
@@ -1173,14 +1198,14 @@ export type {
  * settled on rather than the one the browser guessed, which is the value to
  * carry into anything that names a format.
  */
-export { useUploadMedia } from "@nextlyhq/admin/kit";
+export { useUploadMedia } from "@nextlyhq/admin/kit/core";
 /**
  * A media item by id, as a query a component renders from: a thumbnail, a
  * preview. The admin's own read of one item, cached by id.
  *
  * @experimental
  */
-export { useMediaItem } from "@nextlyhq/admin/kit";
+export { useMediaItem } from "@nextlyhq/admin/kit/core";
 /**
  * Read a media item by id from code that draws a page, outside a component's
  * render. The same query as `useMediaItem`, so the two share one cache and
@@ -1188,7 +1213,7 @@ export { useMediaItem } from "@nextlyhq/admin/kit";
  *
  * @experimental
  */
-export { useMediaResolver } from "@nextlyhq/admin/kit";
+export { useMediaResolver } from "@nextlyhq/admin/kit/core";
 /**
  * Search the media library's images by name from code outside a component's
  * render, such as a picker that searches as the author types: the newest
@@ -1198,7 +1223,7 @@ export { useMediaResolver } from "@nextlyhq/admin/kit";
  *
  * @experimental
  */
-export { useMediaSearcher } from "@nextlyhq/admin/kit";
+export { useMediaSearcher } from "@nextlyhq/admin/kit/core";
 
 /**
  * @experimental The media library as a dialog a plugin can open: browse,
@@ -1207,8 +1232,8 @@ export { useMediaSearcher } from "@nextlyhq/admin/kit";
  * same. Store the chosen item's `id`, which stays right when the file is moved
  * or renamed, rather than its `url`, which does not.
  */
-export { MediaPickerDialog } from "@nextlyhq/admin/kit";
-export type { MediaPickerDialogProps } from "@nextlyhq/admin/kit";
+export { MediaPickerDialog } from "@nextlyhq/admin/kit/media";
+export type { MediaPickerDialogProps } from "@nextlyhq/admin/kit/media";
 
 /**
  * @experimental Reads the `clientConfig` this plugin declared in
@@ -1218,14 +1243,14 @@ export type { MediaPickerDialogProps } from "@nextlyhq/admin/kit";
  * Delivered through `/api/admin-meta`, which requires no authentication — so
  * the value reaches anonymous callers and must hold nothing secret.
  */
-export { usePluginClientConfig } from "@nextlyhq/admin/kit";
+export { usePluginClientConfig } from "@nextlyhq/admin/kit/field-ui";
 
 /**
  * @experimental The translator for this plugin's own admin strings, declared
  * in `contributes.translations`: `t("acme-shop.cart.title")`, read in the
  * interface language in effect, then English, then the key itself.
  */
-export { usePluginTranslate } from "@nextlyhq/admin/kit";
+export { usePluginTranslate } from "@nextlyhq/admin/kit/core";
 
 /**
  * @experimental Read a route this plugin contributed, from this plugin's own
@@ -1250,7 +1275,7 @@ export { usePluginTranslate } from "@nextlyhq/admin/kit";
  * route answered nothing" and "the route has not answered", and a surface that
  * cannot tell them apart draws its empty state over a read in flight.
  */
-export { usePluginRoute } from "@nextlyhq/admin/kit";
+export { usePluginRoute } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * @experimental Read a route this plugin contributed once, outside React.
@@ -1261,7 +1286,7 @@ export { usePluginRoute } from "@nextlyhq/admin/kit";
  * rather than surfacing as a failure, and a refusal rejects with the admin's
  * parsed error. Not cached. Answers `undefined` for an empty answer.
  */
-export { readPluginRoute } from "@nextlyhq/admin/kit";
+export { readPluginRoute } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * @experimental Write to a route this plugin contributed.
@@ -1283,7 +1308,7 @@ export { readPluginRoute } from "@nextlyhq/admin/kit";
  * reported. It is the same shape the read hook has, so there is one thing to
  * learn rather than two.
  */
-export { usePluginRouteMutation } from "@nextlyhq/admin/kit";
+export { usePluginRouteMutation } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * @experimental Write to a route this plugin contributed once, outside React.
@@ -1299,7 +1324,7 @@ export { usePluginRouteMutation } from "@nextlyhq/admin/kit";
  * finishes it after the page is hidden or closed, while its body fits the
  * 64 KB browsers allow; a larger one goes as an ordinary request.
  */
-export { writePluginRoute } from "@nextlyhq/admin/kit";
+export { writePluginRoute } from "@nextlyhq/admin/kit/plugin-parts";
 /**
  * `PluginRouteInvalidation` is what a write names as gone stale. A plugin
  * serving both mounts has to say which one an entry belongs to, so the type has
@@ -1314,8 +1339,11 @@ export type {
   PluginRouteWrite,
   PluginRouteWriter,
   PluginRouteInvalidation,
-} from "@nextlyhq/admin/kit";
-export type { PluginRouteRead, PluginRouteRequest } from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/plugin-parts";
+export type {
+  PluginRouteRead,
+  PluginRouteRequest,
+} from "@nextlyhq/admin/kit/plugin-parts";
 
 /**
  * @experimental Read and write a Single this plugin owns, through the same
@@ -1373,7 +1401,7 @@ export {
   type SingleDocument,
   type ApiError,
   type ValidationIssue,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/core";
 export type {
   FieldTypePickerProps,
   FieldDefaultValueInputProps,
@@ -1389,7 +1417,7 @@ export type {
   ValidationNumberFieldProps,
   ValidationRulesEditorProps,
   ValidationRuleValues,
-} from "@nextlyhq/admin/kit";
+} from "@nextlyhq/admin/kit/field-ui";
 
 // The declarative `contributes.admin` contract types (the same ones exported
 // from the package root) for convenience when authoring admin components.

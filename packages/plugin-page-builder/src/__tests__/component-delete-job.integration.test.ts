@@ -58,6 +58,7 @@ import {
   type ComponentDeleteResult,
 } from "../component-delete/contract";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { COMPONENT_DELETED_REASON } from "../host-rewrite/service";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { COMPONENT_DELETE_JOB } from "../component-delete/sweep";
@@ -856,9 +857,12 @@ describe.each(getConfiguredTestDialects())(
       expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
     });
 
-    it("keeps the component while a page holds unpublished changes", async () => {
-      const { t, cookie } = await boot();
-      const cardId = await card(t);
+    /** A published page placing `cardId`, with an edit saved as a pending draft. */
+    async function pageWithDraft(
+      t: TestNextly,
+      cardId: string,
+      draft: Node[]
+    ): Promise<string> {
       const created = await t.nextly.create({
         collection: "pages",
         data: {
@@ -874,59 +878,122 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id: pageId,
-        data: {
-          content: pageDoc([copyOf("i1", cardId), heading("d", "Draft edit")]),
-          _overwrite: true,
-        },
+        data: { content: pageDoc(draft), _overwrite: true },
         overrideAccess: true,
       });
+      return pageId;
+    }
 
-      const ended = await deleteToTheEnd(cookie, cardId);
-
-      expect(ended.item.status, JSON.stringify(ended.body)).toBe("partly-done");
-      expect(ended.item.left).toEqual([
-        expect.objectContaining({
-          document: expect.objectContaining({ slug: "pages", id: pageId }),
-          reason: "pending-draft",
-        }),
-      ]);
-      // The draft was converted; the live row keeps its copy, and so the
-      // component is kept, with the fence down.
-      expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
-      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
-      expect(await exists(t, cardId)).toBe(true);
-      expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
-    });
-
-    it("keeps the component while a page's pending draft has already removed it, as a pending draft", async () => {
-      const { t, cookie } = await boot();
-      const cardId = await card(t);
-      const created = await t.nextly.create({
-        collection: "pages",
-        data: {
-          title: "Live",
-          slug: `live-${String(Math.random()).slice(2, 10)}`,
-          status: "published",
-          content: pageDoc([copyOf("i1", cardId)]),
-        },
-        overrideAccess: true,
-      });
-      const pageId = String(created.item.id);
-      // A pending draft without the copy: the delete has nothing to write
-      // there, and the live row's copy waits for the draft to be published.
-      await t.nextly.update({
+    /** A page as its editor reads it: its working draft, when it has one. */
+    async function draftRow(
+      t: TestNextly,
+      pageId: string
+    ): Promise<Record<string, unknown>> {
+      return (await t.nextly.findByID({
         collection: "pages",
         id: pageId,
-        data: {
-          content: pageDoc([heading("d", "Draft edit")]),
-          _overwrite: true,
-        },
         overrideAccess: true,
-      });
+        status: "all",
+        depth: 0,
+        draft: true,
+      })) as unknown as Record<string, unknown>;
+    }
+
+    /** The field rewrites a page's history records. */
+    async function rewritesOf(
+      t: TestNextly,
+      pageId: string
+    ): Promise<Record<string, unknown>[]> {
+      const { items } = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: "pages", id: pageId },
+      } as never);
+      return (items as unknown as Record<string, unknown>[]).filter(
+        event => event.kind === "field-rewritten"
+      );
+    }
+
+    it("converts a published page's live copy and its pending draft together, the draft still a draft, then deletes the component", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const pageId = await pageWithDraft(t, cardId, [
+        copyOf("i1", cardId),
+        heading("d", "Draft edit"),
+      ]);
+      // POPULATION CONTROL: the edit is held as a draft, not live.
+      expect((await draftRow(t, pageId))._isWorkingDraft).toBe(true);
+      expect(texts(await nodesOf(t, "pages", pageId))).toHaveLength(1);
 
       const ended = await deleteToTheEnd(cookie, cardId);
 
-      // Left for its draft, not refused as a write the person may not make.
+      expect(ended.item.status, JSON.stringify(ended.body)).toBe("done");
+      // The live copy holds plain blocks now, and so does the draft, which is
+      // still the author's draft with their edit in it.
+      const live = await nodesOf(t, "pages", pageId);
+      expect(copies(live, cardId)).toBe(0);
+      expect(texts(live)).toEqual(["Card title"]);
+      const draft = await nodesOf(t, "pages", pageId, true);
+      expect(copies(draft, cardId)).toBe(0);
+      expect(texts(draft)).toEqual(["Card title", "Draft edit"]);
+      expect(await draftRow(t, pageId)).toMatchObject({
+        _isWorkingDraft: true,
+        status: "published",
+      });
+      // One rewrite in the history, naming the Page Builder and why.
+      expect(await rewritesOf(t, pageId)).toEqual([
+        expect.objectContaining({
+          actorKind: "person",
+          note: COMPONENT_DELETED_REASON,
+          payload: expect.objectContaining({
+            field: "content",
+            copies: ["live", "draft"],
+            plugin: PAGE_BUILDER_PLUGIN_NAME,
+          }),
+        }),
+      ]);
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("converts the live copy of a page whose pending draft already removed it, leaving the draft as it is", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const pageId = await pageWithDraft(t, cardId, [
+        heading("d", "Draft edit"),
+      ]);
+
+      const ended = await deleteToTheEnd(cookie, cardId);
+
+      expect(ended.item.status, JSON.stringify(ended.body)).toBe("done");
+      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(0);
+      expect(texts(await nodesOf(t, "pages", pageId, true))).toEqual([
+        "Draft edit",
+      ]);
+      expect(await draftRow(t, pageId)).toMatchObject({
+        _isWorkingDraft: true,
+      });
+      expect(await rewritesOf(t, pageId)).toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({ copies: ["live"] }),
+        }),
+      ]);
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("converts only the draft for a person who may not publish the page, and keeps the component until it is published", async () => {
+      const { t, anAuthor } = await boot();
+      const cardId = await card(t);
+      const pageId = await pageWithDraft(t, cardId, [
+        copyOf("i1", cardId),
+        heading("d", "Draft edit"),
+      ]);
+      const editor = await anAuthor("editor", [
+        "read-components",
+        "delete-components",
+        "read-pages",
+        "update-pages",
+      ]);
+
+      const ended = await deleteToTheEnd(editor, cardId);
+
       expect(ended.item.status, JSON.stringify(ended.body)).toBe("partly-done");
       expect(ended.item.left).toEqual([
         expect.objectContaining({
@@ -934,9 +1001,12 @@ describe.each(getConfiguredTestDialects())(
           reason: "pending-draft",
         }),
       ]);
+      // The draft was converted, as a save of it; the live row keeps its
+      // copy, and so the component is kept, with the fence down.
+      expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
       expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+      expect(await rewritesOf(t, pageId)).toEqual([]);
       expect(await exists(t, cardId)).toBe(true);
-      expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
     });
 
     it("lets only the person who started a delete carry it on", async () => {

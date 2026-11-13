@@ -35,6 +35,13 @@
  * - Lexical arrives as its production build, never its development build;
  * - the admin it bundled is the packed one, not the workspace's source.
  *
+ * It also measures, without judging yet, what the application ships: the
+ * admin page's first load, gzipped, divided between the admin, `@nextlyhq/ui`,
+ * React and Next.js and the rest, against a budget it reports until it is
+ * gated, and each route's direct visit. This is the one measure that counts
+ * what the package leaves to the application, so a dependency made external
+ * cannot leave the numbers by moving out of the package's own.
+ *
  * A module the output holds in more than one chunk is counted and printed with
  * its bytes, and does not fail the check: Turbopack copies a module into the
  * chunks of each on-demand group that loads it, which the package cannot
@@ -79,12 +86,16 @@ import {
   walk,
 } from "@nextlyhq/module-specifiers/parse-source";
 
+import { gzipSync } from "node:zlib";
+
 import { measureBundle } from "./bundle-report.mjs";
-import { routeKey } from "./check-bundle-budgets.mjs";
+import { readBundleModules, routeKey } from "./check-bundle-budgets.mjs";
 import { option, packInto, unreported } from "./check-published-build.mjs";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE = join(PACKAGE_ROOT, "__fixtures__", "consumer-app");
+/** The plugin SDK, which the fixture's plugin imports the admin's parts through. */
+const SDK_ROOT = resolve(PACKAGE_ROOT, "..", "plugin-sdk");
 
 /** The fixture's admin page, as Next.js names its route. */
 export const ADMIN_ROUTE = "/admin/[[...params]]";
@@ -98,6 +109,24 @@ export const PLUGIN_PAGE_KEY =
 
 /** The `data-testid` the fixture's plugin page renders, which tells it apart. */
 export const PLUGIN_PAGE_MARK = "fixture-plugin-page";
+
+/**
+ * The kit areas the fixture plugin's admin module imports from, through
+ * `@nextlyhq/plugin-sdk/admin`: it builds its page from plugin-page parts and
+ * nothing else. The generated map imports that module with the admin's first
+ * load, so the first load may hold these areas' code beside the shell.
+ */
+export const FIXTURE_PLUGIN_AREAS = ["kit/plugin-parts.mjs"];
+
+/**
+ * Parts of the kit the fixture plugin does not import, by where their source
+ * lives, which the first load must therefore not hold: a plugin naming one
+ * part would otherwise bring every area the SDK re-exports.
+ */
+export const UNIMPORTED_KIT_PARTS = [
+  ["the media library", "src/components/features/media-library/"],
+  ["the field-UI kit", "src/components/field-ui/"],
+];
 
 /** The link Lexical's production build gives in place of each message. */
 export const LEXICAL_PRODUCTION_TEXT = "lexical.dev/docs/error";
@@ -338,6 +367,8 @@ export function readChunk(name, code, map) {
     }
     factories.push({
       ids,
+      // The factory's code as written, for what a first load spends on it.
+      bytes: element.end - element.start,
       sources: sourcesWithin(element, segments, map),
       modules: exportedModules(element, segments, map),
       loader: loaderOf(element),
@@ -507,10 +538,26 @@ export function packageGraph(distDir) {
     root: route.root,
     uses: new Set([...shell, ...route.beyondFirstScreen]),
   }));
+  const imports = new Map(
+    report.chunks.map(chunk => [chunk.file, chunk.staticImports])
+  );
+  /** A module's static closure: what loading it loads. */
+  const closureOf = file => {
+    const seen = new Set();
+    const pending = [file];
+    while (pending.length > 0) {
+      const next = pending.pop();
+      if (seen.has(next) || !imports.has(next)) continue;
+      seen.add(next);
+      pending.push(...imports.get(next));
+    }
+    return seen;
+  };
   return {
     shell,
     routes,
     modules: new Set(report.chunks.map(chunk => chunk.file)),
+    closureOf,
   };
 }
 
@@ -626,14 +673,59 @@ function ownersOf(pkg, module) {
   return ` (code of ${owners.slice(0, 5).join(", ")}${more})`;
 }
 
-/** The first load holds nothing the package keeps out of the shell. */
+/**
+ * What the first load may hold: the shell, and the code of the kit areas the
+ * fixture plugin's admin module imports, which the generated map imports with
+ * the first load.
+ */
+function firstLoadAllowed(pkg) {
+  const allowed = new Set(pkg.shell);
+  for (const area of FIXTURE_PLUGIN_AREAS) {
+    for (const module of pkg.closureOf?.(area) ?? []) allowed.add(module);
+  }
+  return allowed;
+}
+
+/**
+ * The first load holds nothing the package keeps out of the shell, beyond the
+ * areas the fixture plugin imports.
+ */
 function shellProblems(model, pkg, route) {
+  const allowed = firstLoadAllowed(pkg);
   return [...model.shellModules]
-    .filter(module => !pkg.shell.has(module))
+    .filter(module => !allowed.has(module))
     .map(module =>
       problem(
         "shell-loads-route-code",
         `${route}'s first load holds ${module}, which the shell does not use${ownersOf(pkg, module)}`
+      )
+    );
+}
+
+/**
+ * The first load holds no part of the kit the fixture plugin does not import,
+ * read from the record of each chunk's modules the package's build writes
+ * (`dist/bundle-modules.json`, beside the chunks the packed package holds).
+ */
+export function kitAreaProblems(model, pkg, record, route = ADMIN_ROUTE) {
+  if (record === null) {
+    return [
+      problem(
+        "nothing-read",
+        "the package's build left no record of its chunks' modules (dist/bundle-modules.json): rebuild it"
+      ),
+    ];
+  }
+  return [...model.shellModules]
+    .filter(module => !pkg.shell.has(module))
+    .flatMap(module =>
+      UNIMPORTED_KIT_PARTS.filter(([, start]) =>
+        (record.chunks[module] ?? []).some(source => source.startsWith(start))
+      ).map(([part]) =>
+        problem(
+          "first-load-holds-unimported-kit",
+          `${route}'s first load holds ${module}, code of ${part}, which the fixture plugin does not import`
+        )
       )
     );
 }
@@ -882,6 +974,7 @@ export function consumerFindings({
   registration,
   developmentTexts,
   pinned,
+  record,
   route = ADMIN_ROUTE,
 }) {
   const model = outputModel({ pkg, output, adminDir, route });
@@ -889,6 +982,7 @@ export function consumerFindings({
   const problems = [
     ...firstLoadProblems(model, output, route),
     ...shellProblems(model, pkg, route),
+    ...(record === undefined ? [] : kitAreaProblems(model, pkg, record, route)),
     ...onDemandProblems(model, pinned),
     ...foreignCodeProblems(model, pkg),
     ...fetchedTwiceProblems(model, pkg),
@@ -911,6 +1005,11 @@ export function consumerFindings({
     },
     routeNames: [...model.rootOf.keys()].sort(),
     copied: copiedModules(model, output),
+    // Each direct visit: the first load, then what the route's loader fetches.
+    directVisits: visits(model, pkg).map(({ route, loader }) => ({
+      name: routeKey(route.root),
+      chunks: [...model.firstLoad, ...loader.chunks],
+    })),
   };
 }
 
@@ -1139,14 +1238,21 @@ export async function askRegistry({
  * lockfile pins. A build from the same commit is therefore the same build.
  */
 function buildFixture() {
-  const placed = join(FIXTURE, "node_modules", "@nextlyhq", "admin");
   rmSync(join(FIXTURE, ".next"), { recursive: true, force: true });
-  rmSync(placed, { recursive: true, force: true });
-  const scratch = mkdtempSync(join(tmpdir(), "nx-admin-consumer-"));
-  try {
-    cpSync(packInto(scratch), placed, { recursive: true });
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
+  // The admin, and the SDK the fixture's plugin imports the admin's parts
+  // through, each packed as a release packs it.
+  for (const [packageRoot, name] of [
+    [PACKAGE_ROOT, "admin"],
+    [SDK_ROOT, "plugin-sdk"],
+  ]) {
+    const placed = join(FIXTURE, "node_modules", "@nextlyhq", name);
+    rmSync(placed, { recursive: true, force: true });
+    const scratch = mkdtempSync(join(tmpdir(), "nx-admin-consumer-"));
+    try {
+      cpSync(packInto(scratch, packageRoot), placed, { recursive: true });
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
   const next = createRequire(join(PACKAGE_ROOT, "package.json")).resolve(
     "next/dist/bin/next"
@@ -1171,6 +1277,79 @@ function projectRoot() {
     dir = up;
   }
   return dir;
+}
+
+/**
+ * What the admin page's first load may weigh, gzipped: measured at 560.5 KB on
+ * 2026-11-13 with the fixture's plugin page, plus 10%. Reported, not judged:
+ * it is gated once a week of builds has shown how much it moves between them.
+ */
+export const FIRST_LOAD_BUDGET_KB = 617;
+
+/** Whose code a module of the output is, by the sources its factory maps to. */
+export function partOf(sources, adminDir) {
+  const all = [...sources];
+  if (all.some(source => source.startsWith(`${adminDir}/`))) return "admin";
+  if (
+    all.some(
+      source =>
+        source.startsWith("packages/ui/") || source.includes("/@nextlyhq/ui/")
+    )
+  ) {
+    return "@nextlyhq/ui";
+  }
+  if (
+    all.some(source =>
+      /(^|\/)node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?(react|react-dom|next|scheduler)\//.test(
+        source
+      )
+    )
+  ) {
+    return "react and next";
+  }
+  return "other";
+}
+
+/**
+ * The size of the chunks a visit loads, as the output writes them and
+ * gzipped, and how the gzipped bytes divide between the admin, `@nextlyhq/ui`,
+ * React and Next.js, and everything else. Each chunk's gzipped size is shared
+ * between its modules by their written bytes (gzip does not split exactly);
+ * the code between modules, the bundler's runtime and glue, counts with React
+ * and Next.js.
+ */
+export function visitSize(output, names, adminDir) {
+  const parts = {
+    admin: 0,
+    "@nextlyhq/ui": 0,
+    "react and next": 0,
+    other: 0,
+  };
+  let bytes = 0;
+  let gzipped = 0;
+  for (const name of new Set(names)) {
+    const chunk = output.chunks.get(name);
+    const code = chunk?.code ?? "";
+    const written = Buffer.byteLength(code);
+    const zipped = gzipSync(code).length;
+    bytes += written;
+    gzipped += zipped;
+    if (written === 0) continue;
+    let placed = 0;
+    for (const factory of chunk?.factories ?? []) {
+      const share = factory.bytes ?? 0;
+      placed += share;
+      parts[partOf(factory.sources, adminDir)] += (zipped * share) / written;
+    }
+    parts["react and next"] +=
+      (zipped * Math.max(written - placed, 0)) / written;
+  }
+  return { chunks: new Set(names).size, bytes, gzipped, parts };
+}
+
+/** The size of a route's first load. */
+export function firstLoadSize(output, adminDir, route = ADMIN_ROUTE) {
+  return visitSize(output, output.firstLoads.get(route) ?? [], adminDir);
 }
 
 function kb(bytes) {
@@ -1221,14 +1400,17 @@ async function main(argv) {
     packageDir,
   });
   const developmentTexts = lexicalDevelopmentTexts();
-  const { problems, counts, routeNames, copied } = consumerFindings({
-    pkg: packageGraph(distDir),
-    output,
-    adminDir,
-    registration,
-    developmentTexts,
-    pinned,
-  });
+  const { problems, counts, routeNames, copied, directVisits } =
+    consumerFindings({
+      pkg: packageGraph(distDir),
+      output,
+      adminDir,
+      registration,
+      developmentTexts,
+      pinned,
+      // The packed package leaves the record out; it is the workspace build's.
+      record: readBundleModules(join(PACKAGE_ROOT, "dist")),
+    });
   const seconds = ms => `${(ms / 1000).toFixed(1)} s`;
   console.log(
     `check-consumer-bundle: read ${counts.chunks} chunks holding ${counts.modules} admin modules; ` +
@@ -1253,6 +1435,32 @@ async function main(argv) {
   console.log(
     `  measured, not judged: ${copied.length} admin modules sit in more than one chunk, ${kb(copiedBytes)} of extra copies, the bundler's own chunking.`
   );
+  const firstLoad = firstLoadSize(output, adminDir);
+  const parts = Object.entries(firstLoad.parts)
+    .map(([part, size]) => `${part} ${kb(size)}`)
+    .join(", ");
+  console.log(
+    `  measured, not judged: ${ADMIN_ROUTE}'s first load is ${firstLoad.chunks} chunks, ${kb(firstLoad.gzipped)} gzipped (${parts}), ${kb(firstLoad.bytes)} as written; ` +
+      `${firstLoad.gzipped / 1024 > FIRST_LOAD_BUDGET_KB ? "over" : "within"} its budget of ${FIRST_LOAD_BUDGET_KB} KB, reported until it is gated.`
+  );
+  // One per route: a route with several loaders is counted at its largest.
+  const largest = new Map();
+  for (const visit of directVisits) {
+    const { gzipped } = visitSize(output, visit.chunks, adminDir);
+    largest.set(visit.name, Math.max(largest.get(visit.name) ?? 0, gzipped));
+  }
+  const visitSizes = [...largest]
+    .map(([name, gzipped]) => ({ name, gzipped }))
+    .sort((a, b) => b.gzipped - a.gzipped);
+  if (visitSizes.length > 0) {
+    const median = visitSizes[Math.floor(visitSizes.length / 2)].gzipped;
+    console.log(
+      `  measured, not judged: ${visitSizes.length} routes' direct visits, median ${kb(median)} gzipped; the largest: ${visitSizes
+        .slice(0, 5)
+        .map(visit => `${visit.name} ${kb(visit.gzipped)}`)
+        .join(", ")}.`
+    );
+  }
   const expected = option(argv, "--must-fail-with")?.split(",");
   if (expected) return expectedFailure(expected, problems);
   if (problems.length > 0) {
