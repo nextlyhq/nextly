@@ -128,6 +128,8 @@ describe("seoPlugin", () => {
       // What search engines received: the pages it offers, and the check,
       // for anyone signed in.
       ["POST", "/received", undefined, undefined],
+      // Whether the live home page carries the saved verification codes.
+      ["POST", "/settings/verification-check", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // A Page Builder template's SEO panel's read.
       ["POST", "/template", undefined, undefined],
@@ -231,6 +233,7 @@ describe("seoPlugin", () => {
       "/not-found/:id",
       "/proxy-status",
       "/received",
+      "/settings/verification-check",
       "/resolve",
       "/template",
       "/problems",
@@ -276,6 +279,7 @@ describe("seoPlugin", () => {
       "/not-found/:id",
       "/proxy-status",
       "/received",
+      "/settings/verification-check",
       "/resolve",
       "/template",
       "/problems",

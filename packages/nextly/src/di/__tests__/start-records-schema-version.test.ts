@@ -10,6 +10,10 @@
  *   hold, and the stale definitions would then never be loaded again.
  * - **Only a complete load is recorded.** One that left a definition
  *   unregistered is left for the first follow to load again.
+ * - **Only the definitions the start ends with.** The configuration's tables
+ *   are registered over the registry's afterwards; where one has other
+ *   columns (an older build than the one that migrated the registry), the
+ *   start serves something other than the registry, and records nothing.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -35,16 +39,18 @@ describe("the start's record of the schema version it loaded at", () => {
     );
   });
 
-  it("records it after the definitions load, and only for a complete load", () => {
+  it("records it once the configuration's tables are registered, only for a complete load none of them replaced", () => {
     const load = at("const registry = await initializeSchemaRegistry(");
+    const config = at("await registerConfigTablesQuietly(");
     const record = at("definitionsLoaded(");
-    expect(load).toBeLessThan(record);
-    // The completeness is the record's own argument: no record without it.
+    expect(load).toBeLessThan(config);
+    expect(config).toBeLessThan(record);
+    // The conditions are the record's own argument: no record without them.
     const call = registerText
       .slice(record, registerText.indexOf(");", record))
       .replace(/\s+/g, " ");
     expect(call).toBe(
-      "definitionsLoaded( adapter, definitionsVersion, registry !== undefined && completeness.complete "
+      "definitionsLoaded( adapter, definitionsVersion, registry !== undefined && completeness.complete && !overrides.differed "
     );
   });
 });
