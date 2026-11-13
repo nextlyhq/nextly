@@ -280,12 +280,12 @@ export function buildAuthRouterDeps(
       // and collapsing an unknown answer to "no administrator" would both lie
       // about setup state and risk a second super-admin. Callers convert
       // failures to a 503 envelope. The same question the first-administrator
-      // grant asks, through the same query.
-      const { superAdminRoleHeld } = await import(
-        "../../domains/users/services/last-super-admin"
+      // grant asks, through the same query; a yes is kept under the role
+      // version, since setup-status asks it on every admin screen.
+      const { administratorExists } = await import(
+        "../../domains/users/services/administrator-known"
       );
-      const adapter = getService("adapter");
-      return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
+      return administratorExists(getService("adapter"), getDialectTables());
     },
 
     setupToken: setupTokenDeps(getService, env.NODE_ENV === "production"),
