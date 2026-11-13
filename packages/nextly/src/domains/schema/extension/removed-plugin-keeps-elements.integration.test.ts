@@ -161,8 +161,9 @@ async function restartAndPush(
   postsRequired: boolean,
   notesRequired: boolean
 ) {
+  // Not destroyed first: that would disconnect the adapter the restart
+  // boots on, and SQLite's in-memory database with it.
   clearServices();
-  await handle?.destroy();
   handle = await createTestNextly({
     adapter,
     plugins,
@@ -256,11 +257,17 @@ async function stampOf(adapter: Adapter): Promise<string[]> {
   return rows.map(row => row.stamp);
 }
 
+/** The test row, its value in the removed plugin's column set. */
+function insertPost(dialect: TestDialect): string {
+  const now = dialect === "postgresql" ? "now()" : "CURRENT_TIMESTAMP";
+  return `INSERT INTO ${POSTS} (id, title, slug, headline, stamp, created_at, updated_at) VALUES ('${ROW}', 't', 's', 'h', 'kept', ${now}, ${now})`;
+}
+
 describeEachDialect("a plugin removed from the configuration", dialect => {
   it("keeps the column and index it added to a collection's table through a push", async () => {
     const adapter = await firstBoot(dialect);
     await adapter.executeQuery(
-      `INSERT INTO ${POSTS} (id, headline, stamp, created_at, updated_at) VALUES ('${ROW}', 'h', 'kept', ${dialect === "postgresql" ? "now()" : "CURRENT_TIMESTAMP"}, ${dialect === "postgresql" ? "now()" : "CURRENT_TIMESTAMP"})`
+      insertPost(dialect)
     );
     // The premise: the first boot's push made both, and recorded whose they
     // are.
@@ -294,7 +301,7 @@ describeEachDialect("a plugin removed from the configuration", dialect => {
   it("keeps them through a change to the table they are on, or refuses it on SQLite", async () => {
     const adapter = await firstBoot(dialect);
     await adapter.executeQuery(
-      `INSERT INTO ${POSTS} (id, headline, stamp, created_at, updated_at) VALUES ('${ROW}', 'h', 'kept', ${dialect === "postgresql" ? "now()" : "CURRENT_TIMESTAMP"}, ${dialect === "postgresql" ? "now()" : "CURRENT_TIMESTAMP"})`
+      insertPost(dialect)
     );
 
     const pushed = await restartAndPush(adapter, [staying(true)], false, true);
