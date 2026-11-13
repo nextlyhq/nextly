@@ -28,7 +28,11 @@ import {
 } from "@admin/components/ui";
 import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import type { FieldDiff, VersionScope } from "@admin/services/versionApi";
+import type {
+  FieldDiff,
+  VersionDiff,
+  VersionScope,
+} from "@admin/services/versionApi";
 
 import { ChangeNav } from "../ChangeNav";
 import { UnchangedFieldsToggle } from "../UnchangedFieldsToggle";
@@ -155,6 +159,32 @@ function ChangeAnchor({
   );
 }
 
+/**
+ * The baseline the server resolved `from` with, said in words read from its name ("since-approved"
+ * reads "Since approved"), so a baseline another feature registers reads here as core's do, with
+ * no list of names in the admin. Nothing for a pair chosen by number, which names no baseline.
+ */
+function BaselineNote({
+  diff,
+}: {
+  diff: VersionDiff | undefined;
+}): JSX.Element | null {
+  const baseline = diff?.baseline;
+  if (!baseline) return null;
+  const words = baseline.name.replace(/-/g, " ");
+  const name = words.charAt(0).toUpperCase() + words.slice(1);
+  // A baseline whose version retention removed names the one standing in for it.
+  const which =
+    baseline.replaces === undefined
+      ? `version ${baseline.versionNo}`
+      : `version ${baseline.versionNo}, as version ${baseline.replaces} was removed`;
+  return (
+    <span className="text-muted-foreground">
+      Compared from: {name} ({which}).
+    </span>
+  );
+}
+
 export function VersionDiffView({
   scope,
   from,
@@ -193,6 +223,7 @@ export function VersionDiffView({
               <span className="font-medium text-foreground">{from}</span> &rarr;{" "}
               <span className="font-medium text-foreground">{to}</span>.{" "}
             </span>
+            <BaselineNote diff={diff.data} />{" "}
             {changes ? (
               // Its own element, so the count reads, and is found, apart from
               // the pair named before it.

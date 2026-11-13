@@ -11,6 +11,7 @@ import { container } from "../di/container";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import type { PublishPartsRequest } from "../domains/collections/services/publish-parts";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import { collectionMetadataFetcher } from "../domains/dynamic-collections/services/collection-metadata-fetcher";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
@@ -86,6 +87,11 @@ type EveryLanguageLifecycleHandlerParams = {
   authenticatedScope?: AuthenticatedScope;
   /** Acting identity from the transport, forwarded to the recorded event. */
   actor?: RequestActor;
+  /**
+   * Skip cache revalidation for this move (the outbox drain still runs), for a caller that owns
+   * its cache strategy.
+   */
+  disableRevalidate?: boolean;
   /**
    * The version the move was made from: `_rev` and `_overwrite`, judged as a
    * save's are (see the entry service).
@@ -1206,6 +1212,22 @@ export class CollectionsHandler {
    */
   async publishAllLocales(params: EveryLanguageLifecycleHandlerParams) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
+  }
+
+  /**
+   * Publish or unpublish the parts of an entry `request` chooses: some of its languages, or every
+   * one, and its shared part, or say what doing so would do.
+   *
+   * @experimental
+   */
+  async publishParts(
+    params: EveryLanguageLifecycleHandlerParams,
+    request: PublishPartsRequest
+  ) {
+    return this.entryService.publishParts(
+      this.resolveUserParam(params),
+      request
+    );
   }
 
   /**

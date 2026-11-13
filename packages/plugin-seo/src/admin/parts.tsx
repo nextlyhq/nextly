@@ -25,10 +25,11 @@ export function Chip({
   children: ReactNode;
 }): ReactNode {
   return (
+    // 12px, the smallest text the admin draws, so the chip stays readable.
     <span
       data-seo-chip={kind}
       className={cx(
-        "rounded-[5px] px-[7px] py-px text-[11px] leading-[1.5] font-semibold whitespace-nowrap",
+        "rounded-[5px] px-[7px] py-px text-xs leading-[1.5] font-semibold whitespace-nowrap",
         kind === "typed" && "bg-foreground text-background",
         kind === "automatic" && "bg-secondary text-secondary-foreground",
         kind === "code" &&
