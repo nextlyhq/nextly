@@ -1727,6 +1727,22 @@ interface WorkingDraftWriteContext {
   translatedKeys?: readonly string[];
 }
 
+/**
+ * The top-level keys a held save sets: what it laid over the working draft.
+ * A translatable value is among them however drafts are kept: the locale
+ * split moves it out of `updatePayload` into the translations row, and a
+ * save to a draft that already exists builds on that draft, so a key left
+ * out here is dropped from the draft while the save reports success.
+ */
+function keysHeldSaveSets(ctx: WorkingDraftWriteContext): Set<string> {
+  return new Set<string>([
+    ...Object.keys(ctx.updatePayload),
+    ...Object.keys(ctx.componentFieldData),
+    ...Object.keys(ctx.manyToManyData),
+    ...(ctx.translatedKeys ?? []),
+  ]);
+}
+
 /** What the caller needs back: the draft as a read would shape it, and its predecessor. */
 interface WorkingDraftWriteResult {
   /** The update filter a held edit changes a field of, which holds nothing. */
@@ -12944,7 +12960,6 @@ export class CollectionMutationService extends BaseService {
       snapshotComponents,
       snapshotM2M,
       splitComponentSchemas,
-      updatePayload,
     } = ctx;
     const draftParts = await this.snapshotPartsFor(
       {
@@ -12970,17 +12985,7 @@ export class CollectionMutationService extends BaseService {
     // since the live row the re-fetch returns is the unchanged
     // published content.
     // base below rather than replacing it.
-    const touched = new Set<string>([
-      ...Object.keys(updatePayload),
-      ...Object.keys(componentFieldData),
-      ...Object.keys(manyToManyData),
-      // A translatable edit is moved out of `updatePayload` by the locale
-      // split, but is a change of this language's draft all the same, so it
-      // is laid over the draft as the other edits are. Left out, a second
-      // held edit of a translated field matches the draft it replaces and is
-      // dropped without a version.
-      ...(ctx.translatedKeys ?? []),
-    ]);
+    const touched = keysHeldSaveSets(ctx);
     const patchFields = Object.fromEntries(
       Object.entries(patchedDocument).filter(([key]) => touched.has(key))
     );
@@ -13325,12 +13330,7 @@ export class CollectionMutationService extends BaseService {
             // The language whose draft this save writes beside the shared
             // one: never the shared slot here, so the store is handed a code.
             locale: draftLocale,
-            touched: new Set([
-              ...Object.keys(ctx.updatePayload),
-              ...Object.keys(ctx.componentFieldData),
-              ...Object.keys(ctx.manyToManyData),
-              ...(ctx.translatedKeys ?? []),
-            ]),
+            touched: keysHeldSaveSets(ctx),
             keys: await partKeysOf(fields),
           }
         : undefined;

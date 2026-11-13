@@ -86,7 +86,10 @@ afterEach(async () => {
 async function generate(
   dialect: TestDialect,
   name: string,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  // Where nobody can be asked, a file that drops a table is written only
+  // under consent naming it, as `--accept-data-loss` gives it.
+  consent: { acceptDataLoss?: string } = {}
 ): Promise<{ exited: string | undefined; errors: string[] }> {
   process.env.DATABASE_URL = URLS[dialect];
   process.env.DB_DIALECT = dialect;
@@ -110,7 +113,7 @@ async function generate(
   try {
     await runMigrateCreate(
       name,
-      { name, config: configPath, cwd: dir },
+      { name, config: configPath, cwd: dir, ...consent },
       context
     );
   } catch (error) {
@@ -228,10 +231,13 @@ describeEachDialect(
         singles: [pointsAtSurvivor],
       });
 
-      const run = await generate(dialect, "drop_tags", {
-        collections: [survivor],
-        singles: [pointsAtSurvivor],
-      });
+      const run = await generate(
+        dialect,
+        "drop_tags",
+        { collections: [survivor], singles: [pointsAtSurvivor] },
+        // The removed collection's own table, named by its `dbName`.
+        { acceptDataLoss: "dc_labels" }
+      );
 
       expect(run).toEqual({ exited: undefined, errors: [] });
       expect(await migrationFiles()).toHaveLength(2);
@@ -313,7 +319,12 @@ describeEachDialect(
       // collection, not about removing one.
       await generate(dialect, "initial", { collections: [plainTags] });
 
-      const run = await generate(dialect, "drop_tags", { collections: [] });
+      const run = await generate(
+        dialect,
+        "drop_tags",
+        { collections: [] },
+        { acceptDataLoss: TAGS_TABLE }
+      );
 
       expect(run).toEqual({ exited: undefined, errors: [] });
       expect(await migrationFiles()).toHaveLength(2);

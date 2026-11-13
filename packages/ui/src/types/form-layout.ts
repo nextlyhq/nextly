@@ -92,6 +92,13 @@ export interface FormActionsProps {
    * state that already tracks it; never computed here.
    */
   dirty?: boolean;
+  /**
+   * What the bar says while `dirty` is true, in place of "You have unsaved
+   * changes": a bar committing several records at once says what changed,
+   * such as "1 page changed". Like `dirty`, the page states it from the state
+   * that already knows; the bar never counts anything.
+   */
+  message?: React.ReactNode;
   className?: string;
   children: React.ReactNode;
 }

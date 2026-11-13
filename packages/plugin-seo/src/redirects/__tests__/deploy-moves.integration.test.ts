@@ -17,12 +17,20 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly";
+import { eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { catchUp, lastCatchUp } from "../../address-record/catch-up";
-import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
+import {
+  claimRows,
+  forgetNote,
+  noteRows,
+  seoContext,
+} from "../../address-record/__tests__/record-tables";
 import { claimKey } from "../../address-record/rows";
-import { NOT_FOUND_SLUG } from "../../not-found/collection";
+import { addressClaims } from "../../schema/tables";
+import { readNotFoundLog } from "../../not-found/log";
+import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
 
@@ -51,12 +59,19 @@ async function boot(dialect: TestDialect) {
             if (faults.failRedirects)
               throw new Error("the redirect store is down");
           });
-          // A start that stops part-way: the record refuses one claim.
-          ctx.hooks.on("beforeCreate", ADDRESS_RECORD_SLUG, context => {
-            const data = (context as { data?: Record<string, unknown> }).data;
-            if (data?.kind === "address" && data.path === faults.failClaimOf) {
-              throw new Error("the start stopped here");
-            }
+          // A start that stops part-way: a record beside the SEO plugin's
+          // fails one claim, which undoes the whole move.
+          ctx.publicAddresses.participate({
+            holderOf: async () => null,
+            record: async batch => {
+              if (
+                batch.some(update =>
+                  update.holds.some(held => held.path === faults.failClaimOf)
+                )
+              ) {
+                throw new Error("the start stopped here");
+              }
+            },
           });
         },
       }),
@@ -81,12 +96,8 @@ async function publish(t: TestNextly, collection: string, slug: string) {
   return String(created.item.id);
 }
 
-async function rows(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: ADDRESS_RECORD_SLUG,
-    limit: 500,
-  });
-  return items as Record<string, unknown>[];
+async function rows(_t: TestNextly) {
+  return claimRows();
 }
 
 /**
@@ -98,28 +109,22 @@ async function heldBeforeTheDeploy(
   holder: { collection: string; id: string },
   path: string
 ) {
+  const seo = seoContext();
+  const columns = seo.db.table(addressClaims);
   for (const row of await rows(t)) {
     if (
       row.holderCollection === holder.collection &&
       row.holderId === holder.id
     ) {
-      await t.nextly.update({
-        collection: ADDRESS_RECORD_SLUG,
-        id: String(row.id),
-        data: {
+      await seo.db
+        .update(addressClaims, {
           path,
           claimKey: claimKey("address", "en", path),
-          _overwrite: true,
-        },
-      });
-    }
-    if (row.kind === "meta" && !String(row.path).startsWith("[")) {
-      await t.nextly.delete({
-        collection: ADDRESS_RECORD_SLUG,
-        id: String(row.id),
-      });
+        })
+        .where(eq(columns.id, String(row.id)));
     }
   }
+  await forgetNote("fingerprint");
 }
 
 /** Run the catch-up again, as the next start would. */
@@ -141,14 +146,10 @@ async function redirects(t: TestNextly) {
   );
 }
 
-async function notFound(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: NOT_FOUND_SLUG,
-    limit: 500,
-  });
-  return (items as Record<string, unknown>[]).map(
-    row => `${row.path} ${row.kind}`
-  );
+async function notFound(_t: TestNextly) {
+  const seo = keptSeoContext();
+  if (!seo) throw new Error("the SEO plugin never started");
+  return (await readNotFoundLog(seo)).map(row => `${row.path} ${row.kind}`);
 }
 
 async function held(t: TestNextly) {
@@ -215,7 +216,9 @@ describe.each(getConfiguredTestDialects())("a deploy's moves (%s)", dialect => {
       "en|/new": "pages",
       "en|/old": REDIRECTS_SLUG,
     });
-    expect((await rows(t)).filter(row => row.kind === "pending")).toEqual([]);
+    expect((await noteRows()).filter(row => row.kind === "pending")).toEqual(
+      []
+    );
   });
 
   it("send the old address where the page is now, when a save moved it during the start", async () => {
@@ -264,24 +267,19 @@ describe.each(getConfiguredTestDialects())("a deploy's moves (%s)", dialect => {
     await restart();
     // Made where a save could not refuse it: the record forgets the page
     // holding `/new` while a second page is published there.
-    for (const row of await rows(t)) {
-      await t.nextly.delete({
-        collection: ADDRESS_RECORD_SLUG,
-        id: String(row.id),
-      });
-    }
+    const seo = seoContext();
+    await seo.db
+      .delete(addressClaims)
+      .where(inArray(seo.db.table(addressClaims).kind, ["address", "range"]));
     const loser = await publish(t, "posts", "new");
     await heldBeforeTheDeploy(t, { collection: "posts", id: loser }, "/old");
-    await t.nextly.create({
-      collection: ADDRESS_RECORD_SLUG,
-      data: {
-        claimKey: claimKey("address", "en", "/new"),
-        kind: "address",
-        locale: "en",
-        path: "/new",
-        holderCollection: "pages",
-        holderId: holder,
-      },
+    await seo.db.insert(addressClaims, {
+      claimKey: claimKey("address", "en", "/new"),
+      kind: "address",
+      locale: "en",
+      path: "/new",
+      holderCollection: "pages",
+      holderId: holder,
     });
 
     const report = await restart();

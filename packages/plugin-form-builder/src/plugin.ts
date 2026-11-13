@@ -14,7 +14,6 @@ import { createRequire } from "node:module";
 import {
   type AuthUser,
   definePlugin,
-  type HookContext,
   NextlyError,
   type PluginDefinition,
   type PluginEmailService,
@@ -23,11 +22,18 @@ import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
 
 import { formsCollection } from "./collections/forms";
-import { submissionSendsCollection } from "./collections/sends";
+import {
+  submissionResendsCollection,
+  submissionSendsCollection,
+} from "./collections/sends";
 import {
   submissionExtensionFields,
   submissionsCollection,
 } from "./collections/submissions";
+import {
+  FORM_UPLOADS_SLUG,
+  formUploadsCollection,
+} from "./collections/uploads";
 import { newSubmissionsWidget } from "./dashboard/widget";
 import { asFormDocument, asSubmissionDocument } from "./document-shapes";
 import { submissionAnswers } from "./emails/answers";
@@ -39,7 +45,8 @@ import {
   botCheckOptions,
   botTokensOf,
   judgeBotCheck,
-  warnUncheckedBotChecks,
+  warnSavedFormCheck,
+  warnUncheckedSiteDefault,
 } from "./handlers/bot-check";
 import { refuseBlankConsentText } from "./handlers/consent-text-check";
 import {
@@ -75,14 +82,27 @@ import {
   type SubmissionOriginMarks,
   prepareSubmission,
 } from "./handlers/prepare-submission";
+import { registerResend, type ResendDeps } from "./handlers/resend";
 import {
   RETENTION_SCHEDULE,
   type RetentionDeps,
   retentionJob,
   runRetention,
 } from "./handlers/retention";
+import { registerSendHistory } from "./handlers/send-history";
+import { notificationSendDetails } from "./handlers/send-record";
 import { checkSpam, type SpamCheckResult } from "./handlers/spam-detection";
+import {
+  markUploadClaims,
+  registerUploadClaims,
+} from "./handlers/upload-claims";
+import {
+  registerUploadCleanup,
+  type UploadCleanupDeps,
+} from "./handlers/upload-cleanup";
+import { formUploadRoute } from "./routes/form-upload";
 import { publicFormRoutes } from "./routes/public-forms";
+import { submissionSendsRoutes } from "./routes/submission-sends";
 import { submissionsExportRoute } from "./routes/submissions-export";
 import type {
   AnyFormField,
@@ -188,7 +208,7 @@ function resolveConfig(
     redirectRelationships: normalizeRedirectRelationships(
       options.redirectRelationships
     ),
-    // Filled at `init` from each collection's own metadata. Empty until then,
+    // Filled at `init` from each collection's own declaration. Empty until then,
     // and a slug that stays absent reads as unknown rather than as not
     // localized — see `ResolvedFormBuilderConfig`.
     redirectTargetLocalization: {},
@@ -278,6 +298,8 @@ export function formBuilder(
   const submissionsCol = submissionsCollection(resolvedConfig);
   const submissionFields = submissionExtensionFields(resolvedConfig);
   const sendsCol = submissionSendsCollection();
+  const uploadsCol = formUploadsCollection();
+  const resendsCol = submissionResendsCollection();
 
   // The submissions slug the admin links a card's rows to: the declared one
   // until `init` reads the slug the site installed it under.
@@ -317,7 +339,7 @@ export function formBuilder(
     // Declarative schema: the merged pipeline folds these into the
     // app schema — no manual `setup()` append needed. Just register the plugin.
     contributes: {
-      collections: [formsCol, submissionsCol, sendsCol],
+      collections: [formsCol, submissionsCol, sendsCol, uploadsCol, resendsCol],
       // Gives earlier submissions their one-response keys after a form
       // changes how it tells people apart.
       jobs: [
@@ -390,6 +412,9 @@ export function formBuilder(
         // before this plugin took them over. Root-mounted, so no caller's URL
         // changes; see `routes/public-forms`.
         ...publicFormRoutes(resolvedConfig),
+        // A visitor's file, uploaded before the form is submitted; see
+        // `routes/form-upload`.
+        formUploadRoute(resolvedConfig),
         // What a submissions list shows, as CSV or JSON; see
         // `routes/submissions-export`.
         submissionsExportRoute(resolvedConfig),
@@ -457,6 +482,12 @@ export function formBuilder(
           handler: () =>
             Promise.resolve(Response.json({ fields: submissionFields })),
         },
+        // A submission's emails: what became of each, a notification's
+        // recent sends, and Resend.
+        ...submissionSendsRoutes({
+          submissionsDeclared: resolvedConfig.formSubmissionOverrides.slug,
+          deps: ctx => resendDeps(ctx, resolvedConfig),
+        }),
       ],
     },
 
@@ -506,15 +537,20 @@ export function formBuilder(
           .map(([name]) => name),
       });
 
-      // Ask each redirect target collection whether it is localized. The save
-      // rule and the submission path both need it and neither can reach the
+      // Whether each redirect target collection is localized. The save rule
+      // and the submission path both need it and neither can reach the
       // registry themselves: a collection hook is handed `req.nextly`, which
       // is the Direct API and carries no metadata accessor. Resolved once here
       // and written onto the config both of them already close over.
       //
-      // Per collection rather than in one call: a slug that cannot be read
-      // must stay ABSENT from the map, and a single failing lookup would
-      // otherwise take its readable siblings with it.
+      // A collection the site's code declares (or a plugin contributes) is
+      // answered from `ctx.config`, which carries its declaration: the
+      // registry row's `localized` is written from that same declaration
+      // (`collection.localized === true`), so reading the row back cost every
+      // start a round trip to learn what the configuration already says. Only
+      // a collection made in the Schema Builder, whose registry row is its one
+      // declaration, is asked of the registry.
+      //
       // Emptied first. `init` runs again on HMR and re-registration against the
       // SAME config object, so a lookup that succeeded on the previous boot and
       // fails on this one would leave its old answer standing while the catch
@@ -527,13 +563,30 @@ export function formBuilder(
         delete resolvedConfig.redirectTargetLocalization[slug];
       }
 
+      const declaredCollections: readonly unknown[] =
+        nextly.config?.collections ?? [];
+
       // AWAITED, not fired and forgotten: a write reaching the save rule before
       // this resolves would find the map empty and read every target as
-      // undecided, which is the refusal silently not happening.
+      // undecided, which is the refusal silently not happening. Per collection
+      // rather than in one call: a slug that cannot be read must stay ABSENT
+      // from the map, and a single failing lookup would otherwise take its
+      // readable siblings with it.
       await Promise.all(
         Object.keys(resolvedConfig.redirectRelationships).map(
           async declared => {
             const slug = nextly.self.collections[declared] ?? declared;
+            const declaration = declaredCollections.find(
+              (entry): entry is { slug: string; localized?: unknown } =>
+                typeof entry === "object" &&
+                entry !== null &&
+                (entry as { slug?: unknown }).slug === slug
+            );
+            if (declaration !== undefined) {
+              resolvedConfig.redirectTargetLocalization[declared] =
+                declaration.localized === true;
+              return;
+            }
             try {
               // `getCollection` reads registered metadata and does not consult
               // the context — its parameter is declared for a future ACL hook
@@ -613,15 +666,6 @@ export function formBuilder(
           prepareSubmissionForWrite(context, formsSlug, nextly)
       );
 
-      // Register afterCreate hook for email notifications
-      nextly.hooks.on(
-        "afterCreate",
-        submissionSlug,
-        async (context: unknown) => {
-          await handleSubmissionCreated(context, resolvedConfig, nextly);
-        }
-      );
-
       // Stamp admin edits of submitted data: changing what the visitor
       // submitted must leave a visible trace. Registered directly on the
       // registry (like the notification hook) so it runs for every API
@@ -641,26 +685,23 @@ export function formBuilder(
         return ctx.data;
       });
 
-      // A bot check in use with no secret accepts submissions unchecked:
-      // said once at start, naming the option, without holding the start up.
-      void warnUncheckedBotChecks({
-        spam: resolvedConfig.spamProtection,
-        forms: async () =>
-          (
-            await nextly.services.ownCollections.listEntries(formsSlug, {
-              pagination: { limit: 500 },
-            })
-          ).data ?? [],
-        readSettings: normalizeFormSettings,
-        warn: (message, context) => nextly.logger.warn?.(message, context),
-      });
+      // A bot check in use with no secret accepts submissions unchecked. Said
+      // at start for the site default, from the options alone and so with no
+      // read; a check a form names itself is said when that form is saved
+      // (the hook below) and when a submission is accepted unchecked
+      // (`judgeSubmission`), which is when it costs anything.
+      const warnLog = (message: string, context: Record<string, unknown>) =>
+        nextly.logger.warn?.(message, context);
+      warnUncheckedSiteDefault(resolvedConfig.spamProtection, warnLog);
 
       // A form saved to compare one response per email has an Email field
       // it can compare, and each consent has a text to agree to, however it
-      // is saved.
+      // is saved. And a form saved naming a bot check without its keys is
+      // said in the log, to the person who just chose it.
       nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
         refuseOneResponseFieldProblem(context);
         refuseBlankConsentText(context);
+        warnSavedFormCheck(context, resolvedConfig.spamProtection, warnLog);
         return (context as { data?: unknown }).data;
       });
 
@@ -673,11 +714,22 @@ export function formBuilder(
         formsSlug,
         submissionsSlug: submissionSlug,
       };
+      // The uploads collection as this install has it, and what its files
+      // are freed with once the deletion releasing them commits.
+      const uploadsSlug =
+        nextly.self.collections[FORM_UPLOADS_SLUG] ?? FORM_UPLOADS_SLUG;
+      const uploadCleanup: UploadCleanupDeps = {
+        own: nextly.services.ownCollections,
+        collections: nextly.services.collections,
+        media: nextly.services.media,
+        uploadsSlug,
+      };
       retentionDeps = {
         collections: nextly.services.collections,
         jobs: nextly.services.jobs,
         formsSlug,
         submissionsSlug: submissionSlug,
+        uploads: uploadCleanup,
       };
       nextly.hooks.on("beforeChange", formsSlug, async (context: unknown) => {
         await stampOneResponseVersion(context, async formId =>
@@ -721,9 +773,33 @@ export function formBuilder(
         submissions: submissionSlug,
       });
 
+      // Each notification queued inside the transaction that stores its
+      // submission, after the closing hold has let the submission in.
+      nextly.hooks.onInTransaction(submissionSlug, write =>
+        queueSubmissionNotifications(write, resolvedConfig, nextly, formsSlug)
+      );
+
       // What each submission sent, forgotten on every path that deletes it,
       // a form's deletion among them, in the deleting transaction.
       registerForgettingSends(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
+      });
+      // And what became of each, kept with its send as each change happens.
+      registerSendHistory(nextly);
+      // Resend's requests, each queued in the transaction that stores it.
+      registerResend(nextly, resendDeps(nextly, resolvedConfig));
+
+      // The uploads a submission names, claimed in the transaction storing
+      // it, and released in the one deleting it (or its form). After the
+      // closing hold, so the form's row is locked before an upload's.
+      registerUploadClaims(nextly, {
+        forms: formsSlug,
+        submissions: submissionSlug,
+        uploads: uploadsSlug,
+      });
+      // And their files deleted once that deletion has committed.
+      registerUploadCleanup(nextly, uploadCleanup, {
         forms: formsSlug,
         submissions: submissionSlug,
       });
@@ -738,7 +814,7 @@ export function formBuilder(
 
   return {
     plugin,
-    collections: [formsCol, submissionsCol, sendsCol],
+    collections: [formsCol, submissionsCol, sendsCol, uploadsCol, resendsCol],
     config: resolvedConfig,
   };
 }
@@ -1200,9 +1276,13 @@ export async function prepareSubmissionForWrite(
     collection?: string;
     user?: { id?: string };
     req?: { http?: { ip: string | null; method: string } };
+    context?: Record<string, unknown>;
   };
   const submission = ctx.data;
   if (!submission || typeof submission !== "object") return ctx.data;
+  // Whether a request produced this write, for the transaction that claims
+  // the uploads its file answers name (`upload-claims`).
+  markUploadClaims(ctx);
   if (pluginKeyWrite(ctx.operation, submission, ctx.originalData)) {
     return submission;
   }
@@ -1235,6 +1315,8 @@ export async function prepareSubmissionForWrite(
   const marks = submissionMarks(submission);
 
   const form = await formToCheckAgainst(marks, formsSlug, formId, nextly);
+  // And which of the form's fields hold files.
+  markUploadClaims(ctx, form);
   // What the visitor sent, as stored, which an update's consents are held to.
   const storedAnswers =
     ctx.operation === "create" || stored?.data === undefined
@@ -1655,6 +1737,12 @@ function rateLimitKeyFor(form: Record<string, unknown>): string {
   return typeof id === "string" && id.length > 0 ? id : "unidentified-form";
 }
 
+/** How a log line names `form`: its slug, else its id, else not at all. */
+function formNamed(form: Record<string, unknown>): { form?: string } {
+  const name = typeof form.slug === "string" ? form.slug : form.id;
+  return typeof name === "string" ? { form: name } : {};
+}
+
 /**
  * Whether this submission looks like a bot's, and why.
  *
@@ -1715,6 +1803,9 @@ async function judgeSubmission(
   return judgeBotCheck({
     settings: normalizeFormSettings(form.settings),
     spam: config.spamProtection,
+    // Named in the warning when its check is missing a key: by its slug, or
+    // its id where the form in hand carries no slug.
+    ...formNamed(form),
     // Handed over by the plugin's own handler, which keeps only the form's
     // fields in the row; read off the payload at every other door.
     tokens: marks?.botTokens ?? botTokensOf(payload),
@@ -1745,53 +1836,79 @@ function stampDerivedEdit(
   row.editedBy = user?.id ?? null;
 }
 
-async function handleSubmissionCreated(
-  context: unknown,
+/** The write an in-transaction handler on the submissions is handed. */
+type SubmissionWrite = Parameters<
+  Parameters<NextlyInstance["hooks"]["onInTransaction"]>[1]
+>[0];
+
+/**
+ * The parent form, read on the submission's own transaction, so a form the
+ * same transaction wrote is seen and no second connection is taken. Read
+ * with no lock: the closing hold takes the one the form needs. Null for a
+ * form that is not there, which sends nothing.
+ */
+async function formInTransaction(
+  nextly: NextlyInstance,
+  write: SubmissionWrite,
+  formsSlug: string,
+  formId: string
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await nextly.services.ownCollections.findEntryByIdInTransaction(
+      write.transaction,
+      formsSlug,
+      formId,
+      { lock: "none" }
+    );
+  } catch (err) {
+    if (!NextlyError.isNotFound(err)) throw err;
+    nextly.logger.error?.("Form Builder: form not found", { formId });
+    return null;
+  }
+}
+
+/**
+ * Queue a new submission's notifications in the transaction that stores it.
+ *
+ * Each active notification whose conditions the answers meet is queued
+ * through the email service's queued send with the write's transaction, and
+ * recorded with the submission in it too, so the submission, its queued
+ * emails and their records commit together or not at all: a stop between
+ * the insert and the commit leaves none of them, and one after it leaves the
+ * emails queued for the jobs trigger to send. Nothing is sent here: each
+ * email's first attempt starts once the outermost transaction commits.
+ *
+ * The `form-builder.beforeEmail` filter runs here, inside the transaction,
+ * so a handler that throws refuses the submission, and a transaction retried
+ * after a version conflict runs it again.
+ */
+async function queueSubmissionNotifications(
+  write: SubmissionWrite,
   config: ResolvedFormBuilderConfig,
-  nextly: NextlyInstance
+  nextly: NextlyInstance,
+  formsSlug: string
 ): Promise<void> {
-  // The plugin-level kill switch: `notifications.enabled: false` turns off
-  // all form emails regardless of per-rule state.
-  if (!config.notifications.enabled) return;
+  const target = submissionToNotify(write, config);
+  if (!target) return;
+  const { submission, formId } = target;
 
-  const submission = (context as { data?: Record<string, unknown> }).data;
-  if (!submission) return;
-
-  // Spam is stored for review, but nobody gets emailed about it — otherwise
-  // every bot hit would trigger the form's notification rules.
-  if (submission.status === "spam") return;
-
-  const formId = parentFormId(submission);
-  if (!formId) return;
-
-  // Fetch the parent form
-  const declaredFormsSlug = config.formOverrides.slug;
-  const form = await fetchParentForm(
-    nextly.self.collections[declaredFormsSlug] ?? declaredFormsSlug,
-    formId,
-    nextly
-  );
+  const form = await formInTransaction(nextly, write, formsSlug, formId);
   if (!form) return;
 
   const notifications = Array.isArray(form.notifications)
     ? (form.notifications as FormNotification[])
     : [];
-  if (notifications.length === 0) return;
-
   const emailService = nextly.services.email;
-  if (!emailService) return;
+  if (notifications.length === 0 || !emailService) return;
 
-  // The afterCreate hook receives the raw DB row, so on dialects that store
-  // JSON columns as text (e.g. SQLite) `data` arrives serialized. Without
-  // parsing it, {{field}} recipients, reply-to references, and send
-  // conditions all silently see an empty submission.
+  // Read either way: as an object, or serialized as a dialect that stores
+  // JSON columns as text keeps it. Without parsing a serialized one,
+  // {{field}} recipients, reply-to references, and send conditions all
+  // silently see an empty submission.
   const submittedData = parseJsonColumn(submission.data);
-
-  // Collect mediaIds from file fields marked for email attachment
-  const formFields = Array.isArray(form.fields)
-    ? (form.fields as Array<Record<string, unknown>>)
+  const fields = Array.isArray(form.fields)
+    ? (form.fields as AnyFormField[])
     : [];
-  const fileAttachments = collectAttachmentInputs(formFields, submittedData);
 
   // -- Build phase: resolve each enabled notification into an outgoing
   // descriptor (the value the D63 seam transforms).
@@ -1799,28 +1916,11 @@ async function handleSubmissionCreated(
     notifications,
     submittedData,
     formName: form.name,
-    submissionId: submission.id,
+    submissionId: write.id,
     defaultFrom: config.notifications.defaultFrom,
-    fields: Array.isArray(form.fields) ? (form.fields as AnyFormField[]) : [],
+    fields,
   });
-
-  for (const skip of skipped) {
-    if (skip.reason === "empty-recipient") {
-      nextly.logger.warn?.(
-        "Form Builder: empty recipient, skipping notification",
-        { notificationId: skip.notificationId, formSlug: form.slug }
-      );
-    } else {
-      // Unmet conditions and missing templates are expected states, not
-      // faults — surface them only at debug level.
-      nextly.logger.debug?.("Form Builder: notification skipped", {
-        notificationId: skip.notificationId,
-        formSlug: form.slug,
-        reason: skip.reason,
-      });
-    }
-  }
-
+  logSkippedNotifications(skipped, form.slug, nextly.logger);
   if (emails.length === 0) return;
 
   // -- Seam: thread the outgoing notifications through the D63 filter so user
@@ -1830,27 +1930,148 @@ async function handleSubmissionCreated(
     BeforeEmailFilterContext
   >("form-builder.beforeEmail", emails, { form, submission });
 
-  // -- Send phase: queue the (possibly transformed) outgoing notifications,
-  // once the submission is durable. An email cannot be taken back, and a
-  // submission saved inside a caller's transaction runs this hook before that
-  // transaction commits: sent here, it would go out, and its delivery be
-  // recorded, for a submission a rollback then removes. The hook context's
-  // `afterCommit` holds the send until the outermost transaction commits and
-  // drops it on rollback; outside a transaction it sends at once, as before.
-  const submissionId = idText(submission.id);
-  const send = () =>
-    queueNotificationEmails({
-      emails: finalEmails,
-      emailService,
-      logger: nextly.logger,
-      formSlug: form.slug,
-      submissionId,
-      fileAttachments,
-      // Kept so deleting the submission can forget what it sent.
-      record: sent => recordSend(nextly, submissionId, sent),
-    });
-  const { afterCommit } = context as Pick<HookContext, "afterCommit">;
-  await (afterCommit ? afterCommit(send) : send());
+  // -- Queue phase: store the (possibly transformed) outgoing notifications
+  // in the submission's transaction. An email cannot be taken back, so none
+  // is attempted until that transaction (or the caller's, when the
+  // submission is saved inside one) commits, and a rollback leaves nothing
+  // queued.
+  const submissionId = write.id;
+  await queueNotificationEmails({
+    emails: finalEmails,
+    emailService,
+    logger: nextly.logger,
+    formSlug: form.slug,
+    submissionId,
+    // The mediaIds of file fields marked for email attachment, for an email
+    // a filter added that names no files of its own.
+    fileAttachments: attachmentsFrom(
+      fieldsMarkedToAttach(fields),
+      submittedData
+    ),
+    tx: write.db,
+    // Kept so marking the submission Spam, or deleting it, can call off or
+    // forget what it sent, and so its page can say what became of it.
+    record: async (sent, email) =>
+      recordSend(nextly, write.transaction, submissionId, {
+        ...sent,
+        ...(await notificationSendDetails(nextly, {
+          formId,
+          notifications,
+          email,
+        })),
+      }),
+  });
+}
+
+/**
+ * The new submission a write asks notifications for, and its form's id, or
+ * undefined when it asks for none: not a create, notifications switched off
+ * for the whole plugin, spam, or a row naming no form.
+ */
+function submissionToNotify(
+  write: SubmissionWrite,
+  config: ResolvedFormBuilderConfig
+): { submission: Record<string, unknown>; formId: string } | undefined {
+  // The plugin-level kill switch: `notifications.enabled: false` turns off
+  // all form emails regardless of per-rule state.
+  if (write.operation !== "create" || !config.notifications.enabled) {
+    return undefined;
+  }
+  // The submission as the write leaves it, in the shape a read returns.
+  const submission = write.data as Record<string, unknown> | undefined;
+  // Spam is stored for review, but nobody gets emailed about it — otherwise
+  // every bot hit would trigger the form's notification rules. Marking it
+  // Not spam later queues nothing either.
+  if (!submission || submission.status === "spam") return undefined;
+  const formId = parentFormId(submission);
+  return formId ? { submission, formId } : undefined;
+}
+
+/**
+ * Log why each skipped notification was not queued: an empty recipient as a
+ * warning, and unmet conditions or a missing template, which are expected
+ * states rather than faults, at debug level only.
+ */
+function logSkippedNotifications(
+  skipped: readonly SkippedNotification[],
+  formSlug: unknown,
+  logger: Pick<NextlyInstance["logger"], "warn" | "debug">
+): void {
+  for (const skip of skipped) {
+    if (skip.reason === "empty-recipient") {
+      logger.warn?.("Form Builder: empty recipient, skipping notification", {
+        notificationId: skip.notificationId,
+        formSlug,
+      });
+    } else {
+      logger.debug?.("Form Builder: notification skipped", {
+        notificationId: skip.notificationId,
+        formSlug,
+        reason: skip.reason,
+      });
+    }
+  }
+}
+
+/**
+ * What Resend builds and queues with, from a context: the notification's
+ * email as `buildNotificationEmails` makes it, whether or not it is active
+ * or its conditions hold (a person chose to send it); the send filters; and
+ * the queue, as a submission's own notifications are queued.
+ */
+function resendDeps(
+  ctx: Pick<NextlyInstance, "self" | "filters" | "services" | "logger">,
+  config: ResolvedFormBuilderConfig
+): ResendDeps {
+  const declaredForms = config.formOverrides.slug;
+  const declaredSubmissions = config.formSubmissionOverrides.slug;
+  return {
+    formsSlug: ctx.self.collections[declaredForms] ?? declaredForms,
+    submissionsSlug:
+      ctx.self.collections[declaredSubmissions] ?? declaredSubmissions,
+    build: (form, submission, notification) =>
+      buildNotificationEmails({
+        notifications: [
+          {
+            ...notification,
+            enabled: true,
+            condition: undefined,
+            conditions: undefined,
+          },
+        ],
+        submittedData: parseJsonColumn(submission.data),
+        formName: form.name,
+        submissionId: idText(submission.id),
+        defaultFrom: config.notifications.defaultFrom,
+        fields: Array.isArray(form.fields)
+          ? (form.fields as AnyFormField[])
+          : [],
+      }).emails[0],
+    filter: (emails, form, submission) =>
+      ctx.filters.apply<FormEmailNotification[], BeforeEmailFilterContext>(
+        "form-builder.beforeEmail",
+        emails,
+        { form, submission }
+      ),
+    queue: input =>
+      queueNotificationEmails({
+        emails: input.emails,
+        emailService: ctx.services.email,
+        logger: ctx.logger,
+        formSlug: undefined,
+        submissionId: input.key,
+        fileAttachments: [],
+        tx: input.tx,
+        excludeRecipients: input.excludeRecipients,
+        record: input.record,
+      }),
+  };
+}
+
+/** A submission's id as text: a string or a number by dialect. */
+function idText(id: unknown): string {
+  if (typeof id === "number") return `${id}`;
+  return typeof id === "string" ? id : "";
 }
 
 /**
@@ -1876,13 +2097,20 @@ function notificationKey(
  * Queue each notification, and log where it stands.
  *
  * Queued through the email service's queued send rather than sent once: the
- * queue makes the first attempt at once, and a failure a retry can help is
- * tried again through the job queue, with backoff, until it is sent or fails
- * for good, never dropped. Each carries an idempotency key from its
- * submission and notification (`notificationKey`), so a provider that takes keys delivers it
- * once even if this hook runs again. No log line names a recipient: an
- * address in a log outlives the submission it came from, and the
- * notification's id and the queued email's id are enough to find it.
+ * queue makes the first attempt at once (with `tx`, once that transaction
+ * commits), and a failure a retry can help is tried again through the job
+ * queue, with backoff, until it is sent or fails for good, never dropped.
+ * Each carries an idempotency key from its submission and notification
+ * (`notificationKey`), so a provider that takes keys delivers it once even if
+ * this runs again. No log line names a recipient: an address in a log
+ * outlives the submission it came from, and the notification's id and the
+ * queued email's id are enough to find it.
+ *
+ * A refusal of the email itself (an invalid address) is logged and the
+ * others are still queued. With `tx`, any other failure, and a failure to
+ * record a queued one, is thrown as well as logged: the transaction then
+ * rolls back with the submission, rather than keeping a submission whose
+ * notification was silently never queued.
  */
 export async function queueNotificationEmails(input: {
   emails: FormEmailNotification[];
@@ -1893,8 +2121,15 @@ export async function queueNotificationEmails(input: {
   /** The submission the notifications are for, which keys each one. */
   submissionId: string;
   fileAttachments: Array<{ mediaId: string; filename?: string }>;
+  /** The transaction to queue in, which then decides what is kept. */
+  tx?: QueueTransaction;
+  /**
+   * Recipients each email leaves out, by digest: those Resend found already
+   * reached. Judged on each email as send filters leave it.
+   */
+  excludeRecipients?: readonly string[];
   /** Records each queued notification for the submission, when given. */
-  record?: (sent: RecordedSend) => Promise<void>;
+  record?: (sent: RecordedSend, email: FormEmailNotification) => Promise<void>;
 }): Promise<void> {
   const { emails, emailService, logger, formSlug, fileAttachments } = input;
   for (const [index, email] of emails.entries()) {
@@ -1925,11 +2160,16 @@ export async function queueNotificationEmails(input: {
           bcc: email.bcc,
           attachments: files.length > 0 ? files : undefined,
           idempotencyKey: sendKey,
+          ...(input.tx !== undefined ? { tx: input.tx } : {}),
+          ...(input.excludeRecipients
+            ? { excludeRecipients: input.excludeRecipients }
+            : {}),
         }
       );
       queuedId = queued.id;
-      // The first attempt has been made: sent, waiting for a retry, or
-      // failed for good (a refusal no retry can change).
+      // Waiting for its first attempt when queued in a transaction; else
+      // that attempt has been made: sent, waiting for a retry, or failed for
+      // good (a refusal no retry can change).
       if (queued.state === "failed") {
         logger.error?.("Form Builder: notification failed", {
           ...identity,
@@ -1948,46 +2188,54 @@ export async function queueNotificationEmails(input: {
       // Thrown rather than returned: nothing was queued. A refusal of the
       // email itself (an invalid address) would be refused again, so it is
       // not retryable; anything else may pass on another submission.
+      const refused = NextlyError.isCode(err, "VALIDATION_ERROR");
       logger.error?.("Form Builder: notification failed", {
         ...identity,
-        retryable: !NextlyError.isCode(err, "VALIDATION_ERROR"),
+        retryable: !refused,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (!refused && input.tx !== undefined) throw err;
     }
     if (queuedId !== undefined) {
-      await recordQueued(input, identity, { queuedId, sendKey });
+      await recordQueued(input, identity, { queuedId, sendKey }, email);
     }
   }
 }
 
-/** A submission's id as text: a string or a number by dialect. */
-function idText(id: unknown): string {
-  if (typeof id === "number") return `${id}`;
-  return typeof id === "string" ? id : "";
-}
+/** The transaction handle the queued send takes as `tx`. */
+type QueueTransaction = NonNullable<
+  NonNullable<Parameters<PluginEmailService["queueWithTemplate"]>[3]>["tx"]
+>;
 
 /**
- * Record a queued notification for its submission. A failure is logged
- * rather than thrown: the notification is queued either way, and only its
- * forgetting on deletion would miss it.
+ * Record a queued notification for its submission. A failure is logged; in
+ * a transaction it is thrown too, so the submission and its queued email
+ * roll back with the record. Outside one, the notification is queued either
+ * way, and only its forgetting on deletion would miss it.
  */
 async function recordQueued(
   input: {
-    record?: (sent: RecordedSend) => Promise<void>;
+    record?: (
+      sent: RecordedSend,
+      email: FormEmailNotification
+    ) => Promise<void>;
     logger: Pick<NextlyInstance["logger"], "error">;
+    tx?: QueueTransaction;
   },
   identity: Record<string, unknown>,
-  sent: RecordedSend
+  sent: RecordedSend,
+  email: FormEmailNotification
 ): Promise<void> {
   if (!input.record) return;
   try {
-    await input.record(sent);
+    await input.record(sent, email);
   } catch (err) {
     input.logger.error?.("Form Builder: notification not recorded", {
       ...identity,
       queuedId: sent.queuedId,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (input.tx !== undefined) throw err;
   }
 }
 

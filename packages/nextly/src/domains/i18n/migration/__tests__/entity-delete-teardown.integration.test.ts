@@ -24,6 +24,7 @@ import { installRegistryResolver } from "../../../../cli/utils/registry-resolver
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { dynamicFieldGroupsSqlite } from "../../../../schemas/dynamic-field-groups/sqlite";
 import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive";
+import { nextlyMeta } from "../../../../schemas/nextly-meta/sqlite";
 import { FieldGroupRegistryService } from "../../../field-groups/services/field-group-registry-service";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { buildCompanionCreateOnlySql } from "../generate-up";
@@ -35,13 +36,17 @@ type Adapter = ReturnType<typeof createSqliteAdapter>;
 
 let adapter: Adapter;
 
-/** Production DDL for the component registry table this suite writes through. */
+/**
+ * Production DDL for the component registry table this suite writes through,
+ * and the `nextly_meta` table its writes store the schema version in.
+ */
 async function registryDdl(): Promise<string[]> {
   const kit = await getSQLiteDrizzleKit();
   const statements = await kit.generateMigration(
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       dynamicFieldGroups: dynamicFieldGroupsSqlite,
+      nextlyMeta,
     })
   );
   return splitStatements(statements);

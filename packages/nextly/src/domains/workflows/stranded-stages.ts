@@ -35,6 +35,7 @@ import {
   type ReviewState,
   type ReviewStatesDb,
 } from "./review-state-repository";
+import { recordStageChanged } from "./stage-changed";
 import type { Workflow } from "./types";
 import { enteredReviewSlot, pinPart } from "./workflow-pins";
 
@@ -498,7 +499,7 @@ function byDocument<T extends ReviewState>(states: readonly T[]): T[][] {
 
 /**
  * Moves one document's stranded parts to `move.to` on `tx`, under the document's lock, and
- * records the move as one event.
+ * records the move as one event, with an outbox event per part moved.
  */
 async function moveDocument(
   tx: TransactionContext,
@@ -532,6 +533,16 @@ async function moveDocument(
     if (entersReview(workflow, workflow.firstStage, move.to)) {
       await pinEnteredReview(tx, document, state.part);
     }
+    await recordStageChanged(tx, {
+      document,
+      part: state.part,
+      from: state.stage,
+      to: move.to,
+      cause: "recovery",
+      approvalWithdrawn: state.approval !== null,
+      definitionHash,
+      actor: { type: "user", id: move.mover.id },
+    });
   }
   await recordContentEvent(tx, {
     subject: {

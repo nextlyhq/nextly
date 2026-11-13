@@ -20,6 +20,13 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   getCachedNextly: async () => ({ findSingle: async () => savedSettings }),
 }));
 
+// The address record, holding no address here.
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("../../address-record/__tests__/record-double"))
+    .recordDouble,
+}));
+
 /** The SEO settings a test has saved. */
 let savedSettings: Record<string, unknown> = {};
 

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
 /**
- * The SEO settings screen's Connections tab as a person uses it: IndexNow,
- * llms.txt and plain-text copies are off until switched on, each switch saves
+ * The Settings screen's optional outputs and connections as a person uses
+ * them: llms.txt and plain-text copies, on Search engines and AI, and
+ * IndexNow, on Connections, are off until switched on, each switch saves
  * with the rest of the settings, and switching one off again saves it off;
  * Search Console is connected and disconnected through its own routes, and
  * each connection's last failure is said in plain words. What each save
@@ -21,6 +22,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   toastMutationResult: vi.fn(),
   usePluginClientConfig: vi.fn(() => undefined),
   writePluginRoute: vi.fn(),
+  // A move within the admin, as the admin makes it: the address changes and
+  // the move is announced.
+  navigateTo: vi.fn((href: string) => {
+    window.history.pushState(null, "", href);
+    window.dispatchEvent(new Event("locationchange"));
+  }),
 }));
 
 import {
@@ -117,25 +124,26 @@ beforeEach(() => {
 
 const switchNamed = (name: string) => screen.getByRole("switch", { name });
 
-describe("the Connections tab", () => {
+/** Opens one of the screen's tabs by its link. */
+const openTab = (name: string) =>
+  fireEvent.click(screen.getByRole("link", { name }));
+
+describe("the outputs for AI tools", () => {
   it("shows llms.txt and plain-text copies off by default, at the site's own address", () => {
     serving({ _rev: "1", productionAddresses: ["https://rext.ai"] });
     // A link can land on the tab.
     window.history.replaceState(
       null,
       "",
-      "/admin/plugins/nextlyhq-plugin-seo/settings?tab=connections"
+      "/admin/plugins/nextlyhq-plugin-seo/settings?tab=crawlers"
     );
     render(<SeoSettingsPage />);
 
     expect(
       screen
-        .getByRole("tab", { name: "Connections" })
-        .getAttribute("aria-selected")
-    ).toBe("true");
-    expect(
-      screen.getByText("Optional services. If one fails, no page is affected.")
-    ).toBeTruthy();
+        .getByRole("link", { name: "Search engines and AI" })
+        .getAttribute("aria-current")
+    ).toBe("page");
     expect(switchNamed("llms.txt").getAttribute("aria-checked")).toBe("false");
     expect(switchNamed("Plain-text copies").getAttribute("aria-checked")).toBe(
       "false"
@@ -148,7 +156,7 @@ describe("the Connections tab", () => {
   it("saves each switch turned on, and turned off again", async () => {
     serving({ _rev: "4" });
     render(<SeoSettingsPage />);
-    fireEvent.click(screen.getByRole("tab", { name: "Connections" }));
+    openTab("Search engines and AI");
 
     fireEvent.click(switchNamed("llms.txt"));
     fireEvent.click(switchNamed("Plain-text copies"));
@@ -165,15 +173,14 @@ describe("the Connections tab", () => {
   it("shows a switch already on as on", () => {
     serving({ _rev: "1", llmsTxt: true });
     render(<SeoSettingsPage />);
-    fireEvent.click(screen.getByRole("tab", { name: "Connections" }));
+    openTab("Search engines and AI");
 
     expect(switchNamed("llms.txt").getAttribute("aria-checked")).toBe("true");
   });
 });
 
 describe("Search Console on the Connections tab", () => {
-  const open = () =>
-    fireEvent.click(screen.getByRole("tab", { name: "Connections" }));
+  const open = () => openTab("Connections");
 
   it("can't be connected until the site names a Google sign-in, and says so", () => {
     serving(
@@ -191,16 +198,17 @@ describe("Search Console on the Connections tab", () => {
 
   it("sends the person to Google to approve read-only access", async () => {
     serving({ _rev: "1" });
-    const assign = vi.fn();
-    vi.spyOn(window, "location", "get").mockReturnValue({
-      ...window.location,
-      assign,
-    });
     vi.mocked(writePluginRoute).mockResolvedValue({
       url: "https://accounts.google.com/o/oauth2/v2/auth?state=s",
     });
     render(<SeoSettingsPage />);
     open();
+    // Watched only once the tab is open, which reads the real address.
+    const assign = vi.fn();
+    const location = vi.spyOn(window, "location", "get").mockReturnValue({
+      ...window.location,
+      assign,
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Connect Search Console" })
     );
@@ -212,7 +220,7 @@ describe("Search Console on the Connections tab", () => {
     expect(assign).toHaveBeenCalledWith(
       "https://accounts.google.com/o/oauth2/v2/auth?state=s"
     );
-    vi.restoreAllMocks();
+    location.mockRestore();
   });
 
   it("names who is connected, shows what Google says, and disconnects", async () => {
@@ -287,7 +295,7 @@ describe("IndexNow on the Connections tab", () => {
   it("is off by default, saves switched on, and says when search engines refused its key", async () => {
     serving({ _rev: "2" });
     const { unmount } = render(<SeoSettingsPage />);
-    fireEvent.click(screen.getByRole("tab", { name: "Connections" }));
+    openTab("Connections");
     expect(switchNamed("IndexNow").getAttribute("aria-checked")).toBe("false");
     fireEvent.click(switchNamed("IndexNow"));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
@@ -309,8 +317,10 @@ describe("IndexNow on the Connections tab", () => {
       }
     );
     render(<SeoSettingsPage />);
-    fireEvent.click(screen.getByRole("tab", { name: "Connections" }));
-    const row = switchNamed("IndexNow").closest(".nx-seo-conn") as HTMLElement;
+    openTab("Connections");
+    const row = switchNamed("IndexNow").closest(
+      '[role="group"]'
+    ) as HTMLElement;
     expect(
       within(row).getByText(/Search engines refused the site's IndexNow key/)
     ).toBeTruthy();

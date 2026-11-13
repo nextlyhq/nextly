@@ -266,6 +266,33 @@ describe.each(getConfiguredTestDialects())(
       expect(kindsOf(list.problems, id)).toEqual(["shareImage"]);
     });
 
+    it("lists a canonical naming another address, unless the page is confirmed to live elsewhere", async () => {
+      const { t, ctx } = await boot(dialect);
+      // First published on another site, and said so: the canonical is meant.
+      const moved = await publish(t, {
+        title: "Harbour",
+        slug: "harbour",
+        seo: {
+          canonical: "https://first.example/harbour",
+          canonicalElsewhere: true,
+        },
+      });
+      // Another page of this site named, with nothing confirmed.
+      const pointed = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        seo: { canonical: "/blog/harbour" },
+      });
+      await until(
+        t,
+        found => checkedSince(moved)(found) && checkedSince(pointed)(found)
+      );
+
+      const list = await problemList(ctx, CHECKS, everything);
+      expect(kindsOf(list.problems, moved)).not.toContain("canonical");
+      expect(kindsOf(list.problems, pointed)).toContain("canonical");
+    });
+
     it("shows a reader only the pages they may read, compared among those", async () => {
       const { t, ctx } = await boot(dialect);
       const a = await publish(t, { title: "Harbour", slug: "a" });
@@ -280,6 +307,15 @@ describe.each(getConfiguredTestDialects())(
       expect(list.problems.some(p => p.subject.id === b)).toBe(false);
       // The title it shares is with a page the reader may not see.
       expect(kindsOf(list.problems, a)).not.toContain("sharedTitle");
+      // The pages checked for them: theirs, not the one left out, whose
+      // missing problems say nothing about it.
+      expect(list.checked).toEqual([{ type: "posts", id: a }]);
+      expect((await problemList(ctx, CHECKS, everything)).checked).toEqual(
+        expect.arrayContaining([
+          { type: "posts", id: a },
+          { type: "posts", id: b },
+        ])
+      );
     });
 
     it("lists a shared title on both pages, and forgets a deleted page", async () => {

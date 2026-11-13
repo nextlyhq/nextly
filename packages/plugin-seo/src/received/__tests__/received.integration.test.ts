@@ -32,7 +32,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
-import type { ReceivedAnswer, ReceivedPagesBody } from "../contract";
+import type { ReceivedAnswer } from "../contract";
 
 interface Direct {
   users: {
@@ -171,6 +171,8 @@ function pageHtml(origin: string, agent: string): string {
     `<meta property="og:title" content="Surfer vs Rext | Rext AI"/>`,
     `<meta property="og:description" content="Surfer grades drafts; Rext writes them."/>`,
     `<meta name="twitter:title" content="Surfer vs Rext | Rext AI"/>`,
+    // The card's language, as the plugin states it for the site's language.
+    `<meta property="og:locale" content="en_US"/>`,
     "</head><body><h1>Surfer vs Rext</h1></body></html>",
   ].join("");
 }
@@ -328,21 +330,46 @@ describe.each(getConfiguredTestDialects())(
       expect(
         answer.crawlers.map(crawler => [crawler.name, crawler.status])
       ).toEqual([
-        ["Googlebot", 200],
-        ["LinkedIn", 200],
+        ["Google", 200],
+        ["Bing", 200],
+        ["Facebook", 200],
         ["X", 200],
-        ["Slack", 200],
+        ["LinkedIn", 200],
+        ["AI crawlers", 200],
       ]);
       expect(answer.rows.title.googlebot).toEqual({ kind: "same" });
       // The site was asked once by each crawler, each naming itself.
       expect(
-        site.asked.map(each => each.agent.split(/[ /]/)[0]).sort()
+        site.asked
+          .map(
+            each =>
+              /Googlebot|bingbot|facebookexternalhit|Twitterbot|LinkedInBot|GPTBot/.exec(
+                each.agent
+              )?.[0]
+          )
+          .sort()
       ).toEqual([
+        "GPTBot",
+        "Googlebot",
         "LinkedInBot",
-        "Mozilla",
-        "Slackbot-LinkExpanding",
         "Twitterbot",
+        "bingbot",
+        "facebookexternalhit",
       ]);
+      // What Nextly holds, with the page's name, where its SEO is edited,
+      // where each value comes from, and its structured data.
+      expect(answer.name).toBe("Surfer vs Rext");
+      expect(answer.editHref).toMatch(
+        /^\/admin\/collections\/posts\/[^/?]+\?tab=nextlyhq-plugin-seo\.tab$/
+      );
+      expect(answer.stored?.from.title?.level).toBeDefined();
+      expect(answer.aiCrawlers).toBe("all");
+      expect(answer.structuredData?.items.map(item => item.type)).toContain(
+        "BreadcrumbList"
+      );
+      expect(JSON.parse(answer.structuredData?.json ?? "{}")).toHaveProperty(
+        "@graph"
+      );
     });
 
     it("numbers and explains each difference from what Nextly holds", async () => {
@@ -351,7 +378,7 @@ describe.each(getConfiguredTestDialects())(
       site.blockLinkedIn = true;
       const answer = await check(reader, "/blog/surfer-vs-rext");
       if (answer.kind !== "checked") throw new Error(JSON.stringify(answer));
-      expect(answer.crawlers[1]).toMatchObject({
+      expect(answer.crawlers[4]).toMatchObject({
         name: "LinkedIn",
         status: 403,
         difference: 1,
@@ -363,8 +390,8 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(answer.differences.map(each => each.title)).toEqual([
         "LinkedIn was answered 403.",
-        "Googlebot received a different title.",
-        "Googlebot received a different description.",
+        "Google received a different title.",
+        "Google received a different description.",
       ]);
       // A typed title is Nextly's to hold; an automatic description may be
       // set by the page's design or route.
@@ -372,6 +399,9 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.differences[2]?.text).toMatch(
         /^Nextly's automatic description is “Surfer grades drafts; Rext writes them\.”/
       );
+      // Expected, nothing to fix: the design or route sets its own.
+      expect(answer.differences[2]?.expected).toBe(true);
+      expect(answer.differences[1]?.expected).toBeUndefined();
     });
 
     it("holds what a page's design sets, and finds the page holds it too", async () => {
@@ -408,6 +438,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await check(reader, "https://evil.example/")).toEqual({
         kind: "refused",
         address: "https://evil.example/",
+        reason: "other-site",
+        site: new URL(origin).host,
         message: `That address is on another site, evil.example. Only ${new URL(origin).host} addresses can be checked.`,
       });
       expect(site.asked).toEqual([]);
@@ -419,29 +451,21 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.differences).toEqual([
         {
           number: 1,
-          title: "Googlebot, LinkedIn, X and Slack received nothing.",
+          title:
+            "Google, Bing, Facebook, X, LinkedIn and AI crawlers received nothing.",
           text: `It redirected to https://evil.example/. That address is on another site, evil.example. Only ${new URL(origin).host} addresses can be checked.`,
         },
       ]);
-      expect(site.asked.map(each => each.path)).toEqual([
-        "/leave",
-        "/leave",
-        "/leave",
-        "/leave",
-      ]);
+      expect(site.asked.map(each => each.path)).toEqual(
+        Array.from({ length: 6 }, () => "/leave")
+      );
+      expect(answer.crawlers[0]).toMatchObject({
+        reason: "other-site",
+        redirected: true,
+      });
     });
 
-    it("offers the site's own pages, and refuses anyone not signed in", async () => {
-      const response = await call(reader, "GET", [...BASE, "pages"]);
-      expect(response.status, await response.clone().text()).toBe(200);
-      const body = (await response.json()) as ReceivedPagesBody;
-      expect(body.origins).toEqual([origin]);
-      // The site's sitemap, which lists every published page, in id order.
-      expect([...body.pages].sort()).toEqual([
-        `${origin}/blog/closed-plans`,
-        `${origin}/blog/designed`,
-        `${origin}/blog/surfer-vs-rext`,
-      ]);
+    it("refuses anyone not signed in", async () => {
       const anonymous = await call(undefined, "POST", BASE, {
         address: `${origin}/blog/surfer-vs-rext`,
       });

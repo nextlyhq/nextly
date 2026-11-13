@@ -151,11 +151,14 @@ function tick(): void {
 /**
  * `nextly migrate:create --name=<name> --non-interactive` over `config`, at
  * the next tick of the clock, or at `at`, which names the file by that time.
+ * Where nobody can be asked, a file that deletes data (a dropped table, a
+ * changed type) is written only under consent, which `consent` gives.
  */
 async function migrateCreate(
   config: unknown,
   name: string,
-  at?: Date
+  at?: Date,
+  consent: { acceptDataLoss?: boolean } = {}
 ): Promise<string> {
   loaded.config = config;
   if (at === undefined) tick();
@@ -163,7 +166,7 @@ async function migrateCreate(
   const { context, said } = command();
   setNonInteractive(true);
   const code = await exiting(() =>
-    runMigrateCreate(name, { cwd: dir }, context)
+    runMigrateCreate(name, { cwd: dir, ...consent }, context)
   ).finally(() => setNonInteractive(false));
   expect(code, said.join("\n")).toBeUndefined();
   const file = readdirSync(join(dir, "migrations")).find(f =>
@@ -1069,7 +1072,9 @@ describe.each(getConfiguredTestDialects())(
       });
       await migrateCreate(asText, "create_scores");
       await migrated(asText);
-      await migrateCreate(asNumber, "points_number");
+      await migrateCreate(asNumber, "points_number", undefined, {
+        acceptDataLoss: true,
+      });
       // A type change is a conversion the operator consents to.
       await migrated(asNumber, { acceptDataLoss: true });
       expect(
@@ -1270,7 +1275,9 @@ describe.each(getConfiguredTestDialects())(
           await collectionRow(instance!, dialect, "rr_tags")
         ).toBeDefined();
 
-        await migrateCreate(postsOnly, "drop_tags");
+        await migrateCreate(postsOnly, "drop_tags", undefined, {
+          acceptDataLoss: true,
+        });
         await migrated(postsOnly, { acceptDataLoss: true });
         expect(
           await collectionRow(instance!, dialect, "rr_tags")
@@ -1286,7 +1293,9 @@ describe.each(getConfiguredTestDialects())(
         await migrateCreate(both, "create_both");
         await migrated(both);
         const tags = await collectionRow(instance!, dialect, "rr_tags");
-        await migrateCreate(postsOnly, "drop_tags");
+        await migrateCreate(postsOnly, "drop_tags", undefined, {
+          acceptDataLoss: true,
+        });
         await migrated(postsOnly, { acceptDataLoss: true });
 
         const db = (instance!.adapter as unknown as DrizzleAdapter).getDrizzle<{
@@ -1311,7 +1320,9 @@ describe.each(getConfiguredTestDialects())(
       it("names the row it could not remove when the registry cannot be read", async () => {
         await migrateCreate(both, "create_both");
         await migrated(both);
-        await migrateCreate(postsOnly, "drop_tags");
+        await migrateCreate(postsOnly, "drop_tags", undefined, {
+          acceptDataLoss: true,
+        });
         const { CollectionRegistryService } = await import(
           "../../../domains/collections/services/collection-registry-service"
         );
@@ -1380,7 +1391,9 @@ describe.each(getConfiguredTestDialects())(
         await migrateCreate(scores("text"), "create_scores");
         await migrated(scores("text"));
         await createProbe();
-        await migrateCreate(scores("number"), "points_number");
+        await migrateCreate(scores("number"), "points_number", undefined, {
+          acceptDataLoss: true,
+        });
         const next = await migrateCreate(scores("number", "note"), "add_note");
         await insertStatement(next, "up-last", probe());
 
@@ -1396,7 +1409,9 @@ describe.each(getConfiguredTestDialects())(
         async () => {
           await migrateCreate(scores("text"), "create_scores");
           await migrated(scores("text"));
-          await migrateCreate(scores("number"), "points_number");
+          await migrateCreate(scores("number"), "points_number", undefined, {
+            acceptDataLoss: true,
+          });
           const { SchemaEventsRepository } = await import(
             "../../../domains/schema/events/schema-events-repository"
           );
@@ -1447,7 +1462,12 @@ describe.each(getConfiguredTestDialects())(
         await migrated(scores("text"));
         const note = await migrateCreate(scores("text", "note"), "add_note");
         await insertStatement(note, "down-first", probe());
-        await migrateCreate(scores("number", "note"), "points_number");
+        await migrateCreate(
+          scores("number", "note"),
+          "points_number",
+          undefined,
+          { acceptDataLoss: true }
+        );
         await migrated(scores("number", "note"), { acceptDataLoss: true });
         await createProbe();
 
