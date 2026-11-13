@@ -255,11 +255,22 @@ function isUndeclaredDocumentView(pattern: string, params: Params): boolean {
 setRoutePreloader(href => {
   if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return;
   const [pathname] = href.split(/[?#]/, 1);
-  const { Component } = resolveRoute(pathname, "");
+  startRouteCode(resolveRoute(pathname, ""));
+});
+
+/**
+ * Starts fetching a resolved route's page, when it is one fetched lazily; a
+ * page already fetched, or fetching, is joined rather than fetched again. The
+ * router calls it as soon as it resolves an address, so a screen drawn only
+ * once the server confirms the session has its code on the way while that
+ * check is still out, rather than starting the download after its answer.
+ */
+export function startRouteCode(route: Pick<RouteResult, "Component">): void {
+  const { Component } = route;
   if ("preload" in Component && typeof Component.preload === "function") {
     Component.preload();
   }
-});
+}
 
 export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
   // Exact match

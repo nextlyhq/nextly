@@ -3,7 +3,7 @@ title: API stability
 description: What's stable vs experimental in the plugin API, the semver guarantee that backs it, and the deprecation policy.
 ---
 
-`@nextlyhq/plugin-sdk` **is** the stability boundary for the plugin platform (D40/D43).
+`@nextlyhq/plugin-sdk` **is** the stability boundary for the plugin platform.
 Every export carries a TSDoc release tag — `@public`, `@experimental`, or `@deprecated`
 — and the authoritative ledger lives in the SDK's
 [`STABILITY.md`](https://github.com/nextlyhq/nextly/blob/main/packages/plugin-sdk/STABILITY.md).
@@ -11,16 +11,15 @@ This page summarizes it.
 
 ## How a surface becomes stable
 
-Nextly uses a **stability ladder** (D55): nothing is declared stable on paper. A surface
+Nextly uses a **stability ladder**: nothing is declared stable on paper. A surface
 graduates from `@experimental` to `@public` only once **a first-party plugin has
 exercised it in production** (against a real database, not just the SQLite test harness).
-`ctx.services` is the highest-scrutiny surface and was held experimental the longest
-(D56). The public surface is kept deliberately small (D40).
+`ctx.services` is the highest-scrutiny surface and was held experimental the longest. The public surface is kept deliberately small.
 
 ## The semver guarantee
 
 The `@public` surface is the **semver-protected contract**. Once Nextly reaches `1.0`,
-**breaking a `@public` export requires a major version bump** (D40). During the current
+**breaking a `@public` export requires a major version bump**. During the current
 `0.x` alpha it is _stable-in-intent_: changes follow the deprecation policy below rather
 than landing as silent breaks — but **pin your versions** while we're pre-`1.0`.
 `@experimental` exports carry **no** compatibility guarantee.
@@ -49,7 +48,7 @@ than landing as silent breaks — but **pin your versions** while we're pre-`1.0
 
 These ship today but carry no guarantee yet — use them, but expect change:
 
-- `ctx.db` (D56 — prefer `ctx.services`): the typed, owner-checked surface,
+- `ctx.db` (prefer `ctx.services`): the typed, owner-checked surface,
   and the `ctx.db.raw` escape hatch, which is the live Drizzle instance only
   for a plugin that declares `capabilities.db.rawSql` and that the app lists
   in `db.rawSqlPlugins`
@@ -81,11 +80,11 @@ These ship today but carry no guarantee yet — use them, but expect change:
 - `ctx.hooks` plugin registration (`PluginHookRegistry`, `HookType`, `HookHandler`)
 - The in-transaction hook phase: `ctx.hooks.onInTransaction` / `offInTransaction`,
   `InTransactionHandler`, `InTransactionContext`
-- Filters & actions (D63): `ctx.filters` / `ctx.actions` + seam types
-- Secrets (D37): `secret`, `Secret`, `isSecret`
+- Filters & actions: `ctx.filters` / `ctx.actions` + seam types
+- Secrets: `secret`, `Secret`, `isSecret`
 - Client UX (`@nextlyhq/plugin-sdk/client`): `useCan`, `<Can>`
-- Admin dashboard widgets (`defineWidget` under `contributes.dashboard`, D22 — rendered; shape still settling)
-- `contributes.events`, `dependsOn` / `optionalDependsOn`, `plugin.rename` (D54)
+- Admin dashboard widgets (`defineWidget` under `contributes.dashboard` — rendered; shape still settling)
+- `contributes.events`, `dependsOn` / `optionalDependsOn`, `plugin.rename`
 - Schema extensibility: `contributes.schema` (`tables`, `extend`,
   `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,
   `schema.adoptTable` and `db.schema.afterDrizzle`
@@ -97,7 +96,7 @@ These ship today but carry no guarantee yet — use them, but expect change:
   `contributes.settings` / `ctx.settings`, `capabilities.net.outbound` /
   `ctx.fetch`, and `contributes.audit` / `ctx.audit`
 - The route options `rateLimit`, `limitKey`, `rawBody`, `csrf` and `noStore`
-- Auth extensibility (D71/D57): `contributes.auth` (auth-flow hooks,
+- Auth extensibility: `contributes.auth` (auth-flow hooks,
   challenges, sign-in UI), `auth.strategies`, and finishing an external
   sign-in with `ctx.auth.completeLogin`
 - Typed hook points: `contributes.hookPoints`, `ctx.filters.decide` and the
@@ -161,7 +160,7 @@ export default [
 ];
 ```
 
-## Deprecation policy (D41)
+## Deprecation policy
 
 When a `@public` export must change incompatibly:
 
@@ -177,7 +176,7 @@ Promotion (`@experimental` → `@public`) is **not** a breaking change.
 
 ## Out of scope for v1
 
-Per D0/D42/D34, v1 is **npm-trust**: no marketplace, no UI-install, no runtime sandbox or
+v1 is **npm-trust**: no marketplace, no UI-install, no runtime sandbox or
 verification. Discovery is npm + these docs + the `nextly-plugin` keyword — see
 [Publishing & distribution](/docs/plugins/distribution). These are deferred, not
 cancelled.

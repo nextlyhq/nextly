@@ -4,7 +4,7 @@ description: Contribute collections, extend existing entities (including Builder
 ---
 
 A plugin's schema contributions flow through the **same unified merge pipeline** as your
-app's own code-first schema and the Visual Schema Builder's schema (D3). The host can read them
+app's own code-first schema and the Visual Schema Builder's schema. The host can read them
 _without running your plugin_, so the admin and codegen can reason about them.
 
 ## Contribute new entities
@@ -46,7 +46,7 @@ tagged with your plugin's [provenance](#provenance) and locked from Builder edit
 
 ## Extend existing entities
 
-`contributes.extend` adds fields to an entity you don't own, by slug (D12):
+`contributes.extend` adds fields to an entity you don't own, by slug:
 
 ```ts
 contributes: {
@@ -60,7 +60,7 @@ contributes: {
 }
 ```
 
-As of the Builder schema lane (P8), `extend` may target a **Builder-made collection**,
+`extend` may also target a **Builder-made collection**,
 not just a code-first one — the extra fields materialize (a migration adds the columns)
 and are present at runtime. The added fields are attributed to your plugin in provenance,
 so they're cleaned up if your plugin is removed.
@@ -241,13 +241,13 @@ constraints that Postgres/MySQL do, so test against a real database too (see
 
 A plugin relationship (`relationship(...)`) may target **any** slug in the merged schema
 — core (`users`, `media`), another plugin's collection, an app collection, or a
-Builder-made one (D15). Targets are validated at boot; an unknown `relationTo` fails
+Builder-made one. Targets are validated at boot; an unknown `relationTo` fails
 fast.
 
 ## Reference your own slugs via `ctx.self`
 
 Never hardcode your own collection slugs in `init`/handlers — an integrator can rename
-them with `plugin.rename({...})` (D54). Read the resolved slug from `ctx.self`:
+them with `plugin.rename({...})`. Read the resolved slug from `ctx.self`:
 
 ```ts
 const slug = ctx.self.collections.redirects; // resolved, post-rename
@@ -257,7 +257,7 @@ declare const ctx: PluginContext;
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 ```
 
-## Provenance (D14)
+## Provenance
 
 Every schema entity carries a `source`: `"code"`, `"ui"` (Builder), `"built-in"`, or
 `"plugin:<name>"`. This is what makes uninstall safe — Nextly knows which tables, fields,
@@ -374,14 +374,20 @@ or let it default to your plugin's admin slug.
 
 ### The column kinds
 
-`text`, `shortText`, `longText`, `varchar(n)`, `boolean`, `integer`, `double`,
-`decimal(p, s)`, `timestamp`, `json<T>()`, plus two conveniences: `col.id()` (a
-`varchar(36)` primary key for a UUIDv7) and `col.timestamps()` (`created_at`
-and `updated_at`).
+- Text: `text`, `shortText`, `longText`, `varchar(n)`, `char(n)`, `uuid`, and
+  `enum([...])`, a text column whose values a check constraint holds to the list.
+- Numbers: `smallint`, `integer`, `bigint` (read as a JavaScript number, exact
+  up to 2^53), `real`, `double` and `decimal(p, s)`.
+- Others: `boolean`, `timestamp`, `json<T>()` and `bytes`.
+- Keys and conveniences: `col.id()` (a `varchar(36)` primary key for a
+  UUIDv7), `col.serial()` (a primary key the database numbers, in place of
+  `col.id()`), `col.ref(table)` (a recorded reference, with a relation) and
+  `col.timestamps()` (`created_at` and `updated_at`).
 
-The list is deliberately short. Every kind here renders on PostgreSQL, MySQL
-and SQLite, so a table you declare works on all three — what cannot be
-expressed cannot drift between them.
+Every kind here renders on PostgreSQL, MySQL and SQLite, so a table you
+declare works on all three — what cannot be expressed cannot drift between
+them. [Coming from Payload](/docs/database/coming-from-payload#11-any-drizzle-column-type)
+says how each one is stored.
 
 ## Reading and writing
 
@@ -428,17 +434,18 @@ produce identical output.
 
 ## What you may change
 
-| Target                                                                                | Columns     | Indexes |
-| ------------------------------------------------------------------------------------- | ----------- | ------- |
-| Your own tables                                                                       | yes         | yes     |
-| A plugin you name in `dependsOn` / `optionalDependsOn`                                | yes, hidden | yes     |
-| Any other plugin's tables                                                             | no          | no      |
-| Entity tables (`dc_*`, `single_*`, `comp_*`)                                          | yes, hidden | yes     |
-| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes     |
-| Every other core table                                                                | no          | no      |
+| Target                                                                                | Columns     | Indexes | Foreign keys, checks, relations |
+| ------------------------------------------------------------------------------------- | ----------- | ------- | ------------------------------- |
+| Your own tables                                                                       | yes         | yes     | yes                             |
+| A plugin you name in `dependsOn` / `optionalDependsOn`                                | yes, hidden | yes     | yes                             |
+| Any other plugin's tables                                                             | no          | no      | no                              |
+| Entity tables (`dc_*`, `single_*`, `comp_*`)                                          | yes, hidden | yes     | no                              |
+| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes     | no                              |
+| Every other core table                                                                | no          | no      | no                              |
 
-The app may add columns and indexes to any plugin's table, under the same
-rules.
+The app may add columns, indexes, foreign keys, checks and relations to any
+plugin's table, under the same rules. See
+[Keys, checks and relations on a table you do not own](/docs/database/extending-the-schema#keys-checks-and-relations-on-a-table-you-do-not-own).
 
 Which migrations carry what you add depends on the table. On your own tables
 and on a dependency's, your plugin's own migration modules carry it. On an
