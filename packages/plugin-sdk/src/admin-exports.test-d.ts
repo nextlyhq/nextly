@@ -528,6 +528,15 @@ expectTypeOf<adminEntry.StepState>().toEqualTypeOf<
   "complete" | "current" | "upcoming"
 >();
 
+expectTypeOf(adminEntry.FileDropArea)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.FileDropAreaProps>();
+expectTypeOf<adminEntry.FileDropAreaProps>().toMatchTypeOf<{
+  onFiles: (files: File[]) => void;
+  label: string;
+  title: React.ReactNode;
+}>();
+
 expectTypeOf<adminEntry.FormActionsProps["message"]>().toEqualTypeOf<
   React.ReactNode | undefined
 >();

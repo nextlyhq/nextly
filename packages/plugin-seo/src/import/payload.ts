@@ -12,11 +12,10 @@
  *
  * @module import/payload
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-
 import { isRecord } from "../plain-values";
 
 import {
+  ImportFileRefused,
   count,
   idText,
   pathOfAddress,
@@ -88,10 +87,10 @@ function parsedJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    throw NextlyError.invalidInput({
-      message: "This isn't a Payload export: it isn't JSON.",
-      logContext: { reason: "seo-import-payload-not-json" },
-    });
+    throw new ImportFileRefused(
+      "This isn't a Payload export: it isn't JSON.",
+      "seo-import-payload-not-json"
+    );
   }
 }
 
@@ -169,10 +168,10 @@ export function readPayload(
 ): ParsedSource {
   const documents = documentsOf(parsedJson(text));
   if (documents.length === 0) {
-    throw NextlyError.invalidInput({
-      message: "This Payload export holds no documents.",
-      logContext: { reason: "seo-import-payload-empty" },
-    });
+    throw new ImportFileRefused(
+      "This Payload export holds no documents.",
+      "seo-import-payload-empty"
+    );
   }
   const from: ParsedSource["from"] = {};
   const noticed: Noticed = { perLanguage: false, imagesById: 0 };

@@ -142,6 +142,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "FieldTypePickerProps (type)",
   "FieldTypeSettings (type)",
   "FieldWidth (type)",
+  "FileDropArea (value)",
+  "FileDropAreaProps (type)",
   "FixedFieldSetting (type)",
   "FormActions (value)",
   "FormActionsProps (type)",
