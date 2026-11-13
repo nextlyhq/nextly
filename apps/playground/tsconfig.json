@@ -16,6 +16,7 @@
       // Source aliases for client-side workspace packages.
       "@nextlyhq/ui": ["../../packages/ui/src/index.ts"],
       "@nextlyhq/admin": ["../../packages/admin/src/index.ts"],
+      "@nextlyhq/admin/kit": ["../../packages/admin/src/kit.ts"],
       "@nextlyhq/admin/lib/component-registry": [
         "../../packages/admin/src/lib/plugins/component-registry.ts"
       ],

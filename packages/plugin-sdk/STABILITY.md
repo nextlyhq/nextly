@@ -25,6 +25,16 @@ exercised it in production** (against a real database, not just the SQLite test 
 The public surface is kept **deliberately small** (D40). Everything not listed as
 `@public` is internal/unstable and may change in any release.
 
+## Where the admin parts come from
+
+`@nextlyhq/plugin-sdk/admin` re-exports the admin's parts from `@nextlyhq/admin/kit`.
+That subpath is **internal and unstable**: it exists for this SDK alone, its exports
+change in any release, and nothing else should import it. The names a plugin uses, and
+their tags in the tables below, are the SDK's. `@nextlyhq/admin`'s root is what an
+application mounts (`RootLayout`, the providers, `ErrorBoundary`, `CommandPalette`, the
+component registration calls) and the hooks and primitives its README lists; it is not a
+plugin surface either.
+
 ## The semver guarantee
 
 The `@public` surface is the **semver-protected contract**. Once Nextly reaches `1.0`,

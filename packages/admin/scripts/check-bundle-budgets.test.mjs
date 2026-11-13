@@ -19,14 +19,21 @@ import {
 
 const KB = 1024;
 
-/** A report: a small total, a 250 KB shell, and routes with their own code. */
+/**
+ * A report: a small total, a shell under its budget (derived from it, so a
+ * lowered budget leaves the passing cases passing), and routes with their own
+ * code.
+ */
 /**
  * A shipped total over the budget, derived from it, so raising the budget
  * leaves these tests measuring a breach.
  */
 const OVER_TOTAL_KB = BUDGETS.totalMinifiedKB + 20;
 
-function report(routes, { totalKB = 1000, shellKB = 250 } = {}) {
+function report(
+  routes,
+  { totalKB = 1000, shellKB = BUDGETS.shellGzipKB - 30 } = {}
+) {
   return {
     totals: {
       browser: { count: 3, minifiedBytes: totalKB * KB },
