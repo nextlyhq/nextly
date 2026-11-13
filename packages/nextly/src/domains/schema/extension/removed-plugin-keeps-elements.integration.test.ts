@@ -25,6 +25,7 @@ import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
+  type CreateTestNextlyOptions,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
@@ -157,7 +158,7 @@ async function firstBoot(dialect: TestDialect): Promise<Adapter> {
 /** Restart on the same database with `plugins`, then push the collections. */
 async function restartAndPush(
   adapter: Adapter,
-  plugins: Parameters<typeof createTestNextly>[0]["plugins"],
+  plugins: CreateTestNextlyOptions["plugins"],
   postsRequired: boolean,
   notesRequired: boolean
 ) {
@@ -309,9 +310,9 @@ describeEachDialect("a plugin removed from the configuration", dialect => {
       // SQLite makes the change by rebuilding the table from a definition
       // that no longer has the column, so the push is refused, naming the
       // plugin and the column, before anything runs.
-      expect(pushed.success).toBe(false);
-      expect(pushed.error?.message).toContain("kept-elements-removed");
-      expect(pushed.error?.message).toContain('"stamp"');
+      const message = pushed.success ? "" : pushed.error.message;
+      expect(message).toContain('the plugin "kept-elements-removed" added');
+      expect(message).toContain('the column "stamp"');
       expect(await isNotNull(adapter, dialect, POSTS, "headline")).toBe(true);
     } else {
       expect(pushed.success, JSON.stringify(pushed)).toBe(true);
