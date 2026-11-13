@@ -58,6 +58,20 @@ describe("switchedOffExtensions", () => {
     expect(off.get("@acme/notes")).toBeUndefined();
     expect(warn).toHaveBeenCalledOnce();
   });
+
+  it("switches nothing off when a switch cannot even be built, and says so", async () => {
+    const warn = vi.fn();
+    registerPluginService("@acme/notes", EXTENSION_SWITCH_SERVICE, () => {
+      throw new Error("no settings yet");
+    });
+    const off = await switchedOffExtensions(
+      [plugin("@acme/notes")],
+      { "@acme/notes": ["notes"] },
+      { warn }
+    );
+    expect(off.get("@acme/notes")).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+  });
 });
 
 describe("withheldFieldsOf", () => {

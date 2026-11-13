@@ -82,6 +82,7 @@ import { pluginDocumentLock } from "./document-lock-affordances";
 import {
   topLevelFieldNames,
   useContentFields,
+  useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "./document-place";
@@ -858,6 +859,12 @@ export function EntryForm({
   // plugin's tab takes over, by the same rule as the page's own content:
   // they are drawn, and edited, in their tab.
   const besideFields = useContentFields(documentPlace, fieldNames, allFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this type now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace,
+    historicalFields
+  );
   const renderEntryFields = useCallback(
     (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(besideFields, excludePath, {
@@ -1747,7 +1754,7 @@ export function EntryForm({
                       answers a published version through the same surface. Its
                       comparison bar is drawn among the banners under the bar. */}
                                     <ViewedVersionBody
-                                      fields={historicalFields ?? contentFields}
+                                      fields={shownHistoricalFields ?? contentFields}
                                       values={historicalValues ?? undefined}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let

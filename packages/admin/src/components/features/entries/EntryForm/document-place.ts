@@ -194,3 +194,26 @@ export function topLevelFieldNames(
     typeof field.name === "string" ? [field.name] : []
   );
 }
+
+/**
+ * `fields` less the ones a plugin's switch keeps off this type
+ * (`withheldFields`): for a past version's fields, which the page draws as
+ * the version stored them, tab fields included, but never a withheld one.
+ * `null` stays `null`, as nothing is being viewed.
+ */
+export function useWithoutWithheldFields<F extends { name?: unknown }>(
+  place: DocumentPlace,
+  fields: F[] | null
+): F[] | null {
+  const { withheldFields } = useBranding();
+  const withheldKey = [
+    ...fieldsWithheldHere(withheldFields, place.context),
+  ].join("\u0000");
+  return useMemo(() => {
+    if (fields === null || withheldKey === "") return fields;
+    const withheld = new Set(withheldKey.split("\u0000"));
+    return fields.filter(
+      field => typeof field.name !== "string" || !withheld.has(field.name)
+    );
+  }, [fields, withheldKey]);
+}

@@ -34,6 +34,7 @@ import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm
 import {
   topLevelFieldNames,
   useContentFields,
+  useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
@@ -1571,6 +1572,12 @@ export function SingleForm({
   // field keeps its value in the form, so Save still stores them.
   const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
   const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this Single now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace,
+    historicalFields
+  );
   // The side panel's sections in the order the server placed them, with the
   // sections plugins declared at the Single's page among them, as on a
   // collection entry's page.
@@ -2037,7 +2044,7 @@ export function SingleForm({
                                     <SingleFormFieldsPanel
                                       document={document}
                                       singleSlug={schema.slug}
-                                      historicalFields={historicalFields}
+                                      historicalFields={shownHistoricalFields}
                                       historicalValues={historicalValues}
                                       isSubmitting={isSubmitting}
                                       mainFields={contentFields}

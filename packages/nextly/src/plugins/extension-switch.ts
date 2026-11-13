@@ -75,9 +75,12 @@ export async function switchedOffExtensions(
   await Promise.all(
     plugins.map(async ({ name }) => {
       const named = fields[name] ?? [];
-      const toggle = named.length === 0 ? undefined : switchOf(name);
-      if (toggle === undefined) return;
+      if (named.length === 0) return;
       try {
+        // Built on first use, so a switch that cannot be built is a failed
+        // switch too.
+        const toggle = switchOf(name);
+        if (toggle === undefined) return;
         const byField = new Map<string, ReadonlySet<string>>();
         for (const field of named) {
           byField.set(
