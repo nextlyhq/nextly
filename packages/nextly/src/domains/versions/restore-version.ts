@@ -85,6 +85,12 @@ export interface RestoreVersionArgs {
    */
   request?: Request;
   /**
+   * What the caller hands the update's hooks as `ctx.context`, as an ordinary
+   * write hands it: a plugin's own data, so a hook that reads it decides a
+   * restore as it decides the plugin's other writes.
+   */
+  context?: Record<string, unknown>;
+  /**
    * The version the restore was made from (`_rev`) and the overwrite choice
    * (`_overwrite`), as a save's data carries them. A restore puts an old
    * version's content over the document as it is now, so it is judged as the
@@ -714,6 +720,10 @@ export async function restoreVersion(
       // Forward the actor so an API-key restore is attributed to the key, not
       // its owner — mirrors the collection branch below.
       ...(args.actor ? { actor: args.actor } : {}),
+      // The request and hook context, so the update's hooks see the restore
+      // as they see any edit made with them.
+      ...(args.request ? { request: args.request } : {}),
+      ...(args.context ? { context: args.context } : {}),
       // A snapshot that restores `status: "published"` must satisfy the key's
       // own publish grant, not the owner's RBAC.
       ...(args.authenticatedScope
@@ -741,6 +751,7 @@ export async function restoreVersion(
         // again in that language, its filter included.
         overrideAccess: !args.user,
         request: args.request,
+        ...(args.context ? { context: args.context } : {}),
         // A snapshot that restores `status: "published"` must satisfy the key's
         // own publish grant, not the owner's RBAC.
         ...(args.authenticatedScope

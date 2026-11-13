@@ -102,6 +102,12 @@ export async function storeDraftSave(
     });
   }
   const entity = input.ref.scopeKind === "single" ? "single" : "collection";
+  const isRestore = typeof input.sourceVersionNo === "number";
+  // A save that changes nothing captures no version, a restore included. A
+  // restore's version is one retention keeps whatever the cap, so a repeated
+  // restore of what the draft holds would otherwise keep a row each time. It
+  // still leaves its trace: the save's event records every restore, naming its
+  // version, with or without a version of its own (`recordSaveEvent`).
   if (sameContent(input.snapshot, input.replaces, entity)) {
     return { versionNo: null };
   }
@@ -111,7 +117,7 @@ export async function storeDraftSave(
   // restore's undo point carries, so it takes the number just below the
   // restore's own, which retention keeps. No retention runs here; the restore's
   // capture below trims once, with that protection in place.
-  if (typeof input.sourceVersionNo === "number") {
+  if (isRestore) {
     await capture.capture(tx, {
       ref: input.ref,
       status: "draft",

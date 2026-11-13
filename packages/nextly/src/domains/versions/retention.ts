@@ -48,8 +48,11 @@ export interface PrunableVersion {
  * - every named version: someone (or a restore, for its undo point) chose to
  *   keep it;
  * - every row that records a restore, and the version it was made from, and
- *   every row whose save carried restored fields, and each field's source, so
- *   "restored from" never points at a version that is gone;
+ *   each field's source a save's restored fields name, so "restored from"
+ *   never points at a version that is gone. The save's own row is not pinned
+ *   for naming sources: a client's save names them (`_restoredFrom`), and
+ *   pinning every such row would let a caller keep each new version past the
+ *   cap by naming the same source again;
  * - every version a feature has pinned (`pinnedVersionNos`): a feature holds
  *   it for as long as it needs it, whatever the limit;
  * - the version numbers the caller names for this pass.
@@ -163,14 +166,12 @@ function isNamed(row: PrunableVersion): boolean {
 }
 
 /**
- * Whether a row records a restore, which names the version it came from, or a
- * save carrying restored fields, which names a version for each.
+ * Whether a row records a restore, which names the version it came from: the
+ * server writes that, never a client's save. A save's restored fields protect
+ * the versions they name, not the row that names them.
  */
 function isRestore(row: PrunableVersion): boolean {
-  return (
-    typeof row.sourceVersionNo === "number" ||
-    Object.keys(sourcesOf(row)).length > 0
-  );
+  return typeof row.sourceVersionNo === "number";
 }
 
 /**
