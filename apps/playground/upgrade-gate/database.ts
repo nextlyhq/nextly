@@ -314,30 +314,44 @@ export function restorablePostgresDump(script: string): string {
   return kept.join("\n");
 }
 
+/** Where a scan of a line stands: its position, and the quote open there. */
+interface QuoteScan {
+  at: number;
+  open: string | undefined;
+}
+
+/** One step inside the quote `open`: to its close, or to the line's end. */
+function stepInside(line: string, at: number, open: string): QuoteScan {
+  const close = line.indexOf(open, at);
+  if (close < 0) return { at: line.length, open };
+  const after = close + open.length;
+  // A doubled quote inside a string is one quote, and the string goes on.
+  if (open === "'" && line[after] === "'") return { at: after + 1, open };
+  return { at: after, open: undefined };
+}
+
+/** One step outside any quote: past a character, or into a quote it opens. */
+function stepOutside(line: string, at: number): QuoteScan {
+  // The rest of the line is a comment.
+  if (line.startsWith("--", at)) return { at: line.length, open: undefined };
+  if (line[at] === "'") return { at: at + 1, open: "'" };
+  const dollar = /^\$\w*\$/.exec(line.slice(at));
+  if (dollar !== null) {
+    return { at: at + dollar[0].length, open: dollar[0] };
+  }
+  return { at: at + 1, open: undefined };
+}
+
 /** The quote still open at the end of `line`, given the one open at its start. */
 function quoteOpenAfter(line: string, start: string | undefined) {
-  let open = start;
-  let at = 0;
-  while (at < line.length) {
-    if (open !== undefined) {
-      const close = line.indexOf(open, at);
-      if (close < 0) return open;
-      at = close + open.length;
-      // A doubled quote inside a string is one quote, and the string goes on.
-      if (open === "'" && line[at] === "'") {
-        at += 1;
-        continue;
-      }
-      open = undefined;
-      continue;
-    }
-    if (line.startsWith("--", at)) return undefined;
-    const dollar = /^\$\w*\$/.exec(line.slice(at));
-    if (line[at] === "'") open = "'";
-    else if (dollar !== null) open = dollar[0];
-    at += open === undefined ? 1 : open.length;
+  let scan: QuoteScan = { at: 0, open: start };
+  while (scan.at < line.length) {
+    scan =
+      scan.open === undefined
+        ? stepOutside(line, scan.at)
+        : stepInside(line, scan.at, scan.open);
   }
-  return open;
+  return scan.open;
 }
 
 /** Everything `url` holds, as SQL that `restore` replays into an empty database. */
