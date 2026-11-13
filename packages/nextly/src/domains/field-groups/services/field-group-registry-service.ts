@@ -347,7 +347,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * what a save's cycle check judges the saved definition against.
    */
   async getAllFieldLists(): Promise<DynamicFieldGroupRecord[]> {
-    return this.getAllRecordsWithColumns(["fields"]);
+    return this.getAllRecordsWithColumns(["fields"], { forWrite: true });
   }
 
   /**
@@ -451,10 +451,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     };
 
     try {
-      const result = await this.adapter.insert<DynamicFieldGroupRecord>(
-        await this.resolveRegistryTableName(),
-        record,
-        { returning: "*" }
+      const table = await this.resolveRegistryTableName();
+      // With the stored schema version's count (`writeRegistry`).
+      const result = await this.writeRegistry(() =>
+        this.adapter.insert<DynamicFieldGroupRecord>(table, record, {
+          returning: "*",
+        })
       );
       // The cached registry row is now out of date.
       clearRegistryRowCache();
@@ -523,6 +525,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The stored schema version's count moves in the caller's transaction.
+    await this.countWriteOn(tx);
     // The cached registry row is now out of date.
     clearRegistryRowCache();
 
@@ -575,14 +579,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.update<DynamicFieldGroupRecord>(
+      // With the stored schema version's count (`updateRowBySlug`).
+      const results = await this.updateRowBySlug<DynamicFieldGroupRecord>(
         await this.resolveRegistryTableName(),
-        updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
+        slug,
+        updateData
       );
-      // The cached registry row is now out of date.
-      clearRegistryRowCache();
 
       if (results.length === 0) {
         // Generic "Not found."; slug in logContext.
@@ -720,38 +722,41 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     updateData.schema_version = newSchemaVersion;
 
     try {
-      const matched = await this.adapter.updateCount(
-        await this.resolveRegistryTableName(),
-        updateData,
-        {
-          and: [
-            { column: "slug", op: "=", value: slug },
-            // 🔴 The Drizzle PROPERTY name, not the database column name. A WHERE clause is
-            // resolved against the table object's properties, while the SET payload above is
-            // mapped from snake_case by `mapDataToColumnNames` — so the two halves of this one
-            // statement legitimately spell the same column differently, and `schema_version` here
-            // raises "Column not found" rather than matching nothing.
-            {
-              column: "schemaVersion",
-              op: "=",
-              value: expectedSchemaVersion,
-            },
-            // 🔴 The lock state belongs IN the predicate, not only in the read above. Ownership can
-            // change without the version moving — a code sync claiming an existing UI group sets
-            // `locked` through the admin-only branch — so a caller that read the row unlocked still
-            // satisfies a version-only predicate and overwrites a definition that is now owned by a
-            // config file. Pinning it here makes the check and the write one statement, which is
-            // the whole reason this method exists rather than a read followed by an update.
-            //
-            // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
-            // permits it, so requiring `locked = false` there would refuse every code sync.
-            // Safe as an equality because the column is NOT NULL with a default, so there is no
-            // third state for it to miss.
-            ...(options?.source !== "code"
-              ? [{ column: "locked", op: "=" as const, value: false }]
-              : []),
-          ],
-        }
+      const table = await this.resolveRegistryTableName();
+      // With the stored schema version's count (`writeRegistry`), moved only
+      // where the row matched.
+      const matched = await this.writeRegistry(
+        () =>
+          this.adapter.updateCount(table, updateData, {
+            and: [
+              { column: "slug", op: "=", value: slug },
+              // 🔴 The Drizzle PROPERTY name, not the database column name. A WHERE clause is
+              // resolved against the table object's properties, while the SET payload above is
+              // mapped from snake_case by `mapDataToColumnNames` — so the two halves of this one
+              // statement legitimately spell the same column differently, and `schema_version` here
+              // raises "Column not found" rather than matching nothing.
+              {
+                column: "schemaVersion",
+                op: "=",
+                value: expectedSchemaVersion,
+              },
+              // 🔴 The lock state belongs IN the predicate, not only in the read above. Ownership can
+              // change without the version moving — a code sync claiming an existing UI group sets
+              // `locked` through the admin-only branch — so a caller that read the row unlocked still
+              // satisfies a version-only predicate and overwrites a definition that is now owned by a
+              // config file. Pinning it here makes the check and the write one statement, which is
+              // the whole reason this method exists rather than a read followed by an update.
+              //
+              // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
+              // permits it, so requiring `locked = false` there would refuse every code sync.
+              // Safe as an equality because the column is NOT NULL with a default, so there is no
+              // third state for it to miss.
+              ...(options?.source !== "code"
+                ? [{ column: "locked", op: "=" as const, value: false }]
+                : []),
+            ],
+          }),
+        count => count > 0
       );
       // The cached registry row is now out of date.
       clearRegistryRowCache();
@@ -849,9 +854,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       await this.dropComponentTable(existing.tableName);
 
       // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
-      await this.adapter.delete(
-        await this.resolveRegistryTableName(),
-        this.whereEq("slug", slug)
+      const table = await this.resolveRegistryTableName();
+      // With the stored schema version's count (`writeRegistry`).
+      await this.writeRegistry(() =>
+        this.adapter.delete(table, this.whereEq("slug", slug))
       );
       // The cached registry row is now out of date.
       clearRegistryRowCache();
@@ -1399,23 +1405,21 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.select<DynamicFieldGroupRecord>(
-        await this.resolveRegistryTableName(),
-        {
-          where: {
-            and: [
-              {
-                column: "slug",
-                op: "IN",
-                value: slugs,
-              },
-            ],
-          },
-        }
+      // Derived from the registry's listing (`listStored`), which outside a
+      // transaction is read again only once the registry has changed: a form
+      // and a schema read draw the same field groups on every request.
+      const wanted = new Set(slugs);
+      const results = await this.listStored(rows =>
+        rows
+          .filter(row => wanted.has(String(row.slug)))
+          .map(row =>
+            this.deserializeRecord(
+              structuredClone(row) as Record<string, unknown>
+            )
+          )
       );
 
-      for (const result of results) {
-        const deserialized = this.deserializeRecord(result);
+      for (const deserialized of results) {
         componentMap.set(deserialized.slug, deserialized);
       }
     } catch (error) {
