@@ -44,6 +44,7 @@ import { eq, sql } from "drizzle-orm";
 import { container } from "../../di/container";
 import { getAuthLogger } from "../../lib/logger";
 import { RBAC_EPOCH_ROW_ID, rbacEpochTables } from "../../schemas/rbac-epoch";
+import { coalesce } from "../../shared/lib/coalesce";
 
 /**
  * How long a read of the shared counter is reused.
@@ -85,9 +86,11 @@ interface EpochState {
    * and issues its own query before any of them finishes, so a burst turns one
    * read per second into one per request — the cost this design exists to avoid.
    *
-   * A forced caller does not join it; see {@link refreshEpoch}.
+   * A forced caller does not join it; see {@link refreshEpoch}. Held as the
+   * one entry of a map of shared reads (`coalesce`, the shared helper every
+   * followed value reads through), under {@link EPOCH_READ}.
    */
-  inFlight: Promise<string> | null;
+  readsUnderWay: Map<typeof EPOCH_READ, Promise<string>>;
 
   /**
    * Local invalidations the shared row has not accepted yet.
@@ -160,7 +163,7 @@ function freshState(): EpochState {
     revision: 0,
     generation: "",
     readAt: 0,
-    inFlight: null,
+    readsUnderWay: new Map(),
     pendingBumps: 0,
     observed: true,
     retirements: 0,
@@ -174,6 +177,12 @@ const globalForEpoch = globalThis as unknown as {
   __nextly_rbacEpoch?: EpochState;
 };
 const state = (globalForEpoch.__nextly_rbacEpoch ??= freshState());
+// A dev server keeps `globalThis` across a module reload, so the state may
+// have been made by an older build of this module. Before the shared read
+// moved onto `coalesce` it was held as `inFlight` (a promise, or null); that
+// field is left to the code that made it, and the map this code reads under
+// a name of its own is added where the state lacks it.
+(state as Partial<EpochState>).readsUnderWay ??= new Map();
 
 /**
  * The narrow view of the query builder this module uses.
@@ -370,24 +379,23 @@ export async function refreshEpoch(options?: {
   // older than the write it exists to confirm, which is the whole of the
   // post-write verification. So a forced caller waits out the reads ahead of it
   // and then makes one of its own.
-  if (!force) {
-    if (state.inFlight) return state.inFlight;
-  } else {
+  if (force) {
     // Sequential by design: each read ahead of this one has to finish before a
     // new observation may start, or the observation is not a new one.
-    let ahead = state.inFlight;
+    let ahead = state.readsUnderWay.get(EPOCH_READ);
     while (ahead) {
       await ahead;
-      ahead = state.inFlight;
+      ahead = state.readsUnderWay.get(EPOCH_READ);
     }
   }
 
-  const reading = readShared().finally(() => {
-    if (state.inFlight === reading) state.inFlight = null;
-  });
-  state.inFlight = reading;
-  return reading;
+  // The read under way where there is one (never for a forced caller, which
+  // has just waited them all out), or a new one every caller after it joins.
+  return coalesce(state.readsUnderWay, EPOCH_READ, readShared);
 }
+
+/** The key the epoch's one shared read is held under. */
+const EPOCH_READ = "epoch";
 
 async function readShared(): Promise<string> {
   // Which of the two degraded reports a failure below belongs to. Once the row
@@ -476,9 +484,9 @@ async function readShared(): Promise<string> {
  *
  * What rules that out is not a lock here but the shape of the only path in.
  * This is called from one place, the top of {@link readShared}; `readShared` is
- * called from one place, {@link refreshEpoch}; and that call sits between a
- * check of `inFlight` and its assignment with no await in between, so a second
- * read cannot start while one is running. A second caller added anywhere else
+ * called from one place, {@link refreshEpoch}, through `coalesce`, which
+ * checks for a read under way and registers a new one with no await in
+ * between, so a second read cannot start while one is running. A second caller added anywhere else
  * would need its own answer to this, and the subtraction is where it would go
  * wrong.
  *
