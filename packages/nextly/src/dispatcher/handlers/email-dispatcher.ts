@@ -35,12 +35,12 @@ import {
   overrideTemplateSchema,
   undoOwnerUpdateSchema,
 } from "../../domains/email/template-ownership-requests";
-import { templateVariablesSchema } from "../../domains/email/template-variables";
-import { testSendRecipientOf } from "../../domains/email/test-send-recipient";
 import {
   collectTemplateReferences,
   sendersBySlug,
 } from "../../domains/email/template-references";
+import { templateVariablesSchema } from "../../domains/email/template-variables";
+import { testSendRecipientOf } from "../../domains/email/test-send-recipient";
 import type { UserService } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
