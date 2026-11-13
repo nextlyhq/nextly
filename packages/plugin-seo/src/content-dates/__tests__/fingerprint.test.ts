@@ -66,6 +66,34 @@ describe("a page's content fingerprint", () => {
     ).toBe(base);
   });
 
+  it("ignores the stamps as a save hook is handed them, by their column names", () => {
+    const stored = {
+      id: "p1",
+      title: "Pricing",
+      created_at: "2026-11-01T09:00:00.000Z",
+      updated_at: "2026-11-02T09:00:00.000Z",
+      created_by: null,
+      first_published_at: "2026-11-01T09:00:00.000Z",
+      status: "published",
+      _revision: 1,
+      seo: '{"noindex":false}',
+    };
+    expect(
+      contentFingerprint({
+        ...stored,
+        updated_at: "2026-11-13T09:00:00.000Z",
+        created_by: "u1",
+        updated_by: "u2",
+        first_published_at: "2026-11-13T09:00:00.000Z",
+        _revision: 2,
+        seo: '{"metaTitle":"Our prices"}',
+      })
+    ).toBe(contentFingerprint(stored));
+    expect(
+      contentFingerprint({ ...PAGE, createdBy: "u1", firstPublishedAt: "x" })
+    ).toBe(contentFingerprint(PAGE));
+  });
+
   it("treats a field read back empty as one not read", () => {
     expect(contentFingerprint({ ...PAGE, subtitle: null })).toBe(
       contentFingerprint(PAGE)

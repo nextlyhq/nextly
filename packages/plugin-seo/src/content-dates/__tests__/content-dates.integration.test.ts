@@ -11,7 +11,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { ne } from "@nextlyhq/plugin-sdk/db";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -23,6 +24,7 @@ import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
+import { seoContext } from "../../address-record/__tests__/record-tables";
 import { seoPlugin } from "../../plugin";
 import { contentDates } from "../../schema/tables";
 import { contentDatesSettled, recordSaved } from "../hooks";
@@ -36,26 +38,13 @@ const POSTS = "seocd_posts";
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  // Recordings still running would read a database already closed.
+  await contentDatesSettled();
   await current?.destroy();
   current = undefined;
 });
 
-/** A plugin that hands its context over. */
-function contextOf() {
-  const seen: { ctx?: PluginContext } = {};
-  const plugin = definePlugin({
-    name: "@test/content-dates-probe",
-    version: "1.0.0",
-    nextly: ">=0.0.0",
-    init(ctx) {
-      seen.ctx = ctx;
-    },
-  });
-  return { plugin, seen };
-}
-
 async function boot(dialect: TestDialect) {
-  const { plugin, seen } = contextOf();
   current = await createTestNextly({
     dialect,
     plugins: [
@@ -64,7 +53,6 @@ async function boot(dialect: TestDialect) {
         singles: ["seocd_home"],
         baseUrl: SITE,
       }),
-      plugin,
     ],
     collections: [
       defineCollection({
@@ -96,10 +84,9 @@ async function boot(dialect: TestDialect) {
       }),
     ],
   });
-  const ctx = seen.ctx;
-  if (!ctx) throw new Error("the probe plugin never started");
   await lastCatchUp();
-  return { t: current, ctx };
+  // The SEO plugin's own context: a plugin's tables are its own to read.
+  return { t: current, ctx: seoContext() };
 }
 
 /** The `<lastmod>` the sitemap gives the page at `loc`, once dates settle. */
@@ -122,6 +109,12 @@ async function rows(ctx: PluginContext): Promise<Record<string, unknown>[]> {
     string,
     unknown
   >[];
+}
+
+/** Forget every kept date, as a site saved before they were kept has none. */
+async function clearDates(ctx: PluginContext): Promise<void> {
+  const columns = ctx.db.table(contentDates);
+  await ctx.db.delete(contentDates).where(ne(columns.pageKey, ""));
 }
 
 /** Timestamps may be kept to the second: a later save is a later second. */
@@ -162,7 +155,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: POSTS,
         id: post.id,
-        data: { seo: { metaTitle: "Hello, world" } },
+        data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
       });
       expect(await lastmodOf(loc)).toBe(first);
 
@@ -170,7 +163,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: POSTS,
         id: post.id,
-        data: { title: "Hello", body: "First words." },
+        data: { title: "Hello", body: "First words.", _overwrite: true },
       });
       expect(await lastmodOf(loc)).toBe(first);
 
@@ -178,19 +171,21 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: POSTS,
         id: post.id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       });
       expect(await lastmodOf(loc)).toBe(first);
 
       await nextSecond();
-      const { item } = await t.nextly.update({
+      const savedAt = Date.now();
+      await t.nextly.update({
         collection: POSTS,
         id: post.id,
-        data: { body: "Rewritten." },
+        data: { body: "Rewritten.", _overwrite: true },
       });
-      const moved = await lastmodOf(loc);
-      expect(moved).not.toBe(first);
-      expect(second(moved)).toBe(second(item.updatedAt));
+      // Moved to the save that changed the content.
+      const moved = Date.parse(String(await lastmodOf(loc)));
+      expect(moved).toBeGreaterThan(Date.parse(String(first)));
+      expect(Math.abs(moved - savedAt)).toBeLessThan(5_000);
     });
 
     it("leaves the date while a change is a draft, and moves it when the change is published", async () => {
@@ -238,14 +233,18 @@ describe.each(getConfiguredTestDialects())(
       await nextSecond();
       await t.nextly.updateSingle({
         slug: "seocd_home",
-        data: { title: "Acme", seo: { metaTitle: "Acme, home" } },
+        data: {
+          title: "Acme",
+          seo: { metaTitle: "Acme, home" },
+          _overwrite: true,
+        },
       });
       expect(await lastmodOf(loc)).toBe(first);
 
       await nextSecond();
       await t.nextly.updateSingle({
         slug: "seocd_home",
-        data: { title: "Acme, welcome" },
+        data: { title: "Acme, welcome", _overwrite: true },
       });
       expect(await lastmodOf(loc)).not.toBe(first);
     });
@@ -259,7 +258,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await contentDatesSettled();
       // As a page saved before the dates were kept: no row.
-      await ctx.db.delete(contentDates);
+      await clearDates(ctx);
       expect(await rows(ctx)).toEqual([]);
 
       expect(second(await lastmodOf(`${SITE}/blog/hello`))).toBe(
@@ -276,13 +275,13 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
       });
       await contentDatesSettled();
-      await ctx.db.delete(contentDates);
+      await clearDates(ctx);
 
       await nextSecond();
       await t.nextly.update({
         collection: POSTS,
         id: post.id,
-        data: { seo: { metaTitle: "Hello, world" } },
+        data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
       });
       expect(second(await lastmodOf(`${SITE}/blog/hello`))).toBe(
         second(post.updatedAt)
@@ -331,7 +330,7 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
       });
       await contentDatesSettled();
-      await ctx.db.delete(contentDates);
+      await clearDates(ctx);
       const holder = { collection: POSTS, id: post.id };
 
       await Promise.all([

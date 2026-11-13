@@ -18,13 +18,24 @@ import { createHash } from "node:crypto";
 
 import { isRecord } from "../plain-values";
 
-/** A page's own fields that are not its content. */
+/**
+ * A page's own fields that are not its content, by the names a read gives
+ * them and by the column names a save hook is handed them under.
+ */
 const NOT_CONTENT: ReadonlySet<string> = new Set([
   "id",
   "seo",
   "status",
   "createdAt",
   "updatedAt",
+  "createdBy",
+  "updatedBy",
+  "firstPublishedAt",
+  "created_at",
+  "updated_at",
+  "created_by",
+  "updated_by",
+  "first_published_at",
 ]);
 
 /** How deep into nested content the fingerprint reads before it stops. */

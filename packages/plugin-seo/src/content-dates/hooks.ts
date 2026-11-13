@@ -49,8 +49,10 @@ function isDraft(context: SavedContext): boolean {
 function unchangedSince(context: SavedContext): Date | undefined {
   const { data, originalData } = context;
   if (!isRecord(data) || !isRecord(originalData)) return undefined;
+  // A save hook is handed the stored row, its stamps under their column
+  // names.
   return contentFingerprint(data) === contentFingerprint(originalData)
-    ? dateOf(originalData.updatedAt)
+    ? dateOf(originalData.updatedAt ?? originalData.updated_at)
     : undefined;
 }
 
