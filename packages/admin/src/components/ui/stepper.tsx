@@ -99,9 +99,12 @@ function StepContent({
   const content = (
     <>
       <StepMarker index={index} state={state} />
+      {/* The label wraps rather than being cut short: on a phone three
+          steps share the row, and a label cut to "Source: S…" no longer
+          says what was chosen or what comes next. */}
       <span
         className={cn(
-          "truncate",
+          "min-w-0 [overflow-wrap:anywhere]",
           state === "current" ? "font-medium" : "text-muted-foreground"
         )}
       >

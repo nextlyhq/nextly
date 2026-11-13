@@ -45,6 +45,7 @@ import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
+  moveKeepsEveryValue,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
   refusalsForMovedJoinsNarrowed,
@@ -3044,13 +3045,18 @@ function assertFieldsMayJoinTranslation(
     moved: new Set<string>(),
     narrowed: new Set<string>(),
   };
+  // Reshaped only where the column it would have cannot hold every value the column it has holds,
+  // by the one rule every judge of a move asks, with the snapshots' types alone.
   const reshaped = joining
     .filter(({ field, column }) => {
       const before = typeIn(prevMain, column.name);
+      const after = typeIn(sharedMain, column.name);
       return (
         !moved.has(field.name) &&
         before !== undefined &&
-        before !== typeIn(sharedMain, column.name)
+        before !== after &&
+        (after === undefined ||
+          !moveKeepsEveryValue({ type: before }, { type: after }, dialect))
       );
     })
     .map(({ field }) => field.name);

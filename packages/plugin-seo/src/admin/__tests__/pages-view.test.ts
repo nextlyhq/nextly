@@ -188,6 +188,16 @@ describe("where an entry opens", () => {
       "/admin/singles/home"
     );
   });
+
+  it("opens the SEO tab by the id each editor holds it under", () => {
+    expect(
+      entryHref({ kind: "collection", slug: "posts", id: "7" }, "seo")
+    ).toBe("/admin/collections/posts/7?tab=nextlyhq-plugin-seo.tab");
+    // A Single's editor is another place, with a tab of its own.
+    expect(entryHref({ kind: "single", slug: "home", id: "1" }, "seo")).toBe(
+      "/admin/singles/home?tab=nextlyhq-plugin-seo.single-tab"
+    );
+  });
 });
 
 describe("the note for a developer", () => {

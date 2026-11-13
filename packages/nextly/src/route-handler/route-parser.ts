@@ -102,6 +102,9 @@ export function requiresAuthOnly(service: string, method: string): boolean {
 const ALL_LOCALES_ENTRY_ROUTES: Record<string, string> = {
   "publish-all": "publishAllLocales",
   "unpublish-all": "unpublishAllLocales",
+  // The chosen languages and the shared part, named in the body (@experimental).
+  publish: "publishParts",
+  unpublish: "unpublishParts",
 };
 
 /**

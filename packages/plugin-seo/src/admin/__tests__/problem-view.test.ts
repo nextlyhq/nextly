@@ -84,8 +84,10 @@ describe("fixHref", () => {
     expect(
       fixHref(page({ place: "page", tab: "content", field: "body" }))
     ).toBe("/admin/collections/posts/7");
+    // A Single's editor holds the tab under its own id, so the link opens
+    // the SEO tab there rather than the Single's content.
     expect(fixHref(page({ place: "page", tab: "seo" }, "single:home"))).toBe(
-      "/admin/singles/home?tab=nextlyhq-plugin-seo.tab"
+      "/admin/singles/home?tab=nextlyhq-plugin-seo.single-tab"
     );
     expect(fixHref(page({ place: "settings", tab: "types" }))).toBe(
       "/admin/plugins/nextlyhq-plugin-seo/settings?tab=types"

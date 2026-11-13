@@ -99,7 +99,10 @@ import {
   afterCommit as holdUntilCommit,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
-import { secretGenerations } from "../shared/lib/secret-generations";
+import {
+  generationsCurrentFirst,
+  secretGenerations,
+} from "../shared/lib/secret-generations";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
@@ -184,6 +187,7 @@ import {
   createPluginReceivedWebhooks,
   type ReceivedWebhooksAdapter,
 } from "./security/received-webhooks";
+import { isWellFormed } from "./security/well-formed";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
@@ -1668,6 +1672,16 @@ export type {
 export function definePlugin<W extends AnyWidget = AnyWidget>(
   definition: PluginDefinition<W>
 ): PluginDefinition<W> {
+  // A plugin's name keys what it stores (its secrets, digests and settings). A name holding a lone
+  // surrogate encodes to UTF-8 as a replacement character, so two such names would key alike and
+  // reach each other's values: refused here, where every keyed use of the name begins.
+  if (typeof definition.name === "string" && !isWellFormed(definition.name)) {
+    throw NextlyError.configuration({
+      logMessage:
+        "A plugin's name must be well-formed Unicode: it holds a lone surrogate, which would key its stored values alike with another name's.",
+      logContext: { reason: "plugin-name-ill-formed" },
+    });
+  }
   const withRename: PluginDefinition<W> = {
     ...definition,
     // Framework remap: returns a NEW definition with the rename map
@@ -3216,8 +3230,13 @@ export function createPluginContext(
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
         // Every generation, the unkeyed one included: a secret minted before
         // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
+        // The current generation first, the unkeyed one when no NEXTLY_SECRET is set, as the
+        // helper writes with the head of this list.
         secrets: () =>
-          secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
+          generationsCurrentFirst(
+            env.NEXTLY_SECRET,
+            env.NEXTLY_SECRET_PREVIOUS
+          ),
       }),
     },
     // Kept within this plugin's name, which decides the types it may record.

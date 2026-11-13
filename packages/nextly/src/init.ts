@@ -195,6 +195,8 @@ function buildNextlyInstance(
     findByID: directAPI.findByID.bind(directAPI),
     create: directAPI.create.bind(directAPI),
     update: directAPI.update.bind(directAPI),
+    publish: directAPI.publish.bind(directAPI),
+    unpublish: directAPI.unpublish.bind(directAPI),
     delete: directAPI.delete.bind(directAPI),
     count: directAPI.count.bind(directAPI),
     group: directAPI.group.bind(directAPI),

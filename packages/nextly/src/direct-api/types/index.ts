@@ -40,6 +40,8 @@ export type {
   FindByIDArgs,
   CreateArgs,
   UpdateArgs,
+  PublishArgs,
+  PublishResult,
   DeleteArgs,
   CountArgs,
   GroupArgs,

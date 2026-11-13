@@ -24,6 +24,7 @@ import { cn } from "@admin/lib/utils";
 import {
   computeHiddenHeaderButtons,
   headerControlsSettled,
+  pluginHeaderItems,
   pluginUserMenuItems,
   type HeaderAnswersPending,
 } from "../header/header-visibility";
@@ -175,10 +176,22 @@ function RailAccountItems({
   // Drawn only once every answer it depends on is in, so neither the bell nor
   // the avatar arrives after the rest and moves the foot.
   const settled = headerControlsSettled(pending, bellOffered);
-  const frameClass = useAccountFrameClass(placement, className);
   const { flow, side, testId } = ACCOUNT_LAYOUT[placement];
+  const inRail = placement === "rail";
+  const footItemsShown = railFootItemsShown(
+    placement,
+    settled,
+    branding?.plugins
+  );
+  const frameClass = useAccountFrameClass(
+    placement,
+    // The space above the foot is the items' box's while it shows; the gap
+    // under it is the foot's own gap between items. The account's box is
+    // held to the bottom, so its margin moves nothing.
+    cn(className, footItemsShown && "mt-0")
+  );
 
-  return (
+  const account = (
     <div
       className={frameClass}
       data-testid={testId}
@@ -186,10 +199,10 @@ function RailAccountItems({
     >
       {/* In the rail, the Inbox's and the avatar's shapes hold the foot
           until both can be drawn, so the rail never reads as missing them. */}
-      {!settled && placement === "rail" ? <RailFootGhost /> : null}
+      {!settled && inRail ? <RailFootGhost /> : null}
       <div hidden={!settled} className={settled ? flow : undefined}>
-        {/* Plugins' own items at the rail's foot, before the Inbox. */}
-        <RailFootPluginPlace />
+        {/* Plugins' own items in the bar, before the Inbox. */}
+        {!inRail && <RailFootPluginPlace />}
         {bellOffered && (
           <NotificationBell
             journalOffered={journalOffered}
@@ -208,6 +221,56 @@ function RailAccountItems({
           align="end"
         />
       </div>
+    </div>
+  );
+  return inRail ? (
+    <>
+      <RailFootPluginBox shown={footItemsShown} />
+      {account}
+    </>
+  ) : (
+    account
+  );
+}
+
+/**
+ * Whether the rail's box for plugins' foot items shows: in the rail, once the
+ * answers are in, and only where a plugin places an item there.
+ *
+ * The items get a box of their own above the account's because the rail's
+ * foot is held to the window's bottom: an item added inside the account's box
+ * grew that box upwards, its top moving by an item's height as the answers
+ * arrived, which the browser records as the shell moving, though the Inbox and
+ * the avatar stayed where their shapes stood. A box of its own appears whole
+ * instead, and the account's box keeps the size and the place its outline drew.
+ */
+function railFootItemsShown(
+  placement: AccountPlacement,
+  settled: boolean,
+  plugins: Parameters<typeof pluginHeaderItems>[0]
+): boolean {
+  return (
+    placement === "rail" &&
+    settled &&
+    pluginHeaderItems(plugins, "rail-foot").length > 0
+  );
+}
+
+/**
+ * Plugins' own items at the rail's foot, above the Inbox. Kept mounted while
+ * hidden, so an item that only registers what a page needs runs before the
+ * answers are in.
+ */
+function RailFootPluginBox({ shown }: { shown: boolean }): JSX.Element {
+  return (
+    <div
+      hidden={!shown}
+      data-testid="rail-foot-plugin-box"
+      className={
+        shown ? cn(ACCOUNT_LAYOUT.rail.flow, "mt-4 mb-2 shrink-0") : undefined
+      }
+    >
+      <RailFootPluginPlace />
     </div>
   );
 }

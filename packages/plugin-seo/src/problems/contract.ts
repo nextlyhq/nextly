@@ -319,10 +319,22 @@ export function problemsHref(severity?: ProblemSeverity): string {
 }
 
 /**
- * The id the page's SEO tab is opened by in an editor's address
- * (`?tab=<id>`). An editor without the tab opens its content instead.
+ * The id the page's SEO tab is opened by in a collection entry's editor
+ * address (`?tab=<id>`). An editor without the tab opens its content instead.
  */
 export const SEO_TAB_ID = "nextlyhq-plugin-seo.tab";
+
+/**
+ * The same tab's id in a Single's editor, which is another place with tabs
+ * of its own: an address naming the collection tab's id there opens the
+ * Single's content instead.
+ */
+export const SINGLE_SEO_TAB_ID = "nextlyhq-plugin-seo.single-tab";
+
+/** The id the SEO tab is opened by in the editor of a page of `kind`. */
+export function seoTabIdOf(kind: "collection" | "single"): string {
+  return kind === "single" ? SINGLE_SEO_TAB_ID : SEO_TAB_ID;
+}
 
 /** What a problem of the whole site is about. */
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };
@@ -366,11 +378,14 @@ export function fixHref(problem: Problem): string | undefined {
       if (subject.type === undefined || subject.id === undefined) {
         return undefined;
       }
-      const editor = subject.type.startsWith("single:")
+      const single = subject.type.startsWith("single:");
+      const editor = single
         ? `/admin/singles/${encodeURIComponent(subject.type.slice(7))}`
         : `/admin/collections/${encodeURIComponent(subject.type)}/${encodeURIComponent(subject.id)}`;
       const query = new URLSearchParams();
-      if (fix.tab === "seo") query.set("tab", SEO_TAB_ID);
+      if (fix.tab === "seo") {
+        query.set("tab", seoTabIdOf(single ? "single" : "collection"));
+      }
       // The editor's language, as the admin names it in the address.
       if (subject.locale !== undefined) query.set("locale", subject.locale);
       const search = query.toString();

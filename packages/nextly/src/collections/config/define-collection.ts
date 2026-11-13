@@ -895,6 +895,16 @@ export interface CollectionConfig {
   localized?: boolean;
 
   /**
+   * Require every language to hold its own value for each required translated field before that
+   * language is published. Without it, a language whose required field is empty publishes and
+   * shows the value it falls back to. Applies to a translated collection with Draft/Published.
+   *
+   * @default false
+   * @experimental
+   */
+  requireEveryLanguage?: boolean;
+
+  /**
    * Webhook recording policy for this collection. When `false` (or
    * `{ record: false }`), writes to this collection record NO `entry.*` event to
    * the webhook outbox, so nothing is ever delivered to subscribed endpoints.

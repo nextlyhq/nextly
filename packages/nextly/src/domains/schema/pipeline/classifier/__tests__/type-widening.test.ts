@@ -4,7 +4,11 @@
 
 import { describe, it, expect } from "vitest";
 
-import { isWideningChange, stringNarrowingLimit } from "../type-widening";
+import {
+  copiesEveryValue,
+  isWideningChange,
+  stringNarrowingLimit,
+} from "../type-widening";
 
 describe("isWideningChange — Postgres", () => {
   it("varchar(50) -> varchar(255) is widening", () => {
@@ -170,5 +174,60 @@ describe("stringNarrowingLimit", () => {
   });
   it("is null on SQLite, which never enforces a declared length", () => {
     expect(stringNarrowingLimit("text", "varchar(255)", "sqlite")).toBeNull();
+  });
+});
+
+// Copying values into a new column of another type, as a field joining translation does: a widening,
+// except on SQLite into REAL storage, where an integer is stored as a float.
+describe("copiesEveryValue", () => {
+  it("is not a copy of every value on SQLite from integer into REAL storage", () => {
+    expect(copiesEveryValue("integer", "real", "sqlite")).toBe(false);
+    expect(copiesEveryValue("numeric", "double", "sqlite")).toBe(false);
+  });
+  it("is not one on SQLite from REAL or NUMERIC storage into a whole-number or fixed-point type", () => {
+    // A fraction keeps its REAL storage there, a value the new type refuses.
+    expect(copiesEveryValue("real", "integer", "sqlite")).toBe(false);
+    expect(copiesEveryValue("NUMERIC(10, 2)", "INTEGER", "sqlite")).toBe(false);
+    expect(copiesEveryValue("REAL", "NUMERIC(10, 2)", "sqlite")).toBe(false);
+    expect(copiesEveryValue("integer", "numeric", "sqlite")).toBe(false);
+  });
+  it("copies every value on SQLite within one affinity", () => {
+    expect(copiesEveryValue("integer", "bigint", "sqlite")).toBe(true);
+    expect(copiesEveryValue("real", "double", "sqlite")).toBe(true);
+    expect(copiesEveryValue("numeric", "numeric", "sqlite")).toBe(true);
+    expect(copiesEveryValue("NUMERIC(10, 2)", "NUMERIC(12, 2)", "sqlite")).toBe(
+      true
+    );
+  });
+  it("follows the widening rule elsewhere", () => {
+    expect(copiesEveryValue("varchar(255)", "text", "mysql")).toBe(true);
+    expect(copiesEveryValue("varchar(10)", "varchar(5)", "postgresql")).toBe(
+      false
+    );
+    expect(copiesEveryValue("integer", "double precision", "postgresql")).toBe(
+      false
+    );
+    expect(copiesEveryValue("int", "double", "mysql")).toBe(false);
+  });
+});
+
+// A fixed-point column copies every value into one with no fewer digits on either side of the point.
+describe("copiesEveryValue for fixed-point types", () => {
+  it("copies every value into more digits before the point, or after it", () => {
+    expect(copiesEveryValue("decimal(10,2)", "decimal(12,2)", "mysql")).toBe(
+      true
+    );
+    expect(
+      copiesEveryValue("numeric(10,2)", "numeric(12, 4)", "postgresql")
+    ).toBe(true);
+  });
+  it("does not where either side loses digits", () => {
+    expect(copiesEveryValue("decimal(12,2)", "decimal(10,2)", "mysql")).toBe(
+      false
+    );
+    // Same precision, a longer scale: one digit fewer before the point.
+    expect(
+      copiesEveryValue("numeric(10,2)", "numeric(10,3)", "postgresql")
+    ).toBe(false);
   });
 });

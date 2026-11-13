@@ -12,6 +12,8 @@
  */
 import type { AdminContribution } from "@nextlyhq/plugin-sdk";
 
+import { SEO_TAB_ID, SINGLE_SEO_TAB_ID } from "../problems/contract";
+
 import { STRUCTURED_DATA_FIELD } from "./contract";
 import { SEO_GROUP } from "./typed";
 
@@ -111,7 +113,8 @@ export function seoTabContributions({
   const contributions: AdminContribution[] = [];
   if (collections.length > 0) {
     contributions.push({
-      id: "nextlyhq-plugin-seo.tab",
+      // The ids links open the tab by (`seoTabIdOf`), held in one place.
+      id: SEO_TAB_ID,
       kind: "tab",
       place: "collection.edit",
       label: LABEL,
@@ -131,7 +134,7 @@ export function seoTabContributions({
   }
   if (singles.length > 0) {
     contributions.push({
-      id: "nextlyhq-plugin-seo.single-tab",
+      id: SINGLE_SEO_TAB_ID,
       kind: "tab",
       place: "single.edit",
       label: LABEL,

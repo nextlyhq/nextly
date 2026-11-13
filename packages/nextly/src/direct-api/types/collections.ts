@@ -7,6 +7,7 @@
  */
 
 import type { TimeseriesInterval } from "../../domains/collections/query/timeseries-interval";
+import type { PartOutcome } from "../../domains/collections/services/publish-parts";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 
 import type {
@@ -721,4 +722,45 @@ export interface BulkOperationResult<T = { id: string }> {
    * caller a saved row failed and invite a retry that writes it twice.
    */
   warnings?: HookWarning[];
+}
+
+/**
+ * Arguments for `nextly.publish()` and `nextly.unpublish()`: which parts of one entry move.
+ *
+ * @experimental Until publishing per language is complete.
+ */
+export interface PublishArgs<TSlug extends CollectionSlug = CollectionSlug>
+  extends DirectAPIConfig,
+    RunAsPrincipal {
+  /**
+   * Skip cache revalidation for this change (the outbox drain still runs), as an update can: for
+   * a caller that owns its cache strategy.
+   */
+  disableRevalidate?: boolean;
+  /** Collection slug (required). */
+  collection: TSlug;
+  /** The entry's id (required). */
+  id: string;
+  /** The languages chosen, or `"all"` for every language the site has. */
+  locales: readonly string[] | "all";
+  /** Whether the shared part is chosen as well. */
+  shared?: boolean;
+  /** Say what the change would do, and change nothing. */
+  describe?: boolean;
+  /**
+   * The version the change is made from, as a read returned it (`_rev`, such as `"7"`, or
+   * `"7.es:3"` from a read of Spanish), or `_overwrite: true`.
+   */
+  data?: { _rev?: string; _overwrite?: boolean };
+}
+
+/**
+ * What `nextly.publish()` and `nextly.unpublish()` did, or would do, to each part of the entry.
+ *
+ * @experimental
+ */
+export interface PublishResult {
+  id: string;
+  languages: PartOutcome[];
+  shared: { changes: boolean; added: boolean };
 }
